@@ -170,11 +170,10 @@ impl<'a> GoldilocksDigest384DomainPrefixV1<'a> {
 
     /// Construct the unchanged canonical final-field stream at the selected index.
     ///
-    /// This less frequent API replays the borrowed domain through the canonical
-    /// constructor; it does not resume the cached private permutation state.
-    /// It retains the exact CPU/GPU-compatible return type, lane snapshots,
-    /// chunking, finalization and atomic errors. The hot [`Self::hash_at`] path
-    /// uses the cached state directly and does not call this method.
+    /// Resume the immutable typed cache, binding the full-width index, counter
+    /// and independent lane suffixes before the canonical stream field header.
+    /// No complete domain bytes are replayed. The returned fresh stream retains
+    /// the existing lane snapshots, chunking, finalization and atomic errors.
     ///
     /// # Errors
     ///
@@ -188,10 +187,25 @@ impl<'a> GoldilocksDigest384DomainPrefixV1<'a> {
     ) -> Result<GoldilocksDigest384LastFieldStreamV1, GoldilocksDigest384LastFieldStreamErrorV1>
     {
         framed_field_count(prefix_fields.len(), final_field_len)?;
-        GoldilocksDigest384LastFieldStreamV1::new(
-            GoldilocksDigestDomainV1 {
-                index,
-                ..self.domain
+        if prefix_fields
+            .iter()
+            .any(|field| field.len() > MAX_FRAMED_FIELD_BYTES_V1)
+        {
+            return Err(GoldilocksDigest384LastFieldStreamErrorV1::FramingLimitExceeded);
+        }
+        let lanes = self.lanes_at(index);
+        let pending = lanes[0].pending;
+        let pending_len = lanes[0].pending_len;
+        debug_assert!(
+            lanes
+                .iter()
+                .all(|lane| lane.pending == pending && lane.pending_len == pending_len)
+        );
+        GoldilocksDigest384LastFieldStreamV1::from_cached_domain(
+            CachedDomainSuffix {
+                lane_states: core::array::from_fn(|lane| lanes[lane].state),
+                pending,
+                pending_len,
             },
             prefix_fields,
             final_field_len,
@@ -220,6 +234,26 @@ impl<'a> GoldilocksDigest384DomainPrefixV1<'a> {
             }
             sponge
         })
+    }
+}
+
+// Opaque crate-private proof of a canonical cached domain through tag 10.
+// Only the typed prefix owner constructs it; there is no public raw-state input.
+pub(crate) struct CachedDomainSuffix {
+    lane_states: [[u64; STATE_WIDTH]; GOLDILOCKS_DIGEST384_LANES_V1],
+    pending: [u64; RATE],
+    pending_len: usize,
+}
+
+impl CachedDomainSuffix {
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        [[u64; STATE_WIDTH]; GOLDILOCKS_DIGEST384_LANES_V1],
+        [u64; RATE],
+        usize,
+    ) {
+        (self.lane_states, self.pending, self.pending_len)
     }
 }
 
@@ -430,8 +464,12 @@ fn add(left: u64, right: u64) -> u64 {
 
 #[inline]
 fn multiply(left: u64, right: u64) -> u64 {
+    reduce_product(u128::from(left) * u128::from(right))
+}
+
+#[inline]
+fn reduce_product(product: u128) -> u64 {
     const EPSILON: u64 = 0xffff_ffff;
-    let product = u128::from(left) * u128::from(right);
     let low = u64::try_from(product & u128::from(u64::MAX)).expect("masked product word");
     let high = u64::try_from(product >> 64).expect("high product word");
     // Unsigned fold shared with fastpq_prover/metal/kernels/field.metal.
@@ -460,6 +498,25 @@ fn multiply(left: u64, right: u64) -> u64 {
     }
 }
 
+// Match the Metal digest384_mds_dot3 wide accumulation. Three full-width
+// products sum to at most 130 bits; the two overflow flags count its top word.
+// Since 2^128 == -2^32 (mod p), subtract that top word after one ordinary fold.
+#[inline]
+fn mds_dot3(coefficients: [u64; STATE_WIDTH], state: [u64; STATE_WIDTH]) -> u64 {
+    let first = u128::from(coefficients[0]) * u128::from(state[0]);
+    let second = u128::from(coefficients[1]) * u128::from(state[1]);
+    let third = u128::from(coefficients[2]) * u128::from(state[2]);
+    let (sum, carry_first) = first.overflowing_add(second);
+    let (sum, carry_second) = sum.overflowing_add(third);
+    let correction = (u64::from(carry_first) + u64::from(carry_second)) << 32;
+    let reduced = reduce_product(sum);
+    if reduced >= correction {
+        reduced - correction
+    } else {
+        FIELD_MODULUS - (correction - reduced)
+    }
+}
+
 #[inline]
 fn pow7(value: u64) -> u64 {
     let square = multiply(value, value);
@@ -481,9 +538,7 @@ fn permute(state: &mut [u64; STATE_WIDTH], constants: &LaneRoundConstants) {
         }
         let prior = *state;
         for (result, row) in state.iter_mut().zip(MDS) {
-            *result = row.iter().zip(prior).fold(0, |sum, (coefficient, value)| {
-                add(sum, multiply(*coefficient, value))
-            });
+            *result = mds_dot3(row, prior);
         }
     }
 }
@@ -769,6 +824,109 @@ mod tests {
             cache.hash(&[b"after errors"]),
             hash_bytes_384_v1(domain(), &[b"after errors"])
         );
+    }
+
+    #[test]
+    fn wide_mds_dot_matches_independent_modulus_at_carry_boundaries() {
+        let edge = [
+            0,
+            1,
+            2,
+            (1 << 32) - 1,
+            1 << 32,
+            1 << 63,
+            FIELD_MODULUS - 1,
+            FIELD_MODULUS,
+            u64::MAX,
+        ];
+        let oracle = |a: [u64; 3], b: [u64; 3]| {
+            let p = u128::from(FIELD_MODULUS);
+            u64::try_from(
+                a.into_iter()
+                    .zip(b)
+                    .map(|(x, y)| u128::from(x) * u128::from(y) % p)
+                    .sum::<u128>()
+                    % p,
+            )
+            .unwrap()
+        };
+        for x in edge {
+            for y in edge {
+                for z in edge {
+                    for row in MDS.into_iter().chain([[0; 3], [1; 3], [u64::MAX; 3]]) {
+                        let state = [x, y, z];
+                        assert_eq!(mds_dot3(row, state), oracle(row, state));
+                    }
+                }
+            }
+        }
+        // Pin every carry count and both individual carry flags. Nonzero
+        // correction equality must return canonical zero rather than p; less
+        // and greater cases exercise both modular-subtraction branches.
+        use core::cmp::Ordering::{Equal, Greater, Less};
+        let p = FIELD_MODULUS;
+        let half = 1_u64 << 63;
+        for (row, state, carries, relation) in [
+            ([0; 3], [0; 3], (false, false), Equal),
+            ([0, 0, 1], [0, 0, 1], (false, false), Greater),
+            (
+                [0, half - 1, p - 2],
+                [0, half - 1, p - 2],
+                (false, true),
+                Greater,
+            ),
+            ([0, half, p - 2], [0, half, p - 2], (false, true), Less),
+            ([0, p, p], [0, p, p], (false, true), Equal),
+            ([p, p, 0], [p, p, 0], (true, false), Equal),
+            (
+                [(1 << 32) - 1, u64::MAX, u64::MAX],
+                [u64::MAX; 3],
+                (true, true),
+                Greater,
+            ),
+            (
+                [half - 1, p - 2, p - 2],
+                [half - 1, p - 2, p - 2],
+                (true, true),
+                Less,
+            ),
+            ([half - 1, p, p], [p; 3], (true, true), Equal),
+        ] {
+            let products = core::array::from_fn::<_, 3, _>(|index| {
+                u128::from(row[index]) * u128::from(state[index])
+            });
+            let (low, first) = products[0].overflowing_add(products[1]);
+            let (low, second) = low.overflowing_add(products[2]);
+            assert_eq!((first, second), carries);
+            let correction = (u64::from(first) + u64::from(second)) << 32;
+            let reduced = u64::try_from(low % u128::from(FIELD_MODULUS)).unwrap();
+            assert_eq!(reduced.cmp(&correction), relation);
+            let actual = mds_dot3(row, state);
+            assert!(actual < FIELD_MODULUS);
+            assert_eq!(actual, oracle(row, state));
+            if relation == Equal {
+                assert_eq!(actual, 0);
+            }
+        }
+        let mut seed = 0x3840_4d53_2632_ffff_u64;
+        for _ in 0..65_536 {
+            let mut next = || {
+                seed = seed
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                seed
+            };
+            let row = core::array::from_fn(|_| next());
+            let state = core::array::from_fn(|_| next());
+            let result = mds_dot3(row, state);
+            assert!(result < FIELD_MODULUS);
+            assert_eq!(result, oracle(row, state));
+            let product = (u128::from(next()) << 64) | u128::from(next());
+            assert_eq!(
+                u128::from(reduce_product(product)),
+                product % u128::from(FIELD_MODULUS)
+            );
+        }
     }
 
     #[test]

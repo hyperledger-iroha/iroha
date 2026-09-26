@@ -14,14 +14,23 @@ use std::{
 use iroha_core::zk::kagemusha_v1_recursion::{
     KagemushaRecursiveVerifierProfileV1, KagemushaVerifiedFinalityChainV1,
 };
-use iroha_data_model::{NetworkId, kagemusha::KagemushaReleaseAuthorityPolicyV1};
+use iroha_data_model::{
+    NetworkId,
+    kagemusha::{
+        KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1, KagemushaMobileBootstrapPinsV1,
+        KagemushaMobileBootstrapReplayPinV1, KagemushaMobileBootstrapScopeV1,
+        KagemushaReleaseAuthorityPolicyV1,
+    },
+};
 
 use crate::{
     ERR_BUFFER_TOO_SMALL, ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1, ERR_KAGEMUSHA_V1,
-    KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1, KagemushaMobileBootstrapPinsV1,
-    KagemushaMobileBootstrapReplayPinV1, KagemushaMobileBootstrapScopeV1,
     KagemushaTestnetDurableObservationModeV1, KagemushaTestnetNativeMintInstallV1,
     KagemushaTestnetNativeMobileHostV1, KagemushaVerifiedMobileBootstrapV1,
+    kagemusha_testnet_publication_v1::{
+        TestnetPublicationGateV1, TestnetPublicationPermitV1, TestnetPublicationStateV1,
+        testnet_publication_gate_v1,
+    },
     verify_kagemusha_mobile_bootstrap_v1,
 };
 
@@ -131,14 +140,24 @@ pub fn install_kagemusha_testnet_native_startup_context_v1(
     context: KagemushaTestnetNativeStartupContextV1,
     freshness: Box<dyn KagemushaTestnetNativeStartupFreshnessProviderV1>,
 ) -> Result<(), String> {
-    install_context(&STARTUP_SESSION, context, freshness)
+    install_context(
+        &STARTUP_SESSION,
+        testnet_publication_gate_v1(),
+        context,
+        freshness,
+    )
 }
 
 fn install_context(
     slot: &OnceLock<ProvisionedStartupSession>,
+    publication: &TestnetPublicationGateV1,
     context: KagemushaTestnetNativeStartupContextV1,
     freshness: Box<dyn KagemushaTestnetNativeStartupFreshnessProviderV1>,
 ) -> Result<(), String> {
+    let mut publication = publication.exclusive()?;
+    if *publication != TestnetPublicationStateV1::Standalone {
+        return Err("testnet native publication is already owned or unavailable".to_owned());
+    }
     slot.set(ProvisionedStartupSession {
         process_id: std::process::id(),
         session: Mutex::new(StartupSession {
@@ -147,7 +166,10 @@ fn install_context(
             state: StartupState::Cold,
         }),
     })
-    .map_err(|_| "testnet native startup context is already provisioned".to_owned())
+    .map_err(|_| "testnet native startup context is already provisioned".to_owned())?;
+    // Exclude every C dispatch as soon as a signed-checkpoint startup context exists.
+    *publication = TestnetPublicationStateV1::StartupPending;
+    Ok(())
 }
 
 fn require_process_owner(process_id: u32) -> Result<(), String> {
@@ -163,11 +185,11 @@ impl KagemushaTestnetNativeStartupContextV1 {
     fn verify(
         &self,
         archive: &[u8],
-        freshness: KagemushaTestnetNativeStartupFreshnessV1,
+        read_freshness: impl FnOnce() -> Result<KagemushaTestnetNativeStartupFreshnessV1, String>,
     ) -> Result<KagemushaVerifiedMobileBootstrapV1, String> {
-        verify_kagemusha_mobile_bootstrap_v1(
-            archive,
-            KagemushaMobileBootstrapPinsV1 {
+        verify_kagemusha_mobile_bootstrap_v1(archive, || {
+            let freshness = read_freshness()?;
+            Ok(KagemushaMobileBootstrapPinsV1 {
                 authority_policy: &self.authority_policy,
                 network_id: self.network_id,
                 scope: self.scope,
@@ -176,15 +198,17 @@ impl KagemushaTestnetNativeStartupContextV1 {
                 minimum_sequence: freshness.minimum_sequence,
                 previous: freshness.previous,
                 trusted_now_ms: freshness.trusted_now_ms,
-            },
-        )
+            })
+        })
     }
 
     fn install_host(
         &self,
+        publication: &TestnetPublicationPermitV1<'_>,
         bootstrap: &KagemushaVerifiedMobileBootstrapV1,
     ) -> Result<KagemushaTestnetNativeMobileHostV1, String> {
-        KagemushaTestnetNativeMobileHostV1::install(
+        KagemushaTestnetNativeMobileHostV1::install_unpublished(
+            publication,
             KagemushaTestnetNativeMintInstallV1 {
                 manifest_archive: &self.manifest_archive,
                 validation_receipt_archive: &self.validation_receipt_archive,
@@ -209,13 +233,31 @@ fn activate<H>(
     archive: &[u8],
     install: impl FnOnce(&KagemushaVerifiedMobileBootstrapV1) -> Result<H, String>,
 ) -> Result<(), String> {
+    activate_with_final_check(
+        context,
+        freshness,
+        state,
+        archive,
+        install,
+        KagemushaVerifiedMobileBootstrapV1::require_unexpired,
+    )
+}
+
+fn activate_with_final_check<H>(
+    context: &KagemushaTestnetNativeStartupContextV1,
+    freshness: &dyn KagemushaTestnetNativeStartupFreshnessProviderV1,
+    state: &mut StartupState<H>,
+    archive: &[u8],
+    install: impl FnOnce(&KagemushaVerifiedMobileBootstrapV1) -> Result<H, String>,
+    final_check: impl FnOnce(&KagemushaVerifiedMobileBootstrapV1) -> Result<(), String>,
+) -> Result<(), String> {
     if matches!(state, StartupState::Poisoned) {
         return Err(
             "testnet native startup requires process restart after uncertain installation"
                 .to_owned(),
         );
     }
-    let verified = context.verify(archive, freshness.read_freshness()?)?;
+    let verified = context.verify(archive, || freshness.read_freshness())?;
     let pin = verified.replay_pin();
     if let StartupState::Active { pin: previous, .. } = state {
         return if *previous == pin {
@@ -230,45 +272,69 @@ fn activate<H>(
     *state = StartupState::Poisoned;
     verified.require_unexpired()?;
     freshness.retain_verified_bootstrap(pin)?;
-    let retained = freshness.read_freshness()?;
-    if retained.previous != Some(pin) {
-        return Err(
-            "testnet native startup freshness owner did not retain the verified checkpoint"
-                .to_owned(),
-        );
-    }
-    let verified = context.verify(archive, retained)?;
+    let verified = context.verify(archive, || {
+        let retained = freshness.read_freshness()?;
+        if retained.previous != Some(pin) {
+            return Err(
+                "testnet native startup freshness owner did not retain the verified checkpoint"
+                    .to_owned(),
+            );
+        }
+        Ok(retained)
+    })?;
     let host = install(&verified)?;
-    verified.require_unexpired()?;
+    final_check(&verified)?;
     *state = StartupState::Active { pin, host };
     Ok(())
+}
+
+// The writer must be acquired before the startup session mutex. Native host calls can then
+// safely acquire ledger and observation locks without a reader trying to reverse that order.
+fn publish_activation<H>(
+    publication: &mut TestnetPublicationStateV1,
+    state: &mut StartupState<H>,
+    activate: impl FnOnce(&mut StartupState<H>) -> Result<(), String>,
+) -> Result<(), String> {
+    if *publication == TestnetPublicationStateV1::Poisoned {
+        return Err("testnet native publication requires process restart".to_owned());
+    }
+    let result = activate(state);
+    *publication = match state {
+        StartupState::Cold => TestnetPublicationStateV1::StartupPending,
+        StartupState::Active { .. } => TestnetPublicationStateV1::Active,
+        StartupState::Poisoned => TestnetPublicationStateV1::Poisoned,
+    };
+    result
 }
 
 /// Exclusively use the actual activated native host without exporting its private state.
 ///
 /// The callback is Rust-only and runs under the startup ownership mutex. It must not reenter
-/// this accessor or activation. A panic poisons the session, requiring process restart.
+/// this accessor, activation, or any C/JNI testnet entrypoint. Native host methods use the
+/// already-held ownership and do not reacquire it. A panic permanently revokes all testnet
+/// dispatch, requiring process restart.
 ///
 /// # Errors
 /// Rejects missing provisioning, incomplete/failed activation, or a poisoned ownership lock.
 pub fn with_kagemusha_testnet_native_mobile_host_v1<R>(
-    use_host: impl FnOnce(&KagemushaTestnetNativeMobileHostV1) -> Result<R, String>,
+    use_host: impl FnOnce(&crate::KagemushaTestnetNativeMobileHostAccessV1<'_, '_>) -> Result<R, String>,
 ) -> Result<R, String> {
-    let provisioned = STARTUP_SESSION
-        .get()
-        .ok_or_else(|| "testnet native startup context is unavailable".to_owned())?;
-    // Check before touching a mutex potentially inherited while locked at fork.
-    require_process_owner(provisioned.process_id)?;
-    let session = provisioned
-        .session
-        .lock()
-        .map_err(|_| "testnet native startup ownership lock is poisoned".to_owned())?;
-    match &session.state {
-        StartupState::Active { host, .. } => use_host(host),
-        StartupState::Cold | StartupState::Poisoned => {
-            Err("testnet native host is not active".to_owned())
+    testnet_publication_gate_v1().with_dispatch(|publication| {
+        let provisioned = STARTUP_SESSION
+            .get()
+            .ok_or_else(|| "testnet native startup context is unavailable".to_owned())?;
+        require_process_owner(provisioned.process_id)?;
+        let session = provisioned
+            .session
+            .lock()
+            .map_err(|_| "testnet native startup ownership lock is poisoned".to_owned())?;
+        match &session.state {
+            StartupState::Active { host, .. } => use_host(&host.access(publication)),
+            StartupState::Cold | StartupState::Poisoned => {
+                Err("testnet native host is not active".to_owned())
+            }
         }
-    }
+    })
 }
 
 /// Write the exact two-word startup contract and return its word count.
@@ -322,6 +388,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_native_startup_activat
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let archive = unsafe { std::slice::from_raw_parts(bootstrap, bootstrap_len) }.to_vec();
         require_process_owner(slot.process_id).map_err(|_| ())?;
+        let mut publication = testnet_publication_gate_v1().exclusive().map_err(|_| ())?;
         let mut session = slot.session.lock().map_err(|_| ())?;
         let StartupSession {
             context,
@@ -329,10 +396,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_native_startup_activat
             state,
             ..
         } = &mut *session;
-        activate(context, freshness.as_ref(), state, &archive, |verified| {
-            context.install_host(verified)
-        })
-        .map_err(|_| ())
+        publication
+            .with_permit(|publication, permit| {
+                publish_activation(publication, state, |state| {
+                    activate(context, freshness.as_ref(), state, &archive, |verified| {
+                        context.install_host(permit, verified)
+                    })
+                })
+            })
+            .map_err(|_| ())
     }))
     .map_or(ERR_KAGEMUSHA_V1, |result| {
         result.map_or(ERR_KAGEMUSHA_V1, |()| 0)
@@ -342,3 +414,8 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_native_startup_activat
 #[cfg(test)]
 #[path = "kagemusha_testnet_native_startup_v1_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn startup_test_context_v1() -> KagemushaTestnetNativeStartupContextV1 {
+    tests::context()
+}

@@ -127,6 +127,7 @@ impl AirDegreeBounds {
     }
 
     /// All exclusive full numerator bounds, including zero slots.
+    #[cfg(test)]
     pub(super) fn numerators(&self) -> &[usize; SLOT_COUNT] {
         &self.numerators
     }
@@ -145,6 +146,7 @@ impl AirDegreeBounds {
     /// The caller must separately prove zero remainder for the full numerator.
     /// If its bound is <=N, divisibility forces that numerator and quotient to be
     /// identically zero. These are obligations, never verified coefficient claims.
+    #[cfg(test)]
     pub(super) fn conditional_quotients(&self) -> ConditionalQuotientBounds {
         ConditionalQuotientBounds {
             slots: self
@@ -157,6 +159,7 @@ impl AirDegreeBounds {
 
 /// Quotient degree upper bounds that hold only after exact zero-remainder division.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct ConditionalQuotientBounds {
     /// Conditional exclusive degree of each slot's quotient, in complete AIR order.
     pub(super) slots: [usize; SLOT_COUNT],

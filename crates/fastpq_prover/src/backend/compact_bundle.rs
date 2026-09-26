@@ -15,8 +15,7 @@ use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
 use super::compact_value_domain::CompactTransferValue;
 use super::{
     compact_axt_batch::AxtTransferBatch,
-    compact_protocol::shared_openings::SharedVerificationWork,
-    compact_public_api::{AxtVerificationContext, SharedVerifier},
+    compact_public_api::{AxtVerificationContext, DeepVerifier},
     compact_public_batch::{BatchContextLimits, PublicTransferBatch},
 };
 use crate::{
@@ -74,7 +73,7 @@ pub(super) struct BundleWire {
     pub(super) version: u16,
     /// Exactly one shared endpoint between each pair of consecutive proofs.
     pub(super) intermediate_roots: Vec<[u8; 32]>,
-    /// Canonical raw shared proof frames, in original delta occurrence order.
+    /// Canonical DEEP proof frames, in original delta occurrence order.
     pub(super) segments: Vec<Vec<u8>>,
 }
 
@@ -92,8 +91,51 @@ pub(super) struct AxtBundleWire {
     pub(super) version: u16,
     /// Ordered claimed roots between chronological segment proofs.
     pub(super) intermediate_roots: Vec<[u8; 32]>,
-    /// Canonical AXT segment proof frames in original occurrence order.
+    /// Canonical DEEP AXT segment proof frames in original occurrence order.
     pub(super) segments: Vec<Vec<u8>>,
+}
+
+/// Bundle-owned accounting independent of any retired proof implementation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct BundleVerificationWork {
+    /// Sum of accepted canonical child proof bytes.
+    pub(super) proof_bytes: usize,
+    /// Complete child transcript initializations.
+    pub(super) transcripts: usize,
+    /// Distinct authenticated complete row leaves.
+    pub(super) row_leaves: usize,
+    /// Distinct authenticated paired quotient leaves.
+    pub(super) oracle_leaves: usize,
+    /// Authenticated FRI fiber and complete terminal leaves.
+    pub(super) fri_leaves: usize,
+    /// Reconstructed Merkle parents.
+    pub(super) parent_hashes: usize,
+    /// Complete out-of-domain AIR identity evaluations.
+    pub(super) air_evaluations: usize,
+    /// Complete constant-terminal checks.
+    pub(super) terminal_degree_checks: usize,
+}
+
+impl BundleVerificationWork {
+    fn from_deep(work: super::deep_engine::VerificationWork) -> Result<Self> {
+        // The accepted fixed profile has one distinct row and paired quotient
+        // opening for each unique transcript query. All other leaves are FRI.
+        let queries = super::deep_geometry::QUERY_COUNT;
+        let fri_leaves = work
+            .leaf_hashes
+            .checked_sub(queries * 2)
+            .ok_or_else(|| shape("DEEP accepted-work leaf count is inconsistent"))?;
+        Ok(Self {
+            proof_bytes: work.proof_bytes,
+            transcripts: 1,
+            row_leaves: queries,
+            oracle_leaves: queries,
+            fri_leaves,
+            parent_hashes: work.parent_hashes,
+            air_evaluations: work.air_evaluations,
+            terminal_degree_checks: 1,
+        })
+    }
 }
 
 /// All-or-nothing successful relation result, without an authority grant.
@@ -103,7 +145,7 @@ pub(super) struct VerifiedBundle {
     segments: usize,
     wire_bytes: usize,
     statement_bytes: usize,
-    work: SharedVerificationWork,
+    work: BundleVerificationWork,
     row_roots: Vec<GoldilocksDigest384V1>,
 }
 
@@ -135,7 +177,7 @@ impl VerifiedBundle {
     }
 
     /// Sum of measured child verification work, excluding outer frame overhead.
-    pub(super) const fn work(&self) -> SharedVerificationWork {
+    pub(super) const fn work(&self) -> BundleVerificationWork {
         self.work
     }
 }
@@ -153,7 +195,7 @@ pub(super) fn verify_transfer_bundle<V: CompactTransferValue>(
         expected,
         bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 32 * 1024 * 1024,
         },
     )
@@ -164,7 +206,7 @@ fn verify_transfer_bundle_with<V: CompactTransferValue>(
     expected: &PublicIO,
     bytes: &[u8],
     limits: BundleLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<VerifiedBundle> {
     check_limit("max_bundle_wire_bytes", bytes.len(), limits.max_wire_bytes)?;
     if prepared.semantics() != ProofSemantics::StateTransition {
@@ -212,13 +254,13 @@ fn verify_transfer_bundle_with<V: CompactTransferValue>(
             )?;
             // The batch constructor counts every segment's complete statement
             // before constructing an AIR or hashing any child proof.
-            let mut work = SharedVerificationWork::default();
+            let mut work = BundleVerificationWork::default();
             // `count` already passed public and cumulative segment/query bounds.
             let mut row_roots = Vec::with_capacity(count);
             for (ordinal, frame) in wire.segments.iter().enumerate() {
                 let relation = batch.segment(ordinal)?;
                 let child = verifier.verify_frame_committed(&relation, frame, limits.segment)?;
-                add_work(&mut work, child.work())?;
+                add_work(&mut work, BundleVerificationWork::from_deep(child.work())?)?;
                 row_roots.push(child.row_root());
             }
             Ok(VerifiedBundle {
@@ -252,7 +294,7 @@ pub(super) fn verify_axt_transfer_bundle<V: CompactTransferValue>(
         context,
         bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 32 * 1024 * 1024,
         },
     )
@@ -264,7 +306,7 @@ fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
     context: AxtVerificationContext<'_>,
     bytes: &[u8],
     limits: BundleLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<VerifiedBundle> {
     check_limit("max_bundle_wire_bytes", bytes.len(), limits.max_wire_bytes)?;
     if prepared.semantics() != ProofSemantics::AxtTransferClaim {
@@ -313,13 +355,13 @@ fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
             )?;
             // The batch constructor counts every segment's complete statement
             // before constructing an AIR or hashing any child proof.
-            let mut work = SharedVerificationWork::default();
+            let mut work = BundleVerificationWork::default();
             // `count` already passed public and cumulative segment/query bounds.
             let mut row_roots = Vec::with_capacity(count);
             for (ordinal, frame) in wire.segments.iter().enumerate() {
                 let relation = batch.segment(ordinal)?;
                 let child = verifier.verify_frame_committed(&relation, frame, limits.segment)?;
-                add_work(&mut work, child.work())?;
+                add_work(&mut work, BundleVerificationWork::from_deep(child.work())?)?;
                 row_roots.push(child.row_root());
             }
             Ok(VerifiedBundle {
@@ -348,7 +390,7 @@ pub(super) fn verify_transfer_bundle_with_allocation<V: CompactTransferValue>(
         expected,
         bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: max_segment_decode_allocation_charges,
         },
     )
@@ -370,7 +412,7 @@ pub(super) fn verify_axt_transfer_bundle_with_allocation<V: CompactTransferValue
         context,
         bytes,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: max_segment_decode_allocation_charges,
         },
     )
@@ -381,7 +423,7 @@ fn decode_wire_with_policy(
     bytes: &[u8],
     count: usize,
     limits: BundleLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<BundleWire> {
     let wire: BundleWire = norito::decode_canonical_with_limits(
         bytes,
@@ -406,7 +448,7 @@ fn decode_axt_wire_with_policy(
     bytes: &[u8],
     count: usize,
     limits: BundleLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<AxtBundleWire> {
     let wire: AxtBundleWire = norito::decode_canonical_with_limits(
         bytes,
@@ -502,7 +544,7 @@ fn wire_decode_limits(
         bytes,
         expected_count,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 32 * 1024 * 1024,
         },
     )
@@ -512,7 +554,7 @@ fn wire_decode_limits_for(
     bytes: &[u8],
     expected_count: usize,
     limits: BundleLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<DecodeLimits> {
     // The raw byte ceiling precedes even public geometry checks and CRC work.
     check_limit("max_bundle_wire_bytes", bytes.len(), limits.max_wire_bytes)?;
@@ -548,13 +590,13 @@ fn preflight_count(count: usize, limits: BundleLimits) -> Result<()> {
     preflight_count_for(
         count,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 32 * 1024 * 1024,
         },
     )
 }
 
-fn preflight_count_for(count: usize, limits: BundleLimits, verifier: SharedVerifier) -> Result<()> {
+fn preflight_count_for(count: usize, limits: BundleLimits, verifier: DeepVerifier) -> Result<()> {
     if count == 0 {
         return Err(shape("compact bundle requires at least one complete delta"));
     }
@@ -598,7 +640,7 @@ fn preflight_wire_parts(
         segments,
         expected_count,
         limits,
-        SharedVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 32 * 1024 * 1024,
         },
     )
@@ -610,7 +652,7 @@ fn preflight_wire_parts_for(
     segments: &[Vec<u8>],
     expected_count: usize,
     limits: BundleLimits,
-    verifier: SharedVerifier,
+    verifier: DeepVerifier,
 ) -> Result<()> {
     preflight_count_for(expected_count, limits, verifier)?;
     if version != VERSION {
@@ -646,7 +688,7 @@ fn preflight_wire_parts_for(
     Ok(())
 }
 
-fn add_work(total: &mut SharedVerificationWork, child: SharedVerificationWork) -> Result<()> {
+fn add_work(total: &mut BundleVerificationWork, child: BundleVerificationWork) -> Result<()> {
     // Stage the complete addition so an overflow cannot leave partial counters.
     let mut next = *total;
     for (target, value) in [
@@ -688,7 +730,7 @@ fn shape(details: &str) -> Error {
 mod tests {
     fn test_segment_limits() -> crate::VerifyLimits {
         crate::VerifyLimits {
-            max_queries: 375,
+            max_queries: 64,
             ..crate::VerifyLimits::default()
         }
     }
@@ -714,9 +756,9 @@ mod tests {
     fn limits(count: usize) -> BundleLimits {
         BundleLimits {
             max_segments: count,
-            max_total_queries: count * 375,
+            max_total_queries: count * 64,
             segment: VerifyLimits {
-                max_queries: 375,
+                max_queries: 64,
                 ..test_segment_limits()
             },
             ..BundleLimits::default()
@@ -739,14 +781,14 @@ mod tests {
             preflight_count(
                 2,
                 BundleLimits {
-                    max_total_queries: 749,
+                    max_total_queries: 127,
                     ..limits(2)
                 }
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_bundle_queries",
-                actual: 750,
-                max: 749
+                actual: 128,
+                max: 127
             })
         ));
         preflight_count(2, limits(2)).unwrap();
@@ -1019,7 +1061,7 @@ mod tests {
             Err(Error::PublicIoMismatch { .. })
         ));
         // Structurally valid outer bytes and public context do not bypass the
-        // canonical shared-proof decoder for an invalid child frame.
+        // canonical DEEP proof decoder for an invalid child frame.
         assert!(
             verify_transfer_bundle(&ordinary, &fixture.expected(&ordinary), &frame, limits(1))
                 .is_err()
@@ -1031,7 +1073,7 @@ mod tests {
                 &frame,
                 BundleLimits {
                     segment: VerifyLimits {
-                        max_queries: 374,
+                        max_queries: 63,
                         ..test_segment_limits()
                     },
                     ..limits(1)
@@ -1039,8 +1081,8 @@ mod tests {
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_queries",
-                actual: 375,
-                max: 374
+                actual: 64,
+                max: 63
             })
         ));
         let prepared_bytes = ordinary.work().public_bytes;
@@ -1065,8 +1107,43 @@ mod tests {
     }
 
     #[test]
+    fn deep_work_mapping_retains_exact_counts_and_rejects_underflow() {
+        let input = super::super::deep_engine::VerificationWork {
+            proof_bytes: 506_351,
+            air_evaluations: 1,
+            leaf_hashes: 449,
+            parent_hashes: 4666,
+            h_calls: 5125,
+            verifier_messages: 10,
+            g_blocks: 637,
+            fold_checks: 320,
+            terminal_values: 128,
+        };
+        assert_eq!(
+            BundleVerificationWork::from_deep(input).unwrap(),
+            BundleVerificationWork {
+                proof_bytes: 506_351,
+                transcripts: 1,
+                row_leaves: 64,
+                oracle_leaves: 64,
+                fri_leaves: 321,
+                parent_hashes: 4666,
+                air_evaluations: 1,
+                terminal_degree_checks: 1,
+            }
+        );
+        assert!(
+            BundleVerificationWork::from_deep(super::super::deep_engine::VerificationWork {
+                leaf_hashes: 127,
+                ..input
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
     fn successful_result_accessors_and_work_addition_preserve_every_counter() {
-        let child = SharedVerificationWork {
+        let child = BundleVerificationWork {
             proof_bytes: 1,
             transcripts: 2,
             row_leaves: 3,
@@ -1080,7 +1157,7 @@ mod tests {
         add_work(&mut work, child).unwrap();
         assert_eq!(
             work,
-            SharedVerificationWork {
+            BundleVerificationWork {
                 proof_bytes: 2,
                 transcripts: 4,
                 row_leaves: 6,
@@ -1095,9 +1172,9 @@ mod tests {
         assert!(
             add_work(
                 &mut work,
-                SharedVerificationWork {
+                BundleVerificationWork {
                     terminal_degree_checks: usize::MAX,
-                    ..SharedVerificationWork::default()
+                    ..BundleVerificationWork::default()
                 }
             )
             .is_err()
@@ -1323,7 +1400,7 @@ mod tests {
             (
                 BundleLimits {
                     segment: VerifyLimits {
-                        max_queries: 374,
+                        max_queries: 63,
                         ..limits(2).segment
                     },
                     ..limits(2)
@@ -1332,7 +1409,7 @@ mod tests {
             ),
             (
                 BundleLimits {
-                    max_total_queries: 271,
+                    max_total_queries: 2 * crate::backend::deep_geometry::QUERY_COUNT - 1,
                     ..limits(2)
                 },
                 "max_bundle_queries",
@@ -1409,19 +1486,19 @@ mod tests {
             max_segments: count,
             max_wire_bytes: 16 * 1024 * 1024,
             max_total_segment_bytes: 16 * 1024 * 1024,
-            max_total_queries: 375 * count,
+            max_total_queries: 64 * count,
             max_total_decode_allocation_charges: 128 * 1024 * 1024,
             segment: VerifyLimits {
-                max_proof_bytes: 4_326_227,
-                max_queries: 375,
+                max_proof_bytes: super::super::deep_proof::MAX_FRAME_BYTES,
+                max_queries: 64,
                 ..test_segment_limits()
             },
             ..BundleLimits::default()
         }
     }
 
-    fn final_verifier() -> SharedVerifier {
-        SharedVerifier {
+    fn final_verifier() -> DeepVerifier {
+        DeepVerifier {
             max_decode_allocation_charges: 64 * 1024 * 1024,
         }
     }
@@ -1566,7 +1643,7 @@ mod tests {
                 ),
                 (
                     BundleLimits {
-                        max_total_queries: 749,
+                        max_total_queries: 127,
                         ..final_limits(2)
                     },
                     "max_bundle_queries",
@@ -1574,7 +1651,7 @@ mod tests {
                 (
                     BundleLimits {
                         segment: VerifyLimits {
-                            max_queries: 374,
+                            max_queries: 63,
                             ..final_limits(2).segment
                         },
                         ..final_limits(2)

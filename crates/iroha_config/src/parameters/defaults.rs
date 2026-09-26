@@ -2346,8 +2346,9 @@ pub mod torii {
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
     /// Default global pre-auth connection cap (pre-RLIMIT clamp).
     pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
-    /// Default per-IP pre-auth connection cap.
-    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(64usize));
+    /// Default per-IP pre-auth connection cap, including bounded query waiters.
+    /// A solo client's next heavy-query wave must reach the execution queue.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(256usize));
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
@@ -2563,8 +2564,8 @@ pub mod torii {
     pub const APP_API_MAX_LIST_LIMIT: u32 = 500;
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub const APP_API_MAX_FETCH_SIZE: u32 = 500;
-    /// Rate-limiter cost applied per requested row on app-facing endpoints.
-    pub const APP_API_RATE_LIMIT_COST_PER_ROW: u32 = 1;
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub const APP_API_RATE_LIMIT_COST_PER_PAGE: u32 = 1;
     /// Canonical request freshness defaults for app-facing signed HTTP requests.
     pub mod app_auth {
         /// Maximum allowed clock skew for signed app requests (seconds).
@@ -2673,13 +2674,14 @@ pub mod torii {
     // The pre-auth gate charges every external HTTP request, including routine
     // deployment reads and writes. A solo walk with 128 proof reads, 58
     // mutations, 32 direct readbacks, four funding requests and seven outer MCP
-    // requests fits before refill without a 60s IP ban.
+    // requests fits before refill. Ordinary bursts recover with token refill;
+    // operators can explicitly configure a longer rate-violation cooldown.
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(100);
     /// Burst tokens allowed for pre-authorization attempts per IP.
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(256);
-    /// Time to ban IPs that exceed pre-auth rate limits.
-    pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
+    /// Optional extra cooldown after pre-auth rate exhaustion; disabled by default.
+    pub const PREAUTH_BAN_DURATION: Duration = Duration::ZERO;
     /// Maximum number of temporary pre-auth bans retained in memory.
     pub const PREAUTH_BAN_CAPACITY: NonZeroUsize = nonzero!(4096usize);
     /// Exact transport source hosts trusted for internal Torii reads and privileged routing.

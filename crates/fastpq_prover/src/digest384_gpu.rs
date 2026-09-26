@@ -106,6 +106,7 @@ pub(crate) enum Digest384ReadinessV1 {
 pub(crate) struct Digest384BackendReadinessV1 {
     pub(crate) frames: Digest384ReadinessV1,
     pub(crate) indexed: Digest384ReadinessV1,
+    pub(crate) last_fields: Digest384ReadinessV1,
 }
 impl Digest384BackendReadinessV1 {
     pub(crate) fn ensure_available_v1(
@@ -114,6 +115,7 @@ impl Digest384BackendReadinessV1 {
     ) -> Result<(), Digest384GpuErrorV1> {
         if self.frames == Digest384ReadinessV1::Quarantined
             || self.indexed == Digest384ReadinessV1::Quarantined
+            || self.last_fields == Digest384ReadinessV1::Quarantined
         {
             return Err(Digest384GpuErrorV1::Quarantined { backend });
         }
@@ -126,6 +128,7 @@ pub(crate) fn backend_readiness_v1(
     const UNCHECKED: Digest384BackendReadinessV1 = Digest384BackendReadinessV1 {
         frames: Digest384ReadinessV1::Unchecked,
         indexed: Digest384ReadinessV1::Unchecked,
+        last_fields: Digest384ReadinessV1::Unchecked,
     };
     static METAL: Mutex<Digest384BackendReadinessV1> = Mutex::new(UNCHECKED);
     static CUDA: Mutex<Digest384BackendReadinessV1> = Mutex::new(UNCHECKED);
@@ -567,11 +570,15 @@ mod tests {
     #[cfg(any(not(feature = "fastpq-gpu"), fastpq_cuda_unavailable))]
     fn digest384_gpu_unavailable_cuda_never_substitutes_cpu() {
         let frame = GoldilocksDigest384FrameV1::new(domain(), &[]).unwrap();
+        // Another capability may have already failed and closed this shared
+        // backend. Both states must fail without returning CPU results.
         assert!(matches!(
             try_hash_digest384_frames_v1(Digest384GpuBackendV1::Cuda, &[frame]),
             Err(Digest384GpuErrorV1::Execution {
                 backend: Digest384GpuBackendV1::Cuda,
                 ..
+            } | Digest384GpuErrorV1::Quarantined {
+                backend: Digest384GpuBackendV1::Cuda,
             })
         ));
     }

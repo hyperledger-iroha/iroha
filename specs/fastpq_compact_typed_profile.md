@@ -1,7 +1,9 @@
 # Conditional typed-compiler profile and resource arithmetic
 
 2026-09-08. **Conditional ideal field-oracle arithmetic, not production
-qualification.** The [current V1 framing](fastpq_compact_v1_framing.md) and
+qualification.** This document analyzes the test-only 375-query predecessor,
+not the [current DEEP offline profile](fastpq_deep_protocol_contract.md). The
+[predecessor V1 framing](fastpq_compact_v1_framing.md) and
 [protocol contract](fastpq_compact_protocol_contract.md) use the six-lane
 `F_p^6` digest for H and fixed field-product G tapes. The underlying
 [typed compiler](fastpq_compact_typed_compiler.md),

@@ -521,3 +521,96 @@ fn cached_prebuilt_batches_cannot_commit_without_recapture_or_getters() {
         }
     }
 }
+
+#[test]
+fn failed_output_binding_publishes_no_partial_capture_and_cannot_be_retried() {
+    use crate::state::output_capacity::ExecutionOutputPlanState;
+    let _guard = witness::exec_witness_guard();
+    for with_transfer in [false, true] {
+        let state = state();
+        witness::start_block();
+        let mut block = state.block(header());
+        cache_canonical_test_transaction_set(&mut block, &[]);
+        stage_marker_and_membership(&mut block);
+        let archive = if with_transfer {
+            finalized_source(&mut block, Hash::new(b"atomic witness publication"))
+        } else {
+            block
+                .finalize_fastpq_source_inventory(&[], &[], &[])
+                .unwrap();
+            block.drain_transfer_transcripts_with_pending(None)
+        };
+        let prior_lane_seal = block.lane_consensus_contexts_seal;
+        block.execution_output_plan = Some(ExecutionOutputPlanState::Running);
+        let error = block.capture_exec_witness().unwrap_err();
+        assert_eq!(
+            error,
+            "witness capture requires completed execution outputs"
+        );
+        assert_eq!(assert_raw_content_failure(&block), error);
+        assert_eq!(block.lane_consensus_contexts_seal, prior_lane_seal);
+        assert!(matches!(
+            block.execution_output_plan,
+            Some(ExecutionOutputPlanState::Poisoned)
+        ));
+        assert_recorder_discarded();
+
+        // Neither repairing the output plan nor restoring identical public inputs
+        // can turn a failed first capture into a new authority-bearing attempt.
+        block.execution_output_plan = None;
+        witness::start_block();
+        witness::synchronize_fastpq_transcripts(&archive);
+        assert_eq!(block.capture_exec_witness(), Err(error.clone()));
+        assert_getters_refuse(&mut block, &error);
+        assert!(matches!(
+            block.commit(),
+            Err(TransactionsBlockError::FastpqSourceInventory)
+        ));
+        assert_not_published(&state);
+        witness::drain_exec_witness();
+    }
+}
+
+#[test]
+fn interrupted_capture_restores_prior_lane_seal_and_latches_publication_failure() {
+    use crate::state::{
+        exec_witness_capture::WitnessCaptureGuard, output_capacity::ExecutionOutputPlanState,
+    };
+    let _guard = witness::exec_witness_guard();
+    for had_lane_seal in [false, true] {
+        let state = state();
+        witness::start_block();
+        let mut block = state.block(header());
+        cache_canonical_test_transaction_set(&mut block, &[]);
+        let original = finalized_source(&mut block, Hash::new(b"interrupted capture source"));
+        let prior = had_lane_seal.then(|| {
+            block
+                .lane_consensus_contexts
+                .get()
+                .canonical_hash()
+                .unwrap()
+        });
+        block.lane_consensus_contexts_seal = prior;
+        block.execution_output_plan = Some(ExecutionOutputPlanState::Running);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let capture = WitnessCaptureGuard::new(&mut block);
+            capture.state.lane_consensus_contexts_seal = Some(Hash::new(b"partial lane seal"));
+            capture.state.parliament_timed_ovn_casting_bindings = Some(Vec::new());
+            capture.state.exec_witness = Some(witness::drain_exec_witness());
+            panic!("test-only capture interruption");
+        }));
+        assert!(outcome.is_err());
+        assert_eq!(block.lane_consensus_contexts_seal, prior);
+        let error = assert_raw_content_failure(&block);
+        assert_eq!(error, "execution witness capture was interrupted");
+        assert!(matches!(
+            block.execution_output_plan,
+            Some(ExecutionOutputPlanState::Poisoned)
+        ));
+        witness::start_block();
+        witness::synchronize_fastpq_transcripts(&original);
+        assert_eq!(block.capture_exec_witness(), Err(error.clone()));
+        assert_getters_refuse(&mut block, &error);
+        witness::drain_exec_witness();
+    }
+}

@@ -1,6 +1,9 @@
 //! Adversarial checks for independently pinned, authority-signed mobile bootstrap.
 
-use iroha_crypto::{Algorithm, HashOf, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
+use iroha_data_model::kagemusha::{
+    KAGEMUSHA_ASSET_SCALE_MAX_V1, KagemushaMobileBootstrapApprovalV1,
+};
 
 use super::*;
 
@@ -89,7 +92,7 @@ fn archive(package: &KagemushaMobileBootstrapPackageV1) -> Vec<u8> {
 
 pub(super) fn verified_fixture() -> KagemushaVerifiedMobileBootstrapV1 {
     let (_, policy, package) = fixture();
-    verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&policy))
+    verify_kagemusha_mobile_bootstrap_v1(&archive(&package), || Ok(pins(&policy)))
         .expect("authenticated native test bootstrap")
 }
 
@@ -125,6 +128,51 @@ fn expired_installation_token_requires_fresh_verification() {
 }
 
 #[test]
+fn freshness_read_delay_consumes_the_packages_remaining_lifetime() {
+    let (_, policy, package) = fixture();
+    let bytes = archive(&package);
+    let mut current_pins = pins(&policy);
+    current_pins.trusted_now_ms = package.checkpoint.expires_at_ms - 500;
+    verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(current_pins))
+        .expect("the signed package is still valid at the trusted UTC snapshot");
+
+    // Simulate a one-second suspension across the synchronous freshness read. The UTC
+    // snapshot is otherwise valid, but its remaining half-second must not restart afterward.
+    let started = NativeContinuousInstantV1::before_for_test(Duration::from_secs(1));
+    let read = std::cell::Cell::new(false);
+    let result = verify_from_reading(&bytes, started, || {
+        read.set(true);
+        Ok(current_pins)
+    });
+    assert!(read.get());
+    assert_eq!(
+        result.err(),
+        Some("KAGEMUSHA mobile bootstrap installation lease expired or invalid".to_owned())
+    );
+}
+
+#[test]
+fn freshness_read_failure_is_returned_and_oversized_input_never_reads_pins() {
+    let (_, policy, package) = fixture();
+    let bytes = archive(&package);
+    assert_eq!(
+        verify_kagemusha_mobile_bootstrap_v1(&bytes, || Err("freshness unavailable".to_owned()))
+            .err(),
+        Some("freshness unavailable".to_owned())
+    );
+    assert!(
+        verify_kagemusha_mobile_bootstrap_v1(
+            &vec![0; KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1 + 1],
+            || {
+                let _ = pins(&policy);
+                panic!("oversized archive must not invoke the freshness authority")
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn rejects_noncanonical_truncated_trailing_and_oversized_archives() {
     let (_, policy, package) = fixture();
     let valid = archive(&package);
@@ -137,7 +185,7 @@ fn rejects_noncanonical_truncated_trailing_and_oversized_archives() {
         vec![0; KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1 + 1],
         norito::encode_canonical(&package.checkpoint).expect("wrong archive type"),
     ] {
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, pins(&policy)).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(pins(&policy))).is_err());
     }
 }
 
@@ -156,7 +204,7 @@ fn rejects_native_network_scope_and_release_substitution() {
             5 => changed.release_id = [9; 32],
             _ => changed.release_attestation_digest = [9; 32],
         }
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, changed).is_err());
+        assert!(verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(changed)).is_err());
     }
 }
 
@@ -171,7 +219,9 @@ fn authenticates_first_context_and_freshness_fields_in_signature() {
             2 => changed.checkpoint.issued_at_ms += 1,
             _ => changed.checkpoint.expires_at_ms += 1,
         }
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), pins(&policy)).is_err());
+        assert!(
+            verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), || Ok(pins(&policy))).is_err()
+        );
     }
 }
 
@@ -193,7 +243,9 @@ fn rejects_even_threshold_signed_invalid_context_scope_version_and_freshness() {
         let changed = signed(checkpoint, &keys[..2]);
         let mut changed_pins = pins(&policy);
         changed_pins.scope = checkpoint.scope;
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), changed_pins).is_err());
+        assert!(
+            verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), || Ok(changed_pins)).is_err()
+        );
     }
 }
 
@@ -206,15 +258,19 @@ fn rejects_package_selected_key_and_changed_authority_policy() {
     changed
         .approvals
         .sort_by(|a, b| a.public_key.cmp(&b.public_key));
-    assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), pins(&policy)).is_err());
+    assert!(
+        verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), || Ok(pins(&policy))).is_err()
+    );
     let mut changed_policy = policy.clone();
     changed_policy.authority_set_id = [99; 32];
     assert!(
-        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&changed_policy)).is_err()
+        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), || Ok(pins(&changed_policy)))
+            .is_err()
     );
     changed_policy.threshold = 0;
     assert!(
-        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&changed_policy)).is_err()
+        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), || Ok(pins(&changed_policy)))
+            .is_err()
     );
 }
 
@@ -235,7 +291,9 @@ fn rejects_duplicate_unordered_insufficient_and_invalid_approvals() {
                 .expect("wrong signing key");
             }
         }
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), pins(&policy)).is_err());
+        assert!(
+            verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), || Ok(pins(&policy))).is_err()
+        );
     }
 }
 
@@ -248,7 +306,9 @@ fn rejects_cross_domain_signature_replay() {
         approval.signature =
             SignatureOf::try_new(key.private_key(), &payload).expect("other domain");
     }
-    assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&policy)).is_err());
+    assert!(
+        verify_kagemusha_mobile_bootstrap_v1(&archive(&package), || Ok(pins(&policy))).is_err()
+    );
 }
 
 #[test]
@@ -264,7 +324,7 @@ fn enforces_inclusive_issuance_exclusive_expiry_and_native_sequence_floor() {
         let mut changed = pins(&policy);
         changed.trusted_now_ms = time;
         assert_eq!(
-            verify_kagemusha_mobile_bootstrap_v1(&bytes, changed).is_ok(),
+            verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(changed)).is_ok(),
             accepted
         );
     }
@@ -272,7 +332,7 @@ fn enforces_inclusive_issuance_exclusive_expiry_and_native_sequence_floor() {
         let mut changed = pins(&policy);
         changed.minimum_sequence = floor;
         assert_eq!(
-            verify_kagemusha_mobile_bootstrap_v1(&bytes, changed).is_ok(),
+            verify_kagemusha_mobile_bootstrap_v1(&bytes, || Ok(changed)).is_ok(),
             accepted
         );
     }
@@ -281,7 +341,7 @@ fn enforces_inclusive_issuance_exclusive_expiry_and_native_sequence_floor() {
 #[test]
 fn allows_exact_retry_but_rejects_rollback_and_same_sequence_equivocation() {
     let (keys, policy, package) = fixture();
-    let accepted = verify_kagemusha_mobile_bootstrap_v1(&archive(&package), pins(&policy))
+    let accepted = verify_kagemusha_mobile_bootstrap_v1(&archive(&package), || Ok(pins(&policy)))
         .expect("first accepted package")
         .replay_pin();
     for (sequence, context_byte, succeeds) in
@@ -294,7 +354,7 @@ fn allows_exact_retry_but_rejects_rollback_and_same_sequence_equivocation() {
         let mut changed_pins = pins(&policy);
         changed_pins.previous = Some(accepted);
         assert_eq!(
-            verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), changed_pins).is_ok(),
+            verify_kagemusha_mobile_bootstrap_v1(&archive(&changed), || Ok(changed_pins)).is_ok(),
             succeeds
         );
     }
@@ -310,6 +370,8 @@ fn allows_exact_retry_but_rejects_rollback_and_same_sequence_equivocation() {
     ] {
         let mut changed_pins = pins(&policy);
         changed_pins.previous = Some(previous);
-        assert!(verify_kagemusha_mobile_bootstrap_v1(&archive(&package), changed_pins).is_err());
+        assert!(
+            verify_kagemusha_mobile_bootstrap_v1(&archive(&package), || Ok(changed_pins)).is_err()
+        );
     }
 }

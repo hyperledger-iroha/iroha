@@ -463,3 +463,48 @@ fn canonical_frame_schema_flags_and_complete_bytes_are_required() {
         assert_eq!(decode(&bytes, PROOF_BYTE_TARGET).unwrap(), proof);
     }
 }
+
+#[test]
+fn caller_allocation_ceiling_intersects_profile_and_parent_scopes() {
+    let proof = fixture(&maximal_queries());
+    let bytes = norito::encode_canonical(&proof).unwrap();
+    let (decoded, measured) =
+        norito::core::with_decode_limits_measured(decode_limits(bytes.len()), || {
+            decode_with_allocation(&bytes, bytes.len(), MAX_ALLOCATION_CHARGES)
+        });
+    assert_eq!(decoded.unwrap(), proof);
+    let required = measured.total_allocated_bytes();
+    assert!(required > 0 && required <= MAX_ALLOCATION_CHARGES);
+    assert_eq!(
+        decode_with_allocation(&bytes, bytes.len(), required).unwrap(),
+        proof
+    );
+    assert!(decode_with_allocation(&bytes, bytes.len(), required - 1).is_err());
+    assert_eq!(
+        decode_limits_with_allocation(bytes.len(), MAX_ALLOCATION_CHARGES + 1)
+            .max_total_allocated_bytes(),
+        MAX_ALLOCATION_CHARGES
+    );
+    let outer = DecodeLimits::new(
+        MAX_SEQUENCE_ELEMENTS,
+        bytes.len(),
+        2 * MAX_TOTAL_ELEMENTS,
+        2 * required - 1,
+        MAX_DECODE_DEPTH,
+    );
+    norito::core::with_decode_limits_scope(outer, || {
+        assert_eq!(
+            decode_with_allocation(&bytes, bytes.len(), required).unwrap(),
+            proof
+        );
+        assert!(decode_with_allocation(&bytes, bytes.len(), required).is_err());
+    });
+    assert!(matches!(
+        decode_with_allocation(&[0xff], 0, 0),
+        Err(Error::VerifierLimitExceeded {
+            limit: "max_proof_bytes",
+            actual: 1,
+            max: 0
+        })
+    ));
+}

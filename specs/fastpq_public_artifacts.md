@@ -1,6 +1,6 @@
 # FASTPQ public artifact boundary
 
-Source contract updated 2026-09-08. The model codecs in
+Source contract updated 2026-09-26. The model codecs in
 `crates/iroha_data_model/src/fastpq/public_artifact.rs` describe unverified public
 transport data. They register no qualified compact profile. Production proof
 admission still uses the raw replay verifier.
@@ -65,9 +65,9 @@ not new compact persistence or admission support.
 ## Offline verifier mapping
 
 The normal-library `fastpq_prover::offline_compact` facade connects canonical
-quantity model wrappers to the sole [six-lane V1 verifier](fastpq_compact_protocol_contract.md).
+quantity model wrappers to the sole [DEEP verifier](fastpq_deep_protocol_contract.md).
 It derives its metadata profile ID from the complete fixed
-`QuantityArtifactProfileV1` description, never accepts a proof-selected
+`deep_compact::QuantityArtifactProfileV1` description, never accepts a proof-selected
 implementation, and compares all seven PublicIO fields with independently
 supplied expectations. The AXT entry point additionally compares the complete
 binding, original metadata, pre-proof mirrors and ordered remote preimages.
@@ -85,15 +85,17 @@ the six-word commitments; none substitutes for the complete logical hash context
 
 Old SHAKE/prototype carrier schemas are rejected. Production ingress still rejects
 compact artifacts, and no compact persistence/admission path uses the offline
-success result. The current complete-row DTO exceeds both production byte caps
-before framing; explicit diagnostic budgets do not widen production policy.
+success result. The fixed DEEP child DTO has a 506,351-byte shape ceiling;
+actual carrier, statement and artifact overhead still need their independent
+caps. This is not evidence of complete same-profile proof generation or resource
+qualification; explicit diagnostic budgets do not widen production policy.
 Concrete security, witness privacy, authenticated caller integration and release
 hardware evidence remain separate obligations.
 
 ## Validation and remaining work
 
 The counts, artifacts and measurements below retain their original earlier source
-scope. They are not validation of the current six-lane compact transcript or its
+scope. They are not validation of the current DEEP compact transcript or its
 changed profile and wire identities. New evidence must bind the actual source,
 executable and complete proof bytes; compiler success alone is insufficient.
 

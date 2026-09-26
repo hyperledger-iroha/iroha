@@ -603,22 +603,48 @@ height-context ID, validity interval and sequence. The native verifier checks
 an independently provisioned authority policy and deployment selection; the
 package cannot choose its own trusted keys. It rejects expired, future,
 regressed and same-sequence changed checkpoints, while allowing an exact
-still-valid retry. Native trusted time and a retained sequence/digest pin are
-inputs; ordinary app storage does not establish rollback resistance. The
+still-valid retry. The canonical checkpoint and threshold verifier live in the
+shared data model. Kagami prepares checkpoints from an authenticated Experimental
+release, signs partial approvals under independently supplied deployment and
+lifetime pins, and assembles distinct approvals into the exact native package.
+Each output is a new private file; issuing a package does not provision a phone
+or establish current time. Native trusted time and a retained sequence/digest
+pin are inputs; ordinary app storage does not establish rollback resistance. The
 verified token has a suspend-inclusive installation lease capped at 120 seconds
 and the checkpoint's remaining validity; loading, journal replay and publication
-must finish within it or require fresh verification. The
+must finish within it or require fresh verification. Native verification starts
+that lease before calling the freshness reader, so a suspension between reading
+trusted UTC and verifying signatures cannot renew stale time. The
 installer derives every release/finality pin from that token and authenticates
 the matching release and artifacts before installing the owner. Swift and
 Android can activate a Rust-provisioned native startup context by transporting
 only that bounded signed package. Native provisioning fixes the authority,
 release archives, proof layout, private paths and create/recover mode once;
 native freshness ownership supplies current trusted time and replay state.
+The native online freshness owner creates an unpredictable nonce and retains its
+continuous start before transport. It consumes a threshold-signed response bound
+to that nonce, the exact checkpoint digest and sequence, and independent deployment
+pins. The authority must durably retain the checkpoint before signing and supply
+a trusted UTC interval that includes its uncertainty. Verification requires the
+signed lower bound to follow issuance and the signed upper bound plus all native
+elapsed time to precede expiry. Every provider read advances that upper bound;
+device sleep, slow replies and signature work consume time, and no handset wall
+clock is consulted. The online attempt lasts at most 120 seconds; a subsequent
+installation uses the separate bounded lease described above. This source does
+not supply the deployed authority service, its operational keys, or app provisioning,
+and its retained bootstrap pin is not an offline wallet anti-rollback counter.
 Activation retains the verified checkpoint before installing the actual host,
 and an exact retry rechecks freshness and authentication. A changed checkpoint
 cannot replace a live host. An uncertain durable mutation or partial installation
 requires process restart and authenticated recovery. There is no reset or
-caller-supplied verification callback across C/JNI. Approved deployment
+caller-supplied verification callback across C/JNI. Publication, C/JNI dispatch
+and public Rust mutation calls share one native ownership gate; partially
+installed global owners cannot be called before final publication. Rust host
+operations require scoped access with a guard-borrowed permit that cannot move
+across threads. An operation panic permanently revokes dispatch for that process;
+even a callback that swallows the error cannot return a successful result. Inherited
+process identities are rejected before acquiring native ownership or clock
+locks. Approved deployment
 signatures and a concrete independently provisioned native context remain
 required; neither a status hint nor the bundle response can choose the
 checkpoint. JNI finality
@@ -768,6 +794,17 @@ fixtures for both Pasta fields. This is a refactoring of the current verifier
 graph, not an independent source-authentication proof. The separate k15 slice
 arithmetic is not linked to that complete inventory or to child proofs and a
 root join, so neither component qualifies the phone gate.
+
+The separate inventory circuit now reuses the complete scalar verifier graph,
+native Poseidon jobs and reciprocal carrier binding, exposing columns of
+113, 4,090 and 4,090 cells. Its two extra semantic cells bind both source counts
+to the verifier graph's shape; the carriers expose the ordered source and
+coefficient limbs, common statement and constrained zero padding. This circuit
+is not selected by the release. Its final root must still verify both parity
+proofs, authenticate their actual carrier commitments, and bind the five slices
+and joins. Full-circuit tests exercise Poseidon and the entire carrier evaluation
+schedule using a small genuine deferred equation; that fixture does not contain
+the complete recursive parent/shard proof graph or establish phone resource use.
 
 The arithmetic tree has exactly five Eq and five Ep slice proofs plus four
 binary joins in each field: eighteen proof instances per transition, before

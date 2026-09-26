@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 
 use super::*;
-use crate::{
+use crate::kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1;
+use iroha_data_model::kagemusha::{
     KagemushaMobileBootstrapApprovalV1, KagemushaMobileBootstrapPackageV1,
-    kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1,
 };
 
 struct Freshness {
@@ -86,7 +86,7 @@ fn profile() -> KagemushaRecursiveVerifierProfileV1 {
     }
 }
 
-fn context() -> KagemushaTestnetNativeStartupContextV1 {
+pub(super) fn context() -> KagemushaTestnetNativeStartupContextV1 {
     let token = verified_test_bootstrap_v1();
     KagemushaTestnetNativeStartupContextV1 {
         authority_policy: token.trusted_authority_policy().clone(),
@@ -211,13 +211,48 @@ fn native_startup_uncertain_persistence_and_false_success_poison_without_install
 }
 
 #[test]
+fn native_startup_rechecks_freshness_after_retention_before_installing() {
+    struct ExpiringFreshness(Freshness);
+
+    impl KagemushaTestnetNativeStartupFreshnessProviderV1 for ExpiringFreshness {
+        fn read_freshness(&self) -> Result<KagemushaTestnetNativeStartupFreshnessV1, String> {
+            let mut current = self.0.read_freshness()?;
+            if self.0.writes.load(Ordering::SeqCst) > 0 {
+                current.trusted_now_ms = 300_000;
+            }
+            Ok(current)
+        }
+
+        fn retain_verified_bootstrap(
+            &self,
+            pin: KagemushaMobileBootstrapReplayPinV1,
+        ) -> Result<(), String> {
+            self.0.retain_verified_bootstrap(pin)
+        }
+    }
+
+    let provider = ExpiringFreshness(Freshness::new());
+    let mut state: StartupState<u8> = StartupState::Cold;
+    assert!(
+        activate(&context(), &provider, &mut state, &archive(10), |_| {
+            panic!("expired retained checkpoint must not open either journal")
+        })
+        .is_err()
+    );
+    assert_eq!(provider.0.writes.load(Ordering::SeqCst), 1);
+    assert!(matches!(state, StartupState::Poisoned));
+}
+
+#[test]
 fn native_startup_failed_real_release_loader_never_activates() {
+    let gate = TestnetPublicationGateV1::for_test();
+    let publication = gate.exclusive().unwrap();
     let ctx = context();
     let provider = Freshness::new();
     let mut state = StartupState::Cold;
     assert!(
         activate(&ctx, &provider, &mut state, &archive(10), |verified| ctx
-            .install_host(verified))
+            .install_host(&publication.permit(), verified))
         .is_err()
     );
     assert!(matches!(state, StartupState::Poisoned));
@@ -240,8 +275,10 @@ fn native_startup_panicking_installer_cannot_be_retried() {
 #[test]
 fn native_startup_provisioning_is_once_and_rejects_inherited_process_identity() {
     let slot = OnceLock::new();
-    install_context(&slot, context(), Box::new(Freshness::new())).unwrap();
-    assert!(install_context(&slot, context(), Box::new(Freshness::new())).is_err());
+    let publication = TestnetPublicationGateV1::for_test();
+    install_context(&slot, &publication, context(), Box::new(Freshness::new())).unwrap();
+    assert!(publication.dispatch().is_err());
+    assert!(install_context(&slot, &publication, context(), Box::new(Freshness::new())).is_err());
     let provisioned = slot.get().unwrap();
     let session = provisioned.session.lock().unwrap();
     assert!(require_process_owner(provisioned.process_id).is_ok());
@@ -284,4 +321,154 @@ fn native_startup_c_contract_bounds_and_unprovisioned_activation() {
             ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1
         );
     }
+}
+
+#[test]
+fn native_startup_partial_owner_or_final_lease_failure_closes_all_dispatch() {
+    for ledger_failure in [true, false] {
+        let ctx = context();
+        let provider = Freshness::new();
+        let publication = TestnetPublicationGateV1::for_test();
+        let mut state = StartupState::Cold;
+        let owner_installed = AtomicBool::new(false);
+        let ledger_installed = AtomicBool::new(false);
+        let result = {
+            let mut publication = publication.exclusive().unwrap();
+            publish_activation(&mut publication, &mut state, |state| {
+                activate_with_final_check(
+                    &ctx,
+                    &provider,
+                    state,
+                    &archive(10),
+                    |_| {
+                        owner_installed.store(true, Ordering::SeqCst);
+                        if ledger_failure {
+                            return Err("ledger replay failed".to_owned());
+                        }
+                        ledger_installed.store(true, Ordering::SeqCst);
+                        Ok(7_u8)
+                    },
+                    |_| Err("final bootstrap lease expired".to_owned()),
+                )
+            })
+        };
+        assert!(result.is_err());
+        assert!(owner_installed.load(Ordering::SeqCst));
+        assert_eq!(ledger_installed.load(Ordering::SeqCst), !ledger_failure);
+        assert!(matches!(state, StartupState::Poisoned));
+        // This is the exact outer guard used by all three observation/admission exports,
+        // the value-credit export, and the Rust retained-host accessor. Neither populated
+        // global grants access after failure.
+        assert!(publication.dispatch().is_err());
+        let mut guard = publication.exclusive().unwrap();
+        assert!(publish_activation(&mut guard, &mut state, |_| panic!("retried poison")).is_err());
+    }
+}
+
+#[test]
+fn native_startup_concurrent_dispatch_waits_for_final_publication_or_failure() {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    for succeed in [false, true] {
+        let publication = TestnetPublicationGateV1::for_test();
+        let owner_installed = AtomicBool::new(false);
+        let ledger_installed = AtomicBool::new(false);
+        let (staged_tx, staged_rx) = mpsc::channel();
+        let (finish_tx, finish_rx) = mpsc::channel();
+        let (dispatch_started_tx, dispatch_started_rx) = mpsc::channel();
+        let (dispatch_tx, dispatch_rx) = mpsc::channel();
+        thread::scope(|threads| {
+            let gate = &publication;
+            let owner = &owner_installed;
+            let ledger = &ledger_installed;
+            let install = threads.spawn(move || {
+                let ctx = context();
+                let provider = Freshness::new();
+                let mut state = StartupState::Cold;
+                let mut guard = gate.exclusive().unwrap();
+                publish_activation(&mut guard, &mut state, |state| {
+                    activate_with_final_check(
+                        &ctx,
+                        &provider,
+                        state,
+                        &archive(10),
+                        |_| {
+                            owner.store(true, Ordering::SeqCst);
+                            ledger.store(true, Ordering::SeqCst);
+                            staged_tx.send(()).unwrap();
+                            finish_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                            Ok(7_u8)
+                        },
+                        |_| {
+                            if succeed {
+                                Ok(())
+                            } else {
+                                Err("lease expired".to_owned())
+                            }
+                        },
+                    )
+                })
+            });
+            let staged = staged_rx.recv_timeout(Duration::from_secs(5));
+            let dispatch = threads.spawn(|| {
+                dispatch_started_tx.send(()).unwrap();
+                let result = publication.dispatch().map(|_guard| {
+                    assert!(owner_installed.load(Ordering::SeqCst));
+                    assert!(ledger_installed.load(Ordering::SeqCst));
+                });
+                dispatch_tx.send(result.is_ok()).unwrap();
+            });
+            let dispatch_started = dispatch_started_rx.recv_timeout(Duration::from_secs(5));
+            let blocked = dispatch_rx.recv_timeout(Duration::from_millis(50));
+            // Always release the installer and join both workers before checking observations.
+            let released = finish_tx.send(());
+            drop(finish_tx);
+            let installed = install.join();
+            let completed = dispatch_rx.recv_timeout(Duration::from_secs(5));
+            let dispatched = dispatch.join();
+            assert_eq!(staged, Ok(()));
+            assert_eq!(dispatch_started, Ok(()));
+            assert_eq!(blocked, Err(mpsc::RecvTimeoutError::Timeout));
+            released.unwrap();
+            assert_eq!(installed.unwrap().is_ok(), succeed);
+            assert_eq!(completed, Ok(succeed));
+            dispatched.unwrap();
+        });
+    }
+}
+
+#[test]
+fn native_startup_publication_rejects_panics_but_preserves_active_invalid_retry() {
+    let publication = TestnetPublicationGateV1::for_test();
+    let ctx = context();
+    let provider = Freshness::new();
+    let mut state = StartupState::Cold;
+    {
+        let mut guard = publication.exclusive().unwrap();
+        publish_activation(&mut guard, &mut state, |state| {
+            activate(&ctx, &provider, state, &archive(10), |_| Ok(7_u8))
+        })
+        .unwrap();
+        assert!(
+            publish_activation(&mut guard, &mut state, |state| {
+                activate(&ctx, &provider, state, b"invalid retry", |_| {
+                    panic!("reinstalled")
+                })
+            })
+            .is_err()
+        );
+    }
+    assert!(publication.dispatch().is_ok());
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut guard = publication.exclusive().unwrap();
+        let mut state: StartupState<u8> = StartupState::Cold;
+        let _ = publish_activation(&mut guard, &mut state, |state| {
+            activate(&ctx, &provider, state, &archive(10), |_| {
+                panic!("partial install")
+            })
+        });
+    }));
+    assert!(result.is_err());
+    assert!(publication.dispatch().is_err());
+    assert!(publication.exclusive().is_err());
 }

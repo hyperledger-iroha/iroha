@@ -9,6 +9,9 @@
 
 use super::*;
 
+#[path = "mint_hash_claim_inventory_proof.rs"]
+mod proof;
+
 /// Additional proof-internal source counts after the unchanged 97 external
 /// cells and fourteen reciprocal carrier-binding cells.
 const INVENTORY_EQ_SOURCE_COUNT: usize = KAGEMUSHA_MINT_HASH_CLAIM_INNER_SEMANTIC_INSTANCE_COUNT_V1;
@@ -28,10 +31,6 @@ pub(super) struct GlobalInventoryConfigV1<F: halo2_base::utils::ScalarField> {
 /// root must verify both parity proofs, their four carrier commitments, and
 /// their shared two-challenge RLC values before accepting any slice.
 #[derive(Clone)]
-#[expect(
-    dead_code,
-    reason = "global inventory awaits proof-verified slices and joins"
-)]
 pub(super) struct KagemushaClaimGlobalInventoryCircuitV1<F: KagemushaPoseidonFieldV1> {
     builder: BaseCircuitBuilder<F>,
     carrier_rlc: KagemushaClaimCarrierRlcMachineV1<F>,
@@ -117,7 +116,10 @@ impl<F: KagemushaPoseidonFieldV1 + ff::WithSmallOrderMulGroup<3>> Circuit<F>
 /// the current hybrid Claim. Indices 0..96 remain the external statement;
 /// 97..110 retain reciprocal commitments/challenges/evaluations; 111..112
 /// state the Eq and Ep complete-source counts respectively.
-#[expect(dead_code, reason = "inventory proof is not selected by the release")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "inventory proof is not selected by the release")
+)]
 pub(super) struct KagemushaClaimGlobalInventoryProofInputV1<F: KagemushaPoseidonFieldV1> {
     pub(super) circuit: KagemushaClaimGlobalInventoryCircuitV1<F>,
     pub(super) instances: Vec<Vec<F>>,

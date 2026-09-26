@@ -19,7 +19,6 @@ pub(super) enum Node {
 }
 
 impl Node {
-    #[cfg(test)]
     pub(super) fn is_arithmetic(self) -> bool {
         matches!(self, Self::Add(..) | Self::Sub(..) | Self::Mul(..))
     }

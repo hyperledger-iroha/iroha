@@ -25,14 +25,13 @@
 //! declared two-update SMT statement; it changes no query/profile/default limit
 //! and does not replace the production verifier's mandatory replay.
 
-#[cfg(test)]
 use super::{
     air_degree::{AirDegreeBounds, PolynomialDegree},
     compact_hash_quotient::PolynomialHashEvaluator,
     masked_quotient::{checked_add, checked_mul, transform_work},
     polynomial_transform::{PolynomialDomain, PolynomialLanes, reserved},
+    secret_polynomial::SecretPolynomial,
 };
-#[cfg(test)]
 use crate::field::GoldilocksFp4V1;
 use fastpq_isi::FASTPQ_FINAL_V1;
 use norito::{NoritoSerialize, codec::Encode as NoritoEncode};
@@ -47,27 +46,34 @@ use crate::{
     Error, Result,
     gadgets::{
         compact_smt_air::{COLUMN_COUNT, DigestLimbs, PHYSICAL_ROW_COUNT, PublicStatement},
-        compact_trace_columns::{decode_smt_row, smt_row_from_cells},
+        compact_trace_columns::smt_row_from_cells,
     },
     proof::VerifyLimits,
 };
 
+use super::compact_smt_quotient::{CompactSmtFixedValues, FIXED_COLUMN_COUNT, FIXED_ROW_COUNT};
+#[cfg(test)]
 use super::{
     FriDomain, GOLDILOCKS_MODULUS,
     compact_hash_quotient::ProverMaskCycle,
     compact_protocol::{PreparedAir, ProverEvaluator},
-    compact_smt_quotient::{CompactSmtFixedValues, FIXED_COLUMN_COUNT, FIXED_ROW_COUNT},
     fixed_schedule::PeriodicSelectors,
 };
+#[cfg(test)]
+use crate::gadgets::compact_trace_columns::decode_smt_row;
 use crate::{fft::Planner, gadgets::compact_smt_air::PHYSICAL_HASH_ROWS};
 
 const CONSTRAINT_COUNT: usize = LOCAL_SLOTS + TRANSITION_SLOTS + RESIDUE_COUNT;
 const IDENTITY: &str =
     "fastpq:compact:v1:compact-transfer:v1:342cols:597local+83edge+243smt:65536rows";
 const MASK_CYCLE_ROWS: usize = 4096;
+#[cfg(test)]
 const LDE_ROWS: usize = 524_288;
+#[cfg(test)]
 const FIXED_LDE_BYTES: usize = 205_520_896;
+#[cfg(test)]
 const FIXED_COEFFICIENT_BYTES: usize = 25_690_112;
+#[cfg(test)]
 const PHASE_CYCLE_BYTES: usize = 16_777_216;
 
 #[derive(NoritoSerialize, norito::NoritoSchema)]
@@ -212,7 +218,6 @@ impl CompactTransferAir {
     /// Rotation by the nonzero trace generator preserves these degrees. This
     /// follows the exact compiled hash and SMT slot order without evaluating a
     /// trace, selecting mask entropy or interpolating subgroup residues.
-    #[cfg(test)]
     pub(super) fn numerator_degree_bounds(&self, columns: &[usize]) -> Result<AirDegreeBounds> {
         let columns: &[usize; COLUMN_COUNT] = columns
             .try_into()
@@ -230,7 +235,6 @@ impl CompactTransferAir {
     }
 
     /// Bound the actual fixed-column/cycle preparation without allocating it.
-    #[cfg(test)]
     pub(super) fn polynomial_preparation_cost(
         &self,
         domain: PolynomialDomain,
@@ -296,11 +300,11 @@ impl CompactTransferAir {
             payload_bytes,
             work_units,
             point_work_units,
+            scratch_cells: graph.nodes,
         })
     }
 
     /// Prepare actual public fixed polynomials on the checked full Fp4 coset.
-    #[cfg(test)]
     pub(super) fn prepare_polynomial_evaluator(
         &self,
         domain: PolynomialDomain,
@@ -333,6 +337,7 @@ impl CompactTransferAir {
         })
     }
 
+    #[cfg(test)]
     fn prepare(&self) -> Result<PreparedTransferAir<'_>> {
         let lde_rows = PHYSICAL_ROW_COUNT
             .checked_mul(FASTPQ_FINAL_V1.fri.blowup_factor as usize)
@@ -415,16 +420,19 @@ impl FixedAir for CompactTransferAir {
         &self.statement_bytes
     }
 
+    #[cfg(test)]
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.evaluate_at(point, current, next)
     }
 
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         Ok(Box::new(self.prepare()?))
     }
 }
 
 /// Exact immutable public preparation, borrowed by every per-proof worker.
+#[cfg(test)]
 struct PreparedTransferAir<'a> {
     air: &'a CompactTransferAir,
     smt: CompactSmtQuotient<'a>,
@@ -434,6 +442,7 @@ struct PreparedTransferAir<'a> {
     domain: FriDomain,
 }
 
+#[cfg(test)]
 impl PreparedTransferAir<'_> {
     fn fixed_at(&self, index: usize, point: u64) -> Result<CompactSmtFixedValues<u64>> {
         if index >= LDE_ROWS {
@@ -460,6 +469,7 @@ impl PreparedTransferAir<'_> {
     }
 }
 
+#[cfg(test)]
 impl PreparedAir for PreparedTransferAir<'_> {
     fn evaluator(&self) -> ProverEvaluator<'_> {
         let mut scratch = self.air.hash.evaluation_scratch::<u64>();
@@ -479,15 +489,15 @@ impl PreparedAir for PreparedTransferAir<'_> {
 }
 
 /// Public geometry-only costs; no witness or mask values are retained.
-#[cfg(test)]
 pub(super) struct PolynomialPreparationCost {
     pub(super) payload_bytes: usize,
     pub(super) work_units: usize,
     pub(super) point_work_units: usize,
+    /// One graph workspace is included above; parallel callers charge each extra copy.
+    pub(super) scratch_cells: usize,
 }
 
-/// Exact public polynomial caches plus a guarded private hash scratch buffer.
-#[cfg(test)]
+/// Immutable exact public polynomial caches shared by bounded arithmetic workers.
 pub(super) struct PreparedPolynomialAir<'a> {
     domain: PolynomialDomain,
     smt: CompactSmtQuotient<'a>,
@@ -496,8 +506,23 @@ pub(super) struct PreparedPolynomialAir<'a> {
     hash: PolynomialHashEvaluator<'a>,
 }
 
-#[cfg(test)]
-impl PreparedPolynomialAir<'_> {
+impl<'source> PreparedPolynomialAir<'source> {
+    /// Borrow these exact caches with one separately guarded arithmetic workspace.
+    pub(super) fn evaluator(&self) -> Result<PolynomialAirEvaluator<'_, 'source>> {
+        Ok(PolynomialAirEvaluator {
+            prepared: self,
+            scratch: self.hash.scratch()?,
+        })
+    }
+}
+
+/// One zeroizing hash workspace tied to its immutable public polynomial owner.
+pub(super) struct PolynomialAirEvaluator<'cache, 'source> {
+    prepared: &'cache PreparedPolynomialAir<'source>,
+    scratch: SecretPolynomial<GoldilocksFp4V1>,
+}
+
+impl PolynomialAirEvaluator<'_, '_> {
     /// Write every actual AIR slot into the caller's fixed guarded output slice.
     pub(super) fn evaluate_into(
         &mut self,
@@ -506,10 +531,11 @@ impl PreparedPolynomialAir<'_> {
         next: &[GoldilocksFp4V1],
         output: &mut [GoldilocksFp4V1],
     ) -> Result<()> {
-        if index >= self.domain.rows() {
+        let prepared = self.prepared;
+        if index >= prepared.domain.rows() {
             return Err(Error::QueryIndexOutOfRange {
                 index,
-                len: self.domain.rows(),
+                len: prepared.domain.rows(),
             });
         }
         let current: &[GoldilocksFp4V1; COLUMN_COUNT] = current
@@ -527,14 +553,17 @@ impl PreparedPolynomialAir<'_> {
             }
         }
         let mut sparse = [GoldilocksFp4V1::ZERO; FIXED_COLUMN_COUNT];
-        for (value, column) in sparse.iter_mut().zip(&self.fixed) {
+        for (value, column) in sparse.iter_mut().zip(&prepared.fixed) {
             *value = column.value(index)?;
         }
-        let fixed = CompactSmtFixedValues::new(self.phases[index % self.phases.len()], sparse)?;
+        let fixed =
+            CompactSmtFixedValues::new(prepared.phases[index % prepared.phases.len()], sparse)?;
         let current = smt_row_from_cells(current);
         let next = smt_row_from_cells(next);
-        let hash = self.hash.evaluate(index, &current.hash, &next.hash)?;
-        combine_into(hash, self.smt.residues(&fixed, &current, &next), output)
+        let hash = prepared
+            .hash
+            .evaluate(index, &current.hash, &next.hash, &mut self.scratch)?;
+        combine_into(hash, prepared.smt.residues(&fixed, &current, &next), output)
     }
 }
 
@@ -546,7 +575,6 @@ fn combine<F>(hash: HashNumerators<F>, smt: [F; RESIDUE_COUNT]) -> Vec<F> {
     combined_slots(hash, smt).collect()
 }
 
-#[cfg(test)]
 fn combine_into<F>(
     hash: HashNumerators<F>,
     smt: [F; RESIDUE_COUNT],
@@ -561,6 +589,7 @@ fn combine_into<F>(
     Ok(())
 }
 
+#[cfg(test)]
 fn checked_matrix_bytes(columns: usize, rows: usize, maximum: usize) -> Result<usize> {
     let bytes = columns
         .checked_mul(rows)
@@ -964,14 +993,15 @@ mod tests {
         let cost = air.polynomial_preparation_cost(domain).unwrap();
         assert!(cost.payload_bytes > FIXED_COLUMN_COUNT * domain.rows() * GoldilocksFp4V1::BYTES);
         assert!(cost.work_units > 0 && cost.point_work_units > 0);
-        let mut prepared = air.prepare_polynomial_evaluator(domain).unwrap();
+        let prepared = air.prepare_polynomial_evaluator(domain).unwrap();
+        let mut evaluator = prepared.evaluator().unwrap();
         let current = core::array::from_fn::<_, COLUMN_COUNT, _>(|column| {
             GoldilocksFp4V1::new([3 + column as u64, 5, 7, 11]).unwrap()
         });
         let next = current.map(|value| value.add(GoldilocksFp4V1::new([13, 17, 19, 23]).unwrap()));
         for index in [0, 1, 2047, 2048, 262_143] {
             let mut output = [GoldilocksFp4V1::ZERO; CONSTRAINT_COUNT];
-            prepared
+            evaluator
                 .evaluate_into(index, &current, &next, &mut output)
                 .unwrap();
             assert_eq!(
@@ -980,19 +1010,65 @@ mod tests {
                     .unwrap()
             );
         }
+        // Reuse the real production range scheduler and immutable cache at
+        // phase-cycle, trace rotation and final-domain boundaries. The expected
+        // weighted rows come from the independent uncached AIR point evaluator.
+        use super::super::masked_quotient::{NUMERATOR_JOBS, evaluate_parallel_rows};
+        let indices = [0, 1, 3, 4, 2047, 2048, 65_535, 65_536, 262_142, 262_143];
+        let alpha = core::array::from_fn::<_, CONSTRAINT_COUNT, _>(|slot| {
+            GoldilocksFp4V1::new([slot as u64 + 1, 3, 5, 7]).unwrap()
+        });
+        let mix = |values: &[GoldilocksFp4V1]| {
+            values
+                .iter()
+                .zip(&alpha)
+                .fold(GoldilocksFp4V1::ZERO, |sum, (&value, &weight)| {
+                    sum.add(value.mul(weight))
+                })
+        };
+        let expected = indices.map(|index| {
+            mix(&air
+                .evaluate_at(domain.point(index).unwrap(), &current, &next)
+                .unwrap())
+        });
+        for threads in [1, 2, 6] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap();
+            let mut workers = (0..NUMERATOR_JOBS)
+                .map(|_| {
+                    (
+                        prepared.evaluator().unwrap(),
+                        SecretPolynomial::zeroed(CONSTRAINT_COUNT).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut output = SecretPolynomial::zeroed(indices.len()).unwrap();
+            pool.install(|| {
+                evaluate_parallel_rows(&mut output, &mut workers, |row, worker| {
+                    worker
+                        .0
+                        .evaluate_into(indices[row], &current, &next, &mut worker.1)?;
+                    Ok(mix(&worker.1))
+                })
+            })
+            .unwrap();
+            assert_eq!(&*output, &expected);
+        }
         let mut output = [GoldilocksFp4V1::ONE; CONSTRAINT_COUNT];
         assert!(
-            prepared
+            evaluator
                 .evaluate_into(domain.rows(), &current, &next, &mut output)
                 .is_err()
         );
         assert!(
-            prepared
+            evaluator
                 .evaluate_into(0, &current[..341], &next, &mut output)
                 .is_err()
         );
         assert!(
-            prepared
+            evaluator
                 .evaluate_into(0, &current, &next, &mut output[..922])
                 .is_err()
         );
@@ -1000,7 +1076,7 @@ mod tests {
         malformed[341] =
             GoldilocksFp4V1::from_coefficients_unchecked_for_test([0, 0, 0, GOLDILOCKS_MODULUS]);
         assert!(
-            prepared
+            evaluator
                 .evaluate_into(0, &malformed, &next, &mut output)
                 .is_err()
         );

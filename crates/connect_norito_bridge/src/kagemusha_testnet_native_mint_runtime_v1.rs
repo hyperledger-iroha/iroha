@@ -28,8 +28,9 @@ use crate::{
     kagemusha_testnet_observation_v1::{
         KagemushaTestnetDurableObservationModeV1, authenticated_observation_scope,
         load_and_install_kagemusha_testnet_durable_state_observation_owner_v1,
-        reserve_kagemusha_testnet_mint_before_submission_v1,
+        reserve_kagemusha_testnet_mint_under_publication_v1,
     },
+    kagemusha_testnet_publication_v1::TestnetPublicationPermitV1,
 };
 
 /// Authenticated bootstrap, native storage configuration, and signed-release inputs.
@@ -67,7 +68,7 @@ pub struct KagemushaTestnetNativeMintInstallV1<'a> {
 /// after a crash; the native host must recover the journal and repeat the exact reservation.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[must_use]
-pub struct KagemushaTestnetNativeMintReservationV1 {
+pub(crate) struct KagemushaTestnetNativeMintReservationV1 {
     operation_id: [u8; 32],
     reservation_digest: [u8; 32],
 }
@@ -85,19 +86,32 @@ impl KagemushaTestnetNativeMintReservationV1 {
 /// This is a Rust-host integration prerequisite, not a mobile SDK or production mint backend.
 /// It retains the independent first finality context privately and accepts only a signed chain
 /// for a previously persisted reservation. The owner itself is installed once process-wide.
-pub struct KagemushaTestnetNativeMintRuntimeV1 {
+pub(crate) struct KagemushaTestnetNativeMintRuntimeV1 {
     trusted_network_id: NetworkId,
     trusted_first_context_id: HeightContextId,
     reservations: Mutex<BTreeMap<[u8; 32], [u8; 32]>>,
 }
 
 impl KagemushaTestnetNativeMintRuntimeV1 {
+    #[cfg(test)]
+    pub(crate) fn for_test(bootstrap: &KagemushaVerifiedMobileBootstrapV1) -> Self {
+        Self {
+            trusted_network_id: bootstrap.network_id(),
+            trusted_first_context_id: bootstrap.first_context_id(),
+            reservations: Mutex::new(BTreeMap::new()),
+        }
+    }
+
     /// Authenticate and install one durable experimental observer using trusted native pins.
     ///
     /// # Errors
     /// Rejects an invalid native network/context pin, unauthenticated release, changed journal,
     /// failed replay, or an already installed owner.
-    pub fn install(inputs: KagemushaTestnetNativeMintInstallV1<'_>) -> Result<Self, String> {
+    pub(crate) fn install(
+        publication: &TestnetPublicationPermitV1<'_>,
+        inputs: KagemushaTestnetNativeMintInstallV1<'_>,
+    ) -> Result<Self, String> {
+        publication.require_valid()?;
         inputs.bootstrap.require_unexpired()?;
         let scope = authenticated_observation_scope(inputs.bootstrap)?;
         let trusted_network_id = inputs.bootstrap.network_id();
@@ -112,6 +126,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
             )?;
         }
         load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
+            publication,
             inputs.manifest_archive,
             inputs.validation_receipt_archive,
             inputs.release_attestation_archive,
@@ -138,10 +153,12 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
     /// # Errors
     /// Rejects a malformed or conflicting reservation, unavailable durable owner, or failed
     /// journal persistence. No token is issued until the durable owner accepts the reservation.
-    pub fn reserve_before_submission(
+    pub(crate) fn reserve_before_submission(
         &self,
+        publication: &TestnetPublicationPermitV1<'_>,
         reservation: &MintInboxReservationV1,
     ) -> Result<KagemushaTestnetNativeMintReservationV1, String> {
+        publication.require_valid()?;
         let operation_id = reservation.operation_id();
         let reservation_digest = reservation
             .digest()
@@ -156,7 +173,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
         {
             return Err("testnet mint operation changed its private reservation".to_owned());
         }
-        reserve_kagemusha_testnet_mint_before_submission_v1(reservation)?;
+        reserve_kagemusha_testnet_mint_under_publication_v1(publication, reservation)?;
         reservations.insert(operation_id, reservation_digest);
         Ok(KagemushaTestnetNativeMintReservationV1 {
             operation_id,
@@ -175,11 +192,13 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
     /// Rejects an absent or changed reservation, invalid signed chain, missing durable owner,
     /// or a replacement finality pin. Returns whether a new pin was written and the exact
     /// anchor from that same verified chain; an exact retry returns `false` with that anchor.
-    pub fn pin_finality_chain(
+    pub(crate) fn pin_finality_chain(
         &self,
+        publication: &TestnetPublicationPermitV1<'_>,
         reservation: &KagemushaTestnetNativeMintReservationV1,
         chain_json: &[u8],
     ) -> Result<(bool, KagemushaFinalityTrustAnchorV1), String> {
+        publication.require_valid()?;
         let reservations = self
             .reservations
             .lock()
@@ -191,6 +210,7 @@ impl KagemushaTestnetNativeMintRuntimeV1 {
         }
         drop(reservations);
         pin_kagemusha_testnet_authenticated_finality_chain_v1(
+            publication,
             reservation.operation_id,
             self.trusted_network_id,
             self.trusted_first_context_id,

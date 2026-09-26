@@ -19,9 +19,14 @@ use crate::{
         KagemushaTestnetNativeMintRuntimeV1,
     },
     kagemusha_testnet_native_value_ledger_v1::{
-        credit_kagemusha_testnet_native_value_v1, install_kagemusha_testnet_native_value_ledger_v1,
+        credit_kagemusha_testnet_native_value_under_publication_v1,
+        install_kagemusha_testnet_native_value_ledger_v1,
     },
     kagemusha_testnet_observation_v1::KagemushaTestnetDurableObservationModeV1,
+    kagemusha_testnet_publication_v1::{
+        TestnetPublicationGateV1, TestnetPublicationPermitV1, TestnetPublicationStateV1,
+        testnet_publication_gate_v1,
+    },
 };
 
 /// One native host that owns the signed release, private reservation, and testnet credit order.
@@ -30,6 +35,15 @@ use crate::{
 /// singleton. It grants no hardware-qualified or production monetary authority.
 pub struct KagemushaTestnetNativeMobileHostV1 {
     mint: KagemushaTestnetNativeMintRuntimeV1,
+}
+
+/// Scoped native host access under exclusive publication ownership.
+///
+/// Instances can only be borrowed from `Host::with` or the activated-host accessor.
+/// Every method retains the permit while touching private reservations or durable owners.
+pub struct KagemushaTestnetNativeMobileHostAccessV1<'host, 'access> {
+    host: &'host KagemushaTestnetNativeMobileHostV1,
+    publication: &'access TestnetPublicationPermitV1<'access>,
 }
 
 /// Proof that this exact host fsynced a private mint reservation before online submission.
@@ -90,8 +104,9 @@ impl KagemushaTestnetNativeMobileHostV1 {
     /// restart uses Recover/Recover. Mixed modes fail closed: a missing ledger may have been
     /// rolled back, and path absence cannot prove it was never created. An interrupted first
     /// installation requires explicit repair backed by a trusted external checkpoint before
-    /// this host can restart. If the second installation fails, the process must stop; the
-    /// proof owner cannot be reset in place.
+    /// this host can restart. No C/JNI observer or credit operation can dispatch until both
+    /// installations and the final bootstrap lease check succeed. A failure permanently
+    /// closes testnet dispatch in this process; the proof owner cannot be reset in place.
     ///
     /// # Errors
     /// Rejects a shared journal path, mismatched mode pair, invalid release, changed private
@@ -101,6 +116,28 @@ impl KagemushaTestnetNativeMobileHostV1 {
         value_ledger_path: &Path,
         trusted_value_ledger_mode: KagemushaTestnetDurableObservationModeV1,
     ) -> Result<Self, String> {
+        let bootstrap = mint_inputs.bootstrap;
+        install_and_publish(testnet_publication_gate_v1(), |publication| {
+            let host = Self::install_unpublished(
+                publication,
+                mint_inputs,
+                value_ledger_path,
+                trusted_value_ledger_mode,
+            )?;
+            bootstrap.require_unexpired()?;
+            Ok(host)
+        })
+    }
+
+    // Startup owns the outer publication writer through its final lease check. Do not acquire
+    // it again while staging the two globals, and never expose this staging method over FFI.
+    pub(crate) fn install_unpublished(
+        publication: &TestnetPublicationPermitV1<'_>,
+        mint_inputs: KagemushaTestnetNativeMintInstallV1<'_>,
+        value_ledger_path: &Path,
+        trusted_value_ledger_mode: KagemushaTestnetDurableObservationModeV1,
+    ) -> Result<Self, String> {
+        publication.require_valid()?;
         let mint_mode = mint_inputs.mode;
         let mint_journal_path = mint_inputs.journal_path;
         let mint = install_in_order(
@@ -108,9 +145,10 @@ impl KagemushaTestnetNativeMobileHostV1 {
             value_ledger_path,
             mint_mode,
             trusted_value_ledger_mode,
-            || KagemushaTestnetNativeMintRuntimeV1::install(mint_inputs),
+            || KagemushaTestnetNativeMintRuntimeV1::install(publication, mint_inputs),
             || {
                 install_kagemusha_testnet_native_value_ledger_v1(
+                    publication,
                     value_ledger_path,
                     trusted_value_ledger_mode,
                 )
@@ -119,6 +157,40 @@ impl KagemushaTestnetNativeMobileHostV1 {
         Ok(Self { mint })
     }
 
+    /// Access a standalone installed host while holding the shared dispatch permit.
+    ///
+    /// The callback must use the scoped access object's methods and must not reenter another
+    /// C/JNI or public Rust testnet entrypoint. A caught callback panic revokes all later calls.
+    ///
+    /// # Errors
+    /// Rejects revoked, inherited, or unavailable publication before any inner owner lock.
+    pub fn with<'host, R>(
+        &'host self,
+        use_host: impl FnOnce(&KagemushaTestnetNativeMobileHostAccessV1<'host, '_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        self.with_gate(testnet_publication_gate_v1(), use_host)
+    }
+
+    fn with_gate<'host, R>(
+        &'host self,
+        gate: &TestnetPublicationGateV1,
+        use_host: impl FnOnce(&KagemushaTestnetNativeMobileHostAccessV1<'host, '_>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        gate.with_dispatch(|publication| use_host(&self.access(publication)))
+    }
+
+    pub(crate) fn access<'host, 'access>(
+        &'host self,
+        publication: &'access TestnetPublicationPermitV1<'access>,
+    ) -> KagemushaTestnetNativeMobileHostAccessV1<'host, 'access> {
+        KagemushaTestnetNativeMobileHostAccessV1 {
+            host: self,
+            publication,
+        }
+    }
+}
+
+impl<'host> KagemushaTestnetNativeMobileHostAccessV1<'host, '_> {
     /// Fsync the native-owned private opening before exposing the operation for submission.
     ///
     /// # Errors
@@ -126,10 +198,15 @@ impl KagemushaTestnetNativeMobileHostV1 {
     pub fn reserve_before_submission(
         &self,
         reservation: &MintInboxReservationV1,
-    ) -> Result<KagemushaTestnetNativeReservedMintV1<'_>, String> {
-        Ok(KagemushaTestnetNativeReservedMintV1 {
-            host: self,
-            reservation: self.mint.reserve_before_submission(reservation)?,
+    ) -> Result<KagemushaTestnetNativeReservedMintV1<'host>, String> {
+        self.publication.run(|| {
+            Ok(KagemushaTestnetNativeReservedMintV1 {
+                host: self.host,
+                reservation: self
+                    .host
+                    .mint
+                    .reserve_before_submission(self.publication, reservation)?,
+            })
         })
     }
 
@@ -144,9 +221,11 @@ impl KagemushaTestnetNativeMobileHostV1 {
     pub fn prepare_and_reserve(
         &self,
         prepare: impl FnOnce() -> Result<MintInboxReservationV1, String>,
-    ) -> Result<KagemushaTestnetNativeReservedMintV1<'_>, String> {
-        prepare_then_reserve(prepare, |reservation| {
-            self.reserve_before_submission(reservation)
+    ) -> Result<KagemushaTestnetNativeReservedMintV1<'host>, String> {
+        self.publication.run(|| {
+            prepare_then_reserve(prepare, |reservation| {
+                self.reserve_before_submission(reservation)
+            })
         })
     }
 
@@ -159,21 +238,25 @@ impl KagemushaTestnetNativeMobileHostV1 {
     /// # Errors
     /// Rejects a foreign reservation token, invalid chain, missing native reservation, or a
     /// replacement finality pin.
-    pub fn pin_signed_finality<'a>(
-        &'a self,
-        reserved: &KagemushaTestnetNativeReservedMintV1<'a>,
+    pub fn pin_signed_finality(
+        &self,
+        reserved: &KagemushaTestnetNativeReservedMintV1<'host>,
         chain_json: &[u8],
-    ) -> Result<KagemushaTestnetNativePinnedMintV1<'a>, String> {
-        if !std::ptr::eq(self, reserved.host) {
-            return Err("testnet mint reservation belongs to another native host".to_owned());
-        }
-        let (_, anchor) = self
-            .mint
-            .pin_finality_chain(&reserved.reservation, chain_json)?;
-        Ok(KagemushaTestnetNativePinnedMintV1 {
-            host: self,
-            operation_id: reserved.operation_id(),
-            anchor,
+    ) -> Result<KagemushaTestnetNativePinnedMintV1<'host>, String> {
+        self.publication.run(|| {
+            if !std::ptr::eq(self.host, reserved.host) {
+                return Err("testnet mint reservation belongs to another native host".to_owned());
+            }
+            let (_, anchor) = self.host.mint.pin_finality_chain(
+                self.publication,
+                &reserved.reservation,
+                chain_json,
+            )?;
+            Ok(KagemushaTestnetNativePinnedMintV1 {
+                host: self.host,
+                operation_id: reserved.operation_id(),
+                anchor,
+            })
         })
     }
 
@@ -190,11 +273,32 @@ impl KagemushaTestnetNativeMobileHostV1 {
         &self,
         pinned: &KagemushaTestnetNativePinnedMintV1<'_>,
     ) -> Result<(KagemushaTestnetMintLedgerCreditV1, u128), String> {
-        if !std::ptr::eq(self, pinned.host) {
-            return Err("testnet mint finality belongs to another native host".to_owned());
-        }
-        credit_kagemusha_testnet_native_value_v1(pinned.operation_id)
+        self.publication.run(|| {
+            if !std::ptr::eq(self.host, pinned.host) {
+                return Err("testnet mint finality belongs to another native host".to_owned());
+            }
+            credit_kagemusha_testnet_native_value_under_publication_v1(
+                self.publication,
+                pinned.operation_id,
+            )
+        })
     }
+}
+
+fn install_and_publish<T>(
+    publication: &TestnetPublicationGateV1,
+    install: impl FnOnce(&TestnetPublicationPermitV1<'_>) -> Result<T, String>,
+) -> Result<T, String> {
+    let mut publication = publication.exclusive()?;
+    if *publication != TestnetPublicationStateV1::Standalone {
+        return Err("testnet native publication is already owned or unavailable".to_owned());
+    }
+    // Leave no observable interval between partial globals and final publication. An error
+    // leaves Poisoned; a panic also poisons the outer ownership mutex while the writer is held.
+    *publication = TestnetPublicationStateV1::Poisoned;
+    let host = install(&publication.permit())?;
+    *publication = TestnetPublicationStateV1::Active;
+    Ok(host)
 }
 
 fn prepare_then_reserve<T, R>(
@@ -235,6 +339,86 @@ mod tests {
         KagemushaTestnetDurableObservationModeV1::Create;
     const RECOVER: KagemushaTestnetDurableObservationModeV1 =
         KagemushaTestnetDurableObservationModeV1::Recover;
+
+    #[test]
+    fn scoped_host_rejects_mutation_after_a_caught_prepare_panic() {
+        let gate = TestnetPublicationGateV1::for_test();
+        let bootstrap = crate::kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1();
+        let host = KagemushaTestnetNativeMobileHostV1 {
+            mint: KagemushaTestnetNativeMintRuntimeV1::for_test(&bootstrap),
+        };
+        let entered = std::cell::Cell::new(0);
+        let prepare = || -> Result<MintInboxReservationV1, String> {
+            entered.set(entered.get() + 1);
+            panic!("native preparation failed after touching private state");
+        };
+        assert!(
+            host.with_gate(&gate, |access| {
+                assert!(access.prepare_and_reserve(prepare).is_err());
+                assert!(access.prepare_and_reserve(prepare).is_err());
+                assert_eq!(
+                    entered.get(),
+                    1,
+                    "a swallowed inner panic revokes even the still-held scoped access"
+                );
+                Ok(())
+            })
+            .is_err(),
+            "the outer callback cannot publish success after revocation"
+        );
+        assert_eq!(entered.get(), 1);
+        assert!(
+            host.with_gate(&gate, |access| access
+                .prepare_and_reserve(prepare)
+                .map(|_| ()))
+                .is_err()
+        );
+        assert_eq!(
+            entered.get(),
+            1,
+            "revocation precedes later native preparation"
+        );
+    }
+
+    #[test]
+    fn scoped_host_rejects_inherited_process_before_entering_private_callback() {
+        let gate = TestnetPublicationGateV1::inherited_for_test();
+        let bootstrap = crate::kagemusha_mobile_bootstrap_v1::verified_test_bootstrap_v1();
+        let host = KagemushaTestnetNativeMobileHostV1 {
+            mint: KagemushaTestnetNativeMintRuntimeV1::for_test(&bootstrap),
+        };
+        let entered = std::cell::Cell::new(false);
+        assert!(
+            host.with_gate(&gate, |access| {
+                access
+                    .prepare_and_reserve(|| {
+                        entered.set(true);
+                        Err("must never reach an inherited native owner".to_owned())
+                    })
+                    .map(|_| ())
+            })
+            .is_err()
+        );
+        assert!(!entered.get());
+    }
+
+    #[test]
+    fn direct_host_install_publication_requires_complete_success_and_never_resets() {
+        for complete in [false, true] {
+            let gate = TestnetPublicationGateV1::for_test();
+            let result = install_and_publish(&gate, |_| {
+                if complete {
+                    Ok(7_u8)
+                } else {
+                    Err("ledger failed after owner install".to_owned())
+                }
+            });
+            assert_eq!(result.is_ok(), complete);
+            assert_eq!(gate.dispatch().is_ok(), complete);
+            assert!(install_and_publish::<()>(&gate, |_| panic!("reinstalled")).is_err());
+            assert_eq!(gate.dispatch().is_ok(), complete);
+        }
+    }
 
     #[test]
     fn host_install_orders_signed_owner_before_ledger_and_rejects_shared_path() {

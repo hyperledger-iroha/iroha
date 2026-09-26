@@ -18,6 +18,8 @@ struct Digest384Context {
     pipeline: ComputePipelineState,
     round_constants: Buffer,
     mds: Buffer,
+    // Keep every sensitive shared allocation if completion is uncertain.
+    quarantine: Mutex<Option<Vec<(PooledBuffer, Buffer)>>>,
 }
 
 #[derive(Debug)]
@@ -28,9 +30,13 @@ struct BatchLayout {
     slice_words: usize,
     output_words: usize,
     payload_bytes: usize,
+    payload_words: usize,
 }
 
 fn checked_layout(job_count: usize, payload_bytes: usize) -> MetalResult<BatchLayout> {
+    crate::digest384_batch::last_fields_payload_charge(job_count, payload_bytes).map_err(|_| {
+        GpuError::InvalidInput("Digest384 continuation batch exceeds its resource bound")
+    })?;
     let jobs = u32::try_from(job_count)
         .map_err(|_| GpuError::InvalidInput("Digest384 Metal job count exceeds u32"))?;
     let threads = jobs
@@ -62,6 +68,7 @@ fn checked_layout(job_count: usize, payload_bytes: usize) -> MetalResult<BatchLa
         slice_words,
         output_words,
         payload_bytes,
+        payload_words: payload_bytes.max(1).div_ceil(mem::size_of::<u64>()),
     })
 }
 
@@ -90,6 +97,7 @@ fn build_context() -> MetalResult<Digest384Context> {
         pipeline,
         round_constants,
         mds,
+        quarantine: Mutex::new(None),
     })
 }
 
@@ -112,50 +120,33 @@ pub(crate) fn hash_last_fields(
         Ok(context) => context,
         Err(error) => return Err(error.clone()),
     };
-    for byte_len in [
-        layout.prefix_words * mem::size_of::<u64>(),
-        layout.slice_words * mem::size_of::<u64>(),
-        layout.payload_bytes.max(1),
-    ] {
-        validate_metal_buffer_byte_len(&context.device, byte_len as u64)?;
-    }
-    validate_metal_pooled_word_len(&context.device, layout.output_words)?;
-    let mut prefixes = Vec::new();
-    prefixes
-        .try_reserve_exact(layout.prefix_words)
-        .map_err(|_| {
-            GpuError::InvalidInput("Digest384 Metal prefixes exceed available host memory")
-        })?;
-    let mut slices = Vec::new();
-    slices.try_reserve_exact(layout.slice_words).map_err(|_| {
-        GpuError::InvalidInput("Digest384 Metal slices exceed available host memory")
+    let mut quarantine = context.quarantine.lock().map_err(|_| GpuError::Execution {
+        backend: GpuBackend::Metal,
+        message: "Digest384 continuation dispatch lock poisoned".to_owned(),
     })?;
-    let mut payload = Vec::new();
-    payload
-        .try_reserve_exact(layout.payload_bytes.max(1))
-        .map_err(|_| {
-            GpuError::InvalidInput("Digest384 Metal payload exceeds available host memory")
-        })?;
-    for job in jobs {
-        for lane in 0..GOLDILOCKS_DIGEST384_LANES_V1 {
-            let prefix = job
-                .prefix()
-                .lane_prefix_v1(lane)
-                .expect("fixed canonical lane");
-            prefixes.extend_from_slice(&prefix.state());
-            prefixes.push(prefix.next_rate_position() as u64);
-        }
-        slices.extend_from_slice(&[payload.len() as u64, job.final_field().len() as u64]);
-        payload.extend_from_slice(job.final_field());
+    if quarantine.is_some() {
+        return Err(GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: "Digest384 continuation quarantined after uncertain completion".to_owned(),
+        });
     }
-    if payload.is_empty() {
-        payload.push(0); // Metal requires a nonempty allocation, even for zero-byte fields.
+    for words in [
+        layout.prefix_words,
+        layout.slice_words,
+        layout.payload_words,
+        layout.output_words,
+    ] {
+        validate_metal_pooled_word_len(&context.device, words)?;
     }
-    let prefixes = copied_buffer(&context.device, &prefixes)?;
-    let slices = copied_buffer(&context.device, &slices)?;
-    let payload = copied_buffer(&context.device, &payload)?;
-    let mut output = PooledBuffer::zeroed(layout.output_words)?;
-    let output_buffer = shared_pooled_buffer(&context.device, &mut output)?;
+    let mut pools = stage_sensitive_jobs(jobs, &layout)?;
+    let mut buffers = Vec::new();
+    buffers.try_reserve_exact(4).map_err(|_| {
+        GpuError::InvalidInput("Digest384 continuation buffer descriptors allocation failed")
+    })?;
+    for mut pool in pools.drain(..) {
+        let buffer = shared_pooled_buffer(&context.device, &mut pool)?;
+        buffers.push((pool, buffer));
+    }
     let (queue, queue_index) = context.queues.select(layout.jobs, 0);
     let ticket = submit_compute(
         queue,
@@ -165,12 +156,12 @@ pub(crate) fn hash_last_fields(
         None,
         false,
         |encoder| {
-            encoder.set_buffer(0, Some(&prefixes), 0);
-            encoder.set_buffer(1, Some(&payload), 0);
-            encoder.set_buffer(2, Some(&slices), 0);
+            encoder.set_buffer(0, Some(&buffers[0].1), 0);
+            encoder.set_buffer(1, Some(&buffers[2].1), 0);
+            encoder.set_buffer(2, Some(&buffers[1].1), 0);
             encoder.set_buffer(3, Some(&context.round_constants), 0);
             encoder.set_buffer(4, Some(&context.mds), 0);
-            encoder.set_buffer(5, Some(&output_buffer), 0);
+            encoder.set_buffer(5, Some(&buffers[3].1), 0);
             encoder.set_bytes(
                 6,
                 mem::size_of::<u32>() as u64,
@@ -178,10 +169,115 @@ pub(crate) fn hash_last_fields(
             );
         },
     )?;
-    // Do not read shared memory or return apparent success on a failed/timed-out
-    // command. Metal retains every buffer (including the pooled backing) until
-    // its command releases them, preserving fallback safety after an error.
-    collect_completed_output(wait_for_ticket(ticket), &output, jobs.len())
+    // A timeout does not establish that Metal has stopped reading or writing.
+    // Retain both buffer objects and guarded pages, close future dispatch, and
+    // never wipe, recycle or inspect output from an uncertain command.
+    retain_on_uncertain_completion(
+        wait_for_ticket(ticket),
+        buffers,
+        &mut quarantine,
+        jobs.len(),
+    )
+}
+
+fn retain_on_uncertain_completion(
+    completion: MetalResult<()>,
+    buffers: Vec<(PooledBuffer, Buffer)>,
+    quarantine: &mut Option<Vec<(PooledBuffer, Buffer)>>,
+    job_count: usize,
+) -> MetalResult<Vec<GoldilocksDigest384V1>> {
+    if let Err(error) = completion {
+        *quarantine = Some(buffers);
+        return Err(error);
+    }
+    let output = buffers.get(3).ok_or(GpuError::InvalidInput(
+        "Digest384 continuation output buffer missing",
+    ))?;
+    collect_completed_output(Ok(()), &output.0, job_count)
+}
+
+// Prefixes, offsets, payload and output live only in guarded page owners. No
+// private Vec staging or copied Metal allocation is created. Public constants
+// remain in the context; their buffers contain no caller input.
+fn stage_sensitive_jobs(
+    jobs: &[Digest384LastFieldJob<'_>],
+    layout: &BatchLayout,
+) -> MetalResult<Vec<PooledBuffer>> {
+    if jobs.len() != layout.jobs as usize {
+        return Err(GpuError::InvalidInput(
+            "Digest384 continuation jobs differ from admitted layout",
+        ));
+    }
+    let mut pools = Vec::new();
+    pools.try_reserve_exact(4).map_err(|_| {
+        GpuError::InvalidInput("Digest384 continuation pool descriptors allocation failed")
+    })?;
+    for words in [
+        layout.prefix_words,
+        layout.slice_words,
+        layout.payload_words,
+        layout.output_words,
+    ] {
+        pools.push(PooledBuffer::sensitive_zeroed(words)?);
+    }
+    let mut payload_offset = 0usize;
+    for (index, job) in jobs.iter().enumerate() {
+        for lane in 0..GOLDILOCKS_DIGEST384_LANES_V1 {
+            let prefix = job
+                .prefix()
+                .lane_prefix_v1(lane)
+                .expect("fixed canonical lane");
+            let offset = (index * GOLDILOCKS_DIGEST384_LANES_V1 + lane) * 4;
+            pools[0].copy_from_slice_at(offset, &prefix.state());
+            pools[0].copy_from_slice_at(offset + 3, &[prefix.next_rate_position() as u64]);
+        }
+        pools[1].copy_from_slice_at(
+            2 * index,
+            &[payload_offset as u64, job.final_field().len() as u64],
+        );
+        copy_payload_bytes(&mut pools[2], payload_offset, job.final_field())?;
+        payload_offset += job.final_field().len();
+    }
+    if payload_offset != layout.payload_bytes {
+        return Err(GpuError::InvalidInput(
+            "Digest384 continuation staged bytes differ from admitted layout",
+        ));
+    }
+    Ok(pools)
+}
+
+// Write bytes directly into the existing little-endian Metal shared pages,
+// including jobs that begin or end inside a u64 or across a page boundary.
+fn copy_payload_bytes(pool: &mut PooledBuffer, offset: usize, source: &[u8]) -> MetalResult<()> {
+    let end = offset
+        .checked_add(source.len())
+        .ok_or(GpuError::InvalidInput("Digest384 payload range overflow"))?;
+    let bound = pool
+        .len()
+        .checked_mul(mem::size_of::<u64>())
+        .ok_or(GpuError::InvalidInput("Digest384 payload extent overflow"))?;
+    if end > bound {
+        return Err(GpuError::InvalidInput(
+            "Digest384 payload write exceeds admitted buffer",
+        ));
+    }
+    let backing = Arc::get_mut(&mut pool.backing).ok_or(GpuError::InvalidInput(
+        "Digest384 payload cannot change after device retention",
+    ))?;
+    let mut written = 0;
+    while written < source.len() {
+        let position = offset + written;
+        let word_index = position / 8;
+        let within_word = position % 8;
+        let count = (8 - within_word).min(source.len() - written);
+        let word = &mut backing.pages[word_index / METAL_BUFFER_PAGE_WORDS].words
+            [word_index % METAL_BUFFER_PAGE_WORDS];
+        let mut bytes = word.to_le_bytes();
+        bytes[within_word..within_word + count].copy_from_slice(&source[written..written + count]);
+        *word = u64::from_le_bytes(bytes);
+        written += count;
+    }
+    Ok(())
 }
 
 fn collect_completed_output(
@@ -226,6 +322,101 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sensitive_byte_staging_preserves_unaligned_jobs_and_page_boundaries() {
+        assert_eq!(
+            crate::digest384_batch::STAGING_PAGE_BYTES,
+            METAL_BUFFER_PAGE_BYTES
+        );
+        let lengths = [0, 1, 7, 8, METAL_BUFFER_PAGE_BYTES - 3, 17, 96];
+        let payloads = lengths.map(|len| {
+            (0..len)
+                .map(|i| ((i * 73 + len) & 255) as u8)
+                .collect::<Vec<_>>()
+        });
+        let jobs = payloads
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| {
+                let domain = GoldilocksDigestDomainV1 {
+                    catalog: b"test",
+                    protocol: b"continuation",
+                    profile: b"v1",
+                    role: b"row",
+                    phase: b"leaf",
+                    level: 1,
+                    index: index as u64,
+                    counter: 0,
+                };
+                Digest384LastFieldJob::new(
+                    GoldilocksDigest384LastFieldStreamV1::new(domain, &[], bytes.len()).unwrap(),
+                    bytes,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let total = payloads.iter().map(Vec::len).sum();
+        let layout = checked_layout(jobs.len(), total).unwrap();
+        assert!(stage_sensitive_jobs(&jobs[..jobs.len() - 1], &layout).is_err());
+        let mut buffers = stage_sensitive_jobs(&jobs, &layout).unwrap();
+        assert_eq!(buffers.len(), 4);
+        assert!(buffers.iter().all(|buffer| buffer.backing.sensitive));
+        let expected = payloads.concat();
+        let bytes = buffers[2]
+            .to_vec()
+            .unwrap()
+            .into_iter()
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(&bytes[..expected.len()], &expected);
+        assert!(bytes[expected.len()..].iter().all(|byte| *byte == 0));
+        let mut offset = 0;
+        for (index, job) in jobs.iter().enumerate() {
+            let mut descriptor = [0; 2];
+            buffers[1].copy_range_to_slice(2 * index, &mut descriptor);
+            assert_eq!(descriptor, [offset, job.final_field().len() as u64]);
+            for lane in 0..6 {
+                let mut words = [0; 4];
+                buffers[0].copy_range_to_slice((index * 6 + lane) * 4, &mut words);
+                let prefix = job.prefix().lane_prefix_v1(lane).unwrap();
+                assert_eq!(&words[..3], &prefix.state());
+                assert_eq!(words[3], prefix.next_rate_position() as u64);
+            }
+            offset += job.final_field().len() as u64;
+        }
+        for buffer in &mut buffers {
+            let backing = Arc::get_mut(&mut buffer.backing).unwrap();
+            backing.wipe_sensitive_pages();
+            assert!(
+                backing
+                    .pages
+                    .iter()
+                    .flat_map(|page| &page.words)
+                    .all(|word| *word == 0)
+            );
+        }
+        assert!(copy_payload_bytes(&mut buffers[2], usize::MAX, &[1]).is_err());
+        let boundary = buffers[2].len() * 8;
+        assert!(copy_payload_bytes(&mut buffers[2], boundary, &[1]).is_err());
+        let retention = buffers[2].backing();
+        assert!(copy_payload_bytes(&mut buffers[2], 0, &[1]).is_err());
+        drop(retention);
+    }
+
+    #[test]
+    fn failed_completion_quarantines_without_inspecting_output() {
+        let error = GpuError::Execution {
+            backend: GpuBackend::Metal,
+            message: "injected uncertain completion".to_owned(),
+        };
+        let mut quarantine = None;
+        assert!(
+            retain_on_uncertain_completion(Err(error), Vec::new(), &mut quarantine, usize::MAX)
+                .is_err()
+        );
+        assert!(quarantine.is_some());
+    }
+
+    #[test]
     fn layout_checks_lane_and_buffer_arithmetic() {
         let layout = checked_layout(2, 15).unwrap();
         assert_eq!(layout.jobs, 2);
@@ -236,6 +427,8 @@ mod tests {
         assert_eq!(layout.payload_bytes, 15);
         assert!(checked_layout(usize::MAX, 0).is_err());
         assert!(checked_layout(u32::MAX as usize / 6 + 1, 0).is_err());
+        assert!(checked_layout(65_537, 0).is_err());
+        assert!(checked_layout(1, crate::digest384_batch::MAX_LAST_FIELD_BYTES + 1).is_err());
         assert_eq!(checked_layout(0, 0).unwrap().threads, 0);
     }
 
@@ -317,6 +510,74 @@ mod tests {
             );
         }
         assert!(hash_last_fields(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires real Metal continuation execution across batch and page boundaries"]
+    fn required_metal_policy_matches_one_shot_oracle_for_large_batched_fields() {
+        use crate::{
+            DigestExecutionV1, digest384_batch::execute_last_fields,
+            digest384_gpu::Digest384GpuBackendV1,
+        };
+        let _gpu_lane = crate::backend::acquire_gpu_lane();
+        let payloads = (0..257)
+            .map(|index| {
+                let len = [0, 7, 96, 2408, 8192][index % 5];
+                (0..len)
+                    .map(|byte| ((index * 17 + byte * 73) & 255) as u8)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let domain = |index| GoldilocksDigestDomainV1 {
+            catalog: b"iroha-privacy-exact12-v1",
+            protocol: b"continuation-device-parity",
+            profile: b"deep-profile-test",
+            role: b"row",
+            phase: b"leaf",
+            level: u64::MAX,
+            index,
+            counter: u64::MAX,
+        };
+        let jobs = payloads
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| {
+                Digest384LastFieldJob::new(
+                    GoldilocksDigest384LastFieldStreamV1::new(
+                        domain(index as u64),
+                        &[b"", b"public-context"],
+                        bytes.len(),
+                    )
+                    .unwrap(),
+                    bytes,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let expected = payloads
+            .iter()
+            .enumerate()
+            .map(|(index, bytes)| {
+                fastpq_isi::hash_bytes_384_v1(
+                    domain(index as u64),
+                    &[b"", b"public-context", bytes],
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        for chunk in [1, 63, 64, 256, 257] {
+            let actual = jobs
+                .chunks(chunk)
+                .flat_map(|jobs| {
+                    execute_last_fields(
+                        jobs,
+                        DigestExecutionV1::Device(Digest384GpuBackendV1::Metal),
+                    )
+                    .expect("actual required Metal completion")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "partition size {chunk}");
+        }
     }
 
     #[test]

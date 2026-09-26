@@ -7806,8 +7806,8 @@ pub struct AppApi {
     pub max_list_limit: NonZeroU32,
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub max_fetch_size: NonZeroU32,
-    /// Rate-limiter cost applied per requested row when backpressure is enforced.
-    pub rate_limit_cost_per_row: NonZeroU32,
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub rate_limit_cost_per_page: NonZeroU32,
     /// Maximum allowed clock skew for signed app requests.
     pub request_signature_max_clock_skew: Duration,
     /// TTL for app-request nonces retained for replay detection. Configuration

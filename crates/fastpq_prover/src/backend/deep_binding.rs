@@ -4,32 +4,38 @@
 //! compact_v1. This private candidate supplies only a closed geometry and message
 //! schedule. Context construction authenticates no public statement; the caller
 //! must perform the OOD AIR identity and all opening/degree checks separately.
-//! TODO: Integrate the reviewed codec/extractor and qualify the complete protocol
-//! before replacing the shipping proof owner or changing production admission.
+//! The bounded engine and producer use this schedule through the offline facade.
+//! TODO: Qualify the complete protocol and authenticate ledger context before
+//! replacing the node's replay verifier or changing production admission.
 
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use norito::NoritoSerialize;
 
 use super::{
+    compact_protocol::FixedAir,
     compact_public_columns::{COMMITTED_COLUMN_COUNT, LAYOUT_ID},
-    compact_v1::{BodyFields, Context as FramingContext},
+    compact_v1::{BodyFields, Context as FramingContext, Frame, PreparedHashFrame},
     deep_geometry::{
         CONSTRAINTS, COSET_OFFSET, FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, LDE_ROOT, LDE_ROWS,
         QUERY_CANDIDATES, QUERY_COUNT, TRACE_ROWS,
     },
+    deep_relation::DeepRelation,
 };
 use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1 as F};
 
 /// Complete protocol identity; every fixed geometry field is also in the context.
 pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:h6:g-field-blocks:row301:qpair:ood604:components606:lambda-powers:trace-shift2:quotient-shift1:arity16-16-8-8-4:terminal128:q64:c74:v1";
 const MAX_STATEMENT_BYTES: usize = 240 * 1024;
+const MAX_RELATION_IDENTITY_BYTES: usize = 256;
+#[cfg(test)]
+const FIXTURE_RELATION_IDENTITY: &str = "fastpq:deep:explicit-context-fixture:v1";
 const OOD_VALUES: usize = 2 * COMMITTED_COLUMN_COUNT + 2;
 
 /// Failure of the fixed DEEP transcript or its typed input validation.
 #[derive(Debug, thiserror::Error)]
 pub(super) enum BindingError {
-    /// The public statement does not fit the fixed canonical context envelope.
-    #[error("DEEP statement must be nonempty and fit its fixed byte ceiling")]
+    /// The prepared relation, identity or statement violates the fixed context contract.
+    #[error("DEEP relation must match the fixed schema and bounded identity/statement envelope")]
     Context,
     /// Only the ten specified whole-message rounds exist.
     #[error("DEEP verifier round is outside 1..=10")]
@@ -112,7 +118,7 @@ pub(super) enum Oracle {
 }
 
 impl Oracle {
-    fn shape(self) -> Result<(u8, u8, usize, usize)> {
+    pub(super) fn shape(self) -> Result<(u8, u8, usize, usize)> {
         match self {
             Self::Row => Ok((1, 0, LDE_ROWS, COMMITTED_COLUMN_COUNT * 8)),
             Self::QuotientPair => Ok((3, 0, LDE_ROWS, 2 * F::BYTES)),
@@ -132,6 +138,7 @@ impl Oracle {
     frame = "fastpq_prover::deep::StatementContextV1"
 )]
 struct StatementContext {
+    relation: String,
     layout: String,
     trace_rows: u32,
     lde_rows: u32,
@@ -156,12 +163,54 @@ pub(super) struct Context {
 }
 
 impl Context {
-    /// Bind the complete fixed descriptor and statement without accepting geometry.
-    pub(super) fn new(statement: &[u8]) -> Result<Self> {
-        if statement.is_empty() || statement.len() > MAX_STATEMENT_BYTES {
+    /// Bind the outer prepared relation identity and its exact complete statement.
+    ///
+    /// Only the closed relation bridge supplies the arithmetic owner. Reject any
+    /// schema or statement divergence before framing or allocating context bytes.
+    pub(super) fn for_relation(relation: &impl DeepRelation) -> Result<Self> {
+        Self::preflight_relation(relation)?;
+        Self::with_identity(relation.schema().identity, relation.statement_bytes())
+    }
+
+    /// Validate the closed relation and fixed envelope without framing or hashing.
+    pub(super) fn preflight_relation(relation: &impl DeepRelation) -> Result<()> {
+        let schema = relation.schema();
+        let inner = relation.deep_relation();
+        let reference = inner.schema();
+        if schema.trace_rows != TRACE_ROWS
+            || schema.width != 342
+            || schema.constraints != CONSTRAINTS
+            || reference.trace_rows != schema.trace_rows
+            || reference.width != schema.width
+            || reference.constraints != schema.constraints
+            || relation.statement_bytes() != inner.statement_bytes()
+        {
             return Err(BindingError::Context);
         }
+        Self::check_envelope(schema.identity, relation.statement_bytes())
+    }
+
+    /// Explicit raw context fixture, never the prover/verifier relation entry.
+    #[cfg(test)]
+    pub(super) fn new(statement: &[u8]) -> Result<Self> {
+        Self::with_identity(FIXTURE_RELATION_IDENTITY, statement)
+    }
+
+    fn check_envelope(identity: &str, statement: &[u8]) -> Result<()> {
+        if identity.is_empty()
+            || identity.len() > MAX_RELATION_IDENTITY_BYTES
+            || statement.is_empty()
+            || statement.len() > MAX_STATEMENT_BYTES
+        {
+            return Err(BindingError::Context);
+        }
+        Ok(())
+    }
+
+    fn with_identity(identity: &str, statement: &[u8]) -> Result<Self> {
+        Self::check_envelope(identity, statement)?;
         let encoded = norito::encode_canonical(&StatementContext {
+            relation: identity.to_owned(),
             layout: LAYOUT_ID.to_owned(),
             trace_rows: TRACE_ROWS as u32,
             lde_rows: LDE_ROWS as u32,
@@ -185,19 +234,34 @@ impl Context {
 
     /// Hash only canonical complete fixed-shape leaves at valid positions.
     pub(super) fn hash_leaf(&self, oracle: Oracle, index: u32, payload: &[u8]) -> Result<Digest> {
+        Ok(self
+            .framing
+            .hash_frame(&self.leaf_frame(oracle, index, payload)?)?)
+    }
+
+    fn leaf_frame<'a>(&self, oracle: Oracle, index: u32, payload: &'a [u8]) -> Result<Frame<'a>> {
         let (tag, round, leaves, bytes) = oracle.shape()?;
         if index as usize >= leaves || payload.len() != bytes || !canonical_words(payload) {
             return Err(BindingError::Shape);
         }
-        Ok(self.framing.hash_frame(&self.framing.frame(
-            1,
-            tag,
-            round,
-            0,
-            index,
-            48,
-            BodyFields::One(payload),
-        ))?)
+        Ok(self
+            .framing
+            .frame(1, tag, round, 0, index, 48, BodyFields::One(payload)))
+    }
+
+    /// Prepare a complete shape-checked leaf under the unchanged canonical owner.
+    pub(super) fn prepare_leaf(
+        &self,
+        oracle: Oracle,
+        index: u32,
+        payload: &[u8],
+    ) -> crate::Result<PreparedHashFrame> {
+        let frame = self.leaf_frame(oracle, index, payload).map_err(|error| {
+            crate::Error::InvalidTraceShape {
+                details: error.to_string(),
+            }
+        })?;
+        self.framing.prepare_hash_frame(&frame)
     }
 
     /// Hash a binary authentication parent, retaining the sole-leaf duplicate rule.
@@ -226,6 +290,41 @@ impl Context {
             48,
             BodyFields::Two(&left.to_le_bytes(), &right.to_le_bytes()),
         ))?)
+    }
+
+    /// Prepare a complete parent; use the same strict shape checks as verification.
+    pub(super) fn prepare_parent(
+        &self,
+        oracle: Oracle,
+        level: u32,
+        index: u32,
+        left: Digest,
+        right: Digest,
+    ) -> crate::Result<PreparedHashFrame> {
+        let (tag, round, leaves, _) =
+            oracle
+                .shape()
+                .map_err(|error| crate::Error::InvalidTraceShape {
+                    details: error.to_string(),
+                })?;
+        if level == 0
+            || level > leaves.ilog2().max(1)
+            || index as usize >= (leaves >> level).max(1)
+            || (leaves == 1 && left != right)
+        {
+            return Err(crate::Error::InvalidTraceShape {
+                details: BindingError::Shape.to_string(),
+            });
+        }
+        self.framing.prepare_hash_frame(&self.framing.frame(
+            2,
+            tag,
+            round,
+            level,
+            index,
+            48,
+            BodyFields::Two(&left.to_le_bytes(), &right.to_le_bytes()),
+        ))
     }
 
     fn hash_ood(&self, current: &[F], next: &[F], quotient: &[F]) -> Result<Digest> {

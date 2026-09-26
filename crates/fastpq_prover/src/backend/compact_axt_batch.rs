@@ -14,6 +14,7 @@
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 use norito::{NoritoSerialize, codec::Encode};
 
+#[cfg(test)]
 use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
 use super::{
@@ -226,6 +227,16 @@ pub(super) struct AxtTransferSegmentAir {
     inner: CompactTransferAir,
 }
 
+impl super::deep_relation::sealed::Sealed for AxtTransferSegmentAir {}
+
+impl super::deep_relation::DeepRelation for AxtTransferSegmentAir {
+    // Borrow the already constructed AIR without replacing the outer identity
+    // or any byte of its complete prepared batch/ordinal/public context.
+    fn deep_relation(&self) -> &CompactTransferAir {
+        &self.inner
+    }
+}
+
 impl FixedAir for AxtTransferSegmentAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
@@ -236,9 +247,11 @@ impl FixedAir for AxtTransferSegmentAir {
     fn statement_bytes(&self) -> &[u8] {
         self.inner.statement_bytes()
     }
+    #[cfg(test)]
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.inner.evaluate(point, current, next)
     }
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }
@@ -736,5 +749,198 @@ mod tests {
             );
             assert_eq!(norito::core::get_decode_flags(), flags);
         }
+    }
+
+    #[test]
+    fn deep_quantity_axt_bridge_keeps_all_context_and_routes_separate() {
+        use crate::backend::deep_relation::{DeepRelation, tests as deep};
+        use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;
+        use iroha_data_model::fastpq::FastpqQuantityUnits;
+
+        let fixture = Fixture::multiple(2, true);
+        let narrow = fixture.prepare(ProofSemantics::AxtTransferClaim);
+        let (rows, claims, inputs) = deep::quantity_copy(&narrow);
+        let prepared = prepare_quantity_public_transfers(
+            &rows,
+            &claims,
+            inputs,
+            ProofSemantics::AxtTransferClaim,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let expected = deep::expected(&prepared);
+        let root_chain = roots(2);
+        let original = AxtTransferBatch::new(
+            &prepared,
+            &expected,
+            &root_chain,
+            context(&fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        let original_roots = (0..2)
+            .map(|ordinal| {
+                let segment = original.segment(ordinal).unwrap();
+                assert_eq!(
+                    segment.schema().identity,
+                    FastpqQuantityUnits::AXT_BATCH_IDENTITY
+                );
+                assert_eq!(
+                    segment.statement_bytes(),
+                    segment.deep_relation().statement_bytes()
+                );
+                let root = deep::bound_root(&segment);
+                assert_ne!(root, deep::bound_root(segment.deep_relation()));
+                root
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(original_roots[0], original_roots[1]);
+        for field in 0..7 {
+            assert!(matches!(
+                AxtTransferBatch::new(
+                    &prepared,
+                    &deep::changed_input(expected, field),
+                    &root_chain,
+                    context(&fixture),
+                    BatchContextLimits::default()
+                ),
+                Err(Error::PublicIoMismatch { .. })
+            ));
+        }
+        for field in 0..5 {
+            let mut changed = context(&fixture);
+            match field {
+                0 => changed.mirrors.dsid = DataSpaceId::new(8),
+                1 => changed.mirrors.manifest_root[0] ^= 1,
+                2 => changed.mirrors.da_commitment = None,
+                3 => changed.mirrors.committed_amount = None,
+                4 => changed.mirrors.expiry_slot = None,
+                _ => unreachable!(),
+            }
+            assert!(matches!(
+                AxtTransferBatch::new(
+                    &prepared,
+                    &expected,
+                    &root_chain,
+                    changed,
+                    BatchContextLimits::default()
+                ),
+                Err(Error::InvalidAxtBinding { .. })
+            ));
+        }
+        let mut changed_fixture = fixture.clone();
+        changed_fixture.binding.source_receipt_id =
+            "another complete quantity source receipt".into();
+        let changed = AxtTransferBatch::new(
+            &prepared,
+            &expected,
+            &root_chain,
+            context(&changed_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements(), changed.statements());
+        for (ordinal, root) in original_roots.iter().enumerate() {
+            assert_ne!(*root, deep::bound_root(&changed.segment(ordinal).unwrap()));
+        }
+        let mut remote_fixture = fixture.clone();
+        let remote = remote_fixture.remote.as_mut().unwrap();
+        remote[0].handle_replay_key.handle_era = 17;
+        recommit(&mut remote_fixture.binding, remote);
+        let changed = AxtTransferBatch::new(
+            &prepared,
+            &expected,
+            &root_chain,
+            context(&remote_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements(), changed.statements());
+        assert_ne!(
+            original_roots[0],
+            deep::bound_root(&changed.segment(0).unwrap())
+        );
+
+        let larger_fixture = Fixture::multiple(3, true);
+        let larger_narrow = larger_fixture.prepare(ProofSemantics::AxtTransferClaim);
+        let (larger_rows, larger_claims, larger_inputs) = deep::quantity_copy(&larger_narrow);
+        let larger_prepared = prepare_quantity_public_transfers(
+            &larger_rows,
+            &larger_claims,
+            larger_inputs,
+            ProofSemantics::AxtTransferClaim,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let larger_roots = roots(3);
+        let larger = AxtTransferBatch::new(
+            &larger_prepared,
+            &deep::expected(&larger_prepared),
+            &larger_roots,
+            context(&larger_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements()[0], larger.statements()[0]);
+        let larger_root = deep::bound_root(&larger.segment(0).unwrap());
+        assert_ne!(original_roots[0], larger_root);
+        let mut distant_root = larger_roots;
+        distant_root[1][0] ^= 1;
+        let changed = AxtTransferBatch::new(
+            &larger_prepared,
+            &deep::expected(&larger_prepared),
+            &distant_root,
+            context(&larger_fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(larger.statements()[0], changed.statements()[0]);
+        assert_ne!(larger_root, deep::bound_root(&changed.segment(0).unwrap()));
+
+        let ordinary = prepare_quantity_public_transfers(
+            &rows,
+            &claims,
+            inputs,
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let ordinary = PublicTransferBatch::new(
+            &ordinary,
+            &deep::expected(&ordinary),
+            &root_chain,
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_ne!(
+            original_roots[0],
+            deep::bound_root(&ordinary.segment(0).unwrap())
+        );
+        assert!(
+            PublicTransferBatch::new(
+                &prepared,
+                &expected,
+                &root_chain,
+                BatchContextLimits::default()
+            )
+            .is_err()
+        );
+        let narrow = AxtTransferBatch::new(
+            &narrow,
+            &deep::expected(&narrow),
+            &root_chain,
+            context(&fixture),
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_ne!(
+            original_roots[0],
+            deep::bound_root(&narrow.segment(0).unwrap())
+        );
+        let mut identity_only = original.segment(0).unwrap();
+        let statement = identity_only.statement_bytes().to_vec();
+        identity_only.identity = "fastpq:deep:test-only-distinct-axt-segment";
+        assert_eq!(statement, identity_only.statement_bytes());
+        assert_ne!(original_roots[0], deep::bound_root(&identity_only));
     }
 }

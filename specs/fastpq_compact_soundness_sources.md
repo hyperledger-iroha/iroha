@@ -1,6 +1,13 @@
 # Compact FASTPQ: primary-source soundness map
 
-Reviewed 2026-09-06 against the [implemented contract](fastpq_compact_protocol_contract.md) and [profile analysis](fastpq_compact_profile_analysis.md). This is a bounded applicability review of five papers, not a security reduction or parameter qualification. No protocol, profile, admission limit or production caller changes are proposed here.
+Historical applicability review: 2026-09-06 against the
+[predecessor contract](fastpq_compact_protocol_contract.md) and
+[profile analysis](fastpq_compact_profile_analysis.md). Its numerical hypotheses
+and missing protocol steps below describe that source snapshot, not the current
+[DEEP offline implementation](fastpq_deep_protocol_contract.md). This remains a
+bounded review of five papers, not a security reduction or parameter qualification.
+The later DEEP implementation requires its own exact theorem-to-source mapping;
+adding OOD checks does not transfer the papers' soundness conclusions automatically.
 
 The target is the exact one-delta prototype: `N=65,536`, evaluation domain `D=aG` for a subgroup `G` of size `L=8N`, 342 base columns, 923 numerator slots, challenges in `K=F_p[u]/(u^4-7)`, mixed trace bound `<N`, quotient/joint bound `<2N`, 17 binary folds and the entire four-element terminal vector checked at degree `<1`. There are 136 distinct initial queries. The newly bounded sampler returns an error after at most 1,088 digest draws; its implementation does not establish a distributional security bound.
 
@@ -28,7 +35,13 @@ Ben-Sasson, Goldberg, Kopparty and Saraf, [*DEEP-FRI: Sampling Outside the Box I
 
 The original-FRI discussion separates commit randomness from repeated query tests. DEEP-FRI and DEEP-ALI then introduce a verifier-selected field point and claims used to quotient the original words; Protocol 17 checks linked witness/constraint claims through those derived proximity tests.
 
-FASTPQ has no such out-of-domain challenge/opening or DEEP quotient. Its division by the fixed trace vanishing polynomial `X^N-1` is a different operation. Therefore Theorem 8's improved DEEP-FRI guarantee and Theorem 15's DEEP-ALI composition bound cannot be assigned to this implementation. These sections identify a concrete missing hypothesis whenever a DEEP bound is suggested; adopting that protocol would be a separate reviewed change, not a parameter calculation.
+The reviewed predecessor has no such out-of-domain challenge/opening or DEEP
+quotient. Its division by `X^N-1` is a different operation, so Theorems 8 and 15
+cannot qualify that predecessor. The current [DEEP contract](fastpq_deep_protocol_contract.md)
+now specifies an OOD challenge, 604 answers, the linked AIR identity and a shifted
+606-component composition. Its mixed-arity schedule, degree recovery, query
+sampling and concrete transcript still require a separate applicability argument;
+the presence of a DEEP step alone does not discharge those hypotheses.
 
 ### 4. IOP-to-QROM compilation: the strongest directly relevant candidate
 
@@ -70,6 +83,6 @@ and [projected raw-XOF construction](fastpq_compact_projected_xof.md) address
 additional ideal-model interfaces. These are new internally reviewed arguments,
 not constants attributed to the cited papers. The
 [375-position candidate arithmetic](fastpq_compact_typed_profile.md) retains the
-explicit adversary/verifier query accounting and 54-target union. Current
-multi-call challenge expansion, concrete primitives and production admission
-remain outside that qualification.
+explicit adversary/verifier query accounting and 54-target union for its
+predecessor geometry. It does not certify the replacement DEEP geometry. Concrete
+primitives and production admission remain outside either qualification.

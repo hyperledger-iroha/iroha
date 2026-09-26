@@ -17,20 +17,16 @@ implemented; coherent fixture and test validation remains in progress. See [the 
 and Appendix A. Independent protocol-specific qROM and final-artifact digest
 review remain mandatory.
 
-The selected bounded-opening quantity verifier is now available to normal callers
-through `fastpq_prover::offline_compact`. Normal callers can also produce complete
-quantity artifacts under explicit resource policy; the producer validates supplied
-roots, proves segments sequentially and verifies the result before returning it.
-Fresh ordinary/AXT single and ordered
-two-segment proofs verify without their private witnesses, and both complete
-artifact routes pass cumulative-limit and independent-context tests. The fixed
-candidate uses 375 queries from 401 sampler candidates. Its latest full normal
-library run passes 953 tests; the final 14-test producer selection and 20-test
-integration suite pass. These checks do not qualify cryptography or supply authenticated source
-expectations. Node admission still uses replay. Execution resource ownership, D7
-publication, finalized source binding, AXT authorization and release qualification
-remain required; the [current evidence](fastpq_production_readiness.md#current-optimizations-integration)
-records the exact scope and remaining gates.
+The normal `fastpq_prover::offline_compact` Quantity producer and verifier now
+select the [DEEP contract](fastpq_deep_protocol_contract.md): 64 query positions,
+74 sampler candidates, a 301-column projection and bounded openings. The producer
+checks supplied roots, proves segments sequentially and self-verifies before
+returning the complete artifact. The prior 375-query normal-library and proof
+measurements describe the predecessor; they do not validate this cutover.
+Node admission still uses replay. Execution resource ownership, D7 publication,
+finalized source binding, AXT authorization, witness privacy and cryptographic
+and release qualification remain required. [Current evidence](fastpq_production_readiness.md#current-optimizations-integration)
+records the actual tested scope and remaining gates.
 
 ## Implemented release boundary
 

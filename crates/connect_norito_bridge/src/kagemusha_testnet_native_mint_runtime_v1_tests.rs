@@ -115,6 +115,8 @@ fn native_mint_install_derives_all_pins_from_verified_bootstrap() {
 
 #[test]
 fn native_mint_install_still_authenticates_release_after_bootstrap() {
+    let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+    let publication = gate.exclusive().unwrap();
     let bootstrap = verified_test_bootstrap_v1();
     let anchors = BTreeMap::new();
     let inputs = KagemushaTestnetNativeMintInstallV1 {
@@ -129,7 +131,7 @@ fn native_mint_install_still_authenticates_release_after_bootstrap() {
         independent_anchors: &anchors,
     };
     assert!(
-        KagemushaTestnetNativeMintRuntimeV1::install(inputs)
+        KagemushaTestnetNativeMintRuntimeV1::install(&publication.permit(), inputs)
             .err()
             .is_some_and(|error| error.starts_with("invalid KAGEMUSHA release manifest:"))
     );
@@ -137,6 +139,8 @@ fn native_mint_install_still_authenticates_release_after_bootstrap() {
 
 #[test]
 fn native_mint_rejects_delayed_bootstrap_before_loading_or_creating_journal() {
+    let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+    let publication = gate.exclusive().unwrap();
     let bootstrap = expired_test_bootstrap_v1();
     let anchors = BTreeMap::new();
     let storage = tempfile::tempdir().unwrap();
@@ -154,11 +158,12 @@ fn native_mint_rejects_delayed_bootstrap_before_loading_or_creating_journal() {
         independent_anchors: &anchors,
     };
     assert_eq!(
-        KagemushaTestnetNativeMintRuntimeV1::install(inputs).err(),
+        KagemushaTestnetNativeMintRuntimeV1::install(&publication.permit(), inputs).err(),
         Some(expected.clone()),
     );
     assert_eq!(
         super::load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
+            &publication.permit(),
             b"not a release",
             b"not a receipt",
             b"not an attestation",
@@ -177,6 +182,8 @@ fn native_mint_rejects_delayed_bootstrap_before_loading_or_creating_journal() {
 
 #[test]
 fn native_mint_refuses_finality_without_its_private_reservation() {
+    let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+    let publication = gate.exclusive().unwrap();
     // Tests may construct private fields. A real host can obtain a token only
     // after the owner has fsynced the exact native-only reservation.
     let runtime = KagemushaTestnetNativeMintRuntimeV1 {
@@ -190,7 +197,9 @@ fn native_mint_refuses_finality_without_its_private_reservation() {
     };
     assert_eq!(token.operation_id(), [9; 32]);
     assert_eq!(
-        runtime.pin_finality_chain(&token, b"[]").err(),
+        runtime
+            .pin_finality_chain(&publication.permit(), &token, b"[]")
+            .err(),
         Some("testnet mint finality requires this runtime's persisted reservation".to_owned())
     );
     // A token from another exact reservation remains unusable even if the
@@ -201,7 +210,9 @@ fn native_mint_refuses_finality_without_its_private_reservation() {
         .unwrap()
         .insert(token.operation_id(), [11; 32]);
     assert_eq!(
-        runtime.pin_finality_chain(&token, b"[]").err(),
+        runtime
+            .pin_finality_chain(&publication.permit(), &token, b"[]")
+            .err(),
         Some("testnet mint finality requires this runtime's persisted reservation".to_owned())
     );
     runtime
@@ -209,5 +220,46 @@ fn native_mint_refuses_finality_without_its_private_reservation() {
         .lock()
         .unwrap()
         .insert(token.operation_id(), token.reservation_digest);
-    assert!(runtime.pin_finality_chain(&token, b"[]").is_err());
+    assert!(
+        runtime
+            .pin_finality_chain(&publication.permit(), &token, b"[]")
+            .is_err()
+    );
+}
+
+#[test]
+fn native_mint_inherited_process_never_waits_for_the_private_reservation_mutex() {
+    use std::{sync::mpsc, thread, time::Duration};
+    let gate =
+        crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::inherited_for_test();
+    let runtime = KagemushaTestnetNativeMintRuntimeV1 {
+        trusted_network_id: network(3),
+        trusted_first_context_id: first_context(5),
+        reservations: Mutex::new(BTreeMap::new()),
+    };
+    let token = KagemushaTestnetNativeMintReservationV1 {
+        operation_id: [9; 32],
+        reservation_digest: [10; 32],
+    };
+    let locked = runtime.reservations.lock().unwrap();
+    let (send, receive) = mpsc::channel();
+    thread::scope(|threads| {
+        let worker = threads.spawn(|| {
+            send.send(
+                gate.with_dispatch(|permit| runtime.pin_finality_chain(permit, &token, b"[]"))
+                    .err(),
+            )
+            .unwrap();
+        });
+        let result = receive.recv_timeout(Duration::from_secs(1));
+        // Release and join even on regression, so the test does not strand an owner thread.
+        drop(locked);
+        worker.join().unwrap();
+        assert_eq!(
+            result,
+            Ok(Some(
+                "KAGEMUSHA testnet publication belongs to another process".to_owned()
+            ))
+        );
+    });
 }

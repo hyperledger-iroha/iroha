@@ -1,10 +1,13 @@
 # Compact V1 six-lane framing and field tapes
 
-Source contract: 2026-09-08. The private `compact_v1` module supplies the normal
-[offline verifier](fastpq_compact_protocol_contract.md). This document fixes its
-source-level bytes and state reuse. It does not qualify production admission,
-zero knowledge or the concrete hash. No SHAKE or prototype protocol selector is
-accepted by this compact path.
+Predecessor profile framing: 2026-09-08. The shared `compact_v1` prefix/body
+serializer and six-lane hashing remain the canonical owner for the current
+[DEEP offline profile](fastpq_deep_protocol_contract.md). The identity, engine
+statement, 22-message schedule and 375-query decoder specified below belong to
+the predecessor, whose constructors and transcript are now test-only. The DEEP
+contract specifies its distinct statement frame, identity and ten messages.
+Neither the shared framing nor either profile establishes production admission,
+witness hiding or concrete hash qualification. No fallback selector is accepted.
 
 ## Canonical owner and complete context
 

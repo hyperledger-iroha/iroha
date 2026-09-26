@@ -182,6 +182,8 @@ pub use kagemusha_core_coordinator_v1::{
     kagemusha_core_coordinator_validate_storage_path_v1, verify_signed_app_preparation_v1,
 };
 mod kagemusha_device_bridge_v1;
+#[cfg(unix)]
+mod kagemusha_mobile_bootstrap_online_v1;
 mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;
 mod kagemusha_testnet_finality_chain_v1;
@@ -194,11 +196,12 @@ mod kagemusha_testnet_native_startup_v1;
 #[cfg(unix)]
 mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
+mod kagemusha_testnet_publication_v1;
+#[cfg(unix)]
+pub use kagemusha_mobile_bootstrap_online_v1::{
+    KagemushaNativeBootstrapFreshnessAttemptV1, KagemushaOnlineBootstrapFreshnessV1,
+};
 pub use kagemusha_mobile_bootstrap_v1::{
-    KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1, KagemushaMobileBootstrapApprovalPayloadV1,
-    KagemushaMobileBootstrapApprovalV1, KagemushaMobileBootstrapCheckpointV1,
-    KagemushaMobileBootstrapPackageV1, KagemushaMobileBootstrapPinsV1,
-    KagemushaMobileBootstrapReplayPinV1, KagemushaMobileBootstrapScopeV1,
     KagemushaVerifiedMobileBootstrapV1, verify_kagemusha_mobile_bootstrap_v1,
 };
 pub use kagemusha_reserve_finality_v1::{
@@ -208,14 +211,11 @@ pub use kagemusha_reserve_finality_v1::{
 };
 pub use kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1;
 #[cfg(unix)]
-pub use kagemusha_testnet_native_mint_runtime_v1::{
-    KagemushaTestnetNativeMintInstallV1, KagemushaTestnetNativeMintReservationV1,
-    KagemushaTestnetNativeMintRuntimeV1,
-};
+pub use kagemusha_testnet_native_mint_runtime_v1::KagemushaTestnetNativeMintInstallV1;
 #[cfg(unix)]
 pub use kagemusha_testnet_native_mobile_host_v1::{
-    KagemushaTestnetNativeMobileHostV1, KagemushaTestnetNativePinnedMintV1,
-    KagemushaTestnetNativeReservedMintV1,
+    KagemushaTestnetNativeMobileHostAccessV1, KagemushaTestnetNativeMobileHostV1,
+    KagemushaTestnetNativePinnedMintV1, KagemushaTestnetNativeReservedMintV1,
 };
 #[cfg(unix)]
 pub use kagemusha_testnet_native_startup_v1::{
@@ -230,7 +230,6 @@ pub use kagemusha_testnet_native_startup_v1::{
 pub use kagemusha_testnet_native_value_ledger_v1::{
     KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1, KagemushaTestnetMintLedgerCreditArchiveV1,
     connect_norito_kagemusha_testnet_value_credit_v1, credit_kagemusha_testnet_native_value_v1,
-    install_kagemusha_testnet_native_value_ledger_v1,
 };
 pub use kagemusha_testnet_observation_v1::{
     KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1, KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1,

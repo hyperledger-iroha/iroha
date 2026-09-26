@@ -97,16 +97,19 @@ impl VanishingDivisionPlan {
     }
 
     /// Exclusive quotient bound; no divisibility is established by constructing a plan.
+    #[cfg(test)]
     pub(super) const fn quotient_degree_bound(self) -> usize {
         self.quotient_degree_bound
     }
 
     /// Exact output extent including required zero padding.
+    #[cfg(test)]
     pub(super) const fn quotient_extent(self) -> usize {
         self.quotient_extent
     }
 
     /// Conservative payload bytes including the borrowed full numerator.
+    #[cfg(test)]
     pub(super) const fn payload_bytes(self) -> usize {
         self.payload_bytes
     }
@@ -167,7 +170,13 @@ pub(super) struct ExactQuotient {
 }
 
 impl ExactQuotient {
+    /// Transfer the checked coefficients without removing their erasure guard.
+    pub(super) fn into_coefficients(self) -> SecretPolynomial<F> {
+        self.coefficients
+    }
+
     /// Borrow complete quotient coefficients including the caller-declared zero padding.
+    #[cfg(test)]
     pub(super) fn coefficients(&self) -> &[F] {
         &self.coefficients
     }

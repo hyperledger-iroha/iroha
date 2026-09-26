@@ -1,11 +1,13 @@
 # Compact FASTPQ V1 protocol contract
 
-Source contract: 2026-09-08. The normal-library offline verifier uses one fixed
-six-lane commitment and field-tape construction. Its prover remains test-only.
-This is an implementation contract, not production admission, a soundness
-certificate or a zero-knowledge claim. Production verification still uses the
-raw replay route. The [production goals](fastpq_production_readiness.md) retain
-its required replacement by a qualified bounded-opening representation.
+Predecessor source contract: 2026-09-08. The 375-query shared-opening engine,
+its decoder and transcript constructors are now test-only. The normal-library
+Quantity facade selects the [DEEP offline contract](fastpq_deep_protocol_contract.md).
+The geometry, equations, size figures and conditional obligations below describe
+that predecessor; they are not the current offline wire contract. Production
+admission still uses replay and remains subject to the
+[production goals](fastpq_production_readiness.md). Neither contract establishes
+cryptographic qualification or a zero-knowledge claim.
 
 ## Caller and algebraic inputs
 
@@ -156,7 +158,7 @@ Canonical re-encoding comparison does not allocate another whole frame. Norito
 allocation charges are not a peak-RSS measurement. Explicit diagnostic policies
 cannot change the cryptographic geometry or the production defaults.
 
-The current DTO alone requires at least
+The predecessor DTO alone requires at least
 `375*342*8 + 375*64 = 1,050,000` raw row and mixed/quotient bytes. This exceeds
 the 512 KiB compact proof target and the 1 MiB AXT ceiling, even before framing,
 indices, roots, frontiers or FRI data. The separate maximum row shape has 750 rows
@@ -164,8 +166,8 @@ and 2,052,000 raw row bytes. It is not a lower bound on every proof. Explicit
 offline budgets do not close the production resource gap. Replay's derived
 payload/frame limits are separate policies and do not admit this compact profile.
 
-Normal-library quantity producers use the same sole compact V1 owner. Before
-private columns or transforms, they require exact public context and geometry,
+The predecessor normal-library quantity producers used this compact V1 owner.
+Before private columns or transforms, they required exact public context and geometry,
 per-segment output capacity of 4,017,376 framed bytes, and explicit trace,
 private-tree and decode budgets. The temporary repeated-opening representation
 has a separate 7,791,716-byte bound. Row and AIR evaluation partitions own at most

@@ -42,8 +42,7 @@ impl NativeContinuousInstantV1 {
         Ok(Self { process_id, nanos })
     }
 
-    #[cfg(test)]
-    pub(super) fn checked_duration_since(self, earlier: Self) -> Option<Duration> {
+    pub(crate) fn checked_duration_since(self, earlier: Self) -> Option<Duration> {
         if self.process_id != earlier.process_id {
             return None;
         }
@@ -52,6 +51,18 @@ impl NativeContinuousInstantV1 {
             (nanos / NANOS_PER_SECOND).try_into().ok()?,
             (nanos % NANOS_PER_SECOND).try_into().ok()?,
         ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn before_for_test(elapsed: Duration) -> Self {
+        let now = Self::now().expect("native continuous test clock");
+        Self {
+            process_id: now.process_id,
+            nanos: now
+                .nanos
+                .checked_sub(elapsed.as_nanos())
+                .expect("test process has enough continuous clock history"),
+        }
     }
 }
 
@@ -97,6 +108,11 @@ impl NativeDeadlineV1 {
 
     /// Check against the actual continuous clock, returning the exact successful observation.
     pub(crate) fn check(&self) -> Result<NativeContinuousInstantV1> {
+        // After fork, a mutex may still belong to a thread that exists only in the parent.
+        // Reject its immutable process identity before acquiring any inherited lock.
+        if self.0.started.process_id != std::process::id() {
+            return Err(NativeDeadlineErrorV1::Invalid);
+        }
         let mut last_seen = self
             .0
             .last_seen
@@ -304,6 +320,27 @@ mod tests {
             }),
             Err(NativeDeadlineErrorV1::Invalid)
         );
+    }
+
+    #[test]
+    fn inherited_process_deadline_rejects_before_waiting_for_its_clock_lock() {
+        let deadline = NativeDeadlineV1::from_reading(
+            NativeContinuousInstantV1 {
+                process_id: std::process::id().wrapping_add(1),
+                nanos: 100,
+            },
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        let locked = deadline.0.last_seen.lock().unwrap();
+        let copy = deadline.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || send.send(copy.check()).unwrap());
+        let observed = receive.recv_timeout(Duration::from_secs(1));
+        // Always release and join, including on regression, so this test cannot strand a thread.
+        drop(locked);
+        worker.join().unwrap();
+        assert_eq!(observed, Ok(Err(NativeDeadlineErrorV1::Invalid)));
     }
 
     #[test]

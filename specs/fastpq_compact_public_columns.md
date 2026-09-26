@@ -1,9 +1,10 @@
 # Compact SMT public-column projection
 
-`backend/compact_public_columns.rs` owns one candidate layout: retain 301
-columns and reconstruct the exact 342-cell `compact_trace_columns` row before
-reference AIR evaluation. It does not alter the existing compact proof format
-or constitute protocol/security/resource qualification.
+`backend/compact_public_columns.rs` owns the fixed layout used by the normal
+[DEEP offline profile](fastpq_deep_protocol_contract.md): retain 301 columns and
+reconstruct the exact 342-cell `compact_trace_columns` row before reference AIR
+evaluation. This substitution does not constitute protocol, security or resource
+qualification.
 
 The ordered public indices are fixed by the current compact BLAKE2b witness,
 SMT preimage and physical padding:
@@ -54,15 +55,14 @@ coordinates unchanged. `reconstruct_pair_at` evaluates the next row at gX,
 using the checked trace generator. The reference AIR still owns noncyclic
 boundary selectors; reconstructing a pair does not introduce a cyclic edge.
 
-## Required protocol integration and validation
+## Protocol integration and validation
 
-The new protocol must bind the exact layout identity, ordered projection,
-fixed schedule, field basis and 301-column commitment/mixing dimensions. Its
-opening and degree argument must cover the retained columns, while the AIR
-receives all 342 reconstructed cells at each authenticated point. DEEP/OOD
-values must be reconstructed at their actual extension points. The existing
-342-column transcript, leaf codec, profile and fixtures remain unchanged by
-this isolated owner.
+The DEEP context and artifact descriptor bind the exact layout identity, ordered
+projection, fixed schedule, field basis and 301-column dimensions. Its OOD AIR
+check reconstructs all 342 cells at the actual extension points. Its opening and
+degree argument must still establish the required retained-column guarantees;
+source wiring alone does not prove them. The predecessor 342-column transcript
+and codec remain test-only diagnostics and cannot decode the DEEP child frame.
 
 Five focused tests cover the exact column partition; every physical row's
 projection and every phase's reconstruction from a complete native witness;

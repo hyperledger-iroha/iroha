@@ -16,7 +16,7 @@ execution model).
 ## Feature Matrix
 | Path | Cargo features to enable | Result | When to use |
 | ---- | ----------------------- | ------ | ----------- |
-| Production prover (default) | _none_ | V1 FASTPQ backend with FFT/LDE planner and DEEP-FRI pipeline.【crates/fastpq_prover/src/backend.rs:1】 | Default for all production binaries. |
+| Production prover (default) | _none_ | V1 backend with FFT/LDE planning and batch-derived verifier replay; the [DEEP profile](fastpq_deep_protocol_contract.md) is a separate offline path, not production admission. | Default for all production binaries. |
 | Optional GPU acceleration | `fastpq_prover/fastpq-gpu` | Enables CUDA/Metal kernels. Production `gpu` mode fails closed when kernels or preflight are unavailable; `cpu` remains the default.【crates/fastpq_prover/Cargo.toml:9】【crates/iroha_core/src/fastpq/lane.rs:228】 | Hosts with supported accelerators. |
 
 ## Build Procedure

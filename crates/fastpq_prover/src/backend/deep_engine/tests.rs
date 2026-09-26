@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use super::*;
 use crate::{
     backend::{
+        compact_protocol::FixedAir,
         compact_public_columns::COMMITTED_COLUMN_COUNT,
+        compact_transfer_air::CompactTransferAir,
         deep_composition::OodPair,
         deep_geometry::LDE_ROWS,
         deep_proof::{FriGroup, FriRound, OodAnswers, QuotientOpening, RowOpening, RowValues},
@@ -202,6 +204,191 @@ fn nonconstant_coefficient_chain_checks_fiber_coordinates_cosets_and_challenges(
             &proof
         )
         .is_err()
+    );
+}
+
+#[test]
+fn high_degree_coefficient_chain_checks_every_nonconstant_fold() {
+    use crate::backend::{field_pow, mul_mod, polynomial_field::PolynomialField};
+
+    const DEGREE: usize = 16_386;
+    const DEGREES: [usize; 6] = [DEGREE, 1_024, 64, 8, 1, 0];
+    let geometry = DeepGeometry::new().unwrap();
+    let queries = queries(true);
+    let (mut proof, _, _) = constant_fixture(&queries);
+    let z = F::new([17, 19, 23, 29]).unwrap();
+    let next_z = z.mul_base(geometry.trace_generator());
+    let lambda = F::new([31, 37, 41, 43]).unwrap();
+    let betas = betas();
+    // A_0(X)=X^16386, every other trace column is one, and Q0=Q1=0.
+    // Only this column contributes: D(X)=(1+lambda*X²)*h(X), where
+    // h=(X^16386-U(X))/((X-z)(X-next_z)) and U interpolates the two OOD values.
+    proof.ood.current[0] = z.power(DEGREE as u64);
+    proof.ood.next[0] = next_z.power(DEGREE as u64);
+    for row in &mut proof.rows {
+        let mut values = vec![1; COMMITTED_COLUMN_COUNT];
+        values[0] = field_pow(geometry.domain().point(row.index as usize), DEGREE as u64);
+        row.values = RowValues::new(values).unwrap();
+    }
+    let composition = DeepComposition::new(
+        OodPair::new(z, geometry.trace_generator()).unwrap(),
+        &proof.ood.current,
+        &proof.ood.next,
+        &proof.ood.quotient,
+    )
+    .unwrap();
+
+    // Independent complete-homogeneous coefficient recurrence for the quotient.
+    // No producer division, composition evaluation, FFT or FRI helper supplies
+    // these coefficients or the coefficient-folded expected layers.
+    let sum = z.add(next_z);
+    let product = z.mul(next_z);
+    let mut h = vec![F::ZERO; DEGREE - 1];
+    h[DEGREE - 2] = F::ONE;
+    for degree in (0..DEGREE - 2).rev() {
+        h[degree] = sum
+            .mul(h[degree + 1])
+            .sub(product.mul(h.get(degree + 2).copied().unwrap_or(F::ZERO)));
+    }
+    let slope = proof.ood.next[0]
+        .sub(proof.ood.current[0])
+        .mul(next_z.sub(z).inverse().unwrap());
+    let intercept = proof.ood.current[0].sub(z.mul(slope));
+    assert_eq!(intercept, F::ZERO.sub(product.mul(h[0])));
+    assert_eq!(slope, sum.mul(h[0]).sub(product.mul(h[1])));
+    let mut initial_coefficients = vec![F::ZERO; DEGREE + 1];
+    for (degree, &coefficient) in h.iter().enumerate() {
+        initial_coefficients[degree] = initial_coefficients[degree].add(coefficient);
+        initial_coefficients[degree + 2] =
+            initial_coefficients[degree + 2].add(lambda.mul(coefficient));
+    }
+    let horner = |coefficients: &[F], x: u64| {
+        coefficients
+            .iter()
+            .rev()
+            .fold(F::ZERO, |value, &coefficient| {
+                value.mul_base(x).add(coefficient)
+            })
+    };
+    // A closed form avoids a 16K-term Horner evaluation for every initial fiber
+    // coordinate. Cross-check it against the independently built coefficients.
+    let initial_at = |x: u64| {
+        let point = F::from_base(x).unwrap();
+        let numerator = F::from_base(field_pow(x, DEGREE as u64))
+            .unwrap()
+            .sub(intercept.add(slope.mul_base(x)));
+        let denominator = point.sub(z).mul(point.sub(next_z));
+        numerator
+            .mul(denominator.inverse().unwrap())
+            .mul(F::ONE.add(lambda.mul_base(mul_mod(x, x))))
+    };
+    for index in [0, LDE_ROWS / 7, LDE_ROWS - 1] {
+        let x = geometry.domain().point(index);
+        assert_eq!(initial_at(x), horner(&initial_coefficients, x));
+    }
+    let mut coefficients = vec![initial_coefficients];
+    let mut domain = geometry.domain();
+    let mut domains = Vec::with_capacity(5);
+    for round in 0..5 {
+        domains.push(domain);
+        assert_eq!(coefficients[round].len(), DEGREES[round] + 1);
+        assert_ne!(coefficients[round][DEGREES[round]], F::ZERO);
+        for group in &mut proof.rounds[round].groups {
+            for (coordinate, value) in group.values.iter_mut().enumerate() {
+                let index = group.index as usize + coordinate * FRI_LENGTHS[round + 1];
+                let x = domain.point(index);
+                *value = if round == 0 {
+                    initial_at(x)
+                } else {
+                    horner(&coefficients[round], x)
+                };
+            }
+        }
+        let powers: Vec<_> = (0..FRI_ARITIES[round])
+            .map(|power| betas[round].power(power as u64))
+            .collect();
+        let next = coefficients[round]
+            .chunks(FRI_ARITIES[round])
+            .map(|chunk| {
+                chunk
+                    .iter()
+                    .zip(&powers)
+                    .fold(F::ZERO, |value, (&coefficient, &power)| {
+                        value.add(coefficient.mul(power))
+                    })
+            })
+            .collect();
+        coefficients.push(next);
+        domain = domain.folded(FRI_ARITIES[round]);
+    }
+    assert_eq!(coefficients[5].len(), DEGREES[5] + 1);
+    proof.terminal.fill(coefficients[5][0]);
+    deep_proof::preflight(&proof, &queries).unwrap();
+    assert_eq!(
+        check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).unwrap(),
+        320
+    );
+
+    // Query zero passes through group zero in every round. Keep all other rounds
+    // fixed so each corruption must be rejected by the actual joined checker.
+    assert_eq!(queries[0], 0);
+    for round in 0..5 {
+        assert_eq!(proof.rounds[round].groups[0].index, 0);
+        let correct = proof.rounds[round].groups[0].values.clone();
+        for coordinate in 0..FRI_ARITIES[round] {
+            proof.rounds[round].groups[0].values[coordinate] = correct[coordinate].add(F::ONE);
+            assert!(
+                check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).is_err(),
+                "round={round}, coordinate={coordinate}"
+            );
+            proof.rounds[round].groups[0].values[coordinate] = correct[coordinate];
+        }
+        assert_ne!(correct[0], correct[1], "round={round}");
+        proof.rounds[round].groups[0].values.swap(0, 1);
+        assert!(
+            check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).is_err(),
+            "round={round}, reversed coordinates"
+        );
+        proof.rounds[round].groups[0].values.swap(0, 1);
+
+        for (coordinate, value) in proof.rounds[round].groups[0].values.iter_mut().enumerate() {
+            // Evaluate the same polynomial on a different coset, preserving the
+            // within-fiber root orientation and every coefficient and challenge.
+            let x = mul_mod(domains[round].point(coordinate * FRI_LENGTHS[round + 1]), 2);
+            *value = if round == 0 {
+                initial_at(x)
+            } else {
+                horner(&coefficients[round], x)
+            };
+        }
+        assert_ne!(
+            proof.rounds[round].groups[0].values, correct,
+            "round={round}"
+        );
+        assert!(
+            check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).is_err(),
+            "round={round}, wrong coset"
+        );
+        proof.rounds[round].groups[0].values = correct;
+
+        let mut wrong_betas = betas;
+        wrong_betas[round] = wrong_betas[round].add(F::ONE);
+        assert!(
+            check_chains(
+                &geometry,
+                &composition,
+                lambda,
+                &wrong_betas,
+                &queries,
+                &proof
+            )
+            .is_err(),
+            "round={round}, wrong beta"
+        );
+    }
+    assert_eq!(
+        check_chains(&geometry, &composition, lambda, &betas, &queries, &proof).unwrap(),
+        320
     );
 }
 
@@ -448,5 +635,148 @@ fn transcript_field_messages_require_the_exact_complete_dimension() {
     assert!(matches!(
         binding_error(BindingError::Phase),
         Error::InvalidTraceShape { .. }
+    ));
+}
+
+fn policy_relation() -> CompactTransferAir {
+    let mut digest = [0; 8];
+    digest[7] = 1 << 24;
+    CompactTransferAir::new(
+        &PublicStatement {
+            updates: [PublicUpdate {
+                old_leaf: digest,
+                new_leaf: digest,
+                path: 0,
+            }; 2],
+            old_root: digest,
+            new_root: digest,
+        },
+        Some(b"complete committed verifier policy"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn committed_policy_checks_every_segment_dimension_before_decoding() {
+    let relation = policy_relation();
+    let bytes = vec![0; deep_proof::MAX_FRAME_BYTES];
+    let exact = VerifyLimits {
+        // The enclosing public bundle checks its transition table, before any
+        // segment is constructed. This private helper has no transition table.
+        max_transitions: 0,
+        max_batch_bytes: relation.statement_bytes().len(),
+        max_proof_bytes: bytes.len(),
+        max_fri_layers: 6,
+        max_queries: 64,
+        max_query_chunk_values: 2,
+        max_query_path_len: 23,
+        max_fri_round_values: 16,
+        max_air_row_values: COMMITTED_COLUMN_COUNT,
+    };
+    preflight(&relation, bytes.len(), exact).unwrap();
+    type Setter = fn(&mut VerifyLimits, usize);
+    let dimensions: [(&str, usize, Setter); 8] = [
+        (
+            "max_compact_statement_bytes",
+            exact.max_batch_bytes,
+            |l, v| l.max_batch_bytes = v,
+        ),
+        ("max_proof_bytes", exact.max_proof_bytes, |l, v| {
+            l.max_proof_bytes = v
+        }),
+        ("max_fri_layers", 6, |l, v| l.max_fri_layers = v),
+        ("max_queries", 64, |l, v| l.max_queries = v),
+        ("max_query_chunk_values", 2, |l, v| {
+            l.max_query_chunk_values = v
+        }),
+        ("max_query_path_len", 23, |l, v| l.max_query_path_len = v),
+        ("max_fri_round_values", 16, |l, v| {
+            l.max_fri_round_values = v
+        }),
+        ("max_air_row_values", COMMITTED_COLUMN_COUNT, |l, v| {
+            l.max_air_row_values = v
+        }),
+    ];
+    for (name, required, set) in dimensions {
+        let mut limited = exact;
+        set(&mut limited, required - 1);
+        assert!(matches!(
+            verify_committed(&relation, &bytes, limited, deep_proof::MAX_ALLOCATION_CHARGES),
+            Err(Error::VerifierLimitExceeded { limit, actual, max })
+                if limit == name && actual == required && max == required - 1
+        ));
+    }
+    // Inclusive geometry does not grant a success result to malformed bytes.
+    assert!(
+        verify_committed(&relation, &bytes, exact, deep_proof::MAX_ALLOCATION_CHARGES).is_err()
+    );
+    assert!(matches!(
+        preflight(
+            &relation,
+            deep_proof::MAX_FRAME_BYTES + 1,
+            VerifyLimits {
+                max_proof_bytes: usize::MAX,
+                ..exact
+            }
+        ),
+        Err(Error::VerifierLimitExceeded {
+            limit: "max_proof_bytes",
+            max: deep_proof::MAX_FRAME_BYTES,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn committed_result_is_unavailable_for_decoded_but_unauthenticated_carriers() {
+    let relation = policy_relation();
+    let (proof, _, _) = constant_fixture(&queries(true));
+    let bytes = norito::encode_canonical(&proof).unwrap();
+    let limits = VerifyLimits {
+        max_proof_bytes: bytes.len(),
+        ..VerifyLimits::default()
+    };
+    preflight(&relation, bytes.len(), limits).unwrap();
+    assert!(deep_proof::decode(&bytes, bytes.len()).is_ok());
+    assert!(verify_committed(&relation, &bytes, limits, 0).is_err());
+    assert!(
+        verify_committed(
+            &relation,
+            &bytes,
+            limits,
+            deep_proof::MAX_ALLOCATION_CHARGES
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn producer_preflight_rejects_the_fixed_statement_envelope_before_private_work() {
+    let reference = policy_relation();
+    let mut digest = [0; 8];
+    digest[7] = 1 << 24;
+    let context = vec![0; 240 * 1024];
+    let oversized = CompactTransferAir::new(
+        &PublicStatement {
+            updates: [PublicUpdate {
+                old_leaf: digest,
+                new_leaf: digest,
+                path: 0,
+            }; 2],
+            old_root: digest,
+            new_root: digest,
+        },
+        Some(&context),
+    )
+    .unwrap();
+    assert!(oversized.statement_bytes().len() > context.len());
+    let policy = VerifyLimits {
+        max_batch_bytes: oversized.statement_bytes().len(),
+        ..VerifyLimits::default()
+    };
+    preflight(&reference, deep_proof::MAX_FRAME_BYTES, policy).unwrap();
+    assert!(matches!(
+        preflight(&oversized, deep_proof::MAX_FRAME_BYTES, policy),
+        Err(Error::InvalidTraceShape { .. })
     ));
 }

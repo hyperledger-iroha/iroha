@@ -80,7 +80,8 @@ fn domain_limb(limb: usize) -> u64 {
     ))
 }
 
-fn base_values(index: PhysicalRowIndex) -> [u64; PUBLIC_COLUMN_COUNT] {
+/// Exact verifier-known values at a typed physical subgroup row, in public-column order.
+pub(super) fn base_values(index: PhysicalRowIndex) -> [u64; PUBLIC_COLUMN_COUNT] {
     let phase = index.phase();
     let mut values = [0; PUBLIC_COLUMN_COUNT];
     if phase >= EXECUTING_ROWS {

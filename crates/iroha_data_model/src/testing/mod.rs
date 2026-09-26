@@ -8,3 +8,8 @@ pub mod axt;
 pub mod cancel_asset_lock;
 /// Deterministic KAGEMUSHA V1 signing fixtures.
 pub mod kagemusha;
+
+/// Canonical threshold-signed Experimental release fixtures for operator and SDK tests.
+pub mod kagemusha_release {
+    pub use crate::kagemusha::kagemusha_release_v1::fixture_support::KagemushaExperimentalReleaseFixtureV1;
+}

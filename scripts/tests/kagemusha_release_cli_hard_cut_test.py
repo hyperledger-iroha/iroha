@@ -66,6 +66,9 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
         self.assertEqual(
             command_names,
             [
+                "prepare-mobile-bootstrap-v1",
+                "sign-mobile-bootstrap-approval-v1",
+                "assemble-mobile-bootstrap-v1",
                 "prepare-experimental-release-v1",
                 "authenticate-release-v1",
                 "authenticate-experimental-release-v1",

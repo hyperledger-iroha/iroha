@@ -351,3 +351,65 @@ fn real_challenge_uses_every_block_and_preserves_full_raw_tape() {
     assert_ne!(&raw[..48], &raw[615 * 48..]);
     assert_eq!(decode(*round, raw).unwrap(), Message::Fields(alpha));
 }
+
+#[test]
+fn prepared_relation_identity_is_explicit_bounded_and_separate_from_raw_fixtures() {
+    use crate::{
+        backend::compact_transfer_air::CompactTransferAir,
+        gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
+    };
+    let mut marker = [0; 8];
+    marker[7] = 1 << 24;
+    let statement = PublicStatement {
+        updates: [PublicUpdate {
+            old_leaf: marker,
+            new_leaf: marker,
+            path: 0,
+        }; 2],
+        old_root: marker,
+        new_root: marker,
+    };
+    let relation =
+        CompactTransferAir::new(&statement, Some(b"complete prepared statement")).unwrap();
+    let actual = Context::for_relation(&relation).unwrap();
+    let exact =
+        Context::with_identity(relation.schema().identity, relation.statement_bytes()).unwrap();
+    let fixture = Context::new(relation.statement_bytes()).unwrap();
+    let zero = Digest::default();
+    let root = actual.hash_parent(Oracle::Row, 1, 0, zero, zero).unwrap();
+    assert_eq!(
+        root,
+        exact.hash_parent(Oracle::Row, 1, 0, zero, zero).unwrap()
+    );
+    assert_ne!(
+        root,
+        fixture.hash_parent(Oracle::Row, 1, 0, zero, zero).unwrap()
+    );
+    let different = Context::with_identity(
+        "another prepared relation identity",
+        relation.statement_bytes(),
+    )
+    .unwrap();
+    assert_ne!(
+        root,
+        different
+            .hash_parent(Oracle::Row, 1, 0, zero, zero)
+            .unwrap()
+    );
+    assert!(Context::with_identity("", relation.statement_bytes()).is_err());
+    assert!(
+        Context::with_identity(
+            &"x".repeat(MAX_RELATION_IDENTITY_BYTES + 1),
+            relation.statement_bytes()
+        )
+        .is_err()
+    );
+    assert!(
+        Context::with_identity(
+            &"x".repeat(MAX_RELATION_IDENTITY_BYTES),
+            relation.statement_bytes()
+        )
+        .is_ok()
+    );
+    assert!(core::ptr::eq(&relation, relation.deep_relation()));
+}

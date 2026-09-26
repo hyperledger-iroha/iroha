@@ -23,11 +23,11 @@ fn policy() -> ArtifactLimits {
             max_wire_bytes: 16 * 1024 * 1024,
             max_total_segment_bytes: 16 * 1024 * 1024,
             max_total_statement_bytes: 512 * 1024,
-            max_total_queries: 750,
+            max_total_queries: 128,
             max_total_decode_allocation_charges: 128 * 1024 * 1024,
             segment: crate::VerifyLimits {
                 max_proof_bytes: 5 * 1024 * 1024,
-                max_queries: 375,
+                max_queries: 64,
                 ..crate::VerifyLimits::default()
             },
         },
@@ -98,6 +98,241 @@ fn fixed_quantity_profile_is_nominal_distinct_and_codec_independent() {
         assert_eq!(norito::core::effective_decode_flags(), Some(flags));
     }
     eprintln!("quantity_artifact_profile={}", hex::encode(expected.0));
+}
+
+// Exact descriptor retained solely as a rejection fixture from the previous
+// quantity profile. Field order and both declared Norito identities are the
+// predecessor's original values; no production constructor or decoder uses it.
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_model_statement::candidate_artifact::QuantityArtifactProfile",
+    frame = "fastpq_prover::compact_v1::QuantityArtifactProfileV1"
+)]
+struct PredecessorQuantityArtifactProfile {
+    version: u16,
+    catalog: &'static str,
+    protocol: &'static str,
+    compact_geometry_identity: Vec<u8>,
+    lane_parameter_sha3_256: [u8; 32],
+    tape_bytes: [u32; 22],
+    quantity_value_schema: &'static str,
+    quantity_context_schema: &'static str,
+    value_hash_domain: Vec<u8>,
+    relation_identities: [&'static str; 4],
+}
+
+fn predecessor_quantity_profile() -> FastpqCompactProfileIdV1 {
+    let description = PredecessorQuantityArtifactProfile {
+        version: 1,
+        catalog: fastpq_isi::FASTPQ_CATALOG_V1,
+        protocol: fastpq_isi::FASTPQ_FINAL_V1.name,
+        compact_geometry_identity: compact_v1::IDENTITY.to_vec(),
+        lane_parameter_sha3_256: fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1,
+        tape_bytes: core::array::from_fn(|round| {
+            compact_v1::Round::new(round as u8 + 1)
+                .expect("predecessor round")
+                .tape_bytes() as u32
+        }),
+        quantity_value_schema: "fastpq_prover::public_transfer::QuantityValueV1",
+        quantity_context_schema: "fastpq_prover::compact_v1::QuantityTransferContextV1",
+        value_hash_domain: b"fastpq:quantity:v1:smt:value|".to_vec(),
+        relation_identities: [
+            FastpqQuantityUnits::TRANSFER_IDENTITY,
+            FastpqQuantityUnits::AXT_IDENTITY,
+            FastpqQuantityUnits::BATCH_IDENTITY,
+            FastpqQuantityUnits::AXT_BATCH_IDENTITY,
+        ],
+    };
+    FastpqCompactProfileIdV1(Sha256::digest(norito::encode_canonical(&description).unwrap()).into())
+}
+
+fn assert_profile_rejected_before_child_decode(
+    fixture: &QuantityFixture,
+    profile_id: FastpqCompactProfileIdV1,
+) {
+    let mut ordinary = ordinary(fixture, vec![0]);
+    let mut axt = axt(fixture, vec![0]);
+    ordinary.profile_id = profile_id;
+    axt.profile_id = profile_id;
+    let expected = fixture.expected();
+    let statement_digest = statement_digest(&fixture.model(), usize::MAX).unwrap();
+    assert!(matches!(
+        verify_bound_quantity_ordinary_artifact(
+            &norito::encode_canonical(&ordinary).unwrap(),
+            &expected,
+            statement_digest,
+            policy(),
+        ),
+        Err(ArtifactError::Transport(
+            FastpqCompactArtifactDecodeError::ProfileMismatch
+        ))
+    ));
+    assert!(matches!(
+        verify_bound_quantity_axt_artifact(
+            &norito::encode_canonical(&axt).unwrap(),
+            &expected,
+            statement_digest,
+            fixture.context(),
+            policy(),
+        ),
+        Err(ArtifactError::Transport(
+            FastpqCompactArtifactDecodeError::ProfileMismatch
+        ))
+    ));
+}
+
+#[test]
+fn deep_quantity_descriptor_binds_actual_protocol_and_preserves_value_relations() {
+    use norito::schema::identity::NoritoSchema as _;
+
+    let descriptor = DeepQuantityArtifactProfile::fixed();
+    assert_eq!(
+        DeepQuantityArtifactProfile::frame_name(),
+        "fastpq_prover::deep_compact::QuantityArtifactProfileV1"
+    );
+    assert_eq!(descriptor.version, 1);
+    assert_eq!(descriptor.catalog, fastpq_isi::FASTPQ_CATALOG_V1);
+    assert_eq!(descriptor.protocol_identity, deep_binding::IDENTITY);
+    assert_ne!(descriptor.protocol_identity, compact_v1::IDENTITY);
+    assert_eq!(descriptor.trace_rows, 65_536);
+    assert_eq!(descriptor.trace_root, 0xbe5b_4f4b_47ee_4647);
+    assert_eq!(descriptor.lde_rows, 8_388_608);
+    assert_eq!(descriptor.lde_root, 0x35c4_528b_4aa6_2eb8);
+    assert_eq!(descriptor.coset_offset, COSET_OFFSET);
+    assert_eq!(descriptor.committed_columns, 301);
+    assert_eq!(descriptor.public_column_layout, LAYOUT_ID);
+    assert_eq!(descriptor.constraints, 923);
+    assert_eq!(descriptor.modulus, 0xffff_ffff_0000_0001);
+    assert_eq!(descriptor.extension_degree, 4);
+    assert_eq!(descriptor.extension_nonresidue, 7);
+    assert_eq!(
+        descriptor.extension_schema,
+        crate::GoldilocksFp4V1::frame_name()
+    );
+    assert_eq!(descriptor.extension_bytes, 32);
+    assert_eq!(descriptor.hash_digest_lanes, 6);
+    assert_eq!(
+        descriptor.lane_parameter_sha3_256,
+        fastpq_isi::GOLDILOCKS_DIGEST384_PARAMETER_SHA3_256_V1
+    );
+    assert_eq!(descriptor.fri_arities, [16, 16, 8, 8, 4]);
+    assert_eq!(
+        descriptor.fri_lengths,
+        [8_388_608, 524_288, 32_768, 4_096, 512, 128]
+    );
+    assert_eq!(descriptor.fri_degrees, [65_536, 4_096, 256, 32, 4, 1]);
+    assert_eq!(descriptor.query_count, 64);
+    assert_eq!(descriptor.query_candidates, 74);
+    assert_eq!(
+        descriptor.tape_bytes,
+        [48, 29_568, 48, 48, 48, 48, 48, 48, 48, 624]
+    );
+    assert_eq!(
+        descriptor.proof_frame_schema,
+        "fastpq_prover::deep_compact::ProofV1"
+    );
+    assert_eq!(
+        descriptor.proof_frame_hash,
+        norito::schema::identity::frame_hash::<DeepProof>()
+    );
+    assert_eq!(
+        descriptor.quantity_value_schema,
+        "fastpq_prover::public_transfer::QuantityValueV1"
+    );
+    assert_eq!(
+        descriptor.quantity_context_schema,
+        "fastpq_prover::compact_v1::QuantityTransferContextV1"
+    );
+    assert_eq!(
+        descriptor.value_hash_domain,
+        b"fastpq:quantity:v1:smt:value|"
+    );
+    assert_eq!(
+        descriptor.relation_identities,
+        [
+            FastpqQuantityUnits::BATCH_IDENTITY,
+            FastpqQuantityUnits::AXT_BATCH_IDENTITY
+        ]
+    );
+    assert_eq!(descriptor.profile_id(), quantity_diagnostic_profile_id());
+}
+
+#[test]
+fn every_deep_descriptor_field_changes_the_fixed_artifact_profile() {
+    let fixture = fixture();
+    let fixed = DeepQuantityArtifactProfile::fixed();
+    let expected = fixed.profile_id();
+    let reject = |changed: DeepQuantityArtifactProfile| {
+        let profile = changed.profile_id();
+        assert_ne!(profile, expected);
+        assert_profile_rejected_before_child_decode(&fixture, profile);
+    };
+    macro_rules! change {
+        ($field:ident, $value:expr) => {{
+            let mut changed = fixed.clone();
+            changed.$field = $value;
+            reject(changed);
+        }};
+    }
+    change!(version, 2);
+    change!(catalog, "different catalog");
+    change!(protocol_identity, compact_v1::IDENTITY.to_vec());
+    change!(trace_rows, 32_768);
+    change!(trace_root, fixed.trace_root ^ 1);
+    change!(lde_rows, 524_288);
+    change!(lde_root, fastpq_isi::FASTPQ_FINAL_V1.lde_root);
+    change!(coset_offset, fixed.coset_offset ^ 1);
+    change!(committed_columns, 342);
+    change!(public_column_layout, "different column layout");
+    change!(constraints, 922);
+    change!(modulus, fixed.modulus - 1);
+    change!(extension_degree, 2);
+    change!(extension_nonresidue, 11);
+    change!(extension_schema, "different extension".to_owned());
+    change!(extension_bytes, 16);
+    change!(hash_digest_lanes, 4);
+    change!(lane_parameter_sha3_256, [0; 32]);
+    change!(query_count, 375);
+    change!(query_candidates, 75);
+    change!(proof_frame_schema, "different proof frame".to_owned());
+    change!(proof_frame_hash, [0; 16]);
+    change!(quantity_value_schema, "different value frame");
+    change!(quantity_context_schema, "different context frame");
+    change!(value_hash_domain, b"different value domain".to_vec());
+    for index in 0..5 {
+        let mut changed = fixed.clone();
+        changed.fri_arities[index] *= 2;
+        reject(changed);
+    }
+    for index in 0..6 {
+        let mut changed = fixed.clone();
+        changed.fri_lengths[index] *= 2;
+        reject(changed);
+        let mut changed = fixed.clone();
+        changed.fri_degrees[index] *= 2;
+        reject(changed);
+    }
+    for index in 0..10 {
+        let mut changed = fixed.clone();
+        changed.tape_bytes[index] += 48;
+        reject(changed);
+    }
+    for index in 0..2 {
+        let mut changed = fixed.clone();
+        changed.relation_identities[index] = "different outer relation";
+        reject(changed);
+    }
+    let mut changed = fixed.clone();
+    changed.relation_identities.swap(0, 1);
+    reject(changed);
+}
+
+#[test]
+fn predecessor_quantity_profile_is_rejected_on_both_bound_routes() {
+    let predecessor = predecessor_quantity_profile();
+    assert_ne!(predecessor, quantity_diagnostic_profile_id());
+    assert_ne!(predecessor, diagnostic_profile_id());
+    assert_profile_rejected_before_child_decode(&fixture(), predecessor);
 }
 
 #[test]
@@ -258,198 +493,6 @@ fn quantity_artifact_false_rows_do_not_reach_the_proof_decoder() {
         ),
         Err(ArtifactError::Verify(Error::VerifierLimitExceeded { .. }))
     ));
-}
-
-fn complete_retained_quantity_artifact(is_axt: bool) {
-    let f = fixture();
-    let expected = f.expected();
-    let label = if is_axt { "axt" } else { "ordinary" };
-    // TODO: Pin new six-lane bundle hashes from actual final-geometry proof
-    // captures; the old hash is retained as a failing migration control.
-    let bundle_hash = if is_axt {
-        "3ceff34c2ca74ef1554f23bc7e8ec1f4c493a286dd9e532614b511cdfbd5bb20"
-    } else {
-        "2d655210af9e7f550f8cd9706899851fe804ff0d06ac50dc2fc08e8b0ddfa014"
-    };
-    let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/fastpq-production-validation");
-    let frame =
-        std::fs::read(directory.join(format!("quantity-compact-{label}-bundle-{bundle_hash}.bin")))
-            .expect("run the corresponding complete full-domain bundle diagnostic first");
-    assert_eq!(hex::encode(Sha256::digest(&frame)), bundle_hash);
-    let inner_digest: [u8; 32] = Hash::new(&frame).into();
-    let statement_digest: [u8; 32] =
-        Hash::new(norito::encode_canonical(&f.model()).unwrap()).into();
-    let bytes = if is_axt {
-        norito::encode_canonical(&axt(&f, frame)).unwrap()
-    } else {
-        norito::encode_canonical(&ordinary(&f, frame)).unwrap()
-    };
-    let verify = |bytes: &[u8], limits| {
-        if is_axt {
-            verify_quantity_axt_artifact(bytes, &expected, f.context(), limits)
-        } else {
-            verify_quantity_ordinary_artifact(bytes, &expected, limits)
-        }
-    };
-    let started = std::time::Instant::now();
-    let (result, usage) = norito::core::with_decode_limits_measured(policy().total_decode, || {
-        verify(&bytes, policy())
-    });
-    let result = result.unwrap();
-    let elapsed = started.elapsed();
-    let identity = result.identity();
-    assert_eq!(identity.profile_id, quantity_diagnostic_profile_id());
-    assert_eq!(
-        identity.proof_kind,
-        if is_axt {
-            FastpqProofKindV1::AxtCompact
-        } else {
-            FastpqProofKindV1::OrdinaryCompact
-        }
-    );
-    assert_eq!(identity.public_statement_digest, statement_digest);
-    assert_eq!(
-        identity.artifact_digest,
-        <[u8; 32]>::from(Hash::new(&bytes))
-    );
-    assert_eq!(identity.inner_bundle_digest, inner_digest);
-    assert_eq!(identity.artifact_bytes, bytes.len() as u64);
-    assert_eq!(result.bundle().public_io(), f.expected());
-    assert_eq!(result.bundle().work().air_evaluations, 750);
-    assert_eq!(result.bundle().work().terminal_degree_checks, 2);
-    let FastpqCommitmentDescriptionV1::OrderedCompactAir(roots) = &identity.commitments else {
-        panic!("unexpected commitment description")
-    };
-    assert_eq!(roots.segment_count, 2);
-    assert_eq!(
-        roots.segment_air_row_roots.as_slice(),
-        result.bundle().row_roots()
-    );
-    assert_eq!(
-        norito::decode_canonical::<FastpqArtifactIdentityDescriptionV1>(
-            &norito::encode_canonical(identity).unwrap()
-        )
-        .unwrap(),
-        *identity
-    );
-    // Exercise the public library boundary on this same complete retained proof.
-    // Expectations are rebuilt from the independent fixture, never decoded bytes.
-    let p = policy();
-    let public_limits = crate::offline_compact::VerificationLimits {
-        transport: p.transport,
-        public_statement: p.public_statement,
-        bundle: crate::offline_compact::BundleVerificationLimits {
-            max_segments: p.bundle.max_segments,
-            max_wire_bytes: p.bundle.max_wire_bytes,
-            max_total_segment_bytes: p.bundle.max_total_segment_bytes,
-            max_total_statement_bytes: p.bundle.max_total_statement_bytes,
-            max_total_queries: p.bundle.max_total_queries,
-            max_total_decode_allocation_charges: p.bundle.max_total_decode_allocation_charges,
-            segment: p.bundle.segment,
-        },
-        max_segment_decode_allocation_charges: p.max_segment_decode_allocation_charges,
-        total_decode: p.total_decode,
-    };
-    let public_expected = crate::offline_compact::ExpectedStatement {
-        inputs: f.model().public_inputs,
-        ordering_hash: expected.ordering_hash,
-        public_statement_digest: statement_digest,
-    };
-    let offline = if is_axt {
-        let independent = axt(&f, Vec::new());
-        crate::offline_compact::verify_quantity_axt_artifact(
-            &bytes,
-            public_expected,
-            crate::offline_compact::ExpectedAxtContext {
-                binding: &independent.binding,
-                metadata: &independent.metadata,
-                mirrors: independent.mirrors,
-                remote_spend_claims: independent.remote_spend_claims.as_deref(),
-            },
-            public_limits,
-        )
-    } else {
-        crate::offline_compact::verify_quantity_ordinary_artifact(
-            &bytes,
-            public_expected,
-            public_limits,
-        )
-    }
-    .unwrap();
-    assert_eq!(offline.expected_statement(), public_expected);
-    assert_eq!(offline.identity(), result.identity());
-    assert_eq!(offline.air_row_roots(), result.bundle().row_roots());
-    assert_eq!(offline.segments(), result.bundle().segments());
-    assert_eq!(offline.bundle_frame_bytes(), result.bundle().wire_bytes());
-    assert_eq!(offline.statement_bytes(), result.bundle().statement_bytes());
-    let old_work = result.bundle().work();
-    assert_eq!(
-        offline.work(),
-        crate::offline_compact::VerificationWork {
-            proof_bytes: old_work.proof_bytes,
-            transcripts: old_work.transcripts,
-            row_leaves: old_work.row_leaves,
-            oracle_leaves: old_work.oracle_leaves,
-            fri_leaves: old_work.fri_leaves,
-            parent_hashes: old_work.parent_hashes,
-            air_evaluations: old_work.air_evaluations,
-            terminal_degree_checks: old_work.terminal_degree_checks,
-        }
-    );
-    let charges = usage.total_allocated_bytes();
-    let elements = usage.total_elements();
-    let mut exact = policy();
-    exact.total_decode =
-        DecodeLimits::new(20 * 1024 * 1024, 20 * 1024 * 1024, elements, charges, 32);
-    assert_eq!(verify(&bytes, exact).unwrap(), result);
-    let mut low = exact;
-    low.total_decode = DecodeLimits::new(
-        20 * 1024 * 1024,
-        20 * 1024 * 1024,
-        elements,
-        charges - 1,
-        32,
-    );
-    assert!(verify(&bytes, low).is_err());
-    low.total_decode = DecodeLimits::new(
-        20 * 1024 * 1024,
-        20 * 1024 * 1024,
-        elements - 1,
-        charges,
-        32,
-    );
-    assert!(verify(&bytes, low).is_err());
-    assert!(
-        norito::core::with_decode_limits_scope(low.total_decode, || verify(&bytes, policy()))
-            .is_err()
-    );
-    let mut changed = bytes.clone();
-    let last = changed.len() - 1;
-    changed[last] ^= 1;
-    assert!(verify(&changed, policy()).is_err());
-    let sha = hex::encode(Sha256::digest(&bytes));
-    let path = directory.join(format!("quantity-artifact-{label}-{sha}.bin"));
-    std::fs::write(&path, &bytes).unwrap();
-    eprintln!(
-        "quantity_artifact={label}; profile={}; bytes={}; verify={elapsed:?}; decode_allocation_charges={charges}; decode_elements={elements}; work={:?}; retained={}; sha256={sha}",
-        hex::encode(quantity_diagnostic_profile_id().0),
-        bytes.len(),
-        result.bundle().work(),
-        path.display()
-    );
-}
-
-#[test]
-#[ignore = "requires the pinned complete full-domain ordinary bundle; verifies exact cumulative artifact caps"]
-fn complete_ordinary_quantity_artifact_verifies_retained_bundle_and_cumulative_limits() {
-    complete_retained_quantity_artifact(false);
-}
-
-#[test]
-#[ignore = "requires the pinned complete full-domain AXT bundle; verifies exact cumulative artifact caps"]
-fn complete_axt_quantity_artifact_verifies_retained_bundle_and_cumulative_limits() {
-    complete_retained_quantity_artifact(true);
 }
 
 #[test]

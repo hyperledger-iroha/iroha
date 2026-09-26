@@ -9,6 +9,8 @@ import android.os.Build
 import android.os.UserManager
 import android.util.Log
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,6 +18,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.security.KeyPairGenerator
+import java.security.KeyFactory
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.SecureRandom
@@ -194,20 +197,72 @@ class AndroidKeyMintSingleUseDeviceTest {
         }
         check(recorded[0] != diagnosticBootId()) { "device was not rebooted after first use" }
         val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        val second = runCatching {
-            val key = store.getKey(restartAlias, null) as? PrivateKey
-                ?: error("consumed key alias is absent")
-            Signature.getInstance("SHA256withECDSA").run {
-                initSign(key)
-                update("nonmonetary second-use diagnostic".toByteArray(Charsets.US_ASCII))
+        // setMaxUsageCount documents permanent invalidation followed by deletion:
+        // https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec.Builder#setMaxUsageCount(int)
+        // A generic provider failure is not either documented exhausted-key observation.
+        val observation = completeKeyMintRestartDiagnosticV1(
+            verifyFreshControl = { verifyFreshRestartControlKey(store) },
+            readConsumedKey = {
+                if (!store.containsAlias(restartAlias)) null
+                else store.getKey(restartAlias, null) as? PrivateKey
+                    ?: error("consumed alias exists but has no private key")
+            },
+            signConsumedKey = { key ->
+                Signature.getInstance("SHA256withECDSA").run {
+                    initSign(key)
+                    update("nonmonetary second-use diagnostic".toByteArray(Charsets.US_ASCII))
+                    sign()
+                }
+            },
+            isPermanentlyInvalidated = { it is KeyPermanentlyInvalidatedException },
+            removeCompletedMarker = {
+                check(marker.delete()) { "cannot remove restart diagnostic marker" }
+            },
+        )
+        // Leave a still-present consumed alias untouched for inspection. Only the fresh
+        // control alias is removed by this stage; unexpected errors also retain the marker.
+        Log.i("IrohaKeyMintProbe", "restart stage 3: fresh StrongBox control verified; " +
+            "consumed observation=$observation; boot=${diagnosticBootId()}")
+    }
+
+    /** A functioning fresh StrongBox key rules out a provider outage as the probe's success. */
+    private fun verifyFreshRestartControlKey(store: KeyStore) {
+        val nonce = ByteArray(32).also(SecureRandom()::nextBytes)
+        val alias = "iroha_keymint_restart_control_" +
+            nonce.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        check(!store.containsAlias(alias)) { "restart control alias already exists" }
+        try {
+            val specification = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
+                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setIsStrongBoxBacked(true)
+                .build()
+            val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC,
+                "AndroidKeyStore")
+            generator.initialize(specification)
+            val pair = generator.generateKeyPair()
+            val info = KeyFactory.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
+                .getKeySpec(pair.private, KeyInfo::class.java)
+            assertEquals("restart control key must remain StrongBox backed",
+                KeyProperties.SECURITY_LEVEL_STRONGBOX, info.securityLevel)
+            val message = MessageDigest.getInstance("SHA-256").digest(
+                "iroha:kagemusha:restart-control:v1".toByteArray(Charsets.US_ASCII) + nonce,
+            )
+            val signature = Signature.getInstance("SHA256withECDSA").run {
+                initSign(pair.private)
+                update(message)
                 sign()
             }
+            assertTrue("fresh StrongBox control signature failed verification",
+                Signature.getInstance("SHA256withECDSA").run {
+                    initVerify(pair.public)
+                    update(message)
+                    verify(signature)
+                })
+        } finally {
+            if (store.containsAlias(alias)) store.deleteEntry(alias)
+            check(!store.containsAlias(alias)) { "restart control alias cleanup failed" }
         }
-        Log.i("IrohaKeyMintProbe", "restart stage 3: second signed=${second.isSuccess}; " +
-            "failure=${second.exceptionOrNull()?.javaClass?.name}; boot=${diagnosticBootId()}")
-        assertFalse("consumed one-use alias signed after reboot", second.isSuccess)
-        if (store.containsAlias(restartAlias)) store.deleteEntry(restartAlias)
-        check(marker.delete()) { "cannot remove restart diagnostic marker" }
     }
 
     private fun requirePixel6RestartProbe() {

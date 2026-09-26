@@ -1,9 +1,11 @@
 # Compact multiplicative-coset folding
 
 `backend/fri_fold.rs` implements the algebra needed for arities 2, 4, 8 and 16.
-It is currently a private test-registered module, not an admitted proof format.
-The existing protocol remains binary until the complete replacement owns its
-commitments, transcript, authenticated openings, degree progression and limits.
+It is an internal normal-library arithmetic module used by the fixed
+[DEEP offline profile](fastpq_deep_protocol_contract.md), whose ordered arities
+are `[16,16,8,8,4]`. That profile owns commitments, transcript, authenticated
+openings, degree progression and limits. This arithmetic is not production
+admission or cryptographic qualification.
 
 For `f(X) = sum_{j=0}^{r-1} X^j f_j(X^r)`, the ordered input fiber contains
 `f(x * omega^i)` for `i=0..r`, where omega has exact order r. The inverse

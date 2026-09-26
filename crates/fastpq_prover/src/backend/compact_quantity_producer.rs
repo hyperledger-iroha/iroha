@@ -18,15 +18,19 @@ use super::{
     compact_axt_context::preflight_context,
     compact_bundle::{self, AxtBundleWire, BundleWire},
     compact_model_statement::with_prepared_quantity_statement,
-    compact_protocol::{
-        FixedAir,
-        shared_openings::{preflight_prover, prove_shared},
-    },
-    compact_prover_resources::check_segment_charge,
+    compact_prover_resources::{check_segment_charge, quotient_payload_ceiling},
     compact_public_batch::{BatchContextLimits, PublicTransferBatch, preflight_prepared},
+    deep_coefficients::{DeepCoefficientLimits, DeepTraceCoefficients},
+    deep_engine,
+    deep_geometry::QUERY_COUNT,
+    deep_proof::MAX_FRAME_BYTES,
+    deep_prover::{self, ProverLimits as DeepProverLimits},
+    deep_quotient::DeepQuotientLimits,
+    deep_relation::DeepRelation,
     offline_compact::{
         ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits, VerificationLimits,
     },
+    secret_polynomial::SecretPolynomial,
 };
 use crate::{
     Error, ProofSemantics, Result,
@@ -40,9 +44,9 @@ use crate::{
     },
 };
 
-// Exact valid maximal-byte shape at the fixed 375-query geometry, not the
-// larger invalid loose decode shape. The engine independently checks this cap.
-const SHARED_FRAME_BOUND: usize = 4_017_376;
+// The sole fixed profile owns its canonical maximum; the producer and verifier
+// independently enforce this bound before allocating full-domain buffers.
+const SHARED_FRAME_BOUND: usize = MAX_FRAME_BYTES;
 static PRODUCER: Mutex<()> = Mutex::new(());
 
 #[path = "compact_quantity_producer/decode_policy.rs"]
@@ -109,10 +113,10 @@ fn check_statement(
     }
     let bundle = verification.bundle;
     check("max_bundle_segments", count, bundle.max_segments)?;
-    check("max_queries", 375, bundle.segment.max_queries)?;
+    check("max_queries", QUERY_COUNT, bundle.segment.max_queries)?;
     check(
         "max_bundle_queries",
-        mul(count, 375)?,
+        mul(count, QUERY_COUNT)?,
         bundle.max_total_queries,
     )?;
     check(
@@ -131,6 +135,12 @@ fn check_statement(
         proving.max_total_trace_cells,
     )?;
     check_segment_charge(0, SHARED_FRAME_BOUND, proving.max_segment_charge_bytes)?;
+    let conversion = DeepTraceCoefficients::required_resources()?;
+    check(
+        "max_compact_prover_segment_work_units",
+        conversion.work_units,
+        proving.max_segment_work_units,
+    )?;
     decode_policy::preflight_decode_policy(count, verification)?;
     // Canonical framing is measured before allocating an encoded statement.
     // Public preparation below separately charges keys, paths, rows and claims.
@@ -238,7 +248,10 @@ fn encode_artifact<T: NoritoSerialize>(value: &T, limits: VerificationLimits) ->
     Ok(norito::encode_canonical(value)?)
 }
 
-fn columns(statement: &PublicStatement, pair: &[TransferSmtWitness; 2]) -> Result<Vec<Vec<u64>>> {
+fn columns(
+    statement: &PublicStatement,
+    pair: &[TransferSmtWitness; 2],
+) -> Result<Vec<SecretPolynomial<u64>>> {
     for (update, witness) in statement.updates.iter().zip(pair) {
         if witness.path_bits != update.path.to_le_bytes() || witness.siblings.len() != PATH_LEVELS {
             return Err(invalid(
@@ -254,23 +267,23 @@ fn columns(statement: &PublicStatement, pair: &[TransferSmtWitness; 2]) -> Resul
             })
         })
     });
-    let witness = SmtWitness::from_inputs(statement, &siblings)
+    let witness = SmtWitness::from_inputs_guarded(statement, &siblings)
+        .map(SmtWitness::into_physical_guarded)
         .ok_or_else(|| {
             invalid("quantity producer private witness does not satisfy its public ports")
-        })?
-        .into_physical();
-    let mut columns: Vec<Vec<u64>> = (0..COLUMN_COUNT)
-        .map(|_| Vec::with_capacity(PHYSICAL_ROW_COUNT))
-        .collect();
-    for row in witness.rows() {
+        })?;
+    let mut columns = (0..COLUMN_COUNT)
+        .map(|_| SecretPolynomial::zeroed(PHYSICAL_ROW_COUNT))
+        .collect::<Result<Vec<_>>>()?;
+    for (index, row) in witness.rows().iter().enumerate() {
         for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
-            column.push(value);
+            column[index] = value;
         }
     }
     Ok(columns)
 }
 
-fn segments<R: FixedAir>(
+fn segments<R: DeepRelation>(
     statements: &[PublicStatement],
     private: &[[TransferSmtWitness; 2]],
     relation: impl Fn(usize) -> Result<R>,
@@ -285,7 +298,7 @@ fn segments<R: FixedAir>(
     // Validate every complete statement before expanding even the first witness.
     for ordinal in 0..statements.len() {
         let relation = relation(ordinal)?;
-        preflight_prover(&relation, verification.bundle.segment)?;
+        deep_engine::preflight(&relation, MAX_FRAME_BYTES, verification.bundle.segment)?;
         check_segment_charge(
             relation.statement_bytes().len(),
             SHARED_FRAME_BOUND,
@@ -297,9 +310,32 @@ fn segments<R: FixedAir>(
     for (ordinal, (statement, private)) in statements.iter().zip(private).enumerate() {
         let relation = relation(ordinal)?;
         let columns = columns(statement, private)?;
-        let proof = prove_shared(&relation, &columns, verification.bundle.segment)?;
+        let borrowed = columns.iter().map(|column| &column[..]).collect::<Vec<_>>();
+        let coefficients = DeepTraceCoefficients::from_columns(
+            &borrowed,
+            DeepCoefficientLimits {
+                max_payload_bytes: proving.max_segment_charge_bytes,
+                max_work_units: proving.max_segment_work_units,
+            },
+        )?;
+        drop(borrowed);
         drop(columns);
-        let length = norito::core::encoded_frame_len(&proof)?;
+        let proof = deep_prover::prove(
+            &relation,
+            &coefficients.coefficients(),
+            DeepProverLimits {
+                digest_execution: proving.digest_execution,
+                max_payload_bytes: proving.max_segment_charge_bytes,
+                quotient: DeepQuotientLimits {
+                    max_payload_bytes: quotient_payload_ceiling()?
+                        .min(proving.max_segment_charge_bytes),
+                    max_work_units: proving.max_segment_work_units,
+                },
+                max_proof_bytes: verification.bundle.segment.max_proof_bytes,
+            },
+        )?;
+        drop(coefficients);
+        let length = proof.len();
         check(
             "max_proof_bytes",
             length,
@@ -311,7 +347,7 @@ fn segments<R: FixedAir>(
             total,
             verification.bundle.max_total_segment_bytes,
         )?;
-        frames.push(norito::encode_canonical(&proof)?);
+        frames.push(proof);
     }
     Ok(frames)
 }

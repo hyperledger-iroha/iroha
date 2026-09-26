@@ -343,14 +343,19 @@ fn kagemusha_testnet_anchor_requires_signed_consecutive_chain_from_independent_c
         .is_err());
 
     #[cfg(unix)]
-    assert!(crate::kagemusha_testnet_finality_chain_v1::
+    {
+        let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+        let publication = gate.dispatch().unwrap();
+        assert!(crate::kagemusha_testnet_finality_chain_v1::
         pin_kagemusha_testnet_authenticated_finality_chain_v1(
+            &publication.permit(),
             [0x71; 32],
             network(),
             trusted_context,
             chain.as_bytes(),
         )
         .is_err()); // A valid chain cannot install a pin without the private native owner.
+    }
 }
 
 #[test]

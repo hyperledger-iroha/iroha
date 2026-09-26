@@ -29,7 +29,6 @@ use std::{
     sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock, TryLockError},
 };
 const GOLDILOCKS_MODULUS: u64 = 0xffff_ffff_0000_0001;
-#[cfg(test)]
 #[path = "backend/air_degree.rs"]
 mod air_degree;
 #[path = "backend/air_expression.rs"]
@@ -39,10 +38,8 @@ mod air_quotient;
 #[cfg(test)]
 #[path = "backend/coefficient_masking.rs"]
 mod coefficient_masking;
-#[cfg(test)]
 #[path = "backend/masked_quotient.rs"]
 mod masked_quotient;
-#[cfg(test)]
 #[path = "backend/polynomial_division.rs"]
 mod polynomial_division;
 #[path = "backend/polynomial_field.rs"]
@@ -50,10 +47,8 @@ mod polynomial_field;
 #[cfg(test)]
 #[path = "backend/polynomial_reference.rs"]
 mod polynomial_reference;
-#[cfg(test)]
 #[path = "backend/polynomial_transform.rs"]
 mod polynomial_transform;
-#[cfg(test)]
 #[path = "backend/secret_polynomial.rs"]
 mod secret_polynomial;
 pub(crate) use air_quotient::{AirQuotientDomain, AirQuotientWeights};
@@ -68,16 +63,10 @@ pub(crate) use merkle_cache::MerkleNodeCache;
 mod compact_axt_air;
 #[path = "backend/compact_axt_batch.rs"]
 mod compact_axt_batch;
-#[cfg(test)]
-#[path = "backend/compact_axt_bundle_diagnostic.rs"]
-mod compact_axt_bundle_diagnostic;
 #[path = "backend/compact_axt_context.rs"]
 mod compact_axt_context;
 #[path = "backend/compact_bundle.rs"]
 mod compact_bundle;
-#[cfg(test)]
-#[path = "backend/compact_bundle_diagnostic.rs"]
-mod compact_bundle_diagnostic;
 #[path = "backend/compact_hash_quotient.rs"]
 mod compact_hash_quotient;
 #[path = "backend/compact_model_statement.rs"]
@@ -90,7 +79,6 @@ mod compact_prover_resources;
 mod compact_public_api;
 #[path = "backend/compact_public_batch.rs"]
 mod compact_public_batch;
-#[cfg(test)]
 #[path = "backend/compact_public_columns.rs"]
 mod compact_public_columns;
 #[path = "backend/compact_public_transfer.rs"]
@@ -111,24 +99,26 @@ mod compact_transfer_air;
 mod compact_v1;
 #[path = "backend/compact_value_domain.rs"]
 mod compact_value_domain;
-#[cfg(test)]
 #[path = "backend/deep_binding.rs"]
 mod deep_binding;
-#[cfg(test)]
+#[path = "backend/deep_coefficients.rs"]
+mod deep_coefficients;
 #[path = "backend/deep_composition.rs"]
 mod deep_composition;
-#[cfg(test)]
 #[path = "backend/deep_engine.rs"]
 mod deep_engine;
-#[cfg(test)]
 #[path = "backend/deep_geometry.rs"]
 mod deep_geometry;
-#[cfg(test)]
 #[path = "backend/deep_polynomial.rs"]
 mod deep_polynomial;
-#[cfg(test)]
 #[path = "backend/deep_proof.rs"]
 mod deep_proof;
+#[path = "backend/deep_prover.rs"]
+mod deep_prover;
+#[path = "backend/deep_quotient.rs"]
+mod deep_quotient;
+#[path = "backend/deep_relation.rs"]
+mod deep_relation;
 #[cfg(test)]
 #[path = "backend/extension_trace.rs"]
 mod extension_trace;
@@ -136,7 +126,6 @@ mod extension_trace;
 mod fixed_domain;
 #[path = "backend/fixed_schedule.rs"]
 mod fixed_schedule;
-#[cfg(test)]
 #[path = "backend/fri_fold.rs"]
 mod fri_fold;
 #[path = "backend/fri_openings.rs"]

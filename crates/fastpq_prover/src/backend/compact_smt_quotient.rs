@@ -26,13 +26,11 @@
 //! the full base or extension point. It does not establish source authentication,
 //! polynomial-opening validity, witness masking or production qualification.
 
-#[cfg(test)]
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
 use super::GOLDILOCKS_MODULUS;
-#[cfg(test)]
 use super::{
     air_degree::{PolynomialDegree, evaluate_node_degrees},
     air_expression::{Builder, Expression, Node},
@@ -41,7 +39,6 @@ use super::{
     fixed_schedule::PeriodicSelectors, polynomial_field::PolynomialField,
     public_table::PublicTablePolynomial,
 };
-#[cfg(test)]
 use crate::gadgets::{compact_smt_air::COLUMN_COUNT, compact_trace_columns::smt_row_from_cells};
 use crate::{
     Error, Result,
@@ -187,7 +184,6 @@ impl CompactSmtFixedColumns {
     /// Every periodic selector has degree N-N/512. Each already-combined sparse
     /// public column has degree at most N-1, independently of its support size.
     /// No selector products or subgroup-interpolated residues are substituted.
-    #[cfg(test)]
     pub(super) fn numerator_degree_bounds(
         &self,
         columns: &[PolynomialDegree; COLUMN_COUNT],
@@ -307,7 +303,6 @@ impl<'a> CompactSmtQuotient<'a> {
 // Compile the existing generic equations, then interpret their graph. The
 // caller owns the fixed degrees; the public owner above derives them from the
 // actual fixed schema and recognizes identically zero public columns.
-#[cfg(test)]
 fn numerator_degrees(
     statement: &PublicStatement,
     columns: &[PolynomialDegree; COLUMN_COUNT],

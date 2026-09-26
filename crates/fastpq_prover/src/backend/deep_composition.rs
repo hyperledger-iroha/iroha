@@ -23,6 +23,7 @@ use crate::{Error, Result, field::GoldilocksFp4V1 as F};
 /// Exact projected trace width for the proposed one-delta relation.
 pub(super) const TRACE_COLUMNS: usize = super::compact_public_columns::COMMITTED_COLUMN_COUNT;
 /// Number of components in the fixed power batch.
+#[cfg(test)]
 pub(super) const COMPONENTS: usize = 2 * TRACE_COLUMNS + 4;
 const TRACE_ROWS: u64 = 65_536;
 
@@ -135,6 +136,7 @@ impl DeepComposition {
     ///
     /// This arithmetic also accepts non-LDE points for independent polynomial
     /// checks; the caller authenticates the query domain and source openings.
+    #[cfg(test)]
     pub(super) fn value_at(&self, point: F, trace: &[F], quotient: &[F], lambda: F) -> Result<F> {
         if trace.len() != TRACE_COLUMNS || quotient.len() != 2 {
             return Err(shape(

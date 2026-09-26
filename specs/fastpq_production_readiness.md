@@ -1,6 +1,6 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-23. **Production qualification is unavailable.** The selected
+Updated: 2026-09-26. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
@@ -11,15 +11,34 @@ payload and 2,372,085 bytes for the complete canonical Norito frame. The verifie
 uses the payload bound; Core encoding and the sidecar default use the frame
 bound. These replay limits do not qualify or admit compact proofs.
 
-## Current offline implementation
+## September 26 integration in progress
 
-The normal library exposes `fastpq_prover::offline_compact` for bounded ordinary
-and AXT quantity-artifact verification. Its sole compact owner now uses the
+The normal offline quantity facade now selects the bounded DEEP profile:
+301 committed columns, 64 queries, five higher-arity folds and one OOD evaluation
+of the complete 923-slot AIR. The applied candidate includes the real coefficient
+conversion, exact polynomial quotient and full producer, together with per-phase
+work limits, cumulative decode accounting and authenticated row-root results.
+The September 26 normal-library and test build passes with 3,720 unchanged
+dependency-closure inputs; its focused selection passes 238 tests with zero
+failures and seven explicitly deferred full-domain/artifact diagnostics. The real
+full-domain quotient and eight-million-point FFT/inverse checks also pass. Raw
+proof generation is running; complete ordinary/AXT producer verification
+remains pending in the [integration checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
+The September 22 verifier-only checkpoint passed 84 focused tests;
+its maximum-shaped codec fixture measured 506,351 bytes, which is not evidence
+of a valid generated proof. Earlier profile measurements below retain their
+original source and do not qualify this replacement or change Core admission.
+
+## Predecessor offline implementation and evidence
+
+The predecessor normal library exposed `fastpq_prover::offline_compact` for bounded
+ordinary and AXT quantity-artifact verification. Its compact owner used the
 canonical six-lane Goldilocks construction for H and fixed field-product G tapes,
 with the [exact V1 framing](fastpq_compact_v1_framing.md) and
 [fixed protocol geometry](fastpq_compact_protocol_contract.md). No SHAKE or
-prototype selector is accepted at this boundary. The canonical catalog/protocol
-pair remains Exact12 / `fastpq-state-transition-stark-v1`.
+prototype selector is accepted at this boundary. That source advertised the catalog/protocol
+pair Exact12 / `fastpq-state-transition-stark-v1`. The replacement has a distinct
+DEEP descriptor and rejects that predecessor quantity profile.
 
 Both routes require independently expected PublicIO, ordering and the complete
 canonical statement digest; AXT also requires its binding, metadata, mirrors and
@@ -130,11 +149,12 @@ roots cover witnessed keys and writes, not the full persisted state relation
 required by the AXT anchor. The finalized-source resolver, successful transfer
 relation, proof-bound hidden amount and budget checks, atomic durable spend
 nonce, restart behavior, and production-size compact verifier remain open.
-The replacement protocol's public-column reconstruction, 606-component DEEP
-arithmetic and radix-2/4/8/16 folding now pass 21 new real-crate tests, alongside
-37 existing framing/profile/codec/API regressions. These private test-registered
-owners are not yet a complete smaller proof format or production verifier. The
-September 22 record binds the executable and subsequent registration correction.
+The September 22 precursor public-column reconstruction, 606-component DEEP
+arithmetic and radix-2/4/8/16 folding passed 21 new real-crate tests, alongside
+37 framing/profile/codec/API regressions. That checkpoint covered private
+test-registered components. The September 26 integration above now includes the
+complete offline format and producer; full generated-proof evidence and Core
+admission remain separate requirements.
 
 ## Completion goals
 
@@ -142,9 +162,9 @@ September 22 record binds the executable and subsequent registration correction.
 | --- | --- | --- |
 | G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Core still rejects unanchored spending; signed anchored-spend model amount preflight passes 2/2 focused tests but is not admitted; source/nonce and evidence gaps remain |
 | G2: Constrain the complete transfer statement | Reviewed AIR ledger or equivalent bounded public-input checks, with negative tests for every relation below | Complete 923-slot one-delta hash/SMT ledgers, bounded public checks and typed PublicIO/claim adapter pass; external authority/root authentication remains separate |
-| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | One six-lane offline ordinary/AXT quantity verifier is implemented; exact-source full-proof evidence and a production-sized representation remain required; authenticated Core admission is unwired and production still replays |
+| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | The bounded DEEP offline format, producer and ordinary/AXT verifier are implemented; exact-source complete proof/size evidence remains pending; authenticated Core admission is unwired and production still replays |
 | G4: Qualify cryptography | Protocol-specific qROM argument, final multi-target digest analysis, independently reproduced constants and vectors, independent review bound to final artifacts | Unavailable |
-| G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | Native Digest384 proof commitments/transcript and proof LDE execute on CPU; 423 M4 Max dispatch comparisons cover auxiliary shader ABI only; end-to-end, fleet and CUDA qualification remain incomplete |
+| G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | CPU remains the producer default; the M4 Max shader passes 5,454 digest comparisons over 954 dispatches, and the applied Rust lifecycle/tree path passes all six required actual-Metal checks. Full-proof performance, fleet and CUDA qualification remain incomplete; the native quotient fixture failure remains recorded in the September 26 checkpoint |
 | G6: Qualify integration and release | Same-source four-validator tests, restart/recovery and adversarial admission, signed immutable source and artifacts, rollout/rollback evidence | Incomplete |
 
 Goals G2 and G3 must complete together before removing replay. The selected

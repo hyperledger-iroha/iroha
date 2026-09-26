@@ -3,9 +3,10 @@
 Sizing refreshed: 2026-09-08; historical measurements below retain their
 2026-09-06 snapshot context. This is an implementation-coupled sizing analysis,
 not a production parameter approval. The repeated-opening prototype sized
-below remains test code. The normal library now exposes fixed quantity
-ordinary/AXT offline verification through `offline_compact`, using a distinct
-375-query SHAKE shared-opening candidate; these tables do not size that route.
+below remains predecessor test code. The normal library selects the
+[64-query DEEP Quantity profile](fastpq_deep_protocol_contract.md) through
+`offline_compact`; these historical tables do not size that route. The later
+375-query six-lane predecessor is also test-only.
 Production replay and its qualification gate remain in force. The required
 target is aggregate 128-bit qROM security. No profile below has an established
 bound for the complete implemented protocol.

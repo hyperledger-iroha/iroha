@@ -885,8 +885,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                     defaults::torii::APP_API_MAX_FETCH_SIZE.max(1),
                 )
                 .expect("max fetch size must be non-zero"),
-                rate_limit_cost_per_row: std::num::NonZeroU32::new(
-                    defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW.max(1),
+                rate_limit_cost_per_page: std::num::NonZeroU32::new(
+                    defaults::torii::APP_API_RATE_LIMIT_COST_PER_PAGE.max(1),
                 )
                 .expect("rate limit cost must be non-zero"),
                 request_signature_max_clock_skew: std::time::Duration::from_secs(

@@ -393,6 +393,7 @@ mod committed_hash_journal;
 #[cfg(test)]
 mod committed_transaction_context;
 mod da_hydration;
+mod exec_witness_capture;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 mod execution_commitment_test_support;
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -53604,98 +53605,108 @@ impl<'state> StateBlock<'state> {
             }
         };
         if self.exec_witness.is_none() {
-            let mut witness =
-                match crate::sumeragi::witness::drain_exec_witness_checked(|transcripts| {
-                    source_inventory.verify_finalized_transcript_map(transcripts)
-                }) {
-                    Ok(witness) => witness,
-                    Err(error) => return Err(self.reject_fastpq_witness_content(error)),
-                };
-            let receiver_height = self._curr_block.height().get();
-            // Commit the complete protected validation-fee registry selection
-            // at every height. A finality proof for this fixed synthetic write
-            // therefore proves both the current policy and that no later
-            // Parliament enactment was omitted.
-            let validation_fee_parameter_id =
-                iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::parameter_id();
-            let validation_fee_custom = self
-                .world
-                .parameters()
-                .custom()
-                .get(&validation_fee_parameter_id);
-            let validation_fee_commitment =
-                iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
-                    receiver_height,
-                    validation_fee_custom,
-                );
-            let validation_fee_value = norito::to_bytes(&validation_fee_commitment)
-                .expect("validation-fee policy snapshot commitment must encode");
-            let validation_fee_key =
-                iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1;
-            witness
-                .writes
-                .retain(|entry| entry.key.as_slice() != validation_fee_key);
-            witness.writes.push(ExecKv {
-                key: validation_fee_key.to_vec(),
-                value: validation_fee_value,
-            });
-            // Commit the exact set of currently authorized timed-OVN casting
-            // contexts after every external transaction and trigger. The
-            // response-sized registration corpora were replay-validated at
-            // their transitions; this height path reads only their cached exact
-            // commitments plus bounded authoritative Parliament state.
-            let (casting_snapshot, casting_bindings) =
-                crate::tle_release::derive_parliament_timed_ovn_casting_snapshot_v1(
-                    &self.world,
-                    receiver_height,
-                )
-                .expect("committed Parliament timed-OVN state must yield a casting snapshot");
-            let casting_value = norito::to_bytes(&casting_snapshot)
-                .expect("Parliament timed-OVN casting snapshot commitment must encode");
-            let casting_key =
-                iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1;
-            witness
-                .writes
-                .retain(|entry| entry.key.as_slice() != casting_key);
-            witness.writes.push(ExecKv {
-                key: casting_key.to_vec(),
-                value: casting_value,
-            });
-            self.parliament_timed_ovn_casting_bindings = Some(casting_bindings);
-            self.capture_lane_consensus_contexts(&mut witness)?;
-            witness
-                .writes
-                .sort_by(|left, right| left.key.cmp(&right.key));
-            let entry_dsid_bytes: BTreeMap<Hash, [u8; 16]> = self
-                .fastpq_entry_dataspaces
-                .iter()
-                .map(|(hash, dsid)| (*hash, crate::fastpq::dataspace_id_bytes(*dsid)))
-                .collect();
-            // Checked ordinary capture owns transcript bundles only. Prepared batches
-            // are derived later by the background prover lane from this retained context.
-            let has_fastpq = !witness.fastpq_transcripts.is_empty();
-            // The inventory seals the block execution owner's canonical wire commitment;
-            // verified_fastpq_source_inventory_for_capture checked the cache still matches.
-            // Transcript identities cannot reconstruct this commitment.
-            let tx_set_hash = has_fastpq.then(|| source_inventory.tx_set_hash());
-            let perm_root =
-                has_fastpq.then(|| crate::fastpq::permission_table_root(self.world.roles.iter()));
-            let public_inputs = perm_root.map(|perm_root| {
-                crate::fastpq::public_inputs_template_from_block(
-                    &self._curr_block,
-                    &witness,
-                    perm_root,
-                )
-            });
-            self.fastpq_witness_context =
-                has_fastpq.then_some(crate::fastpq::FastpqWitnessContext {
+            let capture = exec_witness_capture::WitnessCaptureGuard::new(self);
+            let result = (|| {
+                let state = &mut *capture.state;
+                let mut witness =
+                    match crate::sumeragi::witness::drain_exec_witness_checked(|transcripts| {
+                        source_inventory.verify_finalized_transcript_map(transcripts)
+                    }) {
+                        Ok(witness) => witness,
+                        Err(error) => return Err(error),
+                    };
+                let receiver_height = state._curr_block.height().get();
+                // Commit the complete protected validation-fee registry selection
+                // at every height. A finality proof for this fixed synthetic write
+                // therefore proves both the current policy and that no later
+                // Parliament enactment was omitted.
+                let validation_fee_parameter_id =
+                    iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::parameter_id();
+                let validation_fee_custom = state
+                    .world
+                    .parameters()
+                    .custom()
+                    .get(&validation_fee_parameter_id);
+                let validation_fee_commitment =
+                    iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
+                        receiver_height,
+                        validation_fee_custom,
+                    );
+                let validation_fee_value = norito::to_bytes(&validation_fee_commitment)
+                    .expect("validation-fee policy snapshot commitment must encode");
+                let validation_fee_key =
+                    iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1;
+                witness
+                    .writes
+                    .retain(|entry| entry.key.as_slice() != validation_fee_key);
+                witness.writes.push(ExecKv {
+                    key: validation_fee_key.to_vec(),
+                    value: validation_fee_value,
+                });
+                // Commit the exact set of currently authorized timed-OVN casting
+                // contexts after every external transaction and trigger. The
+                // response-sized registration corpora were replay-validated at
+                // their transitions; this height path reads only their cached exact
+                // commitments plus bounded authoritative Parliament state.
+                let (casting_snapshot, casting_bindings) =
+                    crate::tle_release::derive_parliament_timed_ovn_casting_snapshot_v1(
+                        &state.world,
+                        receiver_height,
+                    )
+                    .expect("committed Parliament timed-OVN state must yield a casting snapshot");
+                let casting_value = norito::to_bytes(&casting_snapshot)
+                    .expect("Parliament timed-OVN casting snapshot commitment must encode");
+                let casting_key =
+                    iroha_data_model::parliament_casting::PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1;
+                witness
+                    .writes
+                    .retain(|entry| entry.key.as_slice() != casting_key);
+                witness.writes.push(ExecKv {
+                    key: casting_key.to_vec(),
+                    value: casting_value,
+                });
+                state.capture_lane_consensus_contexts(&mut witness)?;
+                witness
+                    .writes
+                    .sort_by(|left, right| left.key.cmp(&right.key));
+                let entry_dsid_bytes: BTreeMap<Hash, [u8; 16]> = state
+                    .fastpq_entry_dataspaces
+                    .iter()
+                    .map(|(hash, dsid)| (*hash, crate::fastpq::dataspace_id_bytes(*dsid)))
+                    .collect();
+                // Checked ordinary capture owns transcript bundles only. Prepared batches
+                // are derived later by the background prover lane from this retained context.
+                let has_fastpq = !witness.fastpq_transcripts.is_empty();
+                // The inventory seals the block execution owner's canonical wire commitment;
+                // verified_fastpq_source_inventory_for_capture checked the cache still matches.
+                // Transcript identities cannot reconstruct this commitment.
+                let tx_set_hash = has_fastpq.then(|| source_inventory.tx_set_hash());
+                let perm_root = has_fastpq
+                    .then(|| crate::fastpq::permission_table_root(state.world.roles.iter()));
+                let public_inputs = perm_root.map(|perm_root| {
+                    crate::fastpq::public_inputs_template_from_block(
+                        &state._curr_block,
+                        &witness,
+                        perm_root,
+                    )
+                });
+                let context = has_fastpq.then_some(crate::fastpq::FastpqWitnessContext {
                     public_inputs,
                     tx_set_hash,
                     entry_dataspaces: entry_dsid_bytes,
                     _source_inventory: Some(source_inventory),
                 });
-            self.bind_execution_output_witness(&witness)?;
-            self.exec_witness = Some(witness);
+                state.bind_execution_output_witness(&witness)?;
+                // Publish only after every fallible preparation and binding check.
+                state.parliament_timed_ovn_casting_bindings = Some(casting_bindings);
+                state.fastpq_witness_context = context;
+                state.exec_witness = Some(witness);
+                Ok(())
+            })();
+            match result {
+                Ok(()) => capture.finish(),
+                Err(error) => return Err(capture.reject(error)),
+            }
         } else {
             if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
                 // This capture call still owns the exclusive block recorder guard. Clear any
@@ -65684,6 +65695,7 @@ impl StateTransaction<'_, '_> {
                     | output_capacity::ExecutionOutputPlanState::Authorized(_)
                     | output_capacity::ExecutionOutputPlanState::Finalized(_)
                     | output_capacity::ExecutionOutputPlanState::Captured
+                    | output_capacity::ExecutionOutputPlanState::Poisoned
             )
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
@@ -65703,24 +65715,47 @@ impl StateTransaction<'_, '_> {
             .append(&mut pending_public_lane_slash_observability);
         world.apply();
     }
-    /// Apply transaction making it's changes visible
-    #[allow(clippy::too_many_lines)]
-    pub fn apply(self) {
-        if matches!(
+    /// Validate the final transaction boundary while rollback owners remain armed.
+    /// A refusal poisons the enclosing carrier before any State field is applied.
+    fn prepare_apply(&mut self) -> Result<(), &'static str> {
+        let error = if matches!(
             self.block_execution_output_plan,
             Some(
                 output_capacity::ExecutionOutputPlanState::Sealed(_)
                     | output_capacity::ExecutionOutputPlanState::Authorized(_)
                     | output_capacity::ExecutionOutputPlanState::Finalized(_)
                     | output_capacity::ExecutionOutputPlanState::Captured
+                    | output_capacity::ExecutionOutputPlanState::Poisoned
             )
-        ) || !self.callback_journal.allows_apply()
-            || !self.execution_effects_allow_apply()
-        {
+        ) {
+            Some("transaction cannot apply in the current execution-output phase")
+        } else if !self.callback_journal.allows_apply() {
+            Some("transaction callback journal does not authorize application")
+        } else if !self.execution_effects_allow_apply() {
+            Some("transaction execution-effect owner does not authorize application")
+        } else {
+            None
+        };
+        if let Some(error) = error {
             *self.block_execution_output_plan =
                 Some(output_capacity::ExecutionOutputPlanState::Poisoned);
-            return;
+            return Err(error);
         }
+        Ok(())
+    }
+
+    /// Apply the transaction's changes when its execution owners authorize application.
+    /// A refused application poisons the enclosing carrier and drops this overlay.
+    pub fn apply(mut self) {
+        if self.prepare_apply().is_ok() {
+            self.apply_prepared();
+        }
+    }
+
+    /// Publish after `prepare_apply` while the exclusive transaction remains owned.
+    /// Only this module and its output owner may use the checked commit seam.
+    #[allow(clippy::too_many_lines)]
+    fn apply_prepared(self) {
         // NOTE: intentionally destruct self not to forget apply some fields
         let Self {
             canonical_runtime,

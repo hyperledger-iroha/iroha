@@ -16,6 +16,7 @@
 
 use norito::{NoritoSerialize, codec::Encode};
 
+#[cfg(test)]
 use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
 use super::{
@@ -232,6 +233,16 @@ pub(super) struct PublicTransferSegmentAir {
     inner: CompactTransferAir,
 }
 
+impl super::deep_relation::sealed::Sealed for PublicTransferSegmentAir {}
+
+impl super::deep_relation::DeepRelation for PublicTransferSegmentAir {
+    // Borrow the already constructed AIR without replacing the outer identity
+    // or any byte of its complete prepared batch/ordinal/public context.
+    fn deep_relation(&self) -> &CompactTransferAir {
+        &self.inner
+    }
+}
+
 impl FixedAir for PublicTransferSegmentAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
@@ -242,9 +253,11 @@ impl FixedAir for PublicTransferSegmentAir {
     fn statement_bytes(&self) -> &[u8] {
         self.inner.statement_bytes()
     }
+    #[cfg(test)]
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.inner.evaluate(point, current, next)
     }
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }
@@ -1033,5 +1046,149 @@ mod tests {
         assert!(isolated.rows().iter().all(|row| row.asset_scale == 0));
         assert_ne!(batch.statements()[0].updates, isolated.pairs()[0].updates);
         assert_eq!(batch.statements().len(), 2);
+    }
+
+    #[test]
+    fn deep_quantity_bridge_keeps_complete_count_ordinal_roots_claims_and_expected_inputs() {
+        use crate::backend::deep_relation::{DeepRelation, tests as deep};
+        use crate::gadgets::public_transfer_statement::prepare_quantity_public_transfers;
+        use iroha_data_model::fastpq::FastpqQuantityUnits;
+
+        // Zero updates isolate count and ordinal binding from the SMT ports.
+        let fixture = PublicFixture::with_amount(3, false, 0);
+        let narrow = fixture.prepare();
+        let (rows, claims, inputs) = deep::quantity_copy(&narrow);
+        let prepared = prepare_quantity_public_transfers(
+            &rows,
+            &claims,
+            inputs,
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let expected = deep::expected(&prepared);
+        let root_chain = [inputs.old_root; 2];
+        let original = PublicTransferBatch::new(
+            &prepared,
+            &expected,
+            &root_chain,
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements()[0], original.statements()[1]);
+        let roots = (0..3)
+            .map(|ordinal| {
+                let segment = original.segment(ordinal).unwrap();
+                assert_eq!(
+                    segment.schema().identity,
+                    FastpqQuantityUnits::BATCH_IDENTITY
+                );
+                assert_eq!(
+                    segment.statement_bytes(),
+                    segment.deep_relation().statement_bytes()
+                );
+                deep::bound_root(&segment)
+            })
+            .collect::<Vec<_>>();
+        assert_ne!(roots[0], roots[1]);
+        assert_ne!(roots[1], roots[2]);
+        for field in 0..7 {
+            assert!(matches!(
+                PublicTransferBatch::new(
+                    &prepared,
+                    &deep::changed_input(expected, field),
+                    &root_chain,
+                    BatchContextLimits::default()
+                ),
+                Err(Error::PublicIoMismatch { .. })
+            ));
+        }
+        let mut changed_roots = root_chain;
+        changed_roots[1][0] ^= 1;
+        let changed = PublicTransferBatch::new(
+            &prepared,
+            &expected,
+            &changed_roots,
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements()[0], changed.statements()[0]);
+        assert_ne!(roots[0], deep::bound_root(&changed.segment(0).unwrap()));
+        let mut changed_claims = claims.clone();
+        changed_claims[0].authority_digest = Hash::new(b"other complete quantity authority claim");
+        let changed_prepared = prepare_quantity_public_transfers(
+            &rows,
+            &changed_claims,
+            inputs,
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let changed = PublicTransferBatch::new(
+            &changed_prepared,
+            &deep::expected(&changed_prepared),
+            &root_chain,
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements(), changed.statements());
+        for (ordinal, root) in roots.iter().enumerate() {
+            assert_ne!(*root, deep::bound_root(&changed.segment(ordinal).unwrap()));
+        }
+        let smaller = PublicFixture::with_amount(2, false, 0);
+        let (small_rows, small_claims, small_inputs) = deep::quantity_copy(&smaller.prepare());
+        let small = prepare_quantity_public_transfers(
+            &small_rows,
+            &small_claims,
+            small_inputs,
+            ProofSemantics::StateTransition,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let small = PublicTransferBatch::new(
+            &small,
+            &deep::expected(&small),
+            &root_chain[..1],
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_eq!(original.statements()[0], small.statements()[0]);
+        assert_ne!(roots[0], deep::bound_root(&small.segment(0).unwrap()));
+        let narrow = PublicTransferBatch::new(
+            &narrow,
+            &deep::expected(&narrow),
+            &root_chain,
+            BatchContextLimits::default(),
+        )
+        .unwrap();
+        assert_ne!(
+            narrow.segment(0).unwrap().schema().identity,
+            FastpqQuantityUnits::BATCH_IDENTITY
+        );
+        assert_ne!(roots[0], deep::bound_root(&narrow.segment(0).unwrap()));
+    }
+
+    #[test]
+    fn deep_wrapper_identity_changes_binding_without_changing_any_statement_byte() {
+        use crate::backend::{
+            deep_binding::Context,
+            deep_relation::{DeepRelation, tests as deep},
+        };
+        let fixture = PublicFixture::new(2, false);
+        let prepared = fixture.prepare();
+        let original = batch(&prepared);
+        let mut segment = original.segment(0).unwrap();
+        let statement = segment.statement_bytes().to_vec();
+        let root = deep::bound_root(&segment);
+        assert_ne!(
+            segment.schema().identity,
+            segment.deep_relation().schema().identity
+        );
+        assert_ne!(root, deep::bound_root(segment.deep_relation()));
+        segment.identity = "fastpq:deep:test-only-distinct-ordinary-segment";
+        assert_eq!(statement, segment.statement_bytes());
+        assert_ne!(root, deep::bound_root(&segment));
+        segment.identity = "";
+        assert!(Context::for_relation(&segment).is_err());
     }
 }

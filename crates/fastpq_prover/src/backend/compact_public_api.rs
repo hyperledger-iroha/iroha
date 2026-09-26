@@ -17,6 +17,7 @@
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 
+#[cfg(test)]
 use super::compact_protocol::{
     FixedAir,
     shared_openings::codec::{VerifiedSharedProof, decode_and_verify_with_allocation_committed},
@@ -39,13 +40,15 @@ use crate::{
     proof::PublicIO,
 };
 
-/// Explicit child decoding policy for the sole compact V1 verifier.
+/// Diagnostic decoding policy for predecessor single-relation fixtures.
+#[cfg(test)]
 #[derive(Clone, Copy)]
 pub(super) struct SharedVerifier {
     /// Maximum cumulative allocation charges for this complete child frame.
     pub(super) max_decode_allocation_charges: usize,
 }
 
+#[cfg(test)]
 impl SharedVerifier {
     /// Fixed query count; no artifact or caller policy can change geometry.
     pub(super) const fn queries(self) -> usize {
@@ -71,6 +74,35 @@ impl SharedVerifier {
         limits: VerifyLimits,
     ) -> Result<VerifiedSharedProof> {
         decode_and_verify_with_allocation_committed(
+            relation,
+            bytes,
+            limits,
+            self.max_decode_allocation_charges,
+        )
+    }
+}
+
+/// Child decoding policy for the sole normal compact proof dispatcher.
+#[derive(Clone, Copy)]
+pub(super) struct DeepVerifier {
+    /// Maximum cumulative allocation charges for this complete child frame.
+    pub(super) max_decode_allocation_charges: usize,
+}
+
+impl DeepVerifier {
+    /// Fixed query count; neither the carrier nor caller can choose a profile.
+    pub(super) const fn queries(self) -> usize {
+        super::deep_geometry::QUERY_COUNT
+    }
+
+    /// Return the row commitment only after the same decoded proof passes all checks.
+    pub(super) fn verify_frame_committed(
+        self,
+        relation: &impl super::deep_relation::DeepRelation,
+        bytes: &[u8],
+        limits: VerifyLimits,
+    ) -> Result<super::deep_engine::VerifiedDeepProof> {
+        super::deep_engine::verify_committed(
             relation,
             bytes,
             limits,

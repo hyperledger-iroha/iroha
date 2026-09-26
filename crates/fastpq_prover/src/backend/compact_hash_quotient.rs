@@ -21,10 +21,10 @@
 
 use std::{cell::RefCell, collections::BTreeMap, sync::OnceLock};
 
-#[cfg(test)]
+use super::GoldilocksFp4V1;
 use super::air_degree::{PolynomialDegree, evaluate_node_degrees};
 #[cfg(test)]
-use super::{GOLDILOCKS_MODULUS, GoldilocksFp4V1, add_mod, mul_mod, sub_mod};
+use super::{GOLDILOCKS_MODULUS, add_mod, mul_mod, sub_mod};
 use fastpq_isi::StarkParameterSet;
 
 use super::{
@@ -75,6 +75,7 @@ pub(super) struct HashNumerators<F> {
 /// previous witness values never enter the next result. The workspace holds no
 /// masks or domain parameters, and its immutable graph identity is checked before
 /// use. It neither grows with the trace nor retains witness data in global state.
+#[cfg(test)]
 pub(super) struct EvaluationScratch<F> {
     compiled: &'static CompiledLedger,
     values: Box<[F]>,
@@ -82,7 +83,6 @@ pub(super) struct EvaluationScratch<F> {
 
 /// Exact graph costs and conservative polynomial degrees for the chosen domain.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg(test)]
 pub(super) struct LedgerMetrics {
     /// Shared DAG nodes, including canonical constants and the 620 input cells.
     pub(super) nodes: usize,
@@ -109,11 +109,11 @@ pub(super) struct LedgerMetrics {
 /// Validated periodic selector geometry and one immutable compiled hash ledger.
 pub(super) struct CompactHashQuotient {
     selectors: PeriodicSelectors,
-    #[cfg(test)]
     trace_rows: usize,
     compiled: &'static CompiledLedger,
     lde_domain: FriDomain,
     lde_rows: usize,
+    #[cfg(test)]
     mask_cycle_rows: usize,
 }
 
@@ -159,11 +159,11 @@ impl CompactHashQuotient {
         }
         Ok(Self {
             selectors,
-            #[cfg(test)]
             trace_rows,
             compiled,
             lde_domain: _lde_domain,
             lde_rows,
+            #[cfg(test)]
             mask_cycle_rows: PERIOD * blowup,
         })
     }
@@ -190,7 +190,6 @@ impl CompactHashQuotient {
     /// Current and rotated next polynomials have the same degree bounds but
     /// remain distinct graph inputs. Every phase mask has degree at most N-N/512;
     /// using that upper bound preserves safety when a sum of phases cancels.
-    #[cfg(test)]
     pub(super) fn numerator_degree_bounds(
         &self,
         columns: &[PolynomialDegree; hash::COLUMN_COUNT],
@@ -202,14 +201,11 @@ impl CompactHashQuotient {
     }
 
     /// Prepare the exact short public phase/mask cycle for a checked numerator coset.
-    #[cfg(test)]
     pub(super) fn polynomial_evaluator(
         &self,
         domain: super::polynomial_transform::PolynomialDomain,
     ) -> Result<(Vec<[GoldilocksFp4V1; PERIOD]>, PolynomialHashEvaluator<'_>)> {
-        use super::{
-            field_pow, polynomial_transform::reserved, secret_polynomial::SecretPolynomial,
-        };
+        use super::{field_pow, polynomial_transform::reserved};
         let stride = domain.numerator_rotation(self.trace_rows)?;
         let expected = field_pow(
             self.lde_domain.generator,
@@ -249,12 +245,12 @@ impl CompactHashQuotient {
                 domain,
                 cycle,
                 masks,
-                scratch: SecretPolynomial::zeroed(self.compiled.nodes.len())?,
             },
         ))
     }
 
     /// Allocate fixed-size arithmetic storage for reuse within one proof operation.
+    #[cfg(test)]
     pub(super) fn evaluation_scratch<F: PolynomialField>(&self) -> EvaluationScratch<F> {
         EvaluationScratch {
             compiled: self.compiled,
@@ -268,6 +264,7 @@ impl CompactHashQuotient {
     /// independently of N. This optional prover-only preparation refuses larger
     /// cycles instead of allocating a full/custom LDE-sized table. The borrowed
     /// view retains its exact owner and cannot be relabelled to another domain.
+    #[cfg(test)]
     pub(super) fn prepare_prover_masks(&self) -> Result<ProverMaskCycle<'_>> {
         if self.mask_cycle_rows > MAX_PROVER_MASK_CYCLE {
             return Err(Error::VerifierLimitExceeded {
@@ -293,7 +290,6 @@ impl CompactHashQuotient {
     /// numerator degree at most 3N-N/512-2, hence a quotient below 2N when every
     /// required subgroup relation vanishes. Degree metadata does not establish
     /// vanishing or replace column/quotient degree proofs.
-    #[cfg(test)]
     pub(super) fn metrics(&self) -> LedgerMetrics {
         let relation_degree = self.compiled.max_degree;
         let selector_degree = self.trace_rows - self.trace_rows / PERIOD;
@@ -323,26 +319,36 @@ impl CompactHashQuotient {
     }
 }
 
-/// Validation-only full-Fp4 numerator view with guarded witness arithmetic scratch.
-#[cfg(test)]
+/// Immutable full-Fp4 numerator masks shared by bounded arithmetic workers.
 pub(super) struct PolynomialHashEvaluator<'a> {
     ledger: &'a CompactHashQuotient,
     domain: super::polynomial_transform::PolynomialDomain,
     cycle: usize,
     // These masks depend only on the declared public domain and fixed selectors.
     masks: Vec<GoldilocksFp4V1>,
-    scratch: super::secret_polynomial::SecretPolynomial<GoldilocksFp4V1>,
 }
 
-#[cfg(test)]
 impl PolynomialHashEvaluator<'_> {
+    /// Allocate exactly one guarded graph workspace, without copying public masks.
+    pub(super) fn scratch(
+        &self,
+    ) -> Result<super::secret_polynomial::SecretPolynomial<GoldilocksFp4V1>> {
+        super::secret_polynomial::SecretPolynomial::zeroed(self.ledger.compiled.nodes.len())
+    }
+
     /// Evaluate the same compiled nodes with exact-domain masks and private scratch.
     pub(super) fn evaluate(
-        &mut self,
+        &self,
         index: usize,
         current: &CompactRow<GoldilocksFp4V1>,
         next: &CompactRow<GoldilocksFp4V1>,
+        scratch: &mut super::secret_polynomial::SecretPolynomial<GoldilocksFp4V1>,
     ) -> Result<HashNumerators<GoldilocksFp4V1>> {
+        if scratch.len() != self.ledger.compiled.nodes.len() {
+            return Err(Error::InvalidTraceShape {
+                details: "polynomial hash scratch differs from the compiled graph".to_owned(),
+            });
+        }
         if index >= self.domain.rows() {
             return Err(Error::QueryIndexOutOfRange {
                 index,
@@ -355,18 +361,20 @@ impl PolynomialHashEvaluator<'_> {
         Ok(self.ledger.compiled.evaluate_masks_with_scratch(
             &self.masks[start..start + width],
             &inputs,
-            &mut self.scratch,
+            scratch,
             GoldilocksFp4V1::mul,
         ))
     }
 }
 
 /// Prover-only mask cycle tied by borrow to one exact ledger and LDE geometry.
+#[cfg(test)]
 pub(super) struct ProverMaskCycle<'a> {
     ledger: &'a CompactHashQuotient,
     values: Box<[u64]>,
 }
 
+#[cfg(test)]
 impl ProverMaskCycle<'_> {
     /// Evaluate shared arithmetic at one bounded LDE index with cached fixed masks.
     #[cfg(test)]
@@ -511,14 +519,11 @@ struct CompiledLedger {
     masks: Vec<PhaseMask>,
     local: [Vec<Term>; LOCAL_SLOTS],
     transitions: [Vec<Term>; TRANSITION_SLOTS],
-    #[cfg(test)]
     max_degree: usize,
-    #[cfg(test)]
     reference_residues: usize,
 }
 
 impl CompiledLedger {
-    #[cfg(test)]
     fn numerator_degree_bounds(
         &self,
         input: &[PolynomialDegree; INPUT_CELLS],
@@ -613,9 +618,7 @@ impl CompiledLedger {
             masks,
             local,
             transitions,
-            #[cfg(test)]
             max_degree,
-            #[cfg(test)]
             reference_residues: _reference_residues,
         }
     }
@@ -764,6 +767,54 @@ mod tests {
         coefficients.iter().rev().fold(0, |sum, &coefficient| {
             add_mod(mul_mod(sum, point), coefficient)
         })
+    }
+
+    #[test]
+    fn polynomial_hash_workers_share_masks_and_use_separate_guarded_scratch() {
+        use super::super::{
+            polynomial_transform::PolynomialDomain, secret_polynomial::SecretPolynomial,
+        };
+        let ledger = CompactHashQuotient::new(&FASTPQ_FINAL_V1, PERIOD).unwrap();
+        let domain = PolynomialDomain::new(
+            2 * PERIOD,
+            GoldilocksFp4V1::new([2, 3, 5, 7]).unwrap(),
+            2 * PERIOD,
+            1 << 20,
+        )
+        .unwrap();
+        let (_, cache) = ledger.polynomial_evaluator(domain).unwrap();
+        let mut first = cache.scratch().unwrap();
+        let mut second = cache.scratch().unwrap();
+        assert_eq!(first.len(), ledger.metrics().nodes);
+        assert_ne!(first.as_ptr(), second.as_ptr());
+        let pointer = cache.masks.as_ptr();
+        let current = hash_row_from_cells(&core::array::from_fn(|column| {
+            GoldilocksFp4V1::new([column as u64 + 1, 3, 5, 7]).unwrap()
+        }));
+        let next = hash_row_from_cells(&core::array::from_fn(|column| {
+            GoldilocksFp4V1::new([11, column as u64 + 13, 17, 19]).unwrap()
+        }));
+        for index in [0, 1, PERIOD - 1, PERIOD, 2 * PERIOD - 1, 0] {
+            let expected = ledger
+                .evaluate(domain.point(index).unwrap(), &current, &next)
+                .unwrap();
+            assert_eq!(
+                cache.evaluate(index, &current, &next, &mut first).unwrap(),
+                expected
+            );
+            assert_eq!(
+                cache.evaluate(index, &current, &next, &mut second).unwrap(),
+                expected
+            );
+            assert_eq!(cache.masks.as_ptr(), pointer);
+        }
+        let mut short = SecretPolynomial::zeroed(first.len() - 1).unwrap();
+        assert!(cache.evaluate(0, &current, &next, &mut short).is_err());
+        assert!(
+            cache
+                .evaluate(domain.rows(), &current, &next, &mut first)
+                .is_err()
+        );
     }
 
     #[test]

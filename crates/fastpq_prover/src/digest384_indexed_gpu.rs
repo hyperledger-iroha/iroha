@@ -301,6 +301,7 @@ mod tests {
         let state = crate::digest384_gpu::Digest384BackendReadinessV1 {
             frames: Digest384ReadinessV1::Ready,
             indexed: Digest384ReadinessV1::Quarantined,
+            last_fields: Digest384ReadinessV1::Ready,
         };
         assert!(
             state

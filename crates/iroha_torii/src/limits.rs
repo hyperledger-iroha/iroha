@@ -199,10 +199,17 @@ impl ExpiringBanStore {
             state: Mutex::new(ExpiringBanState::default()),
         }
     }
-    fn is_banned_at(&self, ip: IpAddr, now: Instant) -> bool {
+    fn remaining_at(&self, ip: IpAddr, now: Instant) -> Option<Duration> {
         let mut state = self.state.lock();
         state.purge_expired(now);
-        state.entries.contains_key(&ip)
+        state
+            .entries
+            .get(&ip)
+            .map(|entry| entry.expires_at.saturating_duration_since(now))
+    }
+    #[cfg(test)]
+    fn is_banned_at(&self, ip: IpAddr, now: Instant) -> bool {
+        self.remaining_at(ip, now).is_some()
     }
     fn ban_for_at(&self, ip: IpAddr, duration: Duration, now: Instant) {
         if self.capacity == 0 || duration.is_zero() {
@@ -1204,8 +1211,8 @@ impl fmt::Debug for PreAuthPermit {
 pub enum RejectReason {
     GlobalCap,
     IpCap,
-    RateLimited,
-    Banned,
+    RateLimited { retry_after: Duration },
+    Banned { retry_after: Duration },
     SchemeCap,
 }
 impl RejectReason {
@@ -1213,10 +1220,24 @@ impl RejectReason {
         match self {
             Self::GlobalCap => "global_cap",
             Self::IpCap => "ip_cap",
-            Self::RateLimited => "rate",
-            Self::Banned => "ban",
+            Self::RateLimited { .. } => "rate",
+            Self::Banned { .. } => "ban",
             Self::SchemeCap => "scheme_cap",
         }
+    }
+    /// Retry delay rounded up to HTTP's whole-second precision.
+    ///
+    /// Capacity has no known release time; one second is a polling hint. Rate
+    /// rejections include the configured cooldown or remaining active ban.
+    pub fn retry_after_seconds(self) -> u64 {
+        let delay = match self {
+            Self::RateLimited { retry_after } | Self::Banned { retry_after } => retry_after,
+            Self::GlobalCap | Self::IpCap | Self::SchemeCap => Duration::from_secs(1),
+        };
+        delay
+            .as_secs()
+            .saturating_add(u64::from(delay.subsec_nanos() != 0))
+            .max(1)
     }
 }
 impl PreAuthGate {
@@ -1284,14 +1305,8 @@ impl PreAuthGate {
             if inner.is_allowlisted(addr) {
                 return Ok(PreAuthPermit::bypass(inner.clone(), Some(addr)));
             }
-            if inner.is_banned(addr) {
-                return Err(RejectReason::Banned);
-            }
-            if let Some(rate) = inner.rate_limiter.as_ref() {
-                if !rate.allow(&addr.to_string()).await {
-                    inner.note_ban(addr);
-                    return Err(RejectReason::RateLimited);
-                }
+            if let Some(retry_after) = inner.bans.remaining_at(addr, Instant::now()) {
+                return Err(RejectReason::Banned { retry_after });
             }
         }
         let counted_ip_addr = if let Some(addr) = ip {
@@ -1299,7 +1314,6 @@ impl PreAuthGate {
                 Entry::Occupied(mut occ) => {
                     if let Some(limit) = inner.max_per_ip {
                         if *occ.get() >= limit {
-                            inner.note_ban(addr);
                             return Err(RejectReason::IpCap);
                         }
                     }
@@ -1349,29 +1363,44 @@ impl PreAuthGate {
                 if let Some(label) = scheme_key.as_deref() {
                     inner.release_scheme(label);
                 }
-                if let Some(addr) = ip {
-                    inner.note_ban(addr);
-                }
                 return Err(RejectReason::GlobalCap);
             }
             true
         } else {
             false
         };
-        Ok(PreAuthPermit {
+        let permit = PreAuthPermit {
             gate: Arc::clone(&self.inner),
             ip,
             counted_global,
             counted_ip,
             scheme: scheme_key,
             counted_scheme,
-        })
+        };
+        // Transient capacity rejection is not evidence of abusive request
+        // volume. Charge only after capacity is available; the owned permit
+        // releases all counters if rate admission fails or is cancelled.
+        if let (Some(addr), Some(rate)) = (ip, inner.rate_limiter.as_ref()) {
+            if !rate.allow(&addr.to_string()).await {
+                inner.note_ban(addr);
+                // Pre-auth rates are positive integer tokens per second,
+                // so a single token refills within one second. An explicit
+                // operator cooldown can extend that minimum retry delay.
+                let retry_after = inner
+                    .ban_duration
+                    .unwrap_or_default()
+                    .max(Duration::from_secs(1));
+                return Err(RejectReason::RateLimited { retry_after });
+            }
+        }
+        Ok(permit)
     }
 }
 impl PreAuthGateInner {
     fn is_allowlisted(&self, ip: IpAddr) -> bool {
         cidr_contains(&self.allow_nets, ip)
     }
+    #[cfg(test)]
     fn is_banned(&self, ip: IpAddr) -> bool {
         self.bans.is_banned_at(ip, Instant::now())
     }
@@ -1431,6 +1460,7 @@ impl Drop for PreAuthPermit {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_config::parameters::defaults;
     fn churn_ip(index: u64) -> IpAddr {
         let prefix = u128::from(0x2001_0db8_u32) << 96;
         IpAddr::V6(Ipv6Addr::from(prefix | u128::from(index)))
@@ -1511,6 +1541,37 @@ mod tests {
         store.ban_for_at(churn_ip(1), Duration::ZERO, now);
         assert_eq!(store.entry_count(), 0);
         assert_eq!(store.expiry_count(), 0);
+    }
+    #[test]
+    fn preauth_retry_delay_tracks_remaining_ban_and_rounds_up() {
+        let store = ExpiringBanStore::new(1);
+        let ip = "198.51.100.1".parse().unwrap();
+        let now = Instant::now();
+        store.ban_for_at(ip, Duration::from_millis(2_500), now);
+        let remaining = store
+            .remaining_at(ip, now + Duration::from_secs(1))
+            .expect("ban remains active");
+        assert_eq!(remaining, Duration::from_millis(1_500));
+        assert_eq!(
+            RejectReason::Banned {
+                retry_after: remaining
+            }
+            .retry_after_seconds(),
+            2
+        );
+        assert_eq!(
+            RejectReason::RateLimited {
+                retry_after: Duration::from_secs(60)
+            }
+            .retry_after_seconds(),
+            60
+        );
+        assert!(
+            store
+                .remaining_at(ip, now + Duration::from_millis(2_500))
+                .is_none()
+        );
+        assert_eq!(RejectReason::GlobalCap.retry_after_seconds(), 1);
     }
     #[test]
     fn preauth_ban_store_remains_usable_after_unwind() {
@@ -1746,6 +1807,42 @@ mod tests {
         assert!(limiter.allow_cost("cost", 4).await);
         // Bucket should be drained beyond burst
         assert!(!limiter.allow_cost("cost", 3).await);
+    }
+    #[test]
+    fn app_query_default_budget_sustains_normal_ui_polling() {
+        let limits = crate::routing::AppQueryLimits::default();
+        let mut limiter = InnerLimiter::new(
+            f64::from(defaults::torii::QUERY_RATE_PER_AUTHORITY_PER_SEC.unwrap()),
+            f64::from(defaults::torii::QUERY_BURST_PER_AUTHORITY.unwrap()),
+            1,
+        );
+        let start = Instant::now();
+        for second in 0..120 {
+            let now = start + Duration::from_secs(second);
+            for (page_size, requests) in
+                [(limits.default_page_limit, 20), (limits.max_page_limit, 10)]
+            {
+                for _ in 0..requests {
+                    assert!(
+                        limiter.allow_cost("solo-user", limits.rate_limit_cost(page_size), now),
+                        "normal UI polling exhausted the query budget at second {second}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn app_query_page_budget_rejects_excess_and_refills() {
+        let limits = crate::routing::AppQueryLimits::default();
+        let budget = defaults::torii::QUERY_RATE_PER_AUTHORITY_PER_SEC.unwrap();
+        let mut limiter = InnerLimiter::new(f64::from(budget), f64::from(budget), 1);
+        let now = Instant::now();
+        let cost = limits.rate_limit_cost(limits.default_page_limit);
+        for _ in 0..budget {
+            assert!(limiter.allow_cost("solo-user", cost, now));
+        }
+        assert!(!limiter.allow_cost("solo-user", cost, now));
+        assert!(limiter.allow_cost("solo-user", cost, now + Duration::from_secs(1)));
     }
     #[tokio::test]
     async fn limiter_rejects_impossible_cost_without_tracking_key() {
@@ -2341,7 +2438,7 @@ mod tests {
             max_per_ip: None,
             rate_per_ip: Some(1),
             burst_per_ip: Some(1),
-            ban_duration: Some(Duration::from_millis(50)),
+            ban_duration: Some(Duration::from_secs(60)),
             ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
             allow_nets: Vec::new(),
             scheme_limits: Vec::new(),
@@ -2354,12 +2451,92 @@ mod tests {
             .acquire(Some(ip), Some("http"))
             .await
             .expect_err("rate limit triggers");
-        assert_eq!(err, RejectReason::RateLimited);
+        assert_eq!(
+            err,
+            RejectReason::RateLimited {
+                retry_after: Duration::from_secs(60)
+            }
+        );
         let banned = gate
             .acquire(Some(ip), Some("http"))
             .await
             .expect_err("ban active");
-        assert_eq!(banned, RejectReason::Banned);
+        assert!(matches!(banned, RejectReason::Banned { .. }));
+        assert!((1..=60).contains(&banned.retry_after_seconds()));
+    }
+    #[tokio::test]
+    async fn preauth_capacity_rejections_neither_ban_nor_spend_rate_tokens() {
+        for (max_total, max_per_ip, scheme_limits, expected) in [
+            (Some(1), None, Vec::new(), RejectReason::GlobalCap),
+            (None, Some(1), Vec::new(), RejectReason::IpCap),
+            (
+                None,
+                None,
+                vec![SchemeLimit {
+                    name: "http".into(),
+                    max_connections: 1,
+                }],
+                RejectReason::SchemeCap,
+            ),
+        ] {
+            let gate = PreAuthGate::new(PreAuthConfig {
+                max_total,
+                max_per_ip,
+                rate_per_ip: Some(1),
+                burst_per_ip: Some(2),
+                ban_duration: Some(Duration::from_secs(60)),
+                ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
+                allow_nets: Vec::new(),
+                scheme_limits,
+            });
+            let ip = "198.51.100.1".parse().unwrap();
+            let held = gate
+                .acquire(Some(ip), Some("http"))
+                .await
+                .expect("first request");
+            for _ in 0..8 {
+                assert_eq!(
+                    gate.acquire(Some(ip), Some("http")).await.unwrap_err(),
+                    expected
+                );
+            }
+            assert!(
+                !gate.inner.is_banned(ip),
+                "capacity must not punish a caller"
+            );
+            drop(held);
+            gate.acquire(Some(ip), Some("http"))
+                .await
+                .expect("capacity recovery preserves the remaining rate token");
+        }
+    }
+    #[tokio::test]
+    async fn preauth_default_rate_exhaustion_recovers_without_a_ban() {
+        let gate = PreAuthGate::new(PreAuthConfig {
+            max_total: Some(1),
+            max_per_ip: Some(1),
+            rate_per_ip: Some(1),
+            burst_per_ip: Some(1),
+            ban_duration: Some(iroha_config::parameters::defaults::torii::PREAUTH_BAN_DURATION),
+            ban_capacity: DEFAULT_PREAUTH_BAN_CAPACITY,
+            allow_nets: Vec::new(),
+            scheme_limits: Vec::new(),
+        });
+        let ip = "198.51.100.1".parse().unwrap();
+        drop(
+            gate.acquire(Some(ip), Some("http"))
+                .await
+                .expect("first request"),
+        );
+        assert!(matches!(
+            gate.acquire(Some(ip), Some("http")).await.unwrap_err(),
+            RejectReason::RateLimited { .. }
+        ));
+        assert!(!gate.inner.is_banned(ip));
+        tokio::time::sleep(Duration::from_millis(1_100)).await;
+        gate.acquire(Some(ip), Some("http"))
+            .await
+            .expect("token refill restores admission and failed rate admission released capacity");
     }
     #[tokio::test]
     async fn preauth_gate_limits_per_scheme() {

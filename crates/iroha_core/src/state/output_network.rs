@@ -524,7 +524,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                 match applied {
                     Ok(()) => {
                         require_rejection_fragment(transaction, input, input_index, routing)?;
-                        penalty.apply();
+                        penalty.apply()?;
                     }
                     Err(error) => {
                         drop(penalty);
@@ -563,7 +563,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                     match charged {
                         Ok(true) => {
                             require_rejection_fragment(transaction, input, input_index, routing)?;
-                            fee.apply();
+                            fee.apply()?;
                         }
                         Ok(false) => drop(fee),
                         Err(error) => {
@@ -646,7 +646,7 @@ impl<'source> ExecutionOutputProducer<'_, '_, 'source> {
                     .into(),
                 );
             }
-            attempt.apply();
+            attempt.apply()?;
         } else {
             drop(attempt);
         }

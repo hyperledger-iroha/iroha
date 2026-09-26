@@ -3,21 +3,24 @@
 //! Constants describe one fixed unmasked relation. They are not proof-supplied
 //! parameters or a production registry entry. The 41 public columns reconstruct
 //! at the actual extension points before the unchanged 923-slot AIR is checked.
-//! TODO: Integrate authenticated roots, transcript order and complete bounded
-//! openings before this private owner participates in proof admission.
+//! The offline engine binds roots, transcript order and complete bounded openings.
+//! TODO: Authenticate ledger context and qualify the complete protocol before
+//! this private owner participates in node admission.
 
 use fastpq_isi::{FASTPQ_FINAL_V1, StarkParameterSet};
 
 use super::{
-    FriDomain, GOLDILOCKS_MODULUS,
+    FriDomain,
     compact_protocol::FixedAir,
-    compact_public_columns::{COMMITTED_COLUMN_COUNT, PublicColumnReconstruction},
+    compact_public_columns::PublicColumnReconstruction,
     compact_transfer_air::CompactTransferAir,
     deep_composition::{DeepComposition, OodPair},
     field_pow,
     fixed_domain::FixedTraceDomain,
     polynomial_field::PolynomialField,
 };
+#[cfg(test)]
+use super::{GOLDILOCKS_MODULUS, compact_public_columns::COMMITTED_COLUMN_COUNT};
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};
 
 /// Physical one-delta execution subgroup order.

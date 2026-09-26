@@ -4638,8 +4638,8 @@ pub struct AppQueryLimits {
     pub max_page_limit: u64,
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub max_fetch_size: u64,
-    /// Rate-limiter cost applied per requested row when backpressure is enforced.
-    pub rate_limit_cost_per_row: u64,
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub rate_limit_cost_per_page: u64,
 }
 impl AppQueryLimits {
     /// Construct limits with sane floors and ordering.
@@ -4647,17 +4647,17 @@ impl AppQueryLimits {
         default_page_limit: u64,
         max_page_limit: u64,
         max_fetch_size: u64,
-        rate_limit_cost_per_row: u64,
+        rate_limit_cost_per_page: u64,
     ) -> Self {
         let default_page_limit = default_page_limit.max(1);
         let max_page_limit = max_page_limit.max(default_page_limit);
         let max_fetch_size = max_fetch_size.max(default_page_limit).max(1);
-        let rate_limit_cost_per_row = rate_limit_cost_per_row.max(1);
+        let rate_limit_cost_per_page = rate_limit_cost_per_page.max(1);
         Self {
             default_page_limit,
             max_page_limit,
             max_fetch_size,
-            rate_limit_cost_per_row,
+            rate_limit_cost_per_page,
         }
     }
     /// Clamp the requested page limit to the configured bounds.
@@ -4694,10 +4694,10 @@ impl AppQueryLimits {
             Some(size) => Ok(Some(size)),
         }
     }
-    /// Compute rate-limiter cost for a given page size.
+    /// Compute cost in default-sized pages, charging at least one page.
     pub fn rate_limit_cost(&self, page_size: u64) -> u64 {
-        self.rate_limit_cost_per_row
-            .saturating_mul(page_size.max(1))
+        self.rate_limit_cost_per_page
+            .saturating_mul(page_size.max(1).div_ceil(self.default_page_limit))
     }
 }
 impl Default for AppQueryLimits {
@@ -4706,7 +4706,7 @@ impl Default for AppQueryLimits {
             defaults::torii::APP_API_DEFAULT_LIST_LIMIT as u64,
             defaults::torii::APP_API_MAX_LIST_LIMIT as u64,
             defaults::torii::APP_API_MAX_FETCH_SIZE as u64,
-            defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW as u64,
+            defaults::torii::APP_API_RATE_LIMIT_COST_PER_PAGE as u64,
         )
     }
 }
@@ -4740,6 +4740,28 @@ mod app_query_limits_tests {
     use super::{AppQueryLimits, read_app_query_limits};
     use std::panic::{self, AssertUnwindSafe};
     use std::sync::RwLock;
+    routing_test! { sync app_query_cost_counts_default_sized_pages
+        let limits = AppQueryLimits::default();
+        for (page_size, expected) in [(0, 1), (1, 1), (99, 1), (100, 1), (101, 2), (499, 5), (500, 5)] {
+            assert_eq!(limits.rate_limit_cost(page_size), expected, "page size {page_size}");
+        }
+        assert_eq!(limits.clamp_page_limit(None).unwrap(), 100);
+        assert!(limits.clamp_page_limit(Some(501)).is_err());
+        assert!(limits.clamp_fetch_size(Some(501)).is_err());
+    }
+    routing_test! { sync app_query_cost_respects_custom_page_size_and_multiplier
+        let limits = AppQueryLimits::new(25, 500, 500, 3);
+        for (page_size, expected) in [(0, 3), (1, 3), (25, 3), (26, 6), (500, 60)] {
+            assert_eq!(limits.rate_limit_cost(page_size), expected, "page size {page_size}");
+        }
+    }
+    routing_test! { sync app_query_cost_saturates_and_preserves_constructor_floors
+        let limits = AppQueryLimits::new(1, u64::MAX, u64::MAX, u64::MAX);
+        assert_eq!(limits.rate_limit_cost(2), u64::MAX);
+        let limits = AppQueryLimits::new(u64::MAX, u64::MAX, u64::MAX, 1);
+        assert_eq!(limits.rate_limit_cost(u64::MAX), 1);
+        assert_eq!(AppQueryLimits::new(0, 0, 0, 0).rate_limit_cost(0), 1);
+    }
     routing_test! { sync read_app_query_limits_recovers_from_poison
         let lock = RwLock::new(AppQueryLimits::default());
         let _ = panic::catch_unwind(AssertUnwindSafe(|| {

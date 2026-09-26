@@ -1,6 +1,7 @@
 //! Signed-bootstrap-only JNI startup of the native Experimental mobile host.
 
 use super::*;
+use iroha_data_model::kagemusha::KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1;
 
 /// Return the exact ABI version and bounded signed-bootstrap size.
 #[unsafe(no_mangle)]

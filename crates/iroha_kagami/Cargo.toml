@@ -51,6 +51,8 @@ libc = "0.2.177"
 rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [dev-dependencies]
+# Synthetic release constructors are test-only; shipping operator builds never enable them.
+iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures"] }
 iroha_core = { workspace = true, default-features = false, features = [
     "iroha-core-tests",
 ] }

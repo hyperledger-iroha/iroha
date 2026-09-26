@@ -85,6 +85,7 @@ mod preauth_connection_lifetime_tests {
         use axum::extract::ConnectInfo;
         let mut request = Request::builder()
             .uri("/hold")
+            .header(header::ACCEPT, "application/json")
             .header(limits::FORWARDED_FOR_HEADER, forwarded_ip)
             .body(Body::empty())
             .expect("request");
@@ -95,6 +96,159 @@ mod preauth_connection_lifetime_tests {
                 12_345,
             )));
         request
+    }
+    #[tokio::test]
+    async fn solo_heavy_query_wave_reaches_the_queue_through_preauth() {
+        let mut app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("unique test app");
+        state.trusted_proxy_nets = Arc::new(limits::parse_cidrs(&["127.0.0.1/32".into()]));
+        state.preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
+            max_total: defaults::torii::PREAUTH_MAX_CONNECTIONS.map(NonZeroUsize::get),
+            max_per_ip: defaults::torii::PREAUTH_MAX_CONNECTIONS_PER_IP.map(NonZeroUsize::get),
+            rate_per_ip: defaults::torii::PREAUTH_RATE_PER_IP_PER_SEC,
+            burst_per_ip: defaults::torii::PREAUTH_BURST_PER_IP,
+            ban_duration: Some(defaults::torii::PREAUTH_BAN_DURATION),
+            ban_capacity: defaults::torii::PREAUTH_BAN_CAPACITY,
+            allow_nets: Vec::new(),
+            scheme_limits: Vec::new(),
+        }));
+        let wave = defaults::torii::QUERY_HEAVY_MAX_INFLIGHT.get();
+        state.query_inflight = Arc::new(Semaphore::new(defaults::torii::QUERY_MAX_INFLIGHT.get()));
+        state.query_heavy_inflight = Arc::new(Semaphore::new(wave));
+        state.query_queue_timeout = Duration::from_millis(defaults::torii::QUERY_QUEUE_TIMEOUT_MS);
+        let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
+        let (started_tx, mut started_rx) = mpsc::unbounded_channel();
+        let release = Arc::new(Semaphore::new(0));
+        let router = Router::new()
+            .route(
+                "/hold",
+                get({
+                    let app = Arc::clone(&app);
+                    let release = Arc::clone(&release);
+                    move || {
+                        let app = Arc::clone(&app);
+                        let release = Arc::clone(&release);
+                        let entered_tx = entered_tx.clone();
+                        let started_tx = started_tx.clone();
+                        async move {
+                            entered_tx.send(()).expect("record pre-auth admission");
+                            let _admission = acquire_query_admission(app.as_ref(), true)
+                                .await
+                                .expect("bounded heavy query admission");
+                            started_tx
+                                .send(())
+                                .expect("record physical query admission");
+                            release.acquire().await.expect("release signal").forget();
+                            StatusCode::OK
+                        }
+                    }
+                }),
+            )
+            .route("/probe", get(|| async { StatusCode::OK }))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_preauth,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                app,
+                inject_remote_addr_header,
+            ));
+        let mut requests = Vec::new();
+        for _ in 0..=wave {
+            requests.push(tokio::spawn(
+                router
+                    .clone()
+                    .oneshot(request_with_remote("127.0.0.1", "198.51.100.10")),
+            ));
+        }
+        tokio::time::timeout(Duration::from_secs(5), async {
+            for _ in 0..=wave {
+                entered_rx
+                    .recv()
+                    .await
+                    .expect("every solo request reaches query admission");
+            }
+            for _ in 0..wave {
+                started_rx.recv().await.expect("first heavy wave starts");
+            }
+        })
+        .await
+        .expect("pre-auth must admit a full heavy wave and its next waiting request");
+        assert!(
+            started_rx.try_recv().is_err(),
+            "next request waits for a heavy permit"
+        );
+        assert!(requests.iter().all(|request| !request.is_finished()));
+        release.add_permits(wave + 1);
+        for request in requests {
+            let response = tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .expect("query completes")
+                .expect("handler remains live")
+                .expect("response");
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let mut probe = request_with_remote("127.0.0.1", "198.51.100.10");
+        *probe.uri_mut() = "/probe".parse().unwrap();
+        assert_eq!(
+            router.oneshot(probe).await.unwrap().status(),
+            StatusCode::OK
+        );
+    }
+    #[tokio::test]
+    async fn preauth_http_reports_configured_and_remaining_cooldown() {
+        let mut app = crate::mk_app_state_for_tests();
+        Arc::get_mut(&mut app)
+            .expect("unique test app")
+            .preauth_gate = Arc::new(limits::PreAuthGate::new(limits::PreAuthConfig {
+            max_total: Some(1),
+            max_per_ip: Some(1),
+            rate_per_ip: Some(1),
+            burst_per_ip: Some(1),
+            ban_duration: Some(Duration::from_millis(60_500)),
+            ban_capacity: defaults::torii::PREAUTH_BAN_CAPACITY,
+            allow_nets: Vec::new(),
+            scheme_limits: Vec::new(),
+        }));
+        let router = per_ip_preauth_router(app);
+        drop(
+            router
+                .clone()
+                .oneshot(request_with_remote("198.51.100.10", "198.51.100.10"))
+                .await
+                .expect("initial response"),
+        );
+        let cooldown_start = std::time::Instant::now();
+        for expected_code in ["preauth_rate_limited", "preauth_temporarily_banned"] {
+            let response = router
+                .clone()
+                .oneshot(request_with_remote("198.51.100.10", "198.51.100.10"))
+                .await
+                .expect("limited response");
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            let retry_after = response.headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .parse::<u64>()
+                .unwrap();
+            let minimum_remaining_seconds = Duration::from_millis(60_500)
+                .saturating_sub(cooldown_start.elapsed())
+                .as_secs()
+                .max(1);
+            assert!((minimum_remaining_seconds..=61).contains(&retry_after));
+            if expected_code == "preauth_rate_limited" {
+                assert_eq!(retry_after, 61, "initial cooldown is rounded up exactly");
+            }
+            let body = response.into_body().collect().await.unwrap().to_bytes();
+            let envelope: ErrorEnvelope = norito::json::from_slice(&body).unwrap();
+            assert_eq!(envelope.code, expected_code);
+            assert_eq!(
+                envelope
+                    .details
+                    .and_then(|details| details.retry_after_seconds),
+                Some(retry_after)
+            );
+        }
     }
     #[tokio::test]
     async fn preauth_uses_distinct_client_buckets_behind_trusted_proxy() {
@@ -527,6 +681,9 @@ mod preauth_connection_lifetime_tests {
             ));
         let mut malformed = request("/ws", false);
         malformed
+            .headers_mut()
+            .insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        malformed
             .extensions_mut()
             .insert(MatchedRouteMetadata::from_descriptor(
                 route_catalog::streaming::SUBSCRIPTION_WS,
@@ -590,7 +747,7 @@ mod preauth_connection_lifetime_tests {
             .oneshot(request("/stream", false))
             .await
             .expect("capacity response");
-        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
         drop(first_body);
         let admitted_again = router
             .oneshot(request("/stream", false))
@@ -681,7 +838,7 @@ mod preauth_connection_lifetime_tests {
             .oneshot(request("/ws", true))
             .await
             .expect("capacity response");
-        assert_eq!(rejected.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
         release.add_permits(1);
         released_rx.recv().await.expect("first guard released");
         let admitted_again = router
@@ -794,7 +951,7 @@ mod preauth_connection_lifetime_tests {
             .oneshot(request("/protected", false))
             .await
             .expect("capacity response");
-        assert_eq!(capacity_response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(capacity_response.status(), StatusCode::SERVICE_UNAVAILABLE);
         drop(occupying_guard);
         let authentication_response = router
             .oneshot(request("/protected", false))
@@ -1143,7 +1300,7 @@ mod preauth_connection_lifetime_tests {
             ))
             .await
             .expect("pre-auth capacity response");
-        assert_eq!(at_capacity.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(at_capacity.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(error_code(at_capacity).await, "preauth_scheme_capacity");
         drop(occupying_guard);
         let missing = router
