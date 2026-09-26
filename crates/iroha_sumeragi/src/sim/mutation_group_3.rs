@@ -30,7 +30,7 @@ use crate::{
 fn common_view0_lock(w: &World) -> Option<(u64, Qc)> {
     let mut common: Option<(u64, Qc)> = None;
     for r in w.honest() {
-        let core = w.replicas[r].core.as_ref()?;
+        let core = w.replicas[r].host.core()?;
         let status = core.status();
         let lock = core.lock()?;
         if status.view != 0 || lock.height != status.height {
@@ -138,7 +138,7 @@ fn det_l10_cluster_restart_lock_no_cqc_strong() {
     for &m in &live {
         w.restart(m);
         let r = w.replica_of(m, 0).expect("a replica of instance 0");
-        let core = w.replicas[r].core.as_ref().expect("restarted");
+        let core = w.replicas[r].host.core().expect("restarted");
         assert_eq!(
             core.status().height,
             height,

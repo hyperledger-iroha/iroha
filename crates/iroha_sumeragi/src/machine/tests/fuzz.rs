@@ -241,6 +241,7 @@ fn step(h: &mut H, rng: &mut Rng, stored: &mut Vec<Block>) {
                 Event::PayloadBuilt {
                     req,
                     payload: vec![1; usize::try_from(rng.below(64)).unwrap()],
+                    attest: false,
                 }
             }
         }

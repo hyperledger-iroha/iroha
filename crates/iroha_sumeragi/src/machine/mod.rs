@@ -38,7 +38,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use self::{sync::SyncState, votes::Pools};
 use crate::{
     api::{Action, CoreStatus, Event, Footprint, HaltReason, LocalFault, LocalParams},
-    crypto::{Crypto, Signer, verify_qc, verify_tc, verify_tc_with_verified_high_qc},
+    crypto::{Attestation, Crypto, Signer, verify_qc, verify_tc, verify_tc_with_verified_high_qc},
     message::{
         Block, BlockHeader, Evidence, Proposal, Qc, TimeoutCert, TimeoutVote, Vote, VoteKind,
         WireMessage,
@@ -55,6 +55,8 @@ use crate::{
 #[allow(clippy::struct_excessive_bools)] // independent per-view and per-height flags of §6.0
 pub struct Core {
     crypto: Box<dyn Crypto>,
+    /// The node's attestor and the attestation verifier (§3.7).
+    attestation: Attestation,
     local: LocalParams,
     instance: Hash32,
     genesis: u64,
@@ -224,6 +226,8 @@ struct Mine {
     prepare: Option<Vote>,
     commit: Option<Vote>,
     timeout: Option<TimeoutVote>,
+    /// `LocalFault(AttestationUnavailable)` was reported in this view (§3.7 A2).
+    unattested: bool,
 }
 
 /// Retransmission schedule of an own vote (§6.11).
@@ -423,7 +427,11 @@ impl Core {
         match event {
             Event::Tick => self.on_tick(),
             Event::Message { from, msg } => self.on_message(&from, msg),
-            Event::PayloadBuilt { req, payload } => self.on_payload_built(req, payload),
+            Event::PayloadBuilt {
+                req,
+                payload,
+                attest,
+            } => self.on_payload_built(req, payload, attest),
             Event::PayloadReady { req } => self.on_payload_ready(req),
             Event::Executed {
                 block_hash,
@@ -457,11 +465,18 @@ impl Core {
 
     /// Read-only diagnostics (§12.1 `status()`).
     pub fn status(&self) -> CoreStatus {
+        let role = |index: ValidatorIndex| {
+            self.member_key(index)
+                .filter(|_| !self.awaiting && self.topo.height() == self.height)
+        };
         CoreStatus {
             instance: self.instance,
             height: self.height,
             view: self.view,
             stage: self.stage,
+            leader: role(self.rnd.leader()),
+            proxy_tail: role(self.rnd.proxy_tail()),
+            high_qc_view: self.high_pqc.as_ref().map(|qc| qc.view),
             level: self.pm.level(self.view),
             start_level: self.pm.start_level(),
             t_retx: self.pm.t_retx(self.view),
@@ -726,7 +741,14 @@ impl Core {
         let Some(config) = self.configs.get(&config_height) else {
             return false;
         };
-        let ok = verify_qc(&*self.crypto, &self.instance, &config.committee, qc).is_ok();
+        let ok = verify_qc(
+            &*self.crypto,
+            &*self.attestation.verifier,
+            &self.instance,
+            &config.committee,
+            qc,
+        )
+        .is_ok();
         if ok {
             self.cert_cache.insert(digest);
         }

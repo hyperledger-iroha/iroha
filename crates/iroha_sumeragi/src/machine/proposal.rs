@@ -196,6 +196,11 @@ impl Core {
                     && !cfg!(sumeragi_mutation = "ML13"),
                 Defect::NonEmptyPayload,
             ),
+            // §3.7 A1: `EMPTY` from `empty_after_views` on is never flagged (MA8 deletes it).
+            (
+                w >= params.empty_after_views && header.attest && !cfg!(sumeragi_mutation = "MA8"),
+                Defect::FlaggedEmpty,
+            ),
         ];
         fresh
             .into_iter()
@@ -479,7 +484,16 @@ impl Core {
             Some(ExecState::Valid(r)) if certified.iter().any(|e| e != r) => {
                 self.local_fault(fault);
             }
-            Some(ExecState::Valid(_)) => self.try_prepare(),
+            Some(ExecState::Valid(_)) => {
+                let h0 = self.height;
+                self.try_prepare();
+                // §3.7 A2: an attestor that answered `Pending` for a flagged lock needed this
+                // execution; ask it again (MA12: only a stage raise does).
+                let flagged = self.high_pqc.as_ref().is_some_and(|q| q.attest);
+                if flagged && self.same_height(h0) && !cfg!(sumeragi_mutation = "MA12") {
+                    self.try_commit();
+                }
+            }
             _ => {}
         }
     }
@@ -514,11 +528,11 @@ impl Core {
             return;
         }
         // Conditions 3–4: the held proposal of this view, its body, its valid result.
-        let Some(bh) = self
+        let Some((bh, attest)) = self
             .proposal
             .as_ref()
             .filter(|held| held.p.view == view || cfg!(sumeragi_mutation = "MS3"))
-            .map(|held| held.bh)
+            .map(|held| (held.bh, held.p.header.attest))
         else {
             return;
         };
@@ -544,11 +558,12 @@ impl Core {
                 view,
                 block_hash: bh,
                 result,
+                attest,
             });
         }
         #[cfg(not(sumeragi_mutation = "MS23"))]
         self.persist();
-        self.cast_vote(me, VoteKind::Prepare, bh, result);
+        self.cast_vote(me, VoteKind::Prepare, (bh, result, attest), None);
         #[cfg(sumeragi_mutation = "MS23")]
         self.persist();
     }

@@ -212,7 +212,7 @@ fn det_l5_lost_vote_retransmitted() {
     qc_msg(&mut h, pqc.clone());
     let voter = h.others(1, &[])[0];
     let vote = h.vote(VoteKind::Prepare, voter, 0, &b);
-    let out = h.deliver(voter, WireMessage::Vote(vote));
+    let out = h.deliver(voter, WireMessage::Vote(vote.clone()));
     let answers = sent(&out)
         .into_iter()
         .filter(|(to, m)| {

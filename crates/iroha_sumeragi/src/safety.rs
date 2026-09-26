@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     api::{HaltReason, LocalFault},
-    crypto::{Crypto, verify_qc},
+    crypto::{AttestationVerifier, Crypto, verify_qc},
     message::{self, Qc, TimeoutCert, VoteKind},
     types::{Committee, Hash32, PublicKey, ValidatorIndex},
 };
@@ -30,7 +30,7 @@ pub struct RecordedProposal {
     pub justify: Option<TimeoutCert>,
 }
 
-/// `(view, block_hash, result)` of the last Prepare vote signed.
+/// `(view, block_hash, result, attest)` of the last Prepare vote signed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode)]
 pub struct RecordedVote {
     /// View of the vote.
@@ -39,6 +39,9 @@ pub struct RecordedVote {
     pub block_hash: Hash32,
     /// Voted result.
     pub result: Hash32,
+    /// The signed attestation flag of the block (§3.7), so a restart re-signs the identical
+    /// preimage.
+    pub attest: bool,
 }
 
 /// `(view, exact PrepareQC carried)` of the last timeout signed.
@@ -371,6 +374,7 @@ impl RestartPlan {
 /// `HaltReason::SafetyRecordInconsistent` when it is missing or does not verify.
 pub fn check_recommit<'a>(
     crypto: &dyn Crypto,
+    verifier: &dyn AttestationVerifier,
     committee_next: &Committee,
     tip_height: u64,
     record: &'a SafetyRecord,
@@ -382,7 +386,7 @@ pub fn check_recommit<'a>(
     let valid = qc.kind == VoteKind::Commit
         && Some(qc.height) == tip_height.checked_add(1)
         && (cfg!(sumeragi_mutation = "MS32a")
-            || verify_qc(crypto, &record.instance, committee_next, qc).is_ok());
+            || verify_qc(crypto, verifier, &record.instance, committee_next, qc).is_ok());
     if valid {
         Ok(qc)
     } else {
@@ -513,6 +517,7 @@ mod tests {
                 view: 3,
                 block_hash: h(2),
                 result: h(3),
+                attest: false,
             }),
             timeout: Some(RecordedTimeout {
                 view: 4,
@@ -738,6 +743,7 @@ mod tests {
                 view: 4,
                 block_hash: h(2),
                 result: h(3),
+                attest: false,
             }),
             timeout: Some(RecordedTimeout {
                 view: 4,
@@ -778,6 +784,7 @@ mod tests {
                 view: 9,
                 block_hash: h(1),
                 result: h(1),
+                attest: false,
             }),
             ..fresh
         };
@@ -933,7 +940,14 @@ mod tests {
         let v = FakeValidators::new(4, 1, None);
         let t = 20u64;
         let record = full_record_for(&v, &v.key(1), t + 2);
-        let qc = check_recommit(&v.crypto, &v.committee, t, &record).unwrap();
+        let qc = check_recommit(
+            &v.crypto,
+            &crate::testing::FakeVerifier,
+            &v.committee,
+            t,
+            &record,
+        )
+        .unwrap();
         assert_eq!(qc.height, t + 1);
         // Missing parent QC.
         let missing = SafetyRecord {
@@ -941,7 +955,13 @@ mod tests {
             ..record.clone()
         };
         assert_eq!(
-            check_recommit(&v.crypto, &v.committee, t, &missing),
+            check_recommit(
+                &v.crypto,
+                &crate::testing::FakeVerifier,
+                &v.committee,
+                t,
+                &missing
+            ),
             Err(HaltReason::SafetyRecordInconsistent)
         );
         // Forged parent QC.
@@ -953,18 +973,36 @@ mod tests {
             ..record.clone()
         };
         assert_eq!(
-            check_recommit(&v.crypto, &v.committee, t, &forged),
+            check_recommit(
+                &v.crypto,
+                &crate::testing::FakeVerifier,
+                &v.committee,
+                t,
+                &forged
+            ),
             Err(HaltReason::SafetyRecordInconsistent)
         );
         // Wrong committee.
         let other = FakeValidators::new(4, 9, None);
         assert_eq!(
-            check_recommit(&other.crypto, &other.committee, t, &record),
+            check_recommit(
+                &other.crypto,
+                &crate::testing::FakeVerifier,
+                &other.committee,
+                t,
+                &record
+            ),
             Err(HaltReason::SafetyRecordInconsistent)
         );
         // Wrong tip height.
         assert_eq!(
-            check_recommit(&v.crypto, &v.committee, t + 1, &record),
+            check_recommit(
+                &v.crypto,
+                &crate::testing::FakeVerifier,
+                &v.committee,
+                t + 1,
+                &record
+            ),
             Err(HaltReason::SafetyRecordInconsistent)
         );
     }

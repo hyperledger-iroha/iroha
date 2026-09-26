@@ -159,6 +159,7 @@ impl Cluster {
             init,
             vec![signer],
             Box::new(self.v.crypto.clone()),
+            crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
             self.now,
         )
         .expect("valid configuration");
@@ -236,7 +237,15 @@ impl Cluster {
                             view.to_be_bytes()[7],
                         ]
                     };
-                    self.schedule(self.now + 1, i, Event::PayloadBuilt { req, payload });
+                    self.schedule(
+                        self.now + 1,
+                        i,
+                        Event::PayloadBuilt {
+                            req,
+                            payload,
+                            attest: false,
+                        },
+                    );
                 }
                 Action::Execute { block, req } => {
                     let bh = block.hash(&self.v.crypto);

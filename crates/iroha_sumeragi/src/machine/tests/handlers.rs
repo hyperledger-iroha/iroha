@@ -130,12 +130,12 @@ fn intake_rule3_status_reply_to_members_behind() {
         &h.bh(&old),
         &result_of(&old),
     );
-    let out = h.deliver(behind, WireMessage::Vote(vote));
+    let out = h.deliver(behind, WireMessage::Vote(vote.clone()));
     assert_eq!(status_to(&out), vec![vec![h.key_at(behind)]]);
-    let out = h.deliver(behind, WireMessage::Vote(vote));
+    let out = h.deliver(behind, WireMessage::Vote(vote.clone()));
     assert!(status_to(&out).is_empty(), "rate-limited per peer");
     h.now += h.local.rebroadcast_interval;
-    let out = h.deliver(behind, WireMessage::Vote(vote));
+    let out = h.deliver(behind, WireMessage::Vote(vote.clone()));
     assert_eq!(status_to(&out).len(), 1);
     // Not from a non-member.
     let stranger = PublicKey::new(vec![0x77; 32]).unwrap();
@@ -277,7 +277,7 @@ fn votes_window_equivocation_and_formation_broadcast() {
     let v1 = h.vote(VoteKind::Prepare, o[1], 0, &b);
     let v2 = h.vote(VoteKind::Prepare, o[1], 0, &h.block(0, b"B2"));
     h.deliver(o[1], WireMessage::Vote(v1));
-    let out = h.deliver(o[1], WireMessage::Vote(v2));
+    let out = h.deliver(o[1], WireMessage::Vote(v2.clone()));
     assert!(matches!(
         evidence(&out)[..],
         [Evidence::VoteEquivocation(..)]
@@ -486,6 +486,7 @@ fn heartbeat_idle_wait_and_payload_ready() {
     let out = h.fire(Event::PayloadBuilt {
         req: first,
         payload: b"stale".to_vec(),
+        attest: false,
     });
     assert!(proposals(&out).is_empty());
     let out = h.built(b"tx");
@@ -685,7 +686,15 @@ fn startup_rejects_bad_input() {
         false,
     )];
     let new = |init: Init, local: LocalParams, signers: Vec<Box<dyn Signer>>| {
-        Core::new(local, init, signers, Box::new(h.v.crypto.clone()), 0).map(|_| ())
+        Core::new(
+            local,
+            init,
+            signers,
+            Box::new(h.v.crypto.clone()),
+            crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            0,
+        )
+        .map(|_| ())
     };
     assert_eq!(new(h.init(fresh.clone()), h.local, signers()), Ok(()));
     let mut init = h.init(fresh.clone());

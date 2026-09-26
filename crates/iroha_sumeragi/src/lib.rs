@@ -52,8 +52,10 @@
 //!
 //! - [`types`]: hashes, keys, signatures, bitmaps, committees, quorum math, chain parameters.
 //! - [`preimage`]: every signing and hash preimage as a fixed byte layout (§3).
-//! - [`message`]: blocks, votes, certificates, service messages, evidence (Norito encodings).
-//! - [`crypto`]: the `Signer`/`Crypto` traits and pure certificate verification and formation.
+//! - [`message`]: blocks, votes, certificates, service messages, evidence (Norito encodings),
+//!   the wire version and the traffic classes of encoded and decoded frames (§3.5).
+//! - [`crypto`]: the `Signer`/`Crypto` traits, the commit-attestation traits `Attestor` and
+//!   `AttestationVerifier` (§3.7), and pure certificate verification and formation.
 //! - [`topology`]: permutation, demotion set, round order and roles, stage hint (§2).
 //! - [`safety`]: the persisted safety record and the restart classification R1–R6 (§7.4).
 //! - [`pacemaker`]: view timeouts, levels, timer formulas and config validation (§9).
@@ -63,8 +65,8 @@
 //!
 //! ## Mutation testing (§13.4)
 //!
-//! Every mutation of §13.4 (the `MS*` and `ML*` rows, plus `ME*` for the as-built rules of
-//! Appendix E and `MR-*` for the revision-4 rules with `det_r4_*` tests) is a tiny alternative at
+//! Every mutation of §13.4 (the `MS*`, `ML*` and `MA*` rows, plus `ME*` for the as-built rules
+//! of Appendix E and `MR-*` for the revision-4 rules with `det_r4_*` tests) is a tiny alternative at
 //! its code site, compiled only under `cfg(sumeragi_mutation = "<ID>")`: a
 //! `#[cfg(sumeragi_mutation = "<ID>")]` attribute on a statement or match arm, or
 //! `cfg!(sumeragi_mutation = "<ID>")` where the change sits inside an expression. Without that

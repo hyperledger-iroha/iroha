@@ -170,9 +170,9 @@ impl Core {
                 continue;
             }
             let vote = if slot == 0 {
-                self.mine.prepare.filter(|_| !self.has_pqc_of_view())
+                (self.mine.prepare.clone()).filter(|_| !self.has_pqc_of_view())
             } else {
-                self.mine.commit
+                self.mine.commit.clone()
             };
             let Some(vote) = vote else {
                 self.retx[slot] = None;

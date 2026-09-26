@@ -211,13 +211,16 @@ TAG_SIG       = ASCII "sumeragi/sig"          TAG_BLOCK    = ASCII "sumeragi/blo
 TAG_PAY       = ASCII "sumeragi/payload"      TAG_ATT      = ASCII "sumeragi/attach"
 TAG_QC        = ASCII "sumeragi/qc"           TAG_TC       = ASCII "sumeragi/tc"
 TAG_COMMITTEE = ASCII "sumeragi/committee"    TAG_TOPOLOGY = ASCII "sumeragi/topology"
-KIND_PROPOSAL = 0x01, KIND_PREPARE = 0x02, KIND_COMMIT = 0x03, KIND_TIMEOUT = 0x04, KIND_ECHO = 0x05
+KIND_PROPOSAL = 0x01, KIND_PREPARE = 0x02, KIND_COMMIT = 0x03, KIND_TIMEOUT = 0x04, KIND_ECHO = 0x05,
+KIND_ATTEST = 0x06
 Hash32 = [u8; 32]; ValidatorIndex = u32 (canonical index into C_h)
 
 kb(pk)    = be16(len(raw)) ‖ raw    // raw: 48-byte compressed G1 point (production); 32 bytes (simulator)
 keys(l)   = be32(len(l)) ‖ kb(l[0]) ‖ … ‖ kb(l[len(l)−1])
 enc(None) = 0x00 ; enc(Some(w)) = 0x01 ‖ be64(w)     // optional view
 opt(None) = 0x00 ; opt(Some(x)) = 0x01 ‖ x           // optional digest
+bit(false) = 0x00 ; bit(true) = 0x01                  // flag byte
+blobs(l)  = be32(len(l)) ‖ be32(len(l[0])) ‖ l[0] ‖ … ‖ be32(len(l[k−1])) ‖ l[k−1]   // byte strings
 sig bytes = canonical compressed encoding (96 bytes for BLS)
 ```
 
@@ -234,13 +237,15 @@ struct BlockHeader {
     payload_len: u32,                 // len(payload) ≤ max_block_bytes(h); 0 if origin_view ≥ empty_after_views(h)
     proposer: ValidatorIndex,         // == idx(L(h, origin_view))
     skipped_leaders: Vec<PublicKey>,  // [L(h, x) for x in 0..min(origin_view, a_h)]
+    attest: bool,                     // application flag: Commit votes need attestations (§3.7);
+                                      //   false if origin_view ≥ empty_after_views(h)
 }
 struct Block { header: BlockHeader, payload: Vec<u8> }   // payload opaque to the core
 ```
 
 ```text
 block_hash = H(TAG_BLOCK ‖ I ‖ be64(h) ‖ be64(origin_view) ‖ parent_hash ‖ parent_result ‖
-               payload_hash ‖ be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders))
+               payload_hash ‖ be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders) ‖ bit(attest))
 body_ok(b) := len(b.payload) == b.header.payload_len ∧ H(TAG_PAY ‖ b.payload) == b.header.payload_hash
 ```
 
@@ -258,29 +263,35 @@ need not commit to them again.
 
 The block's *own* result `R` is **not** in its header; it is bound by the votes and certificates
 of that block (§4). The next block binds it again via `parent_result`. The zero-length payload
-`EMPTY = []` is the canonical empty block and MUST be accepted by every executor.
+`EMPTY = []` with `attest = false` is the canonical empty block and MUST be accepted by every
+executor. The flag `attest` belongs to the application (§3.7): the leader copies it from its payload
+builder, and execution checks it (§4.2).
 
 ### 3.3 Signed messages and preimages
 
 ```text
 prop_preimage(h, v, bh, ad)      = TAG_SIG ‖ 0x01 ‖ I ‖ be64(h) ‖ be64(v) ‖ bh ‖ ad
-vote_preimage(kind, h, v, bh, R) = TAG_SIG ‖ kind ‖ I ‖ be64(h) ‖ be64(v) ‖ bh ‖ R        (kind ∈ {0x02, 0x03})
+vote_preimage(kind, h, v, bh, R, a) = TAG_SIG ‖ kind ‖ I ‖ be64(h) ‖ be64(v) ‖ bh ‖ R ‖ bit(a)
+                                                         (kind ∈ {0x02, 0x03}; a = the block's `attest`)
 tmo_preimage(h, v, hq)           = TAG_SIG ‖ 0x04 ‖ I ‖ be64(h) ‖ be64(v) ‖ enc(hq)       (hq = view of the carried PrepareQC)
 echo_preimage(nonce, height)     = TAG_SIG ‖ 0x05 ‖ I ‖ be64(nonce) ‖ be64(height)        (probe echo, §3.5, §7.4 R2)
+att_preimage(h, bh, R)           = TAG_SIG ‖ 0x06 ‖ I ‖ be64(h) ‖ bh ‖ R                   (commit statement, §3.7; no view)
 
 ad = att_digest(justify, parent_qc)
    = H(TAG_ATT ‖ opt(justify.map(tc_digest)) ‖ opt(parent_qc.map(qc_digest)))
 qc_digest(c) = H(TAG_QC ‖ c.kind ‖ I ‖ be64(c.height) ‖ be64(c.view) ‖ c.block_hash ‖ c.result ‖
-                 be32(len(c.signers)) ‖ c.signers ‖ c.agg_sig)
+                 be32(len(c.signers)) ‖ c.signers ‖ c.agg_sig ‖ bit(c.attest) ‖ blobs(c.attestations))
 tc_digest(t) = H(TAG_TC ‖ I ‖ be64(t.height) ‖ be64(t.view) ‖ be32(len(t.entries)) ‖
                  [be32(idx) ‖ enc(hq)] for each entry ‖ t.agg_sig ‖ opt(t.high_pqc.map(qc_digest)))
 ```
 
 Domain separation: tag, kind, instance, height and view are in every consensus preimage; block
-hash and result in every vote. There is no other signed consensus object. The only other signed
-object is the probe echo (kind `0x05`): it binds the prober's nonce and the replier's reported
-height, carries no sign-once obligation (a node signs one per probe it answers), is never
-recorded, and cannot verify as a vote, proposal or timeout because of its kind byte.
+hash, result and the block's `attest` flag in every vote. There is no other signed consensus
+object. The only other signed object is the probe echo (kind `0x05`): it binds the prober's nonce
+and the replier's reported height, carries no sign-once obligation (a node signs one per probe it
+answers), is never recorded, and cannot verify as a vote, proposal or timeout because of its kind
+byte. The commit statement `att_preimage` (kind `0x06`) is not signed by consensus keys: the
+application's attestor signs it (§3.7); its kind byte keeps it apart from every consensus object.
 
 The leader's signature covers **everything in a proposal except the payload bytes**, which are
 bound through `payload_hash`/`payload_len` in the signed header. A relay can therefore only drop a
@@ -300,7 +311,10 @@ struct Vote {
     kind: VoteKind,                // Prepare | Commit
     instance: Hash32, height: u64, view: u64,
     block_hash: Hash32, result: Hash32,
-    signer: ValidatorIndex, sig: Signature,   // over vote_preimage
+    attest: bool,                  // the block's header flag (Prepare) or the lock's (Commit), signed
+    signer: ValidatorIndex, sig: Signature,   // over vote_preimage(kind, h, v, bh, R, attest)
+    attestation: Option<Vec<u8>>,  // Some iff kind == Commit ∧ attest: the signer's attestation of
+                                   //   att_preimage(h, bh, R) (§3.7); not covered by `sig`
 }
 struct TimeoutVote {
     instance: Hash32, height: u64, view: u64,
@@ -315,8 +329,11 @@ struct TimeoutVote {
 struct Qc {                        // PrepareQC if kind == Prepare, CommitQC if kind == Commit
     kind: VoteKind, instance: Hash32, height: u64, view: u64,
     block_hash: Hash32, result: Hash32,
+    attest: bool,                  // the certified block's flag (signed by every signer)
     signers: Bitmap,               // exactly ceil(n_h/8) bytes, bit i = canonical index i, spare bits 0
     agg_sig: AggregateSignature,
+    attestations: Vec<Vec<u8>>,    // CommitQC with attest: one per signer, ascending index (§3.7);
+                                   //   empty otherwise
 }
 struct TimeoutCert {
     instance: Hash32, height: u64, view: u64,
@@ -327,8 +344,10 @@ struct TimeoutCert {
 ```
 
 **verify_qc(qc, C_h)**: `qc.instance == I`; bitmap length exact and spare bits zero;
-`popcount ≥ q_h`; `AggVerify({pk_i : bit i set}, vote_preimage(kind, h, v, bh, R), agg_sig)`.
-Certificates with more than `q_h` signers are valid. The committee used is always
+`popcount ≥ q_h`; `AggVerify({pk_i : bit i set}, vote_preimage(kind, h, v, bh, R, a), agg_sig)`
+with `a = qc.attest`; and the attestation rule A4 (§3.7): a CommitQC with `attest` has exactly
+`q_h` signers and carries one attestation per signer that verifies, any other certificate carries
+none. Other certificates with more than `q_h` signers are valid. The committee used is always
 `C_{qc.height}`; a certificate for a height whose committee is not known is buffered (bounded,
 §8.4) or dropped, never verified against another committee.
 
@@ -345,7 +364,8 @@ pairings); let `m = max(hq)` over entries (None if all None): `high_pqc` MUST be
 
 **Formation.** An aggregator (proxy tail, or any member at stage 2) keeps at most one vote per
 `(kind, view, signer)` and forms a certificate as soon as it holds `q_h` valid votes with identical
-`(kind, h, v, block_hash, R)`, using exactly those `q_h`. A TC is formed from any `q_h` valid
+`(kind, h, v, block_hash, R, attest)`, using exactly those `q_h` (a CommitQC with `attest` carries
+their attestations in signer order, §3.7). A TC is formed from any `q_h` valid
 timeout votes for `(h, v)` (honest aggregators pick the `q_h` with the highest `hq`, §6.7); its
 `high_pqc` is the PrepareQC carried by the entry with the maximal `hq`. The aggregator's own entry
 is its stored signed message (§6.6), never a re-signed one. Verification cost is bounded by the
@@ -388,12 +408,31 @@ While `awaiting` (§6.8) a node's `Status` has `height = tip.height + 1`, `view 
 `committed_qc = tip.commit_qc`, no `high_pqc`, `high_tc` or `proposal_hash`, and
 `want_proposal = false`.
 
+**Wire tags, version and traffic classes.** A `WireMessage` travels as one canonical Norito frame
+(`WireMessage::encode` / `decode`). Its enum tag (a `u32`) is the variant's position in the list
+above, 0 to 9. `PROTOCOL_VERSION = 5` names this wire format in the P2P handshake (the retired v2
+runtime used 4); every incompatible change of a wire type changes it. The traffic class of a message
+(§12.3 O8) is a function of its tag and, for a proposal, of whether it carries its payload:
+
+| Tag | Message | Class |
+|---|---|---|
+| 0 | `Proposal` | Proposal with a payload, Control without one |
+| 1, 2, 3, 4 | `Vote`, `Qc`, `Timeout`, `Tc` | Control |
+| 5, 6, 8 | `Status`, `SyncRequest`, `BlockRequest` | Control |
+| 7 | `SyncResponse` | Bulk |
+| 9 | `BlockResponse` | Proposal (every one; the current height is not known before decoding, Appendix E, E44) |
+
+`traffic_class_of_frame(bytes)` computes the same class from the encoded frame without decoding it
+(the frame header, the tag and, for tag 0, the `Option` tag of `Proposal.payload`), so the transport
+can queue a frame by class before the driver decodes it. For every frame that decodes, the two
+agree.
+
 ### 3.6 Evidence
 
 ```rust
 enum Evidence {
     ProposalEquivocation(Proposal, Proposal),   // same (I,h,v), both signed by L(h,v), different (bh, ad)
-    VoteEquivocation(Vote, Vote),               // same (kind,I,h,v,signer), different (bh, R)
+    VoteEquivocation(Vote, Vote),               // same (kind,I,h,v,signer), different (bh, R, attest)
     TimeoutEquivocation(TimeoutVote, TimeoutVote), // same (I,h,v,signer), different hq
     InvalidProposal { proposal: Proposal, defect: Defect }, // signed-content defect, §6.2 step 7
     ConflictingCertificates(Qc, Qc),            // CommitQCs of the same committed height, different value (§7.6)
@@ -412,7 +451,129 @@ honest leader can propose a poison transaction without knowing it, and a single 
 would otherwise accuse honest leaders. Penalties are the application's.
 
 Typical sizes (BLS): Vote ≈ 215 B; Qc ≈ 215 B; TimeoutVote ≤ 440 B; TC ≈ 330 B + 13 B × signers;
-Proposal without payload ≤ 2 KB at n = 31; Status ≤ 1.4 KB at n = 22 (an `Echo` adds ≈ 160 B).
+Proposal without payload ≤ 2 KB at n = 31; Status ≤ 1.4 KB at n = 22 (an `Echo` adds ≈ 160 B). A
+Commit vote of a flagged block adds its attestation, and a CommitQC of one (also inside a
+`Status`, a proposal's `parent_qc` or a sync entry) adds `q` attestations (§3.7); each is at most
+`MAX_ATTESTATION_BYTES = 4 KiB`.
+
+### 3.7 Commit attestation (application extension)
+
+Some blocks need more than consensus finality: KAGEMUSHA mint finality requires that `q`
+validators' separately provisioned application authorities (paired Pasta keys, verified by a
+recursive mint circuit without BLS) attest the committed block and result. The core supports this
+generically and key-agnostically, as opaque bytes carried by Commit votes and CommitQCs, produced
+and checked by two driver-supplied traits:
+
+```rust
+pub enum AttestOutcome { Attested(Vec<u8>), Pending, NoAuthority }
+pub trait Attestor {             // the node's application authority (KAGEMUSHA in production)
+    fn attest(&self, height: u64, key: &PublicKey, statement: &[u8]) -> AttestOutcome;
+}
+pub trait AttestationVerifier {  // every node
+    fn verify(&self, height: u64, signer: ValidatorIndex, key: &PublicKey, statement: &[u8],
+              attestation: &[u8]) -> bool;
+}
+```
+
+`attest` runs inside `handle`, like `Signer::sign`: local, non-blocking and deterministic (the same
+inputs give the same `Attested` bytes). It answers `NoAuthority` iff the node holds no authority
+for member `key` at `height`, and `Pending` while it lacks application data that the attestation
+binds and only the node's own execution of `bh` provides (in KAGEMUSHA, `R`'s preimage; the
+attestor learns it from the executor, never from the core). `verify` is a pure function of its
+arguments and of committed application state known wherever `C_height` is known (the application
+schedules its attestation keys with the committee, from `S_{height−2}`, §10.1), never of local
+execution: sync, `Status` and `parent_qc` verify certificates of blocks the node has not executed
+(§6.8, §6.9). It MUST accept only an attestation that the authority of member `key` of `C_height`
+produced over exactly `statement` (EUF-CMA). The statement is `att_preimage(h, bh, R)` (§3.3): it
+binds `I`, `h`, `bh` and `R` but not the view, so an attestation stays valid in every view of its
+block (re-proposals, restarts).
+
+**Unique message.** An application MAY bind more than the statement (its network, its key
+generation, the content of `R`'s preimage): the attestation then signs an application *message*.
+That message MUST be determined by the statement and the committed state alone, and `verify` MUST
+check it: every attestation it accepts for one statement at one height binds the same message. An
+attestation that needs a preimage of a digest in the statement carries it, and `verify` re-hashes
+it (`R`'s preimage → `R`). Then the attestations of every valid flagged CommitQC are `q` signatures
+over one message, one application bundle, whichever members signed, and a Byzantine member cannot
+get an attestation over another message counted (it is a different, unverifiable claim about the
+same statement).
+
+Rules (safety rules SR39–SR42 of §7.1, argument in §7.7):
+
+- **A1 Flag.** The payload builder answers `BuildPayload` with `(payload, attest)`, and the leader
+  copies `attest` into a fresh header (§6.10). `EMPTY` is always `([], attest = false)`: the core's
+  own `EMPTY` (build timeout, oversize payload, views `≥ empty_after_views`) is unflagged, and a
+  flagged fresh block at a view `≥ empty_after_views(h)` is a signed defect (§6.2 step 6).
+  Execution checks the flag: `exec` is `Invalid` when `attest` differs from the application's
+  deterministic flag rule for `(S_{h−1}, payload)`, which MUST give `false` for `EMPTY` (§4.2).
+  Every vote signs the flag of its block: a Prepare the proposal header's, a Commit its lock's
+  (`vote_preimage`, §3.3), and a certificate carries its signers' common flag.
+- **A2 Attested Commit.** `try_commit` on a lock `Q` with `Q.attest` first asks the node's
+  `Attestor` for `attest(h, key, att_preimage(h, Q.block_hash, Q.result))` and checks an
+  `Attested` answer with its own verifier. `Attested` and accepted → the Commit vote carries the
+  attestation. `Pending` → no Commit vote yet (no `persist()`, nothing signed) and no fault;
+  `try_commit` runs again when the node's execution of the current proposal's block completes
+  `Valid` with a flagged lock (§6.3 step 4), and at every stage raise. `NoAuthority`, or an
+  attestation its verifier rejects (a misconfigured authority), → no Commit vote and
+  `LocalFault(AttestationUnavailable{height, view})` once per view. The own vote is pooled
+  without further checks (§6.0), so this check keeps every certificate a node forms valid (SR38).
+  Prepare votes, timeouts, aggregation and every other rule are unaffected.
+- **A3 Counting.** A vote is well formed only if `attestation` is present exactly when
+  `kind == Commit ∧ attest`. A Commit vote with `attest` enters a pool (§6.4 step 4) only if
+  `verify(h, signer, C_h[signer], att_preimage(h, bh, R), attestation)` holds. A malformed vote,
+  or one whose attestation does not verify, is dropped with no state change and no evidence: a
+  relay can strip or corrupt the unsigned attestation, and the signer's retransmission still
+  counts. Votes aggregate only with identical `(bh, R, attest)`; two votes of one signer at
+  `(kind, h, v)` that differ in `attest` are equivocation (§3.6).
+- **A4 Certificate.** A PrepareQC and a CommitQC without `attest` carry no attestations. A
+  CommitQC with `attest` has exactly `q_h` signers (`popcount(signers) == q_h`) and carries `q_h`
+  attestations in ascending signer order, the `i`-th verifying for the `i`-th signer under
+  `C_{qc.height}` over `att_preimage(qc.height, qc.block_hash, qc.result)`; formation (§3.4) uses
+  exactly `q_h` pooled votes and copies their attestations. Only a Byzantine aggregator forms a
+  larger one, which is rejected like a withheld one: the application's bundle (one message, `q_h`
+  seals, as the KAGEMUSHA mint verifier requires) is then the certificate's attestations, with no
+  choice of subset. `verify_qc` checks this on every path that verifies a certificate, and
+  `qc_digest` covers the flag and the attestations, so the verified-certificate cache (§6.1 rule 5) cannot admit a
+  stripped copy. Only the safety monitor (§7.6) checks the Commit signatures alone. A caller that
+  holds the certified header also checks `qc.attest == header.attest` (sync entries, §6.9 rule 3;
+  light clients, §11).
+- **A5 Liveness.** A member that cannot attest at `h` counts as faulty at `h` for flagged blocks
+  (§8.1): a flagged block commits only if at least `q` members of `C_h` are honest, running and
+  able to attest. A `Pending` member is not faulty: its attestation follows its own execution,
+  which after GST ends within `E_max` (§8.2 L4); a member that never receives the proposal of the
+  lock's view attests the re-proposal of a later view. A locked flagged block is re-proposed by
+  the TC rule, so a height whose flagged block was locked commits nothing else. The application MUST therefore provision attestation
+  authority for every member it schedules into a committee, and flag nothing while fewer than `q`
+  could attest.
+
+Why the flag is signed and not only in the header: a member Commit-votes on a PrepareQC alone
+(§6.5) and a node commits on a CommitQC alone (§6.8), often before either holds the header. With
+the flag in every vote preimage, every valid certificate carries the true flag of its block (it has
+an honest signer, §7.7), so each node knows whether attestations are required without the header.
+With a header-only flag, a Byzantine aggregator could present a flagged block's CommitQC, stripped
+of its attestations, as unflagged to every node that lacks the header.
+
+*KAGEMUSHA mapping (informative).* The `Attestor` is the validator's
+`KagemushaMintFinalityLocalAuthorityV1`. The seal message binds the network, the authority
+generation and epoch authorization, the height, the digests of `bh` and of the execution
+commitment, and the top-up root and count. The last three come from `R`'s preimage, the node's
+`ExecutionResultCommitment` (`R = H("iroha/sumeragi/result/v1" ‖ preimage)`, §4.1), which the
+core never holds. Hence:
+
+- The attestation is the canonical encoding of `(ExecutionResultCommitment, seal)`.
+- The attestor takes the preimage from its node's own execution of `bh` and uses it only if it
+  hashes to the statement's `R`; it answers `Pending` until then (A2), and forever on a divergent
+  executor (which reports `ExecutionMismatch`, §4.2).
+- The verifier decodes canonically and re-hashes the preimage to the statement's `R`. From the
+  preimage, `bh`, `h` and the authority generation scheduled for `h` it derives the one expected
+  seal message, requires the carried seal to be over exactly it, and verifies the seal under the
+  validator's Pasta keys from that generation (keyed by the consensus key). No local execution
+  is needed, so sync and `Status` verify flagged certificates of unexecuted blocks.
+
+The builder flags blocks that carry top-ups, and the first non-empty block of a new authority
+generation (`EMPTY` is never flagged). A CommitQC's `q` attestations then share one preimage and
+one message, so they become exactly one v2 exact-quorum seal bundle (`message`, `q` seals in
+signer order); one copy of the preimage suffices for the bundle.
 
 ---
 
@@ -473,10 +634,15 @@ Proposal without payload ≤ 2 KB at n = 31; Status ≤ 1.4 KB at n = 22 (an `Ec
   PrepareQC this node had not seen) is executed again from scratch; a stale answer is ignored.
 - Missing or corrupt payload bytes (`body_ok` fails) are never invalidity: the body is fetched
   (§6.9).
+- **Application flag.** `exec(S_{h−1}, B)` is `Invalid` when `B.header.attest` differs from the
+  application's deterministic flag rule for `(S_{h−1}, B.payload)`; the rule gives `false` for
+  `EMPTY` (§3.7 A1). A flagged block is otherwise executed like any other; the attestations are
+  checked by the vote and certificate rules, never by `exec`.
 
 ### 4.3 The complete Prepare-vote predicate (no local refusal reasons)
 
-An honest committee member of `C_h` signs `Prepare(h, v, bh, R)` iff **all** hold:
+An honest committee member of `C_h` signs `Prepare(h, v, bh, R)` (with `attest` = the proposal
+header's flag, §3.7) iff **all** hold:
 1. it is in round `(h, v)`, has a signing key at `h` (§7.4), and `timeout_view < v` (it has not
    timed out view `v` or later);
 2. it has not signed a Prepare at `(h, v)` (sign-once record);
@@ -500,7 +666,7 @@ slow resource stopped every honest node at once. Here:
    one view (early timeout, next leader; the leader of that view is recorded as skipped), and
    `PayloadRejected` lets builders drop the culprit transactions. An executor defect that rejects *every* non-empty payload is escaped because
    the `EMPTY` payload must always execute and fresh blocks from view `empty_after_views` on must
-   be `EMPTY` (§6.2, §6.10).
+   be `EMPTY` and unflagged (§6.2, §6.10, §3.7 A1), so they never need attestations.
 2. **Timing dependence is absorbed by the pacemaker.** Execution latency only delays votes. View
    timeouts grow ×1.5 per failed view up to `T_max ≥ T_req` (§8.2 L3; the same formula is the
    config validation rule, §9.4), and the start level adapts across heights (§9), so the view
@@ -643,6 +809,7 @@ struct Core {
     keys: Vec<LocalKey>,                 // configured and retired keys: {pk, signer: Option<Signer> (None if retired),
                                          //   abstain_below: u64, unanchored: bool, restore: Option<SafetyRecord>} (§7.4)
     nonce: u64,                          // Init.nonce: probe nonce of this process lifetime (§7.4 R2)
+    attestation: Attestation,            // the node's attestor and the attestation verifier (§3.7)
     probe: BTreeMap<PublicKey, u64>,     // while a key is unanchored: lowest height reported per member key of
                                          //   C_{tip.height+2} in a fresh, verified echo (§6.11)
     // committed chain (consensus view of it)
@@ -787,7 +954,7 @@ that each mutation has exactly one site.
      against the same parent.
    - **Fresh block** — `w == 0`, or `p.justify.high_pqc = None`: `origin_view == w`;
      `proposer == idx(L(h, w))`; `skipped_leaders == [L(h, x) for x in 0..min(w, a_h)]`;
-     `payload_len == 0` if `w ≥ empty_after_views(h)`.
+     `payload_len == 0` and `attest == false` if `w ≥ empty_after_views(h)` (§3.7 A1).
 7. **Signed defect.** A failure in step 3, 5 or 6 is attributable to `L(h, w)`:
    `ReportEvidence(InvalidProposal{p, defect})` (deduplicated, §6.0), and if `w == view`,
    `sign_timeout(view)` (early timeout, §6.6). Stop.
@@ -839,13 +1006,15 @@ block is not in `keep`; push `DiscardExecution{height: h, keep}`. It is the only
      `LocalFault(ExecutionMismatch)`; stop.
    - `Valid(R)`: if §4.3 conditions 1–4 hold and `t_ready` is unset: `t_ready = now`; schedule
      the stage timers (§5.2).
-4. `try_prepare()`.
+4. `try_prepare()`; then, after `Valid` and with a flagged lock (`high_pqc.attest`), `try_commit()`:
+   an attestor that answered `Pending` may need exactly this execution (§3.7 A2).
 
 `try_prepare()`: if the §4.3 predicate holds for `proposal` (condition 3 includes
 `proposal.view == view`; condition 2 is `safety.prepare` having no entry at `view`):
 ```text
-safety.prepare = Some((view, bh, R)); persist()
-vote = sign(Prepare, h, view, bh, R); mine.prepare = vote
+a = proposal.header.attest
+safety.prepare = Some((view, bh, R, a)); persist()
+vote = sign(Prepare, h, view, bh, R, a); mine.prepare = vote
 route(vote); pool_insert(vote); t_lastvote = now
 ```
 (The body's `StoreBody` was emitted at acceptance; the `PersistSafety` above is durable only after
@@ -861,12 +1030,14 @@ it, §12.3 O2.)
    `h` here: the node that holds one has committed `h`, and the vote is then handled by §6.1
    rule 3.)
 3. Apply §6.1 rule 5 (an exact duplicate stops here); verify `x.sig` under `C[x.signer]`; failure
-   → drop. If the pool `(x.kind, x.view)` already has a vote from `x.signer`: same `(bh, R)` → drop;
-   different → `ReportEvidence(VoteEquivocation)` (deduplicated), drop.
+   → drop. If the pool `(x.kind, x.view)` already has a vote from `x.signer`: same
+   `(bh, R, attest)` → drop; different → `ReportEvidence(VoteEquivocation)` (deduplicated), drop.
+   Then §3.7 A3: a malformed vote, or a Commit vote with `attest` whose attestation does not
+   verify, is dropped.
 4. `pool_insert(x)`: insert (only votes verified in step 3, or the node's own, ever enter a pool).
    If `x.view == view`, `me ≠ P` and the pools of view `view` now hold votes from ≥ `f+1` distinct
    signers other than `me`: enter stage 2 (§5.2 contagion). If the pool now holds `q` votes with
-   identical `(kind, view, bh, R)` and no QC of that kind and view is held: form the Qc from
+   identical `(kind, view, bh, R, attest)` and no QC of that kind and view is held: form the Qc from
    exactly those `q` (§3.4) and run §6.5 with `formed_locally = true`.
 
 Any member aggregates any votes it receives; the proxy tail is only the *designated* receiver.
@@ -896,15 +1067,23 @@ verifies unverified votes in bulk.
 `try_commit()`: if in `(h, view)`, `signer` is set, `timeout_view < view`, `mine.commit` is
 `None`, `high_pqc.view == view`, and (`me ∈ setA` or `stage ≥ 1`), with `Q = high_pqc`:
 ```text
+if Q.attest:                                                // §3.7 A2
+    s = att_preimage(h, Q.bh, Q.R)
+    match attestor.attest(h, keys[signer], s):
+        Pending: return                                     // again after §6.3 step 4 or a stage raise
+        Attested(att) if verifier.verify(h, idx(me), keys[signer], s, att): pass
+        otherwise: LocalFault(AttestationUnavailable{h, view}) (once per view); return
 persist()                                                   // writes lock = Q (SR25)
-vote = sign(Commit, h, view, Q.bh, Q.R); mine.commit = vote
+vote = sign(Commit, h, view, Q.bh, Q.R, Q.attest) with attestation att; mine.commit = vote
 route(vote); pool_insert(vote); t_lastvote = now
 ```
-A Commit vote does not require local execution of the block. There is no separate "commit"
+A Commit vote does not require local execution of the block, nor its header: the flag comes from
+the lock. (An attestor may: a KAGEMUSHA authority answers `Pending` until the node's execution
+gives it `R`'s preimage, §3.7 A2, so at a flagged height a slow executor also delays its Commit.) There is no separate "commit"
 entry in the record: a Commit at `(h, v)` is always for the lock of view `v` (unique per view by
 Lemma 1 and never replaced within a view, §6.5 2a), and that lock is durable before the vote
 leaves (SR25). After a restart, `try_commit()` may sign it again; the preimage and, with
-deterministic signatures, the bytes are identical.
+deterministic signatures, the bytes are identical, and so is a deterministic attestation (§3.7).
 
 ### 6.6 Timing out (local timer, early timeout, join)
 
@@ -1043,7 +1222,8 @@ two heights (§10.2).
    responses are dropped. Before it is checked, buffered entries above a gap in the heights from
    `h` on are dropped (rule 2). Entries below `h` are skipped; every
    other entry must satisfy `c.kind == Commit`, `c.height == block.header.height`,
-   `block_hash(block.header) == c.block_hash`, `body_ok(block)`, consecutive heights. The entry
+   `block_hash(block.header) == c.block_hash`, `c.attest == block.header.attest` (§3.7 A4),
+   `body_ok(block)`, consecutive heights. The entry
    for the current `h` additionally needs `C_h` known, `verify_qc(c, C_h)`,
    `header.parent_hash == tip.block_hash` and `header.parent_result == tip.result`; it then runs
    §6.8 (commit, enter the next height), and buffered entries are processed in the same way in
@@ -1090,8 +1270,9 @@ signing key, `timeout_view < v`, and no proposal recorded at `(h, v)` (`safety.p
    be loaded it stays silent in that view.
 1. **View 0.** At `t_propose = t_enter + pace` (§9.1) push `BuildPayload{req, height: h, view: 0,
    max_bytes: max_block_bytes(h), exec_budget_ms}` (`req` from `next_req`, remembered in `build`);
-   the driver answers `PayloadBuilt{req, payload}`, and a `PayloadBuilt` whose `req` is not the
-   one in `build` is ignored. If no answer arrives by `t_propose + build_timeout`, use `EMPTY`. If
+   the driver answers `PayloadBuilt{req, payload, attest}` (the application flag, §3.7 A1), and a
+   `PayloadBuilt` whose `req` is not the one in `build` is ignored. If no answer arrives by
+   `t_propose + build_timeout`, use `EMPTY` (unflagged). If
    the payload is `EMPTY` and `now < t_enter + idle_block_interval`, wait until
    `t_enter + idle_block_interval` or a `PayloadReady{req}` for that request (but not before
    `t_propose`), request again (new `req`) and propose whatever is returned (`EMPTY` on timeout);
@@ -1110,7 +1291,8 @@ signing key, `timeout_view < v`, and no proposal recorded at `(h, v)` (`safety.p
      wait).
 3. **Construct and send.** Fresh header = `{I, h, origin_view: v, parent_hash: tip.block_hash,
    parent_result: tip.result, payload_hash, payload_len, proposer: idx(me), skipped_leaders:
-   [L(h,x) for x in 0..min(v, a_h)]}`; a re-proposal reuses `Q`'s header unchanged. Then
+   [L(h,x) for x in 0..min(v, a_h)], attest}` with the builder's `attest` (`false` for an `EMPTY`
+   the core chose); a re-proposal reuses `Q`'s header unchanged. Then
    `StoreBody{block}` (unless stored); `safety.proposal = Some((v, bh, justify.clone())); persist();`
    `ad = att_digest(justify, safety.parent_commit_qc)`; sign `prop_preimage(h, v, bh, ad)`;
    `mine.proposal = Proposal{…, justify, parent_qc: safety.parent_commit_qc, payload: Some(..)}`;
@@ -1300,6 +1482,10 @@ killed by a named deterministic test:
 | SR36 | Execution mismatch on a certified block (or `Failed`) is a local fault, never an early timeout or `PayloadRejected` | §4.2 | MS36a, MS36b |
 | SR37 | Safety monitor halts on a conflicting CommitQC for a committed height | §7.6 | MS37 |
 | SR38 | Every vote is signature-verified before it is pooled; locally formed certificates are therefore valid without re-verification | §6.1, §6.4 | MS38 |
+| SR39 | Attestation flag: every vote signs its block's `attest` (Prepare: the header's; Commit: the lock's), the leader proposes the builder's flag, the fresh-block rule keeps views `≥ empty_after_views` unflagged, and a restored Prepare carries its recorded flag | §3.7 A1, §6.2, §6.10, R4 | MA6, MA7, MA8, MA9 |
+| SR40 | Attested Commit: a Commit vote on a flagged lock is signed only with the node's attestation, checked by its own verifier; a node that cannot attest does not Commit-vote there, and one whose attestor is `Pending` asks again after its execution of the block | §3.7 A2, §6.3, §6.5 | MA5, MA10, MA12 |
+| SR41 | Attestation counting: a Commit vote with `attest` is pooled only with an attestation that verifies for its signer | §3.7 A3, §6.4 | MA1 |
+| SR42 | Attested certificate: a flagged CommitQC is valid only with exactly `q` signers and one verifying attestation per signer over `att_preimage(h, bh, R)`, which binds `I`, `h`, `bh` and `R` | §3.3, §3.7 A4 | MA2, MA3, MA4, MA11 |
 
 ### 7.2 Lock
 
@@ -1337,7 +1523,7 @@ struct SafetyRecord {
     height: u64,                                     // round height the record describes
     parent_commit_qc: Option<Qc>,                    // CommitQC of height − 1 (None at g + 1)
     proposal: Option<(u64, Hash32, Option<TimeoutCert>)>, // (view, bh, justify) of the last proposal signed
-    prepare: Option<(u64, Hash32, Hash32)>,          // (view, bh, R) of the last Prepare signed
+    prepare: Option<(u64, Hash32, Hash32, bool)>,    // (view, bh, R, attest) of the last Prepare signed
     timeout: Option<(u64, Option<Qc>)>,              // (view, exact PrepareQC carried) of the last timeout signed
     lock: Option<Qc>,                                // high_pqc at write time; also the record of every Commit (§6.5)
     high_tc: Option<TimeoutCert>,                    // high_tc at write time (the certificate that justified the view)
@@ -1443,7 +1629,8 @@ value drawn by the driver for every `Init`; the simulator draws it from its seed
    views of `parent_commit_qc` and of certificates nested inside entries are not used); timers
    start at `now`. The recorded timeout is re-sent at the first rebroadcast and a recorded Prepare
    of the current view on the retransmit schedule with `t_vote = now`; `try_commit()` is called
-   (it re-signs the identical Commit if the lock is of the current view); a recorded proposal is
+   (it re-signs the identical Commit if the lock is of the current view; for a flagged lock whose
+   attestor answers `Pending` after the restart, once the node has executed the block again, §3.7 A2); a recorded proposal is
    re-sent only as recorded (§6.10 rule 0). If `me == L(h, view)`, no proposal is recorded at
    `view` and `timeout_view < view`: at `view > 0` with `high_tc` = TC(`view − 1`) propose as
    §6.10 rule 2 with it; at `view = 0` schedule the proposal as §6.10 rule 1. Without an R4
@@ -1590,10 +1777,57 @@ deterministic execution `R = exec(S_{h−1}, B)`. Apply re-checks it (O3, SR34).
   heights) →
   `ReportEvidence(ConflictingCertificates)` and `Halt(SafetyViolation)`: agreement is broken, so
   more than `f` members of `C_x` are faulty. Values are compared first; a signature check happens
-  only on a mismatch. CommitQCs for older heights are dropped (§10.7).
+  only on a mismatch, and it checks the Commit signatures alone, not the attestations (§3.7 A4):
+  `q` Commit signatures on another value already prove the violation. CommitQCs for older heights
+  are dropped (§10.7).
 - Nothing else is monitored. Conflicting certificates of the current, uncommitted height are
   never even verified (a second PrepareQC of a view already locked is cheap-rejected, §6.1 rule
   5); forensics for them are the application's (§14.6).
+
+### 7.7 Commit attestation: safety argument
+
+The extension of §3.7 changes no rule that §7.5 relies on. It adds data (attestations) that no
+safety rule reads, one signed byte (the flag), and one more reason not to Commit-vote.
+
+1. *Agreement is unchanged.* The flag is part of the signed value, and `bh` binds the header, so
+   every honest vote on a block carries that block's true flag, and two votes of one value agree
+   on it. Lemma 1 and the theorem of §7.5 therefore hold with the value `(bh, R)` exactly as
+   before: a Byzantine vote with a wrong flag is a different preimage, which never aggregates with
+   honest votes (§3.4, A3) and is evidence if its signer also signed the true one. A2 only withholds
+   Commit votes, which is indistinguishable from a crashed voter; SR25's lock durability, the
+   timeout fence and the TC rule are untouched. The attestation is not in the safety record, and
+   a restart re-creates the identical Commit (A2 with a deterministic `Attestor`); a
+   non-deterministic one yields a vote that differs only in unsigned bytes, never an equivocation.
+2. *Certificates carry the true flag.* Let `c` be a valid CommitQC for a block `B`. It has an honest
+   signer `s` (`q − f ≥ 1`), which Commit-voted with the flag of its lock `Q`, a valid PrepareQC of
+   `c.view` for `(B, c.result)`, so `c.attest == Q.attest` (they are one signed byte). `Q` has an
+   honest signer `p`, which Prepared the proposal it held, whose header hashes to `B`, with that
+   header's flag. Hence `c.attest == B.header.attest`, whatever the aggregator did: a Byzantine
+   aggregator cannot present a flagged block's CommitQC as unflagged, nor the reverse.
+3. *No flagged commit without `q` attestations.* An honest node accepts a CommitQC `c` only through
+   `verify_qc` (every path of SR21 and sync, A4) or by forming it (SR38). By (2), if `B` is flagged
+   then `c.attest` holds, so `verify_qc` requires exactly `q` signers with one attestation each,
+   verifying for its signer over `att_preimage(h, bh, R)`. A formed `c` takes its attestations
+   from pooled votes, which A3 admitted only with verifying attestations, and from the node's
+   own vote, whose attestation its verifier accepted before the vote was signed (A2). By the
+   verifier's EUF-CMA property (§3.7) these are `q` attestations produced by the authorities of
+   `q` distinct members of `C_h` over exactly `(I, h, bh, R)`, at least `q − f` of them honest.
+   A Byzantine aggregator can strip, reorder, forge, replay or add attestations only to make its
+   certificate invalid (an over-aggregated one has more than `q` signers). An attestation from
+   another instance, height, block or result does not verify, because the statement binds all
+   four; one made in another view does verify, and it attests the same fact.
+   By the unique-message rule (§3.7) the `q` attestations sign one application message, so the
+   certificate is one application bundle; a Byzantine attestation over another message (another
+   top-up root under the same `R`) does not verify and is not counted (A3).
+4. *Honest nodes never count an unattested Commit vote for a flagged block.* By A3 such a vote is
+   dropped before it can enter a pool, and only pooled votes are counted, trigger contagion or form
+   certificates. Relays can therefore not front-run an honest vote with a stripped copy either:
+   the copy leaves no state behind.
+5. *Liveness* is the only cost: a flagged block needs `q` honest, running members that can attest
+   (A5, §8.1), and an attestor that needs `R`'s preimage waits for its node's execution (A2). A
+   Byzantine member can withhold or forge its attestation, which removes one attestor, exactly as
+   withholding its Commit vote would. `Pending` withholds a Commit vote only until the execution
+   ends, and never signs anything, so it changes no safety argument above.
 
 ---
 ## 8. Liveness
@@ -1601,8 +1835,9 @@ deterministic execution `R = exec(S_{h−1}, B)`. Apply re-checks it (O3, SR34).
 ### 8.1 Assumptions after GST
 
 At least `q_h` members of `C_h` are honest and running, where a member with an unanchored key
-(§7.4 R2) counts as faulty until it anchors and a member whose key abstains at `h` (R2, R6)
-counts as faulty at `h`; honest-to-honest delay `≤ Δ` for every
+(§7.4 R2) counts as faulty until it anchors, a member whose key abstains at `h` (R2, R6)
+counts as faulty at `h`, and a member that cannot attest at `h` counts as faulty at `h` for a
+flagged block (§3.7 A5); honest-to-honest delay `≤ Δ` for every
 message up to `max_block_bytes`, including the last of the `n − 1` payload copies a leader sends
 in sequence (the driver's traffic classes, §12.3 O8, keep control traffic independent of bulk
 load); local signing/verification/persist per message `≤ δ`; parent apply `≤ A_max`; execution
@@ -1650,7 +1885,9 @@ simulator's post-heal delays respect this, and §9.4 validates the nominal case.
   when the rest of that `Status` is over its rate limit; a member whose copy was lost asks the
   same way as soon as it holds a vote, PrepareQC or `Status` showing the proposal exists, at the
   latest when stage-2 votes reach it. All honest nodes execute within
-  `σ + build_timeout + 3Δ + F + A_max + E_max ≤ φ·T`. If every set-A
+  `σ + build_timeout + 3Δ + F + A_max + E_max ≤ φ·T`; at a flagged height a `Pending` attestor is
+  asked again at that `Executed` (§6.3 step 4), so every honest attesting member Commit-votes within
+  the same bound after the PrepareQC reaches it. If every set-A
   member and `P` are honest, stage 0 forms both certificates within 4 hops. With faulty non-P
   set-A members (at most `f`, and set B supplies the missing votes), stage 1 does so within
   `t_retx` more, or with no delay when the hint started the round at stage 1. With a faulty `P`,
@@ -1742,6 +1979,7 @@ turns in exchange for no absence records in headers.
 | Slow executors (all) | level grows ×1.5 per failed view; start level adapts (an execution — also one discarded unfinished, as a lower bound — or the committing view `> T(start)/2`, §9.2); `exec_budget` caps block cost at `φ·T_base/2`; `EMPTY` from `empty_after_views` | converges in `k*` views; payload resumes once the start level covers `E` |
 | Late but valid leader (proposal or body sent as late as the view still commits) | the view commits; `d_c` is measured from `t_body`, so the start level is unchanged (§9.2); never skipped, no evidence | its own delay, `< P(v) + T(start)` per turn |
 | Poison transaction | `Invalid` → early timeout + `PayloadRejected` → builder quarantines the culpable transaction only; no evidence; start level unchanged | one or two views; that view's (honest) leader is demoted once |
+| Member that cannot attest (no authority, forged or withheld attestations) | its Commit vote on a flagged block is not sent or not pooled (§3.7 A2, A3); set B and stage 1 supply the missing Commit votes, as for a silent set-A member; a slow executor whose attestor is `Pending` Commit-votes when its execution ends (§6.3 step 4) | as a silent set-A member, at flagged heights only; below `q` attestors a flagged height halts (A5) |
 | Lost safety record (with or without block-store loss) | key unanchored until signed probe echoes from `2f + 1` members of `C_{t'+2}` show it caught up; abstains through `t' + 2` | that key signs nothing until then; the node counts as one of the `f` faults until it anchors |
 | Lagging node | `Status.committed_qc` / `parent_qc` → sync (one request outstanding, fetch overlaps apply); others never wait | none for others |
 | Whole-cluster restart | records (lock, `high_tc`, exact timeout) and stored bodies restored; Status re-synchronises views | ≤ one view |
@@ -2072,7 +2310,9 @@ and dataspaces `D1..Dk`, each a separate core instance with its own committee.
 **What the core exposes for this (and nothing else):** (a) the instance id in every signing
 domain and header; (b) the committed-block output (`CommitBlock{block, commit_qc}`) from which
 proofs are built; (c) pure functions `block_hash(&BlockHeader)`, `committee_digest(&Committee)` and
-`verify_commit_qc(instance, &Committee, &Qc) -> bool` for foreign-instance light verification.
+`verify_commit_qc(verifier, instance, &Committee, &Qc, Option<&BlockHeader>) -> bool` for
+foreign-instance light verification (the attestation verifier and the certified header, when the
+caller holds it, serve §3.7 A4).
 
 ---
 
@@ -2084,11 +2324,14 @@ proofs are built; (c) pure functions `block_hash(&BlockHeader)`, `committee_dige
 pub struct Core { /* §6.0 */ }
 impl Core {
     pub fn new(local: LocalParams, init: Init, signers: Vec<Box<dyn Signer>>, crypto: Box<dyn Crypto>,
-               now: Millis) -> Result<(Core, Vec<Action>), ConfigError>;  // applies R1–R6 (§7.4)
+               attestation: Attestation, now: Millis)
+               -> Result<(Core, Vec<Action>), ConfigError>;  // applies R1–R6 (§7.4)
     pub fn handle(&mut self, now: Millis, event: Event) -> Vec<Action>;
     pub fn next_wakeup(&self) -> Millis;                   // earliest deadline; driver sends Tick
-    pub fn status(&self) -> CoreStatus;                    // read-only diagnostics (height, view, level, stage, t_retx, footprint)
+    pub fn status(&self) -> CoreStatus;                    // read-only diagnostics (height, view, level, stage, t_retx,
+                                                           //   leader and proxy tail of (h, view), high PrepareQC view, footprint)
 }
+pub struct Attestation { attestor: Box<dyn Attestor>, verifier: Box<dyn AttestationVerifier> } // §3.7
 pub struct Init {
     records: Vec<(PublicKey, RecordState, bool)>, // one per configured or retired key: Present(bytes) | Absent; retired flag
     genesis_height: u64,
@@ -2102,7 +2345,7 @@ pub struct HeightConfig { committee: Committee, params: ChainParams }
 pub enum Event {
     Tick,
     Message { from: PublicKey, msg: WireMessage },           // `from`: authenticated sender (§1.4)
-    PayloadBuilt { req: u64, payload: Vec<u8> },             // answer to BuildPayload{req}
+    PayloadBuilt { req: u64, payload: Vec<u8>, attest: bool }, // answer to BuildPayload{req}; attest: §3.7 A1
     PayloadReady { req: u64 },                               // after answering BuildPayload{req} with EMPTY: an includable transaction arrived (at most once per req)
     Executed { block_hash: Hash32, req: u64, outcome: ExecOutcome }, // Valid(R) | Invalid | Failed(reason) | Cancelled; exactly one per Execute
     BodyAvailable { block: Block },                          // FetchBody satisfied from local storage
@@ -2123,7 +2366,7 @@ pub enum Action {
     ServeBlocks { to: PublicKey, from_height: u64, max_count: u16, max_bytes: u32 },
     PayloadRejected { height: u64, view: u64, block_hash: Hash32 },     // builder quarantines those transactions
     ReportEvidence(Evidence),
-    LocalFault(LocalFault),                         // ExecutionMismatch, ExecutorFailed, RecordMissing, ... (telemetry)
+    LocalFault(LocalFault),                         // ExecutionMismatch, ExecutorFailed, RecordMissing, AttestationUnavailable, ... (telemetry)
     Halt(HaltReason),
 }
 pub trait Signer { fn public_key(&self) -> &PublicKey; fn sign(&self, preimage: &[u8]) -> Signature; } // deterministic
@@ -2134,6 +2377,7 @@ pub trait Crypto {                                  // pure; BLS in production, 
     fn verify_aggregate(&self, pks: &[&PublicKey], msg: &[u8], agg: &AggregateSignature) -> bool;
     fn verify_aggregate_multi(&self, groups: &[(Vec<&PublicKey>, Vec<u8>)], agg: &AggregateSignature) -> bool;
 }
+// Attestor (answers AttestOutcome: Attested(bytes) | Pending | NoAuthority) and AttestationVerifier: §3.7.
 ```
 `Signer::sign` runs inside `handle` and MUST be local and non-blocking (an in-memory key or a
 local device with bounded latency); a remote signer would block the core and its timers. It MUST
@@ -2156,7 +2400,9 @@ transactions leave the queue when a block containing them is applied; `PayloadRe
 once after an `EMPTY` answer to `req`; on `PayloadRejected` it quarantines only transactions that
 make a block `Invalid` on their own, §4.2), serving `ServeBlocks`/`ServeBody`/`FetchBody`
 (`ServeBlocks` may answer with an empty `SyncResponse`), reporting executor panics and I/O errors
-as `Failed`, and the applied header in `BlockApplied`. One core instance per consensus instance; instances share nothing inside the core and
+as `Failed`, the applied header in `BlockApplied`, and the application side of commit attestation
+(§3.7): the builder's flag, the executor's flag check, the node's `Attestor` and the
+`AttestationVerifier`. One core instance per consensus instance; instances share nothing inside the core and
 are isolated by the driver (O9).
 
 ### 12.3 Ordering and scheduling guarantees the driver MUST honour
@@ -2199,7 +2445,8 @@ are isolated by the driver (O9).
 - **O7** The driver never delivers the node's own messages back to it.
 - **O8 Traffic classes.** *Control*: `Vote`, `Qc`, `Timeout`, `Tc`, `Status`, `SyncRequest`,
   `BlockRequest`, and `Proposal` without payload. *Proposal*: `Proposal` with payload, and
-  `BlockResponse` for the current height. *Bulk*: `SyncResponse` and other `BlockResponse`s.
+  every `BlockResponse`. *Bulk*: `SyncResponse`. The core exports the table
+  (`WireMessage::traffic_class`, and `traffic_class_of_frame` for an encoded frame, §3.5).
   Egress and ingress use strict priority control > proposal > bulk, with a guaranteed minimum
   share (e.g. 10 %) for bulk so sync always progresses.
 - **O9 Instance isolation.** Each instance has its own event loop, its own record files and O2
@@ -2316,6 +2563,7 @@ A new mechanism that would exceed the budget replaces something or goes to §14.
 | O-HALT | No honest halt, except at a node where the scenario injected record corruption or a divergent executor. |
 | O-EVID | Evidence soundness: honest nodes never report evidence against honest nodes. |
 | O-FAULT | Local-fault soundness: an honest node emits `LocalFault(ExecutorFailed)` or `LocalFault(ExecutionMismatch)` only where the scenario injected executor failures or divergence; cancelled, discarded or evicted executions never surface as faults, `Failed` or `ApplyDiverged`. |
+| O-ATT | (F37) Commit attestation (§3.7): every CommitQC with which an honest node commits a flagged block carries the flag, exactly `q` signers and one attestation per signer, each produced by that signer's authority (ground truth) over `att_preimage(h, bh, R)`; no honest node sends a Commit vote for a flagged block without its attestation. |
 | O-AMX | (F31) Atomicity: a toy AMX transaction is applied by all participants or by none; an escrow is released only with a `G` decision proof; settlement follows within `B_live` of `G` and the DSes being live. |
 
 ### 13.3 Fault scenarios (each over `n ∈ {1, 4, 5, 7, 22}` where meaningful)
@@ -2373,7 +2621,15 @@ executions still pending at commit · F35 local-queue asymmetry: transactions su
 F36 late leaders: up to `f` members send their view-0 proposal `T(start)/2 + 100 ms` after the
 honest anchor `t_enter + P(0)`, or the proposal at once without its payload and the body that much
 later (never served on request), so that every such view still commits; later one honest member
-crashes → no honest start level ever rises, every gap within the P4 leader-turn bound.
+crashes → no honest start level ever rises, every gap within the P4 leader-turn bound · F37
+commit attestation (§3.7): a share of the transactions requires mint finality, so the builder
+flags their blocks; every authority attests only blocks its node executed (`Pending` before, as a
+KAGEMUSHA authority needs `R`'s preimage); up to `f` Byzantine members forge or withhold their
+attestations, a Byzantine proxy tail strips the attestations of the CommitQCs it forms and clears
+their flag, and it over-aggregates the genuine attested votes it receives into `q + 1`-signer
+CommitQCs; one honest member has no attestation authority (or a misconfigured one) while `q`
+members still attest; on every other seed one attesting honest member executes non-empty blocks
+slowly (the PrepareQC often reaches it before its execution ends) → O-ATT, O-LIVE.
 
 ### 13.4 Mutations that MUST be detected
 
@@ -2507,7 +2763,27 @@ accepts the re-proposal X emits `Execute{B, req = r2}` with `r2 ≠ r1`; on `Val
 Prepares `(h, v+2, B, R)`; no `LocalFault` at any point. Variant c delivers the answer to `r1`
 only after the re-proposal: X still re-executes at once and ignores the stale answer.
 
-Also required: golden vectors for every preimage (including `echo_preimage`, §3.3), `block_hash`, `att_digest`, `committee_digest`,
+**Commit attestation rules (§3.7, SR39–SR42).** Harness keys and the fake attestor of
+`testing.rs` (a keyed MAC per member key and height, so a forged, stripped or replayed attestation
+is distinguishable from a genuine one; its execution-gated form answers `Pending` for a block its
+node has not executed, as the simulator's authorities do).
+
+| Id | Site — change | Named deterministic test (setup → expected) | Randomized scenario | Oracle |
+|---|---|---|---|---|
+| MA1 | `on_vote` (`attested`) — a Commit vote with `attest` is pooled whether or not its attestation is present and verifies | `det_a2_unattested_commit_votes_not_counted`: n=4, X = P of view 0, flagged block B; X holds PQC(B) and its own attested Commit; W's Commit arrives with a forged attestation, Y's with its attestation stripped, Z's with W's attestation → none is pooled, no stage change, no evidence; Y's genuine retransmission → still no CommitQC; W's genuine one → a CommitQC carrying exactly the attestations of X, Y and W, which verifies | F37 | O-ATT |
+| MA2 | `verify_qc` — the attestation check (A4) skipped | `det_a4_commitqc_attestations_checked`: flagged CommitQC(h) with no attestations, one missing, one forged, two swapped, or one made at another height → rejected by `verify_qc` and `verify_commit_qc`, and no commit when it arrives as a `Qc`, in a `Status` or as a proposal's `parent_qc`; with the genuine attestations → commit | F37 | O-ATT |
+| MA3 | `att_preimage` omits `R` | `det_a3_attestation_binds_result`: the genuine members' attestations of `(h, bh, R′)` attached to a flagged CommitQC for `(h, bh, R)`, and to a Commit vote for `(h, bh, R)` → rejected, not counted | — (no scenario varies `R` under one block) | — |
+| MA4 | `att_preimage` omits `h` | `golden_attestation_preimage` (the §3.3 layout, which an application verifier may parse) | — | — |
+| MA5 | `try_commit` — a node whose `Attestor` answers `NoAuthority` Commit-votes anyway (without an attestation) | `det_a5_no_authority_abstains_from_commit_only` (a): X without authority Prepares flagged B, sends no Commit vote for it and reports `AttestationUnavailable` once per view; for an unflagged block it Commit-votes normally | F37 | O-ATT |
+| MA6 | `vote_preimage` omits the flag | `det_a6_flag_is_signed`: a Byzantine P strips the attestations of a genuine flagged CommitQC and clears its flag → an honest node without B's header rejects it as a `Qc`, in a `Status` and as `parent_qc` | F37 (stripping proxy tail) | O-ATT |
+| MA7 | `propose_fresh` — the builder's flag is dropped (every fresh block unflagged) | `det_a1_flagged_block_commits_with_attestations`: n=4, the builder flags B → B's header carries the flag, every Commit vote an attestation, and the CommitQC q attestations | F37 | O-ATT |
+| MA8 | `on_proposal` step 6 — the `attest == false` rule for views `≥ empty_after_views` deleted | `det_a7_empty_after_views_never_flagged`: a fresh flagged `EMPTY` proposal at view `empty_after_views` → `InvalidProposal` evidence (`FlaggedEmpty`) and an early timeout | — | direct assertion |
+| MA9 | `restore_round` — the recorded Prepare is rebuilt unflagged | `det_a8_restart_resends_identical_attested_votes`: X Prepares and Commits flagged B, its record is durable, it crashes and restarts (R4) → the re-sent Prepare and Commit (with its attestation) are byte-identical to the originals | — (F37 has no restarts; F13 has no flagged blocks) | O-SIGN |
+| MA10 | `try_commit` — an attestation that the node's own verifier rejects is used anyway | `det_a5_no_authority_abstains_from_commit_only` (b): the proxy tail's authority is misconfigured (its attestations never verify) → no Commit vote, `AttestationUnavailable`; the others' attested votes form a `CommitQC` that verifies | F37 (an honest member with a broken authority) | O-ATT, O-CERT |
+| MA11 | `verify_attestations` — a flagged CommitQC with more than `q` signers accepted (one attestation each) | `det_a4_flagged_commitqc_has_exactly_q_signers`: `q + 1` genuine signatures and attestations → `AttestationShape` from `verify_qc` and `verify_commit_qc`, the Commit signatures alone verify, an unflagged CommitQC and a PrepareQC with `q + 1` signers stay valid; `det_a4_commitqc_attestations_checked_core`: that certificate commits nothing as a `Qc`, in a `Status` or as `parent_qc` | F37 (over-aggregating proxy tail) | O-ATT (counts the signers itself) |
+| MA12 | `on_outcome` — no `try_commit()` after the execution of the current proposal's block (a `Pending` attestor is asked again only at a stage raise) | `det_a9_pending_attestor_commits_after_execution`: n=4, X in set A with an execution-gated authority, flagged B executing; PQC(B) arrives first → no Commit vote, no `PersistSafety`, no `AttestationUnavailable`; `Executed{Valid(R)}` → X Commit-votes at once with a verifying attestation; `Valid(R′ ≠ R)` → `ExecutionMismatch`, still no Commit | — (F37's slow executors then commit later, at stage raises: start levels rise, no oracle fails) | — |
+
+Also required: golden vectors for every preimage (including `echo_preimage` and `att_preimage`, §3.3), `block_hash`, `att_digest`, `committee_digest`,
 the permutation, `D_h`, slot substitution (order and leaders for `|D| ∈ {0, 1, f}`, with demoted
 slots at the anchor, between views and adjacent to each other) at views 0, 1, 2, and the stage
 hint; TC
@@ -2529,6 +2805,16 @@ of `handle` with arbitrary events (no panic, O-MEM holds).
   an `Execute` whose certified parent post-state was evicted is answered with the correct `Valid`,
   never `Failed`), O5/O8 (Tick lateness and control-class latency under bulk and CPU floods), O9
   (a stalled DS instance does not delay global-instance events).
+- **Host seam.** The simulator runs each replica's node program behind `sim::host::Host`: the
+  ingress queues with the O5 priorities and the O6/O8 bounds and classes, the core, and the O1/O2
+  persist-before-effect barrier. The world supplies everything else as fake backends: network,
+  clocks, the write device and record store with the installation log, the body store, the block
+  store with O3 apply, the O4 executor, the payload builder and the `Init` a restart assembles from
+  the durable stores. The default host is the fake driver (`sim::host::FakeHost`). The production
+  driver's ingress and barrier kernel runs as another `Host` in the same seeded world under every
+  oracle (scenario field `host`); that is how the conformance runs above are hosted. TODO(WP4): to
+  run the production driver's persistence, serving or `Init` assembly in the simulator as well,
+  move them behind the seam as backend traits of the same shape.
 - Before the Taira cutover: a multi-process soak test (n = 4 and n = 22; netem loss 10–30 %,
   delay spikes, random `kill -9`, disk-full injection; 24 h) with O-AGR, O-SIGN, O-LIVE and O-PERF
   computed from node logs. It is a release gate.
@@ -2613,11 +2899,12 @@ The review logs of revisions 2, 3, 4 and 4.1 (Appendices A–D) are kept verbati
 ## Appendix E. As-built reconciliation
 
 This appendix reconciles revision 4.1 with the implementation in `crates/iroha_sumeragi` and its
-simulator. Every `// SPEC:` marker in the crate refers to one row below. Rows E1–E8, E36, E40
-and E41 changed the normative text above (minimal edits, marked by their section); rows E9–E30,
-E37 and E38 record code-level choices where the text leaves room or adds a defensive check,
-without changing the protocol; E31–E35, E39 and E42 record simulator and verification
-deviations. This file, `specs/sumeragi.md`, is the normative specification that the crate's `§`
+simulator. Every `// SPEC:` marker in the crate refers to one row below. Rows E1–E8, E36, E40,
+E41, E43, E44 and E47 changed the normative text above (minimal edits, marked by their section;
+E43, E44 and E47 are the node-integration additions); rows E9–E30, E37, E38 and E45 record code-level
+choices where the text leaves room or adds a defensive check, without changing the protocol;
+E31–E35, E39, E42 and E46 record simulator and verification deviations. This file,
+`specs/sumeragi.md`, is the normative specification that the crate's `§`
 references and `// SPEC:` markers resolve against (checked by `crates/iroha_sumeragi/tests/spec.rs`).
 
 ### E.1 Rules amended in place
@@ -2635,6 +2922,9 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E36 | review (sync buffer poisoning) | Sync responses are bound to requests: a response answers one unanswered request of this node to its source and starts at that request's `from_height` (an empty one answers the source's latest request); other responses, including a second one for the same request, are dropped; buffered entries above a gap are dropped before a response is checked; `Status` candidates are members only (as rule 2 already said). 4.1 processed every response of a source that was ever asked and never replaced a buffered entry, so a Byzantine source asked once could fill the buffer with well-formed entries carrying forged CommitQCs for heights above `h`; they never reached their turn, every honest answer found the buffer full, and a lagging node never caught up. Now a forged entry reaches its turn and is dropped there, at most once per request sent to its source. | §6.9 rules 2–3 | `machine::sync::on_sync_response`, `SyncState::take_request`, `maybe_request_sync` |
 | E40 | simulator, final 500-seed sweep: F5 seed 279 (`n = 22`, churn; successive equivocating leaders held every honest node at start levels 3–4 and one height took 26.4 s, failing the post-heal progress check) | (a) §9.2 raise: the start level rises iff `pm.last_exec_ms > T(start)/2` (unchanged) or the committing view was slow here, `t_commit(h) − anchor(h, v_c) > T(start)/2` with `v_c` the committing CommitQC's view, measured only when this node is in `v_c`; the rule "a view timed out on its deadline or by a join while this node held its proposal" (`failed_with_proposal`) and the timeout causes that existed only for it are deleted. That rule let every faulty leader raise the level at each of its turns (equivocate, or send a valid proposal to only `2f` honest members); now a failed view never raises. The rule as first drafted measured from `t_enter(h, v_c)`; the anchor is used instead because at view 0 the entry is followed by the pace or heartbeat wait (`idle_block_interval` = 5 s > `T(0)/2`): measured from the entry, a healthy idle chain in the simulator sat at `start_cap` = 4 and a loaded `n = 4` chain at level 1 (both stay at 0 from the anchor); for `v_c > 0` the two differ by at most `build_timeout`. (b) Early timeout on proven leader equivocation: two different proposals for the current `(h, view)`, both validly signed by `L(h, view)`, make the node sign its timeout at once (not only report evidence), so the view ends one join and one TC later instead of at its deadline. Safe (timeouts are always safe under the fence) and unframeable (the evidence needs two signatures of the leader over different preimages). Tests `det_l25`, `det_l26`; mutations ML25, ML26. | §6.2 step 2, §6.6, §6.8 step 4, §7.1 SR35, §7.5, §8.2 L2–L3, §8.3, §9.2, §13.4 | `pacemaker::Pacemaker::on_commit`, `machine::round::commit_height`, `machine::proposal::check_held`, `machine::timeout::sign_timeout` |
 | E41 | adversarial review of E40: (1) every executor 3.0–3.9 s for non-empty blocks at `n = 4` defaults, with an executor that aborts discarded work (O4) — every height committed `EMPTY` at view 2 and the start level stayed 0; (2) a leader whose valid proposal arrives `T(start)/2 + ε` after `t_enter + P(0)` — the view commits, the leader is never demoted, and every honest node rose to `start_cap`, because faulty members lead every `n/f` heights and `decay_after` = 8 never catches up | (a) `pm.last_exec_ms` is the maximum over the height (it was the last value), and an execution still `Pending` when `discard_exec` removes it, or when its block commits, counts with `now − since`, a lower bound that never exceeds what the execution clause counts once the execution finishes. With the failed-view raise gone (E40), nothing else saw an execution that outlasted every payload view; the simulator's non-preemptive executor had hidden it (the next view's execution queued behind the cancelled job, so the committing view looked slow). (b) `d_c = t_commit − t_body`, where `t_body` is when this node first held the committing view's proposal together with its body; `d_c` is defined only if this node holds that view's proposal of the committed block. E40 measured from the anchor, which a late proposal stretches; measuring from `t_prop`, as the review proposed, would still count a body served late and the other twin's commit. §9.2 item (2) corrected: faulty members stretch `d_c` only through certificate delays that the stage ladder bounds, and decay cannot outpace a lever used at every faulty turn. Tests `det_l27`, `det_l28`, `det_l29` and `det_l26` (h), which now executes view 1's block before the commit; mutations ML27–ML30; scenarios F15 variant 5 and F36. | §6.0, §6.2 steps 8–9 and `discard_exec`, §6.3 step 1, §6.8 steps 4–5, §6.12, §8.3, §9.2, §13.3, §13.4 | `pacemaker::Pacemaker::record_exec`, `machine::proposal::{discard_exec, record_pending_exec, maybe_execute}`, `machine::round::commit_height` |
+| E43 | owner decision (node integration, KAGEMUSHA mint finality) | Commit attestation, a generic application extension (§3.7): a header flag `attest` bound in `block_hash`; every vote signs its block's flag (one byte appended to `vote_preimage`); a Commit vote on a flagged block carries an attestation of `att_preimage(h, bh, R)` (new kind `0x06`) from a driver-supplied `Attestor`, and a node that cannot attest does not Commit-vote there (`LocalFault(AttestationUnavailable)`); aggregators pool only Commit votes whose attestation verifies under a driver-supplied `AttestationVerifier`; a flagged CommitQC carries the attestations of exactly its signers and `verify_qc` checks them on every path (`qc_digest` covers them); the recorded Prepare keeps its flag; `EMPTY` is never flagged. The v2 runtime sealed KAGEMUSHA top-ups inside Commit votes; this keeps that model without making the core aware of Pasta keys. Safety argument §7.7; liveness condition §3.7 A5, §8.1. Tests `det_a1`–`det_a8`, `golden_attestation_preimage`; mutations MA1–MA10; scenario F37 and oracle O-ATT. Amended by E47. | §3.1–§3.7, §4.2–§4.4, §6.2–§6.5, §6.9, §6.10, §7.1, §7.4, §7.6, §7.7, §8.1, §12.1, §13.2–§13.4 | `crypto::{Attestor, AttestationVerifier, verify_qc, verify_attestations}`, `preimage::{att_preimage, vote_preimage}`, `machine::votes::{attested, try_commit}`, `machine::propose::propose_fresh`, `machine::proposal::check_header`, `machine::sync::on_sync_response` |
+| E44 | cutover plan (transport) | Traffic classes (O8): every `BlockResponse` is Proposal class. "`BlockResponse` for the current height" needs the decoded block and the receiver's height, but the transport queues a frame by class before the driver decodes it. The core exports one table for decoded and raw frames (`TrafficClass`, `WireMessage::traffic_class`, `traffic_class_of_frame`) and the wire version `PROTOCOL_VERSION = 5`; the simulator's NIC and ingress lanes use the same table (they had used the height rule). | §3.5, §12.3 O8 | `message::{TrafficClass, traffic_class_of_frame, PROTOCOL_VERSION}`, `sim::net::class_of` |
+| E47 | adversarial review of E43 (KAGEMUSHA mapping) | (a) A KAGEMUSHA seal message binds the top-up root and count and the execution-commitment digest, i.e. `R`'s preimage, which the core never holds and which a node that Commit-votes on the lock alone may not have executed yet. `Attestor::attest` now answers `AttestOutcome::{Attested, Pending, NoAuthority}`: `Pending` (the authority still needs its own execution) is no fault, and `try_commit()` runs again after every `Valid` execution of the current proposal's block with a flagged lock (§6.3 step 4) as well as at stage raises; before, a slow executor's authority could only answer "no authority" and its Commit waited for a stage raise. (b) The verifier contract gains the unique-message rule: whatever an attestation binds beyond the statement is determined by the statement and committed state and checked by `verify`, so an attestation carries the preimages it needs (KAGEMUSHA: `R`'s preimage, re-hashed to `R`) and never depends on local execution (sync, `Status`, `parent_qc`); a Byzantine seal over another top-up root under the same `R` is not counted. (c) A flagged CommitQC has exactly `q` signers (formation always uses `q`): a Byzantine aggregator's over-aggregated certificate would otherwise commit a block whose attestations are not an exact-quorum KAGEMUSHA bundle, leaving its top-ups unmintable. Tests `det_a4_flagged_commitqc_has_exactly_q_signers`, `det_a4_commitqc_attestations_checked_core` (over-aggregated case), `det_a9_pending_attestor_commits_after_execution`, `execution_gated_attestor_waits_for_execution`, `o_att_requires_exactly_q_attested_signers`; mutations MA11, MA12; F37 gains execution-gated authorities, slow executors and an over-aggregating proxy tail (`Strategy::OverAggregate`), and O-ATT counts exactly `q`. | §3.4, §3.7 A2, A4, A5, §6.3, §6.5, §7.1, §7.7, §8.2, §8.3, §12.1, §13.2–§13.4 | `crypto::{AttestOutcome, Attestor, AttestationVerifier, verify_attestations}`, `machine::votes::try_commit`, `machine::proposal::on_outcome` |
 
 ### E.2 Code-level choices (no protocol change)
 
@@ -2664,15 +2954,17 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E30 | Probe answers | Answered at most once per peer per `rebroadcast_interval`, with a stamp separate from the §6.1 reply limit. | `machine::intake::answer_probe` |
 | E37 | `Init.configs` | Only the heights `t` to `t + 2` are accepted, each at most once (a `ConfigError::InvalidInit` otherwise). A configuration above `t + 2` let commits run more than two heights ahead of apply (§10.2), and the next in-order `BlockApplied` then halted the core as a driver anomaly. | `machine::restart::check_init` |
 | E38 | Chain parameters | `Core::new` also applies the transport-independent §9.4 chain-parameter rules to the initial configurations (`block_time ≤ idle_block_interval`, `empty_after_views ≥ 1`), and the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh payload, at view 0 too: with `empty_after_views = 0` from a committed configuration it proposes `EMPTY` instead of a payload every voter reports as a signed defect. | `machine::restart::Core::new`, `machine::propose::propose_fresh` |
+| E45 | `CoreStatus` | Also reports the leader and the proxy tail of `(h, view)` (`None` while awaiting: the next round's committee is not known yet) and the view of the lock (`high_pqc`), for the node's status endpoint, which replaces the v2 leader and QC endpoints. | `machine::Core::status` |
 
 ### E.3 Simulator and verification
 
 | # | Topic | As-built | Site |
 |---|---|---|---|
 | E31 | F33 | As literally described F33 needs the network to also delay the lock holder's votes: stage-2 broadcast voting otherwise re-forms the hidden PrepareQC among the honest members. The scenario does so. | `sim::byz::adv_net` |
-| E32 | F4, F34 slow executors | A slow executor delays only its Prepare (a Commit needs no execution), so P2's "one gap per `n` heights" is not claimed for it; F4 and F34's pending-execution variant check progress, not P2. | `sim::scenarios::f34` |
+| E32 | F4, F34 slow executors | A slow executor delays only its Prepare (a Commit needs no execution), so P2's "one gap per `n` heights" is not claimed for it; F4 and F34's pending-execution variant check progress, not P2. At a flagged height an attestor that needs `R`'s preimage (§3.7 A2, E47) delays the slow executor's Commit too; F37's slow-executor seeds check progress and O-ATT. | `sim::scenarios::f34` |
 | E33 | O3 in-flight reuse | The fake driver reuses a cached post-state whose commitment equals the certified result and otherwise re-executes at once; reusing an execution still in flight is a performance property checked only by the §13.5 production-driver conformance. | `sim::world::apply_block` |
 | E34 | O-LIVE accounting | The precondition "`≥ q` honest, running members able to sign" (an unanchored member counts as faulty until it anchors, an abstaining one at its heights) is evaluated every 50 virtual ms; O-LIVE windows restart when it holds again. | `sim::oracle::check_live` |
-| E35 | §13.4 meta-check | Every MS/ML row is a `cfg(sumeragi_mutation = "<ID>")` switch, which `build.rs` sets only with the crate feature `mutation-testing` (a production build can never be mutated). The meta-check is `scripts/sumeragi_mutation_gate.py` (named tests, then the scenario at 200 seeds, plus the unmutated build); no CI job runs it yet. It also covers ME1–ME7 (rules E1–E7 with their regression tests) and 18 `MR-*` mutations of revision-4 rules with `det_r4_*` tests (`MR-early-cause`, "an early timeout raises the start level", was removed with the rule it guarded, E40). MS33a is switched in both fake drivers (the simulator's record store and the deterministic-test harness's), and `try_prepare` (and `on_outcome`, before an early timeout) checks `proposal.view == view` explicitly, so MS3 removes these guards together with the proposal reset in `advance_to`. First run: 95 of 100 mutations are killed by their named tests. MS24 and ML14 are killed only by F13 and F19: their named tests run on the test harness, which has no O2 barrier and no builder. MS34, ML5a and ML10 survive; their named tests must be strengthened. O-AMX and the toy AMX application (F31) are not modelled. | `build.rs`, `scripts/sumeragi_mutation_gate.py` |
+| E35 | §13.4 meta-check | Every MS/ML row is a `cfg(sumeragi_mutation = "<ID>")` switch, which `build.rs` sets only with the crate feature `mutation-testing` (a production build can never be mutated). The meta-check is `scripts/sumeragi_mutation_gate.py` (named tests, then the scenario at 200 seeds, plus the unmutated build); no CI job runs it yet. It also covers MA1–MA12 (the commit-attestation rules of §3.7, E43, E47), ME1–ME7 (rules E1–E7 with their regression tests) and 18 `MR-*` mutations of revision-4 rules with `det_r4_*` tests (`MR-early-cause`, "an early timeout raises the start level", was removed with the rule it guarded, E40). MS33a is switched in both fake drivers (the simulator's record store and the deterministic-test harness's), and `try_prepare` (and `on_outcome`, before an early timeout) checks `proposal.view == view` explicitly, so MS3 removes these guards together with the proposal reset in `advance_to`. First run: 95 of 100 mutations are killed by their named tests. MS24 and ML14 are killed only by F13 and F19: their named tests run on the test harness, which has no O2 barrier and no builder. MS34, ML5a and ML10 survive; their named tests must be strengthened. O-AMX and the toy AMX application (F31) are not modelled. | `build.rs`, `scripts/sumeragi_mutation_gate.py` |
 | E42 | Executor and adversary models of E41 | The fake executor optionally aborts a discarded running job and answers `Cancelled` at once (`Profile::abort_discarded`; O4 allows either), and non-empty payloads may carry extra latency that the builder's `exec_budget` estimate does not foresee (`Profile::exec_nonempty`), both used by F15 variant 5 (F15 seeds now cycle over six variants). `Strategy::LateLeader` delivers view-0 proposals, or their bodies, as late as the view still commits, timed from the attacker's `t_enter` (a simulator-only observation, `Core::round_entered_at`) and the lowest honest start level (F36). | `sim::driver::Executor::discard`, `sim::scenarios::{f15, f36}`, `sim::byz::Strategy::LateLeader` |
-| E39 | §12.6 gate, traceability | `tests/spec.rs` counts the non-blank, non-comment lines of the core (everything under `src/` except `sim/`, `machine/tests/`, `testing.rs` and inline `#[cfg(test)] mod tests`, mutation alternates included), prints them per §12.6 module and fails above the 8 000-line MUST; the planned split is reported, not enforced (as built `message`, i.e. `message.rs`, `preimage.rs` and `crypto.rs`, is about 975 of 800 and `safety`, i.e. `safety.rs` and `machine/restart.rs`, about 720 of 700). The same test checks that every `§` reference and every `// SPEC:` marker of the crate resolves in this file. No CI job runs either yet. | `tests/spec.rs` |
+| E39 | §12.6 gate, traceability | `tests/spec.rs` counts the non-blank, non-comment lines of the core (everything under `src/` except `sim/`, `machine/tests/`, `testing.rs` and inline `#[cfg(test)] mod tests`, mutation alternates included), prints them per §12.6 module and fails above the 8 000-line MUST; the planned split is reported, not enforced (as built after E43 and E44, `message`, i.e. `message.rs`, `preimage.rs` and `crypto.rs`, is about 1 270 of 800, `safety`, i.e. `safety.rs` and `machine/restart.rs`, about 755 of 700, and `core` about 3 120 of 3 000, 6 751 lines in all). The same test checks that every `§` reference and every `// SPEC:` marker of the crate resolves in this file. No CI job runs either yet. | `tests/spec.rs` |
+| E46 | Host seam (§13.5) | The world drives each replica through `sim::host::Host` (ingress lanes, core, O2 barrier); `FakeHost` is the former in-world fake driver, moved behind the trait without behavioural change (the `Io` write device lost its barrier to `sim::driver::Barrier`). A scenario chooses its host with `Scenario::host`; `sim::tests::host_seam_runs_a_wrapped_host` runs a delegating wrapper through F9 and F13 (crash churn) and checks identical results. | `sim::host`, `sim::world::World::process` |

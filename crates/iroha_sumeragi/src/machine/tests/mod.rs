@@ -3,6 +3,7 @@
 //! multi-core loop (`cluster`) and a fuzz test.
 #![allow(dead_code)] // shared harness helpers; not every helper is used by every test file
 
+mod attestation;
 mod cluster;
 mod fuzz;
 mod handlers;
@@ -24,7 +25,10 @@ use crate::{
     },
     preimage,
     safety::{RecordState, SafetyRecord},
-    testing::{FakeSigner, FakeValidators, SignLog, sha256},
+    testing::{
+        FakeAttestor, FakeSigner, FakeValidators, SignLog, fake_attestation, fake_attestation_ext,
+        sha256,
+    },
     topology::{Round, Topology},
     types::{
         Bitmap, ChainParams, Committee, Hash32, HeightConfig, Millis, PublicKey, Signature,
@@ -86,6 +90,8 @@ pub(super) struct H {
     pub last_build: Option<u64>,
     /// `Init.demotion_window` (default [`W`]).
     pub w: u64,
+    /// The core's commit-attestation authority (§3.7; default: authority for every key).
+    pub attestor: FakeAttestor,
 }
 
 impl H {
@@ -129,6 +135,7 @@ impl H {
             nonce: 0,
             last_build: None,
             w: W,
+            attestor: FakeAttestor::new(),
         };
         h.install_keys();
         h.restart();
@@ -216,6 +223,7 @@ impl H {
             init,
             signers,
             Box::new(self.v.crypto.clone()),
+            fake_attestation_ext(self.attestor.clone()),
             self.now,
         )
         .expect("valid test configuration");
@@ -371,6 +379,17 @@ impl H {
         self.fire(Event::PayloadBuilt {
             req,
             payload: payload.to_vec(),
+            attest: false,
+        })
+    }
+
+    /// Answer the latest `BuildPayload` with `payload` and the attestation flag (§3.7 A1).
+    pub fn built_flagged(&mut self, payload: &[u8]) -> Vec<Action> {
+        let req = self.last_build.expect("a BuildPayload was requested");
+        self.fire(Event::PayloadBuilt {
+            req,
+            payload: payload.to_vec(),
+            attest: true,
         })
     }
 
@@ -500,11 +519,18 @@ impl H {
             payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(view),
             skipped_leaders: topo.skipped_leader_keys(&self.committee(), view),
+            attest: false,
         };
         Block {
             header,
             payload: payload.to_vec(),
         }
+    }
+
+    /// `block` with the attestation flag set (§3.7): its Commit votes need attestations.
+    pub fn flagged(mut block: Block) -> Block {
+        block.header.attest = true;
+        block
     }
 
     pub fn bh(&self, block: &Block) -> Hash32 {
@@ -539,7 +565,8 @@ impl H {
         }
     }
 
-    /// A certificate by exactly `signers` (members of the current committee), any number.
+    /// A certificate of an unflagged value by exactly `signers` (members of the current
+    /// committee), any number.
     pub fn qc_value(
         &self,
         kind: VoteKind,
@@ -547,11 +574,33 @@ impl H {
         value: (Hash32, Hash32),
         signers: &[ValidatorIndex],
     ) -> Qc {
-        let msg = preimage::vote_preimage(kind, &I, self.height(), view, &value.0, &value.1);
+        self.qc_value_flagged(kind, view, value, signers, false)
+    }
+
+    /// A certificate with the attestation flag `attest`; a flagged `CommitQC` carries the
+    /// signers' genuine attestations (§3.7).
+    pub fn qc_value_flagged(
+        &self,
+        kind: VoteKind,
+        view: u64,
+        value: (Hash32, Hash32),
+        signers: &[ValidatorIndex],
+        attest: bool,
+    ) -> Qc {
+        let msg =
+            preimage::vote_preimage(kind, &I, self.height(), view, &value.0, &value.1, attest);
+        let statement = preimage::att_preimage(&I, self.height(), &value.0, &value.1);
         let mut sorted = signers.to_vec();
         sorted.sort_unstable();
         sorted.dedup();
         let sigs: Vec<Signature> = sorted.iter().map(|i| self.sign_as(*i, &msg)).collect();
+        let attestations = if kind == VoteKind::Commit && attest {
+            (sorted.iter())
+                .map(|i| fake_attestation(&self.key_at(*i), self.height(), &statement))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Qc {
             kind,
             instance: I,
@@ -559,13 +608,17 @@ impl H {
             view,
             block_hash: value.0,
             result: value.1,
+            attest,
             signers: Bitmap::from_indices(self.committee().n(), sorted.iter().copied()).unwrap(),
             agg_sig: self.v.crypto.aggregate(&sigs),
+            attestations,
         }
     }
 
+    /// A certificate of `block` (with its flag) by exactly `signers`.
     pub fn qc(&self, kind: VoteKind, view: u64, block: &Block, signers: &[ValidatorIndex]) -> Qc {
-        self.qc_value(kind, view, (self.bh(block), result_of(block)), signers)
+        let value = (self.bh(block), result_of(block));
+        self.qc_value_flagged(kind, view, value, signers, block.header.attest)
     }
 
     /// A certificate by `q` members other than the core.
@@ -574,6 +627,7 @@ impl H {
         self.qc(kind, view, block, &signers)
     }
 
+    /// A vote of an unflagged value.
     pub fn vote_value(
         &self,
         kind: VoteKind,
@@ -581,7 +635,22 @@ impl H {
         view: u64,
         value: (Hash32, Hash32),
     ) -> Vote {
-        let msg = preimage::vote_preimage(kind, &I, self.height(), view, &value.0, &value.1);
+        self.vote_value_flagged(kind, signer, view, value, false)
+    }
+
+    /// A vote with the attestation flag `attest`; a flagged Commit vote carries the signer's
+    /// genuine attestation (§3.7).
+    pub fn vote_value_flagged(
+        &self,
+        kind: VoteKind,
+        signer: ValidatorIndex,
+        view: u64,
+        value: (Hash32, Hash32),
+        attest: bool,
+    ) -> Vote {
+        let msg =
+            preimage::vote_preimage(kind, &I, self.height(), view, &value.0, &value.1, attest);
+        let statement = preimage::att_preimage(&I, self.height(), &value.0, &value.1);
         Vote {
             kind,
             instance: I,
@@ -589,13 +658,18 @@ impl H {
             view,
             block_hash: value.0,
             result: value.1,
+            attest,
             signer,
             sig: self.sign_as(signer, &msg),
+            attestation: (kind == VoteKind::Commit && attest)
+                .then(|| fake_attestation(&self.key_at(signer), self.height(), &statement)),
         }
     }
 
+    /// A vote for `block` (with its flag).
     pub fn vote(&self, kind: VoteKind, signer: ValidatorIndex, view: u64, block: &Block) -> Vote {
-        self.vote_value(kind, signer, view, (self.bh(block), result_of(block)))
+        let value = (self.bh(block), result_of(block));
+        self.vote_value_flagged(kind, signer, view, value, block.header.attest)
     }
 
     pub fn timeout(&self, signer: ValidatorIndex, view: u64, qc: Option<Qc>) -> TimeoutVote {
@@ -696,6 +770,7 @@ impl H {
                 payload_len: u32::try_from(payload.len()).unwrap(),
                 proposer,
                 skipped_leaders: Vec::new(),
+                attest: false,
             },
             payload: payload.to_vec(),
         }
@@ -712,9 +787,33 @@ impl H {
         value: (Hash32, Hash32),
         keys: &[PublicKey],
     ) -> Qc {
-        let msg = preimage::vote_preimage(kind, &I, height, view, &value.0, &value.1);
+        self.qc_keys_flagged(committee, kind, (height, view), value, keys, false)
+    }
+
+    /// [`H::qc_keys`] with the attestation flag `attest`; a flagged `CommitQC` carries the
+    /// genuine attestations of its representable signers in canonical order (§3.7).
+    pub fn qc_keys_flagged(
+        &self,
+        committee: &Committee,
+        kind: VoteKind,
+        (height, view): (u64, u64),
+        value: (Hash32, Hash32),
+        keys: &[PublicKey],
+        attest: bool,
+    ) -> Qc {
+        let msg = preimage::vote_preimage(kind, &I, height, view, &value.0, &value.1, attest);
+        let statement = preimage::att_preimage(&I, height, &value.0, &value.1);
         let sigs: Vec<Signature> = keys.iter().map(|k| self.signer_of(k).sign(&msg)).collect();
         let indices = keys.iter().filter_map(|k| committee.index_of(k));
+        let signers = Bitmap::from_indices(committee.n(), indices).unwrap();
+        let attestations = if kind == VoteKind::Commit && attest {
+            (signers.ones())
+                .filter_map(|i| committee.get(i))
+                .map(|k| fake_attestation(k, height, &statement))
+                .collect()
+        } else {
+            Vec::new()
+        };
         Qc {
             kind,
             instance: I,
@@ -722,8 +821,10 @@ impl H {
             view,
             block_hash: value.0,
             result: value.1,
-            signers: Bitmap::from_indices(committee.n(), indices).unwrap(),
+            attest,
+            signers,
             agg_sig: self.v.crypto.aggregate(&sigs),
+            attestations,
         }
     }
 
@@ -740,7 +841,15 @@ impl H {
             .cloned()
             .collect();
         let value = (self.bh(block), result_of(block));
-        self.qc_keys(&committee, VoteKind::Commit, height, view, value, &keys)
+        let attest = block.header.attest;
+        self.qc_keys_flagged(
+            &committee,
+            VoteKind::Commit,
+            (height, view),
+            value,
+            &keys,
+            attest,
+        )
     }
 
     /// Keys of a certificate's signers (canonical order) in the committee of its height.
@@ -824,9 +933,16 @@ fn placeholder_core(
         .iter()
         .map(|s| -> Box<dyn Signer> { Box::new(s.clone()) })
         .collect();
-    Core::new(*local, init, boxed, Box::new(v.crypto.clone()), 0)
-        .expect("valid test configuration")
-        .0
+    Core::new(
+        *local,
+        init,
+        boxed,
+        Box::new(v.crypto.clone()),
+        fake_attestation_ext(FakeAttestor::new()),
+        0,
+    )
+    .expect("valid test configuration")
+    .0
 }
 
 // ---- action inspection ---------------------------------------------------------------------

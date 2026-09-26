@@ -117,6 +117,7 @@ impl Rig {
             init,
             vec![Box::new(signer)],
             Box::new(v.crypto.clone()),
+            crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
             0,
         )
         .expect("valid test configuration");
@@ -202,6 +203,7 @@ impl Rig {
             payload_len: u32::try_from(payload.len()).expect("a small payload"),
             proposer: self.topo.leader(view),
             skipped_leaders: self.topo.skipped_leader_keys(&self.v.committee, view),
+            attest: false,
         };
         Block {
             header,
@@ -565,7 +567,7 @@ fn proxy_tail_answers_retransmitted_prepare() {
             .count()
     };
     let mark = r.sent.len();
-    r.deliver(voter, WireMessage::Vote(vote));
+    r.deliver(voter, WireMessage::Vote(vote.clone()));
     assert_eq!(answers(&r, mark), 1, "the PrepareQC answers the voter");
     let mark = r.sent.len();
     r.deliver(voter, WireMessage::Vote(vote));

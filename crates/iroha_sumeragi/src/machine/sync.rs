@@ -285,6 +285,7 @@ impl Core {
                 && previous.is_none_or(|p| Some(qc.height) == p.checked_add(1))
                 && (entry.block.hash(&*self.crypto) == qc.block_hash
                     || cfg!(sumeragi_mutation = "MS22"))
+                && qc.attest == entry.block.header.attest
                 && entry.block.body_ok(&*self.crypto);
             if !well_formed {
                 break;
@@ -341,7 +342,14 @@ impl Core {
             let verified = self
                 .cert_cache
                 .contains(&entry.commit_qc.digest(&*self.crypto))
-                || verify_qc(&*self.crypto, &self.instance, committee, &entry.commit_qc).is_ok();
+                || verify_qc(
+                    &*self.crypto,
+                    &*self.attestation.verifier,
+                    &self.instance,
+                    committee,
+                    &entry.commit_qc,
+                )
+                .is_ok();
             if !linked || !verified {
                 self.sync.buffer.clear();
                 self.sync.buffer_bytes = 0;

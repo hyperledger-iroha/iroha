@@ -195,6 +195,9 @@ pub enum Event {
         req: u64,
         /// Payload bytes.
         payload: Vec<u8>,
+        /// The application flag of a block with this payload (§3.7 A1): its Commit votes need
+        /// attestations. `false` for `EMPTY`.
+        attest: bool,
     },
     /// After answering `BuildPayload{req}` with `EMPTY`: an includable transaction arrived (at
     /// most once per `req`). It only ends the view-0 leader's heartbeat wait (§6.10).
@@ -402,6 +405,15 @@ pub enum LocalFault {
         /// The new `T_req(nominal)`.
         t_req: Millis,
     },
+    /// The lock of the round is a flagged block and the node's `Attestor` holds no authority
+    /// (`AttestOutcome::NoAuthority`, or an attestation its own verifier rejects): no Commit vote
+    /// (§3.7 A2); reported once per view. A `Pending` answer is no fault.
+    AttestationUnavailable {
+        /// Height.
+        height: u64,
+        /// View.
+        view: u64,
+    },
 }
 
 /// Memory footprint counters of a core (§8.4), checked by the O-MEM oracle.
@@ -490,6 +502,15 @@ pub struct CoreStatus {
     pub view: u64,
     /// Routing stage of the round (0, 1, 2).
     pub stage: u8,
+    /// Leader `L(h, view)` of the current round (`None` while awaiting: the next round's
+    /// committee is not known yet).
+    // SPEC: §12.1 lists no roles in `status()`; the node's status endpoint reports them
+    // (Appendix E, E45).
+    pub leader: Option<PublicKey>,
+    /// Proxy tail `P(h, view)` of the current round (`None` while awaiting).
+    pub proxy_tail: Option<PublicKey>,
+    /// View of the lock (`high_pqc`) at the current height, if any.
+    pub high_qc_view: Option<u64>,
     /// Level of the current view.
     pub level: u32,
     /// Start level of the height.

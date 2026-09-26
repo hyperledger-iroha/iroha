@@ -18,21 +18,22 @@ use super::{
     byz::Adversary,
     crypto::{SharedLog, SimCrypto, SimSigner},
     driver::{
-        Clock, Executor, Io, Lanes, Write, decode_txs, divergent_exec, encode_tx, reference_exec,
+        Clock, Executor, Io, Write, block_exec, decode_txs, divergent_exec, encode_tx_flagged,
+        payload_mints,
     },
-    net::{Fate, NetConfig, Nic, Packet, approx_size, class_of},
+    host::{Host, Start},
+    net::{Fate, NetConfig, Nic, Packet, approx_size, class_of, lane},
     oracle::Oracle,
     records::{KeyStore, StoreId},
     rng::{Rng, seed_of},
-    scenario::{Checks, Churn, CrashPoint, Fault, Profile, Scenario, Workload},
+    scenario::{Authority, Checks, Churn, CrashPoint, Fault, Profile, Scenario, Workload},
 };
 use crate::{
-    Core,
     api::{Action, CommittedTip, Event, ExecOutcome, HaltReason, Init, LocalParams},
-    crypto::Signer,
+    crypto::{Attestation, Signer},
     message::{Block, BlockRequest, BlockResponse, Qc, SyncEntry, SyncResponse, WireMessage},
     safety::{RecordState, SafetyRecord},
-    testing::sha256,
+    testing::{FakeAttestor, fake_attestation_ext, sha256},
     types::{ChainParams, Committee, Hash32, HeightConfig, Millis, PublicKey},
 };
 
@@ -124,8 +125,8 @@ pub struct Replica {
     pub inst: usize,
     /// Configured signing keys.
     pub keys: Vec<PublicKey>,
-    /// The core (`None` while crashed).
-    pub core: Option<Core>,
+    /// The hosted node: ingress, core and O2 barrier (§13.5); the fake driver by default.
+    pub host: Box<dyn Host>,
     /// Counting crypto shared with the core.
     pub crypto: SimCrypto,
     /// Durable safety-record files of this instance per key (part of the machine's record
@@ -135,8 +136,6 @@ pub struct Replica {
     pub bodies: BTreeMap<Hash32, Block>,
     /// Durable block store (Kura), consecutive heights from `g + 1`.
     pub store: Vec<(Block, Qc)>,
-    /// Ingress lanes.
-    pub lanes: Lanes,
     /// Busy until (virtual CPU).
     pub busy_until: Millis,
     cpu_carry_us: u64,
@@ -442,12 +441,11 @@ impl World {
                     machine: m,
                     inst: i,
                     keys: keys.clone(),
-                    core: None,
+                    host: (sc.host)(m, i),
                     crypto,
                     records: BTreeMap::new(),
                     bodies: BTreeMap::new(),
                     store: Vec::new(),
-                    lanes: Lanes::default(),
                     busy_until: 0,
                     cpu_carry_us: 0,
                     io: Io::default(),
@@ -656,7 +654,7 @@ impl World {
             Ev::Arrive { r, from, msg } => self.arrive(r, from, &msg),
             Ev::Local { r, epoch, event } => {
                 if self.alive(r, epoch) {
-                    self.replicas[r].lanes.push_local(*event);
+                    self.replicas[r].host.deliver(*event);
                     self.refresh(r);
                 }
             }
@@ -713,13 +711,13 @@ impl World {
     pub fn refresh(&mut self, r: usize) {
         let rep = &self.replicas[r];
         let machine = &self.machines[rep.machine];
-        let t = match rep.core.as_ref() {
-            Some(core) if machine.up => {
-                let wake = machine.clock.global_at(core.next_wakeup());
-                let t = if rep.lanes.is_empty() {
-                    wake
-                } else {
+        let t = match &rep.host {
+            host if machine.up && host.running() => {
+                let wake = machine.clock.global_at(host.next_wakeup());
+                let t = if host.has_input() {
                     wake.min(self.now)
+                } else {
+                    wake
                 };
                 if t == Millis::MAX {
                     t
@@ -739,23 +737,20 @@ impl World {
         let local_now = self.machines[m].clock.local(self.now);
         let byz = self.machines[m].byz;
         let rep = &mut self.replicas[r];
-        let Some(core) = rep.core.as_mut() else {
+        if !rep.host.running() {
             self.ready[r] = Millis::MAX;
             return;
-        };
-        let wake = core.next_wakeup();
-        let tick_first = !rep.lanes.fifo || rep.lanes.is_empty();
-        let event = if wake <= local_now && tick_first {
-            // The deadline became due at `wake`, or when the core first reported it.
-            let due = wake.max(rep.wake_mark.1);
-            rep.max_tick_late = rep.max_tick_late.max(local_now.saturating_sub(due));
-            Event::Tick
-        } else if let Some(event) = rep.lanes.pop() {
-            event
-        } else {
+        }
+        let wake = rep.host.next_wakeup();
+        let Some(event) = rep.host.next_input(local_now) else {
             self.refresh(r);
             return;
         };
+        if matches!(event, Event::Tick) {
+            // The deadline became due at `wake`, or when the core first reported it.
+            let due = wake.max(rep.wake_mark.1);
+            rep.max_tick_late = rep.max_tick_late.max(local_now.saturating_sub(due));
+        }
         let mut what = describe_event(&event);
         if let Event::Message { from, .. } = &event
             && let Some(sender) = self.key_owner.get(from)
@@ -764,11 +759,12 @@ impl World {
         }
         let is_tick = matches!(event, Event::Tick);
         let before = rep.crypto.pairings();
-        let actions = core.handle(local_now, event);
-        let after_wake = core.next_wakeup();
+        let actions = rep.host.handle(local_now, event);
+        let after_wake = rep.host.next_wakeup();
         let pairings = rep.crypto.pairings() - before;
-        let height = core.status().height;
-        rep.height = height;
+        if let Some(core) = rep.host.core() {
+            rep.height = core.status().height;
+        }
         let profile = self.machines[m].profile;
         rep.cpu_carry_us += pairings * profile.cpu_us_per_pairing + profile.cpu_us_per_event;
         let cost = rep.cpu_carry_us / 1_000;
@@ -874,6 +870,7 @@ impl World {
                     self.replicas[r]
                         .io
                         .write(at, latency, Write::Record(record, bytes));
+                self.replicas[r].host.persisting(id);
                 self.schedule(done, Ev::IoDone { r, epoch, id });
             }
             Action::StoreBody { block } => {
@@ -926,7 +923,7 @@ impl World {
                 self.trace(r, format!("HALT {reason:?}"));
             }
             effect => {
-                if let Some(effect) = self.replicas[r].io.hold(effect) {
+                if let Some(effect) = self.replicas[r].host.gate(effect) {
                     self.perform(r, effect, at);
                 }
             }
@@ -1113,7 +1110,7 @@ impl World {
             self.stats.oversize += 1;
             return;
         }
-        let class = class_of(&msg, self.replicas[r].height);
+        let class = class_of(&msg);
         self.replicas[r].nic.push(
             class,
             Packet {
@@ -1141,7 +1138,7 @@ impl World {
 
     fn transmit(&mut self, r: usize, target: usize, msg: Rc<WireMessage>, depart: Millis) {
         let size = approx_size(&msg);
-        let lane = class_of(&msg, self.replicas[r].height).lane();
+        let lane = lane(class_of(&msg));
         self.stats.packets[lane] += 1;
         self.stats.bytes += size;
         let Some((msg, extra)) = self.adv_net(r, target, msg, depart) else {
@@ -1190,23 +1187,21 @@ impl World {
 
     fn arrive(&mut self, r: usize, from: PublicKey, msg: &Rc<WireMessage>) {
         let m = self.replicas[r].machine;
-        if !self.machines[m].up || self.replicas[r].core.is_none() {
+        if !self.machines[m].up || !self.replicas[r].host.running() {
             return;
         }
         if self.machines[m].byz {
             self.byz_observe(r, &from, msg);
         }
-        let class = class_of(msg, self.replicas[r].height);
-        self.replicas[r]
-            .lanes
-            .push_message(from, (**msg).clone(), class);
+        let class = class_of(msg);
+        self.replicas[r].host.receive(from, (**msg).clone(), class);
         self.refresh(r);
     }
 
     // ---- storage, execution, building -------------------------------------------------------
 
     fn io_done(&mut self, r: usize, id: u64) {
-        let (writes, released) = self.replicas[r].io.complete(id);
+        let writes = self.replicas[r].io.complete(id);
         for write in writes {
             match write {
                 Write::Record(record, bytes) => {
@@ -1242,6 +1237,8 @@ impl World {
             }
         }
         let m = self.replicas[r].machine;
+        // O2: the host releases the effects that waited for these writes.
+        let released = self.replicas[r].host.durable(id);
         if !released.is_empty() && self.churn_hit(m, CrashPoint::AfterDurable) {
             self.crash_by_churn(m);
             return;
@@ -1294,7 +1291,7 @@ impl World {
             let outcome = if profile.divergent && !block.payload.is_empty() {
                 divergent_exec(&tip_result, &block.payload, &bh)
             } else {
-                reference_exec(&tip_result, &block.payload)
+                block_exec(&tip_result, block)
             };
             match outcome {
                 ExecOutcome::Valid(res) => Some(res),
@@ -1321,6 +1318,7 @@ impl World {
         rep.applied = (height, bh, qc.result);
         rep.bodies.retain(|_, b| b.header.height > height);
         rep.exec.cache.retain(|_, (h, _)| *h >= height);
+        rep.exec.executed.prune_through(height);
         for (id, _) in decode_txs(&block.payload) {
             rep.txs.remove(&id);
         }
@@ -1373,7 +1371,7 @@ impl World {
             } else if profile.divergent && !job.block.payload.is_empty() {
                 divergent_exec(&parent, &job.block.payload, &job.bh)
             } else {
-                reference_exec(&parent, &job.block.payload)
+                block_exec(&parent, &job.block)
             };
             let kib = u64::try_from(job.block.payload.len()).unwrap_or(u64::MAX) / 1024;
             let nonempty = if job.block.payload.is_empty() {
@@ -1407,6 +1405,7 @@ impl World {
 
     fn exec_done(&mut self, r: usize, job_id: u64) {
         let epoch = self.epoch_of(r);
+        let instance = self.instances[self.replicas[r].inst].id;
         let rep = &mut self.replicas[r];
         let Some((job, _)) = rep.exec.running.take_if(|(job, _)| job.id == job_id) else {
             return;
@@ -1417,11 +1416,11 @@ impl World {
             job.outcome.clone().unwrap_or(ExecOutcome::Cancelled)
         };
         if let ExecOutcome::Valid(res) = &outcome {
-            rep.exec
-                .cache
-                .insert(job.bh, (job.block.header.height, *res));
+            let height = job.block.header.height;
+            rep.exec.cache.insert(job.bh, (height, *res));
+            rep.exec.executed.record(&instance, height, &job.bh, res);
         }
-        rep.lanes.push_local(Event::Executed {
+        rep.host.deliver(Event::Executed {
             block_hash: job.bh,
             req: job.req,
             outcome,
@@ -1472,13 +1471,19 @@ impl World {
         let hash = crate::preimage::payload_hash(&self.hasher, &payload);
         self.oracle.built.insert((inst, m, hash));
         self.replicas[r].pending_ready = payload.is_empty().then_some(req);
+        // The application flag of this payload (§3.7 A1).
+        let attest = payload_mints(&payload);
         let latency = self.rng.range(profile.build_min, profile.build_max);
         self.schedule(
             at + latency,
             Ev::Local {
                 r,
                 epoch,
-                event: Box::new(Event::PayloadBuilt { req, payload }),
+                event: Box::new(Event::PayloadBuilt {
+                    req,
+                    payload,
+                    attest,
+                }),
             },
         );
     }
@@ -1512,7 +1517,7 @@ impl World {
         self.next_tx += 1;
         let id = self.next_tx;
         let poison = self.rng.chance(workload.poison_ppm);
-        let tx = encode_tx(id, poison, workload.pad);
+        let tx = encode_tx_flagged(id, poison, workload.mints(id), workload.pad);
         self.txs[inst].insert(id, (self.now, poison, None));
         for r in 0..self.replicas.len() {
             let m = self.replicas[r].machine;
@@ -1536,7 +1541,7 @@ impl World {
         }
         rep.txs.insert(id, tx);
         if let Some(req) = rep.pending_ready.take() {
-            rep.lanes.push_local(Event::PayloadReady { req });
+            rep.host.deliver(Event::PayloadReady { req });
             self.refresh(r);
         }
     }
@@ -1588,8 +1593,7 @@ impl World {
         let replicas: Vec<usize> = machine.replicas.iter().flatten().copied().collect();
         for r in replicas {
             let rep = &mut self.replicas[r];
-            rep.core = None;
-            rep.lanes.clear();
+            rep.host.crash();
             rep.io.clear();
             rep.exec.clear();
             rep.nic.clear();
@@ -1668,16 +1672,25 @@ impl World {
                 .collect();
             let local = self.instances[rep.inst].local;
             let crypto = rep.crypto.clone();
-            match Core::new(local, init, signers, Box::new(crypto), local_now) {
-                Ok((core, actions)) => {
-                    let fifo =
-                        self.machines[m].profile.fifo_ingress || cfg!(sumeragi_mutation = "ML12");
-                    let core_wake = core.next_wakeup();
+            let start = Start {
+                local,
+                init,
+                signers,
+                crypto: Box::new(crypto),
+                attestation: self.attestation_for(r),
+                now: local_now,
+                fifo_ingress: self.machines[m].profile.fifo_ingress
+                    || cfg!(sumeragi_mutation = "ML12"),
+            };
+            let started = self.replicas[r].host.start(start);
+            match started {
+                Ok(actions) => {
                     let rep = &mut self.replicas[r];
-                    rep.lanes.fifo = fifo;
+                    let core_wake = rep.host.next_wakeup();
                     rep.wake_mark = (core_wake, local_now);
-                    rep.height = core.status().height;
-                    rep.core = Some(core);
+                    if let Some(core) = rep.host.core() {
+                        rep.height = core.status().height;
+                    }
                     rep.busy_until = self.now;
                     rep.applied = rep.store.last().map_or_else(
                         || {
@@ -1702,12 +1715,27 @@ impl World {
                     self.refresh(r);
                 }
                 Err(e) => {
-                    self.fail(format!("replica {r}: Core::new failed: {e}"));
+                    self.fail(format!("replica {r}: the host did not start: {e}"));
                     return;
                 }
             }
         }
         self.trace(m, "RESTART".to_owned());
+    }
+
+    /// The commit-attestation extension of replica `r` (§3.7): its machine profile's authority
+    /// (every key, none, or forging) with the ground-truth verifier. Like a KAGEMUSHA authority,
+    /// which needs `R`'s preimage, it attests only blocks the replica executed (`Pending` before,
+    /// A2).
+    pub fn attestation_for(&self, r: usize) -> Attestation {
+        let rep = &self.replicas[r];
+        let m = rep.machine;
+        let attestor = match self.machines[m].profile.authority {
+            Authority::Full => FakeAttestor::new(),
+            Authority::Missing => FakeAttestor::without_authority(self.machines[m].keys.clone()),
+            Authority::Forging => FakeAttestor::forging(),
+        };
+        fake_attestation_ext(attestor.after_execution(rep.exec.executed.clone()))
     }
 
     /// The start-up check of the store id (§7.4 rule 3), then the installation event of every
@@ -1746,9 +1774,12 @@ impl World {
             .filter(|(_, (_, _, committed))| committed.is_none())
             .map(|(id, (_, poison, _))| (*id, *poison))
             .collect();
-        let pad = self.workload.map_or(0, |w| w.pad);
+        let Some(workload) = self.workload else {
+            return;
+        };
         for (id, poison) in pending {
-            self.offer_tx(r, id, encode_tx(id, poison, pad));
+            let tx = encode_tx_flagged(id, poison, workload.mints(id), workload.pad);
+            self.offer_tx(r, id, tx);
         }
     }
 
@@ -1947,7 +1978,7 @@ impl World {
     /// Committed height of replica `r` (core tip; store tip while crashed).
     pub fn committed(&self, r: usize) -> u64 {
         let rep = &self.replicas[r];
-        rep.core.as_ref().map_or_else(
+        rep.host.core().map_or_else(
             || u64::try_from(rep.store.len()).unwrap_or(0),
             |core| core.status().committed_height,
         )
@@ -1989,8 +2020,12 @@ fn describe_event(event: &Event) -> String {
     match event {
         Event::Tick => "Tick".to_owned(),
         Event::Message { msg, .. } => describe_msg(msg),
-        Event::PayloadBuilt { req, payload } => {
-            format!("PayloadBuilt req{req} {}B", payload.len())
+        Event::PayloadBuilt {
+            req,
+            payload,
+            attest,
+        } => {
+            format!("PayloadBuilt req{req} {}B attest={attest}", payload.len())
         }
         Event::PayloadReady { req } => format!("PayloadReady req{req}"),
         Event::Executed { req, outcome, .. } => format!("Executed req{req} {outcome:?}"),

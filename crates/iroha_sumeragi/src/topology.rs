@@ -393,6 +393,7 @@ mod tests {
             payload_len: 0,
             proposer: 0,
             skipped_leaders: skipped.to_vec(),
+            attest: false,
         }
     }
 
@@ -406,6 +407,8 @@ mod tests {
             result: Hash32::ZERO,
             signers: Bitmap::from_indices(n, signers.iter().copied()).unwrap(),
             agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
+            attest: false,
+            attestations: Vec::new(),
         }
     }
 

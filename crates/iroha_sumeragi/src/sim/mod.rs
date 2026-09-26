@@ -43,6 +43,7 @@
 pub mod byz;
 pub mod crypto;
 pub mod driver;
+pub mod host;
 pub mod net;
 pub mod oracle;
 pub mod records;

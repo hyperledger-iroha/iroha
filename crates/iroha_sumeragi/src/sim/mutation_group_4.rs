@@ -10,7 +10,7 @@
 
 use super::{
     crypto::parse_preimage,
-    driver::{Io, Write},
+    driver::{Barrier, Io, Write},
     oracle::covers,
     scenario::{Profile, Scenario},
     world::{World, preview},
@@ -49,6 +49,8 @@ fn qc(kind: VoteKind, height: u64, block_hash: Hash32) -> Qc {
         result: Hash32([7; 32]),
         signers: Bitmap::from_indices(4, [0, 1, 2]).unwrap_or_else(|| Bitmap::new(4)),
         agg_sig: AggregateSignature([1; SIGNATURE_LEN]),
+        attest: false,
+        attestations: Vec::new(),
     }
 }
 
@@ -62,6 +64,8 @@ fn vote(block_hash: Hash32) -> Vote {
         result: Hash32([7; 32]),
         signer: 0,
         sig: Signature([2; SIGNATURE_LEN]),
+        attest: false,
+        attestation: None,
     }
 }
 
@@ -77,6 +81,7 @@ fn block() -> Block {
             payload_len: 0,
             proposer: 0,
             skipped_leaders: Vec::new(),
+            attest: false,
         },
         payload: Vec::new(),
     }
@@ -131,51 +136,53 @@ fn det_s24_o2_barrier_holds_every_effect() {
     let effects = every_effect();
     let record = SafetyRecord::fresh(Hash32::ZERO, key(9), 0, None);
     let mut io = Io::default();
+    let mut barrier = Barrier::default();
     // No pending record: nothing waits.
     for effect in &effects {
-        assert_eq!(io.hold(effect.clone()).as_ref(), Some(effect));
+        assert_eq!(barrier.hold(effect.clone()).as_ref(), Some(effect));
     }
     // A body write is no barrier by itself.
     let (body, _) = io.write(0, 5, Write::Body(Box::new(block())));
     for effect in &effects {
-        assert!(io.hold(effect.clone()).is_some());
+        assert!(barrier.hold(effect.clone()).is_some());
     }
     let (first, _) = io.write(1, 5, Write::Record(Box::new(record.clone()), Vec::new()));
+    barrier.persisting(first);
     for effect in &effects {
         assert!(
-            io.hold(effect.clone()).is_none(),
+            barrier.hold(effect.clone()).is_none(),
             "{effect:?} escaped the O2 barrier before the record was durable"
         );
     }
     // A later record moves the barrier: effects after it wait for it, not for the first one.
     let (second, _) = io.write(2, 5, Write::Record(Box::new(record), Vec::new()));
+    barrier.persisting(second);
     for effect in &effects {
-        assert!(io.hold(effect.clone()).is_none());
+        assert!(barrier.hold(effect.clone()).is_none());
     }
-    let (done, released) = io.complete(body);
     assert_eq!(
-        (done.len(), released.len()),
+        (io.complete(body).len(), barrier.release(body).len()),
         (1, 0),
         "a body write releases nothing"
     );
-    let (done, released) = io.complete(first);
-    assert_eq!(done.len(), 1);
+    assert_eq!(io.complete(first).len(), 1);
     assert_eq!(
-        released, effects,
+        barrier.release(first),
+        effects,
         "released in order once the first record is durable"
     );
     assert!(
-        effects.iter().all(|e| io.hold(e.clone()).is_none()),
+        effects.iter().all(|e| barrier.hold(e.clone()).is_none()),
         "the second record is still pending"
     );
     // Crash: every held effect is lost with the non-durable record.
     io.clear();
-    assert!(io.held.is_empty() && io.pending.is_empty());
-    let (done, released) = io.complete(second);
-    assert!(done.is_empty() && released.is_empty());
+    barrier.clear();
+    assert!(barrier.held.is_empty() && io.pending.is_empty());
+    assert!(io.complete(second).is_empty() && barrier.release(second).is_empty());
     for effect in &effects {
         assert!(
-            io.hold(effect.clone()).is_some(),
+            barrier.hold(effect.clone()).is_some(),
             "no barrier after a crash"
         );
     }
@@ -259,13 +266,11 @@ impl Tail {
         let xr = self.replica;
         let (block, cqc) = step_until(world, "a CommitBlock held behind X's barrier", |w| {
             w.replicas[xr]
-                .io
-                .held
-                .iter()
-                .find_map(|(_, action)| match action {
-                    Action::CommitBlock { block, commit_qc } => {
-                        Some((block.clone(), commit_qc.clone()))
-                    }
+                .host
+                .held()
+                .into_iter()
+                .find_map(|action| match action {
+                    Action::CommitBlock { block, commit_qc } => Some((block, commit_qc)),
                     _ => None,
                 })
         });
@@ -280,7 +285,7 @@ impl Tail {
         );
         let io = &world.replicas[xr].io;
         assert!(
-            io.held.iter().any(|(_, a)| matches!(
+            world.replicas[xr].host.held().iter().any(|a| matches!(
                 a,
                 Action::Broadcast { msg: WireMessage::Qc(q), .. } if *q == cqc
             )),
@@ -308,12 +313,10 @@ impl Tail {
         let xr = self.replica;
         step_until(world, "X's ServeBlocks for W", |w| {
             w.replicas[xr]
-                .io
-                .held
+                .host
+                .held()
                 .iter()
-                .any(|(_, a)| {
-                    matches!(a, Action::ServeBlocks { to, from_height: 1, .. } if to == w_key)
-                })
+                .any(|a| matches!(a, Action::ServeBlocks { to, from_height: 1, .. } if to == w_key))
                 .then_some(())
         });
         assert!(

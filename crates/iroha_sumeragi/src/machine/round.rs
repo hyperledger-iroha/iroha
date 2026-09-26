@@ -4,7 +4,7 @@
 use super::{Build, Core, ExecState, Me, Mine, PendingApply, Tip, Via, votes::Pools};
 use crate::{
     api::{Action, HaltReason, LocalFault},
-    crypto::verify_qc,
+    crypto::verify_qc_signatures,
     message::{BlockHeader, Evidence, Qc, VoteKind, WireMessage},
     pacemaker::{effective_t_max, t_req_nominal},
     safety::{SafetyRecord, SignerChoice, select_signer},
@@ -451,7 +451,8 @@ impl Core {
         let Some(config) = self.configs.get(&config_height) else {
             return;
         };
-        if verify_qc(&*self.crypto, &self.instance, &config.committee, c).is_err() {
+        // The Commit signatures alone prove the violation; attestations are not checked (§7.6).
+        if verify_qc_signatures(&*self.crypto, &self.instance, &config.committee, c).is_err() {
             return;
         }
         if let Some(qc) = our_qc {

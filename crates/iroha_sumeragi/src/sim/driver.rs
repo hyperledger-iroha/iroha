@@ -1,15 +1,17 @@
 //! Building blocks of the fake driver (§12.3): the node clock with offset and drift, ingress
-//! lanes with O5 priorities and O6 bounds, the write device with the O2 persist-before-effect
-//! barrier, the executor honouring O4, and the transaction encoding of the payload builder.
+//! lanes with O5 priorities and O6 bounds, the O2 persist-before-effect barrier, the write
+//! device, the executor honouring O4, and the transaction encoding of the payload builder. The
+//! lanes and the barrier belong to the hosted node ([`super::host::FakeHost`]); the device, the
+//! executor and the builder are the world's fake backends.
 
 use std::collections::{BTreeMap, VecDeque};
 
-use super::net::Class;
+use crate::message::TrafficClass;
 use crate::{
     api::{Action, Event, ExecOutcome},
     message::{Block, Qc, WireMessage},
     safety::SafetyRecord,
-    testing::sha256,
+    testing::{Executed, sha256},
     types::{Hash32, Millis, PublicKey},
 };
 
@@ -150,7 +152,7 @@ impl Lanes {
     }
 
     /// Queue a message in its class lane.
-    pub fn push_message(&mut self, from: PublicKey, msg: WireMessage, class: Class) {
+    pub fn push_message(&mut self, from: PublicKey, msg: WireMessage, class: TrafficClass) {
         if self.fifo {
             // One global FIFO with a bound per peer.
             let count = self.fifo_counts.entry(from.clone()).or_insert(0);
@@ -162,7 +164,7 @@ impl Lanes {
             self.fifo_queue.push_back((from, msg));
             return;
         }
-        let lane = class.lane();
+        let lane = super::net::lane(class);
         if self.classes[lane].push(from, msg, INGRESS_CAP[lane]) {
             self.dropped += 1;
         }
@@ -224,17 +226,14 @@ pub enum Write {
     Commit(Box<(Block, Qc)>),
 }
 
-/// The write device of a replica: FIFO completion, and the O2 barrier holding every effect
-/// emitted after a `PersistSafety` until that record is durable.
+/// The write device of a replica: FIFO completion; a write is durable at its completion and
+/// lost if the machine crashes first.
 #[derive(Debug, Default)]
 pub struct Io {
     next_id: u64,
     /// Pending writes in completion order.
     pub pending: VecDeque<(u64, Millis, Write)>,
     last_done: Millis,
-    barrier: Option<u64>,
-    /// Effects waiting for the barrier: `(record write id, action)`.
-    pub held: VecDeque<(u64, Action)>,
 }
 
 impl Io {
@@ -245,11 +244,50 @@ impl Io {
         let id = self.next_id;
         let done = self.last_done.max(now).saturating_add(latency);
         self.last_done = done;
-        if matches!(write, Write::Record(..)) {
-            self.barrier = Some(id);
-        }
         self.pending.push_back((id, done, write));
         (id, done)
+    }
+
+    /// Complete the writes up to `id` and return them in order.
+    pub fn complete(&mut self, id: u64) -> Vec<Write> {
+        let mut done = Vec::new();
+        while self.pending.front().is_some_and(|(w, _, _)| *w <= id) {
+            if let Some((_, _, write)) = self.pending.pop_front() {
+                done.push(write);
+            }
+        }
+        done
+    }
+
+    /// Lose every non-durable write (crash).
+    pub fn clear(&mut self) {
+        self.pending.clear();
+    }
+
+    /// A body in a pending (not yet durable) write.
+    pub fn pending_body(&self, bh: &Hash32, crypto: &dyn crate::crypto::Crypto) -> Option<Block> {
+        self.pending.iter().find_map(|(_, _, w)| match w {
+            Write::Body(block) if block.hash(crypto) == *bh => Some((**block).clone()),
+            _ => None,
+        })
+    }
+}
+
+/// The O2 persist-before-effect barrier (§12.3) of the fake driver: after a `PersistSafety`
+/// write, every externally visible effect waits until that record is durable, and is lost
+/// with it on a crash.
+#[derive(Debug, Default)]
+pub struct Barrier {
+    barrier: Option<u64>,
+    /// Effects waiting for the barrier: `(record write id, action)`.
+    pub held: VecDeque<(u64, Action)>,
+}
+
+impl Barrier {
+    /// The safety record of write `write` is on its way to the device: later effects wait
+    /// for it.
+    pub fn persisting(&mut self, write: u64) {
+        self.barrier = Some(write);
     }
 
     /// Whether an effect must wait; if so it is held.
@@ -268,39 +306,24 @@ impl Io {
         }
     }
 
-    /// Complete writes up to `id`; returns them and the released effects, in order.
-    pub fn complete(&mut self, id: u64) -> (Vec<Write>, Vec<Action>) {
-        let mut done = Vec::new();
-        while self.pending.front().is_some_and(|(w, _, _)| *w <= id) {
-            if let Some((_, _, write)) = self.pending.pop_front() {
-                done.push(write);
-            }
-        }
-        if self.barrier.is_some_and(|b| b <= id) {
+    /// The writes up to `write` are durable: release the effects waiting for them, in order.
+    pub fn release(&mut self, write: u64) -> Vec<Action> {
+        if self.barrier.is_some_and(|b| b <= write) {
             self.barrier = None;
         }
         let mut released = Vec::new();
-        while self.held.front().is_some_and(|(w, _)| *w <= id) {
+        while self.held.front().is_some_and(|(w, _)| *w <= write) {
             if let Some((_, action)) = self.held.pop_front() {
                 released.push(action);
             }
         }
-        (done, released)
+        released
     }
 
-    /// Lose every non-durable write and held effect (crash).
+    /// Lose every held effect (crash).
     pub fn clear(&mut self) {
-        self.pending.clear();
         self.held.clear();
         self.barrier = None;
-    }
-
-    /// A body in a pending (not yet durable) write.
-    pub fn pending_body(&self, bh: &Hash32, crypto: &dyn crate::crypto::Crypto) -> Option<Block> {
-        self.pending.iter().find_map(|(_, _, w)| match w {
-            Write::Body(block) if block.hash(crypto) == *bh => Some((**block).clone()),
-            _ => None,
-        })
     }
 }
 
@@ -334,6 +357,9 @@ pub struct Executor {
     pub running: Option<(Job, Millis)>,
     /// Post-states: block hash → (height, result).
     pub cache: BTreeMap<Hash32, (u64, Hash32)>,
+    /// The statements of the `Valid` executions, shared with the node's execution-gated
+    /// attestor (§3.7 A2: `R`'s preimage comes from the node's own execution).
+    pub executed: Executed,
     next_job: u64,
 }
 
@@ -387,6 +413,7 @@ impl Executor {
         self.parked.clear();
         self.running = None;
         self.cache.clear();
+        self.executed.clear();
     }
 
     /// Outstanding requests (queued, parked, running).
@@ -400,12 +427,22 @@ const TX_TAG: u8 = 0x54;
 /// Fixed transaction header: tag, id, flags, padding length.
 pub const TX_HEADER: usize = 1 + 8 + 1 + 2;
 
+/// Transaction flag: the transaction is poison (every block holding it is `Invalid`).
+const TX_POISON: u8 = 0x01;
+/// Transaction flag: the transaction needs mint finality, so its block is flagged (§3.7, F37).
+const TX_MINT: u8 = 0x02;
+
 /// Encode a transaction: `0x54 ‖ be64(id) ‖ flags ‖ be16(pad) ‖ pad bytes`; flag bit 0 = poison.
 pub fn encode_tx(id: u64, poison: bool, pad: u16) -> Vec<u8> {
+    encode_tx_flagged(id, poison, false, pad)
+}
+
+/// [`encode_tx`] with flag bit 1 = the transaction needs mint finality (§3.7, F37).
+pub fn encode_tx_flagged(id: u64, poison: bool, mint: bool, pad: u16) -> Vec<u8> {
     let mut out = Vec::with_capacity(TX_HEADER + usize::from(pad));
     out.push(TX_TAG);
     out.extend_from_slice(&id.to_be_bytes());
-    out.push(u8::from(poison));
+    out.push(if poison { TX_POISON } else { 0 } | if mint { TX_MINT } else { 0 });
     out.extend_from_slice(&pad.to_be_bytes());
     out.extend(std::iter::repeat_n(0xab, usize::from(pad)));
     out
@@ -419,7 +456,7 @@ pub fn decode_txs(payload: &[u8]) -> Vec<(u64, bool)> {
         let Ok(id) = <[u8; 8]>::try_from(&rest[1..9]) else {
             break;
         };
-        let poison = rest[9] & 1 == 1;
+        let poison = rest[9] & TX_POISON != 0;
         let pad = usize::from(u16::from_be_bytes([rest[10], rest[11]]));
         let len = TX_HEADER + pad;
         if rest.len() < len {
@@ -429,6 +466,32 @@ pub fn decode_txs(payload: &[u8]) -> Vec<(u64, bool)> {
         rest = &rest[len..];
     }
     out
+}
+
+/// The application's flag rule of the simulator (§3.7 A1): a block needs attestations iff its
+/// payload carries a mint transaction (`EMPTY` never does).
+pub fn payload_mints(payload: &[u8]) -> bool {
+    let mut rest = payload;
+    while rest.len() >= TX_HEADER && rest[0] == TX_TAG {
+        if rest[9] & TX_MINT != 0 {
+            return true;
+        }
+        let len = TX_HEADER + usize::from(u16::from_be_bytes([rest[10], rest[11]]));
+        let Some(tail) = rest.get(len..) else {
+            break;
+        };
+        rest = tail;
+    }
+    false
+}
+
+/// The simulator's `exec` of a block (§4.1, §4.2): `Invalid` if its header flag differs from
+/// the application's flag rule ([`payload_mints`]), otherwise [`reference_exec`].
+pub fn block_exec(parent_result: &Hash32, block: &Block) -> ExecOutcome {
+    if block.header.attest != payload_mints(&block.payload) {
+        return ExecOutcome::Invalid;
+    }
+    reference_exec(parent_result, &block.payload)
 }
 
 /// The deterministic reference execution `R = H(parent_R ‖ payload)`; `Invalid` iff the
@@ -497,7 +560,7 @@ mod tests {
             block_hash: Hash32::ZERO,
         });
         for _ in 0..300 {
-            lanes.push_message(k.clone(), req.clone(), Class::Control);
+            lanes.push_message(k.clone(), req.clone(), TrafficClass::Control);
         }
         assert_eq!(lanes.len(), 256);
         assert_eq!(lanes.dropped, 44);
@@ -511,6 +574,7 @@ mod tests {
     #[test]
     fn io_barrier() {
         let mut io = Io::default();
+        let mut barrier = Barrier::default();
         let block = Block {
             header: BlockHeader {
                 instance: Hash32::ZERO,
@@ -522,29 +586,82 @@ mod tests {
                 payload_len: 0,
                 proposer: 0,
                 skipped_leaders: Vec::new(),
+                attest: false,
             },
             payload: Vec::new(),
         };
         let (b, t1) = io.write(0, 5, Write::Body(Box::new(block.clone())));
         assert!(
-            io.hold(Action::Halt(crate::api::HaltReason::SafetyRecordCorrupt))
+            barrier
+                .hold(Action::Halt(crate::api::HaltReason::SafetyRecordCorrupt))
                 .is_some()
         );
         let record =
             SafetyRecord::fresh(Hash32::ZERO, PublicKey::new(vec![1; 32]).unwrap(), 0, None);
         let (r, t2) = io.write(0, 5, Write::Record(Box::new(record), Vec::new()));
+        barrier.persisting(r);
         assert!(t2 >= t1 + 5);
         assert!(
-            io.hold(Action::LocalFault(crate::api::LocalFault::RecordMissing))
+            barrier
+                .hold(Action::LocalFault(crate::api::LocalFault::RecordMissing))
                 .is_none()
         );
-        let (done, released) = io.complete(b);
-        assert_eq!((done.len(), released.len()), (1, 0));
-        let (done, released) = io.complete(r);
-        assert_eq!((done.len(), released.len()), (1, 1));
+        assert_eq!((io.complete(b).len(), barrier.release(b).len()), (1, 0));
+        assert_eq!((io.complete(r).len(), barrier.release(r).len()), (1, 1));
         assert!(
-            io.hold(Action::LocalFault(crate::api::LocalFault::RecordMissing))
+            barrier
+                .hold(Action::LocalFault(crate::api::LocalFault::RecordMissing))
                 .is_some()
+        );
+        io.clear();
+        barrier.clear();
+        assert!(io.pending.is_empty() && barrier.held.is_empty());
+    }
+
+    #[test]
+    fn mint_flag_rule() {
+        let mut payload = encode_tx(1, false, 2);
+        assert!(!payload_mints(&payload));
+        payload.extend(encode_tx_flagged(2, false, true, 1));
+        assert!(payload_mints(&payload));
+        assert_eq!(decode_txs(&payload), vec![(1, false), (2, false)]);
+        assert!(!payload_mints(&[]));
+        assert!(!payload_mints(&[TX_TAG, 0, 0]), "truncated");
+        let header = BlockHeader {
+            instance: Hash32::ZERO,
+            height: 1,
+            origin_view: 0,
+            parent_hash: Hash32::ZERO,
+            parent_result: Hash32::ZERO,
+            payload_hash: Hash32::ZERO,
+            payload_len: 0,
+            proposer: 0,
+            skipped_leaders: Vec::new(),
+            attest: false,
+        };
+        let block = |attest: bool, payload: Vec<u8>| Block {
+            header: BlockHeader {
+                attest,
+                ..header.clone()
+            },
+            payload,
+        };
+        let parent = Hash32([1; 32]);
+        assert_eq!(
+            block_exec(&parent, &block(false, Vec::new())),
+            reference_exec(&parent, &[])
+        );
+        assert_eq!(
+            block_exec(&parent, &block(true, Vec::new())),
+            ExecOutcome::Invalid
+        );
+        assert_eq!(
+            block_exec(&parent, &block(false, payload.clone())),
+            ExecOutcome::Invalid
+        );
+        assert_eq!(
+            block_exec(&parent, &block(true, payload.clone())),
+            reference_exec(&parent, &payload)
         );
     }
 

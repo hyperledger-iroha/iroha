@@ -65,7 +65,7 @@ impl Core {
             None if self.view >= self.cfg.params.empty_after_views
                 && !cfg!(sumeragi_mutation = "ML13") =>
             {
-                self.propose_fresh(Vec::new());
+                self.propose_fresh(Vec::new(), false);
             }
             None => self.request_build(true),
         }
@@ -102,8 +102,8 @@ impl Core {
                 second,
                 ready,
             } if self.now >= deadline => {
-                // No answer by `t_propose + build_timeout`: use `EMPTY`.
-                self.payload_ready(req, Vec::new(), second, ready);
+                // No answer by `t_propose + build_timeout`: use `EMPTY` (unflagged).
+                self.payload_ready(req, (Vec::new(), false), second, ready);
             }
             Build::IdleWait { until, .. } if self.now >= until => self.request_build(true),
             _ => {}
@@ -120,7 +120,8 @@ impl Core {
     }
 
     /// On `PayloadBuilt{req}`: an answer to another request than the outstanding one is ignored.
-    pub(super) fn on_payload_built(&mut self, req: u64, payload: Vec<u8>) {
+    /// `attest` is the application flag of a block with this payload (§3.7 A1).
+    pub(super) fn on_payload_built(&mut self, req: u64, payload: Vec<u8>, attest: bool) {
         if let Build::Requested {
             req: outstanding,
             second,
@@ -130,16 +131,26 @@ impl Core {
             && req == outstanding
             && !self.awaiting
         {
-            self.payload_ready(req, payload, second, ready);
+            self.payload_ready(req, (payload, attest), second, ready);
         }
     }
 
-    fn payload_ready(&mut self, req: u64, payload: Vec<u8>, second: bool, ready: bool) {
+    fn payload_ready(
+        &mut self,
+        req: u64,
+        (payload, attest): (Vec<u8>, bool),
+        second: bool,
+        ready: bool,
+    ) {
         // SPEC: a payload above `max_block_bytes` would be a signed defect; it is replaced by
-        // `EMPTY` rather than proposed (Appendix E, E20).
+        // `EMPTY` (unflagged) rather than proposed (Appendix E, E20).
         let too_large =
             u32::try_from(payload.len()).map_or(true, |len| len > self.cfg.params.max_block_bytes);
-        let payload = if too_large { Vec::new() } else { payload };
+        let (payload, attest) = if too_large {
+            (Vec::new(), false)
+        } else {
+            (payload, attest)
+        };
         let idle_until = self
             .t_enter
             .saturating_add(self.cfg.params.idle_block_interval);
@@ -157,7 +168,7 @@ impl Core {
             return;
         }
         self.build = Build::Idle;
-        self.propose_fresh(payload);
+        self.propose_fresh(payload, attest);
     }
 
     /// On `PayloadReady{req}` (§6.10): it only ends the view-0 leader's heartbeat wait for the
@@ -190,8 +201,9 @@ impl Core {
         }
     }
 
-    /// Build and send a fresh block (§6.10 rule 3).
-    fn propose_fresh(&mut self, payload: Vec<u8>) {
+    /// Build and send a fresh block (§6.10 rule 3) with the builder's application flag `attest`
+    /// (§3.7 A1).
+    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool) {
         let Some(me) = self.leader_eligible() else {
             self.build = Build::Idle;
             return;
@@ -200,13 +212,15 @@ impl Core {
         // payload, also a built one at view 0: with `empty_after_views = 0` (a chain parameter
         // the application must reject, §9.4) it would otherwise propose a payload that every
         // voter reports as a signed defect (Appendix E, E38).
-        let payload = if self.view >= self.cfg.params.empty_after_views
+        let (payload, attest) = if self.view >= self.cfg.params.empty_after_views
             && !cfg!(sumeragi_mutation = "ML13")
         {
-            Vec::new()
+            (Vec::new(), false)
         } else {
-            payload
+            (payload, attest)
         };
+        // MA7: the builder's flag is dropped.
+        let attest = attest && !cfg!(sumeragi_mutation = "MA7");
         let justify = if self.view == 0 {
             None
         } else {
@@ -227,6 +241,7 @@ impl Core {
             skipped_leaders: self
                 .topo
                 .skipped_leader_keys(&self.cfg.committee, self.view),
+            attest,
         };
         self.propose_block(Block { header, payload }, justify);
     }

@@ -21,8 +21,9 @@ Purpose
       survived                 nothing failed;
       error                    it did not build, or a named test filter matched no test.
 
-    The table MUTATIONS mirrors §13.4 (MS*/ML* rows) plus ME* (the as-built rules E1-E7 of
-    Appendix E, with their regression tests) and MR-* (revision-4 rules with det_r4 tests).
+    The table MUTATIONS mirrors §13.4 (MS*/ML* rows and the MA* rows of the commit-attestation
+    extension, §3.7) plus ME* (the as-built rules E1-E7 of Appendix E, with their regression
+    tests) and MR-* (revision-4 rules with det_r4 tests).
 
 Prerequisites
     Python 3.9+ (stdlib only) and a working `cargo` for the workspace. Builds go to a dedicated
@@ -103,6 +104,7 @@ SCENARIOS = {
     "f34": "sim::tests::f34_late_entrants",
     "f35": "sim::tests::f35_local_queue_asymmetry",
     "f36": "sim::tests::f36_late_leaders",
+    "f37": "sim::tests::f37_commit_attestation",
     # F9 variant for ML5a: a vote blackout ending at GST (sim/mutation_group_2.rs).
     "f09r": "sim::mutation_group_2::f09r_vote_blackout_until_gst",
     # F32 with up to f proposers of the needed blocks kept down after the restart (ML10).
@@ -277,6 +279,29 @@ MUTATIONS = [
       ["det_l29_late_leader_does_not_raise"], ["f36"]),
     m("ML30", "commit_height: d_c measured from t_prop of any held proposal",
       ["det_l29_late_leader_does_not_raise"], ["f36"]),
+    # ---- commit-attestation rules (§3.7, SR39-SR42)
+    m("MA1", "on_vote (attested): a flagged Commit vote is pooled without a verifying attestation",
+      ["det_a2_unattested_commit_votes_not_counted"], ["f37"]),
+    m("MA2", "verify_qc: the attestation check of a flagged CommitQC skipped",
+      ["det_a4_commitqc_attestations_checked"], ["f37"]),
+    m("MA3", "att_preimage omits R", ["det_a3_attestation_binds_result"], []),
+    m("MA4", "att_preimage omits h", ["golden_attestation_preimage"], []),
+    m("MA5", "try_commit: a node without authority Commit-votes without an attestation",
+      ["det_a5_no_authority_abstains_from_commit_only"], ["f37"]),
+    m("MA6", "vote_preimage omits the flag", ["det_a6_flag_is_signed"], ["f37"]),
+    m("MA7", "propose_fresh: the builder's flag is dropped",
+      ["det_a1_flagged_block_commits_with_attestations"], ["f37"]),
+    m("MA8", "on_proposal step 6: the unflagged-EMPTY rule from empty_after_views deleted",
+      ["det_a7_empty_after_views_never_flagged"], []),
+    m("MA9", "restore_round: the recorded Prepare is rebuilt unflagged",
+      ["det_a8_restart_resends_identical_attested_votes"], []),
+    m("MA10", "try_commit: an attestation the node's own verifier rejects is used anyway",
+      ["det_a5_no_authority_abstains_from_commit_only"], ["f37"]),
+    m("MA11", "verify_attestations: a flagged CommitQC with more than q signers accepted",
+      ["det_a4_flagged_commitqc_has_exactly_q_signers", "det_a4_commitqc_attestations_checked"],
+      ["f37"]),
+    m("MA12", "on_outcome: no try_commit after the lock's block executes (Pending attestor)",
+      ["det_a9_pending_attestor_commits_after_execution"], []),
     # ---- as-built rules of Appendix E (E1-E7) and their regression tests
     m("ME1", "on_status: rate-limited Status drops its fresh CommitQC (E1)",
       ["rate_limited_status_still_delivers_a_fresh_commit_qc"], ["f03"]),

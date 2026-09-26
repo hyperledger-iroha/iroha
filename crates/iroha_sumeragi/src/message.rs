@@ -20,6 +20,13 @@ pub const MAX_SYNC_ENTRIES: usize = 1024;
 /// Largest signer bitmap in bytes.
 pub const MAX_BITMAP_BYTES: usize = MAX_COMMITTEE_SIZE.div_ceil(8);
 
+/// Largest attestation (§3.7) in bytes, in a Commit vote or a `CommitQC`.
+pub const MAX_ATTESTATION_BYTES: usize = 4096;
+
+/// The wire-format version of [`WireMessage`] for the P2P handshake (§3.5). Every incompatible
+/// change of a wire type changes it; the retired v2 runtime used 4.
+pub const PROTOCOL_VERSION: u16 = 5;
+
 /// Vote / certificate kind (§3.3).
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, norito::Encode, norito::Decode,
@@ -63,6 +70,9 @@ pub struct BlockHeader {
     pub proposer: ValidatorIndex,
     /// `[L(h, x) for x in 0..min(origin_view, a_h)]`.
     pub skipped_leaders: Vec<PublicKey>,
+    /// Application flag (§3.7): Commit votes for this block carry attestations. Set from the
+    /// payload builder, checked by execution; never set on `EMPTY` from `empty_after_views` on.
+    pub attest: bool,
 }
 
 impl BlockHeader {
@@ -148,9 +158,7 @@ impl Proposal {
 }
 
 /// A Prepare or Commit vote (§3.3).
-#[derive(
-    Clone, Copy, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema,
-)]
+#[derive(Clone, PartialEq, Eq, Debug, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_sumeragi::Vote")]
 pub struct Vote {
     /// Prepare or Commit.
@@ -165,10 +173,16 @@ pub struct Vote {
     pub block_hash: Hash32,
     /// Execution result `R` bound by the vote.
     pub result: Hash32,
+    /// The block's attestation flag (§3.7): the proposal header's for a Prepare, the lock's for
+    /// a Commit. Signed.
+    pub attest: bool,
     /// Canonical index of the signer in `C_height`.
     pub signer: ValidatorIndex,
-    /// Signature over `vote_preimage(kind, height, view, block_hash, result)`.
+    /// Signature over `vote_preimage(kind, height, view, block_hash, result, attest)`.
     pub sig: Signature,
+    /// The signer's attestation of `att_preimage(height, block_hash, result)`: present iff
+    /// `kind == Commit` and `attest` (§3.7 A3). Not covered by `sig`.
+    pub attestation: Option<Vec<u8>>,
 }
 
 impl Vote {
@@ -181,12 +195,24 @@ impl Vote {
             self.view,
             &self.block_hash,
             &self.result,
+            self.attest,
         )
     }
 
     /// The voted value `(block_hash, result)`.
     pub fn value(&self) -> (Hash32, Hash32) {
         (self.block_hash, self.result)
+    }
+
+    /// Whether this vote must carry an attestation: a Commit vote of a flagged block (§3.7).
+    pub fn needs_attestation(&self) -> bool {
+        self.kind == VoteKind::Commit && self.attest
+    }
+
+    /// The commit statement `att_preimage(height, block_hash, result)` this vote's attestation
+    /// covers (§3.7).
+    pub fn statement(&self) -> Vec<u8> {
+        preimage::att_preimage(&self.instance, self.height, &self.block_hash, &self.result)
     }
 }
 
@@ -236,10 +262,15 @@ pub struct Qc {
     pub block_hash: Hash32,
     /// Certified execution result.
     pub result: Hash32,
+    /// The certified block's attestation flag (§3.7), signed by every signer.
+    pub attest: bool,
     /// Signers (canonical indices of `C_height`).
     pub signers: Bitmap,
     /// Aggregate of the signers' vote signatures.
     pub agg_sig: AggregateSignature,
+    /// A `CommitQC` with `attest`: one attestation per signer, in ascending signer order
+    /// (§3.7 A4); empty otherwise.
+    pub attestations: Vec<Vec<u8>>,
 }
 
 impl Qc {
@@ -252,7 +283,18 @@ impl Qc {
             self.view,
             &self.block_hash,
             &self.result,
+            self.attest,
         )
+    }
+
+    /// Whether this certificate must carry attestations: a `CommitQC` of a flagged block (§3.7).
+    pub fn needs_attestations(&self) -> bool {
+        self.kind == VoteKind::Commit && self.attest
+    }
+
+    /// The commit statement `att_preimage(height, block_hash, result)` its attestations cover.
+    pub fn statement(&self) -> Vec<u8> {
+        preimage::att_preimage(&self.instance, self.height, &self.block_hash, &self.result)
     }
 
     /// `qc_digest(self)` (§3.3).
@@ -461,6 +503,28 @@ impl WireMessage {
         }
     }
 
+    /// The Norito enum tag of this message: its position in §3.5, 0 to 9.
+    pub fn wire_tag(&self) -> u32 {
+        match self {
+            Self::Proposal(_) => 0,
+            Self::Vote(_) => 1,
+            Self::Qc(_) => 2,
+            Self::Timeout(_) => 3,
+            Self::Tc(_) => 4,
+            Self::Status(_) => 5,
+            Self::SyncRequest(_) => 6,
+            Self::SyncResponse(_) => 7,
+            Self::BlockRequest(_) => 8,
+            Self::BlockResponse(_) => 9,
+        }
+    }
+
+    /// The §12.3 O8 traffic class (the table of §3.5).
+    pub fn traffic_class(&self) -> TrafficClass {
+        let payload = matches!(self, Self::Proposal(p) if p.payload.is_some());
+        class_of_tag(self.wire_tag(), payload).unwrap_or(TrafficClass::Control)
+    }
+
     /// Canonical Norito encoding (one exact V1 frame).
     ///
     /// # Errors
@@ -497,7 +561,8 @@ impl WireMessage {
     pub fn check_limits(&self) -> Result<(), CodecError> {
         match self {
             Self::Proposal(p) => check_proposal(p),
-            Self::Vote(_) | Self::SyncRequest(_) | Self::BlockRequest(_) => Ok(()),
+            Self::Vote(x) => check_attestation(x.attestation.as_deref()),
+            Self::SyncRequest(_) | Self::BlockRequest(_) => Ok(()),
             Self::Qc(c) => check_qc(c),
             Self::Timeout(t) => check_opt_qc(t.high_pqc.as_ref()),
             Self::Tc(t) => check_tc(t),
@@ -527,6 +592,18 @@ pub(crate) fn check_qc(qc: &Qc) -> Result<(), CodecError> {
     if qc.signers.as_bytes().len() > MAX_BITMAP_BYTES {
         return Err(CodecError::Limit("bitmap"));
     }
+    if qc.attestations.len() > MAX_COMMITTEE_SIZE {
+        return Err(CodecError::Limit("attestations"));
+    }
+    qc.attestations
+        .iter()
+        .try_for_each(|a| check_attestation(Some(a)))
+}
+
+fn check_attestation(attestation: Option<&[u8]>) -> Result<(), CodecError> {
+    if attestation.is_some_and(|a| a.len() > MAX_ATTESTATION_BYTES) {
+        return Err(CodecError::Limit("attestation"));
+    }
     Ok(())
 }
 
@@ -555,6 +632,104 @@ pub(crate) fn check_proposal(p: &Proposal) -> Result<(), CodecError> {
     check_header(&p.header)?;
     check_opt_qc(p.parent_qc.as_ref())?;
     p.justify.as_ref().map_or(Ok(()), check_tc)
+}
+
+/// Traffic class of a wire message (§12.3 O8, the table of §3.5): the transport and the
+/// driver's ingress serve control before proposal before bulk traffic, with a minimum share for
+/// bulk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum TrafficClass {
+    /// Votes, certificates, timeouts, `Status`, requests, proposals without payload.
+    Control,
+    /// Proposals with payload and every `BlockResponse`.
+    Proposal,
+    /// `SyncResponse`.
+    Bulk,
+}
+
+/// The class of wire tag `tag` (`payload`: a proposal carries its payload); `None` for an
+/// unknown tag.
+// SPEC: §12.3 O8 put a `BlockResponse` for the current height in the proposal class and other
+// ones in bulk; the transport classifies a frame before it is decoded, so every `BlockResponse`
+// is proposal class (Appendix E, E44).
+fn class_of_tag(tag: u32, payload: bool) -> Option<TrafficClass> {
+    match tag {
+        0 if payload => Some(TrafficClass::Proposal),
+        0..=6 | 8 => Some(TrafficClass::Control),
+        7 => Some(TrafficClass::Bulk),
+        9 => Some(TrafficClass::Proposal),
+        _ => None,
+    }
+}
+
+/// The Norito frame header: magic, version, schema hash, compression, length, checksum, flags.
+const FRAME_HEADER: usize = 40;
+/// The header flag of compact per-value lengths, the only flag of a canonical frame.
+const COMPACT_LEN: u8 = 0x02;
+
+/// The schema hash of a `WireMessage` frame (header bytes 6..22).
+fn wire_schema_hash() -> [u8; 16] {
+    static HASH: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+    *HASH.get_or_init(norito::schema::identity::frame_hash::<WireMessage>)
+}
+
+/// The traffic class of an encoded [`WireMessage`] frame without decoding it (§3.5): the
+/// canonical frame header (magic, version, schema hash, no compression, compact lengths, exact
+/// length), the enum tag and, for a proposal, the `Option` tag of its payload. `None` for bytes
+/// that are not such a frame. Never panics; for every frame that
+/// [`WireMessage::decode`] accepts it equals [`WireMessage::traffic_class`].
+pub fn traffic_class_of_frame(frame: &[u8]) -> Option<TrafficClass> {
+    let header = frame.get(..FRAME_HEADER)?;
+    let length = u64::from_le_bytes(header.get(23..31)?.try_into().ok()?);
+    if header.get(..6)? != b"NRT0\0\0"
+        || header.get(6..22)? != wire_schema_hash()
+        || header.get(22) != Some(&0)
+        || header.get(39) != Some(&COMPACT_LEN)
+        || usize::try_from(length).ok()? != frame.len() - FRAME_HEADER
+    {
+        return None;
+    }
+    let body = &frame[FRAME_HEADER..];
+    let tag = u32::from_le_bytes(body.get(..4)?.try_into().ok()?);
+    if tag != 0 {
+        return class_of_tag(tag, false);
+    }
+    // `Proposal(Box<Proposal>)`: the variant's length, the box's length, then the fields
+    // `instance, height, view, header, justify, parent_qc` and the `Option` of `payload`, each
+    // prefixed with its compact length.
+    let mut rest = body.get(4..)?;
+    for _ in 0..2 {
+        rest = take_len(rest)?.1;
+    }
+    for _ in 0..6 {
+        let (field, tail) = take_len(rest)?;
+        rest = tail.get(field..)?;
+    }
+    let (len, tail) = take_len(rest)?;
+    match (len, tail.first()) {
+        (1.., Some(0)) => class_of_tag(0, false),
+        (1.., Some(1)) => class_of_tag(0, true),
+        _ => None,
+    }
+}
+
+/// Split a canonical compact length (LEB128, at most ten bytes, shortest form) off `bytes`.
+fn take_len(bytes: &[u8]) -> Option<(usize, &[u8])> {
+    let mut value: u64 = 0;
+    for (i, byte) in bytes.iter().take(10).enumerate() {
+        let bits = u64::from(byte & 0x7f);
+        if i == 9 && bits > 1 {
+            return None; // beyond 64 bits
+        }
+        value |= bits.checked_shl(u32::try_from(7 * i).ok()?)?;
+        if byte & 0x80 == 0 {
+            if i > 0 && bits == 0 {
+                return None; // not the shortest form
+            }
+            return Some((usize::try_from(value).ok()?, bytes.get(i + 1..)?));
+        }
+    }
+    None
 }
 
 /// Encoding or decoding failure.
@@ -621,6 +796,8 @@ pub enum Defect {
     SkippedLeaders,
     /// Fresh block at `view ≥ empty_after_views(h)` with a non-empty payload.
     NonEmptyPayload,
+    /// Fresh block at `view ≥ empty_after_views(h)` with the attestation flag (§3.7 A1).
+    FlaggedEmpty,
 }
 
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.
@@ -668,6 +845,7 @@ mod tests {
             payload_len: 3,
             proposer: 1,
             skipped_leaders: vec![key(5), key(6)],
+            attest: false,
         }
     }
 
@@ -681,6 +859,8 @@ mod tests {
             result: h(8),
             signers: Bitmap::from_indices(4, [0, 1, 3]).unwrap(),
             agg_sig: AggregateSignature([9; SIGNATURE_LEN]),
+            attest: false,
+            attestations: Vec::new(),
         }
     }
 
@@ -716,8 +896,10 @@ mod tests {
             view: 3,
             block_hash: h(7),
             result: h(8),
+            attest: false,
             signer: 2,
             sig: Signature([11; SIGNATURE_LEN]),
+            attestation: None,
         }
     }
 
@@ -1191,6 +1373,227 @@ mod tests {
         }
         // Checksums reject nearly every mutation.
         assert!(accepted < 200, "accepted {accepted}");
+    }
+
+    /// §3.5: the wire tag of every variant is its position, pinned against the encoded frame
+    /// (bytes 40..44 after the Norito header), with its traffic class (§12.3 O8, E44).
+    #[test]
+    fn wire_tags_and_classes_pinned() {
+        use TrafficClass::{Bulk, Control, Proposal as Prop};
+        let expected: [(&str, u32, TrafficClass); 17] = [
+            ("proposal with payload", 0, Prop),
+            ("proposal without payload", 0, Control),
+            ("prepare vote", 1, Control),
+            ("commit vote", 1, Control),
+            ("prepare qc", 2, Control),
+            ("commit qc", 2, Control),
+            ("timeout", 3, Control),
+            ("timeout without lock", 3, Control),
+            ("tc", 4, Control),
+            ("empty tc", 4, Control),
+            ("status", 5, Control),
+            ("bare status", 5, Control),
+            ("sync request", 6, Control),
+            ("empty sync response", 7, Bulk),
+            ("sync response", 7, Bulk),
+            ("block request", 8, Control),
+            ("block response", 9, Prop),
+        ];
+        let messages = all_wire_messages();
+        assert_eq!(messages.len(), expected.len());
+        for (message, (name, tag, class)) in messages.iter().zip(expected) {
+            let frame = message.encode().unwrap();
+            assert_eq!(message.wire_tag(), tag, "{name}");
+            assert_eq!(
+                u32::from_le_bytes(frame[40..44].try_into().unwrap()),
+                tag,
+                "{name}: the Norito enum tag"
+            );
+            assert_eq!(message.traffic_class(), class, "{name}");
+            assert_eq!(
+                traffic_class_of_frame(&frame),
+                Some(class),
+                "{name}: raw frame"
+            );
+        }
+        assert_eq!(PROTOCOL_VERSION, 5);
+        assert!(TrafficClass::Control < TrafficClass::Proposal);
+        assert!(TrafficClass::Proposal < TrafficClass::Bulk);
+        assert_eq!(class_of_tag(10, false), None);
+        assert_eq!(class_of_tag(u32::MAX, true), None);
+    }
+
+    /// The raw classifier refuses what is not a canonical `WireMessage` frame.
+    #[test]
+    fn raw_classification_rejects_other_frames() {
+        let frame = WireMessage::Proposal(Box::new(sample_proposal()))
+            .encode()
+            .unwrap();
+        assert_eq!(traffic_class_of_frame(&frame), Some(TrafficClass::Proposal));
+        let mut cases: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            frame[..39].to_vec(),
+            frame[..frame.len() - 1].to_vec(),
+            [frame.clone(), vec![0]].concat(),
+        ];
+        for (at, value) in [(0, b'X'), (4, 1), (10, 0xff), (22, 1), (39, 0)] {
+            let mut bad = frame.clone();
+            bad[at] = value;
+            cases.push(bad);
+        }
+        let mut unknown = WireMessage::Vote(sample_vote(VoteKind::Prepare))
+            .encode()
+            .unwrap();
+        unknown[40] = 10;
+        cases.push(unknown);
+        // Another Norito type (a `Status` struct frame, not a `WireMessage`).
+        cases.push(norito::encode_canonical(&sample_status()).unwrap());
+        for case in &cases {
+            assert_eq!(traffic_class_of_frame(case), None, "{case:?}");
+        }
+        assert_eq!(take_len(&[0x80, 0x00]), None, "overlong length");
+        assert_eq!(take_len(&[0xff; 11]), None, "unterminated length");
+        let mut max = vec![0xff; 9];
+        max.push(0x01);
+        assert_eq!(
+            take_len(&max).map(|(v, _)| u64::try_from(v).unwrap()),
+            Some(u64::MAX)
+        );
+        max[9] = 0x02;
+        assert_eq!(take_len(&max), None, "beyond 64 bits");
+        assert_eq!(take_len(&[0x85, 0x01, 7]), Some((133, &[7u8][..])));
+    }
+
+    /// Property (§3.5): for random frames — valid frames of every variant with random bytes
+    /// flipped, truncated, extended or re-encoded — the raw classification of every frame that
+    /// decodes equals the decoded message's class, and the raw classifier never panics.
+    #[test]
+    fn raw_and_decoded_classification_agree() {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        let mut messages = all_wire_messages();
+        // Larger payloads and attestations exercise multi-byte lengths.
+        messages.push(WireMessage::Proposal(Box::new(Proposal {
+            payload: Some(vec![0x5a; 300]),
+            ..sample_proposal()
+        })));
+        messages.push(WireMessage::Vote(Vote {
+            attest: true,
+            attestation: Some(vec![1; 200]),
+            ..sample_vote(VoteKind::Commit)
+        }));
+        let frames: Vec<Vec<u8>> = messages.iter().map(|m| m.encode().unwrap()).collect();
+        let (mut decoded, mut raw_only) = (0usize, 0usize);
+        for round in 0..20_000u32 {
+            let base = &frames[usize::try_from(next() % frames.len() as u64).unwrap()];
+            let mut bytes = base.clone();
+            match round % 5 {
+                0 => {}
+                1 => {
+                    let pos = usize::try_from(next() % bytes.len() as u64).unwrap();
+                    bytes[pos] ^= u8::try_from(next() % 255 + 1).unwrap();
+                }
+                2 => {
+                    let cut = usize::try_from(next() % bytes.len() as u64).unwrap();
+                    bytes.truncate(cut);
+                }
+                3 => bytes.push(u8::try_from(next() & 0xff).unwrap()),
+                _ => {
+                    let pos = 40 + usize::try_from(next() % (bytes.len() as u64 - 40)).unwrap();
+                    bytes[pos] = u8::try_from(next() & 0xff).unwrap();
+                }
+            }
+            let raw = traffic_class_of_frame(&bytes);
+            match WireMessage::decode(&bytes, 1 << 20) {
+                Ok(message) => {
+                    decoded += 1;
+                    assert_eq!(raw, Some(message.traffic_class()), "{message:?}");
+                }
+                Err(_) => raw_only += usize::from(raw.is_some()),
+            }
+        }
+        assert!(decoded >= 4_000, "decoded {decoded}");
+        // Frames the raw classifier accepts without decoding are only queued, never trusted.
+        assert!(raw_only > 0, "some undecodable frames still classify");
+    }
+
+    /// Decode limits of the attestation fields (§3.7).
+    #[test]
+    fn attestation_limits() {
+        let vote = Vote {
+            attest: true,
+            attestation: Some(vec![0; MAX_ATTESTATION_BYTES]),
+            ..sample_vote(VoteKind::Commit)
+        };
+        assert_eq!(WireMessage::Vote(vote.clone()).check_limits(), Ok(()));
+        let too_big = Vote {
+            attestation: Some(vec![0; MAX_ATTESTATION_BYTES + 1]),
+            ..vote
+        };
+        assert_eq!(
+            WireMessage::Vote(too_big).check_limits(),
+            Err(CodecError::Limit("attestation"))
+        );
+        let qc = Qc {
+            attest: true,
+            attestations: vec![vec![0; MAX_ATTESTATION_BYTES]; 3],
+            ..sample_qc(VoteKind::Commit, 0)
+        };
+        assert_eq!(WireMessage::Qc(qc.clone()).check_limits(), Ok(()));
+        for bad in [
+            Qc {
+                attestations: vec![vec![0; MAX_ATTESTATION_BYTES + 1]],
+                ..qc.clone()
+            },
+            Qc {
+                attestations: vec![Vec::new(); MAX_COMMITTEE_SIZE + 1],
+                ..qc.clone()
+            },
+        ] {
+            assert!(matches!(
+                WireMessage::Qc(bad.clone()).check_limits(),
+                Err(CodecError::Limit(_))
+            ));
+            let bytes = WireMessage::Qc(bad).encode().unwrap();
+            assert!(matches!(
+                WireMessage::decode(&bytes, usize::MAX),
+                Err(CodecError::Limit(_))
+            ));
+        }
+        // Round trip with attestations, and the accessors.
+        let bytes = WireMessage::Qc(qc.clone()).encode().unwrap();
+        assert_eq!(
+            WireMessage::decode(&bytes, bytes.len()).unwrap(),
+            WireMessage::Qc(qc.clone())
+        );
+        assert!(qc.needs_attestations());
+        assert!(!sample_qc(VoteKind::Commit, 0).needs_attestations());
+        assert!(
+            !Qc {
+                attest: true,
+                ..sample_qc(VoteKind::Prepare, 0)
+            }
+            .needs_attestations()
+        );
+        assert_eq!(
+            qc.statement(),
+            preimage::att_preimage(&qc.instance, qc.height, &qc.block_hash, &qc.result)
+        );
+        let commit = sample_vote(VoteKind::Commit);
+        assert!(!commit.needs_attestation());
+        assert!(
+            Vote {
+                attest: true,
+                ..commit.clone()
+            }
+            .needs_attestation()
+        );
+        assert_eq!(commit.statement(), qc.statement());
     }
 
     #[test]

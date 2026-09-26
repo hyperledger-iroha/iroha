@@ -1,7 +1,8 @@
 //! Signing and hash preimages (spec §2.1, §3.1–§3.3, §1.8): fixed byte layouts built by hand,
 //! independent of any codec. Every layout starts with a domain tag; instance, height and view are
-//! in every consensus signing preimage, block hash and result in every vote. The probe echo
-//! (kind `0x05`, §7.4 R2) is the only other signed object.
+//! in every consensus signing preimage, block hash, result and the block's attestation flag in
+//! every vote. The probe echo (kind `0x05`, §7.4 R2) is the only other signed object; the commit
+//! statement (kind `0x06`, §3.7) is attested by the application, not signed by consensus keys.
 
 use crate::{
     crypto::Crypto,
@@ -37,6 +38,8 @@ pub const KIND_COMMIT: u8 = 0x03;
 pub const KIND_TIMEOUT: u8 = 0x04;
 /// Kind byte of a probe echo (§3.3, §7.4 R2).
 pub const KIND_ECHO: u8 = 0x05;
+/// Kind byte of the commit statement an application attests (§3.3, §3.7).
+pub const KIND_ATTEST: u8 = 0x06;
 
 /// `kb(pk) = be16(len(raw)) ‖ raw`.
 pub fn kb(pk: &PublicKey) -> Vec<u8> {
@@ -72,6 +75,20 @@ fn put_len32(out: &mut Vec<u8>, len: usize) {
     out.extend_from_slice(&u32::try_from(len).unwrap_or(u32::MAX).to_be_bytes());
 }
 
+/// `bit(b) = 0x01 if b else 0x00` (§3.1).
+pub fn bit(flag: bool) -> u8 {
+    u8::from(flag)
+}
+
+/// `blobs(l) = be32(len(l)) ‖ [be32(len(x)) ‖ x] for x in l` (§3.1).
+pub fn put_blobs(out: &mut Vec<u8>, list: &[Vec<u8>]) {
+    put_len32(out, list.len());
+    for blob in list {
+        put_len32(out, blob.len());
+        out.extend_from_slice(blob);
+    }
+}
+
 /// `enc(None) = 0x00 ; enc(Some(w)) = 0x01 ‖ be64(w)` (optional view).
 pub fn enc_view(out: &mut Vec<u8>, view: Option<u64>) {
     match view {
@@ -102,7 +119,7 @@ fn put_round(out: &mut Vec<u8>, instance: &Hash32, height: u64, view: u64) {
 
 /// Preimage of `block_hash` (§3.2):
 /// `TAG_BLOCK ‖ I ‖ be64(h) ‖ be64(origin_view) ‖ parent_hash ‖ parent_result ‖ payload_hash ‖
-/// be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders)`.
+/// be32(payload_len) ‖ be32(proposer) ‖ keys(skipped_leaders) ‖ bit(attest)`.
 pub fn block_hash_preimage(header: &BlockHeader) -> Vec<u8> {
     let mut out = Vec::with_capacity(200);
     out.extend_from_slice(TAG_BLOCK);
@@ -118,6 +135,7 @@ pub fn block_hash_preimage(header: &BlockHeader) -> Vec<u8> {
     out.extend_from_slice(&header.payload_len.to_be_bytes());
     out.extend_from_slice(&header.proposer.to_be_bytes());
     put_keys(&mut out, &header.skipped_leaders);
+    out.push(bit(header.attest));
     out
 }
 
@@ -161,7 +179,8 @@ pub fn prop_preimage(
     out
 }
 
-/// `vote_preimage(kind, h, v, bh, R) = TAG_SIG ‖ kind ‖ I ‖ be64(h) ‖ be64(v) ‖ bh ‖ R` (§3.3).
+/// `vote_preimage(kind, h, v, bh, R, a) = TAG_SIG ‖ kind ‖ I ‖ be64(h) ‖ be64(v) ‖ bh ‖ R ‖
+/// bit(a)` (§3.3), with `a` the block's attestation flag (§3.7).
 pub fn vote_preimage(
     kind: VoteKind,
     instance: &Hash32,
@@ -169,16 +188,42 @@ pub fn vote_preimage(
     view: u64,
     bh: &Hash32,
     result: &Hash32,
+    attest: bool,
 ) -> Vec<u8> {
     #[cfg(sumeragi_mutation = "MS16")]
     let instance = &Hash32::ZERO;
-    let mut out = Vec::with_capacity(TAG_SIG.len() + 1 + 32 + 16 + 64);
+    let mut out = Vec::with_capacity(TAG_SIG.len() + 1 + 32 + 16 + 65);
     out.extend_from_slice(TAG_SIG);
     out.push(kind.byte());
     put_round(&mut out, instance, height, view);
     out.extend_from_slice(bh.as_bytes());
     #[cfg(not(sumeragi_mutation = "MS17"))]
     out.extend_from_slice(result.as_bytes());
+    // MA6: the flag is not signed.
+    #[cfg(not(sumeragi_mutation = "MA6"))]
+    out.push(bit(attest));
+    #[cfg(sumeragi_mutation = "MA6")]
+    let _ = attest;
+    out
+}
+
+/// `att_preimage(h, bh, R) = TAG_SIG ‖ 0x06 ‖ I ‖ be64(h) ‖ bh ‖ R` (§3.3): the commit statement
+/// an application attests (§3.7). It binds the instance, height, block hash and result, not the
+/// view, so an attestation stays valid in every view of its block.
+pub fn att_preimage(instance: &Hash32, height: u64, bh: &Hash32, result: &Hash32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(TAG_SIG.len() + 1 + 32 + 8 + 64);
+    out.extend_from_slice(TAG_SIG);
+    out.push(KIND_ATTEST);
+    out.extend_from_slice(instance.as_bytes());
+    #[cfg(not(sumeragi_mutation = "MA4"))]
+    out.extend_from_slice(&height.to_be_bytes());
+    #[cfg(sumeragi_mutation = "MA4")]
+    let _ = height;
+    out.extend_from_slice(bh.as_bytes());
+    #[cfg(not(sumeragi_mutation = "MA3"))]
+    out.extend_from_slice(result.as_bytes());
+    #[cfg(sumeragi_mutation = "MA3")]
+    let _ = result;
     out
 }
 
@@ -208,7 +253,8 @@ pub fn echo_preimage(instance: &Hash32, nonce: u64, height: u64) -> Vec<u8> {
 }
 
 /// Preimage of `qc_digest(c)` (§3.3): `TAG_QC ‖ c.kind ‖ I ‖ be64(c.height) ‖ be64(c.view) ‖
-/// c.block_hash ‖ c.result ‖ be32(len(c.signers)) ‖ c.signers ‖ c.agg_sig`.
+/// c.block_hash ‖ c.result ‖ be32(len(c.signers)) ‖ c.signers ‖ c.agg_sig ‖ bit(c.attest) ‖
+/// blobs(c.attestations)`.
 // SPEC: `I` in qc_digest / tc_digest is taken from the certificate's own `instance` field (every
 // verified certificate has `instance == I`) (Appendix E, E13).
 pub fn qc_digest_preimage(qc: &Qc) -> Vec<u8> {
@@ -221,6 +267,8 @@ pub fn qc_digest_preimage(qc: &Qc) -> Vec<u8> {
     put_len32(&mut out, qc.signers.as_bytes().len());
     out.extend_from_slice(qc.signers.as_bytes());
     out.extend_from_slice(&qc.agg_sig.0);
+    out.push(bit(qc.attest));
+    put_blobs(&mut out, &qc.attestations);
     out
 }
 
@@ -376,6 +424,8 @@ mod tests {
             result: h(0x33),
             signers: Bitmap::from_indices(4, [0, 1, 3]).unwrap(),
             agg_sig: AggregateSignature([0x55; SIGNATURE_LEN]),
+            attest: false,
+            attestations: Vec::new(),
         }
     }
 
@@ -414,6 +464,7 @@ mod tests {
             payload_len: 3,
             proposer: 2,
             skipped_leaders: vec![key(0xa1, 32), key(0xa2, 48)],
+            attest: false,
         }
     }
 
@@ -433,9 +484,10 @@ mod tests {
                 KIND_PREPARE,
                 KIND_COMMIT,
                 KIND_TIMEOUT,
-                KIND_ECHO
+                KIND_ECHO,
+                KIND_ATTEST
             ],
-            [1, 2, 3, 4, 5]
+            [1, 2, 3, 4, 5, 6]
         );
     }
 
@@ -457,6 +509,10 @@ mod tests {
         assert_eq!(out.len(), 1 + 1 + 32);
         assert_eq!(out[..2], [0, 1]);
         assert!(out[2..].iter().all(|b| *b == 0xee));
+        assert_eq!((bit(false), bit(true)), (0, 1));
+        let mut out = vec![];
+        put_blobs(&mut out, &[vec![0xaa; 3], vec![]]);
+        assert_eq!(hex(&out), "0000000200000003aaaaaa00000000");
     }
 
     #[test]
@@ -474,8 +530,9 @@ mod tests {
                 "44".repeat(32)
             )
         );
-        let prepare = vote_preimage(VoteKind::Prepare, &h(0x11), 7, 2, &h(0x22), &h(0x33));
-        let commit = vote_preimage(VoteKind::Commit, &h(0x11), 7, 2, &h(0x22), &h(0x33));
+        let prepare = vote_preimage(VoteKind::Prepare, &h(0x11), 7, 2, &h(0x22), &h(0x33), false);
+        let commit = vote_preimage(VoteKind::Commit, &h(0x11), 7, 2, &h(0x22), &h(0x33), false);
+        let flagged = vote_preimage(VoteKind::Commit, &h(0x11), 7, 2, &h(0x22), &h(0x33), true);
         let expected_tail = format!(
             "{}{:016x}{:016x}{}{}",
             "11".repeat(32),
@@ -484,8 +541,15 @@ mod tests {
             "22".repeat(32),
             "33".repeat(32)
         );
-        assert_eq!(hex(&prepare), format!("{}02{expected_tail}", hex(TAG_SIG)));
-        assert_eq!(hex(&commit), format!("{}03{expected_tail}", hex(TAG_SIG)));
+        assert_eq!(
+            hex(&prepare),
+            format!("{}02{expected_tail}00", hex(TAG_SIG))
+        );
+        assert_eq!(hex(&commit), format!("{}03{expected_tail}00", hex(TAG_SIG)));
+        assert_eq!(
+            hex(&flagged),
+            format!("{}03{expected_tail}01", hex(TAG_SIG))
+        );
         assert_eq!(
             hex(&tmo_preimage(&h(0x11), 7, 2, None)),
             format!(
@@ -515,11 +579,15 @@ mod tests {
         );
         assert_eq!(
             crypto.hash(&prepare).to_string(),
-            "98659ba03c8365889ce6ab17a82f3c7c2f731768d577f612f44f69ff60a737ba"
+            "53222ee16cb8647a734e07df3ed44f6a36d5d2f9451664295c515a469b13a6eb"
         );
         assert_eq!(
             crypto.hash(&commit).to_string(),
-            "4c0c11825b6f7b8c1906d28265a12d54cda658ea17e2286f3faf548db203bf17"
+            "deb26ab6a46ed3a2b61f33b5fb1202e02e69bed82473e2a592fd54aeaf9c869d"
+        );
+        assert_eq!(
+            crypto.hash(&flagged).to_string(),
+            "479a4dc4701f48d141903980474715d0af4ebaf5cd66109ac92db1e6607c04c5"
         );
         assert_eq!(
             crypto
@@ -561,13 +629,53 @@ mod tests {
         );
     }
 
+    /// MA4, MA3: the commit statement of §3.3 binds `I`, `h`, `bh` and `R` (and no view) in a
+    /// fixed layout that an application verifier may parse; digest from an independent Python
+    /// implementation (SHA-256).
     #[test]
+    fn golden_attestation_preimage() {
+        let statement = att_preimage(&h(0x11), 7, &h(0x22), &h(0x33));
+        assert_eq!(
+            hex(&statement),
+            format!(
+                "{}06{}{:016x}{}{}",
+                hex(TAG_SIG),
+                "11".repeat(32),
+                7,
+                "22".repeat(32),
+                "33".repeat(32)
+            )
+        );
+        assert_eq!(
+            FakeCrypto::new().hash(&statement).to_string(),
+            "29c5ddc95adc4be05eba0f89d3203f82dff4181d81699bc2d0d9c500f84a19f6"
+        );
+        for other in [
+            att_preimage(&h(0x12), 7, &h(0x22), &h(0x33)),
+            att_preimage(&h(0x11), 8, &h(0x22), &h(0x33)),
+            att_preimage(&h(0x11), 7, &h(0x23), &h(0x33)),
+            att_preimage(&h(0x11), 7, &h(0x22), &h(0x34)),
+        ] {
+            assert_ne!(
+                other, statement,
+                "instance, height, block and result are bound"
+            );
+        }
+        // Never a vote preimage (kind byte), whatever the numbers.
+        assert_ne!(
+            statement[..13],
+            vote_preimage(VoteKind::Commit, &h(0x11), 7, 2, &h(0x22), &h(0x33), true)[..13]
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
     fn golden_block_hash_and_body() {
         let crypto = FakeCrypto::new();
         let header = golden_header();
         let preimage = block_hash_preimage(&header);
         let expected = format!(
-            "{}{}{:016x}{:016x}{}{}{}{:08x}{:08x}00000002{}{}{}{}",
+            "{}{}{:016x}{:016x}{}{}{}{:08x}{:08x}00000002{}{}{}{}00",
             hex(TAG_BLOCK),
             "11".repeat(32),
             7,
@@ -585,7 +693,18 @@ mod tests {
         assert_eq!(hex(&preimage), expected);
         assert_eq!(
             block_hash(&crypto, &header).to_string(),
-            "eed316da61dc9657d91171ed83520ccbc7a2d82d53f8b889a70225f6ba9aab66"
+            "45403072247b2888ad75c76901aada6c9d66db2a17d08027dacd5af851798391"
+        );
+        assert_eq!(
+            block_hash(
+                &crypto,
+                &BlockHeader {
+                    attest: true,
+                    ..header.clone()
+                }
+            )
+            .to_string(),
+            "7f104b5aae007e7236557806080d74c7d15fb716e92d3b46559dd858feb0ae5d"
         );
         assert_eq!(
             payload_hash(&crypto, &[1, 2, 3]).to_string(),
@@ -657,6 +776,10 @@ mod tests {
                 skipped_leaders: vec![key(0xa1, 32)],
                 ..golden_header()
             },
+            BlockHeader {
+                attest: true,
+                ..golden_header()
+            },
         ];
         for variant in variants {
             assert_ne!(block_hash(&crypto, &variant), base, "{variant:?}");
@@ -664,6 +787,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn golden_certificate_digests() {
         let crypto = FakeCrypto::new();
         let qc = golden_qc();
@@ -671,7 +795,17 @@ mod tests {
         assert_eq!(hex(&qc_pre), GOLDEN_QC_PREIMAGE);
         assert_eq!(
             qc_digest(&crypto, &qc).to_string(),
-            "5a799f5973cc39048cde28866f24e3f9797558246b0bc6dec27dd194d8debe97"
+            "09961cfa21029631bcad3e23c0572a04e88932f6635e003a750eff1843141f40"
+        );
+        let flagged = Qc {
+            kind: VoteKind::Commit,
+            attest: true,
+            attestations: vec![vec![0xaa; 3], vec![0xbb; 2], vec![]],
+            ..golden_qc()
+        };
+        assert_eq!(
+            qc_digest(&crypto, &flagged).to_string(),
+            "9898e876d8db5771c1d75a8d9f9934b4a6125873786a3eb32e460267af32c1b2"
         );
 
         let tc = golden_tc();
@@ -679,7 +813,7 @@ mod tests {
         assert_eq!(hex(&tc_pre), GOLDEN_TC_PREIMAGE);
         assert_eq!(
             tc_digest(&crypto, &tc).to_string(),
-            "7f5c9a35805977cdb7fa5f1b9d3d2fb133efcee88ec2f51549a2ac834b1d3298"
+            "4348c6c6f0eb72fd48cdd073c713aaf4062e75c86a535fce28b0c3f3c37845a2"
         );
         let tc_none = TimeoutCert {
             high_pqc: None,
@@ -703,7 +837,7 @@ mod tests {
         );
         assert_eq!(
             att_digest(&crypto, Some(&tc), Some(&qc)).to_string(),
-            "160eb7332347c89e822ce96579009af5637b06c1976b2ef225dbc4fdffc0101c"
+            "a1a158efeb6a3b218e5078eaa2aa8974d729de4b765cdcbef6b64225b3bcf8bb"
         );
         assert_eq!(
             att_digest(&crypto, None, None).to_string(),
@@ -744,9 +878,34 @@ mod tests {
                 agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
                 ..golden_qc()
             },
+            Qc {
+                attest: true,
+                ..golden_qc()
+            },
+            Qc {
+                attestations: vec![vec![]],
+                ..golden_qc()
+            },
         ] {
             assert_ne!(qc_digest(&crypto, &variant), base);
         }
+        // Attestations are delimited: moving a byte between two of them changes the digest.
+        assert_ne!(
+            qc_digest(
+                &crypto,
+                &Qc {
+                    attestations: vec![vec![1, 2], vec![3]],
+                    ..flagged.clone()
+                }
+            ),
+            qc_digest(
+                &crypto,
+                &Qc {
+                    attestations: vec![vec![1], vec![2, 3]],
+                    ..flagged
+                }
+            )
+        );
         let base = tc_digest(&crypto, &tc);
         for variant in [
             TimeoutCert {
@@ -817,26 +976,31 @@ mod tests {
     #[test]
     fn instance_height_view_separate_domains() {
         // SR16/SR17: instance, height, view, kind and result change every signing preimage.
-        let base = vote_preimage(VoteKind::Prepare, &h(1), 1, 1, &h(2), &h(3));
+        let base = vote_preimage(VoteKind::Prepare, &h(1), 1, 1, &h(2), &h(3), false);
         assert_ne!(
             base,
-            vote_preimage(VoteKind::Prepare, &h(9), 1, 1, &h(2), &h(3))
+            vote_preimage(VoteKind::Prepare, &h(9), 1, 1, &h(2), &h(3), false)
         );
         assert_ne!(
             base,
-            vote_preimage(VoteKind::Prepare, &h(1), 2, 1, &h(2), &h(3))
+            vote_preimage(VoteKind::Prepare, &h(1), 2, 1, &h(2), &h(3), false)
         );
         assert_ne!(
             base,
-            vote_preimage(VoteKind::Prepare, &h(1), 1, 2, &h(2), &h(3))
+            vote_preimage(VoteKind::Prepare, &h(1), 1, 2, &h(2), &h(3), false)
         );
         assert_ne!(
             base,
-            vote_preimage(VoteKind::Commit, &h(1), 1, 1, &h(2), &h(3))
+            vote_preimage(VoteKind::Commit, &h(1), 1, 1, &h(2), &h(3), false)
         );
         assert_ne!(
             base,
-            vote_preimage(VoteKind::Prepare, &h(1), 1, 1, &h(2), &h(4))
+            vote_preimage(VoteKind::Prepare, &h(1), 1, 1, &h(2), &h(4), false)
+        );
+        assert_ne!(
+            base,
+            vote_preimage(VoteKind::Prepare, &h(1), 1, 1, &h(2), &h(3), true),
+            "the attestation flag is signed (SR39)"
         );
         assert_ne!(
             tmo_preimage(&h(1), 1, 1, None),
@@ -849,10 +1013,10 @@ mod tests {
         // Kind bytes keep proposals, votes and timeouts apart.
         assert_ne!(
             prop_preimage(&h(1), 1, 1, &h(2), &h(3))[..13],
-            vote_preimage(VoteKind::Prepare, &h(1), 1, 1, &h(2), &h(3))[..13]
+            vote_preimage(VoteKind::Prepare, &h(1), 1, 1, &h(2), &h(3), false)[..13]
         );
     }
 
-    const GOLDEN_QC_PREIMAGE: &str = "73756d65726167692f71630211111111111111111111111111111111111111111111111111111111111111110000000000000007000000000000000122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333000000010b555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555";
-    const GOLDEN_TC_PREIMAGE: &str = "73756d65726167692f74631111111111111111111111111111111111111111111111111111111111111111000000000000000700000000000000020000000300000000000000000101000000000000000100000003010000000000000001666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666015a799f5973cc39048cde28866f24e3f9797558246b0bc6dec27dd194d8debe97";
+    const GOLDEN_QC_PREIMAGE: &str = "73756d65726167692f71630211111111111111111111111111111111111111111111111111111111111111110000000000000007000000000000000122222222222222222222222222222222222222222222222222222222222222223333333333333333333333333333333333333333333333333333333333333333000000010b5555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555555550000000000";
+    const GOLDEN_TC_PREIMAGE: &str = "73756d65726167692f746311111111111111111111111111111111111111111111111111111111111111110000000000000007000000000000000200000003000000000000000001010000000000000001000000030100000000000000016666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666660109961cfa21029631bcad3e23c0572a04e88932f6635e003a750eff1843141f40";
 }

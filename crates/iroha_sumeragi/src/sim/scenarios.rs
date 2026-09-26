@@ -1,4 +1,4 @@
-//! Fault scenarios F1–F36 of §13.3, each a function of the seed. Committee sizes rotate over
+//! Fault scenarios F1–F37 of §13.3, each a function of the seed. Committee sizes rotate over
 //! `n ∈ {1, 4, 5, 7, 22}` where meaningful (small sizes first, so that the few default seeds of
 //! a debug run stay fast); every other random choice is drawn from a side stream of the seed.
 
@@ -7,7 +7,7 @@ use super::{
     driver::Clock,
     net::{Partition, Spike},
     rng::{Rng, seed_of},
-    scenario::{Churn, CrashPoint, Fault, Perf, Profile, Scenario, Workload},
+    scenario::{Authority, Churn, CrashPoint, Fault, Perf, Profile, Scenario, Workload},
     world::preview,
 };
 use crate::types::Millis;
@@ -53,6 +53,7 @@ pub const ALL: &[(&str, Builder)] = &[
     ("F34", f34),
     ("F35", f35),
     ("F36", f36),
+    ("F37", f37),
 ];
 
 fn pick<T: Copy>(seed: u64, options: &[T]) -> T {
@@ -1465,5 +1466,77 @@ pub fn f36(seed: u64) -> Scenario {
     sc.duration = crash + 30_000;
     sc.checks.perf = Perf::OneViewFailure;
     sc.checks.progress = 3;
+    sc
+}
+
+/// F37: commit attestation (§3.7). Every eighth transaction needs mint finality, so a share of
+/// the blocks is flagged. Every authority attests only blocks its node executed (`Pending`
+/// before, as KAGEMUSHA needs `R`'s preimage). Up to `f` Byzantine members send forged or
+/// stripped attestations — one of them, as proxy tail, also strips the attestations of the
+/// `CommitQC`s it forms and clears their flag every other time, and over-aggregates genuine
+/// attested votes into `q + 1`-signer `CommitQC`s — and one honest member may hold no
+/// authority, or a misconfigured one that its own verifier rejects, while at least `q` members
+/// still attest. On every other seed one attesting honest member executes non-empty blocks
+/// slowly, so the `PrepareQC` of a flagged block often reaches it before its execution ends.
+/// Flagged blocks commit, every committed flagged block's `CommitQC` carries exactly `q` valid
+/// attestations (O-ATT), and liveness holds.
+pub fn f37(seed: u64) -> Scenario {
+    let n = pick(seed, &[4, 7, 5, 10]);
+    let mut sc = sized("F37", seed, n);
+    let mut rng = side("F37", seed);
+    sc.workload = Some(Workload {
+        mint_every: 8,
+        ..Workload::default()
+    });
+    let f = f_of(n);
+    // `b` Byzantine members and `u` honest members without a working authority, `b + u ≤ f`
+    // (so at least `q` members attest); n = 4 and 5 alternate between the two kinds.
+    let (b, u) = match (f, (seed / 4) % 2) {
+        (1, 0) => (1, 0),
+        (1, _) => (0, 1),
+        (f, 0) => (f, 0),
+        (f, _) => (f - 1, 1),
+    };
+    let chosen = distinct(&mut rng, n, b + u);
+    let (byz, unattested) = chosen.split_at(b);
+    sc.byz = byz
+        .iter()
+        .enumerate()
+        .map(|(i, m)| {
+            let mut strategies = vec![Strategy::ForgeAttestations];
+            if i == 0 {
+                strategies.push(Strategy::StripAttestations);
+                strategies.push(Strategy::OverAggregate);
+            }
+            (*m, strategies)
+        })
+        .collect();
+    // A slow executor among the attesting honest members (its Commit waits for its execution).
+    if seed % 2 == 1
+        && let Some(slow) = (0..n).find(|m| !chosen.contains(m))
+    {
+        sc.set_profile(
+            slow,
+            Profile {
+                exec_nonempty: 400,
+                ..Profile::default()
+            },
+        );
+    }
+    for m in unattested {
+        let authority = if (seed / 8).is_multiple_of(2) {
+            Authority::Missing
+        } else {
+            Authority::Forging
+        };
+        sc.set_profile(
+            *m,
+            Profile {
+                authority,
+                ..Profile::default()
+            },
+        );
+    }
+    sc.checks.progress = 10;
     sc
 }

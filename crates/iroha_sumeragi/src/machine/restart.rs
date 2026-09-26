@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use super::{Build, CertCache, Core, LocalKey, Mine, Retx, Tip, sync::SyncState, votes::Pools};
 use crate::{
     api::{Action, ConfigError, HaltReason, Init, LocalParams},
-    crypto::{Crypto, Signer},
+    crypto::{Attestation, Crypto, Signer},
     message::{Vote, VoteKind},
     pacemaker::{Pacemaker, effective_t_max, retransmit_spacing, validate_chain, validate_local},
     preimage,
@@ -21,8 +21,9 @@ impl Core {
     /// Start a core (§12.1): validates the configuration (§9.4), then `restore` applies the
     /// restart rules R1–R6 (§7.4) to every configured and retired key and enters one starting
     /// round. `signers` are the configured keys; every key (configured or retired) has one
-    /// entry in `init.records`. A corrupt or inconsistent record halts the instance (the core is
-    /// still returned; it only serves).
+    /// entry in `init.records`. `attestation` is the node's commit-attestation extension (§3.7;
+    /// [`Attestation::none`] for an application that never flags a block). A corrupt or
+    /// inconsistent record halts the instance (the core is still returned; it only serves).
     ///
     /// # Errors
     /// [`ConfigError`] for an invalid local configuration or unusable startup input.
@@ -31,6 +32,7 @@ impl Core {
         init: Init,
         signers: Vec<Box<dyn Signer>>,
         crypto: Box<dyn Crypto>,
+        attestation: Attestation,
         now: Millis,
     ) -> Result<(Self, Vec<Action>), ConfigError> {
         let t = init.tip.height;
@@ -65,7 +67,15 @@ impl Core {
             .get(&t.saturating_add(1))
             .cloned()
             .ok_or_else(|| ConfigError::MissingConfig(t.saturating_add(1)))?;
-        let mut core = Self::blank(local, init, keys, crypto, now, configs, first);
+        let mut core = Self::blank(
+            local,
+            init,
+            keys,
+            (crypto, attestation),
+            now,
+            configs,
+            first,
+        );
         core.restore(&states);
         core.finish_call();
         let out = std::mem::take(&mut core.out);
@@ -95,7 +105,13 @@ impl Core {
             let Some(config) = self.configs.get(&config_height) else {
                 return self.halt(HaltReason::SafetyRecordInconsistent);
             };
-            match check_recommit(&*self.crypto, &config.committee, t, record) {
+            match check_recommit(
+                &*self.crypto,
+                &*self.attestation.verifier,
+                &config.committee,
+                t,
+                record,
+            ) {
                 Ok(qc) => {
                     let qc = qc.clone();
                     self.install_commit(qc);
@@ -135,7 +151,7 @@ impl Core {
         local: LocalParams,
         init: Init,
         keys: Vec<LocalKey>,
-        crypto: Box<dyn Crypto>,
+        (crypto, attestation): (Box<dyn Crypto>, Attestation),
         now: Millis,
         configs: BTreeMap<u64, HeightConfig>,
         first: HeightConfig,
@@ -167,6 +183,7 @@ impl Core {
         let rnd = topo.round(0);
         Self {
             crypto,
+            attestation,
             local,
             instance: init.instance,
             genesis: init.genesis_height,
@@ -291,7 +308,11 @@ impl Core {
         self.mine.timeout.clone_from(&timeout);
         // The recorded Prepare of the resumed view: identical preimage, identical bytes
         // (deterministic signatures), on the retransmit schedule from now.
-        let prepare = prepare.and_then(|v| self.rebuild_vote(me, v.block_hash, v.result));
+        // MA9: the recorded Prepare is rebuilt unflagged.
+        let prepare = prepare.and_then(|v| {
+            let attest = v.attest && !cfg!(sumeragi_mutation = "MA9");
+            self.rebuild_vote(me, (v.block_hash, v.result, attest))
+        });
         if let Some(qc) = self.high_pqc.clone() {
             let sources = self.signer_keys(&qc);
             self.want(qc.block_hash, self.height, sources);
@@ -312,7 +333,7 @@ impl Core {
         }
         // The own messages re-enter the own pools (§6.0); forming a certificate may commit.
         if let Some(vote) = prepare.filter(|_| self.same_height(h0)) {
-            self.pool_insert(vote);
+            self.pool_insert(&vote);
         }
         if let Some(timeout) = timeout.filter(|_| self.same_height(h0)) {
             self.timeout_insert(timeout);
@@ -349,12 +370,23 @@ impl Core {
         }
     }
 
-    /// Re-sign a recorded Prepare of the current view (an identical preimage gives identical
-    /// bytes, §12.1) and put it on the retransmit schedule with `t_vote = now`.
-    fn rebuild_vote(&mut self, me: super::Me, bh: Hash32, result: Hash32) -> Option<Vote> {
+    /// Re-sign a recorded Prepare `(bh, R, attest)` of the current view (an identical preimage
+    /// gives identical bytes, §12.1) and put it on the retransmit schedule with `t_vote = now`.
+    fn rebuild_vote(
+        &mut self,
+        me: super::Me,
+        (bh, result, attest): (Hash32, Hash32, bool),
+    ) -> Option<Vote> {
         let kind = VoteKind::Prepare;
-        let msg =
-            preimage::vote_preimage(kind, &self.instance, self.height, self.view, &bh, &result);
+        let msg = preimage::vote_preimage(
+            kind,
+            &self.instance,
+            self.height,
+            self.view,
+            &bh,
+            &result,
+            attest,
+        );
         let sig = self.sign(me, &msg)?;
         let vote = Vote {
             kind,
@@ -363,10 +395,12 @@ impl Core {
             view: self.view,
             block_hash: bh,
             result,
+            attest,
             signer: me.index,
             sig,
+            attestation: None,
         };
-        self.mine.prepare = Some(vote);
+        self.mine.prepare = Some(vote.clone());
         self.t_lastvote = Some(self.now);
         let t_retx = self.pm.t_retx(self.view);
         let spacing = retransmit_spacing(1, t_retx, self.local.rebroadcast_interval);

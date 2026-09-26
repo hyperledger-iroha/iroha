@@ -111,7 +111,7 @@ fn s34_check(seed: u64) {
             rep.halted, halt,
             "{down_until:?}: X must halt at the first non-empty height {h1}, not apply it"
         );
-        let core = rep.core.as_ref().expect("X is running");
+        let core = rep.host.core().expect("X is running");
         assert_eq!(core.status().halted, halt);
         assert_eq!(
             rep.applied.0,
@@ -204,7 +204,7 @@ fn inject_poison(w: &mut World) {
         let rep = &mut w.replicas[r];
         rep.txs.insert(POISON, encode_tx(POISON, true, pad));
         if let Some(req) = rep.pending_ready.take() {
-            rep.lanes.push_local(Event::PayloadReady { req });
+            rep.host.deliver(Event::PayloadReady { req });
         }
         w.refresh(r);
     }

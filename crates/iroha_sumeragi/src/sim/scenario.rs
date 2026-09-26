@@ -5,6 +5,7 @@
 use super::{
     byz::{NetRule, Strategy},
     driver::Clock,
+    host::{HostFactory, fake_host},
     net::NetConfig,
     world::World,
 };
@@ -58,6 +59,21 @@ pub struct Profile {
     pub block_write_extra: Millis,
     /// Ingress without priority lanes (FIFO; only to show that `det_l12` detects ML12).
     pub fifo_ingress: bool,
+    /// The machine's commit-attestation authority (§3.7, F37).
+    pub authority: Authority,
+}
+
+/// A machine's commit-attestation authority (§3.7, F37).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Authority {
+    /// Attests genuinely for every key.
+    #[default]
+    Full,
+    /// Holds no authority: attests nothing (so it does not Commit-vote on flagged blocks).
+    Missing,
+    /// A broken authority whose attestations never verify (the node's own verifier rejects
+    /// them, so it does not Commit-vote on flagged blocks either).
+    Forging,
 }
 
 impl Default for Profile {
@@ -82,6 +98,7 @@ impl Default for Profile {
             apply_ms: 5,
             block_write_extra: 0,
             fifo_ingress: false,
+            authority: Authority::Full,
         }
     }
 }
@@ -195,6 +212,16 @@ pub struct Workload {
     /// Bit mask of the machines that receive transactions (0 = all; F35 local-queue
     /// asymmetry).
     pub targets: u64,
+    /// Every `mint_every`-th transaction needs mint finality, so the block holding it is
+    /// flagged (§3.7, F37); 0 = none.
+    pub mint_every: u64,
+}
+
+impl Workload {
+    /// Whether transaction `id` needs mint finality.
+    pub fn mints(&self, id: u64) -> bool {
+        self.mint_every > 0 && id.is_multiple_of(self.mint_every)
+    }
 }
 
 impl Default for Workload {
@@ -206,6 +233,7 @@ impl Default for Workload {
             poison_ppm: 0,
             until: Millis::MAX,
             targets: 0,
+            mint_every: 0,
         }
     }
 }
@@ -330,6 +358,8 @@ pub struct Scenario {
     pub prebuilt: u64,
     /// Machines whose stores hold the pre-built chain.
     pub prebuilt_holders: Vec<usize>,
+    /// The node implementation of every replica (§13.5; default: the fake driver).
+    pub host: HostFactory,
 }
 
 impl Scenario {
@@ -362,6 +392,7 @@ impl Scenario {
             checks: Checks::default(),
             prebuilt: 0,
             prebuilt_holders: Vec::new(),
+            host: fake_host,
         }
     }
 

@@ -202,7 +202,15 @@ fn review_init_configs_beyond_t_plus_2_are_refused() {
     )];
     let start = |init: Init| {
         let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
-        Core::new(h.local, init, signers, Box::new(h.v.crypto.clone()), 0).map(|_| ())
+        Core::new(
+            h.local,
+            init,
+            signers,
+            Box::new(h.v.crypto.clone()),
+            crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+            0,
+        )
+        .map(|_| ())
     };
     assert!(start(h.init(records.clone())).is_ok(), "t + 1 and t + 2");
     let mut extra = h.init(records.clone());
@@ -394,7 +402,14 @@ fn review_empty_after_views_zero_refused_at_start() {
         config.params.empty_after_views = 0;
     }
     let signers: Vec<Box<dyn Signer>> = vec![Box::new(h.signers[0].clone())];
-    let started = Core::new(h.local, init, signers, Box::new(h.v.crypto.clone()), 0);
+    let started = Core::new(
+        h.local,
+        init,
+        signers,
+        Box::new(h.v.crypto.clone()),
+        crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
+        0,
+    );
     assert!(matches!(started, Err(ConfigError::EmptyAfterViewsZero)));
 }
 
@@ -433,6 +448,7 @@ fn review_zero_build_timeout_refused() {
         h.init(records),
         signers,
         Box::new(h.v.crypto.clone()),
+        crate::testing::fake_attestation_ext(crate::testing::FakeAttestor::new()),
         0,
     );
     assert!(matches!(

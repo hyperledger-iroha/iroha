@@ -410,8 +410,9 @@ mod tests {
         let log: SharedLog = Rc::default();
         let i = Hash32([1; 32]);
         let x = SimSigner::new(key(1), Some(0), Rc::clone(&log));
-        let prep =
-            |bh: u8| preimage::vote_preimage(VoteKind::Prepare, &i, 5, 2, &Hash32([bh; 32]), &i);
+        let prep = |bh: u8| {
+            preimage::vote_preimage(VoteKind::Prepare, &i, 5, 2, &Hash32([bh; 32]), &i, false)
+        };
         let leader = SimSigner::new(key(9), None, Rc::clone(&log));
         for bh in 1..=3u8 {
             leader.sign(&preimage::prop_preimage(&i, 5, 2, &Hash32([bh; 32]), &i));
@@ -431,14 +432,30 @@ mod tests {
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "equivocation");
         // Timeout fence.
         x.sign(&preimage::tmo_preimage(&i, 6, 3, None));
-        x.sign(&preimage::vote_preimage(VoteKind::Commit, &i, 6, 3, &i, &i));
+        x.sign(&preimage::vote_preimage(
+            VoteKind::Commit,
+            &i,
+            6,
+            3,
+            &i,
+            &i,
+            false,
+        ));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "fence");
         // A timeout for an earlier view: out of order (the Lemma 2 lock clause covers only
         // timeouts at views ≥ the Commit's).
         x.sign(&preimage::tmo_preimage(&i, 6, 2, None));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "timeout order");
         // After a Commit at view 1, a later timeout must carry hq ≥ 1.
-        x.sign(&preimage::vote_preimage(VoteKind::Commit, &i, 7, 1, &i, &i));
+        x.sign(&preimage::vote_preimage(
+            VoteKind::Commit,
+            &i,
+            7,
+            1,
+            &i,
+            &i,
+            false,
+        ));
         x.sign(&preimage::tmo_preimage(&i, 7, 1, Some(1)));
         assert!(log.borrow_mut().take_violations().is_empty());
         x.sign(&preimage::tmo_preimage(&i, 7, 2, Some(0)));
@@ -466,6 +483,7 @@ mod tests {
             0,
             &i,
             &i,
+            false,
         ));
         assert_eq!(log.borrow_mut().take_violations().len(), 1, "unproposed");
         // Abstention (R2/R6).

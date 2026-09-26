@@ -705,7 +705,7 @@ fn det_s16_cross_instance_replay_core() {
     // A certificate genuinely signed for another instance, relabelled with this instance.
     let other = Hash32([0x22; 32]);
     let value = (h.bh(&b), result_of(&b));
-    let msg = preimage::vote_preimage(VoteKind::Commit, &other, 1, 0, &value.0, &value.1);
+    let msg = preimage::vote_preimage(VoteKind::Commit, &other, 1, 0, &value.0, &value.1, false);
     let signers = h.others(3, &[]);
     let sigs: Vec<Signature> = signers
         .iter()

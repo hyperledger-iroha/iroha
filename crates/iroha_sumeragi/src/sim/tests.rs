@@ -6,6 +6,7 @@
 
 use super::{
     byz::Strategy,
+    host::{FakeHost, Host, Start},
     run,
     scenario::{Perf, Profile, Scenario},
     scenarios::{self, Builder},
@@ -54,7 +55,7 @@ fn sweep(name: &str, builder: Builder) -> Vec<World> {
         sum(&|w| w.stats.crashes),
         sum(&|w| w.stats.evidence),
         sum(&|w| w.stats.lost),
-        sum(&|w| w.replicas.iter().map(|r| r.lanes.dropped).sum()),
+        sum(&|w| w.replicas.iter().map(|r| r.host.ingress_drops()).sum()),
     );
     if let Some((seed, report)) = failures.first() {
         let seeds: Vec<u64> = failures.iter().map(|(s, _)| *s).collect();
@@ -131,7 +132,7 @@ fn f15_slow_executors() {
             continue;
         }
         for r in world.honest() {
-            let Some(core) = world.replicas[r].core.as_ref() else {
+            let Some(core) = world.replicas[r].host.core() else {
                 continue;
             };
             let max = world.oracle.reps[r].max_start_level;
@@ -176,7 +177,7 @@ fn f24_record_corruption_and_loss() {
         // R2 works under every variant (forged, replayed and relayed echoes, rolled-back key
         // stores, reinstalled keys): every honest node that lost a record anchors again.
         for r in world.honest() {
-            let Some(core) = world.replicas[r].core.as_ref() else {
+            let Some(core) = world.replicas[r].host.core() else {
                 continue;
             };
             let status = core.status();
@@ -386,5 +387,204 @@ fn report() {
                 "{n:<4} {case:<22} {heights:>8} {avg:>8}ms {p99:>8}ms {latency:>8}ms {msgs:>12}"
             );
         }
+    }
+}
+
+/// F37 (§3.7): flagged blocks commit under forging, withholding and stripping members, and
+/// each committed flagged block's `CommitQC` carries at least `q` valid attestations (the O-ATT
+/// oracle checks every honest commit; this counts that flagged blocks were committed at all).
+#[test]
+fn f37_commit_attestation() {
+    let worlds = sweep("F37", scenarios::f37);
+    let flagged: usize = worlds
+        .iter()
+        .map(|w| {
+            w.oracle.refs[0]
+                .values()
+                .filter(|b| b.header.attest)
+                .count()
+        })
+        .sum();
+    let total: usize = worlds.iter().map(|w| w.oracle.refs[0].len()).sum();
+    eprintln!("F37: {flagged} of {total} committed blocks flagged");
+    assert!(
+        flagged * 10 >= total,
+        "a share of the committed blocks is flagged"
+    );
+}
+
+/// O-ATT counts the signers of a flagged `CommitQC` itself (independently of
+/// `verify_attestations`, which MA11 mutates): exactly `q`, one genuine attestation each, and
+/// the block's flag; `q + 1` genuine ones, a missing one or a cleared flag fail.
+#[test]
+fn o_att_requires_exactly_q_attested_signers() {
+    use crate::{
+        message::{Block, BlockHeader, Qc, VoteKind},
+        preimage,
+        testing::fake_attestation,
+        types::{AggregateSignature, Bitmap, Hash32, SIGNATURE_LEN},
+    };
+    let world = World::new(scenarios::f37(0));
+    let inst = &world.instances[0];
+    let committee = inst.committee(1).clone();
+    let (n, q) = (committee.n(), committee.q());
+    let header = BlockHeader {
+        instance: inst.id,
+        height: 1,
+        origin_view: 0,
+        parent_hash: inst.genesis_hash,
+        parent_result: inst.genesis_result,
+        payload_hash: Hash32([1; 32]),
+        payload_len: 1,
+        proposer: 0,
+        skipped_leaders: Vec::new(),
+        attest: true,
+    };
+    let block = Block {
+        header,
+        payload: vec![0],
+    };
+    let (bh, result) = (Hash32([2; 32]), Hash32([3; 32]));
+    let statement = preimage::att_preimage(&inst.id, 1, &bh, &result);
+    let qc_of = |count: usize| {
+        let signers: Vec<u32> = (0..u32::try_from(count).unwrap()).collect();
+        Qc {
+            kind: VoteKind::Commit,
+            instance: inst.id,
+            height: 1,
+            view: 0,
+            block_hash: bh,
+            result,
+            attest: true,
+            signers: Bitmap::from_indices(n, signers.iter().copied()).unwrap(),
+            agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
+            attestations: (signers.iter())
+                .map(|i| fake_attestation(committee.get(*i).unwrap(), 1, &statement))
+                .collect(),
+        }
+    };
+    assert_eq!(world.attested(0, &block, &qc_of(q)), Ok(()));
+    assert!(world.attested(0, &block, &qc_of(q + 1)).is_err(), "q + 1");
+    let mut missing = qc_of(q);
+    missing.attestations.pop();
+    assert!(world.attested(0, &block, &missing).is_err(), "missing");
+    let cleared = Qc {
+        attest: false,
+        attestations: Vec::new(),
+        ..qc_of(q)
+    };
+    assert!(world.attested(0, &block, &cleared).is_err(), "flag");
+}
+
+std::thread_local! {
+    /// Inputs handled by [`Wrapped`] hosts on this test thread.
+    static WRAPPED_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// A trivial external node implementation (§13.5): it delegates every call to the fake driver
+/// and counts the inputs it handles.
+#[derive(Default)]
+struct Wrapped(FakeHost);
+
+impl Host for Wrapped {
+    fn start(&mut self, start: Start) -> Result<Vec<crate::api::Action>, crate::api::ConfigError> {
+        self.0.start(start)
+    }
+
+    fn crash(&mut self) {
+        self.0.crash();
+    }
+
+    fn running(&self) -> bool {
+        self.0.running()
+    }
+
+    fn receive(
+        &mut self,
+        from: crate::types::PublicKey,
+        msg: crate::message::WireMessage,
+        class: crate::message::TrafficClass,
+    ) {
+        self.0.receive(from, msg, class);
+    }
+
+    fn deliver(&mut self, event: crate::api::Event) {
+        self.0.deliver(event);
+    }
+
+    fn has_input(&self) -> bool {
+        self.0.has_input()
+    }
+
+    fn next_input(&mut self, now: Millis) -> Option<crate::api::Event> {
+        self.0.next_input(now)
+    }
+
+    fn handle(&mut self, now: Millis, event: crate::api::Event) -> Vec<crate::api::Action> {
+        WRAPPED_CALLS.with(|calls| calls.set(calls.get() + 1));
+        self.0.handle(now, event)
+    }
+
+    fn next_wakeup(&self) -> Millis {
+        self.0.next_wakeup()
+    }
+
+    fn persisting(&mut self, write: u64) {
+        self.0.persisting(write);
+    }
+
+    fn gate(&mut self, effect: crate::api::Action) -> Option<crate::api::Action> {
+        self.0.gate(effect)
+    }
+
+    fn durable(&mut self, write: u64) -> Vec<crate::api::Action> {
+        self.0.durable(write)
+    }
+
+    fn core(&self) -> Option<&crate::Core> {
+        self.0.core()
+    }
+
+    fn held(&self) -> Vec<crate::api::Action> {
+        self.0.held()
+    }
+
+    fn ingress_drops(&self) -> u64 {
+        self.0.ingress_drops()
+    }
+}
+
+fn wrapped_host(_machine: usize, _instance: usize) -> Box<dyn Host> {
+    Box::new(Wrapped::default())
+}
+
+/// §13.5 host seam: a scenario runs through an external node implementation (here a wrapper
+/// that delegates to the fake driver) with every oracle, and the run is identical to the one on
+/// the default host — the seam carries every input and effect, crashes and restarts included
+/// (F13 churn).
+#[test]
+fn host_seam_runs_a_wrapped_host() {
+    let cases: [(&str, Builder, u64); 2] = [("F9", scenarios::f09, 3), ("F13", scenarios::f13, 1)];
+    for (name, builder, seed) in cases {
+        let plain = run(builder(seed)).unwrap_or_else(|e| panic!("{e}"));
+        WRAPPED_CALLS.with(|calls| calls.set(0));
+        let mut sc = builder(seed);
+        sc.host = wrapped_host;
+        let wrapped = run(sc).unwrap_or_else(|e| panic!("{e}"));
+        let calls = WRAPPED_CALLS.with(std::cell::Cell::get);
+        assert_eq!(
+            calls, wrapped.stats.events,
+            "{name}: every input went through the host"
+        );
+        assert!(calls > 1_000, "{name}: {calls}");
+        assert_eq!(plain.stats.events, wrapped.stats.events, "{name}");
+        assert_eq!(plain.stats.bytes, wrapped.stats.bytes, "{name}");
+        assert_eq!(plain.stats.crashes, wrapped.stats.crashes, "{name}");
+        let chain = |w: &World| -> Vec<_> { w.oracle.refs[0].values().map(|b| b.bh).collect() };
+        assert_eq!(
+            chain(&plain),
+            chain(&wrapped),
+            "{name}: the same committed chain"
+        );
     }
 }

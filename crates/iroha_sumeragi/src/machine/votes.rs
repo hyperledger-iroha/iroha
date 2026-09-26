@@ -5,7 +5,8 @@ use std::collections::BTreeMap;
 
 use super::{Core, EvKey, PqcVia, Retx, Via};
 use crate::{
-    crypto::{form_qc, verify_vote},
+    api::LocalFault,
+    crypto::{AttestOutcome, form_qc, verify_vote, verify_vote_attestation},
     message::{Evidence, Qc, Vote, VoteKind, WireMessage},
     pacemaker::retransmit_spacing,
     types::{Hash32, ValidatorIndex, usize_of},
@@ -46,15 +47,15 @@ impl Pools {
         }
     }
 
-    /// Votes of `(kind, view)` for `value`, in signer order.
-    fn matching(&self, kind: VoteKind, view: u64, value: (Hash32, Hash32)) -> Vec<&Vote> {
+    /// Votes of `(kind, view)` for the signed value `(bh, R, attest)` of `x`, in signer order.
+    fn matching(&self, x: &Vote) -> Vec<&Vote> {
         self.slots
-            .get(&(view, kind))
+            .get(&(x.view, x.kind))
             .map(|slots| {
                 slots
                     .iter()
                     .flatten()
-                    .filter(|vote| vote.value() == value)
+                    .filter(|vote| same_value(vote, x))
                     .collect()
             })
             .unwrap_or_default()
@@ -101,6 +102,11 @@ impl Pools {
     }
 }
 
+/// Whether two votes sign the same value `(bh, R, attest)` (§3.4 formation, §3.7 A3).
+fn same_value(a: &Vote, b: &Vote) -> bool {
+    a.value() == b.value() && a.attest == b.attest
+}
+
 impl Core {
     /// §6.4 steps 1–3 for a vote from the wire at the current height.
     pub(super) fn on_vote(&mut self, x: Vote) {
@@ -120,15 +126,16 @@ impl Core {
         {
             self.send(to, WireMessage::Qc(qc));
         }
-        // Step 3: cheap reject, verification, equivocation.
-        let held = self.votes.get(x.kind, x.view, x.signer).copied();
-        if held.is_some_and(|old| old.value() == x.value()) {
+        // Step 3: cheap reject, verification (signature, attestation), equivocation.
+        let held = self.votes.get(x.kind, x.view, x.signer).cloned();
+        if held.as_ref().is_some_and(|old| same_value(old, &x)) {
             return;
         }
         #[cfg(not(sumeragi_mutation = "MS38"))]
         if verify_vote(&*self.crypto, &self.instance, &self.cfg.committee, &x).is_err() {
             return;
         }
+        // Two signed values in one slot are equivocation, whatever the unsigned attestation.
         if let Some(old) = held {
             self.report(
                 EvKey::Vote(x.kind, x.view, x.signer),
@@ -136,16 +143,27 @@ impl Core {
             );
             return;
         }
-        self.pool_insert(x);
+        if !self.attested(&x) {
+            return;
+        }
+        self.pool_insert(&x);
+    }
+
+    /// §3.7 A3: a Commit vote of a flagged block counts only with an attestation that verifies
+    /// for its signer (any other vote needs none). A vote failing it leaves no state behind, so
+    /// the signer's genuine retransmission still counts after a relay's stripped copy.
+    fn attested(&self, x: &Vote) -> bool {
+        cfg!(sumeragi_mutation = "MA1")
+            || verify_vote_attestation(&*self.attestation.verifier, &self.cfg.committee, x).is_ok()
     }
 
     /// `pool_insert` (§6.4 step 4): insert a verified (or own) vote, contagion, formation. The
     /// node's own votes enter here exactly once, right after they are signed (§6.0).
-    pub(super) fn pool_insert(&mut self, x: Vote) {
+    pub(super) fn pool_insert(&mut self, x: &Vote) {
         if self.votes.get(x.kind, x.view, x.signer).is_some() {
             return;
         }
-        self.votes.insert(x);
+        self.votes.insert(x.clone());
         let h0 = self.height;
         let f = self.cfg.committee.f();
         if x.view == self.view
@@ -160,7 +178,7 @@ impl Core {
                 return;
             }
         }
-        let votes = self.votes.matching(x.kind, x.view, x.value());
+        let votes = self.votes.matching(x);
         if votes.len() != self.cfg.committee.q() {
             return;
         }
@@ -265,24 +283,76 @@ impl Core {
         if self.mine.commit.is_some() || self.safety.is_none() {
             return;
         }
-        let Some((bh, result)) = self
+        let Some((bh, result, attest)) = self
             .high_pqc
             .as_ref()
             .filter(|q| q.view == view || cfg!(sumeragi_mutation = "MS5"))
-            .map(Qc::value)
+            .map(|q| (q.block_hash, q.result, q.attest))
         else {
             return;
         };
         if !self.rnd.in_set_a(me.index) && (self.stage < 1 || cfg!(sumeragi_mutation = "ML3")) {
             return;
         }
+        // §3.7 A2: a flagged lock is Commit-voted only with this node's attestation.
+        let attestation = if attest {
+            let statement =
+                crate::preimage::att_preimage(&self.instance, self.height, &bh, &result);
+            let outcome = self.own_attestation(me, &statement);
+            match outcome {
+                AttestOutcome::Attested(attestation) => Some(attestation),
+                // Not yet (the authority needs this node's execution of the block): asked
+                // again after it (§6.3 step 4) and at each stage raise; no fault.
+                AttestOutcome::Pending => return,
+                // MA5: a node without authority Commit-votes anyway, without an attestation.
+                AttestOutcome::NoAuthority if cfg!(sumeragi_mutation = "MA5") => None,
+                AttestOutcome::NoAuthority => {
+                    if !self.mine.unattested {
+                        self.mine.unattested = true;
+                        self.local_fault(LocalFault::AttestationUnavailable {
+                            height: self.height,
+                            view,
+                        });
+                    }
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         self.persist();
-        self.cast_vote(me, VoteKind::Commit, bh, result);
+        self.cast_vote(me, VoteKind::Commit, (bh, result, attest), attestation);
     }
 
-    /// Sign, route and pool an own vote (after its `persist()`); pooling is last because it may
-    /// form a certificate and commit.
-    pub(super) fn cast_vote(&mut self, me: super::Me, kind: VoteKind, bh: Hash32, result: Hash32) {
+    /// §3.7 A2: this node's answer for `statement`, the commit statement of its flagged lock.
+    /// An attestation its own verifier rejects (a misconfigured authority) counts as no
+    /// authority, so it never enters the node's own pool (SR38).
+    fn own_attestation(&self, me: super::Me, statement: &[u8]) -> AttestOutcome {
+        let Some(key) = self.key_of_slot(me.slot) else {
+            return AttestOutcome::NoAuthority;
+        };
+        let (attestor, verifier) = (&self.attestation.attestor, &self.attestation.verifier);
+        match attestor.attest(self.height, key, statement) {
+            // MA10: an attestation the node's own verifier rejects is used anyway.
+            AttestOutcome::Attested(attestation)
+                if !cfg!(sumeragi_mutation = "MA10")
+                    && !verifier.verify(self.height, me.index, key, statement, &attestation) =>
+            {
+                AttestOutcome::NoAuthority
+            }
+            other => other,
+        }
+    }
+
+    /// Sign, route and pool an own vote for the signed value `(bh, R, attest)` (after its
+    /// `persist()`); pooling is last because it may form a certificate and commit.
+    pub(super) fn cast_vote(
+        &mut self,
+        me: super::Me,
+        kind: VoteKind,
+        (bh, result, attest): (Hash32, Hash32, bool),
+        attestation: Option<Vec<u8>>,
+    ) {
         let preimage = crate::preimage::vote_preimage(
             kind,
             &self.instance,
@@ -290,6 +360,7 @@ impl Core {
             self.view,
             &bh,
             &result,
+            attest,
         );
         let Some(sig) = self.sign(me, &preimage) else {
             return;
@@ -301,13 +372,15 @@ impl Core {
             view: self.view,
             block_hash: bh,
             result,
+            attest,
             signer: me.index,
             sig,
+            attestation,
         };
         let slot = usize::from(kind == VoteKind::Commit);
         match kind {
-            VoteKind::Prepare => self.mine.prepare = Some(vote),
-            VoteKind::Commit => self.mine.commit = Some(vote),
+            VoteKind::Prepare => self.mine.prepare = Some(vote.clone()),
+            VoteKind::Commit => self.mine.commit = Some(vote.clone()),
         }
         self.t_lastvote = Some(self.now);
         let t_retx = self.pm.t_retx(self.view);
@@ -323,7 +396,7 @@ impl Core {
             });
         }
         self.route(&vote);
-        self.pool_insert(vote);
+        self.pool_insert(&vote);
     }
 
     /// `route(vote)` (§5.2): to `P` at stages 0–1 (local if `P` is this node), broadcast to
@@ -331,14 +404,14 @@ impl Core {
     pub(super) fn route(&mut self, vote: &Vote) {
         if self.stage >= 2 {
             let to = self.members_except_me();
-            self.broadcast(to, WireMessage::Vote(*vote));
+            self.broadcast(to, WireMessage::Vote(vote.clone()));
             return;
         }
         let tail = self.rnd.proxy_tail();
         if Some(tail) != self.my_index()
             && let Some(to) = self.member_key(tail)
         {
-            self.send(to, WireMessage::Vote(*vote));
+            self.send(to, WireMessage::Vote(vote.clone()));
         }
     }
 
@@ -351,8 +424,11 @@ impl Core {
         }
         self.stage = stage;
         let unanswered = [
-            self.mine.prepare.filter(|_| !self.has_pqc_of_view()),
-            self.mine.commit,
+            self.mine
+                .prepare
+                .clone()
+                .filter(|_| !self.has_pqc_of_view()),
+            self.mine.commit.clone(),
         ];
         let t_retx = self.pm.t_retx(self.view);
         let spacing = retransmit_spacing(1, t_retx, self.local.rebroadcast_interval);

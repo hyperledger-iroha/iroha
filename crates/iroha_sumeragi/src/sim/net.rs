@@ -7,44 +7,41 @@ use std::collections::{BTreeSet, VecDeque};
 
 use super::rng::Rng;
 use crate::{
-    message::{Block, BlockHeader, Qc, TimeoutCert, WireMessage},
+    message::{Block, BlockHeader, Qc, TimeoutCert, TrafficClass, WireMessage},
     types::Millis,
 };
 
-/// Traffic class of a message (O8).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Class {
-    /// Votes, certificates, timeouts, `Status`, requests, proposals without payload.
-    Control,
-    /// Proposals with payload and `BlockResponse`s for the current height.
-    Proposal,
-    /// Sync responses and other block responses.
-    Bulk,
+/// Traffic class of a message (O8): the core's table (§3.5, Appendix E, E44).
+pub type Class = TrafficClass;
+
+/// The O8 class of `msg` (`WireMessage::traffic_class`, the table the transport uses).
+pub fn class_of(msg: &WireMessage) -> Class {
+    msg.traffic_class()
 }
 
-impl Class {
-    /// Lane index (priority order).
-    pub fn lane(self) -> usize {
-        match self {
-            Self::Control => 0,
-            Self::Proposal => 1,
-            Self::Bulk => 2,
-        }
+/// Lane index of a class (priority order: control, proposal, bulk).
+pub fn lane(class: Class) -> usize {
+    match class {
+        Class::Control => 0,
+        Class::Proposal => 1,
+        Class::Bulk => 2,
     }
 }
 
-/// The O8 class of `msg`; `height` is the receiver's (or sender's) current round height.
-pub fn class_of(msg: &WireMessage, height: u64) -> Class {
-    match msg {
-        WireMessage::Proposal(p) if p.payload.is_some() => Class::Proposal,
-        WireMessage::BlockResponse(r) if r.block.header.height >= height => Class::Proposal,
-        WireMessage::BlockResponse(_) | WireMessage::SyncResponse(_) => Class::Bulk,
-        _ => Class::Control,
-    }
+fn attestations_size(attestations: &[Vec<u8>]) -> u64 {
+    attestations.iter().map(|a| 4 + len64(a.len())).sum()
 }
 
 fn qc_size(qc: &Qc) -> u64 {
-    1 + 32 + 8 + 8 + 32 + 32 + 8 + len64(qc.signers.as_bytes().len()) + 96
+    1 + 32
+        + 8
+        + 8
+        + 32
+        + 32
+        + 8
+        + len64(qc.signers.as_bytes().len())
+        + 96
+        + attestations_size(&qc.attestations)
 }
 
 fn opt_qc_size(qc: Option<&Qc>) -> u64 {
@@ -81,7 +78,9 @@ pub fn approx_size(msg: &WireMessage) -> u64 {
                 + p.payload.as_ref().map_or(0, |b| 8 + len64(b.len()))
                 + 96
         }
-        WireMessage::Vote(_) => 1 + 32 + 8 + 8 + 32 + 32 + 4 + 96,
+        WireMessage::Vote(v) => {
+            1 + 32 + 8 + 8 + 32 + 32 + 4 + 96 + v.attestation.as_ref().map_or(0, |a| len64(a.len()))
+        }
         WireMessage::Qc(qc) => qc_size(qc),
         WireMessage::Timeout(t) => 32 + 8 + 8 + opt_qc_size(t.high_pqc.as_ref()) + 4 + 96,
         WireMessage::Tc(tc) => tc_size(tc),
@@ -323,7 +322,7 @@ impl<T> Default for Nic<T> {
 impl<T> Nic<T> {
     /// Queue a packet at time `now_us`.
     pub fn push(&mut self, class: Class, packet: Packet<T>) {
-        if let Some(queue) = self.queues.get_mut(class.lane()) {
+        if let Some(queue) = self.queues.get_mut(lane(class)) {
             queue.push_back(packet);
         }
     }
