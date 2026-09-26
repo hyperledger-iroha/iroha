@@ -6,10 +6,10 @@ fn enforce_zk_envelope_maps_errors_and_ok() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -49,10 +49,10 @@ fn enforce_zk_envelope_rejects_shared_open_verify_shape_failures() {
     host.halo2_config.max_envelope_bytes = usize::MAX;
     host.halo2_config.max_proof_bytes = usize::MAX;
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -159,10 +159,10 @@ fn enforce_zk_envelope_rejects_namespace_and_manifest_replays() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -210,10 +210,10 @@ fn enforce_zk_envelope_rejects_vk_metadata_mismatch() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,
@@ -491,7 +491,7 @@ fn generic_verify_proof_syscall_rejects_injected_non_production_vk_snapshot() {
 #[test]
 fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let public_inputs = vec![1_u8, 2, 3, 4];
     let mut vk_bytes = b"ZK1\0H2VK".to_vec();
     vk_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
@@ -519,7 +519,7 @@ fn generic_verify_proof_revalidates_injected_halo2_material_at_dispatch() {
             record,
             backend_label: Arc::from(backend),
             material: Some(crate::zk::PreparedVerifyingKeyMaterialV1::Halo2IpaPasta {
-                ipa_k: crate::zk::IVM_EXECUTION_V1_IPA_K,
+                ipa_k: crate::zk::IVM_REPLAY_BINDING_V1_IPA_K,
             }),
         },
     );
@@ -658,10 +658,10 @@ fn zk_verify_batch_reports_first_error_for_dummy_payloads() {
     host.set_chain_id_bytes(b"chain".to_vec());
     host.set_current_manifest_id(Some("core".to_string()));
     let backend = "halo2/ipa";
-    let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let vk_bytes = canonical_ivm_execution_vk_bytes();
     let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
-    let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+    let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
     let schema_hash = schema_hash(&public_inputs);
     let rec = active_vk_record(
         commitment,

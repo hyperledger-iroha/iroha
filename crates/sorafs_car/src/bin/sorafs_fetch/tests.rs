@@ -53,25 +53,60 @@ fn write_canonical_plan(path: &Path, plan: &CarBuildPlan) {
 fn xor_micro(value: u128) -> XorQuantity {
     XorQuantity::try_from_micro(value).expect("test micro-XOR amount is representable")
 }
-fn plan_chunks(payload: &[u8], plan: &CarBuildPlan) -> Vec<Vec<u8>> {
-    plan.chunks
-        .iter()
-        .map(|chunk| {
-            let start = chunk.offset as usize;
-            let end = start + chunk.length as usize;
-            payload[start..end].to_vec()
-        })
-        .collect()
-}
+
 #[test]
-fn write_binary_creates_parent_and_writes_all_bytes() {
+fn output_spool_creates_parent_and_publishes_all_bytes() {
     let (_temp, temp_path) = canonical_tempdir();
     let output_path = temp_path.join("nested").join("payload.bin");
-    write_binary(&output_path, b"sorafs-fetch-output").expect("write binary output");
+    let mut spool = private_output_spool(&output_path).expect("private output");
+    spool.write_all(b"sorafs-fetch-output").unwrap();
+    assert!(!output_path.exists());
+    publish_output_spool(spool, &output_path).expect("publish verified output");
     assert_eq!(
         fs::read(&output_path).expect("read output"),
         b"sorafs-fetch-output"
     );
+}
+
+#[test]
+fn interrupted_streaming_writer_discards_prefix_without_replacing_output() {
+    let (_temp, directory) = canonical_tempdir();
+    let output = directory.join("payload.bin");
+    fs::write(&output, b"previous verified payload").unwrap();
+    let mut writer = StreamingWriter::create(&output).unwrap();
+    let temporary_path = writer.writer.get_ref().path().to_owned();
+    writer.write_chunk(0, b"unverified prefix").unwrap();
+    writer.flush().unwrap();
+    let mut replay = Vec::new();
+    writer.reader().unwrap().read_to_end(&mut replay).unwrap();
+    assert_eq!(replay, b"unverified prefix");
+    assert_eq!(writer.total_written(), replay.len() as u64);
+    assert_eq!(writer.current_digest(), *blake3::hash(&replay).as_bytes());
+    drop(writer);
+    assert!(!temporary_path.exists());
+    assert_eq!(fs::read(output).unwrap(), b"previous verified payload");
+}
+
+#[test]
+fn streaming_writer_publishes_only_complete_verified_bytes() {
+    let (_temp, directory) = canonical_tempdir();
+    let output = directory.join("payload.bin");
+    let mut writer = StreamingWriter::create(&output).unwrap();
+    writer.write_chunk(0, b"verified bytes").unwrap();
+    writer.publish(&output).unwrap();
+    assert_eq!(fs::read(output).unwrap(), b"verified bytes");
+}
+
+#[test]
+fn failed_output_publication_cleans_up_temporary_bytes() {
+    let (_temp, directory) = canonical_tempdir();
+    let output = directory.join("payload.bin");
+    let spool = private_output_spool(&output).unwrap();
+    let temporary_path = spool.path().to_owned();
+    fs::create_dir(&output).unwrap();
+    assert!(publish_output_spool(spool, &output).is_err());
+    assert!(output.is_dir());
+    assert!(!temporary_path.exists());
 }
 #[cfg(unix)]
 #[test]
@@ -112,16 +147,13 @@ fn streaming_writer_rejects_symlink_parent() {
 }
 #[cfg(unix)]
 #[test]
-fn write_car_archive_rejects_symlink_output() {
+fn output_spool_rejects_symlink_output() {
     let (_temp, temp_path) = canonical_tempdir();
-    let payload = b"sorafs-fetch-car-output".to_vec();
-    let plan = CarBuildPlan::single_file(&payload).expect("plan");
-    let chunks = plan_chunks(&payload, &plan);
     let target_path = temp_path.join("target.car");
     fs::write(&target_path, b"unchanged").expect("write target");
     let car_path = temp_path.join("payload.car");
     std::os::unix::fs::symlink(&target_path, &car_path).expect("create symlink");
-    let err = match write_car_archive(&plan, &chunks, &car_path) {
+    let err = match private_output_spool(&car_path) {
         Ok(_) => panic!("symlink output should be rejected"),
         Err(err) => err,
     };

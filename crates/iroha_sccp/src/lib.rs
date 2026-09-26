@@ -81,7 +81,7 @@ pub use test_fixtures::{
     SccpFinalizedBlockTestFixtureV1, sccp_exact_evm_governed_route_test_fixture_v1,
     sccp_exact_outbound_test_fixture_for_nonce_v1, sccp_exact_outbound_test_fixture_v1,
     sccp_exact_ton_governed_route_test_fixture_v1, sccp_exact_ton_outbound_test_fixture_v1,
-    sccp_finalize_taira_block_test_fixture_v1, sccp_sora_outbound_execution_policy_test_fixture_v1,
+    sccp_finalize_taira_block_test_fixture_v1, sccp_finalize_taira_native_operation_block_test_fixture_v1, sccp_finalize_native_genesis_network_block_test_fixture_v1, sccp_sora_outbound_execution_policy_test_fixture_v1,
 };
 use tiny_keccak::Hasher;
 #[cfg(any(test, feature = "test-fixtures"))]

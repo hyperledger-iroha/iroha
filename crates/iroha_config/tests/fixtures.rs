@@ -1649,16 +1649,7 @@ fn full_config_parses_fine() {
         PathBuf::from("sorafs_discovery/test-provider-advert-replay.to")
     );
     assert_eq!(sorafs.replay_checkpoint_max_entries.get(), 4_096);
-    let admission = sorafs
-        .admission
-        .as_ref()
-        .expect("sorafs.discovery.admission.envelopes_dir missing");
-    assert_eq!(
-        admission.envelopes_dir,
-        PathBuf::from("tests/fixtures/sorafs_admission")
-    );
-    assert_eq!(admission.trusted_council_keys.len(), 1);
-    assert_eq!(admission.signature_threshold.get(), 1);
+    assert!(sorafs.admission.is_some(), "native finalized admission is selected");
     let alias_policy = cfg.torii.sorafs_alias_cache;
     assert_eq!(alias_policy.positive_ttl.as_secs(), 600);
     assert_eq!(alias_policy.refresh_window.as_secs(), 120);

@@ -98,7 +98,7 @@ fn ten_messages_637_blocks_and_exact_commitment_order() {
             );
             let expected = match ordinal {
                 1 => Oracle::Row,
-                2 => Oracle::QuotientPair,
+                2 => Oracle::QuotientAndMask,
                 4..=8 => Oracle::Fri(ordinal - 4),
                 9 => Oracle::Terminal,
                 _ => unreachable!(),
@@ -274,9 +274,26 @@ fn complete_ood_coordinates_have_fixed_order_and_reject_every_noncanonical_lane(
 #[test]
 fn all_fixed_oracle_shapes_and_full_terminal_are_checked() {
     let context = context();
+    // The old two-value leaf is not another accepted candidate encoding.
+    assert!(
+        context
+            .hash_leaf(Oracle::QuotientAndMask, 0, &[0; 64])
+            .is_err()
+    );
+    let mut payload = [0; 96];
+    let original = context
+        .hash_leaf(Oracle::QuotientAndMask, 0, &payload)
+        .unwrap();
+    payload[64] = 1;
+    assert_ne!(
+        original,
+        context
+            .hash_leaf(Oracle::QuotientAndMask, 0, &payload)
+            .unwrap()
+    );
     for oracle in [
         Oracle::Row,
-        Oracle::QuotientPair,
+        Oracle::QuotientAndMask,
         Oracle::Fri(0),
         Oracle::Fri(1),
         Oracle::Fri(2),
@@ -335,7 +352,7 @@ fn shared_framing_binds_statement_profile_oracle_and_fri_round() {
     assert_ne!(
         expected,
         context
-            .hash_parent(Oracle::QuotientPair, 1, 0, zero, zero)
+            .hash_parent(Oracle::QuotientAndMask, 1, 0, zero, zero)
             .unwrap()
     );
     let old = FramingContext::new(b"complete immutable public statement").unwrap();
@@ -354,10 +371,10 @@ fn shared_framing_binds_statement_profile_oracle_and_fri_round() {
     );
     assert_ne!(
         context
-            .hash_leaf(Oracle::QuotientPair, 0, &[0; 64])
+            .hash_leaf(Oracle::QuotientAndMask, 0, &[0; 96])
             .unwrap(),
         context
-            .hash_leaf(Oracle::QuotientPair, 1, &[0; 64])
+            .hash_leaf(Oracle::QuotientAndMask, 1, &[0; 96])
             .unwrap()
     );
 }

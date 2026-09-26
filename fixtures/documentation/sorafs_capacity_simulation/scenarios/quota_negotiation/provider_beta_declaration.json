@@ -9,7 +9,8 @@
     {
       "profile_handle": "sorafs.sf1@1.0.0",
       "profile_aliases": [
-        "sorafs.sf1@1.0.0"
+        "sorafs.sf1@1.0.0",
+        "sorafs-sf1"
       ],
       "committed_gib": 320,
       "capability_refs": [
@@ -21,12 +22,12 @@
   ],
   "lane_commitments": [
     {
-      "lane_id": "global",
-      "max_gib": 280
-    },
-    {
       "lane_id": "analytics",
       "max_gib": 80
+    },
+    {
+      "lane_id": "global",
+      "max_gib": 280
     }
   ],
   "pricing": {
@@ -40,10 +41,5 @@
   "metadata": {
     "region": "emea",
     "tier": "primary"
-  },
-  "record_window": {
-    "registered_epoch": 1700500000,
-    "valid_from_epoch": 1700500000,
-    "valid_until_epoch": 1701104800
   }
 }

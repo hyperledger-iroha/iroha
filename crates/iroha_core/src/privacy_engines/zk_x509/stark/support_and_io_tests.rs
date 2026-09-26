@@ -1474,7 +1474,7 @@ fn zero_p256_terminal_fixture(role: P256EcdsaRoleV1) -> P256TerminalRegistration
         sink: zero,
     }
 }
-fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainPostBaseChallengesV1 {
+pub(super) fn p256_main_provider_post_base_fixture_v1() -> ZkX509CredentialMainPostBaseChallengesV1 {
     derive_zk_x509_credential_pre_aux_binding_v1(
         ZkX509CredentialMainPreAuxV1::fixture_for_test_v1(
             [0x71; 32],
@@ -1531,7 +1531,7 @@ fn p256_main_terminal_claims_fixture_v1() -> ZkX509P256TerminalClaimsV1 {
         },
     }
 }
-fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
+pub(super) fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
     ZkX509Rfc5280StatementV1 {
         presentation_not_before_unix_seconds: 1,
         presentation_not_after_unix_seconds: 2,
@@ -1541,7 +1541,7 @@ fn main_log19_statement_fixture_v1() -> ZkX509Rfc5280StatementV1 {
         disclosed_attribute_indices: Vec::new(),
     }
 }
-fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaimsV1 {
+pub(super) fn main_log19_terminal_claims_fixture_v1() -> ZkX509MainTerminalClaimsV1 {
     let der = ZkX509DerStarkTerminalClaimsV1 {
         input_byte: [F(3), F(5), F(7), F(11)],
         node: [F(13), F(17), F(19), F(23)],

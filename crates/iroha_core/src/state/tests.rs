@@ -37387,7 +37387,7 @@ state_test! { sync confidential_digest_reflects_registry_commit
     {
         let mut stx = block2.transaction();
         let id = VerifyingKeyId::new("halo2/ipa", "vk_cache");
-        let rec = crate::zk::halo2_ipa_ivm_execution_vk_record("test", 1)
+        let rec = crate::zk::halo2_ipa_ivm_replay_binding_vk_record("test", 1)
             .expect("canonical compiled IVM verifier key");
         verifying_keys::RegisterVerifyingKey { id, record: rec }
             .execute(&ALICE_ID, &mut stx)

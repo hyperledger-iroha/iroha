@@ -1466,7 +1466,7 @@ pub mod isi {
         envelope: ZkOpenVerifyEnvelope,
     }
     fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
-        crate::zk::normalize_halo2_ipa_circuit_id(raw)
+        crate::zk::canonical_halo2_ipa_circuit_id(raw)
     }
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         let is_admissible = |circuit_id: &str| {
@@ -8629,7 +8629,26 @@ pub mod isi {
                 parliament_present_head_v1(subject_id, u64::from(registry.version), &registry)
             }
             ProposalKind::SorafsProviderGovernance(payload) => {
-                let provider_id = payload.action.provider_id();
+                if let iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Admission(
+                    action,
+                ) = payload.action.as_ref()
+                {
+                    return super::sorafs_provider_admission::governed_head(
+                        state_transaction.world(),
+                        action,
+                    )?
+                    .map_or_else(
+                        || Ok(parliament_absent_head_v1(subject_id)),
+                        |(revision, bytes)| {
+                            parliament_present_head_v1(subject_id, revision, &bytes)
+                        },
+                    );
+                }
+                let provider_id = payload.action.provider_id().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "missing SoraFS provider identity".into(),
+                    )
+                })?;
                 state_transaction
                     .world
                     .provider_owners
@@ -21547,9 +21566,9 @@ pub mod isi {
             str::FromStr,
             sync::Arc,
         };
-        const TEST_HALO2_CIRCUIT_ID: &str = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-execution-v1";
-        const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
+        const TEST_HALO2_CIRCUIT_ID: &str = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
+        const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-replay-binding-v1";
+        const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-replay-binding-v1";
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
 
         #[test]
@@ -25353,7 +25372,7 @@ pub mod isi {
         fn canonical_test_halo2_vk_box() -> VerifyingKeyBox {
             #[cfg(feature = "zk-halo2-ipa")]
             {
-                crate::zk::halo2_ipa_ivm_execution_vk_box()
+                crate::zk::halo2_ipa_ivm_replay_binding_vk_box()
                     .expect("generate canonical IVM execution verifying key")
             }
             #[cfg(not(feature = "zk-halo2-ipa"))]
@@ -25362,7 +25381,7 @@ pub mod isi {
             }
         }
         fn test_halo2_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
-            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
+            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
             record
         }
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -31382,12 +31401,12 @@ seiyaku GovernanceLifecycle {
             assert_eq!(normalize_halo2_circuit_id(""), None);
             assert!(circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa/ivm-execution-v1",
-                "halo2/ipa:ivm-execution-v1"
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
+                "halo2/ipa:ivm-replay-binding-v1"
             ));
             assert!(!circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa/ivm-execution-v1",
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
                 "halo2/ipa:tiny-add"
             ));
             assert!(!circuit_id_matches(
@@ -31401,9 +31420,9 @@ seiyaku GovernanceLifecycle {
                 "halo2/ipa:zk-vote"
             ));
             assert!(!circuit_id_matches(
-                "halo2/ipa::ivm-execution-v1",
-                "halo2/pasta/ipa/ivm-execution-v1",
-                "halo2/ipa:ivm-execution-v1"
+                "halo2/ipa::ivm-replay-binding-v1",
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
+                "halo2/ipa:ivm-replay-binding-v1"
             ));
             assert!(circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
@@ -31455,7 +31474,7 @@ seiyaku GovernanceLifecycle {
                 "halo2/ipa:production-ready",
                 "halo2/ipa:release-ready",
                 "halo2/ipa:third-party-audited",
-                "halo2/ipa::ivm-execution-v1",
+                "halo2/ipa::ivm-replay-binding-v1",
             ] {
                 assert!(
                     !voting_circuit_matches(
@@ -32192,7 +32211,7 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Halo2IpaPasta,
                 TEST_HALO2_CIRCUIT_ID,
                 [0x41u8; 32],
-                crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
+                crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
                 vec![1, 2, 3],
             );
             let proof = ProofBox::new(
@@ -32550,7 +32569,7 @@ seiyaku GovernanceLifecycle {
                 contract_artifact_sha256: [0xb1; 32],
                 vk_ref: iroha_data_model::proof::VerifyingKeyId::new(
                     "stark/fri/v1",
-                    "ivm-execution-v1",
+                    "ivm-replay-binding-v1",
                 ),
                 vk_version: 1,
                 vk_commitment: [0xb2; 32],
@@ -39180,7 +39199,7 @@ seiyaku GovernanceLifecycle {
                 .position(|window| window == b"IPAK")
                 .expect("canonical key carries IPAK");
             vk_box.bytes[ipa_offset + 8..ipa_offset + 12]
-                .copy_from_slice(&(crate::zk::IVM_EXECUTION_V1_IPA_K + 1).to_le_bytes());
+                .copy_from_slice(&(crate::zk::IVM_REPLAY_BINDING_V1_IPA_K + 1).to_le_bytes());
             let record = test_halo2_vk_record(1, vk_box);
             let mut stx = state_block.transaction();
             let error = Executor::default()
@@ -39255,7 +39274,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_missing_gas");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -39272,7 +39291,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
             let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -39293,7 +39312,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -39412,7 +39431,7 @@ seiyaku GovernanceLifecycle {
         world_test!(register_vk_reserves_every_exact12_privacy_circuit_label {
             fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 record
             }
             alice_state_transaction!(state, block, state_block, stx);
@@ -39528,7 +39547,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx = state_block.transaction();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_label");
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
                 let err = exec
@@ -40654,7 +40673,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_payload_confusion");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let mut stx = state_block.transaction();
             let err = Executor::default()
                 .execute_instruction(
@@ -40735,7 +40754,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let exec = Executor::default();
             let mut stx = state_block.transaction();
             exec.execute_instruction(
@@ -40789,7 +40808,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -40937,7 +40956,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -40947,7 +40966,7 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction();
-            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let update_instruction: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
                 record: new_rec,
@@ -41018,7 +41037,7 @@ seiyaku GovernanceLifecycle {
             let circuit = TEST_HALO2_CIRCUIT_ID;
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -41072,7 +41091,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -41150,7 +41169,7 @@ seiyaku GovernanceLifecycle {
                 let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
                 let vk_commitment = hash_vk(&vk_box);
-                let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+                let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 vk_record!(rec, 1, circuit_id.clone(), backend_tag, if backend_tag == BackendTag::Stark {
@@ -41233,7 +41252,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -41282,7 +41301,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -41338,7 +41357,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -41423,7 +41442,7 @@ seiyaku GovernanceLifecycle {
                 );
                 let vk_box = canonical_test_halo2_vk_box();
                 let vk_commitment = hash_vk(&vk_box);
-                let expected_public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+                let expected_public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] =
                     CryptoHash::new(&expected_public_inputs).into();
                 vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = if matches!(tamper, Tamper::InactiveKey) { ConfidentialStatus::Proposed } else { ConfidentialStatus::Active }, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
@@ -41476,7 +41495,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_existing");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let envelope = OpenVerifyEnvelope {
@@ -41560,7 +41579,7 @@ seiyaku GovernanceLifecycle {
                     }
                 };
                 let vk_commitment = hash_vk(&stored_vk);
-                let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+                let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
                 vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(stored_vk.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(stored_vk), gas_schedule_id = Some("halo2_default".into()));
                 let envelope = OpenVerifyEnvelope {
@@ -41607,7 +41626,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,

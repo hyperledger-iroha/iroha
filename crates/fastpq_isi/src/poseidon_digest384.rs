@@ -7,6 +7,7 @@
 //! not six squeezes from one capacity-one sponge.
 
 use std::{fmt, sync::OnceLock};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::poseidon::{FIELD_MODULUS, MDS, RATE, STATE_WIDTH};
 
@@ -213,6 +214,10 @@ impl<'a> GoldilocksDigest384FrameV1<'a> {
     }
 
     /// Compute all six lanes with the canonical CPU permutation.
+    ///
+    /// Internal lane/rate arrays and byte-packing scratch are erased on return
+    /// or unwind. Input slices remain owned by the caller. This does not promise
+    /// erasure of compiler-created scalar copies or register temporaries.
     #[must_use]
     pub fn hash(&self) -> GoldilocksDigest384V1 {
         let words = core::array::from_fn(|lane| {
@@ -466,7 +471,10 @@ impl std::error::Error for GoldilocksDigest384LastFieldStreamErrorV1 {}
 /// The domain, all preceding fields, and the exact final-field byte length are
 /// bound by [`Self::new`]. The builder keeps only the six lane permutation
 /// states plus one shared rate block and one shared seven-byte input chunk.
-#[derive(Clone, Copy)]
+/// Each owner erases those buffers on drop, including failed finalization and
+/// unwinding. Forking requires an explicit clone, which owns its own cleanup.
+/// Compiler-created copies and registers are outside this memory-erasure claim.
+#[derive(Clone)]
 pub struct GoldilocksDigest384LastFieldStreamV1 {
     lane_states: [[u64; STATE_WIDTH]; GOLDILOCKS_DIGEST384_LANES_V1],
     pending: [u64; RATE],
@@ -475,6 +483,16 @@ pub struct GoldilocksDigest384LastFieldStreamV1 {
     byte_chunk_len: usize,
     expected_final_field_len: usize,
     received_final_field_len: usize,
+}
+
+impl Drop for GoldilocksDigest384LastFieldStreamV1 {
+    fn drop(&mut self) {
+        self.lane_states.zeroize();
+        self.pending.zeroize();
+        self.byte_chunk.zeroize();
+        #[cfg(test)]
+        observe_stream_erasure_v1(self);
+    }
 }
 
 impl fmt::Debug for GoldilocksDigest384LastFieldStreamV1 {
@@ -494,10 +512,18 @@ impl fmt::Debug for GoldilocksDigest384LastFieldStreamV1 {
 /// field must be added.  The next permutation is performed when that position
 /// advances to the rate.  Keeping the fields private prevents callers from
 /// constructing an invalid prefix snapshot.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct GoldilocksDigest384LanePrefixV1 {
     state: [u64; STATE_WIDTH],
     next_rate_position: usize,
+}
+
+impl Drop for GoldilocksDigest384LanePrefixV1 {
+    fn drop(&mut self) {
+        self.state.zeroize();
+        #[cfg(test)]
+        observe_prefix_erasure_v1(&self.state);
+    }
 }
 
 impl fmt::Debug for GoldilocksDigest384LanePrefixV1 {
@@ -510,15 +536,16 @@ impl fmt::Debug for GoldilocksDigest384LanePrefixV1 {
 }
 
 impl GoldilocksDigest384LanePrefixV1 {
-    /// Prefix state with all pending rate words folded in.
+    /// Borrow the prefix state with all pending rate words folded in.
+    /// Any deliberate copy made by an AIR or accelerator has its own cleanup responsibility.
     #[must_use]
-    pub const fn state(self) -> [u64; STATE_WIDTH] {
-        self.state
+    pub const fn state(&self) -> &[u64; STATE_WIDTH] {
+        &self.state
     }
 
     /// Rate position for the first final-field word.
     #[must_use]
-    pub const fn next_rate_position(self) -> usize {
+    pub const fn next_rate_position(&self) -> usize {
         self.next_rate_position
     }
 }
@@ -787,7 +814,7 @@ fn pow7_v1(value: u64) -> u64 {
 }
 
 fn apply_mds_v1(state: &mut [u64; STATE_WIDTH]) {
-    let prior = *state;
+    let prior = Zeroizing::new(*state);
     for row in 0..STATE_WIDTH {
         state[row] = prior
             .iter()
@@ -826,6 +853,64 @@ struct LaneSpongeV1<'a> {
     parameters: &'a LaneParametersV1,
 }
 
+impl Drop for LaneSpongeV1<'_> {
+    fn drop(&mut self) {
+        self.state.zeroize();
+        self.pending.zeroize();
+        #[cfg(test)]
+        observe_sponge_erasure_v1(&self.state, &self.pending);
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static SPONGE_ERASURES_V1: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+    static STREAM_ERASURES_V1: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+    static PREFIX_ERASURES_V1: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+fn observe_stream_erasure_v1(stream: &GoldilocksDigest384LastFieldStreamV1) {
+    let clean = stream
+        .lane_states
+        .iter()
+        .flatten()
+        .chain(&stream.pending)
+        .all(|word| *word == 0)
+        && stream.byte_chunk.iter().all(|byte| *byte == 0);
+    STREAM_ERASURES_V1.with(|observed| {
+        let (cleared, uncleared) = observed.get();
+        observed.set((
+            cleared + usize::from(clean),
+            uncleared + usize::from(!clean),
+        ));
+    });
+}
+
+#[cfg(test)]
+fn observe_prefix_erasure_v1(state: &[u64; STATE_WIDTH]) {
+    let clean = state.iter().all(|word| *word == 0);
+    PREFIX_ERASURES_V1.with(|observed| {
+        let (cleared, uncleared) = observed.get();
+        observed.set((
+            cleared + usize::from(clean),
+            uncleared + usize::from(!clean),
+        ));
+    });
+}
+
+#[cfg(test)]
+fn observe_sponge_erasure_v1(state: &[u64; STATE_WIDTH], pending: &[u64; RATE]) {
+    SPONGE_ERASURES_V1.with(|observed| {
+        let (cleared, uncleared) = observed.get();
+        let clean = state.iter().chain(pending).all(|word| *word == 0);
+        observed.set((
+            cleared + usize::from(clean),
+            uncleared + usize::from(!clean),
+        ));
+    });
+}
+
 impl<'a> LaneSpongeV1<'a> {
     fn new(parameters: &'a LaneParametersV1) -> Self {
         Self {
@@ -846,11 +931,11 @@ impl<'a> LaneSpongeV1<'a> {
     }
 
     fn flush(&mut self) {
-        for (state, value) in self.state.iter_mut().zip(self.pending) {
-            *state = add_v1(*state, value);
+        for (state, value) in self.state.iter_mut().zip(&self.pending) {
+            *state = add_v1(*state, *value);
         }
         permute_v1(&mut self.state, self.parameters);
-        self.pending = [0; RATE];
+        self.pending.zeroize();
         self.pending_len = 0;
     }
 }
@@ -863,15 +948,15 @@ fn emit_byte_field_v1(tag: u64, bytes: &[u8], emit: &mut impl FnMut(u64)) -> Opt
     emit(u64::try_from(bytes.len()).ok()?);
     let mut chunks = bytes.chunks_exact(7);
     for chunk in &mut chunks {
-        let mut word = [0_u8; 8];
+        let mut word = Zeroizing::new([0_u8; 8]);
         word[..7].copy_from_slice(chunk);
-        emit(u64::from_le_bytes(word));
+        emit(u64::from_le_bytes(*word));
     }
     let remainder = chunks.remainder();
-    let mut terminal = [0_u8; 8];
+    let mut terminal = Zeroizing::new([0_u8; 8]);
     terminal[..remainder.len()].copy_from_slice(remainder);
     terminal[remainder.len()] = 1;
-    emit(u64::from_le_bytes(terminal));
+    emit(u64::from_le_bytes(*terminal));
     Some(())
 }
 
@@ -1007,15 +1092,19 @@ impl GoldilocksDigest384LastFieldStreamV1 {
     /// the streamed final field without reimplementing typed-domain framing.
     #[must_use]
     pub fn lane_prefix_v1(&self, lane: usize) -> Option<GoldilocksDigest384LanePrefixV1> {
-        let mut state = *self.lane_states.get(lane)?;
-        for (state_word, pending_word) in state.iter_mut().zip(self.pending).take(self.pending_len)
-        {
-            *state_word = add_v1(*state_word, pending_word);
-        }
-        Some(GoldilocksDigest384LanePrefixV1 {
-            state,
+        let mut prefix = GoldilocksDigest384LanePrefixV1 {
+            state: *self.lane_states.get(lane)?,
             next_rate_position: self.pending_len,
-        })
+        };
+        for (state_word, pending_word) in prefix
+            .state
+            .iter_mut()
+            .zip(&self.pending)
+            .take(self.pending_len)
+        {
+            *state_word = add_v1(*state_word, *pending_word);
+        }
+        Some(prefix)
     }
 
     /// Absorb the next bytes of the final field.
@@ -1048,10 +1137,10 @@ impl GoldilocksDigest384LastFieldStreamV1 {
             self.byte_chunk_len += copied;
             remaining = &remaining[copied..];
             if self.byte_chunk_len == self.byte_chunk.len() {
-                let mut word = [0_u8; 8];
+                let mut word = Zeroizing::new([0_u8; 8]);
                 word[..self.byte_chunk.len()].copy_from_slice(&self.byte_chunk);
-                self.absorb_element(u64::from_le_bytes(word));
-                self.byte_chunk = [0; 7];
+                self.absorb_element(u64::from_le_bytes(*word));
+                self.byte_chunk.zeroize();
                 self.byte_chunk_len = 0;
             }
         }
@@ -1076,10 +1165,10 @@ impl GoldilocksDigest384LastFieldStreamV1 {
             });
         }
 
-        let mut terminal = [0_u8; 8];
+        let mut terminal = Zeroizing::new([0_u8; 8]);
         terminal[..self.byte_chunk_len].copy_from_slice(&self.byte_chunk[..self.byte_chunk_len]);
         terminal[self.byte_chunk_len] = 1;
-        self.absorb_element(u64::from_le_bytes(terminal));
+        self.absorb_element(u64::from_le_bytes(*terminal));
         // Match the complete typed frame: a final field element equal to one
         // makes the complete field-element stream prefix-free.
         self.absorb_element(1);
@@ -1109,12 +1198,12 @@ impl GoldilocksDigest384LastFieldStreamV1 {
         debug_assert!((1..=RATE).contains(&self.pending_len));
         let parameters = lane_parameters_v1();
         for (lane, state) in self.lane_states.iter_mut().enumerate() {
-            for (state_word, value) in state.iter_mut().zip(self.pending) {
-                *state_word = add_v1(*state_word, value);
+            for (state_word, value) in state.iter_mut().zip(&self.pending) {
+                *state_word = add_v1(*state_word, *value);
             }
             permute_v1(state, &parameters[lane]);
         }
-        self.pending = [0; RATE];
+        self.pending.zeroize();
         self.pending_len = 0;
     }
 }
@@ -1167,6 +1256,32 @@ fn parameter_asset_sha3_256_v1() -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_one_shot_sponge_storage_is_erased_on_return_and_unwind() {
+        let before = SPONGE_ERASURES_V1.with(core::cell::Cell::get);
+        let digest = hash_bytes_384_v1(domain(), &[b"private identity root and blinding"])
+            .expect("bounded private fields");
+        assert_ne!(
+            digest,
+            hash_bytes_384_v1(domain(), &[b"another identity"]).unwrap()
+        );
+        let after = SPONGE_ERASURES_V1.with(core::cell::Cell::get);
+        assert_eq!(after.0 - before.0, 2 * GOLDILOCKS_DIGEST384_LANES_V1);
+        assert_eq!(after.1, before.1, "all observed arrays were erased");
+
+        let result = std::panic::catch_unwind(|| {
+            let mut sponge = LaneSpongeV1::new(&lane_parameters_v1()[0]);
+            sponge.absorb(0x1234);
+            sponge.absorb(0x5678);
+            sponge.absorb(0x9abc); // Leave a private pending rate word too.
+            panic!("injected private hash caller unwind");
+        });
+        assert!(result.is_err());
+        let unwound = SPONGE_ERASURES_V1.with(core::cell::Cell::get);
+        assert_eq!(unwound.0, after.0 + 1);
+        assert_eq!(unwound.1, after.1, "unwind erased state and pending words");
+    }
 
     fn reference_bytes(encoded: &str) -> Vec<u8> {
         assert!(
@@ -1571,6 +1686,34 @@ mod tests {
     }
 
     #[test]
+    fn stream_and_prefix_owners_erase_on_success_error_and_unwind() {
+        STREAM_ERASURES_V1.with(|observed| observed.set((0, 0)));
+        PREFIX_ERASURES_V1.with(|observed| observed.set((0, 0)));
+        let mut stream =
+            GoldilocksDigest384LastFieldStreamV1::new(domain(), &[b"private"], 8).unwrap();
+        stream.update(b"secret").unwrap();
+        let prefix = stream.lane_prefix_v1(0).unwrap();
+        assert!(prefix.state().iter().any(|word| *word != 0));
+        drop(prefix.clone());
+        drop(prefix);
+        assert!(stream.clone().finalize().is_err());
+        assert!(stream.update(b"too long").is_err());
+        let unfinished = stream.clone();
+        stream.update(b"!!").unwrap();
+        assert_eq!(
+            stream.finalize().unwrap(),
+            hash_bytes_384_v1(domain(), &[b"private", b"secret!!"]).unwrap()
+        );
+        let unwind = std::panic::catch_unwind(move || {
+            let _stream = unfinished;
+            panic!("test stream cleanup");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(STREAM_ERASURES_V1.with(core::cell::Cell::get), (3, 0));
+        assert_eq!(PREFIX_ERASURES_V1.with(core::cell::Cell::get), (2, 0));
+    }
+
+    #[test]
     fn stream_and_air_prefix_diagnostics_hide_buffered_witnesses() {
         let mut stream =
             GoldilocksDigest384LastFieldStreamV1::new(domain(), &[b"private prefix"], 14).unwrap();
@@ -1626,7 +1769,7 @@ mod tests {
                 Some(lane_parameters_v1()[lane].initial_state)
             );
             let prefix = stream.lane_prefix_v1(lane).expect("canonical lane");
-            let mut state = prefix.state();
+            let mut state = Zeroizing::new(*prefix.state());
             let mut position = prefix.next_rate_position();
             for word in &final_words {
                 state[position] = add_v1(state[position], *word);
@@ -2001,7 +2144,9 @@ mod grinding_prefix_tests {
             .into_iter()
             .enumerate()
         {
-            let payload: Vec<u8> = (0..length).map(|i| (i * 73 + length) as u8).collect();
+            let payload: Vec<u8> = (0..length)
+                .map(|i| u8::try_from((i * 73 + length) % 256).expect("fixture byte modulo 256"))
+                .collect();
             let fields: &[&[u8]] = &[b"", &payload];
             let frame = GoldilocksDigest384FrameV1::new(
                 GoldilocksDigestDomainV1 {
@@ -2061,11 +2206,14 @@ mod indexed_predicate_tests {
         assert!(cached.write_staged_words_v1(&mut words));
         let mut complete = vec![0; frame.word_count()];
         assert!(frame.write_lane_words(0, &mut complete));
-        let prefix = complete.len() - words[4] as usize;
+        let prefix = complete.len() - usize::try_from(words[4]).expect("fixture suffix length");
         assert_eq!(prefix % RATE, 0);
         assert_eq!(&words[..3], &cached.prefix_state);
         assert_eq!(&words[5..], &complete[prefix..]);
-        assert_eq!(words[3] as usize + prefix, frame.lane_word_index() - 8);
+        assert_eq!(
+            usize::try_from(words[3]).expect("fixture index offset") + prefix,
+            frame.lane_word_index() - 8
+        );
         let mut invalid = vec![0x1234; words.len() - 1];
         assert!(!cached.write_staged_words_v1(&mut invalid));
         assert!(invalid.iter().all(|word| *word == 0x1234));

@@ -89,6 +89,7 @@ fn actual_core_finality_requires_durable_certified_history_beyond_public_cache_c
                     observation.active_head.approved_anchor
                 )],
                 &observation,
+                None,
             ),
             Err(StreamTokenIssuerError::SignerFinalityUnavailable)
         ));

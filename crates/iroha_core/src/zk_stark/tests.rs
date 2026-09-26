@@ -182,7 +182,10 @@ fn fp4_wire_rejects_every_noncanonical_coefficient() {
 #[test]
 fn fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema() {
     #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_core::zk_stark::tests::fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema::RetiredStructFrame", frame = "iroha_core::zk_stark::GoldilocksFp4V1")]
+    #[norito_schema(
+        name = "iroha_core::zk_stark::tests::fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema::RetiredStructFrame",
+        frame = "iroha_core::zk_stark::GoldilocksFp4V1"
+    )]
     #[derive(norito::NoritoSerialize)]
     struct RetiredStructFrame {
         c0: u64,
@@ -573,7 +576,7 @@ fn ivm_binding_verifying_key_rejects_domain_above_exact_root_cap() {
     let circuit_id = format!(
         "{}:{}",
         crate::zk::ZK_BACKEND_STARK_FRI_V1,
-        crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID
+        crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID
     );
     let mut payload = StarkFriVerifyingKeyV1 {
         version: 1,
@@ -594,7 +597,7 @@ fn ivm_binding_verifying_key_rejects_domain_above_exact_root_cap() {
 #[test]
 fn ivm_binding_air_verifier_pins_statement_and_rejects_tampering() {
     let backend = crate::zk::ZK_BACKEND_STARK_FRI_V1;
-    let circuit = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let circuit_id = format!("{backend}:{circuit}");
     let params = StarkFriParamsV1 {
         version: 1,
@@ -617,20 +620,24 @@ fn ivm_binding_air_verifier_pins_statement_and_rejects_tampering() {
     };
     let limits = StarkVerifierLimits::default();
     let proof = prove(&circuit_id);
-    assert!(verify_stark_fri_ivm_execution_air_envelope_with_limits(
-        &proof,
-        &limits,
-        &public_digest,
-    ));
+    assert!(
+        verify_stark_fri_ivm_replay_binding_air_envelope_with_limits(
+            &proof,
+            &limits,
+            &public_digest,
+        )
+    );
     assert!(
         !verify_stark_fri_envelope_with_limits(&proof, &limits),
         "generic verification must continue to reject the reserved IVM circuit"
     );
-    assert!(!verify_stark_fri_ivm_execution_air_envelope_with_limits(
-        &proof,
-        &limits,
-        &test_digest(0x72),
-    ));
+    assert!(
+        !verify_stark_fri_ivm_replay_binding_air_envelope_with_limits(
+            &proof,
+            &limits,
+            &test_digest(0x72),
+        )
+    );
     for alias in [
         circuit.to_owned(),
         format!("{backend}/{circuit}"),
@@ -638,7 +645,7 @@ fn ivm_binding_air_verifier_pins_statement_and_rejects_tampering() {
         format!("{backend}:generic-binding"),
     ] {
         assert!(
-            !verify_stark_fri_ivm_execution_air_envelope_with_limits(
+            !verify_stark_fri_ivm_replay_binding_air_envelope_with_limits(
                 &prove(&alias),
                 &limits,
                 &public_digest,
@@ -671,7 +678,7 @@ fn ivm_binding_air_verifier_pins_statement_and_rejects_tampering() {
         mutate(&mut tampered);
         let bytes = norito::encode_canonical(&tampered).expect("encode tampered IVM proof");
         assert!(
-            !verify_stark_fri_ivm_execution_air_envelope_with_limits(
+            !verify_stark_fri_ivm_replay_binding_air_envelope_with_limits(
                 &bytes,
                 &limits,
                 &public_digest,
@@ -679,11 +686,13 @@ fn ivm_binding_air_verifier_pins_statement_and_rejects_tampering() {
             "IVM binding verifier accepted altered {label}"
         );
     }
-    assert!(verify_stark_fri_ivm_execution_air_envelope_with_limits(
-        &proof,
-        &limits,
-        &public_digest,
-    ));
+    assert!(
+        verify_stark_fri_ivm_replay_binding_air_envelope_with_limits(
+            &proof,
+            &limits,
+            &public_digest,
+        )
+    );
 }
 #[test]
 fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
@@ -1332,7 +1341,7 @@ fn public_generic_air_provers_reject_zk_ace_circuit_aliases() {
     }
 }
 #[test]
-fn public_generic_air_provers_reject_ivm_execution_circuit_aliases() {
+fn public_generic_air_provers_reject_ivm_replay_binding_circuit_aliases() {
     let params = StarkFriParamsV1 {
         version: 1,
         n_log2: 4,
@@ -1343,7 +1352,7 @@ fn public_generic_air_provers_reject_ivm_execution_circuit_aliases() {
         domain_tag: "iroha:test:reserved-ivm-generic-air".to_owned(),
     };
     let rows = vec![vec![0]; 1_usize << usize::from(params.n_log2)];
-    let canonical = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let canonical = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
     let circuit_ids = [
         canonical.to_owned(),
         format!("stark/fri/poseidon-x7-goldilocks-6x64-v1:{canonical}"),

@@ -62,6 +62,13 @@ pub trait StreamTokenSignerClientV1: Send + Sync {
 pub trait StreamTokenStateObserverClientV1: Send + Sync {
     /// Exact independently configured credential-free observer routing handle.
     fn handle(&self) -> &str;
+    /// Sign and submit exactly this fresh native Check, then wait for committed application.
+    /// The instruction reads application state; its signed transaction is recorded on chain.
+    /// The caller independently consumes its same-State Kura/QC execution proof before use.
+    fn finalize_check(
+        &self,
+        instruction: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+    ) -> Result<iroha_data_model::transaction::SignedTransaction, StreamTokenSignerCallErrorV1>;
     /// Execute one read-only query, preserving every retained challenge, phase and subject field.
     fn observe(
         &self,

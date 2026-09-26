@@ -257,7 +257,7 @@ fn retained_reader_rechecks_revocation_at_exact_eof_and_keeps_admission_bounded(
     let admissions = Arc::new(Semaphore::new(1));
     let permit = Arc::clone(&admissions).try_acquire_owned().unwrap();
     let mut reader = LeaseCheckedReader {
-        reader: Cursor::new(vec![1, 2]),
+        reader: Box::new(std::io::Cursor::new(vec![1, 2])),
         config,
         resolver: resolver.clone(),
         lease: fixture().lease,

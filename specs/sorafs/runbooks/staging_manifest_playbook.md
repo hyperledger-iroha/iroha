@@ -44,8 +44,9 @@ fixtures are available in the repository.
    ```
 
    Storage startup also requires distinct proof-outcome, repair, reserve, and
-   orderbook bindings under `sorafs.storage.native_transaction_signers` plus all
-   four matching live providers, regardless of new-work generation flags.
+   orderbook bindings under `sorafs.storage.native_transaction_signers`, each with
+   an explicit owner-only `software_credential` or matching external provider,
+   regardless of new-work generation flags.
 
    Torii refuses to start when discovery/admission is enabled without a non-empty, satisfiable
    Ed25519 council policy. Use governance council keys only; node identity, provider advert, and

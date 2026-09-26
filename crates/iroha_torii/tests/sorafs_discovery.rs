@@ -1525,21 +1525,10 @@ fn fixtures_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../fixtures/sorafs_manifest/provider_admission")
 }
-fn test_admission_config(envelopes_dir: PathBuf) -> SorafsAdmission {
-    let council_keys = [0x42, 0x45]
-        .into_iter()
-        .map(|seed| {
-            let signing_key = SigningKey::from_bytes(&[seed; 32]);
-            PublicKey::from_bytes(Algorithm::Ed25519, signing_key.verifying_key().as_bytes())
-                .expect("valid test council key")
-        })
-        .collect();
-    SorafsAdmission {
-        envelopes_dir,
-        trusted_council_keys: council_keys,
-        signature_threshold: NonZeroUsize::new(1).expect("non-zero test threshold"),
-    }
+fn test_admission_config() -> SorafsAdmission {
+    SorafsAdmission
 }
+
 fn fixture_from_disk(advert_name: &str, envelope_name: &str) -> ProviderFixture {
     let advert_path = fixtures_root().join(advert_name);
     let envelope_path = fixtures_root().join(envelope_name);
@@ -1643,6 +1632,7 @@ impl DiscoveryNativeTransactionSigner {
     ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
         let public_key = self.key_pair.public_key().clone();
         iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+            software_credential: None,
             handle: self.handle.to_owned(),
             authority: AccountId::new(public_key.clone()),
             algorithm: Algorithm::Ed25519,
@@ -2636,48 +2626,25 @@ async fn sorafs_routes_disabled_when_cache_off() {
     harness.shutdown().await;
 }
 #[tokio::test]
-#[should_panic(
-    expected = "discovery requires envelopes_dir, trusted_council_keys, and signature_threshold"
-)]
-async fn sorafs_discovery_startup_rejects_missing_admission_policy() {
+async fn sorafs_discovery_without_local_trust_starts_with_no_admitted_providers() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
     cfg.torii.sorafs_discovery.admission = None;
-    let _ = build_torii_harness(&cfg);
+    let harness = build_torii_harness(&cfg);
+    let response = harness.app.clone().oneshot(Request::builder()
+        .uri("/v1/sorafs/providers").body(axum::body::Body::empty()).unwrap())
+        .await.expect("native discovery responds before any governed admission");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = BodyExt::collect(response.into_body()).await.unwrap().to_bytes();
+    let body: json::Value = norito::json::from_slice(&body).unwrap();
+    assert_eq!(body.get("providers").and_then(json::Value::as_array).unwrap().len(), 0);
+    harness.shutdown().await;
 }
 #[tokio::test]
-#[should_panic(expected = "provider admission council trust set must not be empty")]
-async fn sorafs_discovery_startup_rejects_empty_trust_set() {
+async fn sorafs_routes_enabled_with_native_admission() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let temp = tempdir().expect("temp dir");
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let mut admission = test_admission_config(temp.path().to_path_buf());
-    admission.trusted_council_keys.clear();
-    cfg.torii.sorafs_discovery.admission = Some(admission);
-    let _ = build_torii_harness(&cfg);
-}
-#[tokio::test]
-#[should_panic(expected = "differs from local network")]
-async fn sorafs_discovery_startup_rejects_signed_foreign_network_envelope() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    cfg.genesis.expected_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xB3; 32]));
-    let temp = tempdir().expect("admission directory");
-    fs::copy(
-        fixtures_root().join("envelope_v1.to"),
-        temp.path().join("provider.to"),
-    )
-    .expect("install fully signed foreign-network envelope");
-    cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission = Some(test_admission_config(temp.path().to_path_buf()));
-    let _ = build_torii_harness(&cfg);
-}
-#[tokio::test]
-async fn sorafs_routes_enabled_with_admission_dir() {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let temp = tempdir().expect("temp dir");
-    cfg.torii.sorafs_discovery.discovery_enabled = true;
-    cfg.torii.sorafs_discovery.admission = Some(test_admission_config(temp.path().to_path_buf()));
+    cfg.torii.sorafs_discovery.admission = Some(test_admission_config());
     let harness = build_torii_harness(&cfg);
     let app = harness.app.clone();
     let response = app
@@ -3723,9 +3690,8 @@ async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor
 async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config(admission_dir.path().to_path_buf()));
+        Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3859,9 +3825,8 @@ async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection
 async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config(admission_dir.path().to_path_buf()));
+        Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3928,9 +3893,8 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
 async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config(admission_dir.path().to_path_buf()));
+        Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -3992,9 +3956,8 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
 async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config(admission_dir.path().to_path_buf()));
+        Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -4051,9 +4014,8 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
 async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_projection() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config(admission_dir.path().to_path_buf()));
+        Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -4125,9 +4087,8 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_project
 async fn sorafs_alias_listing_reports_successor_refusal() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config(admission_dir.path().to_path_buf()));
+        Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;
@@ -4226,9 +4187,8 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
 async fn sorafs_alias_listing_reports_governance_revocation() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.sorafs_discovery.discovery_enabled = true;
-    let admission_dir = tempdir().expect("admission dir");
     cfg.torii.sorafs_discovery.admission =
-        Some(test_admission_config(admission_dir.path().to_path_buf()));
+        Some(test_admission_config());
     enable_storage_with_discovery_native_signers(&mut cfg);
     cfg.torii.sorafs_storage.max_parallel_fetches = 1;
     cfg.torii.sorafs_storage.max_pins = 8;

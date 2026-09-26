@@ -460,3 +460,48 @@ fn tampered_untrusted_expired_and_replayed_enrollment_leave_native_head_unchange
 mod reader_tests;
 #[path = "rotation_tests.rs"]
 mod rotation_tests;
+
+#[test]
+fn unrelated_committed_block_does_not_invalidate_an_unchanged_custody_approval() {
+    let mut f = fixture();
+    configure(&mut f);
+    let approved = attest(&f, 1_500);
+    transact(&mut f.state, 1_600, |_| {});
+    transact(&mut f.state, 1_700, |tx| {
+        instruction(tx, f.provider, Action::Enroll(approved))
+            .execute(&f.authority, tx)
+            .unwrap();
+    });
+    let current = read_stream_token_custody_control_at_v1(&f.state.view(), &f.policy.binding, 3)
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.state.active_head.unwrap().approved_anchor.height, 1);
+}
+#[test]
+fn intervening_custody_revocation_invalidates_a_historical_approval() {
+    let mut f = fixture();
+    configure(&mut f);
+    let approved = attest(&f, 1_500);
+    transact(&mut f.state, 1_600, |tx| {
+        instruction(
+            tx,
+            f.provider,
+            Action::Revoke(SorafsStreamTokenCustodyRevocationV1 {
+                signer: true,
+                attester: false,
+            }),
+        )
+        .execute(&f.authority, tx)
+        .unwrap();
+    });
+    transact(&mut f.state, 1_700, |tx| {
+        assert!(
+            instruction(tx, f.provider, Action::Enroll(approved))
+                .execute(&f.authority, tx)
+                .is_err()
+        );
+        let control = read_active(tx.world(), f.provider).unwrap().unwrap();
+        assert!(control.state.active_head.is_none());
+        assert!(control.state.signer_revoked);
+    });
+}

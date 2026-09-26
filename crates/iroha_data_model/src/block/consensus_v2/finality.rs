@@ -1,9 +1,8 @@
 //! Durable, versioned finality records for canonical Sumeragi v2 blocks.
 //!
-//! These values are structural persistence records. Their validation checks
-//! every redundant protocol, context, height, subject, and block-hash binding,
-//! but deliberately leaves aggregate-signature verification to the consensus
-//! cryptography adapter.
+//! Structural validation checks every redundant protocol, context, height, subject and block
+//! binding. Cryptographic verification and portable predecessor/epoch checks are shared with
+//! the consensus adapter; callers retain their own independent trust anchors and resource bounds.
 use super::{
     BlockSubject, ConsensusMode, DualQuorum, GlobalPhase, Height, HeightContext, HeightContextId,
     PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
@@ -16,6 +15,10 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::vec::Vec;
 use thiserror::Error;
+mod lineage;
+pub use lineage::{
+    V2FinalityLineageError, validate_successor_height_context, verify_finality_successor,
+};
 /// Current Norito layout version of [`V2FinalityArtifact`].
 pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 4;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.

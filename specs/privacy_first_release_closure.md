@@ -114,7 +114,7 @@ independent audit, SDK, hardware, and deployment evidence.
 | VeRange | Native P-256 range profile and typed component surface. | Same-candidate range, composition, resource and release qualification. |
 | ZK-AMS | Native40 qPCS/FRI roots and staged transcript use the shared six-lane owner and [sole three-section V1 wire](crypto/zk_ams_rns_native_wire_v1.md). Source packing retains both native48 anchors. One 72,386-entry inventory replaces disconnected commitment owners; original fallible entropy continues through source and authenticated D/S preparation. The repaired fixture-based direct-proof suite passes all 34 tests on ordinary stacks, including four actual 16,384-gate proofs. Actual source replay and composite MKHE admission remain unavailable, and full qPCS hashing exceeds the unchanged work cap. | Complete actual source/prover and composite admission, a reviewed qPCS commitment/evaluation design within whole-proof resource bounds, malicious-party, decryption-share, phase-2/3 and full-size release-KAT gates. Fixture proofs do not qualify a production source. |
 | Vega | Credential relation and Figure 9 key-install machinery exist; compiled profile unavailable. | Full-shape governed keys, independent proof vector and complete Figure 9 qualification. |
-| ZK-X509 | Native certificate relation and pinned compiled metadata exist; activation is unavailable. | Redesign or recursively compose the complete relation to fit the 9 MiB limit while preserving all certificate coverage. The shared-geometry MAIN maximum is 16,447,808 bytes, including 12,235,648 bytes of raw trace openings; the combined X5S1 maximum is 19,156,074 bytes. Regenerate artifacts and measure the real implementation. |
+| ZK-X509 | Native certificate relation and pinned compiled metadata exist; activation is unavailable. | Redesign or recursively compose the complete relation to fit the 9 MiB limit while preserving all certificate coverage. The shared-geometry MAIN maximum is 15,791,168 bytes, including 12,235,648 bytes of raw trace openings; the combined X5S1 maximum is 18,288,618 bytes. Regenerate artifacts and measure the real implementation. |
 | Jindo | Native Figures 2–7 implementation with 32 signed-monomial repetitions. | Reviewed qROM extractor certificate, exact adversarial/max-shape evidence and production qualification. |
 | Bootle/Lantern | Native lattice anonymous credential and Falcon issuer implementation. | Independent arithmetic/sampling/custody review, issuer lifecycle, maximum-shape and release qualification. |
 | Orchard | Sole Orchard/PostNu6_3 profile with two-pass preparation and authorization. | Audited parameter/proof provenance and full native/SDK/network qualification. |
@@ -125,7 +125,7 @@ independent audit, SDK, hardware, and deployment evidence.
 The X509 diagnostic geometry uses the shared 136-query, eightfold-LDE profile:
 MAIN has a log-22 common domain and the accumulator pads its 104 active rows to
 8,192 rows on a log-16 LDE. Canonical registration and arithmetic diagnostics do
-not establish activation. The combined maximum wire is 19,156,074 bytes; the
+not establish activation. The combined maximum wire is 18,288,618 bytes; the
 unchanged production ceiling is 9,437,184 bytes. Full MAIN proving rejects the
 resource preflight before witness preparation or entropy. A reviewed redesign or
 recursive composition must preserve the complete certificate, CRL, disclosure and

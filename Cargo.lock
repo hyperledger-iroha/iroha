@@ -3172,6 +3172,9 @@ dependencies = [
 [[package]]
 name = "fastpq_isi"
 version = "2.0.0-rc.2.0"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "fastpq_prover"
@@ -3193,6 +3196,7 @@ dependencies = [
  "iroha_zkp_halo2",
  "metal",
  "norito",
+ "rand 0.9.4",
  "rayon",
  "sha2",
  "smallvec",
@@ -5394,6 +5398,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows-sys 0.61.2",
+ "zeroize",
  "zk_ace_prover",
 ]
 
@@ -6074,6 +6079,7 @@ name = "irohad"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "assertables",
+ "base64 0.22.1",
  "blake3",
  "build-support",
  "clap",
@@ -10406,7 +10412,9 @@ dependencies = [
  "eyre",
  "flate2",
  "futures",
+ "futures-timer",
  "hex",
+ "httpdate",
  "httpmock",
  "iroha_crypto",
  "iroha_data_model",
@@ -10517,6 +10525,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_service_model",
  "iroha_telemetry",
+ "iroha_torii_shared",
  "iroha_version",
  "norito",
  "prost 0.14.3",

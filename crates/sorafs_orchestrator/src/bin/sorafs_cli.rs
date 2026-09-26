@@ -1,5 +1,9 @@
 //! Aggregated CLI entry point for SoraFS packaging helpers.
 #![allow(unexpected_cfgs)]
+#[path = "sorafs_cli/deploy_publication.rs"]
+mod deploy_publication;
+#[path = "sorafs_cli/fetch_spool.rs"]
+mod fetch_spool;
 #[path = "sorafs_cli/pdp.rs"]
 mod pdp;
 use base64::{
@@ -91,7 +95,7 @@ use sorafs_manifest::{
 };
 use sorafs_orchestrator::DEFAULT_LOCAL_PROXY_BRIDGE_SPOOL_DIR;
 use sorafs_orchestrator::{
-    FetchSession, OrchestratorConfig,
+    OrchestratorConfig, StreamFetchSession,
     appeals::{
         AppealClass, AppealClassConfig, AppealDisbursementError, AppealDisbursementInput,
         AppealDisbursementPlan, AppealPricingConfig, AppealQuote, AppealQuoteInput,
@@ -102,7 +106,7 @@ use sorafs_orchestrator::{
         config_from_json as orchestrator_config_from_json,
         config_to_json as orchestrator_config_to_json,
     },
-    fetch_via_gateway,
+    fetch_via_gateway_to_writer,
     moderation_provenance::{ModerationProvenanceStoreError, ModerationProvenanceStoreV1},
     moderation_runner::{
         LoadedModerationRunnerV1, LoadedModerationSigningRunnerV1, ModerationInferenceV1,
@@ -586,6 +590,8 @@ struct DeployClientConfig {
     chain_discriminant: u16,
 }
 struct DeployPackArtifacts {
+    plan: CarBuildPlan,
+    payload: Vec<u8>,
     manifest: ManifestV1,
     manifest_digest_hex: String,
     root_cid_hex: String,
@@ -601,6 +607,7 @@ struct GatewayExpectation {
     blake3_hex: String,
 }
 struct PublishPeerDiscovery {
+    pin_torii_urls: Vec<String>,
     gateway_base_url: Option<String>,
     status: Option<u16>,
     error: Option<String>,
@@ -622,6 +629,8 @@ struct ManifestSubmitRequest<'a> {
     alias_inputs: Option<&'a AliasInputs>,
 }
 fn deploy(raw_args: Vec<String>) -> Result<(), String> {
+    let mut finality_checkpoint: Option<PathBuf> = None;
+    let mut provider_urls = Vec::new();
     let mut payload_path: Option<PathBuf> = None;
     let mut client_config_path: Option<PathBuf> = None;
     let mut torii_url_override: Option<String> = None;
@@ -639,6 +648,8 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
             .split_once('=')
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
+            "--finality-checkpoint" => finality_checkpoint = Some(PathBuf::from(value)),
+            "--provider-url" => provider_urls.push(value.to_owned()),
             "--payload" => payload_path = Some(PathBuf::from(value)),
             "--client-config" => client_config_path = Some(PathBuf::from(value)),
             "--torii-url" => torii_url_override = Some(value.to_string()),
@@ -659,6 +670,9 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         "missing required `--client-config=PATH` for `sorafs_cli deploy`".to_string()
     })?;
     let client_config = load_deploy_client_config(&client_config_path)?;
+    let finality_checkpoint = finality_checkpoint.ok_or_else(|| "deploy requires --finality-checkpoint=PATH containing an independently trusted canonical V2FinalityArtifact for the configured network".to_owned())?;
+    let checkpoint =
+        deploy_publication::load_checkpoint(&finality_checkpoint, &client_config.network_id)?;
     let torii_url = torii_url_override
         .or(client_config.torii_url.clone())
         .ok_or_else(|| {
@@ -667,6 +681,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         })?;
     let torii_base_url =
         Url::parse(&torii_url).map_err(|err| format!("invalid Torii URL `{torii_url}`: {err}"))?;
+    deploy_publication::endpoint(&torii_base_url, "v1/sorafs/publish/prepare")?;
     let deploy_name = sanitize_deploy_name(
         name.as_deref()
             .or_else(|| payload_path.file_name().and_then(|name| name.to_str()))
@@ -691,6 +706,12 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let register_response_path = out_dir.join(format!("{deploy_name}.pin-register.response.json"));
     let mut errors: Vec<String> = Vec::new();
     let client = HttpClient::builder()
+        .no_proxy()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .retry(reqwest::retry::never())
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(30))
@@ -790,6 +811,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         discover_publish_peers(&client, &torii_base_url)
     } else {
         PublishPeerDiscovery {
+            pin_torii_urls: Vec::new(),
             gateway_base_url: None,
             status: None,
             error: Some("peer discovery disabled by --no-peer-discovery".to_string()),
@@ -798,6 +820,10 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let gateway_base_url = gateway_base_url_override
         .or(discovery.gateway_base_url.clone())
         .unwrap_or_else(|| torii_url.clone());
+    provider_urls.extend(discovery.pin_torii_urls.iter().cloned());
+    provider_urls.push(torii_url.clone());
+    provider_urls.sort();
+    provider_urls.dedup();
     let mut discovery_json = Map::new();
     insert_value!(discovery_json["enabled"] = peer_discovery_enabled);
     insert_json!(
@@ -813,14 +839,35 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
         insert_value!(discovery_json["warning"] = err.clone());
     }
     insert_json!(receipt["peer_discovery"] = Value::Object(discovery_json));
-    insert_json!(
-        receipt["provider_ingest"] = Value::Object(Map::from_iter([
-            ("state".into(), Value::from("unverified"),),
-            ("assignment_finalized".into(), Value::Null),
-            ("completion_finalized".into(), Value::Null),
-            ("direct_http_ingest".into(), Value::from(false)),
-        ]))
-    );
+    let publication = if errors.is_empty() {
+        deploy_publication::qualify(
+            &client,
+            &torii_base_url,
+            &client_config,
+            &artifacts,
+            checkpoint,
+            &provider_urls,
+            &out_dir,
+        )
+    } else {
+        Err("registration submission failed".to_owned())
+    };
+    let publication_verified = match publication {
+        Ok(summary) => {
+            insert_json!(receipt["provider_ingest"] = summary);
+            true
+        }
+        Err(error) => {
+            errors.push(error.clone());
+            insert_json!(
+                receipt["provider_ingest"] = Value::Object(Map::from_iter([
+                    ("state".into(), Value::from("unverified")),
+                    ("error".into(), Value::from(error))
+                ]))
+            );
+            false
+        }
+    };
     let gateway_verification = verify_gateway_deploy(
         &client,
         &gateway_base_url,
@@ -838,11 +885,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     if !gateway_success {
         errors.push("gateway verification failed".to_string());
     }
-    // TODO: authenticate registration and provider completion against a pinned finalized
-    // ledger, and supply an authenticated publisher source before claiming publication.
-    // Existing bytes at a gateway prove only readback of these bytes, not paid replication.
-    insert_value!(receipt["publication_verified"] = false);
-    errors.push("publication is not qualified: finalized registration, provider completion, and authenticated publisher-source availability have not been verified".to_owned());
+    insert_value!(receipt["publication_verified"] = publication_verified && gateway_success);
     let success = errors.is_empty();
     insert_value!(receipt["success"] = success);
     insert_json!(
@@ -856,8 +899,8 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     }
 }
 fn load_deploy_client_config(path: &Path) -> Result<DeployClientConfig, String> {
-    let raw = fs::read_to_string(path)
-        .map_err(|err| format!("failed to read client config `{}`: {err}", path.display()))?;
+    let raw = String::from_utf8(read_file_bounded(path, 64 * 1024, "deploy client config")?)
+        .map_err(|_| "deploy client config must be UTF-8".to_owned())?;
     let root: toml::Table = raw.parse().map_err(|err| {
         format!(
             "failed to parse client config TOML `{}`: {err}",
@@ -1064,7 +1107,12 @@ fn build_deploy_artifacts(
         .pin_policy(PinPolicy {
             min_replicas: 1,
             storage_class: StorageClass::Hot,
-            retention_epoch: 86_400,
+            retention_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| "system clock precedes Unix epoch".to_owned())?
+                .as_secs()
+                .checked_add(86_400)
+                .ok_or_else(|| "retention deadline overflow".to_owned())?,
         })
         .build()
         .map_err(format_manifest_error)?;
@@ -1089,6 +1137,8 @@ fn build_deploy_artifacts(
     let root_cid_base32 = encode_content_cid_base32(&root_cid);
     plan.chunks.shrink_to_fit();
     Ok(DeployPackArtifacts {
+        plan,
+        payload: payload_bytes,
         manifest,
         manifest_digest_hex: hex_encode(manifest_digest.as_bytes()),
         root_cid_hex,
@@ -1163,6 +1213,12 @@ fn submit_pin_register(
         request.alias_inputs,
         successor_digest,
     )?;
+    let transaction = deploy_publication::quote_and_sign(
+        request.client,
+        request.torii_base_url,
+        request.private_key,
+        transaction.payload().clone(),
+    )?;
     let body_bytes = transaction.encode_versioned();
     let response = request
         .client
@@ -1194,6 +1250,7 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         Ok(endpoint) => endpoint,
         Err(err) => {
             return PublishPeerDiscovery {
+                pin_torii_urls: Vec::new(),
                 gateway_base_url: None,
                 status: None,
                 error: Some(format!(
@@ -1210,6 +1267,7 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         Ok(response) => response,
         Err(err) => {
             return PublishPeerDiscovery {
+                pin_torii_urls: Vec::new(),
                 gateway_base_url: None,
                 status: None,
                 error: Some(format!("peer discovery unavailable: {err}")),
@@ -1221,6 +1279,7 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         Ok(bytes) => bytes,
         Err(err) => {
             return PublishPeerDiscovery {
+                pin_torii_urls: Vec::new(),
                 gateway_base_url: None,
                 status: Some(status.as_u16()),
                 error: Some(format!("failed to read peer discovery response: {err}")),
@@ -1229,6 +1288,7 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
     };
     if !status.is_success() {
         return PublishPeerDiscovery {
+            pin_torii_urls: Vec::new(),
             gateway_base_url: None,
             status: Some(status.as_u16()),
             error: Some(format!(
@@ -1240,6 +1300,7 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         Ok(value) => value,
         Err(err) => {
             return PublishPeerDiscovery {
+                pin_torii_urls: Vec::new(),
                 gateway_base_url: None,
                 status: Some(status.as_u16()),
                 error: Some(format!("failed to parse peer discovery JSON: {err}")),
@@ -1251,6 +1312,15 @@ fn discover_publish_peers(client: &HttpClient, torii_base_url: &Url) -> PublishP
         .and_then(Value::as_str)
         .map(str::to_owned);
     PublishPeerDiscovery {
+        pin_torii_urls: value
+            .get("pin_torii_urls")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .take(64)
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect(),
         gateway_base_url,
         status: Some(status.as_u16()),
         error: None,
@@ -2958,7 +3028,7 @@ fn format_car_error(err: CarWriteError) -> String {
 }
 fn usage() -> String {
     "Usage:
-  sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
+  sorafs_cli deploy --payload=PATH --client-config=PATH --finality-checkpoint=PATH [--provider-url=URL...] [--torii-url=URL] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL --network-id=NETWORK_ID (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
@@ -3735,20 +3805,22 @@ fn fetch_gateway(raw_args: Vec<String>) -> Result<(), String> {
     let write_mode = orchestrator_config.write_mode;
     let runtime =
         Runtime::new().map_err(|err| format!("failed to initialise Tokio runtime: {err}"))?;
-    let session = runtime
-        .block_on(fetch_via_gateway(
+    // Keep unauthenticated bytes private and publish the same-filesystem spool only after
+    // canonical manifest, payload, CAR and PoR verification have all succeeded.
+    let spool = fetch_spool::create(output_path.as_deref())?;
+    let (session, spool) = runtime
+        .block_on(fetch_via_gateway_to_writer(
             orchestrator_config,
             &plan,
             gateway_config,
             provider_inputs,
             Some(&telemetry_snapshot),
             max_peers,
+            spool,
         ))
         .map_err(|err| format!("fetch failed: {err}"))?;
-    let outcome = &session.outcome;
     if let Some(path) = output_path {
-        let assembled = outcome.assemble_payload();
-        write_bytes(&path, &assembled)?;
+        fetch_spool::publish(spool, &path)?;
     }
     let mut summary = build_fetch_summary(
         manifest_id_hex.as_str(),
@@ -20961,7 +21033,7 @@ fn build_fetch_summary(
     manifest_id_hex: &str,
     chunker_handle: &str,
     plan: &CarBuildPlan,
-    session: &FetchSession,
+    session: &StreamFetchSession,
     options: FetchSummaryOptions<'_>,
 ) -> Value {
     let outcome = &session.outcome;
@@ -20982,8 +21054,13 @@ fn build_fetch_summary(
     }
     insert_value!(root["chunk_count"] = plan.chunks.len() as u64);
     insert_value!(root["content_length"] = plan.content_length);
-    let assembled_bytes: u64 = outcome.chunks.iter().map(|chunk| chunk.len() as u64).sum();
+    let assembled_bytes: u64 = outcome
+        .chunk_receipts
+        .iter()
+        .map(|receipt| receipt.bytes as u64)
+        .sum();
     insert_value!(root["assembled_bytes"] = assembled_bytes);
+    insert_value!(root["peak_buffered_bytes"] = outcome.peak_buffered_bytes as u64);
     let provider_reports = outcome
         .provider_reports
         .iter()

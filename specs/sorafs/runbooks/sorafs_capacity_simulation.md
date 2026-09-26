@@ -15,7 +15,7 @@ cd $REPO_ROOT/fixtures/documentation/sorafs_capacity_simulation
 ```
 
 The script invokes `sorafs_manifest_builder capacity` to emit deterministic Norito
-payloads, base64 encodings, Torii request bodies, and JSON summaries for:
+payloads, base64 encodings, and JSON summaries for:
 
 - Three provider declarations participating in the quota negotiation scenario.
 - A replication order allocating the staged manifest across the providers.
@@ -24,7 +24,10 @@ payloads, base64 encodings, Torii request bodies, and JSON summaries for:
 - A dispute payload requesting slashing after the simulated outage.
 
 The artefacts are written to `./artifacts` (or the path supplied as the first
-argument). Inspect the `_summary.json` files for human-readable state.
+argument). Declaration submission summaries contain only `declaration_b64`; copied
+`_spec.json` files retain the simulation's authoring inputs. Telemetry, replication
+and dispute summaries retain their descriptive fields. The script performs no
+signing or submission.
 
 ## 2. Aggregate results & emit metrics
 
@@ -32,7 +35,9 @@ argument). Inspect the `_summary.json` files for human-readable state.
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analysis script produces:
+The analysis script uses those declaration authoring specs for quota metrics;
+the Rust fixture regression independently decodes the canonical declarations and
+checks that their provider and capacity fields match. It produces:
 
 - `capacity_simulation_report.json` — Aggregated allocations, failover deltas,
   and dispute metadata.
@@ -79,5 +84,5 @@ copy it into the configured `--collector.textfile.directory`).
 - `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha`
   provider identifier.
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit`
+Run `cargo test -p sorafs_car --features cli --test sorafs_car_integration capacity_simulation_toolkit`
 to confirm the fixtures still validate with the CLI schema.

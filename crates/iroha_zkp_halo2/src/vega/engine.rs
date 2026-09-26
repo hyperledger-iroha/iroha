@@ -48,15 +48,8 @@ pub const VEGA_MDL_COMPILED_PROFILE_DIGEST_V1: [u8; 32] = [
     0xe7, 0x54, 0xae, 0xbc, 0x68, 0xf6, 0x44, 0x01, 0xb5, 0x89, 0x19, 0x83, 0xfb, 0xae, 0xff, 0x81,
     0xbc, 0x4b, 0x4d, 0x59, 0x92, 0x1a, 0x72, 0xc3, 0xa6, 0x2a, 0xa9, 0x9a, 0x19, 0x26, 0x0a, 0x2a,
 ];
-/// Hard release cap for caller-selected Vega workers.
-pub const MAX_VEGA_PROVER_WORKERS_V1: usize = 20;
-/// Conservative resident-memory admission budget for one canonical MC proof.
-pub const VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1: usize = 2 * 1024 * 1024 * 1024;
-const PROVER_WORKER_MEMORY_BOUND_BYTES: usize = 768 * 1024;
-/// Largest released per-proof memory ceiling at twenty workers.
-pub const MAX_VEGA_PROVER_RELEASE_MEMORY_CEILING_BYTES_V1: usize =
-    VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1
-        + MAX_VEGA_PROVER_WORKERS_V1 * PROVER_WORKER_MEMORY_BOUND_BYTES;
+/// Maximum number of dedicated row-commitment workers per Vega prover.
+pub const MAX_VEGA_PROVER_WORKERS_V1: usize = super::commitment::MAX_COMMITMENT_WORKERS;
 /// Explicit failure returned by an injected cryptographic random source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum VegaRandomSourceErrorV1 {
@@ -69,13 +62,21 @@ pub trait VegaRandomSourceV1 {
     /// Fill the entire destination or return an error.
     fn fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), VegaRandomSourceErrorV1>;
 }
-/// Explicit bounded worker configuration for the canonical Vega-MC prover.
+/// Dedicated row-commitment worker configuration for the canonical Vega-MC prover.
+///
+/// Secret MSM runs serially inside each dedicated worker. Public verifier
+/// arithmetic may use the ambient Rayon pool. This configuration does not
+/// reserve memory or certify a resident-memory ceiling; complete proof
+/// resource qualification remains a separate activation requirement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct VegaMdlProverConfigV1 {
     worker_count: usize,
 }
 impl VegaMdlProverConfigV1 {
-    /// Select the exact Rayon pool size used by setup-independent preparation and proving work.
+    /// Select the maximum number of dedicated row-commitment workers.
+    ///
+    /// A padded segment with fewer rows uses one worker per row. Secret MSM
+    /// never fans out from these workers into the ambient Rayon pool.
     ///
     /// # Errors
     ///
@@ -90,20 +91,10 @@ impl VegaMdlProverConfigV1 {
         }
         Ok(Self { worker_count })
     }
-    /// Exact number of prover workers.
+    /// Maximum number of dedicated row-commitment workers.
     #[must_use]
     pub const fn worker_count(self) -> usize {
         self.worker_count
-    }
-    /// Conservative worker-local scratch bound.
-    #[must_use]
-    pub const fn commitment_worker_scratch_bound_bytes(self) -> usize {
-        self.worker_count * PROVER_WORKER_MEMORY_BOUND_BYTES
-    }
-    /// Conservative release-mode resident-memory admission ceiling.
-    #[must_use]
-    pub const fn release_memory_ceiling_bytes(self) -> usize {
-        VEGA_PROVER_SHARED_MEMORY_BOUND_BYTES_V1 + self.commitment_worker_scratch_bound_bytes()
     }
 }
 /// Consensus context bound as four exact public scalars in the MC core.
@@ -352,3 +343,25 @@ pub fn verify_vega_mdl_figure9_v1(
 /// Number of uniform SHA-256 compression instances in the released split.
 pub const VEGA_MDL_MC_STEP_COUNT_V1: usize = VEGA_MDL_FIGURE9_SHA256_STEPS_V1;
 const _: () = assert!(MAX_VEGA_PROOF_BYTES_V1 == 524_288);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn commitment_worker_configuration_enforces_its_exact_public_bounds() {
+        for count in [1, MAX_VEGA_PROVER_WORKERS_V1] {
+            assert_eq!(
+                VegaMdlProverConfigV1::new(count).unwrap().worker_count(),
+                count
+            );
+        }
+        for count in [0, MAX_VEGA_PROVER_WORKERS_V1 + 1, usize::MAX] {
+            assert!(matches!(
+                VegaMdlProverConfigV1::new(count),
+                Err(VegaMdlProofErrorV1::InvalidWorkerCount { actual, min: 1, max })
+                    if actual == count && max == MAX_VEGA_PROVER_WORKERS_V1
+            ));
+        }
+    }
+}

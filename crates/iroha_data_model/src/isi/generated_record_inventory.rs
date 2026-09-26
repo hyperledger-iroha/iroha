@@ -25,6 +25,16 @@ macro_rules! record {
         }
     };
 }
+record!(
+    sorafs_assert_publication_v1,
+    crate::isi::sorafs::AssertSorafsPublicationV1,
+    "iroha_data_model::isi::sorafs::AssertSorafsPublicationV1"
+);
+record!(
+    sorafs_initialize_provider_admission_v1,
+    crate::isi::sorafs::InitializeSorafsProviderAdmissionV1,
+    "iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1"
+);
 // These five records retain the original public frames, reject the retired
 // hash-shaped scalar payloads, and pin populated canonical private frames.
 macro_rules! kaigi_record {

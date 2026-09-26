@@ -3091,6 +3091,7 @@ fn musubi_provider_bundle_attestation_and_exact_release_contract_is_static() {
 }
 // The shared typed contract macros must precede every lexical consumer.
 include!("tests/sorafs_contracts.rs");
+include!("tests/sorafs_publication_contracts.rs");
 include!("tests/diagnostics_schemas.rs");
 include!("tests/fee_quote_contract.rs");
 include!("tests/finality_app_contracts.rs");

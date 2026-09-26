@@ -1,11 +1,12 @@
 //! Real loopback HTTP scope: native payload verification, not governance or HTTPS deployment.
 use super::*;
+use crate::CarStreamingWriter;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::SigningKey;
 use sorafs_manifest::{ManifestBuilder, StreamTokenBodyV1, StreamTokenV1};
 use std::{
     collections::BTreeMap,
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::TcpListener,
     sync::Mutex,
     thread,
@@ -240,14 +241,19 @@ async fn real_http_native_multifile_payload_verifies_complete_pagination_and_com
             .expect("complete native plan"),
         plan
     );
-    let (observed, observed_plan, observed_payload) = context
+    let (observed, observed_plan, mut observed_reader) = context
         .fetch_verified_payload_v1(&manifest, limits())
         .await
         .expect("verified HTTP native payload")
         .into_parts();
     assert_eq!(observed, manifest);
     assert_eq!(observed_plan, plan);
+    let temporary_path = observed_reader.path().to_owned();
+    let mut observed_payload = Vec::new();
+    observed_reader.read_to_end(&mut observed_payload).unwrap();
     assert_eq!(observed_payload, payload);
+    drop(observed_reader);
+    assert!(!temporary_path.exists());
 }
 #[tokio::test]
 async fn real_http_source_rejects_redirects_truncated_body_and_changed_chunk() {
@@ -319,6 +325,12 @@ async fn real_http_source_rejects_changed_later_page_and_manifest_substitution()
 #[test]
 fn source_limits_reject_zero_excessive_and_incomplete_page_budgets() {
     limits().validate().unwrap();
+    GatewaySourceLimitsV1 {
+        max_payload_bytes: 8 * 1024 * 1024 * 1024,
+        ..limits()
+    }
+    .validate()
+    .unwrap();
     for altered in [
         GatewaySourceLimitsV1 {
             max_payload_bytes: 0,

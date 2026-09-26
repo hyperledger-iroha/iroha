@@ -233,7 +233,7 @@ def miss_probability(good: int, domain: int, queries: int) -> Fraction:
 def base_field_hiding_degree_screen(deep_frame_bytes: int) -> dict[str, int]:
     """Unqualified `<2N` DEEP/masking byte and degree screen, not a proof."""
     n, h, lde_rows, queries, retained = 65_536, 32_768, 8_388_608, 64, 301
-    if deep_frame_bytes != 500_783:
+    if deep_frame_bytes != 502_895:
         raise ValueError("DEEP DTO frame changed; review the hiding candidate")
     trace_bound = n + h
     numerator_bound = max(2 * trace_bound - 1 + (n - n // 512), trace_bound + n - 1)
@@ -242,7 +242,9 @@ def base_field_hiding_degree_screen(deep_frame_bytes: int) -> dict[str, int]:
     # Candidate appends R(x) to the same fixed inline RowValues field, with
     # no per-cell framing or new Merkle tree. Both lengths use two-byte varints.
     row_mask_bytes = field(retained * 8 + 32) - field(retained * 8)
-    frame_bytes = deep_frame_bytes + queries * row_mask_bytes
+    # The implemented candidate already carries R as a framed quotient field.
+    # This separate hypothetical layout relocates R into the inline row.
+    frame_bytes = deep_frame_bytes - queries * field(32) + queries * row_mask_bytes
     segment_margin = CAP - frame_bytes
     axt_two_child_margin = AXT_INNER_CAP - 2 * frame_bytes
     if (

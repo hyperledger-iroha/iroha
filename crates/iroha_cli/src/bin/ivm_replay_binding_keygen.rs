@@ -1,5 +1,5 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-#![doc = "Generate canonical Halo2 IPA IVM execution verifier and prover key artifacts."]
+#![doc = "Generate canonical Halo2 IPA IVM replay binding verifier and prover key artifacts."]
 use base64::Engine as _;
 use std::{env, fs, path::PathBuf};
 fn take_arg(args: &mut Vec<String>, name: &str) -> Result<String, String> {
@@ -31,17 +31,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let name = if args.iter().any(|arg| arg == "--name") {
         take_arg(&mut args, "--name")?
     } else {
-        "ivm_execution".to_owned()
+        "ivm_replay_binding".to_owned()
     };
     if !args.is_empty() {
         return Err(format!("unexpected arguments: {}", args.join(" ")).into());
     }
-    let vk_box = iroha_core::zk::halo2_ipa_ivm_execution_vk_box()
-        .map_err(|err| format!("failed to build ivm-execution-v1 verifying key: {err}"))?;
-    let pk = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box)
-        .map_err(|err| format!("failed to derive ivm-execution-v1 proving key: {err}"))?;
-    let record = iroha_core::zk::halo2_ipa_ivm_execution_vk_record("core", 1)
-        .map_err(|err| format!("failed to build ivm-execution-v1 VK record: {err}"))?;
+    let vk_box = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_box()
+        .map_err(|err| format!("failed to build ivm-replay-binding-v1 verifying key: {err}"))?;
+    let pk = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(&vk_box)
+        .map_err(|err| format!("failed to derive ivm-replay-binding-v1 proving key: {err}"))?;
+    let record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("core", 1)
+        .map_err(|err| format!("failed to build ivm-replay-binding-v1 VK record: {err}"))?;
     if let Some(parent) = vk_out.parent() {
         fs::create_dir_all(parent)?;
     }

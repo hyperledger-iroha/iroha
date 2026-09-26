@@ -186,7 +186,7 @@ pub fn validate_provider_ingest_https_evidence_v1(
         .ok_or(rejected)?;
     let advert = cached.advert();
     let now_seconds = now_unix_ms / 1000;
-    if !admission.is_council_verified()
+    if !(admission.is_council_verified() || admission.is_genesis_material())
         || admission.envelope_digest() != &pins.admission_envelope_digest
         || cached.fingerprint() != &pins.advert_digest
         || grant.lease.advert_digest != pins.advert_digest

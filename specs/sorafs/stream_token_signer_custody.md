@@ -117,13 +117,26 @@ body, original custody and authenticated-operator quota across the operation.
 4. The bounded receipt contains exactly four ordered signatures for role payload,
    audit record, provenance and response. Fresh `AfterCommit` and then separate
    `BeforeRelease` observations authenticate the original custody and exact durable
-   completion. Startup or pre-sign evidence cannot replace either observation.
+   completion. Each phase also prepares a fresh native `Check`, asks the separately
+   configured observer to sign and submit that exact instruction, then consumes
+   successful execution and the original Reserve/Complete history against one
+   State/Kura/QC view. The resulting completion must equal the private receipt and
+   signed observation, including its original journal digest and terminal block.
+   Startup or pre-sign evidence cannot replace either observation.
 5. Before publication, Torii checks approved, current and historical signing custody
    anchors against the native control reader and Kura's verified finality artifacts
    using one immutable Core State view. Completion keeps its separate finalized
    operation-block identity; it is not interpreted as custody control state. Larger
    heights alone prove no ancestry. Torii resamples time after finality reads and
-   rejects expiry, rollback, revocation or custody drift.
+  rejects expiry, rollback, revocation or custody drift.
+
+`query::stream_token_authority::observation` owns the native Check capability.
+Its challenge is generated before signing and its monotonic deadline never
+renews. The consumer checks current provider ownership, separate Check/Operate
+permissions, custody revision and phase at both endpoints of the caller's UTC
+uncertainty interval. Decoded transaction or row claims cannot construct this
+capability. The broker's Check operation only transports the exact bounded signed
+transaction; Torii independently verifies its finalized execution.
 
 The signer client and broker return only bounded untrusted receipt bytes.
 `SignerStreamTokenServiceV1` owns durable production and read-only recovery over
@@ -134,14 +147,57 @@ The coordinator rejects a generic role-11 Sign reservation. Its stream-token
 entry point checks the exact canonical body against the borrowed domain-prefixed
 signing bytes and passes a sealed body, time-window and request-digest review to
 the source's purpose-specific Reserve. The source must independently rederive
-that review and perform the finalized CAS; the current test source exercises this
-boundary, but a production finalized operation source is still required.
+that review and perform the finalized CAS. The daemon native source performs
+this CAS through the actual signed transaction queue and authenticates the resulting
+Reserve, Complete and independent phase-specific Checks against its State and
+durable Kura finality. It compares each mutation to its original signed transaction
+hash, so a competing identical request cannot borrow another operation's success.
 
 The token signature covers `sorafs.stream-token.signature.v1\0` followed by the
 canonical body frame. The token transport is canonical padded base64 over one
 canonical Norito V1 frame, capped at 2048 decoded bytes and 4096 header bytes.
 Same-value alternate layouts and compression are rejected; finite decoder limits
 also intersect any stricter caller budget.
+
+## Native software runtime construction
+
+The optional `sorafs.storage.stream_tokens.signer.native` configuration selects the
+local State-backed runtime. It requires absolute owner-only `signer_credential`,
+`operator_credential`, `observer_credential`, `custody_record` and `receipt_journal`
+paths, the current governed provider `operator`, an explicit canonical
+`fee_payment_json`, and bounded `timeout_ms` (default 30,000; 100–60,000). The three
+software key identities are distinct. The attester remains independently trusted;
+its private key is not a daemon input. The custody file is signed material that
+must match current finalized native state, never an alternative authority.
+
+The common signer `clock_uncertainty_ms` setting (default 250; maximum 5,000)
+bounds both UTC endpoints for native and external runtimes. Each native transaction
+has one monotonic deadline beginning before signing; ambiguous submission or
+finality failure never generates a replacement mutation. Recovery reads the
+original immutable operation and performs fresh Check observations.
+
+Daemon startup assembles the selected runtime after State and queue construction
+and rejects conflicting injected signer dependencies. Startup current-custody
+observation reads actual finalized State without waiting for a new block. Once
+serving, signing and completed observations submit the native phase-specific
+transactions and require their finalized execution. Explicit external broker
+adapters remain a separate configuration choice under the same consumer protocol;
+failed native construction cannot select one automatically.
+Emergency Fast recovery disables storage and skips native credential loading and custody
+construction on every platform, matching the other storage runtime dependencies.
+
+Source-adjacent fixtures exercise the production constructor, signed software
+custody, queue submission, native executor outcomes and durable three-of-four QCs.
+The daemon issuer test calls `StreamTokenIssuer::from_config` and the real issue path,
+checks its native Current/BeforeProvider/AfterCommit/BeforeRelease transactions and
+exactly one Reserve/Complete, then verifies the returned canonical CID token's transport,
+signature and policy fields. A subsequently finalized revocation denies existing-token
+custody admission and a new issuance. These are source assertions pending the coordinated
+test run. Public gateway serving additionally requires the configured deployment-owned
+admission quota/sequencer and committed reputation callback; this fixture supplies neither
+and cannot establish their cross-replica behavior.
+These fixture assertions require focused test execution; they do not establish
+live consensus, ordinary fee settlement or a four-process deployment qualification.
 
 ## Current custody before serving admission
 
@@ -189,3 +245,12 @@ authoritative durable operation source. Validate the native custody transitions 
 Torii reader together against durable certified history and four voting validators
 with mandatory signed RS16 DA/RBC. The present source contracts and signed
 simulations do not complete those qualification outcomes.
+
+
+Custody enrollment may reference an earlier committed approval block while unrelated
+blocks finalize. The reducer reconstructs the exact native custody at that block and
+requires it to equal the current control digest and state; an intervening custody
+mutation or revocation rejects the enrollment. Consensus execution uses replicated
+committed lineage. Independent attesters and runtime consumers authenticate their
+observations against exact durable State/Kura/QC evidence. Public canonical request
+and control-record digest helpers derive material only and grant no execution authority.

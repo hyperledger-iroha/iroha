@@ -14,9 +14,15 @@ SOURCES = {
     "row": "crates/fastpq_prover/src/backend/compact_protocol/shared_openings/row_values.rs",
     "shared": "crates/fastpq_prover/src/backend/compact_protocol/shared_openings.rs",
     "producer": "crates/fastpq_prover/src/backend/compact_quantity_producer.rs",
+    "resources": "crates/fastpq_prover/src/backend/offline_compact/resources.rs",
     "fp4": "crates/fastpq_prover/src/field.rs",
     "digest": "crates/fastpq_isi/src/poseidon_digest384.rs",
     "deep": "crates/fastpq_prover/src/backend/deep_proof.rs",
+    "deep_tests": "crates/fastpq_prover/src/backend/deep_proof/tests.rs",
+    "deep_row": "crates/fastpq_prover/src/backend/deep_proof/row_values.rs",
+    "deep_fri": "crates/fastpq_prover/src/backend/deep_proof/fri_values.rs",
+    "deep_geometry": "crates/fastpq_prover/src/backend/deep_geometry.rs",
+    "public_columns": "crates/fastpq_prover/src/backend/compact_public_columns.rs",
     "backend": "crates/fastpq_prover/src/backend.rs",
     "axt": "crates/fastpq_prover/src/axt_binding.rs",
     "retained": "crates/fastpq_prover/src/backend/compact_quantity_diagnostic.rs",
@@ -71,6 +77,50 @@ def frontier(leaves: int, opened: int) -> int:
     return sum(min(opened, 1 << level) for level in range(leaves.bit_length() - 1)) - opened + 1
 
 
+def deep_frame_bound(sources: dict[str, str], width: int, fp4_bytes: int, digest_bytes: int) -> int:
+    """Derive the inactive DTO bound with its raw row and fixed FRI-fiber codecs."""
+    geometry = sources["deep_geometry"]
+    queries = number(geometry, r"QUERY_COUNT: usize = ([\d_]+);", "DEEP query count")
+    public = number(sources["public_columns"], r"PUBLIC_COLUMN_COUNT: usize = ([\d_]+);", "public columns")
+    require(sources["public_columns"], r"COMMITTED_COLUMN_COUNT: usize = COLUMN_COUNT - PUBLIC_COLUMN_COUNT", "retained width")
+    arrays = []
+    for name, length in (("FRI_ARITIES", 5), ("FRI_LENGTHS", 6)):
+        matches = re.findall(rf"{name}: \[usize; {length}\] = \[([\d_, ]+)\];", geometry)
+        if len(matches) != 1:
+            raise ValueError(f"unrecognized DEEP {name}")
+        values = [int(value.strip().replace("_", "")) for value in matches[0].split(",")]
+        if len(values) != length:
+            raise ValueError(f"wrong DEEP {name} length")
+        arrays.append(values)
+    arities, lengths = arrays
+    if any(lengths[i] != arity * lengths[i + 1] for i, arity in enumerate(arities)):
+        raise ValueError("DEEP FRI dimensions disagree")
+    require(sources["deep_row"], r"struct RowValues\(\[u64; COMMITTED_COLUMN_COUNT\]\)", "retained row")
+    require(sources["deep_row"], r"BYTES: usize = COMMITTED_COLUMN_COUNT \* size_of::<u64>\(\)", "raw retained row bytes")
+    require(sources["deep_row"], r"writer\.write_all\(&value\.to_le_bytes\(\)\)", "raw retained row encoding")
+    require(sources["deep_fri"], r"1 \+ arity \* Fp4::BYTES", "raw FRI fiber bytes")
+    require(sources["deep_fri"], r"writer\.write_all\(&\[self\.len\(\) as u8\]\)", "FRI arity encoding")
+    require(sources["deep_fri"], r"writer\.write_all\(&value\.to_le_bytes\(\)\)", "raw FRI fiber encoding")
+    require(sources["deep"], r"pub\(super\) composition_mask: Fp4,", "authenticated composition mask field")
+    retained = width - public
+    ood = record(vector(retained, fp4_bytes), vector(retained, fp4_bytes), vector(2, fp4_bytes))
+    rounds = 8 + sum(
+        field(record(
+            vector(queries, record(4, 1 + arity * fp4_bytes)),
+            vector(frontier(lengths[i + 1], queries), digest_bytes),
+        ))
+        for i, arity in enumerate(arities)
+    )
+    return 40 + record(
+        digest_bytes, digest_bytes, vector(6, digest_bytes), ood,
+        vector(queries, record(4, retained * 8)),
+        vector(queries, record(4, fp4_bytes, fp4_bytes, fp4_bytes)),
+        vector(frontier(lengths[0], queries), digest_bytes),
+        vector(frontier(lengths[0], queries), digest_bytes),
+        rounds, vector(lengths[-1], fp4_bytes),
+    )
+
+
 def budget(sources: dict[str, str]) -> dict[str, object]:
     """Derive a conservative current-frame bound and read candidate boundaries."""
     profile = sources["profile"].split("#[derive", 1)[0]
@@ -90,9 +140,10 @@ def budget(sources: dict[str, str]) -> dict[str, object]:
     axt_cap = number(sources["axt"], r"DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES: usize = ([\d_]+) \* 1024;", "AXT KiB cap") * 1024
     deep_max = number(sources["deep"], r"MAX_FRAME_BYTES: usize = ([\d_]+);", "DEEP DTO bound")
     rust_bound = number(sources["shared"], r"assert_eq!\(bound, ([\d_]+)\);", "Rust current bound")
-    producer_bound = number(sources["producer"], r"const SHARED_FRAME_BOUND: usize = ([\d_]+);", "producer preflight bound")
+    producer_bound = number(sources["resources"], r"const QUANTITY_SHARED_FRAME_BOUND: usize = ([\d_]+);", "producer preflight bound")
+    resource_queries = number(sources["resources"], r"const QUANTITY_QUERY_COUNT: usize = ([\d_]+);", "resource query count")
 
-    if width != row_width or width != declared_width or trace_rows * 8 != lde_rows or arity != 2 or lde_rows >> folds != terminal:
+    if width != row_width or width != declared_width or trace_rows * 8 != lde_rows or arity != 2 or lde_rows >> folds != terminal or resource_queries != query_count:
         raise ValueError("profile and fixed-row codec geometry disagree")
     require(sources["row"], r"BYTES: usize = Self::WIDTH \* size_of::<u64>\(\)", "fixed row byte width")
     require(sources["row"], r"writer\.write_all\(&value\.to_le_bytes\(\)\)", "canonical row encoding")
@@ -106,12 +157,21 @@ def budget(sources: dict[str, str]) -> dict[str, object]:
     require(sources["digest"], r"GOLDILOCKS_DIGEST384_BYTES_V1: usize = GOLDILOCKS_DIGEST384_LANES_V1 \* 8", "digest byte width")
     require(sources["backend"], r"#\[cfg\(test\)\]\s*#\[path = \"backend/deep_engine.rs\"\]\s*mod deep_engine;", "test-only DEEP verifier")
     require(sources["deep"], r"caller_max_bytes\.min\(MAX_FRAME_BYTES\)", "DEEP decoder cap")
-    require(sources["producer"], r"check\(\s*\"max_proof_bytes\",\s*SHARED_FRAME_BOUND,\s*bundle\.segment\.max_proof_bytes", "producer byte preflight")
+    require(sources["producer"], r"QUANTITY_SHARED_FRAME_BOUND as SHARED_FRAME_BOUND", "shared producer frame bound")
+    require(sources["producer"], r"quantity_artifact_resources\(count, 0\)\?\.check_proving_limits\(proving, verification\)\?", "producer resource preflight")
+    require(sources["resources"], r"maximum_segment_frame_bytes: QUANTITY_SHARED_FRAME_BOUND", "planned child frame bound")
+    require(sources["resources"], r'"max_proof_bytes",\s*self\.maximum_segment_frame_bytes,\s*child\.max_proof_bytes', "producer byte preflight")
 
     if (segment_cap, axt_cap) != (524_288, 1_048_576):
         raise ValueError("fixed first-release proof ceilings changed")
 
     digest_bytes = lanes * 8
+    deep_bound = deep_frame_bound(sources, width, fp4_bytes, digest_bytes)
+    deep_fixture_bytes = number(sources["deep_tests"], r"assert_eq!\(bytes\.len\(\), ([\d_]+)\);", "canonical DEEP fixture bytes")
+    require(sources["deep_tests"], r"assert_eq!\(bytes\.len\(\), MAX_FRAME_BYTES\)", "DEEP fixture bound")
+    require(sources["deep_tests"], r"assert_eq!\(bytes\.len\(\), maximum_frame_bytes\(\)\)", "DEEP independent Rust bound")
+    if deep_bound != deep_max or deep_fixture_bytes != deep_max:
+        raise ValueError("DEEP source-derived frame, canonical fixture, and decoder bound disagree")
     minimum_rows = query_count * row_width * 8
     minimum_scalars = query_count * 2 * fp4_bytes
     raw_floor = minimum_rows + minimum_scalars

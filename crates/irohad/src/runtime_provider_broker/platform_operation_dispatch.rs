@@ -455,6 +455,9 @@ fn dispatch_server_operation_with_session(
         (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
             stream_token_operations::stream_token_observe(state, request)
         }
+        (slot, OPERATION_STREAM_TOKEN_CHECK_V1) if slot == stream_token_slot => {
+            stream_token_operations::stream_token_check(state, request)
+        }
         (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
             if slot == stream_token_gateway_admission_slot =>
         {

@@ -571,13 +571,10 @@ impl<Admission, Block: AsRef<iroha_data_model::block::SignedBlock>, Components>
         if self.context.as_ref() != context {
             return false;
         }
-        match (
-            self.valid.as_ref().canonical_proposal_wire_hash(),
-            proposal.canonical_proposal_wire_hash(),
-        ) {
-            (Ok(original), Ok(candidate)) => original == candidate,
-            _ => false,
-        }
+        self.valid
+            .as_ref()
+            .checked_resultless_proposal_eq(proposal)
+            .unwrap_or(false)
     }
 }
 

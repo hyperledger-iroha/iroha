@@ -5,12 +5,17 @@
 //! original operation execution and private receipt before any token is released.
 
 use super::*;
+use crate::query::stream_token_authority::eligibility::{check_live_custody, checked_phase};
 use crate::query::stream_token_custody::NativeControl;
 use iroha_data_model::sorafs::stream_token_authority::{
-    STREAM_TOKEN_AUTHORITY_REQUEST_MAX_BYTES_V1, StreamTokenCheckPhaseV1 as Phase,
-    StreamTokenCheckV1, StreamTokenFinalityFloorV1, StreamTokenReviewedV1,
+    STREAM_TOKEN_AUTHORITY_REQUEST_MAX_BYTES_V1, StreamTokenCheckV1, StreamTokenFinalityFloorV1,
     validate_stream_token_check_claim_v1,
 };
+#[cfg(test)]
+use iroha_data_model::sorafs::stream_token_authority::{
+    StreamTokenCheckPhaseV1 as Phase, StreamTokenReviewedV1,
+};
+#[cfg(test)]
 use sorafs_manifest::signer::stream_token::stream_token_binding_digest_v1;
 
 fn check_floor(
@@ -50,92 +55,6 @@ fn check_floor(
         || receipt.context_id() != floor.context_id
     {
         return Err(Error::Finality);
-    }
-    Ok(())
-}
-
-fn checked_phase(
-    tx: &StateTransaction<'_, '_>,
-    provider: ProviderId,
-    check: &StreamTokenCheckV1,
-    head: &OperationHeadV1,
-    now: u64,
-) -> Result<(StreamTokenReviewedV1, Phase), Error> {
-    let id = check.reviewed.request.operation_id;
-    match &check.phase {
-        Phase::Current(_) => {
-            if head.active_operation.is_some()
-                || journal::read_history(tx.world(), provider, id)?.is_some()
-                || check.reviewed.intent.previous_audit != head.audit
-            {
-                return Err(Error::Conflict);
-            }
-            Ok((check.reviewed, Phase::Current(head.audit)))
-        }
-        Phase::BeforeProvider(_) | Phase::AfterProvider(_) | Phase::BeforeCommit(_) => {
-            let history =
-                journal::read_history(tx.world(), provider, id)?.ok_or(Error::Conflict)?;
-            let record = &history.current;
-            let row = &record.operation;
-            if row.operation.outcome != StreamTokenOutcomeV1::Reserved
-                || head.active_operation != Some(id)
-                || head.revision != record.revision
-                || head.digest != journal::record_digest(record)?
-                || head.audit != row.operation.reviewed.intent.previous_audit
-                || now < row.reserved_execution.recorded_at_unix_ms
-                || now >= row.operation.reservation.expires_at_unix_ms
-            {
-                return Err(Error::Conflict);
-            }
-            let expected = match &check.phase {
-                Phase::BeforeProvider(_) => Phase::BeforeProvider(row.clone()),
-                Phase::AfterProvider(_) => Phase::AfterProvider(row.clone()),
-                Phase::BeforeCommit(_) => Phase::BeforeCommit(row.clone()),
-                _ => return Err(Error::Invalid),
-            };
-            Ok((history.reserved.operation.operation.reviewed, expected))
-        }
-        Phase::AfterCommit(_) | Phase::BeforeRelease(_) => {
-            let history =
-                journal::read_history(tx.world(), provider, id)?.ok_or(Error::Conflict)?;
-            let row = &history.current.operation;
-            if !matches!(row.operation.outcome, StreamTokenOutcomeV1::Completed(_))
-                || row
-                    .terminal_execution
-                    .as_ref()
-                    .is_none_or(|terminal| now < terminal.recorded_at_unix_ms)
-            {
-                return Err(Error::Conflict);
-            }
-            let expected = match &check.phase {
-                Phase::AfterCommit(_) => Phase::AfterCommit(row.clone()),
-                Phase::BeforeRelease(_) => Phase::BeforeRelease(row.clone()),
-                _ => return Err(Error::Invalid),
-            };
-            Ok((history.reserved.operation.operation.reviewed, expected))
-        }
-    }
-}
-
-fn check_live_custody(
-    current: &NativeControl,
-    check: &StreamTokenCheckV1,
-    authority: &AccountId,
-    now: u64,
-) -> Result<(), Error> {
-    let reviewed = &check.reviewed.request;
-    eligible_custody(current, reviewed.original_custody.record_digest, now)?;
-    if *authority != check.expected_observer
-        || *authority == check.expected_operator
-        || *authority == AccountId::new(current.state.policy.binding.public_key.clone())
-        || reviewed.original_custody.control_state_digest != current.index.digest
-        || reviewed.binding_digest
-            != stream_token_binding_digest_v1(&current.state.policy.binding)
-                .map_err(|_| Error::Custody)?
-        || now < reviewed.issued_at_unix_ms
-        || now >= reviewed.expires_at_unix_ms
-    {
-        return Err(Error::Custody);
     }
     Ok(())
 }
@@ -206,9 +125,9 @@ pub(super) fn evaluate_check(
         &current,
         execution.recorded_at_unix_ms,
     )?;
-    // TODO: A separate purpose-owned observer must authenticate the signed Check from its
-    // independently pinned floor into one applied cut, historical Reserve/Complete proof,
-    // current custody and private receipt before the daemon may sign or release a token.
+    // The purpose-owned query::stream_token_authority::observation consumer authenticates
+    // the signed Check and original operation history. Private receipt validation belongs to
+    // the signer/issuer and remains required before release.
     Ok(())
 }
 

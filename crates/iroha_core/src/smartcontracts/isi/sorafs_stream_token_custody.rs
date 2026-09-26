@@ -9,7 +9,6 @@ use crate::{
     },
     state::{StateTransaction, WorldReadOnly},
 };
-use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
     isi::{
@@ -109,17 +108,13 @@ fn request_digest(
     instruction: &MutateSorafsStreamTokenCustody,
     authority: &AccountId,
 ) -> Result<[u8; 32], Error> {
-    // A 16 KiB canonical action plus its native request envelope must fit before allocation.
-    if norito::canonical_frame_len(instruction).map_err(|_| Error::Invalid)? > 32 * 1024 {
-        return Err(Error::Invalid);
-    }
-    let request = norito::encode_canonical(instruction).map_err(|_| Error::Invalid)?;
-    let authority = encode(authority)?;
-    let mut bytes = b"iroha.sorafs.stream-token.custody-request.v1\0".to_vec();
-    bytes.extend_from_slice(&request);
-    bytes.extend_from_slice(&authority);
-    Ok(*Hash::new(bytes).as_ref())
+    iroha_data_model::sorafs::stream_token_custody::stream_token_custody_request_digest_v1(
+        instruction,
+        authority,
+    )
+    .map_err(|_| Error::Invalid)
 }
+
 fn apply_control(
     instruction: MutateSorafsStreamTokenCustody,
     authority: &AccountId,
@@ -208,13 +203,21 @@ fn apply_control(
         }
         Action::Enroll(bytes) => {
             let current = current.as_ref().ok_or(Error::Conflict)?;
+            let candidate: sorafs_manifest::signer::custody::SignerCustodyRecordV1 =
+                decode(&bytes)?;
+            if candidate.statement.anchor.height == 0
+                || candidate.statement.anchor.height > parent_height
+            {
+                return Err(Error::HeightUnavailable);
+            }
             let previous_committed = read_stream_token_custody_control_at_v1(
                 tx,
                 &current.state.policy.binding,
-                parent_height,
+                candidate.statement.anchor.height,
             )?
             .ok_or(Error::Conflict)?;
-            // A pending Configure/Enroll/Revoke cannot masquerade as the previous committed state.
+            // Unrelated later blocks do not change custody. Any intervening custody mutation,
+            // including a pending same-block mutation, invalidates this approval anchor.
             if previous_committed.anchor.state_digest != current.index.digest
                 || previous_committed.state != current.state
             {

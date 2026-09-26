@@ -12,6 +12,11 @@ from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
 
+from scripts.tests.sorafs_path_resolution_contract import (
+    STRICT_CUSTODY_OWNERS,
+    custody_owns_resolution,
+)
+
 from scripts.tests.sorafs_release_contract_support import (
     assert_canary_matches_release_gate,
     required_release_kinds,
@@ -643,19 +648,6 @@ ACTIVE_SORAFS_TODO_SCAN_FILES = (
     / "model"
     / "instructions"
     / "BindManifestAliasInstruction.java",
-    REPO_ROOT
-    / "java"
-    / "iroha_android"
-    / "src"
-    / "main"
-    / "java"
-    / "org"
-    / "hyperledger"
-    / "iroha"
-    / "android"
-    / "model"
-    / "instructions"
-    / "RegisterCapacityDeclarationInstruction.java",
     REPO_ROOT
     / "java"
     / "iroha_android"
@@ -2305,7 +2297,8 @@ def test_sorafs_fetch_integrity_verification_is_mandatory() -> None:
     assert "fetch.verify_lengths must remain true" in orchestrator
     assert "fetch.verify_digests must remain true" in orchestrator
     assert "let should_verify_manifest =" not in orchestrator
-    assert ".verify_against_manifest(plan, verification_context)" in orchestrator
+    assert "session.verify_against_manifest(plan, ManifestVerificationContext::from(&gateway_manifest))?;" in orchestrator
+    assert "validate_gateway_manifest_context(plan, &ManifestVerificationContext::from(&gateway_manifest))?;" in orchestrator
 
     stale_docs = [
         str(path.relative_to(REPO_ROOT))
@@ -8402,19 +8395,48 @@ def test_sorafs_operator_helpers_use_shared_path_identity_for_resolution() -> No
                 continue
             if SCRIPTS_DIR / "tests" in path.parents:
                 continue
-            for line_number, line in enumerate(read(path).splitlines(), start=1):
+            source = read(path)
+            for line_number, line in enumerate(source.splitlines(), start=1):
                 if ".resolve(" not in line and "os.path.realpath(" not in line:
                     continue
                 stripped = line.strip()
-                bootstrap_resolve = "__file__" in line and ".resolve()" in line
+                bootstrap_resolve = (
+                    "Path(__file__).resolve()" in line
+                    and ".resolve(" not in line.replace("Path(__file__).resolve()", "")
+                    and "os.path.realpath(" not in line
+                )
                 shared_helper_resolve = (
                     path == PATH_IDENTITY_HELPER and stripped == "return path.resolve()"
                 )
-                if not (bootstrap_resolve or shared_helper_resolve):
+                custody_resolve = custody_owns_resolution(path.relative_to(REPO_ROOT), line, source)
+                if not (bootstrap_resolve or shared_helper_resolve or custody_resolve):
                     rel = path.relative_to(REPO_ROOT)
                     offenders.append(f"{rel}:{line_number}: {stripped}")
 
     assert offenders == []
+
+
+def test_custody_resolution_owners_reject_relaxed_or_substituted_resolution() -> None:
+    for owner in STRICT_CUSTODY_OWNERS:
+        source = read(REPO_ROOT / owner)
+        calls = [line for line in source.splitlines() if ".resolve(strict=True)" in line]
+        assert calls, f"strict custody owner is disconnected: {owner}"
+        for line in calls:
+            assert custody_owns_resolution(Path(owner), line, source)
+            for replacement in ("resolve()", "resolve(strict=False)", "resolve(strict=flag)"):
+                assert not custody_owns_resolution(Path(owner), line.replace("resolve(strict=True)", replacement), source)
+            assert not custody_owns_resolution(Path("scripts/unreviewed_sorafs.py"), line, source)
+    namespace = Path("scripts/sorafs_javascript_runtime_inputs.py")
+    source = read(REPO_ROOT / namespace)
+    line = "require(namespace.resolve(alias.path) == alias.resolved, 'exact')"
+    assert custody_owns_resolution(namespace, line, source)
+    assert not custody_owns_resolution(namespace, line.replace("namespace.resolve", "path.resolve"), source)
+    assert not custody_owns_resolution(namespace, line, source.replace("class _Namespace:", "class OtherNamespace:"))
+    child = Path("scripts/sorafs_javascript_child_session.mjs")
+    source = read(REPO_ROOT / child)
+    line = "const url = import.meta.resolve(specifier);"
+    assert custody_owns_resolution(child, line, source)
+    assert not custody_owns_resolution(child, line, source.replace("demand(url === pathToFileURL", "demand(true || pathToFileURL"))
 
 
 def test_rollout_runners_preflight_verifier_and_output_targets() -> None:
@@ -25095,7 +25117,8 @@ def test_gateway_compliance_controller_runtime_state_is_honest_in_docs() -> None
     required_current = (
         "`iroha_config` now carries the non-secret controller policy",
         "Torii now exposes six canonical, account-signed, governed-operator routes",
-        "Real authenticated feed and ACME adapters for the standard daemon",
+        "The authenticated feed transport ships in the standard daemon.",
+        "ACME adapters, finalized accepted-appeal and legal/safety-hold catalog producers",
         "Configuration, runtime dependency transfer, fail-closed startup checks, durable controller construction, authenticated control routes, live serving enforcement, and unsigned-bootstrap mutual exclusion already ship locally and must not be reopened as missing work.",
         "Connect finalized accepted-appeal outcomes and legal/safety-hold producers to signed catalog construction and cache invalidation.",
         "Wire deployed GAR receipts and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
@@ -25136,7 +25159,8 @@ def test_gateway_compliance_docs_keep_shipped_runtime_and_transparency_state() -
     required_current = (
         "`iroha_config` now carries the non-secret controller policy",
         "Torii now exposes six canonical, account-signed, governed-operator routes",
-        "Real authenticated feed and ACME adapters for the standard daemon",
+        "The authenticated feed transport ships in the standard daemon.",
+        "ACME adapters, finalized accepted-appeal and legal/safety-hold catalog producers",
         "legal/safety hold > accepted appeal > baseline",
         "no local pack, diff, verify, or mutation CLI is supported",
         "Wire deployed GAR receipts and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",

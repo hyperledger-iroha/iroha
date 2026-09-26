@@ -212,6 +212,28 @@ impl MultiproofPlan {
         })
     }
 
+    /// Exact retained Vec payload, including reserved capacity, for prover planning.
+    /// Allocator metadata and this fixed-size object are not dynamic payload.
+    #[cfg(test)]
+    pub(super) fn owned_payload_bytes(&self) -> Result<usize> {
+        self.indices
+            .capacity()
+            .checked_mul(size_of::<usize>())
+            .and_then(|indices| {
+                self.siblings
+                    .capacity()
+                    .checked_mul(size_of::<SiblingPosition>())
+                    .and_then(|siblings| indices.checked_add(siblings))
+            })
+            .ok_or_else(|| shape("multiproof owned payload overflow"))
+    }
+
+    /// Exact canonical selected positions, borrowed by the streamed producer.
+    #[cfg(test)]
+    pub(super) fn queried_indices(&self) -> &[usize] {
+        &self.indices
+    }
+
     /// Return the exact ordered sibling locations for prover extraction.
     pub(super) fn sibling_positions(&self) -> &[SiblingPosition] {
         &self.siblings

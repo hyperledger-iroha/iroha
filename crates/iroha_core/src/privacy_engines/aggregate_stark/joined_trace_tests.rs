@@ -1,0 +1,427 @@
+//! Independent common-domain row, frontier, ordering and rejection checks.
+
+use super::*;
+
+fn fixture() -> (
+    AggregateStarkParametersV1,
+    AggregateStarkDomainsV1,
+    AggregateProofLayoutV1,
+) {
+    let parameters = AggregateStarkParametersV1 {
+        proof_magic: *b"JON1",
+        proof_version: 1,
+        fri_commitment_layout: AggregateFriCommitmentLayoutV1::Paired,
+        security_lanes: 2,
+        query_count: FASTPQ_QUERY_COUNT_V1 as usize,
+        blowup_log2: 3,
+        terminal_log2: 3,
+        terminal_degree_bound: 3,
+        composition_degree_chunks: 3,
+        minimum_trace_log2: 5,
+        maximum_trace_log2: 8,
+        maximum_trace_groups: 4,
+        maximum_segment_instances: 4,
+        maximum_base_columns_per_instance: 16,
+        maximum_aux_columns_per_instance: 16,
+        maximum_proof_bytes: 1 << 20,
+    };
+    let domains = AggregateStarkDomainsV1 {
+        digest_context: TransparentStarkDigestContextV1::new(
+            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            b"joined-trace-tests-v1",
+        ),
+        base_leaf: b"joined-test-base-leaf",
+        base_node: b"joined-test-base-node",
+        aux_leaf: b"joined-test-aux-leaf",
+        aux_node: b"joined-test-aux-node",
+        composition_leaf: b"joined-test-composition-leaf",
+        composition_node: b"joined-test-composition-node",
+        fri_leaf: b"joined-test-fri-leaf",
+        fri_node: b"joined-test-fri-node",
+        layout_label: b"joined-test-layout",
+        base_root_label: b"joined-test-base-root",
+        aux_root_label: b"joined-test-aux-root",
+        composition_root_label: b"joined-test-composition-root",
+        fri_root_label: b"joined-test-fri-root",
+        fri_beta_label: b"joined-test-fri-beta",
+        query_seed: b"joined-test-query",
+    };
+    let layout = AggregateProofLayoutV1::new(
+        parameters,
+        vec![
+            AggregateTraceGroupLayoutV1 {
+                native_trace_log2: 5,
+                segment_instances: 1,
+                base_width: 9,
+                aux_width: 2,
+            },
+            AggregateTraceGroupLayoutV1 {
+                native_trace_log2: 8,
+                segment_instances: 1,
+                base_width: 3,
+                aux_width: 4,
+            },
+        ],
+    )
+    .unwrap();
+    (parameters, domains, layout)
+}
+
+fn polynomial_groups(plan: &JoinedTraceCommitmentPlanV1) -> Vec<MaskedTracePolynomialSetV1> {
+    plan.groups
+        .iter()
+        .enumerate()
+        .map(|(group, (native, range))| {
+            let count = (1_usize << *native) + 4;
+            MaskedTracePolynomialSetV1 {
+                native_trace_log2: *native,
+                commitment_lde_log2: plan.commitment_lde_log2,
+                columns: (0..range.len())
+                    .map(|column| {
+                        ZeroizingFieldColumnV1(
+                            (0..count)
+                                .map(|coefficient| {
+                                    F((1 + group * 100_000 + column * 1_000 + coefficient) as u64)
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+fn materialized_rows(
+    plan: &JoinedTraceCommitmentPlanV1,
+    polynomials: &[MaskedTracePolynomialSetV1],
+) -> Vec<Vec<F>> {
+    let root = goldilocks_primitive_root_v1(plan.commitment_lde_log2).unwrap();
+    (0..(1 << plan.commitment_lde_log2))
+        .map(|index| {
+            let x = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(index as u128));
+            polynomials
+                .iter()
+                .flat_map(|group| {
+                    group.columns.iter().map(|column| {
+                        column
+                            .iter()
+                            .rev()
+                            .fold(F::ZERO, |value, &coefficient| value.mul(x).add(coefficient))
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+fn joined_mixed_native_commitment_matches_independent_horner_rows_and_frontier() {
+    let (parameters, domains, layout) = fixture();
+    for kind in [JoinedTraceColumnKindV1::Base, JoinedTraceColumnKindV1::Aux] {
+        let plan = JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, kind).unwrap();
+        let polynomials = polynomial_groups(&plan);
+        let borrowed = polynomials.iter().collect::<Vec<_>>();
+        let rows = materialized_rows(&plan, &polynomials);
+        let (leaf, node) = plan.roles_v1(domains);
+        let leaves = rows
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                row_leaf_hash_v1(
+                    domains.digest_context,
+                    leaf,
+                    JOINED_TRACE_GROUP_MARKER_V1,
+                    index,
+                    row,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let tree =
+            PrivacyOuterMerkleTreeV1::from_leaves(leaves, domains.digest_context, node).unwrap();
+        let root_only = plan.commit_v1(domains, &borrowed, &[]).unwrap();
+        assert_eq!(root_only.commitment.root, tree.root());
+        assert!(root_only.opened_rows.is_empty());
+        let indices = [0, 1, 7, 63, 1024, 2047];
+        let opened = plan.commit_v1(domains, &borrowed, &indices).unwrap();
+        assert_eq!(opened.commitment.root, root_only.commitment.root);
+        assert_eq!(
+            opened.commitment.frontier,
+            canonical_multiproof_frontier_v1(&tree, rows.len(), &indices).unwrap()
+        );
+        let mut authenticated = BTreeMap::new();
+        for &index in &indices {
+            assert_eq!(opened.opened_rows[&index], rows[index]);
+            assert_eq!(rows[index].len(), plan.width_v1());
+            let slices = (0..polynomials.len())
+                .map(|group| &rows[index][plan.group_range_v1(group).unwrap()])
+                .collect::<Vec<_>>();
+            authenticated.insert(index, plan.leaf_hash_v1(domains, index, &slices).unwrap());
+        }
+        verify_canonical_multiproof_v1(
+            domains.digest_context,
+            node,
+            &tree.root(),
+            rows.len(),
+            &authenticated,
+            &opened.commitment.frontier,
+        )
+        .unwrap();
+        authenticated.insert(
+            0,
+            plan.leaf_hash_v1(
+                domains,
+                1,
+                &(0..polynomials.len())
+                    .map(|group| &rows[0][plan.group_range_v1(group).unwrap()])
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap(),
+        );
+        assert!(
+            verify_canonical_multiproof_v1(
+                domains.digest_context,
+                node,
+                &tree.root(),
+                rows.len(),
+                &authenticated,
+                &opened.commitment.frontier
+            )
+            .is_err()
+        );
+        assert_ne!(
+            row_leaf_hash_v1(domains.digest_context, leaf, 0, 0, &rows[0]).unwrap(),
+            plan.leaf_hash_v1(
+                domains,
+                0,
+                &(0..polynomials.len())
+                    .map(|group| &rows[0][plan.group_range_v1(group).unwrap()])
+                    .collect::<Vec<_>>()
+            )
+            .unwrap()
+        );
+    }
+}
+
+#[test]
+fn joined_trace_rejects_group_width_domain_order_field_and_index_substitution() {
+    let (parameters, domains, layout) = fixture();
+    let plan =
+        JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
+            .unwrap();
+    let mut polynomials = polynomial_groups(&plan);
+    assert!(plan.group_range_v1(2).is_err());
+    assert!(plan.commit_v1(domains, &[&polynomials[0]], &[]).is_err());
+    assert!(
+        plan.commit_v1(domains, &[&polynomials[1], &polynomials[0]], &[])
+            .is_err()
+    );
+    for indices in [&[2, 1][..], &[1, 1], &[2048]] {
+        assert!(
+            plan.commit_v1(domains, &polynomials.iter().collect::<Vec<_>>(), indices)
+                .is_err()
+        );
+    }
+    polynomials[0].commitment_lde_log2 += 1;
+    assert!(
+        plan.commit_v1(domains, &polynomials.iter().collect::<Vec<_>>(), &[])
+            .is_err()
+    );
+    polynomials[0].commitment_lde_log2 -= 1;
+    polynomials[0].columns[0].0[0] =
+        F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+    assert!(
+        plan.commit_v1(domains, &polynomials.iter().collect::<Vec<_>>(), &[])
+            .is_err()
+    );
+    assert!(
+        plan.leaf_hash_v1(domains, 0, &[&[F::ZERO; 8], &[F::ZERO; 3]])
+            .is_err()
+    );
+    assert!(
+        plan.leaf_hash_v1(domains, 2048, &[&[F::ZERO; 9], &[F::ZERO; 3]])
+            .is_err()
+    );
+    assert!(
+        plan.leaf_hash_v1(
+            domains,
+            0,
+            &[
+                &[F::ZERO; 9],
+                &[F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1); 3]
+            ]
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn joined_trace_commitment_is_identical_across_worker_counts() {
+    let (parameters, domains, layout) = fixture();
+    let plan =
+        JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
+            .unwrap();
+    let polynomials = polynomial_groups(&plan);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                plan.commit_v1(
+                    domains,
+                    &polynomials.iter().collect::<Vec<_>>(),
+                    &[0, 17, 2047],
+                )
+                .unwrap()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn streamed_private_row_scratch_clears_and_invalid_columns_leave_no_partial_absorption() {
+    let (_, domains, _) = fixture();
+    let create = || {
+        StreamingRowCommitmentV1::new(
+            domains.digest_context,
+            domains.base_leaf,
+            domains.base_node,
+            JOINED_TRACE_GROUP_MARKER_V1,
+            8,
+            2,
+            &[0, 7],
+        )
+        .unwrap()
+    };
+    let mut commitment = create();
+    let first = [F(17); 8];
+    let second = [F(23); 8];
+    commitment.absorb_column(&first).unwrap();
+    let mut malformed = second;
+    malformed[7] = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1);
+    assert_eq!(
+        commitment.absorb_column(&malformed),
+        Err(AggregateStarkErrorV1::NonCanonicalField)
+    );
+    assert_eq!(commitment.received_columns, 1);
+    assert_eq!(commitment.opened_rows[&0], vec![F(17)]);
+    commitment.absorb_column(&second).unwrap();
+    let result = commitment.finish().unwrap();
+    let mut expected = create();
+    expected.absorb_column(&first).unwrap();
+    expected.absorb_column(&second).unwrap();
+    assert_eq!(result, expected.finish().unwrap());
+    assert_eq!(result.opened_rows[&7], vec![F(17), F(23)]);
+
+    let mut aborted = create();
+    aborted.absorb_column(&first).unwrap();
+    aborted.clear_private_opened_rows_v1();
+    assert!(
+        aborted
+            .opened_rows
+            .values()
+            .flatten()
+            .all(|&value| value == F::ZERO)
+    );
+    // The same routine runs from Drop, including finish's incomplete error.
+    assert_eq!(aborted.finish(), Err(AggregateStarkErrorV1::InvalidLayout));
+}
+
+#[test]
+fn sampling_before_join_preserves_masks_source_order_and_early_rejection() {
+    use rand::{SeedableRng as _, rngs::StdRng};
+    let (parameters, domains, layout) = fixture();
+    let plan =
+        JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, JoinedTraceColumnKindV1::Base)
+            .unwrap();
+    let mut sampled = Vec::new();
+    for (group, (native, range)) in plan.groups.iter().enumerate() {
+        let source = |column| {
+            (0..(1 << *native))
+                .map(|row| F((1 + 100_000 * group + 1_000 * column + row) as u64))
+                .collect::<Vec<_>>()
+        };
+        let mut first_rng = StdRng::from_seed([0x49; 32]);
+        let mut next_column = 0;
+        let polynomials = MaskedTracePolynomialSetV1::sample_columns_v1(
+            *native,
+            plan.commitment_lde_log2,
+            range.len(),
+            3,
+            &mut first_rng,
+            |column| {
+                assert_eq!(column, next_column);
+                next_column += 1;
+                Ok(source(column))
+            },
+        )
+        .unwrap();
+        assert_eq!(next_column, range.len());
+        let mut reference_rng = StdRng::from_seed([0x49; 32]);
+        let (_, reference) = commit_masked_trace_polynomial_columns_v1(
+            domains.digest_context,
+            domains.base_leaf,
+            domains.base_node,
+            group,
+            *native,
+            plan.commitment_lde_log2,
+            range.len(),
+            3,
+            &[],
+            &mut reference_rng,
+            |column| Ok(source(column)),
+        )
+        .unwrap();
+        for column in 0..range.len() {
+            assert_eq!(
+                polynomials.column_coefficients_v1(column).unwrap(),
+                reference.column_coefficients_v1(column).unwrap()
+            );
+        }
+        sampled.push(polynomials);
+    }
+    assert!(
+        plan.commit_v1(domains, &sampled.iter().collect::<Vec<_>>(), &[0, 2047])
+            .is_ok()
+    );
+    for (native, common, width, mask) in [
+        (8, 8, 1, 3),
+        (8, 11, 0, 3),
+        (8, 11, 1, usize::MAX),
+        (8, 11, usize::MAX, 3),
+    ] {
+        let mut calls = 0;
+        let mut rng = StdRng::from_seed([3; 32]);
+        assert!(
+            MaskedTracePolynomialSetV1::sample_columns_v1(
+                native,
+                common,
+                width,
+                mask,
+                &mut rng,
+                |_| {
+                    calls += 1;
+                    Ok(vec![F::ONE; 256])
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(calls, 0);
+    }
+    let mut calls = 0;
+    let mut rng = StdRng::from_seed([7; 32]);
+    assert!(
+        MaskedTracePolynomialSetV1::sample_columns_v1(5, 11, 3, 3, &mut rng, |column| {
+            calls += 1;
+            if column == 1 {
+                Err(AggregateStarkErrorV1::InvalidLayout)
+            } else {
+                Ok(vec![F::ONE; 32])
+            }
+        })
+        .is_err()
+    );
+    assert_eq!(calls, 2);
+}

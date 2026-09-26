@@ -341,6 +341,10 @@ required-features = ["iroha-core-tests"]
 name = "gen_pin_snapshot"
 required-features = ["iroha-core-tests"]
 
+[[example]]
+name = "confidential_redemption"
+required-features = ["zk-halo2-ipa"]
+
 [package.metadata.cargo-all-features]
 denylist = [
     "schema-endpoint",

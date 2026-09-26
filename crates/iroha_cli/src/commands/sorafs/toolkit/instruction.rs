@@ -14,16 +14,13 @@ use iroha_data_model::{
     musubi::ArchiveId,
     prelude::InstructionBox,
     sorafs::{
-        capacity::{CapacityDeclarationRecord, ProviderId},
+        capacity::ProviderId,
         pin_registry::{
             ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
             ProviderIngestFinalizedAnchorV1, ReplicationOrderId,
         },
     },
 };
-use iroha_model_base::metadata::Metadata;
-use iroha_model_base::name::Name;
-use iroha_primitives::json::Json;
 use norito::{
     decode_from_bytes,
     json::{self, Map, Value},
@@ -35,7 +32,6 @@ use std::{
     num::NonZeroU64,
     path::{Path, PathBuf},
     process::ExitCode,
-    str::FromStr,
 };
 
 /// Prepare one canonical SoraFS instruction as transaction-stdin JSON.
@@ -54,7 +50,7 @@ pub enum Command {
 /// A canonical capacity declaration and its registration metadata.
 #[derive(Debug, clap::Args)]
 pub struct CapacityDeclarationArgs {
-    /// JSON summary containing declaration_b64 and registered_epoch.
+    /// JSON object containing only the canonical declaration_b64 payload.
     #[arg(long, value_name = "PATH")]
     summary: PathBuf,
 }
@@ -142,38 +138,47 @@ impl Command {
 
 fn run_capacity_declaration(args: CapacityDeclarationArgs) -> Result<(), String> {
     let summary = read_json_map(&args.summary, "declaration summary")?;
-    for redundant in ["valid_from_epoch", "valid_until_epoch"] {
-        if summary.contains_key(redundant) {
+    for key in summary.keys() {
+        if key != "declaration_b64" {
             return Err(format!(
-                "`{redundant}` is derived from the canonical capacity payload and must be omitted"
+                "`{key}` must be omitted; only `declaration_b64` is accepted"
             ));
         }
     }
     let declaration_b64 = require_string(&summary, "declaration_b64")?;
+    if declaration_b64.len() > 349_528 {
+        return Err("capacity declaration exceeds 256 KiB".to_owned());
+    }
     let declaration_bytes = BASE64_STD
         .decode(declaration_b64.as_bytes())
         .map_err(|err| format!("invalid base64 in `declaration_b64`: {err}"))?;
-    let declaration: CapacityDeclarationV1 = decode_from_bytes(&declaration_bytes)
-        .map_err(|err| format!("failed to decode `CapacityDeclarationV1`: {err}"))?;
+    if declaration_bytes.is_empty() || declaration_bytes.len() > 256 * 1024 {
+        return Err("capacity declaration must contain 1..=262144 bytes".to_owned());
+    }
+    let declaration: CapacityDeclarationV1 = norito::decode_from_bytes_with_limits(
+        &declaration_bytes,
+        norito::core::DecodeLimits::new(
+            sorafs_manifest::capacity::MAX_CAPACITY_METADATA_VALUE_BYTES,
+            256 * 1024,
+            131_072,
+            1024 * 1024,
+            32,
+        ),
+    )
+    .map_err(|err| format!("failed to decode `CapacityDeclarationV1`: {err}"))?;
     declaration
         .validate()
         .map_err(|err| format!("capacity declaration validation failed: {err}"))?;
     let canonical_bytes = to_bytes(&declaration)
         .map_err(|err| format!("failed to re-encode capacity declaration: {err}"))?;
-    let metadata = metadata_from_summary(&summary)?;
-    let record = CapacityDeclarationRecord::new(
-        ProviderId::new(declaration.provider_id),
-        canonical_bytes,
-        declaration.committed_capacity_gib,
-        require_u64(&summary, "registered_epoch")?,
-        declaration.valid_from,
-        declaration.valid_until,
-        metadata,
-    );
+    if canonical_bytes != declaration_bytes {
+        return Err("capacity declaration must use canonical first-release Norito".to_owned());
+    }
     print_instruction_json(InstructionBox::from(RegisterCapacityDeclaration::new(
-        record,
+        declaration_bytes,
     )))
 }
+
 fn run_replication_order(args: ReplicationOrderArgs) -> Result<(), String> {
     let musubi_archive = args.musubi_archive_id_hex.map(ArchiveId::new);
     let summary = read_json_map(&args.summary, "replication order summary")?;
@@ -285,11 +290,6 @@ fn require_string<'a>(map: &'a Map, key: &str) -> Result<&'a str, String> {
         .and_then(Value::as_str)
         .ok_or_else(|| format!("missing or invalid string field `{key}`"))
 }
-fn require_u64(map: &Map, key: &str) -> Result<u64, String> {
-    map.get(key)
-        .and_then(Value::as_u64)
-        .ok_or_else(|| format!("missing or invalid integer field `{key}`"))
-}
 fn parse_u64(value: &str, label: &str) -> Result<u64, String> {
     require_canonical_unsigned_decimal(value, label)?;
     value
@@ -345,21 +345,6 @@ fn require_lowercase_fixed_hex(
             "`{label}` must be lowercase fixed-width hex without prefixes or whitespace"
         ))
     }
-}
-fn metadata_from_summary(summary: &Map) -> Result<Metadata, String> {
-    let mut metadata = Metadata::default();
-    let Some(entries) = summary.get("metadata") else {
-        return Ok(metadata);
-    };
-    let object = entries
-        .as_object()
-        .ok_or_else(|| "`metadata` must be an object".to_owned())?;
-    for (key, value) in object {
-        let name =
-            Name::from_str(key).map_err(|err| format!("metadata key `{key}` is invalid: {err}"))?;
-        metadata.insert(name, Json::new(value.clone()));
-    }
-    Ok(metadata)
 }
 fn print_instruction_json(instruction: InstructionBox) -> Result<(), String> {
     let encoded = to_bytes(&instruction)

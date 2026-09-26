@@ -28,8 +28,13 @@ pub mod runtime_provider_registry;
 mod soracloud_runtime;
 /// Exact external signer boundary for Soracloud runtime mutations.
 pub mod soracloud_runtime_signer;
+/// Stock assembly of the configured production compliance HTTPS transport.
+mod sorafs_gateway_compliance_transport;
 /// Supervised committed `SoraFS` hedging/billing projector and delivery worker.
 pub mod sorafs_hedging_billing_runtime;
+/// Explicit owner-only software credentials for the four native transaction roles.
+#[cfg(unix)]
+mod sorafs_native_software_signers;
 /// Fail-closed config-bound `SoraFS` `PoP` runtime construction.
 pub mod sorafs_pop_runtime;
 /// Supervised finalized-PoR reputation reconciliation and optional archive compaction.
@@ -38,6 +43,8 @@ pub mod sorafs_por_replay_archive_runtime;
 pub mod sorafs_provider_ingest_finalized_query;
 /// Supervised finalized-ledger `SoraFS` provider-ingest worker.
 pub mod sorafs_provider_ingest_runtime;
+/// Native authenticated remote repair chunk reader.
+pub mod sorafs_repair_source;
 /// Immutable finalized-ledger query adapter for the reputation runtime.
 pub mod sorafs_reputation_finalized_query;
 /// Supervised committed `SoraFS` reputation projector and publisher.
@@ -279,21 +286,6 @@ fn decode_consensus_handshake_meta(
 type SharedSoraFsProviderCache = Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>;
 #[derive(Debug)]
 enum SharedSoraFsProviderCacheError {
-    AdmissionPolicyRequired,
-    MalformedCouncilKey {
-        index: usize,
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-    UnsupportedCouncilKeyAlgorithm {
-        index: usize,
-        algorithm: iroha_crypto::Algorithm,
-    },
-    InvalidCouncilKeyLength {
-        index: usize,
-        actual: usize,
-    },
-    InvalidCouncilPolicy(sorafs_manifest::ProviderAdmissionCouncilPolicyError),
-    AdmissionRegistry(iroha_torii::sorafs::AdmissionRegistryError),
     UnknownCapability(String),
     DuplicateCapability(String),
     EmptyCapabilities,
@@ -305,27 +297,6 @@ enum SharedSoraFsProviderCacheError {
 impl core::fmt::Display for SharedSoraFsProviderCacheError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::AdmissionPolicyRequired => formatter.write_str(
-                "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold",
-            ),
-            Self::MalformedCouncilKey { index, source } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} is malformed: {source}"
-            ),
-            Self::UnsupportedCouncilKeyAlgorithm { index, algorithm } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} uses {algorithm:?}; Ed25519 is required"
-            ),
-            Self::InvalidCouncilKeyLength { index, actual } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} has {actual} bytes; 32 are required"
-            ),
-            Self::InvalidCouncilPolicy(source) => {
-                write!(formatter, "invalid SoraFS admission council policy: {source}")
-            }
-            Self::AdmissionRegistry(source) => {
-                write!(formatter, "failed to load SoraFS provider admission registry: {source}")
-            }
             Self::UnknownCapability(name) => write!(
                 formatter,
                 "unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities"
@@ -334,9 +305,8 @@ impl core::fmt::Display for SharedSoraFsProviderCacheError {
                 formatter,
                 "duplicate SoraFS capability `{name}` in torii.sorafs.known_capabilities"
             ),
-            Self::EmptyCapabilities => formatter.write_str(
-                "torii.sorafs.known_capabilities must include at least one capability",
-            ),
+            Self::EmptyCapabilities => formatter
+                .write_str("torii.sorafs.known_capabilities must include at least one capability"),
             Self::ReplayCheckpoint { path, source } => write!(
                 formatter,
                 "failed to load SoraFS provider replay checkpoint {}: {source}",
@@ -348,63 +318,21 @@ impl core::fmt::Display for SharedSoraFsProviderCacheError {
 impl std::error::Error for SharedSoraFsProviderCacheError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::MalformedCouncilKey { source, .. } => Some(source.as_ref()),
-            Self::InvalidCouncilPolicy(source) => Some(source),
-            Self::AdmissionRegistry(source) => Some(source),
             Self::ReplayCheckpoint { source, .. } => Some(source),
-            Self::AdmissionPolicyRequired
-            | Self::UnsupportedCouncilKeyAlgorithm { .. }
-            | Self::InvalidCouncilKeyLength { .. }
-            | Self::UnknownCapability(_)
-            | Self::DuplicateCapability(_)
-            | Self::EmptyCapabilities => None,
+            Self::UnknownCapability(_) | Self::DuplicateCapability(_) | Self::EmptyCapabilities => {
+                None
+            }
         }
     }
 }
 fn build_shared_sorafs_provider_cache(
     config: &Config,
-    network_id: &NetworkId,
+    state: Arc<State>,
 ) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
     let discovery = &config.torii.sorafs_discovery;
     if !discovery.discovery_enabled {
         return Ok(None);
     }
-    let admission_cfg = discovery
-        .admission
-        .as_ref()
-        .ok_or(SharedSoraFsProviderCacheError::AdmissionPolicyRequired)?;
-    let trusted_council_keys = admission_cfg
-        .trusted_council_keys
-        .iter()
-        .enumerate()
-        .map(|(index, key)| {
-            let (algorithm, payload) = key.try_to_bytes().map_err(|source| {
-                SharedSoraFsProviderCacheError::MalformedCouncilKey {
-                    index,
-                    source: Box::new(source),
-                }
-            })?;
-            if algorithm != iroha_crypto::Algorithm::Ed25519 {
-                return Err(
-                    SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
-                        index,
-                        algorithm,
-                    },
-                );
-            }
-            <[u8; 32]>::try_from(payload).map_err(|_| {
-                SharedSoraFsProviderCacheError::InvalidCouncilKeyLength {
-                    index,
-                    actual: payload.len(),
-                }
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
-        trusted_council_keys,
-        admission_cfg.signature_threshold.get(),
-    )
-    .map_err(SharedSoraFsProviderCacheError::InvalidCouncilPolicy)?;
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
         let capability = iroha_torii::sorafs::parse_capability_name(name)
@@ -419,14 +347,7 @@ fn build_shared_sorafs_provider_cache(
     if capabilities.is_empty() {
         return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
     }
-    let admission = Arc::new(
-        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(
-            &admission_cfg.envelopes_dir,
-            *network_id.as_bytes(),
-            policy,
-        )
-        .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
-    );
+    let admission = Arc::new(iroha_torii::sorafs::AdmissionRegistry::from_state(state));
     let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
         discovery.replay_checkpoint_path.clone()
     } else {
@@ -7741,42 +7662,66 @@ const fn sorafs_native_signer_role_required(
 ) -> bool {
     storage_enabled || role_generation_enabled
 }
+fn validate_selected_sorafs_native_signer_presence(
+    role: &'static str,
+    required: bool,
+    binding: Option<&iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding>,
+    injected: bool,
+) -> Result<(), String> {
+    let native = binding.is_some_and(|binding| binding.software_credential.is_some());
+    if native && injected {
+        return Err(format!(
+            "SoraFS {role} native software custody conflicts with an external adapter"
+        ));
+    }
+    if native && !cfg!(unix) {
+        return Err(format!(
+            "SoraFS {role} native software custody requires owner-only Unix runtime credentials"
+        ));
+    }
+    validate_sorafs_native_signer_role_presence(
+        role,
+        required,
+        binding.is_some(),
+        injected || native,
+    )
+}
 fn validate_sorafs_native_signer_provider_presence(
     config: &Config,
     runtime_deps: &IrohaRuntimeDeps,
 ) -> Result<(), String> {
     let configured = &config.torii.sorafs_storage.native_transaction_signers;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "proof_outcome",
         sorafs_native_signer_role_required(config.torii.sorafs_storage.enabled, false),
-        configured.proof_outcome.is_some(),
+        configured.proof_outcome.as_ref(),
         runtime_deps.sorafs_proof_outcome_signer.is_some(),
     )?;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "repair",
         sorafs_native_signer_role_required(
             config.torii.sorafs_storage.enabled,
             config.torii.sorafs_repair.enabled,
         ),
-        configured.repair.is_some(),
+        configured.repair.as_ref(),
         runtime_deps.sorafs_repair_transaction_signer.is_some(),
     )?;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "reserve",
         sorafs_native_signer_role_required(
             config.torii.sorafs_storage.enabled,
             config.torii.sorafs_storage.reserve_worker.enabled,
         ),
-        configured.reserve.is_some(),
+        configured.reserve.as_ref(),
         runtime_deps.sorafs_reserve_transaction_signer.is_some(),
     )?;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "orderbook",
         sorafs_native_signer_role_required(
             config.torii.sorafs_storage.enabled,
             config.torii.sorafs_storage.orderbook_worker.enabled,
         ),
-        configured.orderbook.is_some(),
+        configured.orderbook.as_ref(),
         runtime_deps.sorafs_orderbook_transaction_signer.is_some(),
     )
 }
@@ -7969,6 +7914,73 @@ impl Iroha {
             )
             .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         }
+        #[cfg(unix)]
+        let native_provider_ingest = if !emergency_fast {
+            config
+                .torii
+                .sorafs_storage
+                .provider_ingest_runtime
+                .as_ref()
+                .filter(|ingest| ingest.native_completion_credential.is_some())
+                .map(|ingest| {
+                    let roles = &config.torii.sorafs_storage.native_transaction_signers;
+                    if ingest.completion_signer_public_key == *config.common.key_pair.public_key()
+                        || [
+                            &roles.proof_outcome,
+                            &roles.repair,
+                            &roles.reserve,
+                            &roles.orderbook,
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .any(|role| role.public_key == ingest.completion_signer_public_key)
+                    {
+                        return Err(eyre::eyre!(
+                            "native completion custody requires a separate role key"
+                        ));
+                    }
+                    let provider = config.torii.sorafs_storage.provider_id.ok_or_else(|| {
+                        eyre::eyre!("native provider ingest requires configured provider identity")
+                    })?;
+                    if runtime_deps
+                        .sorafs_provider_ingest_authenticated_source
+                        .is_some()
+                        || runtime_deps
+                            .sorafs_provider_ingest_signer_resolver
+                            .is_some()
+                        || runtime_deps
+                            .sorafs_provider_ingest_checkpoint_runtime
+                            .is_some()
+                    {
+                        return Err(eyre::eyre!(
+                            "native provider ingest rejects substituted external adapters"
+                        ));
+                    }
+                    sorafs_provider_ingest_runtime::native_software::NativeProducerV1::prepare(
+                        ingest,
+                        provider,
+                        &config.torii.sorafs_storage.data_dir,
+                    )
+                })
+                .transpose()
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii)
+                        .attach(format!("native provider ingest rejected: {error}"))
+                })?
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        if config
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_ref()
+            .is_some_and(|ingest| ingest.native_completion_credential.is_some())
+        {
+            return Err(Report::new(StartError::StartTorii)
+                .attach("native provider ingest requires owner-only Unix credential custody"));
+        }
         let sorafs_provider_ingest_preflight = if emergency_fast {
             None
         } else if let Some(provider_ingest_config) =
@@ -7983,7 +7995,33 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires the exact configured storage provider identity",
                         )
                     })?;
-            let authenticated_source = runtime_deps
+            let native_preflight = {
+                #[cfg(unix)]
+                {
+                    if let Some(native) = native_provider_ingest.as_ref() {
+                        Some(
+                            native
+                                .preflight(provider_ingest_config, provider_id)
+                                .await
+                                .map_err(|error| {
+                                    Report::new(StartError::StartTorii).attach(format!(
+                                        "native provider ingest preflight rejected: {error}"
+                                    ))
+                                })?,
+                        )
+                    } else {
+                        None
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    None::<sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1>
+                }
+            };
+            if let Some(preflight) = native_preflight {
+                Some(preflight)
+            } else {
+                let authenticated_source = runtime_deps
                     .sorafs_provider_ingest_authenticated_source
                     .clone()
                     .ok_or_else(|| {
@@ -7991,7 +8029,7 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected authenticated governed source-fetch adapter",
                         )
                     })?;
-            let signer_resolver = runtime_deps
+                let signer_resolver = runtime_deps
                     .sorafs_provider_ingest_signer_resolver
                     .clone()
                     .ok_or_else(|| {
@@ -7999,7 +8037,7 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected governance-aware signer resolver",
                         )
                     })?;
-            let checkpoint_runtime = runtime_deps
+                let checkpoint_runtime = runtime_deps
                     .sorafs_provider_ingest_checkpoint_runtime
                     .clone()
                     .ok_or_else(|| {
@@ -8007,19 +8045,19 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected sealed monotonic checkpoint provider",
                         )
                     })?;
-            if provider_ingest_config
-                .finalized_archive
-                .retention_authority
-                .is_some()
-                != runtime_deps
-                    .sorafs_provider_ingest_retention_authority
+                if provider_ingest_config
+                    .finalized_archive
+                    .retention_authority
                     .is_some()
-            {
-                return Err(Report::new(StartError::StartTorii).attach(
+                    != runtime_deps
+                        .sorafs_provider_ingest_retention_authority
+                        .is_some()
+                {
+                    return Err(Report::new(StartError::StartTorii).attach(
                         "SoraFS provider-ingest finalized-archive retention requires exact configured/injected sealed authority presence",
                     ));
-            }
-            Some(
+                }
+                Some(
                     sorafs_provider_ingest_runtime::preflight_runtime_adapters(
                         provider_ingest_config,
                         provider_id,
@@ -8036,6 +8074,7 @@ impl Iroha {
                         ))
                     })?,
                 )
+            }
         } else {
             if runtime_deps
                 .sorafs_provider_ingest_authenticated_source
@@ -9412,6 +9451,14 @@ impl Iroha {
             }
         }
         let state: Arc<State> = Arc::from(state);
+        #[cfg(unix)]
+        if let Some(native) = native_provider_ingest.as_ref() {
+            native.bind_state(Arc::clone(&state)).map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "native provider ingest State binding rejected: {error}"
+                ))
+            })?;
+        }
         #[cfg(feature = "telemetry")]
         if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =
             lane_manifest_task
@@ -9933,11 +9980,52 @@ impl Iroha {
         let sorafs_governance_dag_signer = runtime_deps.sorafs_governance_dag_signer.clone();
         let sorafs_governance_dag_checkpoint_store =
             runtime_deps.sorafs_governance_dag_checkpoint_store.clone();
-        let sorafs_stream_token_signer_client =
+        let mut sorafs_stream_token_signer_client =
             runtime_deps.sorafs_stream_token_signer_client.clone();
-        let sorafs_stream_token_state_observer =
+        let mut sorafs_stream_token_state_observer =
             runtime_deps.sorafs_stream_token_state_observer.clone();
-        let sorafs_stream_token_approved_anchor = runtime_deps.sorafs_stream_token_approved_anchor;
+        let mut sorafs_stream_token_approved_anchor =
+            runtime_deps.sorafs_stream_token_approved_anchor;
+        #[cfg(unix)]
+        if !emergency_fast
+            && config
+                .torii
+                .sorafs_storage
+                .stream_tokens
+                .signer
+                .as_ref()
+                .is_some_and(|signer| signer.native.is_some())
+        {
+            if sorafs_stream_token_signer_client.is_some()
+                || sorafs_stream_token_state_observer.is_some()
+                || sorafs_stream_token_approved_anchor.is_some()
+            {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "native stream-token custody conflicts with externally supplied adapters",
+                ));
+            }
+            let native = crate::signer_operation::stream_token::native::runtime::build_native_stream_token_runtime_v1(
+                &config.torii.sorafs_storage, Arc::clone(&state), Arc::clone(&queue))
+                .map_err(|_| Report::new(StartError::StartTorii).attach("configured native stream-token authority unavailable"))?
+                .ok_or_else(|| Report::new(StartError::StartTorii).attach("configured native stream-token authority absent"))?;
+            sorafs_stream_token_signer_client = Some(native.signer);
+            sorafs_stream_token_state_observer = Some(native.observer);
+            sorafs_stream_token_approved_anchor = Some(native.anchor);
+        }
+        #[cfg(not(unix))]
+        if !emergency_fast
+            && config
+                .torii
+                .sorafs_storage
+                .stream_tokens
+                .signer
+                .as_ref()
+                .is_some_and(|signer| signer.native.is_some())
+        {
+            return Err(Report::new(StartError::StartTorii).attach(
+                "native stream-token software custody requires owner-only Unix runtime credentials",
+            ));
+        }
         let sorafs_stream_token_gateway_admission =
             runtime_deps.sorafs_stream_token_gateway_admission.clone();
         let sorafs_appeal_finance_runtime_signers =
@@ -9945,6 +10033,16 @@ impl Iroha {
         let sorafs_appeal_finance_checkpoint_runtime = runtime_deps
             .sorafs_appeal_finance_checkpoint_runtime
             .clone();
+        #[cfg(unix)]
+        if !emergency_fast {
+            sorafs_native_software_signers::install_native_software_signers(
+                &config.torii.sorafs_storage.native_transaction_signers,
+                Arc::clone(&state),
+                config.common.key_pair.public_key(),
+                &mut runtime_deps,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+        }
         let sorafs_proof_outcome_signer = runtime_deps.sorafs_proof_outcome_signer.clone();
         let sorafs_repair_transaction_signer =
             runtime_deps.sorafs_repair_transaction_signer.clone();
@@ -10056,25 +10154,24 @@ impl Iroha {
             .map(sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1::checkpoint_runtime);
         let sorafs_por_finalized_replay_archive =
             runtime_deps.sorafs_por_finalized_replay_archive.clone();
-        let sorafs_gateway_compliance_feed_transport = runtime_deps
+        let mut sorafs_gateway_compliance_feed_transport = runtime_deps
             .sorafs_gateway_compliance_feed_transport
             .clone();
         if !emergency_fast {
-            match (
-                config.torii.sorafs_gateway.compliance.as_ref(),
-                sorafs_gateway_compliance_feed_transport.as_ref(),
-            ) {
-                (Some(_), None) => {
-                    return Err(Report::new(StartError::StartTorii).attach(
-                    "enabled SoraFS gateway compliance requires the exact deployment-owned authenticated feed transport",
-                ));
+            match config.torii.sorafs_gateway.compliance.as_ref() {
+                Some(compliance) => {
+                    sorafs_gateway_compliance_feed_transport = Some(
+                        sorafs_gateway_compliance_transport::resolve(
+                            &compliance.feed_transport_provider, &compliance.feeds,
+                            sorafs_gateway_compliance_feed_transport.take(),
+                        ).map_err(|error| Report::new(StartError::StartTorii).attach(error))?,
+                    );
                 }
-                (None, Some(_)) => {
+                None if sorafs_gateway_compliance_feed_transport.is_some() => {
                     return Err(Report::new(StartError::StartTorii).attach(
-                        "disabled SoraFS gateway compliance rejects an unexpected feed transport",
-                    ));
+                        "disabled SoraFS gateway compliance rejects an unexpected feed transport"));
                 }
-                (Some(_), Some(_)) | (None, None) => {}
+                None => {}
             }
             match (
                 config.torii.sorafs_gateway.acme.provider.as_ref(),
@@ -10229,10 +10326,48 @@ impl Iroha {
         let shared_sorafs_cache = if emergency_fast {
             None
         } else {
-            build_shared_sorafs_provider_cache(&config, state.network_id_ref())
+            build_shared_sorafs_provider_cache(&config, Arc::clone(&state))
                 .map_err(Report::new)
                 .change_context(StartError::StartTorii)?
         };
+        if let Some(source_config) = config
+            .torii
+            .sorafs_repair
+            .source
+            .as_ref()
+            .filter(|_| !emergency_fast)
+        {
+            if config
+                .torii
+                .sorafs_storage
+                .native_transaction_signers
+                .repair
+                .as_ref()
+                .is_none_or(|binding| binding.authority != source_config.authority)
+            {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "remote SoraFS repair requires the configured native repair authority",
+                ));
+            }
+            let cache = shared_sorafs_cache.clone().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("remote SoraFS repair requires native provider discovery")
+            })?;
+            let node = sorafs_node.as_ref().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("remote SoraFS repair requires local storage")
+            })?;
+            let source = sorafs_repair_source::NativeRepairSourceV1::new(
+                source_config,
+                Arc::clone(&state),
+                cache,
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii)
+                    .attach(format!("remote SoraFS repair source rejected: {error}"))
+            })?;
+            node.set_repair_orchestrator(Arc::new(source));
+        }
         let sorafs_provider_ingest_runtime = if let Some(provider_ingest_config) =
             sorafs_provider_ingest_config
         {

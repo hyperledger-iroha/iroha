@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import ast
+import copy
 import importlib.util
+import shutil
 import sys
 from pathlib import Path
 
@@ -29,23 +31,67 @@ def validate(fixture):
     return tuple(errors)
 
 
-@pytest.fixture
-def fixture(tmp_path):
+@pytest.fixture(scope="module")
+def canonical_fixture(tmp_path_factory):
+    """Authenticate and validate one immutable source cut for every mutation."""
+    root = tmp_path_factory.mktemp("native-preparation-canonical")
     helper = support()
     checker = helper.load_checker()
     c = checker.native_preparation_contract
-    helper.copy_reviewed_source_fixture_with_includes(tmp_path, checker, {
+    models = helper.canonical_models()
+    relatives = {
         *(p for p in c.NATIVE_PREPARATION_SOURCE_RELATIVES if p.suffix == ".rs"),
         checker.REVIEWED_RUST_SOURCE_HELPER_RELATIVE,
         checker.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE,
-    })
-    result = tmp_path, helper, checker, helper.canonical_models()
+    }
+    # Generic and specialized consumers must observe the same source cut. Copy
+    # their union now; no later fixture may overwrite it from the live checkout.
+    model, = [model for model in models if model["module"] == c.MODEL]
+    relatives.update(Path(row["path"]) for row in model["production_symbols"])
+    relatives.update(Path(path) for path, _, _, _ in checker.NATIVE_PREPUBLICATION_BINDINGS)
+    relatives.update(path for path, _, _ in checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS)
+    relatives.update(Path(path) for path, _, _, _ in (
+        *checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS,
+        *checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS,
+    ))
+    helper.copy_reviewed_source_fixture_with_includes(root, checker, relatives)
+    result = root, helper, checker, models
     assert validate(result) == ()
     return result
 
 
+def _copy_native_fixture(snapshot, destination):
+    """Give each mutation its own source files, Git index and ledger graph."""
+    root, helper, checker, models = snapshot
+    shutil.copytree(root, destination, dirs_exist_ok=True)
+    return destination, helper, checker, copy.deepcopy(models)
+
+
+@pytest.fixture
+def fixture(tmp_path, canonical_fixture):
+    return _copy_native_fixture(canonical_fixture, tmp_path)
+
+
 def test_native_preparation_accepts_actual_owners(fixture):
     assert validate(fixture) == ()
+
+
+def test_native_preparation_fixture_isolates_sources_and_ledger(fixture, canonical_fixture, tmp_path):
+    root, _, checker, models = fixture
+    canonical_root, _, _, canonical_models = canonical_fixture
+    relative = checker.native_preparation_contract.VALIDATION_CUSTODY
+    original = (canonical_root / relative).read_text()
+    assert not (root / relative).samefile(canonical_root / relative)
+    (root / relative).write_text(original.replace("body: Option<SignedBlock>", "body: Option<Arc<SignedBlock>>", 1))
+    models[0]["production_symbols"].clear()
+    assert (canonical_root / relative).read_text() == original
+    assert canonical_models[0]["production_symbols"]
+    second = _copy_native_fixture(canonical_fixture, tmp_path / "independent")
+    assert (second[0] / relative).read_text() == original
+    assert second[3] == canonical_models
+    assert second[3] is not canonical_models
+    assert validate(fixture)
+    assert validate(second) == ()
 
 
 @pytest.mark.parametrize("owner,anchor,old,new", [
@@ -57,13 +103,13 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("VALIDATION_CUSTODY", "struct RetainedBodyValidationService", "limit: usize,", "limit: usize, decided: Vec<P::Owner>,"),
     ("VALIDATION_CUSTODY", "struct SelectedValidationCarrier", "owner: Option<P::Owner>,", "owner: Option<P::Owner>, saved: Option<P::Owner>,"),
     ("JOURNALS", "fn matches_validation_candidate", "if self.context.as_ref() != context", "if false"),
-    ("JOURNALS", "fn matches_validation_candidate", "original == candidate", "true"),
+    ("JOURNALS", "fn matches_validation_candidate", ".checked_resultless_proposal_eq(proposal)", ".checked_resultless_proposal_eq(self.valid.as_ref())"),
     ("JOURNALS", "fn execution_prefix_commitment", "self.execution_prefix", "Default::default()"),
     ("VALIDATION_CUSTODY", "fn new", "candidates.try_reserve_exact(limit)?;", "// descriptor admission removed"),
     ("VALIDATION_CUSTODY", "fn new", "markers.try_reserve_exact(limit)?;", "// marker admission removed"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if self.candidates.len() == self.limit", "if false"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", "if requires_existing_owner", "if false"),
-    ("VALIDATION_CUSTODY", "fn preflight_marker", "candidate.is_some_and(|row| row.owner.is_none())", "false"),
+    ("VALIDATION_CUSTODY", "fn preflight_marker", "candidate.is_some_and(|row| match row.owner.as_ref() {\n            None => true,\n            Some(owner) => owner.needs_decoded_body() && row.body.is_none(),\n        })", "false"),
     ("VALIDATION_CUSTODY", "fn preflight_marker", "self.markers.len() == self.limit", "false"),
     ("VALIDATION_CUSTODY", "fn preflight_marker", "candidate.is_none() && self.candidates.len() == self.limit", "false"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", ".pop()", ".first()"),
@@ -73,11 +119,11 @@ def test_native_preparation_accepts_actual_owners(fixture):
     ("DECISION_CARRIER", "fn resume_capture", "(Self::Capturing(carrier), error)", "(Self::Capturing(other), error)"),
     ("DECISION_CARRIER", "fn resume_capture", "ready => Ok(ready)", "ready => Ok(ready.clone())"),
     ("VALIDATION_CUSTODY", "fn resume(", "(Self::Owner, LocalValidationRefusal)", "(Self::Owner, Self::Error)"),
-    ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner)", "self.candidates[index].owner = Some(owner);", "drop(owner);"),
-    ("VALIDATION_CUSTODY", "Err((owner, refusal))", "self.candidates[index].owner = Some(owner);", "drop(owner);"),
-    ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner)", "if !owner.matches_candidate(context, body)", "if false"),
+    ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner, body)", "candidate.owner = Some(owner);", "drop(owner);"),
+    ("VALIDATION_CUSTODY", "Err((owner, refusal))", "candidate.owner = Some(owner);", "drop(owner);"),
+    ("VALIDATION_CUSTODY", "let refusal = match self.validator.resume(owner, body)", "let matches = owner.matches_candidate(context, body)", "let matches = true"),
     ("VALIDATION_CUSTODY", "fn prepare_marker", ".ok_or(CarrierCustodyError::IncompleteCapture)?", ".unwrap_or_default()"),
-    ("VALIDATION_CUSTODY", "fn prepare_marker", "Some(commitment) => commitment", "Some(commitment) => { self.resume_candidate(index, context, body)?; commitment }"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "Some(commitment) => commitment", "Some(commitment) => { self.resume_candidate(index, context, decoded.as_ref())?; commitment }"),
     ("JOURNALS", "fn try_complete", "mut self: Box<Self>", "mut self: Self"),
     ("JOURNALS", "fn try_complete", "return Err((self, error));", "return Err((Box::new(*self), error));"),
     ("JOURNALS", "fn try_complete", "self.try_prepare_archives()", "Ok::<_, CarrierArchivePreparationError>(())"),
@@ -103,6 +149,47 @@ def test_native_preparation_accepts_actual_owners(fixture):
 def test_retained_carrier_rejects_owner_or_refusal_substitution(fixture, owner, anchor, old, new):
     root, helper, checker, _ = fixture
     helper.replace_once_after(root / getattr(checker.native_preparation_contract, owner), anchor, old, new)
+    errors = validate(fixture)
+    assert any("executable relation" in e or "retained carrier" in e for e in errors), errors
+    assert not any("digest" in e or "must have one" in e for e in errors), errors
+
+
+@pytest.mark.parametrize("owner,anchor,old,new", [
+    ("NATIVE_SOURCE", "struct PreparedNativeLaneBatchSourceV1", "input: SignedBlock", "input: Arc<SignedBlock>"),
+    ("NATIVE_SOURCE", "fn record_execution", "self,\n        context:", "self,\n        carrier: SignedBlock,\n        context:"),
+    ("NATIVE_SOURCE", "fn record_execution", "record_native_lane_decision_batch(self.input,", "record_native_lane_decision_batch(other_input,"),
+    ("NATIVE_SOURCE", "fn record_execution", "record_native_lane_decision_batch(self.input,", "record_native_lane_decision_batch(self.input.clone(),"),
+    ("VALIDATION_CUSTODY", "struct Candidate", "body: Option<SignedBlock>", "body: Option<Arc<SignedBlock>>"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "body: SignedBlock", "body: &SignedBlock"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "let mut decoded = Some(body);", "let mut decoded = Some(body.clone());"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "owner.needs_decoded_body() && candidate.body.is_none()", "false"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "decoded.as_ref() != Some(retained)", "decoded.as_ref().map(SignedBlock::header) != Some(retained.header())"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "decoded.as_ref() != Some(retained)", "false"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "self.candidates[index].body = decoded.take();", "self.candidates[index].body = None;"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "self.candidates[index].body = decoded.take();", "self.candidates[index].body = decoded.clone();"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "let matches = owner.matches_candidate(context, current_body)", "let matches = true"),
+    ("VALIDATION_CUSTODY", "fn prepare_marker", "drop(decoded);", "std::mem::forget(decoded);"),
+    ("VALIDATION_CUSTODY", "fn resume_candidate", ".or(decoded_body)", ".or(Some(other_body))"),
+    ("VALIDATION_CUSTODY", "fn resume_candidate", "self.validator.resume(owner, body)", "self.validator.resume(owner, other_body)"),
+    ("VALIDATION_CUSTODY", "fn resume_candidate", "if owner.needs_decoded_body()", "if true"),
+    ("VALIDATION_CUSTODY", "fn resume_candidate", "drop(retained_body);", "std::mem::forget(retained_body);"),
+    ("VALIDATION_CUSTODY", "fn resume_candidate", "let retained_body = candidate.body.take();", "let retained_body = candidate.body.clone();"),
+    ("VALIDATION_CUSTODY", "fn resume_candidate", "candidate.body = retained_body;", "candidate.body = None;"),
+    ("VALIDATION_CUSTODY", "fn resume_candidate", "candidate.body = retained_body;", "candidate.body = other_retained_body;"),
+    ("VALIDATION_CUSTODY", "fn unretain_finished_body", "!owner.needs_decoded_body()", "owner.needs_decoded_body()"),
+    ("VALIDATION_CUSTODY", "fn unretain_finished_body", "*decoded = retained;", "*decoded = None;"),
+    ("VALIDATION_CUSTODY", "fn try_consume", "drop(self.service.candidates[self.index].body.take());", "std::mem::forget(self.service.candidates[self.index].body.take());"),
+    ("NATIVE_VALIDATION", "fn needs_decoded_body", "NativeValidationPhase::AwaitingSource(_)", "NativeValidationPhase::Stopped { .. }"),
+    ("NATIVE_VALIDATION", "fn resume(", "self.execute_source(waiting, proposal)", "self.execute_source(waiting, other_proposal)"),
+    ("RETAINED_VALIDATION", "match service.prepare_marker(", "            block,", "            block.clone(),"),
+])
+def test_native_preparation_preserves_owned_body_and_complete_retry_binding(
+    fixture, owner, anchor, old, new,
+):
+    root, helper, checker, _ = fixture
+    helper.replace_once_after(
+        root / getattr(checker.native_preparation_contract, owner), anchor, old, new,
+    )
     errors = validate(fixture)
     assert any("executable relation" in e or "retained carrier" in e for e in errors), errors
     assert not any("digest" in e or "must have one" in e for e in errors), errors
@@ -209,7 +296,7 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
         path.write_text(source[:at] + reservation + source[at:])
     elif mutation == "resume-before-install":
         helper.replace_once_after(root / c.VALIDATION_CUSTODY, "fn prepare_marker",
-                                  "self.candidates.push(Candidate {", "self.resume_candidate(0, context, body); self.candidates.push(Candidate {")
+                                  "self.candidates.push(Candidate {", "self.resume_candidate(0, context, decoded.as_ref()); self.candidates.push(Candidate {")
     elif mutation == "marker-before-resume":
         path = root / c.VALIDATION_CUSTODY
         source = path.read_text()
@@ -217,7 +304,7 @@ def test_retained_carrier_requires_admission_and_marker_order(fixture, mutation)
         end = source.index("        Ok(CarrierMarkerPreparation::Ready(commitment))", start)
         marker = source[start:end]
         source = source[:start] + source[end:]
-        at = source.index("        let commitment = match owner.ready_commitment()", source.index("fn prepare_marker"))
+        at = source.index("        let commitment = match ready", source.index("fn prepare_marker"))
         path.write_text(source[:at] + marker + source[at:])
     elif mutation == "decode-before-capacity":
         path = root / c.RETAINED_VALIDATION
@@ -566,11 +653,12 @@ def test_native_common_metadata_refuses_policy_before_autoscale(fixture):
                  "// Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?;",
                  id="authenticated-npos-controls"),
     pytest.param("NATIVE_SOURCE", "record_execution",
-                 "carrier != *self.input", "carrier.header() != self.input.header()",
+                 "record_native_lane_decision_batch(self.input, self.groups, context)",
+                 "record_native_lane_decision_batch(self.input.canonical_resultless_proposal(), self.groups, context)",
                  id="complete-original-carrier"),
     pytest.param("NATIVE_SOURCE", "record_execution",
-                 "record_native_lane_decision_batch(carrier, self.groups, context)",
-                 "record_native_lane_decision_batch(carrier, self.groups.clone(), context)",
+                 "record_native_lane_decision_batch(self.input, self.groups, context)",
+                 "record_native_lane_decision_batch(self.input, self.groups.clone(), context)",
                  id="original-source-custody"),
     pytest.param("NATIVE_SOURCE", "stage_with_start_hooks",
                  "crate::block::native_lane_batch_for_scratch(&self.input)",
@@ -2503,7 +2591,7 @@ def test_world_storage_mode_delegates_exact_original_owners(fixture, symbol, old
     ("NATIVE_VALIDATION", "struct NativeValidationCandidate", "phase: Box<Option<NativeValidationPhase>>", "phase: Option<NativeValidationPhase>"),
     ("NATIVE_VALIDATION", "enum NativeValidationPhase", "carrier: RetainedCarrier<CarrierShellAdmission>", "carrier: wire::ExecutionCommitment"),
     ("NATIVE_VALIDATION", "struct AwaitingNativeSource", "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>", "recovered: Vec<usize>"),
-    ("NATIVE_VALIDATION", "fn matches_candidate", "source.context.context() == context && source.proposal == *body", "source.context.context() == context"),
+    ("NATIVE_VALIDATION", "fn matches_candidate", "source.context.context() == context", "true"),
     ("NATIVE_VALIDATION", "fn matches_candidate", "*context_id == context.id()", "true"),
     ("NATIVE_VALIDATION", "fn matches_candidate", "carrier.matches_validation_candidate(context, body)", "true"),
     ("NATIVE_VALIDATION", "fn matches_candidate", "carrier.artifact().height_context == *context", "true"),
@@ -2540,17 +2628,7 @@ def test_native_preparation_unlocks_before_original_admission_drop(fixture):
 
 @pytest.fixture
 def generic_fixture(fixture):
-    """Copy all owners before mutating either canonical consumer's source."""
-    root, helper, checker, models = fixture
-    model, = [model for model in models if model["module"] == checker.native_preparation_contract.MODEL]
-    relatives = {Path(row["path"]) for row in model["production_symbols"]}
-    relatives.update(Path(path) for path, _, _, _ in checker.NATIVE_PREPUBLICATION_BINDINGS)
-    relatives.update(path for path, _, _ in checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS)
-    relatives.update(Path(path) for path, _, _, _ in (
-        *checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS,
-        *checker.native_merge_manifest.NATIVE_MERGE_MANIFEST_ORDERED_RELATIONS,
-    ))
-    helper.copy_reviewed_source_fixture_with_includes(root, checker, relatives)
+    """Use the same complete, independently copied canonical source cut."""
     return fixture
 
 
@@ -2805,7 +2883,7 @@ def test_live_kura_durability_rejects_receipt_or_binding_before_barrier(fixture,
 
 @pytest.mark.parametrize("owner,symbol,old,new", [
     ("BLOCK", "prepare_native_candidate", "PreparedCarrier::prepare(execution)", "PreparedCarrier::prepare(other_execution)"),
-    ("BLOCK", "validate_and_record_native_candidate", "source.record_execution(body, context)?", "source.record_execution(body, other_context)?"),
+    ("BLOCK", "validate_and_record_native_candidate", "source.record_execution(context)?", "source.record_execution(other_context)?"),
     ("BLOCK", "validate_and_record_native_candidate", "anchor.snapshot_block_hash", "anchor.other_block_hash"),
     ("CONTROLS", "prepare_native_execution_controls", "anchor.snapshot_block_hash", "anchor.other_block_hash"),
     ("CONTROLS", "VerifiedReplayProposal::new", "Hash::new(&wire) != commitment.executed_block_wire_hash", "false"),
@@ -3080,3 +3158,65 @@ def test_revert_carrier_binding_rejects_reordered_steps(revert_carrier_items, fi
     errors = []
     native._validate_revert_carrier_start(items, errors)
     assert any("missing or reorders executable relation" in error for error in errors), errors
+
+@pytest.mark.parametrize("owner,symbol,old,new", [
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_proposal_eq", "self.checked_resultless_payload_len()?", "self.checked_resultless_payload_len().unwrap_or_default()", id="first-operand-errors"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_proposal_eq", "other.checked_resultless_payload_len()?", "other.checked_resultless_payload_len().unwrap_or_default()", id="second-operand-errors"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_proposal_eq", "let candidate_len = other.checked_resultless_payload_len()?;", "let candidate_len = original_len;", id="count-second-operand"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_proposal_eq", "self.signatures == other.signatures", "true", id="full-signature-set"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_proposal_eq", "self.payload == other.payload", "self.payload.header == other.payload.header", id="complete-payload"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_proposal_eq", "original_len == candidate_len", "true", id="actual-length-equality"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_proposal_eq", "let original_len =", "if self.signatures != other.signatures { return Ok(false); } let original_len =", id="check-errors-before-comparing"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "enforce_payload_len_limit(payload_len)?;", "", id="archive-ceiling"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "DecodeFlagsGuard::enter(default_encode_flags())", "DecodeFlagsGuard::enter(norito::core::get_decode_flags())", id="fixed-canonical-flags"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "let payload_len =", "drop(_flags); let payload_len =", id="flags-live-through-count"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "norito::core::encoded_payload_len(&proposal)?", "proposal.encoded_len_hint().unwrap_or_default()", id="real-serialization-count"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "u64::try_from(payload_len).map_err(|_| NoritoFrameError::LengthMismatch)?;", "", id="canonical-length-conversion"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "result: None", "result: self.result.as_ref()", id="ignore-only-execution-result"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "signatures: OutputFieldRef(&self.signatures)", "signatures: OutputFieldRef(&Default::default())", id="count-original-signatures"),
+    pytest.param("RESULTLESS_BLOCK", "SignedBlock::checked_resultless_payload_len", "payload: OutputFieldRef(&self.payload)", "payload: OutputFieldRef(&self.payload.clone())", id="borrow-original-payload"),
+    pytest.param("JOURNALS", "PreparedCarrierJournals::matches_validation_candidate", ".unwrap_or(false)", ".unwrap_or(true)", id="journals-error-rejects"),
+    pytest.param("NATIVE_VALIDATION", "NativeValidationCandidate::matches_candidate", ".unwrap_or(false)", ".unwrap_or(true)", id="published-error-rejects"),
+    pytest.param("NATIVE_VALIDATION", "NativeValidationCandidate::matches_candidate", ".checked_resultless_proposal_eq(body)", ".checked_resultless_proposal_eq(carrier.block())", id="published-original-versus-candidate"),
+    *[
+        pytest.param("RESULTLESS_PAYLOAD", "BlockPayload::eq", f"self.{field} == other.{field}", "true", id=f"payload-{field}")
+        for field in (
+            "header", "external_entrypoints", "execution_context", "da_commitments",
+            "da_proof_policies", "da_pin_intents", "npos_consensus_effects",
+        )
+    ],
+])
+def test_native_preparation_checked_resultless_comparison_rejects_weakened_identity(
+    fixture, owner, symbol, old, new,
+):
+    root, _, checker, _ = fixture
+    target = root / getattr(checker.native_preparation_contract, owner)
+    source = target.read_text()
+    item, = checker._extract_rust_binding_items(source, "method", symbol)
+    assert item.count(old) == 1, (symbol, old)
+    assert source.count(item) == 1
+    target.write_text(source.replace(item, item.replace(old, new, 1), 1))
+    errors = validate(fixture)
+    assert any("executable relation" in error or "retained carrier" in error for error in errors), errors
+    assert not any("digest" in error or "must have one" in error for error in errors), errors
+
+
+@pytest.mark.parametrize("symbol", [
+    "SignedBlock::checked_resultless_proposal_eq",
+    "SignedBlock::checked_resultless_payload_len",
+    "BlockPayload::eq",
+])
+@pytest.mark.parametrize("change", ["remove-owner", "weaken-tokens"])
+def test_native_preparation_checked_resultless_comparison_requires_ledger_owner(
+    fixture, symbol, change,
+):
+    _, _, checker, models = fixture
+    model, = [model for model in models if model["module"] == checker.native_preparation_contract.MODEL]
+    row, = [row for row in model["production_symbols"] if row["symbol"] == symbol]
+    if change == "remove-owner":
+        model["production_symbols"].remove(row)
+    else:
+        row["required_tokens"] = []
+    errors = validate(fixture)
+    assert any("Native preparation ledger owner" in error or "Native preparation reviewed tokens changed" in error for error in errors), errors
+    assert not any("digest" in error for error in errors), errors

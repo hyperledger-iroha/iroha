@@ -36,8 +36,8 @@ This handbook gives infra teams a single playbook for shipping and running Torii
    into the same configuration, replacing its deliberately invalid placeholders and
    zero trust generations/intervals with independently reviewed values.
 2. Configure distinct proof-outcome, repair, reserve, and orderbook entries under
-   `sorafs.storage.native_transaction_signers`, and inject all four matching
-   live providers. The storage-enabled durable-drain requirement does not
+   `sorafs.storage.native_transaction_signers`. For each role, select an explicit
+   owner-only `software_credential` or inject its matching external provider. The storage-enabled durable-drain requirement does not
    depend on the new-work generation flags. When storage and a reserve or
    orderbook generation flag are both disabled, that role starts no worker and
    leaves its durable state unchanged until a later startup where either

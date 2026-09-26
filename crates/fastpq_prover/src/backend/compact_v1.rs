@@ -48,6 +48,9 @@ pub(super) enum CandidateError {
     /// Oracle, leaf or parent geometry is not the fixed candidate geometry.
     #[error("candidate tree geometry or canonical leaf payload is invalid")]
     Tree,
+    /// Fixed private framing storage could not be allocated.
+    #[error("candidate private framing allocation failed")]
+    Allocation,
     /// A tape has another fixed length.
     #[error("candidate tape has another fixed length")]
     TapeLength,
@@ -253,6 +256,23 @@ pub(super) struct Frame<'a> {
     fields: BodyFields<'a>,
 }
 
+// Count without output-sized scratch, allocate under unconditional clearing,
+// then serialize directly into an exact slice. Neither a failed writer nor a
+// successful private row hash drops an unguarded encoded-payload Vec.
+fn encode_private_frame(
+    frame: &Frame<'_>,
+) -> Result<super::secret_polynomial::SecretPolynomial<u8>> {
+    let bytes = norito::canonical_frame_len(frame)?;
+    let mut encoded = super::secret_polynomial::SecretPolynomial::zeroed(bytes)
+        .map_err(|_| CandidateError::Allocation)?;
+    let mut remaining = &mut encoded[..];
+    norito::core::write_canonical_to_writer(frame, &mut remaining)?;
+    if !remaining.is_empty() {
+        return Err(CandidateError::Encode(norito::Error::LengthMismatch));
+    }
+    Ok(encoded)
+}
+
 // A lifetime is only an ownership detail. Preserve both existing identities;
 // the schema derive would append its lifetime placeholder to the nominal name.
 impl norito::NoritoSchema for Frame<'_> {
@@ -417,9 +437,46 @@ impl Context {
         Ok(())
     }
 
+    /// Maximum retained public payload when every reachable prefix-cache slot is filled.
+    /// Counts actual owner layouts, Arc counters and bytes; hashing is unchanged.
+    #[cfg(test)]
+    pub(super) fn maximum_retained_payload_bytes(&self) -> Result<usize> {
+        let slots = match self.profile {
+            FramingProfile::Current => PREFIX_CACHE_SLOTS,
+            FramingProfile::Deep => 10 * (super::deep_geometry::LDE_ROWS.ilog2() as usize + 1) + 10,
+        };
+        let per_prefix = [(H_ROLE, H_PHASE), (G_ROLE, G_PHASE)]
+            .into_iter()
+            .map(|(role, phase)| {
+                GoldilocksDigest384OwnedDomainPrefixV1::allocation_bytes_excluding_profile(
+                    fastpq_isi::GoldilocksDigestDomainV1 {
+                        catalog: FASTPQ_CATALOG_V1.as_bytes(),
+                        protocol: FASTPQ_FINAL_V1.name.as_bytes(),
+                        profile: &self.prefix.encoded,
+                        role,
+                        phase,
+                        level: 0,
+                        index: 0,
+                        counter: 0,
+                    },
+                )
+                .ok_or(CandidateError::Allocation)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .expect("two fixed prefix families");
+        slots
+            .checked_mul(per_prefix)
+            .and_then(|bytes| bytes.checked_add(core::mem::size_of::<AbsorbedPrefix>()))
+            .and_then(|bytes| bytes.checked_add(self.prefix.encoded.len()))
+            .and_then(|bytes| bytes.checked_add(4 * core::mem::size_of::<usize>()))
+            .ok_or(CandidateError::Allocation)
+    }
+
     /// Hash a body through the sole canonical cached framing owner.
     pub(super) fn hash_frame(&self, frame: &Frame<'_>) -> Result<Digest> {
-        let encoded = norito::encode_canonical(frame)?;
+        let encoded = encode_private_frame(frame)?;
         self.digest(
             b"compact-commitment",
             b"typed-h",
@@ -690,6 +747,71 @@ mod tests {
             slot.copy_from_slice(&value.to_le_bytes());
         }
         output
+    }
+
+    #[test]
+    fn private_frame_storage_is_exact_guarded_and_preserves_canonical_bytes() {
+        let context = Context::new(b"private framing erasure regression").unwrap();
+        for bytes in [0, 1, 96, 301 * 8, 342 * 8, 4096] {
+            let payload: Vec<u8> = (0..bytes).map(|i| (i % 251) as u8).collect();
+            for fields in [
+                BodyFields::One(&payload),
+                BodyFields::Two(&payload, b"other"),
+            ] {
+                let frame = context.frame(1, 1, 0, 0, u32::MAX, 48, fields);
+                let expected = norito::encode_canonical(&frame).unwrap();
+                let encoded = encode_private_frame(&frame).unwrap();
+                assert_eq!(&*encoded, expected);
+                assert_eq!(encoded.len(), norito::canonical_frame_len(&frame).unwrap());
+                // The same fixed clearing owner also guards partial writer output.
+                let mut too_short =
+                    super::super::secret_polynomial::SecretPolynomial::<u8>::zeroed(
+                        encoded.len() - 1,
+                    )
+                    .unwrap();
+                assert!(
+                    norito::core::write_canonical_to_writer(&frame, &mut &mut too_short[..])
+                        .is_err()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn retained_prefix_payload_counts_shared_profile_once_and_bounds_filled_cache() {
+        for deep in [false, true] {
+            let make = |bytes: &[u8]| {
+                if deep {
+                    Context::new_deep(bytes)
+                } else {
+                    Context::new(bytes)
+                }
+                .unwrap()
+            };
+            let context = make(b"a");
+            let longer = make(&[b'a'; 101]);
+            let before = context.maximum_retained_payload_bytes().unwrap();
+            assert_eq!(
+                longer.maximum_retained_payload_bytes().unwrap() - before,
+                100
+            );
+            // The maximum includes every reachable slot before any cache entry exists.
+            let rounds = if deep { 10 } else { H_CACHE_ROUNDS as u8 };
+            let depth = if deep { 23 } else { H_CACHE_LEVELS as u32 - 1 };
+            for round in 0..rounds {
+                for level in 0..=depth {
+                    context
+                        .digest(H_ROLE, H_PHASE, round, level, 0, b"public")
+                        .unwrap();
+                }
+            }
+            for round in 1..=if deep { 10 } else { G_CACHE_ROUNDS as u8 } {
+                context
+                    .digest(G_ROLE, G_PHASE, round, 0, 0, b"public")
+                    .unwrap();
+            }
+            assert_eq!(context.maximum_retained_payload_bytes().unwrap(), before);
+        }
     }
 
     #[test]

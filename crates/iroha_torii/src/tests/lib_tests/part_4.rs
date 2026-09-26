@@ -1189,7 +1189,7 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
         core.zk.halo2.enabled = true;
     }
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-fixture");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -1203,7 +1203,7 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1217,7 +1217,7 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
     vk_record.activation_height = Some(2);
     vk_record.withdraw_height = Some(3);
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(
+    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(
         vk_record.key.as_ref().expect("vk_box"),
     )
     .expect("derive proving key bytes");
@@ -1225,13 +1225,7 @@ async fn zk_ivm_prove_job_completes_and_does_not_expose_gas_used() {
     std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -1332,7 +1326,7 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
         core.zk.verify_timeout = Duration::ZERO;
     }
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
     let vk_id = VerifyingKeyId::new(backend, "ivm-exec-v1-stark");
     let vk_box = sample_stark_vk_box(backend, circuit_id);
     let vk_commitment = iroha_core::zk::hash_vk(&vk_box);
@@ -1341,7 +1335,7 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
         circuit_id,
         iroha_data_model::zk::BackendTag::Stark,
         "goldilocks",
-        iroha_core::zk::ivm_execution_public_inputs_schema_hash(),
+        iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash(),
         vk_commitment,
     );
     vk_record.vk_len = vk_box.bytes.len() as u32;
@@ -1351,13 +1345,7 @@ async fn zk_ivm_prove_job_completes_for_stark_backend() {
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -1440,7 +1428,7 @@ async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
         core.zk.halo2.enabled = true;
     }
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-disk-vk");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -1454,13 +1442,13 @@ async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
         .expect("fixture should include verifying key commitment");
     let vk_path = zk_vk_store_path(temp.path(), &vk_id);
     std::fs::write(&vk_path, &vk_box.bytes).expect("write verifying key bytes");
-    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box)
+    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(&vk_box)
         .expect("derive proving key bytes");
     let pk_path = zk_pk_store_path(temp.path(), &vk_id);
     std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1473,13 +1461,7 @@ async fn zk_ivm_prove_job_loads_vk_bytes_from_disk_when_inline_missing() {
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -1558,7 +1540,7 @@ async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
         core.zk.halo2.enabled = true;
     }
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-raw-pk");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -1572,7 +1554,7 @@ async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1587,13 +1569,7 @@ async fn zk_ivm_prove_job_rejects_non_archive_proving_key_bytes() {
     std::fs::write(&pk_path, b"raw-halo2-proving-key").expect("write raw proving key bytes");
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -1667,7 +1643,7 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
         core.zk.halo2.enabled = true;
     }
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-mismatched-proved");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -1681,7 +1657,7 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -1692,7 +1668,7 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
     vk_record.key = Some(vk_box);
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
-    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(
+    let pk_bytes = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(
         vk_record.key.as_ref().expect("vk_box"),
     )
     .expect("derive proving key bytes");
@@ -1700,13 +1676,7 @@ async fn zk_ivm_prove_job_rejects_mismatched_client_proved_payload() {
     std::fs::write(&pk_path, &pk_bytes).expect("write proving key bytes");
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -1790,8 +1760,8 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
         core.zk.halo2.enabled = true;
     }
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-derive");
-    let schema_hash = iroha_core::zk::ivm_execution_public_inputs_schema_hash();
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let schema_hash = iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash();
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -1805,7 +1775,7 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         schema_hash,
@@ -1820,13 +1790,7 @@ async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
     vk_record.gas_schedule_id = Some("sched_0".to_owned());
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -2147,7 +2111,7 @@ async fn zk_ivm_prove_jobs_reject_cross_tenant_read_and_delete() {
 async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
     let app = mk_ivm_prove_app_state_for_tests();
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-schema-mismatch");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -2161,7 +2125,7 @@ async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         [0xAA; 32],
@@ -2173,13 +2137,7 @@ async fn zk_ivm_prove_rejects_vk_schema_hash_mismatch() {
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -2228,7 +2186,7 @@ async fn zk_ivm_prove_rejects_when_queue_full() {
         state.zk_ivm_prove_inflight_total = 1;
     }
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-queue-full");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -2242,7 +2200,7 @@ async fn zk_ivm_prove_rejects_when_queue_full() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -2254,13 +2212,7 @@ async fn zk_ivm_prove_rejects_when_queue_full() {
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world
@@ -2312,7 +2264,7 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
         state.zk_ivm_prove_inflight_total = 0;
     }
     let vk_id = VerifyingKeyId::new("halo2/ipa", "ivm-exec-v1-cancel");
-    let fixture = iroha_core::zk::test_utils::halo2_ivm_execution_envelope(
+    let fixture = iroha_core::zk::test_utils::halo2_ivm_replay_binding_envelope(
         Hash::new(b"code"),
         Hash::new(b"overlay"),
         Hash::new(b"events"),
@@ -2326,7 +2278,7 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
         .expect("fixture should include verifying key commitment");
     let mut vk_record = VerifyingKeyRecord::new(
         1,
-        iroha_core::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         iroha_data_model::zk::BackendTag::Halo2IpaPasta,
         "pasta",
         fixture.schema_hash,
@@ -2338,13 +2290,7 @@ async fn zk_ivm_prove_delete_cancels_and_frees_capacity_slot() {
     vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
     {
         let height = next_block_height(&app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            0,
-            0,
-        );
+        let header = BlockHeader::new(NonZeroU64::new(height).expect("height>0"), None, None, 0, 0);
         let mut block = app.state.block(header);
         let mut stx = block.transaction();
         stx.world

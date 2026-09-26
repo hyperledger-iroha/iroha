@@ -30,6 +30,7 @@ struct Validator {
     drops: Arc<AtomicUsize>,
     prepare_refusal_at: Option<usize>,
     panic_after_prepare: bool,
+    panic_after_resume: bool,
     dropped_payloads_at_producer_drop: Option<Arc<AtomicUsize>>,
     retained_signature_node_address: Option<Arc<AtomicUsize>>,
 }
@@ -71,6 +72,10 @@ impl CarrierValidator for Validator {
             assert_eq!(address.load(Ordering::SeqCst), signature_node_address(body));
         }
         assert!(
+            !std::mem::take(&mut self.panic_after_resume),
+            "fixture capture unwound before returning its owner"
+        );
+        assert!(
             !self.ready,
             "a ready original owner must not resume capture"
         );
@@ -98,6 +103,7 @@ fn validator(
             drops: Arc::clone(&drops),
             prepare_refusal_at: None,
             panic_after_prepare: false,
+            panic_after_resume: false,
             dropped_payloads_at_producer_drop: None,
             retained_signature_node_address: None,
         },
@@ -845,6 +851,60 @@ fn retained_prepare_unwind_keeps_reserved_subject_without_reexecution() {
         ))
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(service.marker_counts_for_test(), (0, 0));
+    assert!(store.validated.is_empty());
+    assert!(store.rejected.is_empty());
+    assert!(
+        !store
+            .validated_path_for(durable.round(), durable.subject())
+            .exists()
+    );
+}
+
+#[test]
+fn retained_resume_unwind_releases_body_and_preserves_subject_without_reexecution() {
+    let directory = TempDir::new().unwrap();
+    let (context, keys) = context_and_keys();
+    let (body, manifest) = body_and_manifest_for_view(&context, &keys, 0);
+    let mut store = V2BodyStore::open(directory.path(), context).unwrap();
+    let durable = store.store(manifest, body).unwrap();
+    let (mut producer, calls, drops) = validator(&durable);
+    producer.ready = false;
+    producer.panic_after_resume = true;
+    let resumes = Arc::clone(&producer.resume_calls);
+    let mut service = store
+        .retained_validation_service(producer, &descriptor_budget(&store))
+        .unwrap();
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.execute_retained_durable_validation(
+            durable.clone(),
+            durable.manifest_hash(),
+            &mut service,
+        )
+    }));
+    assert!(unwound.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(resumes.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(service.body_for_test(durable.subject()).is_none());
+    assert!(service.owner_for_test(durable.subject()).is_none());
+    assert!(matches!(
+        service.preflight_marker(&durable),
+        Err(CarrierCustodyError::MissingOwner)
+    ));
+    assert!(matches!(
+        store.execute_retained_durable_validation(
+            durable.clone(),
+            durable.manifest_hash(),
+            &mut service,
+        ),
+        Err(V2BodyStoreError::CarrierCustody(
+            CarrierCustodyError::MissingOwner
+        ))
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(resumes.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert_eq!(service.marker_counts_for_test(), (0, 0));
     assert!(store.validated.is_empty());
     assert!(store.rejected.is_empty());

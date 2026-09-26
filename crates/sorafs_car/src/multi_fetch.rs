@@ -12,7 +12,7 @@ use std::{
     fmt,
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 mod runtime;
 use runtime::{ProviderRateWindow, classify_provider_error};
@@ -298,6 +298,11 @@ impl fmt::Display for CapabilityMismatch {
 pub struct FetchOptions {
     /// Maximum complete object accepted before allocating or dispatching any payload request.
     pub max_payload_bytes: u64,
+    /// Maximum sum of chunks, files, and logical path components in the admitted plan.
+    ///
+    /// Receipts and canonical CAR geometry remain proportional to this separately bounded
+    /// inventory. This does not describe the payload reservation tracked by the buffer limit.
+    pub max_metadata_entries: usize,
     /// Maximum reserved bytes across running requests and the ordered delivery window.
     pub max_buffered_bytes: usize,
     /// Absolute fetch deadline, including provider cooldowns and sink delivery.
@@ -320,6 +325,7 @@ impl Default for FetchOptions {
     fn default() -> Self {
         Self {
             max_payload_bytes: 8 * 1024 * 1024 * 1024,
+            max_metadata_entries: 262_144,
             max_buffered_bytes: 16 * 1024 * 1024,
             session_timeout: Duration::from_secs(15 * 60),
             verify_lengths: true,
@@ -335,6 +341,7 @@ impl fmt::Debug for FetchOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FetchOptions")
             .field("max_payload_bytes", &self.max_payload_bytes)
+            .field("max_metadata_entries", &self.max_metadata_entries)
             .field("max_buffered_bytes", &self.max_buffered_bytes)
             .field("session_timeout", &self.session_timeout)
             .field("verify_lengths", &self.verify_lengths)
@@ -350,6 +357,31 @@ impl fmt::Debug for FetchOptions {
                 &self.score_policy.as_ref().map(|_| "ScorePolicy"),
             )
             .finish()
+    }
+}
+impl FetchOptions {
+    /// Admit complete object and metadata inventory limits before derived fetch allocations.
+    pub fn validate_plan_limits(&self, plan: &CarBuildPlan) -> Result<(), MultiSourceError> {
+        if self.max_payload_bytes == 0 || plan.content_length > self.max_payload_bytes {
+            return Err(MultiSourceError::ResourceLimit(
+                "complete payload exceeds the configured object limit",
+            ));
+        }
+        let entries = plan
+            .files
+            .iter()
+            .try_fold(plan.chunks.len(), |count, file| {
+                count.checked_add(1)?.checked_add(file.path.len())
+            });
+        if self.max_metadata_entries == 0
+            || self.max_metadata_entries > crate::CAR_PLAN_MAX_CHUNKS
+            || entries.is_none_or(|count| count > self.max_metadata_entries)
+        {
+            return Err(MultiSourceError::ResourceLimit(
+                "plan exceeds the configured metadata inventory limit",
+            ));
+        }
+        Ok(())
     }
 }
 /// Request metadata passed to the caller-supplied fetcher.
@@ -582,10 +614,15 @@ pub(crate) fn provider_can_serve_chunk(
         }
     }
     if let Some(budget) = &metadata.stream_budget {
-        let burst_limit = budget
+        let mut burst_limit = budget
             .burst_bytes
             .filter(|value| *value > 0)
             .unwrap_or_else(|| budget.max_bytes_per_sec.max(1));
+        if budget.max_bytes_per_sec != 0 {
+            // A larger concurrency burst cannot authorize a single request that would exceed
+            // the gateway's complete one-second byte quota in every possible window.
+            burst_limit = burst_limit.min(budget.max_bytes_per_sec);
+        }
         if u64::from(spec.length) > burst_limit {
             return Err(CapabilityMismatch::StreamBurstTooSmall {
                 chunk_length: spec.length,
@@ -723,6 +760,11 @@ where
         .await
         .map(|outcome| outcome.retained)
 }
+/// Consume verified chunks in plan order without retaining the complete payload.
+///
+/// The response reservation window includes unfinished requests and completed out-of-order
+/// chunks. Observer callbacks must return promptly; an elapsed deadline is checked after every
+/// callback. On failure the sink may contain a verified prefix and must not be published.
 pub async fn fetch_plan_parallel_with_observer<F, Fut, E, O>(
     plan: &CarBuildPlan,
     providers: impl IntoIterator<Item = FetchProvider>,
@@ -911,6 +953,10 @@ fn select_weighted_provider(
         if state.disabled || !state.is_available() {
             continue;
         }
+        let now = tokio::time::Instant::now();
+        if state.rate_window.ready_at(u64::from(spec.length), now) > now {
+            continue;
+        }
         if provider_can_serve_chunk(&state.config, spec).is_err() {
             continue;
         }
@@ -996,7 +1042,7 @@ fn handle_attempt_failure(
     attempt_error: AttemptError,
     failure_threshold: usize,
     retry_limit: Option<usize>,
-    chunk_last_error: &mut [Option<AttemptError>],
+    chunk_last_error: &mut BTreeMap<usize, AttemptError>,
     pending: &mut VecDeque<ChunkAttempt>,
     pending_front: &mut Option<ChunkAttempt>,
 ) -> Result<(), MultiSourceError> {
@@ -1004,7 +1050,7 @@ fn handle_attempt_failure(
         let state = &mut provider_states[provider_idx];
         state.record_failure(failure_threshold);
     }
-    chunk_last_error[spec.chunk_index] = Some(attempt_error.clone());
+    chunk_last_error.insert(spec.chunk_index, attempt_error.clone());
     if let Some(limit) = retry_limit
         && attempt >= limit
     {
@@ -1025,48 +1071,8 @@ fn handle_attempt_failure(
         spec,
         attempts: attempt,
     };
-    if pending_front.is_none() {
-        *pending_front = Some(retry);
-    } else {
-        pending.push_front(retry);
-    }
-    Ok(())
-}
-struct DeliveryError {
-    chunk_index: usize,
-    error: ObserverError,
-}
-fn deliver_ready_chunks(
-    observer: &mut dyn ChunkObserver,
-    specs: &[ChunkFetchSpec],
-    chunk_results: &[Option<Vec<u8>>],
-    chunk_receipts: &[Option<ChunkReceipt>],
-    next_delivery: &mut usize,
-) -> Result<(), DeliveryError> {
-    while *next_delivery < specs.len() {
-        let idx = *next_delivery;
-        let Some(bytes) = chunk_results[idx].as_ref() else {
-            break;
-        };
-        let Some(receipt) = chunk_receipts[idx].as_ref() else {
-            return Err(DeliveryError {
-                chunk_index: idx,
-                error: ObserverError::new("missing chunk receipt while delivering to observer"),
-            });
-        };
-        let delivery = ChunkDelivery {
-            chunk_index: idx,
-            spec: &specs[idx],
-            provider: &receipt.provider,
-            attempts: receipt.attempts,
-            latency_ms: receipt.latency_ms,
-            bytes,
-        };
-        observer.on_chunk(delivery).map_err(|error| DeliveryError {
-            chunk_index: idx,
-            error,
-        })?;
-        *next_delivery += 1;
+    if let Some(front) = pending_front.replace(retry) {
+        pending.push_front(front);
     }
     Ok(())
 }
@@ -1081,257 +1087,314 @@ async fn fetch_plan_parallel_internal<F, Fut, E>(
     fetcher: F,
     options: FetchOptions,
     mut observer: Option<BoxedObserver>,
-) -> Result<FetchOutcome, MultiSourceError>
+) -> Result<InternalFetchOutcome, MultiSourceError>
 where
     F: Fn(FetchRequest) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<ChunkResponse, E>> + Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
 {
-    let mut provider_states: Vec<ProviderState> =
-        providers.into_iter().map(ProviderState::new).collect();
-    if provider_states.is_empty() {
-        return Err(MultiSourceError::NoProviders);
+    if !options.verify_lengths || !options.verify_digests {
+        return Err(MultiSourceError::ResourceLimit(
+            "chunk integrity verification must remain enabled",
+        ));
     }
-    let total_capacity: usize = provider_states.iter().map(ProviderState::capacity).sum();
-    if total_capacity == 0 {
-        return Err(MultiSourceError::NoProviders);
+    if options.session_timeout.is_zero()
+        || options.session_timeout > Duration::from_secs(24 * 60 * 60)
+    {
+        return Err(MultiSourceError::ResourceLimit(
+            "session timeout must be between zero and 24 hours",
+        ));
     }
-    let mut global_limit = options.global_parallel_limit.unwrap_or(total_capacity);
-    if global_limit == 0 {
-        global_limit = total_capacity;
+    let deadline = tokio::time::Instant::now() + options.session_timeout;
+    options.validate_plan_limits(plan)?;
+    let consuming = observer.is_some();
+    if !consuming && plan.content_length > MAX_EAGER_PAYLOAD_BYTES {
+        return Err(MultiSourceError::ResourceLimit(
+            "eager payload exceeds 64 MiB; use the consuming sink API",
+        ));
     }
-    if global_limit == 0 {
-        global_limit = 1;
-    }
-    global_limit = global_limit.min(total_capacity).max(1);
     let chunk_specs = plan
         .try_chunk_fetch_specs()
         .map_err(MultiSourceError::InvalidPlan)?;
-    let total_chunks = chunk_specs.len();
-    let mut pending: VecDeque<ChunkAttempt> = chunk_specs
-        .iter()
-        .cloned()
-        .map(|spec| ChunkAttempt { spec, attempts: 0 })
-        .collect();
-    if total_chunks == 0 {
-        return Ok(FetchOutcome {
-            chunks: Vec::new(),
-            chunk_receipts: Vec::new(),
-            provider_reports: provider_states
-                .into_iter()
-                .map(ProviderState::into_report)
-                .collect(),
-        });
+    if options.max_buffered_bytes == 0
+        || options.max_buffered_bytes > 256 * 1024 * 1024
+        || chunk_specs
+            .iter()
+            .any(|spec| spec.length as usize > options.max_buffered_bytes)
+    {
+        return Err(MultiSourceError::ResourceLimit(
+            "one chunk exceeds the configured reorder buffer",
+        ));
     }
-    let mut chunk_results: Vec<Option<Vec<u8>>> = vec![None; total_chunks];
+    let mut provider_states = Vec::new();
+    for provider in providers {
+        if provider_states.len() == 256 {
+            return Err(MultiSourceError::ResourceLimit(
+                "provider inventory exceeds 256",
+            ));
+        }
+        if provider
+            .metadata()
+            .is_some_and(|metadata| metadata.requests_per_minute == Some(0))
+        {
+            return Err(MultiSourceError::ResourceLimit(
+                "provider request quota must be positive",
+            ));
+        }
+        provider_states.push(ProviderState::new(provider));
+    }
+    if provider_states.is_empty() {
+        return Err(MultiSourceError::NoProviders);
+    }
+    let total_capacity = provider_states
+        .iter()
+        .map(ProviderState::capacity)
+        .fold(0usize, usize::saturating_add);
+    let global_limit = options
+        .global_parallel_limit
+        .unwrap_or(total_capacity)
+        .max(1)
+        .min(total_capacity)
+        .min(256);
+    let total_chunks = chunk_specs.len();
+    let mut pending = VecDeque::new();
+    let mut undispatched = 0usize;
+    let mut pending_front: Option<ChunkAttempt> = None;
+    let mut chunk_results = BTreeMap::<usize, Vec<u8>>::new();
     let mut chunk_receipts: Vec<Option<ChunkReceipt>> = vec![None; total_chunks];
-    let mut chunk_last_error: Vec<Option<AttemptError>> = vec![None; total_chunks];
+    let mut chunk_last_error = BTreeMap::<usize, AttemptError>::new();
     let mut next_delivery = 0usize;
+    let mut buffered_bytes = 0usize;
+    let mut peak_buffered_bytes = 0usize;
+    let mut payload_hasher = blake3::Hasher::new();
     let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
     let fetcher = Arc::new(fetcher);
-    let total_weight: i64 = provider_states
+    let total_weight = provider_states
         .iter()
-        .map(|state| state.config.weight().get() as i64)
+        .map(|state| i64::from(state.config.weight().get()))
         .sum();
     let mut provider_credits = vec![0i64; provider_states.len()];
-    let score_policy = options.score_policy.as_deref();
     let mut completed = 0usize;
-    let mut pending_front: Option<ChunkAttempt> = None;
-    let retry_limit = options.per_chunk_retry_limit;
-    let failure_threshold = options.provider_failure_threshold;
     while completed < total_chunks {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(MultiSourceError::DeadlineExceeded);
+        }
         while in_flight.len() < global_limit {
-            let next_task = if let Some(task) = pending_front.take() {
-                Some(task)
-            } else {
-                pending.pop_front()
-            };
-            let Some(task) = next_task else {
+            let task = pending_front
+                .take()
+                .or_else(|| pending.pop_front())
+                .or_else(|| {
+                    let spec = chunk_specs.get(undispatched)?.clone();
+                    undispatched += 1;
+                    Some(ChunkAttempt { spec, attempts: 0 })
+                });
+            let Some(task) = task else { break };
+            // Reserve both unfinished requests and completed out-of-order responses. A stalled
+            // first chunk cannot cause the rest of the object to accumulate behind the sink.
+            if buffered_bytes.saturating_add(task.spec.length as usize) > options.max_buffered_bytes
+                || (consuming
+                    && task.spec.chunk_index >= next_delivery.saturating_add(global_limit))
+            {
+                pending_front = Some(task);
                 break;
-            };
+            }
             let selection = select_weighted_provider(
                 &provider_states,
                 &mut provider_credits,
                 total_weight,
                 &task.spec,
-                score_policy,
+                options.score_policy.as_deref(),
             );
             let provider_idx = match selection {
-                ProviderSelectionOutcome::Selected(idx) => idx,
+                ProviderSelectionOutcome::Selected(index) => index,
                 ProviderSelectionOutcome::Unavailable => {
-                    if pending_front.is_none() {
-                        pending_front = Some(task);
-                    } else {
-                        pending.push_front(task);
-                    }
+                    pending_front = Some(task);
                     break;
                 }
                 ProviderSelectionOutcome::Ineligible(reasons) => {
-                    let providers = reasons
-                        .into_iter()
-                        .map(|(idx, reason)| (provider_states[idx].config.id().clone(), reason))
-                        .collect();
                     return Err(MultiSourceError::NoCompatibleProviders {
                         chunk_index: task.spec.chunk_index,
-                        providers,
+                        providers: reasons
+                            .into_iter()
+                            .map(|(index, reason)| {
+                                (provider_states[index].config.id().clone(), reason)
+                            })
+                            .collect(),
                     });
                 }
                 ProviderSelectionOutcome::PolicyDenied(indices) => {
                     if in_flight.is_empty() {
-                        let providers = indices
-                            .into_iter()
-                            .map(|idx| provider_states[idx].config.id().clone())
-                            .collect();
                         return Err(MultiSourceError::NoPolicyEligibleProviders {
                             chunk_index: task.spec.chunk_index,
-                            providers,
+                            providers: indices
+                                .into_iter()
+                                .map(|index| provider_states[index].config.id().clone())
+                                .collect(),
                         });
                     }
-                    if pending_front.is_none() {
-                        pending_front = Some(task);
-                    } else {
-                        pending.push_front(task);
-                    }
+                    pending_front = Some(task);
                     break;
                 }
             };
-            let spec = task.spec.clone();
+            let spec = task.spec;
             let attempt_number = task.attempts + 1;
-            provider_states[provider_idx].inflight += 1;
-            if provider_states[provider_idx].burst_limit.is_some() {
-                provider_states[provider_idx].bytes_inflight = provider_states[provider_idx]
-                    .bytes_inflight
-                    .saturating_add(u64::from(spec.length));
-            }
-            let provider = provider_states[provider_idx].config.clone();
+            let state = &mut provider_states[provider_idx];
+            state.inflight += 1;
+            state.bytes_inflight = state.bytes_inflight.saturating_add(u64::from(spec.length));
+            state
+                .rate_window
+                .reserve(u64::from(spec.length), tokio::time::Instant::now());
+            buffered_bytes += spec.length as usize;
+            peak_buffered_bytes = peak_buffered_bytes.max(buffered_bytes);
+            let provider = state.config.clone();
             let fetcher = Arc::clone(&fetcher);
-            let future = async move {
-                let request = FetchRequest {
-                    provider: Arc::clone(&provider),
-                    spec: spec.clone(),
-                    attempt: attempt_number,
-                };
-                let start = Instant::now();
-                let result = fetcher(request).await;
-                let latency = start.elapsed();
-                JobOutcome {
-                    provider_idx,
-                    provider,
-                    spec,
-                    attempt: attempt_number,
-                    result,
-                    latency,
+            in_flight.push(
+                async move {
+                    let start = tokio::time::Instant::now();
+                    let result = fetcher(FetchRequest {
+                        provider: Arc::clone(&provider),
+                        spec: spec.clone(),
+                        attempt: attempt_number,
+                    })
+                    .await;
+                    JobOutcome {
+                        provider_idx,
+                        provider,
+                        spec,
+                        attempt: attempt_number,
+                        result,
+                        latency: start.elapsed(),
+                    }
                 }
-            };
-            in_flight.push(future.boxed());
+                .boxed(),
+            );
         }
-        if completed >= total_chunks {
-            break;
+        let now = tokio::time::Instant::now();
+        let next_wake = pending_front.as_ref().and_then(|task| {
+            provider_states
+                .iter()
+                .filter(|state| {
+                    !state.disabled
+                        && state.is_available()
+                        && provider_can_serve_chunk(&state.config, &task.spec).is_ok()
+                })
+                .map(|state| state.rate_window.ready_at(u64::from(task.spec.length), now))
+                .filter(|ready| *ready > now)
+                .min()
+        });
+        if in_flight.is_empty() && next_wake.is_none() {
+            let task = pending_front.as_ref().ok_or_else(|| {
+                MultiSourceError::InternalInvariant(
+                    "fetch has unfinished chunks without a pending request".into(),
+                )
+            })?;
+            return Err(MultiSourceError::NoHealthyProviders {
+                chunk_index: task.spec.chunk_index,
+                attempts: task.attempts,
+                last_error: chunk_last_error
+                    .get(&task.spec.chunk_index)
+                    .cloned()
+                    .map(Box::new),
+            });
         }
-        if in_flight.is_empty() {
-            let stalled = pending_front.take().or_else(|| pending.pop_front());
-            if let Some(task) = stalled {
-                if !has_active_providers(&provider_states) {
-                    let last_error = chunk_last_error[task.spec.chunk_index].clone();
-                    return Err(MultiSourceError::NoHealthyProviders {
-                        chunk_index: task.spec.chunk_index,
-                        attempts: task.attempts,
-                        last_error: last_error.map(Box::new),
-                    });
-                }
-                if pending_front.is_none() {
-                    pending_front = Some(task);
-                } else {
-                    pending.push_front(task);
-                }
-            } else {
-                break;
-            }
-        }
-        let Some(outcome) = in_flight.next().await else {
-            continue;
+        let wake = next_wake.unwrap_or(deadline).min(deadline);
+        let outcome = tokio::select! {
+            result = in_flight.next(), if !in_flight.is_empty() => result,
+            _ = runtime::sleep_until(wake) => None,
         };
+        let Some(outcome) = outcome else { continue };
         let provider_idx = outcome.provider_idx;
         let chunk_index = outcome.spec.chunk_index;
-        let attempt = outcome.attempt;
         let provider_id = outcome.provider.id().clone();
-        {
-            let state = &mut provider_states[provider_idx];
-            if state.inflight == 0 {
-                return Err(MultiSourceError::InternalInvariant(format!(
-                    "provider '{provider_id}' inflight underflow"
-                )));
-            }
-            state.inflight -= 1;
-            if state.burst_limit.is_some() {
-                state.bytes_inflight = state
-                    .bytes_inflight
-                    .saturating_sub(u64::from(outcome.spec.length));
-            }
-        }
+        let state = &mut provider_states[provider_idx];
+        state.inflight -= 1;
+        state.bytes_inflight -= u64::from(outcome.spec.length);
         match outcome.result {
             Ok(response) => match verify_chunk(&outcome.spec, &response, &options) {
                 Ok(()) => {
-                    {
-                        let state = &mut provider_states[provider_idx];
-                        state.record_success();
-                    }
-                    if chunk_results[chunk_index].is_some() {
+                    if chunk_receipts[chunk_index].is_some() {
                         return Err(MultiSourceError::InternalInvariant(format!(
-                            "chunk {chunk_index} resolved multiple times"
+                            "chunk {chunk_index} completed twice"
                         )));
                     }
-                    chunk_results[chunk_index] = Some(response.bytes);
+                    state.record_success();
+                    chunk_results.insert(chunk_index, response.bytes);
                     chunk_receipts[chunk_index] = Some(ChunkReceipt {
                         chunk_index,
                         provider: provider_id,
-                        attempts: attempt,
+                        attempts: outcome.attempt,
                         latency_ms: outcome.latency.as_secs_f64() * 1_000.0,
                         bytes: outcome.spec.length,
                     });
-                    chunk_last_error[chunk_index] = None;
+                    chunk_last_error.remove(&chunk_index);
                     completed += 1;
-                    if let Some(observer_ref) = observer.as_mut()
-                        && let Err(error) = deliver_ready_chunks(
-                            observer_ref.as_mut(),
-                            &chunk_specs,
-                            &chunk_results,
-                            &chunk_receipts,
-                            &mut next_delivery,
-                        )
-                    {
-                        return Err(MultiSourceError::ObserverFailed {
-                            chunk_index: error.chunk_index,
-                            source: error.error,
-                        });
+                    if let Some(sink) = observer.as_mut() {
+                        while let Some(bytes) = chunk_results.remove(&next_delivery) {
+                            let receipt = chunk_receipts[next_delivery]
+                                .as_ref()
+                                .expect("completed chunk has a receipt");
+                            payload_hasher.update(&bytes);
+                            sink.on_chunk(ChunkDelivery {
+                                chunk_index: next_delivery,
+                                spec: &chunk_specs[next_delivery],
+                                provider: &receipt.provider,
+                                attempts: receipt.attempts,
+                                latency_ms: receipt.latency_ms,
+                                bytes: &bytes,
+                            })
+                            .map_err(|source| {
+                                MultiSourceError::ObserverFailed {
+                                    chunk_index: next_delivery,
+                                    source,
+                                }
+                            })?;
+                            buffered_bytes -= bytes.len();
+                            next_delivery += 1;
+                            if tokio::time::Instant::now() >= deadline {
+                                return Err(MultiSourceError::DeadlineExceeded);
+                            }
+                        }
+                    } else {
+                        buffered_bytes -= outcome.spec.length as usize;
                     }
                 }
                 Err(reason) => {
-                    let failure = AttemptFailure::InvalidChunk(reason);
-                    let attempt_error = AttemptError {
+                    buffered_bytes -= outcome.spec.length as usize;
+                    let error = AttemptError {
                         provider: provider_id,
-                        failure,
+                        failure: AttemptFailure::InvalidChunk(reason),
                     };
                     handle_attempt_failure(
                         &mut provider_states,
                         provider_idx,
                         outcome.spec,
-                        attempt,
-                        attempt_error,
-                        failure_threshold,
-                        retry_limit,
+                        outcome.attempt,
+                        error,
+                        options.provider_failure_threshold,
+                        options.per_chunk_retry_limit,
                         &mut chunk_last_error,
                         &mut pending,
                         &mut pending_front,
                     )?;
                 }
             },
-            Err(err) => {
-                let failure = AttemptFailure::Provider {
-                    message: err.to_string(),
-                    policy_block: None,
-                };
-                let attempt_error = AttemptError {
+            Err(error) => {
+                buffered_bytes -= outcome.spec.length as usize;
+                let (failure, retry_after) = classify_provider_error(&error);
+                if let Some(delay) = retry_after {
+                    state.rate_window.throttle(delay);
+                    // Quota denial did not attempt a payload read and does not spend the failure
+                    // retry budget. The absolute session deadline bounds repeated denials.
+                    pending.push_front(ChunkAttempt {
+                        spec: outcome.spec,
+                        attempts: outcome.attempt - 1,
+                    });
+                    if let Some(front) = pending_front.take() {
+                        pending.push_back(front);
+                    }
+                    continue;
+                }
+                let error = AttemptError {
                     provider: provider_id,
                     failure,
                 };
@@ -1339,10 +1402,10 @@ where
                     &mut provider_states,
                     provider_idx,
                     outcome.spec,
-                    attempt,
-                    attempt_error,
-                    failure_threshold,
-                    retry_limit,
+                    outcome.attempt,
+                    error,
+                    options.provider_failure_threshold,
+                    options.per_chunk_retry_limit,
                     &mut chunk_last_error,
                     &mut pending,
                     &mut pending_front,
@@ -1350,47 +1413,51 @@ where
             }
         }
     }
-    if completed != total_chunks {
-        return Err(MultiSourceError::InternalInvariant(format!(
-            "fetch completed {completed} of {total_chunks} chunks"
-        )));
+    let chunks: Vec<Vec<u8>> = chunk_results.into_values().collect();
+    if !consuming {
+        for bytes in &chunks {
+            payload_hasher.update(bytes);
+        }
     }
-    let chunks: Vec<Vec<u8>> = chunk_results
+    if payload_hasher.finalize() != plan.payload_digest {
+        return Err(MultiSourceError::InternalInvariant(
+            "complete payload digest does not match the plan".into(),
+        ));
+    }
+    if tokio::time::Instant::now() >= deadline {
+        return Err(MultiSourceError::DeadlineExceeded);
+    }
+    let receipts = chunk_receipts
         .into_iter()
-        .enumerate()
-        .map(|(idx, maybe)| {
-            maybe.ok_or_else(|| {
-                MultiSourceError::InternalInvariant(format!(
-                    "missing chunk payload for index {idx}"
-                ))
+        .map(|receipt| {
+            receipt.ok_or_else(|| {
+                MultiSourceError::InternalInvariant("missing verified chunk receipt".into())
             })
         })
         .collect::<Result<_, _>>()?;
-    let receipts: Vec<ChunkReceipt> = chunk_receipts
-        .into_iter()
-        .enumerate()
-        .map(|(idx, maybe)| {
-            maybe.ok_or_else(|| {
-                MultiSourceError::InternalInvariant(format!(
-                    "missing chunk receipt for index {idx}"
-                ))
-            })
-        })
-        .collect::<Result<_, _>>()?;
-    let provider_reports = provider_states
-        .into_iter()
-        .map(ProviderState::into_report)
-        .collect();
-    Ok(FetchOutcome {
-        chunks,
-        chunk_receipts: receipts,
-        provider_reports,
+    Ok(InternalFetchOutcome {
+        retained: FetchOutcome {
+            chunks,
+            chunk_receipts: receipts,
+            provider_reports: provider_states
+                .into_iter()
+                .map(ProviderState::into_report)
+                .collect(),
+        },
+        peak_buffered_bytes,
     })
 }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::{executor::block_on, future::poll_fn};
+    use futures::future::poll_fn;
+    fn block_on<F: std::future::Future>(future: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("test runtime")
+            .block_on(future)
+    }
     use sorafs_chunker::ChunkProfile;
     use std::{
         error::Error,
@@ -2187,7 +2254,7 @@ mod tests {
             },
         ))
         .expect("fetch succeeds");
-        let expected: Vec<usize> = (0..outcome.chunks.len()).collect();
+        let expected: Vec<usize> = (0..outcome.chunk_receipts.len()).collect();
         let observed = deliveries.lock().expect("lock deliveries").clone();
         assert_eq!(observed, expected);
     }
@@ -2233,4 +2300,5 @@ mod tests {
             other => panic!("unexpected error: {other:?}"),
         }
     }
+    include!("multi_fetch/resource_tests.rs");
 }

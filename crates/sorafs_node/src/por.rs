@@ -212,6 +212,9 @@ pub enum PorChallengePlannerError {
     /// Storage backend has no PoR leaves for the manifest.
     #[error("manifest does not expose any PoR leaves")]
     EmptyMerkleTree,
+    /// This manifest is quarantined until verified payload repair completes.
+    #[error("manifest payload is unavailable pending verified repair")]
+    PayloadUnavailable,
     /// drand signature is an inert placeholder.
     #[error("drand signature must not be all zero")]
     InvalidDrandSignature,
@@ -548,7 +551,10 @@ pub fn build_por_challenge_for_manifest(
         &manifest_digest,
         randomness.epoch_id,
     );
-    let selection = sample_leaf_indices(manifest.por_tree_ref(), seed, plan)?;
+    let tree = manifest
+        .por_tree_ref()
+        .map_err(|_| PorChallengePlannerError::PayloadUnavailable)?;
+    let selection = sample_leaf_indices(tree, seed, plan)?;
     let sample_count_usize = selection.indices.len();
     let sample_count = u16::try_from(sample_count_usize)
         .map_err(|_| PorChallengePlannerError::SampleCountOverflow(sample_count_usize))?;

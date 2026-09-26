@@ -1,13 +1,13 @@
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
     if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
-        record_id == crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID
-            && env_id == crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID
+        record_id == crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID
+            && env_id == crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID
     } else if crate::zk::is_stark_fri_v1_backend(backend) {
         record_id == env_id
             && record_id
                 .strip_prefix(backend)
                 .and_then(|suffix| suffix.strip_prefix(':'))
-                == Some(crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID)
+                == Some(crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID)
     } else {
         false
     }
@@ -18,19 +18,19 @@ mod circuit_id_match_tests {
     use super::circuit_id_matches;
     #[test]
     fn circuit_id_matching_accepts_only_exact_backend_canonical_syntax() {
-        let halo2_canonical = crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID;
+        let halo2_canonical = crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID;
         assert!(circuit_id_matches(
             crate::zk::ZK_BACKEND_HALO2_IPA,
             halo2_canonical,
             halo2_canonical,
         ));
         for alias in [
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/ipa::ivm-execution-v1",
-            "halo2/ipa/ivm-execution-v1",
-            "halo2/pasta/ivm-execution-v1",
-            " halo2/pasta/ipa/ivm-execution-v1 ",
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            "halo2/ipa:ivm-replay-binding-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
+            "halo2/ipa/ivm-replay-binding-v1",
+            "halo2/pasta/ivm-replay-binding-v1",
+            " halo2/pasta/ipa/ivm-replay-binding-v1 ",
         ] {
             assert!(!circuit_id_matches(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
@@ -39,16 +39,16 @@ mod circuit_id_match_tests {
             ));
         }
         let stark_backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let stark_canonical = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
+        let stark_canonical = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
         assert!(circuit_id_matches(
             stark_backend,
             stark_canonical,
             stark_canonical,
         ));
         for alias in [
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
-            "stark/fri/poseidon-x7-goldilocks-6x64-v1/ivm-execution-v1",
-            " stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1 ",
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1/ivm-replay-binding-v1",
+            " stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1 ",
         ] {
             assert!(!circuit_id_matches(stark_backend, alias, alias));
         }

@@ -1,7 +1,9 @@
 # SoraFS first-release publication qualification
 
-This source audit and focused validation track the SORA CARS release. Iroha 3 is unreleased;
-obsolete formats and publication aliases are rejected, not supported through fallback paths.
+This record describes the source as of September 26, 2026 and retains earlier SORA CARS
+validation evidence separately. Iroha 3 is unreleased; obsolete formats and publication aliases
+are rejected. Current integrated compilation and four-validator publication qualification remain
+open; historical binaries below do not validate the new source delta.
 
 ## Corrected publisher behavior
 
@@ -19,12 +21,20 @@ rejects data beyond its exact expected length. Expected hashes come from the ret
 cannot substitute the expected publication bytes. Every directory asset is checked; the previous
 32-file sample could overlook an unavailable or corrupted later asset.
 
-`deploy` currently registers a signed manifest and checks existing gateway bytes. It has no
-authenticated publisher-source transfer and no pinned finalized registration/provider-completion
-verifier. It therefore records `publication_verified: false`, labels endpoint fee data
-`reported_pin_fee`, leaves assignment/completion unknown, and fails qualification even when an
-HTTP endpoint returns success and matching bytes. This must be replaced by genuine evidence,
-not a flag or a permissive compatibility route.
+`deploy` now requires an independently supplied, exact-network native finality checkpoint.
+It verifies challenged `AssertSorafsPublicationV1` transaction inclusion and native finality for
+the approved manifest and automatic assignment, then uploads bounded, authenticated source
+chunks to `/v1/sorafs/publish/source` for every incomplete assigned provider. Staging verifies
+the manifest and native plan and checks each content-addressed chunk; ordinary finalized ingest
+must still reproduce complete payload, CAR and proof commitments before admitting the replica.
+Staging neither completes the ledger order nor writes a directly admitted pin.
+
+The publisher awaits the same assignment's native completion evidence, verifies a second
+challenged finality proof extending the trusted floor, and retains assignment/completion proofs
+and the new finality checkpoint. It then checks every asset at the CID origin. The receipt sets
+`publication_verified` only when this evidence and all gateway reads succeed. Endpoint success
+or bytes alone are insufficient. The implementation is present; live four-validator acceptance
+and the frozen package run through this complete path remain qualification gates.
 
 `sorafs_car/src/gateway.rs` now accepts the native 36-byte CIDv1 root (72 lowercase hex
 characters), validates its dag-cbor/BLAKE3-256 structure, and binds the signed stream token to
@@ -53,7 +63,7 @@ cargo iroha-fast -- test -p sorafs_orchestrator --features cli-orchestrator --te
 cargo iroha-fast -- test -p sorafs_car --features manifest --lib gateway::tests:: -- --nocapture
 ```
 
-Current Cargo evidence on September 6, 2026: the three native provider tests passed, with the
+Historical Cargo evidence recorded September 6, 2026: the three native provider tests passed, with the
 release-artifact test correctly ignored (3 passed, 1 ignored, 2.16 seconds). The executed binary
 was `target/debug/deps/pin_workflows-11af0074c335c138`; the log is retained at
 `/tmp/sora-cars-sorafs-provider-roundtrip.log`. The current Cargo gateway suite subsequently passed all 34 tests in 0.04 seconds, with
@@ -79,13 +89,12 @@ the supervised remote source fetch, or establish provider availability over the 
 - Consensus `RegisterPinManifest::execute` in `iroha_core/src/smartcontracts/isi/sorafs.rs`
   creates an automatic replication order once policy permits approval. Registration is therefore
   more than a local manifest cache, but HTTP acceptance is still insufficient finality evidence.
-- The supervised provider-ingest runtime requires exact injected authenticated source, governed
-  completion-signer, and sealed checkpoint providers (`irohad/src/main.rs` and
-  `sorafs_provider_ingest_runtime.rs`). The authenticated Unix broker client/server already
-  supplies bounded transport, authenticated source EOF, signer resolution and checkpoint calls.
-  The concrete HTTPS leaf is now implemented with a mandatory injected governed grant resolver.
-  Catalog-bound backend assembly is implemented; deployment-owned authenticated grant resolution
-  remains a prerequisite. No retired `/v1/sorafs/storage/pin` route may be restored.
+- The supervised provider-ingest runtime supports explicit native software custody through
+  `native_completion_credential`, or qualified external adapters. Native assembly uses the
+  daemon's State, governed completion authority, typed assignment source authorization and a
+  durable local checkpoint CAS; external injection cannot replace a selected native adapter.
+  Configured source origins provide remote acquisition after authenticated publisher staging.
+  No retired `/v1/sorafs/storage/pin` route is restored.
 - Existing `sorafs_node::provider_ingest_runtime` tests mostly use fixture ledger/source/storage
   adapters. `irohad`'s `post_admission_quarantine_survives_restart_with_shared_chunks` does combine
   the production local storage adapter with a durable sealed outbox and explicit fixture ledger;
@@ -101,84 +110,46 @@ the supervised remote source fetch, or establish provider availability over the 
   Retain the exact CID, network trust context, finalized transaction/block evidence, provider
   identities, and independent retrieval report. The public Taira prerequisites remain separate.
 
-## Narrow production implementation route
+## Current native implementation boundaries
 
-This is an implementation map, not a claim that the following adapters are deployed.
-
-| Work | Source integration point | Exact requirement |
+| Component | Source | Behavior and limit |
 | --- | --- | --- |
-| Provider HTTPS source leaf | Implemented in `irohad/src/sorafs_provider_ingest_runtime/https_source.rs`, implements `sorafs_node::ProviderIngestAuthenticatedProviderSourceV1<Fetched = VerifiedProviderIngestPayloadV1>` | Derive only current admitted signed provider adverts from a finalized trust context; pin provider ID, network, endpoint trust policy and bounded stream-grant identity. |
-| Source pool and broker injection | `https_source_pool::compose_provider_ingest_https_pool_v1`, `RuntimeProviderBrokerBackendsV1::with_provider_ingest_https_sources`, existing broker launcher | Compose the native source pool from the exact public catalog, explicitly injected governed resolvers and one shared retained-payload/DNS admission budget. Preserve existing pre/post qualification and authenticated streamed EOF checks. |
-| Gateway transport | `sorafs_car/src/gateway.rs` | Reuse public-address DNS resolution pinned into the HTTP client, HTTPS-only/no-proxy, no redirects/decompression, deadlines, bounded metadata and canonical token validation. Add bounded full CAR streaming or bounded complete plan/chunk acquisition without an eager whole-CAR buffer. |
-| Public policy configuration | `iroha_config/src/parameters/{user,actual,defaults}.rs`, runtime broker catalog | Expose public endpoint/trust, deadlines, maximum metadata/CAR/chunk counts and policy digests through typed configuration. Keep grants, credentials and signer material runtime-only in the deployment launcher. No environment or local-key fallback. |
-| Initial publisher seed | Native publisher command plus provider source staging admission | Transfer the public CAR and canonical manifest to at least two governed source providers that can serve the exact assignment. Verify CAR/root/plan/PoR before exposing source bytes. Stage under content identity; staging does not imply finalized storage or authorize a completion signature. |
-| Publication receipt | `sorafs_cli.rs` `deploy` | Await authenticated finalized registration, assignment and completion evidence; check exact manifest/CID/provider identities and retention, then verify every asset at its isolated CID origin. Only this complete path can set `publication_verified: true`. |
+| Publisher source | `sorafs_cli/deploy_publication.rs`, Torii publisher routes, `sorafs_node` staging | Authenticated assignment-bound chunk transfer and bounded staging; completion requires normal verified ingest. |
+| Assigned provider source | `sorafs_provider_ingest_runtime/native_source.rs`, Core `query/provider_ingest_source.rs` | Requester signatures bind the exact network and typed source request. Same-State durable finality, owner permission, both provider admissions, assignment revision and retained pin authorize reads. The reader fetches and verifies one chunk at a time under one operation deadline. Configured origins use HTTPS, with explicit loopback HTTP for local networks. |
+| Repair source | `irohad/src/sorafs_repair_source.rs`, Core `query/repair_source.rs`, Torii repair route | Origins must match current admitted signed adverts. HTTPS is required except for explicitly configured numeric loopback HTTP origins. A typed request requires the exact active repair lease, requester permission, source/target admission and pin. The worker consumes one verified chunk at a time, rechecks live authority before mutation and proof release, and preserves quarantine on failure. |
+| Native completion signer | `sorafs_provider_ingest_runtime/native_software.rs` | An explicit owner-only credential must match the public binding. The signer rechecks native authority, assignment, manifest and exact completion payload. It cannot publish a transaction itself. |
+| Native transaction roles | `irohad/src/sorafs_native_software_signers.rs` | Separate explicit `software_credential` selection for proof-outcome, repair, reserve and orderbook. Credentials are loaded after State exists; validator-key reuse, shared roles and native/external ambiguity are rejected. Existing qualification probes and forwarder permission checks remain mandatory. |
+| Local checkpoint | `sorafs_provider_ingest_runtime/native_software.rs` | Owner-only files, process lock and in-process mutex, bounded canonical decoding, exact predecessor/sequence CAS, file sync, atomic rename and directory sync. This is crash-durable software state, not a hardware rollback seal. Finalized ledger replay independently reconciles restored local state. |
+| Publication proof | `sorafs_cli/deploy_publication.rs`, native publication query/ISI | Challenge-bound transaction inclusion, exact manifest/order/completion, pinned network/finality ancestry and every-asset retrieval. Current live qualification remains open. |
 
-The leaf must first check the opaque `FinalizedProviderIngestAuthorizationV1` supplied by the
-runtime. The existing public manifest endpoint is `/v1/sorafs/storage/manifest/{manifest_id}`.
-The public plan endpoint `/v1/sorafs/storage/plan/{manifest_id}` is paginated: consume both file
-and chunk inventories completely, requiring unchanged totals, digest, profile, exact offsets,
-progress and bounded page count. Do not mistake a truncated first page for a complete plan.
-Preserve file paths and sizes; flattening the directory into one file changes its root CID.
-Bind the complete plan, content length, canonical root CID, chunk commitments, PoR root, CAR
-size and CAR digest to the finalized manifest, and repeat exact reader validation at EOF.
+Publisher, assigned-source and repair requests are typed operations, not generic transaction or
+storage proxies. Private keys remain runtime-only; configuration contains explicit credential
+paths and public bindings. Provider source reads do not require the publisher's wallet key.
+The ordinary public gateway continues to require its protocol handshake and governed stream
+token. Native assignment/repair routes derive their narrower read authority from their specific
+finalized ledger operation.
 
-The existing `/v1/sorafs/storage/token` is operator-authenticated; CAR/chunk routes require the
-protocol handshake. Manifest/plan routes are public reads. A source grant must therefore come
-from the correctly governed issuer through an authenticated provider capability. Do not pass
-publisher wallet/spending keys into a worker, and do not weaken token issuance to make a test
-work. Missing/expired/substituted grants must be fixed source errors; retries try only the
-bounded canonical source list. Runtime outbox data must never contain endpoint credentials,
-stream tokens or payload bytes.
+## Optional external custody and gateway-source composition
 
-The initial-seed requirement is substantive: current finalized work derives source provider IDs
-from the other order assignments. A new manifest on an entirely empty provider set otherwise
-has no source to read. Seed acquisition must be a distinct authenticated staging operation,
-kept outside the durable admitted manifest store until normal finalized ingest succeeds. The
-existing offline `sorafs-node ingest`/preseed tooling can exercise native verification mechanics,
-but it is not itself an authenticated production publisher transfer. Do not resurrect the
-retired storage-pin HTTP route or use a generic transaction proxy.
+Selecting external adapters still requires the exact governed completion resolver, qualified
+checkpoint service and authenticated source provider. Existing Unix broker clients retain
+bounded transport and streamed EOF authentication. External archive retention authority is
+required only when that retention mode is selected; native software mode refuses to pretend it
+supplies external retention or Musubi attestation services.
 
-## External signer/checkpoint dependencies
+The reusable gateway HTTPS source below has a distinct governed stream-grant resolver contract.
+That external composition requires an authenticated issuer, independent TLS/key pins and fresh
+revocation evidence; a local advert or endpoint URL cannot manufacture a grant. Native assigned
+source acquisition uses the narrower typed native route described above. Neither path implies
+hardware custody or platform qualification from shared broker transport.
 
-The HTTPS leaf alone does not make publication operational. The deployment-owned launcher
-must also inject:
-
-- `ProviderIngestGovernedSignerResolverRuntimeV1` resolving a
-  `ProviderIngestCompletionSignerV1` against the finalized provider owner, assignment revision,
-  signer policy and binding qualification. The native wrapper signs exactly one
-  `CompleteReplicationOrder` instruction with the expected finalized anchor. Provider-owner
-  rotation or policy changes must fail stale requests; publisher and racer keys are unrelated.
-- `ProviderIngestCheckpointRuntimeV1` supplying a sealed, monotonic compare-and-swap checkpoint,
-  with exact predecessor revision, externally authenticated qualification, durable restart and
-  rollback detection. A local mutable JSON file is not an implementation of that guarantee.
-- `ProviderIngestFinalizedArchiveRetentionAuthorityV1` where finalized archive retention is
-  enabled, plus the existing native finalized-ledger query/archive integration.
-- The stream-token signer and gateway admission/quota backend at the source providers, including
-  their sealed sequence/callback state. Provider signing, quota and checkpoint backends remain
-  separate from the custody-free source byte reader.
-
-The concrete daemon broker clients for signer resolution/completion and sealed checkpoint are
-in `runtime_provider_broker/platform_provider_clients_03.rs`; source client/reader are in
-`platform_provider_clients_01.rs`, and source-serving frames are in
-`platform_server_transport.rs`. `api.rs` intentionally requires deployment-owned backends;
-its typed HTTPS composition method installs no credential loader or authority default. The concrete
-`https_source::ProviderIngestHttpsSourceV1` leaf now implements
-`ProviderIngestAuthenticatedProviderSourceV1` through that pool. Its new mandatory
-`ProviderIngestGovernedHttpsGrantResolverV1` remains a deployment-owned dependency; no default
-resolver or fabricated authenticated readiness is installed. KAGEMUSHA platform owners can
-supply compatible sealed/checkpoint and signer services,
-but the SoraFS contracts above must be implemented and qualified explicitly; shared broker
-transport or a passing KAGEMUSHA proof test does not establish them.
-
-Qualify in this order: actual HTTPS leaf against admitted native providers with corruption,
-truncation, wrong provider/token/CID, stale advert, timeout and restart cases; actual source pool
-through the existing Unix broker and retained-memory quotas; then four validators plus provider
-processes producing finalized registration/order/completion and identical restart outcomes.
-Finally run the immutable complete SORA CARS package through the same source/ingest path and
-independent CID-origin retrieval. Preserve the expected network genesis/trust context and
-finalized inclusion evidence together with exact package hashes. Until then, the publisher's
-explicit unverified result is the current implementation truth.
+Qualification must cover corruption, truncation, substituted network/provider/manifest/token,
+revoked permissions/admission, expired or superseded assignments/leases, deadline and resource
+limits, process interruption, checkpoint restart, and identical full commitment checks. Final
+acceptance requires four actual validators and provider processes producing finalized
+registration, assignment and completion, followed by independent CID-origin asset retrieval.
+Retain exact genesis/trust context, transaction/block evidence, package hashes and provider
+identities. Source implementation alone is not this evidence.
 
 ## Concrete HTTPS leaf implementation status
 
@@ -202,16 +173,18 @@ inventing a parallel transfer protocol. Every page repeats identical manifest ID
 profile and payload digest, exact offsets/counts and truncation flags. The complete native plan
 then validates file paths and chunk coverage. Chunk responses are individually bounded and
 hashed; exact payload, native PoR, root CID, CAR size and complete canonical CAR digest are
-reproduced before a payload reader is exposed. It currently retains at most 64 MiB of public
-payload rather than exposing a partially verified transport reader. There is no second full CAR
-buffer. The existing broker reader still authenticates its exact streamed EOF independently.
+reproduced before a payload reader is exposed. The consuming scheduler writes ordered verified
+chunks into a private temporary file under the configured complete-payload disk bound (at most
+8 GiB); dropping the reader removes the file. Payload reservations and metadata inventories are
+bounded separately, with no complete payload or CAR buffer. The existing broker reader still
+authenticates its exact streamed EOF independently.
 
-Five new CAR tests cover explicit TLS-root bounds and use real loopback HTTP and native multi-file plans to cover complete
+Historical gateway/leaf snapshot tests cover explicit TLS-root bounds and use real loopback HTTP and native multi-file plans to cover complete
 pagination, redirect rejection, truncated HTTP bodies, changed chunk bytes, later-page
 substitution and malformed resource bounds. Loopback is injected only through the existing
 crate-private test engine; it does not qualify TLS, governance, public routing or deployment.
 Five daemon leaf tests cover exact request/lease bindings, explicit resolver refusal, retained
-admission bounds, sticky reader failure, revocation at EOF and expiry. The current Cargo gateway
+admission bounds, sticky reader failure, revocation at EOF and expiry. The retained historical Cargo gateway
 suite passed all 34 tests. A historical exact-source harness passed all 38 gateway/leaf tests in
 0.04 seconds using the retained coherent native Node dependency closure
 `sorafs_node-82f9b21f41cf1f7f`. The production payload type/implementation is copied byte-for-byte;
@@ -234,8 +207,8 @@ After the shared-admission change, a separate immutable exact-source harness pas
 (34 gateway, five leaf) in 0.04 seconds. Its evidence is
 `sora-cars/output/qualification/sorafs-source-shared-admission/report.json`; the copied binary's
 SHA-256 is `547084195d95bffb4ed7cb5225474125ab276940791b5b82ce9eedac9a0348fd`.
-It reuses the retained coherent native dependency closure and verifies exact current leaf/gateway
-source and native payload-wrapper bytes. This pass additionally covers a shared admission held
+It reuses the retained coherent native dependency closure and verifies the exact leaf/gateway
+source and native payload-wrapper bytes in that historical snapshot. This pass additionally covers a shared admission held
 by a pending real leaf acquisition, denial before a second grant can be requested, and release
 on cancellation. It explicitly excludes the six new catalog/pool/backend/launcher composition
 tests below, full daemon Cargo composition, real governed grants/TLS endpoints and publication.
@@ -268,9 +241,9 @@ digest directly from the catalog. Before contacting any resolver it checks exact
 source count, distinct provider identities and handles, handle separation from the pool, native
 metadata/payload bounds, and deadlines/concurrency against the catalog. All leaves use one
 shared semaphore, retained through blocking DNS work and until the verified reader is dropped.
-The source count cannot multiply the retained-payload allowance. Public leaf policies all carry
+The source count cannot multiply the concurrent-spool allowance. Public leaf policies all carry
 the same pool admission count. Catalog `max_content_bytes` currently comes from total local
-storage capacity; the leaf's maximum retained payload may be smaller (at most 64 MiB), and a
+storage capacity; the leaf's maximum temporary payload may be smaller (at most 8 GiB), and a
 larger requested object fails closed. It does not claim transport support for the whole capacity.
 
 Construction checks public qualifications but never calls readiness or issues a grant. The
@@ -289,25 +262,19 @@ socket. Run this filter to include both the leaf and composition tests:
 cargo iroha-fast -- test -p irohad --lib sorafs_provider_ingest_runtime::https_source -- --nocapture
 ```
 
-The full current daemon Cargo gate now passes, including all six composition tests. This
+The retained historical daemon Cargo gate passed, including all six composition tests. This
 supersedes the narrower 39-test exact-source evidence for daemon compilation and constructor
 composition; it does not install an authenticated grant resolver or qualify remote publication.
 
-The unresolved authority is specific. Native `State` exposes finalized provider owners, manifests,
-orders and completion-authority records; the existing finalized ingest archive captures order
-assignments. Torii also has real `AdmissionRegistry` council-envelope verification and
-`ProviderAdvertCache` signed-advert/admission/replay checks in `sorafs/{admission,discovery}.rs`.
-These are useful inputs to a resolver, but neither a local owner lookup nor a cached admitted
-advert is the complete fresh, exact-network assignment/advert/key/grant lease required by the
-new source contract. No current backend registry implements that contract. In particular the
-existing `/v1/sorafs/storage/token` issuer requires an exact-network authenticated operator
-signature, qualified stream-token signer and admission service; it cannot be replaced by a
-locally fabricated token. The deployment must supply the authenticated resolver that composes
-those authorities, governed TLS/key pins, revocation freshness, and custody-free source grants.
-Publisher staging, governed completion signing, sealed checkpoints and finalized publication
-evidence remain separately required. This code does not enable publication by configuration alone.
+For the external gateway-source composition, provider owners, signed adverts and completion
+records alone do not form the exact assignment/advert/key/grant lease required by that contract.
+Its deployment registry must supply the authenticated stream-grant resolver and governed TLS/key
+pins. The current native assigned-source implementation instead exposes an operation-specific
+read route authorized directly from same-State finalized assignment and admission records. This
+resolves native provider acquisition without making the worker's claim factory public or
+fabricating a stream token.
 
-## Reusable governed evidence validation and remaining read capability
+## External gateway evidence validation and historical qualification
 
 `sorafs_provider_ingest_runtime/https_source_evidence.rs` now composes existing native
 `ProviderIngestSourceRequestV1`, actual Torii `AdmissionRegistry` and `ProviderAdvertCache`, the
@@ -320,14 +287,11 @@ registry overrides a still-cached historical advert. Debug output excludes autho
 endpoints and grant material. This is validation of supplied evidence, not an authority or resolver.
 The leaf retains canonical token/signature/budget and actual TLS/public-DNS enforcement.
 
-The remaining read-capability gap is in the actual APIs: `ProviderIngestFinalizedLedgerV1` requires
-`ProviderIngestFinalizedClaimFactoryV1` for assignment reads; that factory's constructor is private
-to the native ingest worker. A source resolver cannot mint it or use the public trait to obtain
-a separately authenticated current assignment. Ordinary finalized authorization values explicitly
-carry no credentials or authentication capability. A qualified read-only source-assignment service
-must provide the current request/revision and revocation/freshness context without exposing a
-completion-signing capability. Making the claim-factory constructor public would remove this
-boundary rather than implement the missing authority.
+The external `ProviderIngestFinalizedLedgerV1` claim factory remains private to the worker;
+ordinary authorization values carry no read capability. External stream-grant resolvers still
+need their own authenticated authority. The native typed source route uses Core's current
+assignment read and account-authenticated request instead; it does not expose that factory or
+a completion-signing capability.
 
 Admission data does not fill the other missing bindings: provider advert keys sign adverts, while
 the stream-token issuer has a separate key; endpoint TLS metadata describes leaf fingerprints,
@@ -346,8 +310,8 @@ labels and noncanonical default-port origins remain rejected; no production rewr
 These tests use explicit fixture authority and clock inputs;
 they do not qualify finality, revocation activation timing, real grants or TLS.
 
-The locked `...::https_source` Cargo filter passed all 17 tests against current `irohad`
-composition. The exact copied native binary then passed all 74
+The retained historical locked `...::https_source` Cargo filter passed all 17 tests against its
+`irohad` composition snapshot. The exact copied native binary then passed all 74
 `sorafs_provider_ingest_runtime::` tests, with zero ignored, in 0.53 seconds. This includes
 persistent quarantine/restart and preflight validation. The shared preflight fixture now uses
 the actual 192-MiB checkpoint default and validates itself before testing identity mutations.
@@ -363,12 +327,13 @@ The source snapshot after the preflight fixture repair matches compilation and e
 The original queue snapshot remains retained, including the documented fixture change while
 Cargo waited for its artifact lock. Attempt 1's five invalid transport-fixture failures and
 the earlier `E0463` exact-source attempt remain historical evidence, not passing qualification.
-The current pass excludes an installed authoritative resolver, real TLS, consensus finality
-and live provider publication.
+That historical pass excludes an installed authoritative resolver, real TLS, consensus finality
+and live provider publication. It also predates the native producer, typed source/repair routes,
+streaming retrieval changes and completed publisher workflow described above.
 
 ## Frozen SORA CARS package through native provider storage
 
-The retained frozen `NF89bGDp` frontend passed the ignored native provider test in 32.92 seconds.
+The historical frozen `NF89bGDp` frontend passed the ignored native provider test in 32.92 seconds.
 The complete directory contained 22 files, 201 chunks and 24,248,940 payload bytes; its canonical
 CAR was 24,279,435 bytes. The exact root CID bytes are:
 

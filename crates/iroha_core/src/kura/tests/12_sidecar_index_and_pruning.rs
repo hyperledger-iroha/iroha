@@ -1243,10 +1243,10 @@ fn populate_prune_recovery_fixture(
     // Seed a removable DA-sidecar suffix without finalizing the block.
     // Production eviction requires signed complete-wire finality, and such
     // a block must not subsequently be pruned by this recovery fixture.
-    let (block3_wire, _) = blocks[2]
+    let block3_wire = blocks[2]
         .canonical_wire()
         .expect("encode prune fixture block")
-        .into_parts();
+        .into_vec();
     kura.block_store
         .lock()
         .write_da_block_bytes(3, &block3_wire)

@@ -5397,6 +5397,8 @@ mod tests {
                 .expect("provider-ingest completion signer key");
         config.torii.sorafs_storage.provider_ingest_runtime = Some(
             iroha_config::parameters::actual::SorafsProviderIngestRuntime {
+            native_source_origins: Default::default(),
+            native_completion_credential: None,
                 authenticated_source_fetch_handle:
                     "network://sorafs/provider-ingest/source-primary".to_owned(),
                 authenticated_source_fetch_revision: 5,
@@ -5754,6 +5756,7 @@ mod tests {
         binding: &iroha_torii::SorafsNativeTransactionSignerBindingV1,
     ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
         iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+            software_credential: None,
             handle: binding.handle().to_owned(),
             authority: binding.authority().clone(),
             algorithm: binding

@@ -1,5 +1,370 @@
 #[cfg(test)]
 mod tests {
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    pub(super) fn full_tree_input_path_v3<const DEPTH: usize>(
+        commitment: [u8; 32],
+    ) -> super::ConfidentialMerklePathV2 {
+        // Leaf zero is the input note. Every other leaf is a nonzero filler
+        // commitment, so this root has no unused zero leaf. Repeated filler
+        // subtrees let the capacity boundary be exercised in O(DEPTH) work.
+        let mut node = super::confidential_commitment_leaf_v3(commitment, 0)
+            .expect("canonical input commitment");
+        let mut sibling = super::confidential_commitment_leaf_v3(scalar_bytes(7), 1)
+            .expect("canonical nonzero filler commitment");
+        let mut siblings = Vec::with_capacity(DEPTH);
+        let mut witness_nodes = Vec::with_capacity(DEPTH);
+        for _ in 0..DEPTH {
+            siblings.push(super::scalar_to_repr_bytes(sibling));
+            node = super::merkle_parent_v3(node, sibling);
+            witness_nodes.push(super::scalar_to_repr_bytes(node));
+            sibling = super::merkle_parent_v3(sibling, sibling);
+        }
+        super::ConfidentialMerklePathV2 {
+            siblings,
+            directions: vec![0; DEPTH],
+            witness_nodes,
+            root: super::scalar_to_repr_bytes(node),
+        }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn single_input_paths_accept_full_capacity_and_reject_surplus_or_foreign_paths() {
+        let commitment = scalar_bytes(41);
+        let path = full_tree_input_path_v3::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>(commitment);
+        let dummy =
+            super::confidential_absent_input_path_v3::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>();
+        assert_eq!(dummy.root, super::poseidon_empty_root_v2());
+        assert_ne!(path.root, dummy.root);
+        let input = super::ConfidentialUnshieldInputV2 {
+            amount: 9,
+            rho: [1; 32],
+            diversifier: scalar_bytes(1),
+            leaf_index: 0,
+        };
+        for normalize in [
+            super::normalize_confidential_unshield_full_paths_v3,
+            super::normalize_confidential_unshield_change_paths_v4,
+        ] {
+            let (actual, absent) = normalize(
+                std::slice::from_ref(&path),
+                path.root,
+                &input,
+                None,
+                commitment,
+                [0; 32],
+            )
+            .expect("one-note unshield needs no empty leaf in a full tree");
+            assert_eq!(actual.root, path.root);
+            assert_eq!(absent.root, dummy.root);
+            assert_eq!(absent.siblings, dummy.siblings);
+            assert_eq!(absent.directions, dummy.directions);
+            assert_eq!(absent.witness_nodes, dummy.witness_nodes);
+            for supplied in [vec![], vec![path.clone(), dummy.clone()]] {
+                assert!(
+                    normalize(&supplied, path.root, &input, None, commitment, [0; 32]).is_err()
+                );
+            }
+            assert!(
+                normalize(
+                    std::slice::from_ref(&path),
+                    dummy.root,
+                    &input,
+                    None,
+                    commitment,
+                    [0; 32],
+                )
+                .is_err()
+            );
+            assert!(
+                normalize(
+                    &[path.clone(), dummy.clone()],
+                    path.root,
+                    &input,
+                    Some(&input),
+                    commitment,
+                    commitment,
+                )
+                .is_err()
+            );
+        }
+        let transfer_input = super::ConfidentialTransferInputV2 {
+            amount: input.amount,
+            rho: input.rho,
+            diversifier: input.diversifier,
+            leaf_index: input.leaf_index,
+        };
+        let (actual, absent) = super::normalize_confidential_transfer_paths_v3(
+            std::slice::from_ref(&path),
+            path.root,
+            &transfer_input,
+            None,
+            commitment,
+            [0; 32],
+        )
+        .expect("one-note transfer needs no empty leaf in a full tree");
+        assert_eq!(actual.root, path.root);
+        assert_eq!(absent.root, dummy.root);
+        assert!(
+            super::normalize_confidential_transfer_paths_v3(
+                &[path.clone(), dummy],
+                path.root,
+                &transfer_input,
+                None,
+                commitment,
+                [0; 32],
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn tree_list_optional_input_accepts_full_capacity_without_empty_membership() {
+        let tree = vec![scalar_bytes(7); super::CONFIDENTIAL_TREE_CAPACITY_V2];
+        super::reset_confidential_commitment_leaf_hash_calls_v3();
+        let absent = super::confidential_optional_input_path_v3(&tree, None)
+            .expect("a full populated tree still allows an absent second input");
+        assert_eq!(absent.root, super::poseidon_empty_root_v2());
+        assert_eq!(super::confidential_commitment_leaf_hash_calls_v3(), 0);
+        assert!(super::confidential_optional_input_path_v3(&tree, Some(tree.len())).is_err());
+        assert_eq!(super::confidential_commitment_leaf_hash_calls_v3(), 0);
+        let present = super::confidential_optional_input_path_v3(&tree[..1], Some(0))
+            .expect("a present input resolves its actual tree membership");
+        assert_eq!(
+            present.root,
+            super::compute_confidential_root_v2(&tree[..1]).unwrap()
+        );
+        assert_ne!(present.root, absent.root);
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn tree_builders_reject_impossible_public_shapes_before_hashing_or_keys() {
+        let network = network_id("tree-shape-preflight");
+        let key = iroha_data_model::proof::VerifyingKeyBox::new(
+            crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+            Vec::new(),
+        );
+        let transfer_output = super::ConfidentialTransferOutputV2 {
+            amount: 1,
+            rho: [1; 32],
+            owner_tag: scalar_bytes(1),
+        };
+        let check = |result: Result<(), String>, expected: &str| {
+            let error =
+                result.expect_err("public shape must reject before the invalid verifier key");
+            assert!(error.contains(expected), "unexpected error: {error}");
+            assert_eq!(super::confidential_commitment_leaf_hash_calls_v3(), 0);
+        };
+        for (tree_len, indices, expected) in [
+            (
+                super::CONFIDENTIAL_TREE_CAPACITY_V2,
+                vec![],
+                "one or two inputs",
+            ),
+            (
+                super::CONFIDENTIAL_TREE_CAPACITY_V2,
+                vec![0, 1, 2],
+                "one or two inputs",
+            ),
+            (super::CONFIDENTIAL_TREE_CAPACITY_V2 + 1, vec![0], "at most"),
+            (1, vec![1], "leaf_index"),
+        ] {
+            let tree = vec![scalar_bytes(7); tree_len];
+            let transfer_inputs: Vec<_> = indices
+                .iter()
+                .map(|&leaf_index| super::ConfidentialTransferInputV2 {
+                    amount: 1,
+                    rho: [1; 32],
+                    diversifier: scalar_bytes(1),
+                    leaf_index,
+                })
+                .collect();
+            let unshield_inputs: Vec<_> = indices
+                .iter()
+                .map(|&leaf_index| super::ConfidentialUnshieldInputV2 {
+                    amount: 1,
+                    rho: [1; 32],
+                    diversifier: scalar_bytes(1),
+                    leaf_index,
+                })
+                .collect();
+            super::reset_confidential_commitment_leaf_hash_calls_v3();
+            check(
+                super::build_confidential_transfer_proof_v2(
+                    &network,
+                    "asset",
+                    &[1; 32],
+                    &tree,
+                    &transfer_inputs,
+                    std::slice::from_ref(&transfer_output),
+                    [0; 32],
+                    super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                    &key,
+                )
+                .map(|_| ()),
+                expected,
+            );
+            check(
+                super::build_confidential_unshield_proof_v2(
+                    &network,
+                    "asset",
+                    &[1; 32],
+                    &tree,
+                    &unshield_inputs,
+                    1,
+                    [0; 32],
+                    super::CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
+                    &key,
+                )
+                .map(|_| ()),
+                expected,
+            );
+            check(
+                super::build_confidential_unshield_proof_v3(
+                    &network,
+                    "asset",
+                    &[1; 32],
+                    &tree,
+                    &unshield_inputs,
+                    &[],
+                    1,
+                    [0; 32],
+                    super::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                    &key,
+                )
+                .map(|_| ()),
+                expected,
+            );
+        }
+        let transfer_input = super::ConfidentialTransferInputV2 {
+            amount: 1,
+            rho: [1; 32],
+            diversifier: scalar_bytes(1),
+            leaf_index: 0,
+        };
+        let tree = [scalar_bytes(7)];
+        for outputs in [vec![], vec![transfer_output; 3]] {
+            check(
+                super::build_confidential_transfer_proof_v2(
+                    &network,
+                    "asset",
+                    &[1; 32],
+                    &tree,
+                    std::slice::from_ref(&transfer_input),
+                    &outputs,
+                    [0; 32],
+                    super::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
+                    &key,
+                )
+                .map(|_| ()),
+                "one or two outputs",
+            );
+        }
+        let unshield_input = super::ConfidentialUnshieldInputV2 {
+            amount: 1,
+            rho: [1; 32],
+            diversifier: scalar_bytes(1),
+            leaf_index: 0,
+        };
+        let outputs = vec![
+            super::ConfidentialUnshieldOutputV3 {
+                amount: 1,
+                rho: [1; 32]
+            };
+            2
+        ];
+        check(
+            super::build_confidential_unshield_proof_v3(
+                &network,
+                "asset",
+                &[1; 32],
+                &tree,
+                &[unshield_input],
+                &outputs,
+                1,
+                [0; 32],
+                super::CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
+                &key,
+            )
+            .map(|_| ()),
+            "at most one private change output",
+        );
+    }
+
+    fn assert_redacted_debug(value: &dyn core::fmt::Debug, name: &str) {
+        for rendered in [format!("{value:?}"), format!("{value:#?}")] {
+            let fields = rendered.strip_prefix(name).expect("type name is retained");
+            assert!(fields.contains(".."), "debug must indicate omitted fields");
+            assert!(
+                fields
+                    .bytes()
+                    .all(|byte| matches!(byte, b' ' | b'\n' | b'{' | b'}' | b'.')),
+                "secret debug must expose only its type and an omission marker",
+            );
+        }
+    }
+    #[test]
+    fn confidential_merkle_path_debug_redacts_private_authentication_data() {
+        let path = super::ConfidentialMerklePathV2 {
+            siblings: vec![[0xA5; 32]],
+            directions: vec![1],
+            witness_nodes: vec![[0xB6; 32]],
+            root: [0xC7; 32],
+        };
+        assert_redacted_debug(&path, "ConfidentialMerklePathV2");
+    }
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn confidential_opening_debug_redacts_amounts_nonces_and_ownership() {
+        let transfer_input = super::ConfidentialTransferInputV2 {
+            amount: 123_456_789,
+            rho: [0xA5; 32],
+            diversifier: [0xB6; 32],
+            leaf_index: 37,
+        };
+        let transfer_output = super::ConfidentialTransferOutputV2 {
+            amount: 987_654_321,
+            rho: [0xC7; 32],
+            owner_tag: [0xD8; 32],
+        };
+        let unshield_input = super::ConfidentialUnshieldInputV2 {
+            amount: 234_567_891,
+            rho: [0xE9; 32],
+            diversifier: [0xFA; 32],
+            leaf_index: 53,
+        };
+        let unshield_output = super::ConfidentialUnshieldOutputV3 {
+            amount: 345_678_912,
+            rho: [0xAB; 32],
+        };
+        let private_values: [(&dyn core::fmt::Debug, &str); 4] = [
+            (&transfer_input, "ConfidentialTransferInputV2"),
+            (&transfer_output, "ConfidentialTransferOutputV2"),
+            (&unshield_input, "ConfidentialUnshieldInputV2"),
+            (&unshield_output, "ConfidentialUnshieldOutputV3"),
+        ];
+        for (value, name) in private_values {
+            assert_redacted_debug(value, name);
+        }
+        let public = super::ConfidentialUnshieldProofV2 {
+            nullifiers: vec![[0xBC; 32]],
+            root: [0xCD; 32],
+            proof: iroha_data_model::proof::ProofBox::new(
+                crate::zk::ZK_BACKEND_HALO2_IPA.to_owned(),
+                vec![0xDE],
+            ),
+        };
+        let public_debug = format!("{public:?}");
+        for field in ["nullifiers", "root", "proof"] {
+            assert!(
+                public_debug.contains(field),
+                "public proof output remains inspectable"
+            );
+        }
+    }
+
     fn network_id(seed: impl AsRef<[u8]>) -> iroha_data_model::NetworkId {
         iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
             iroha_data_model::block::BlockHeader,

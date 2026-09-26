@@ -3815,7 +3815,11 @@ fn committed_block_wire_requires_exact_canonical_executed_height() -> Result<()>
             .contains("differs from requested height 3")
     );
     assert!(decode_committed_block_wire(canonical.as_framed(), 0).is_err());
-    assert!(decode_committed_block_wire(canonical.as_versioned(), 2).is_err());
+    // Deliberately omit the header to exercise rejection of bare transport bytes.
+    let mut bare = Vec::with_capacity(1 + canonical.payload().len());
+    bare.push(canonical.version());
+    bare.extend_from_slice(canonical.payload());
+    assert!(decode_committed_block_wire(&bare, 2).is_err());
     let mut trailing = canonical.to_vec();
     trailing.push(0);
     assert!(decode_committed_block_wire(&trailing, 2).is_err());

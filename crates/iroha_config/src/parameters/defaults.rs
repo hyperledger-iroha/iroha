@@ -1961,6 +1961,10 @@ pub mod sorafs {
         }
         /// Stream token issuance defaults.
         pub mod tokens {
+            /// Complete native stream-token transaction observation timeout.
+            pub const NATIVE_TRANSACTION_TIMEOUT_MS: u64 = 30_000;
+            /// Software host-clock uncertainty checked at both eligibility endpoints.
+            pub const CLOCK_UNCERTAINTY_MS: u64 = 250;
             /// Enable gateway-issued stream tokens.
             pub const ENABLED: bool = false;
             /// Default TTL applied to issued tokens (seconds).
@@ -1983,6 +1987,8 @@ pub mod sorafs {
     }
     /// Defaults for native SoraFS repair workers and transaction forwarding.
     pub mod repair {
+        /// Maximum total authenticated remote repair duration in milliseconds.
+        pub const SOURCE_TIMEOUT_MS: u64 = 60_000;
         /// Enable native repair processing (disabled by default).
         pub const ENABLED: bool = false;
         /// Default native claim lease duration (seconds).

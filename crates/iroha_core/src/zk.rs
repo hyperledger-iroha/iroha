@@ -1,11 +1,14 @@
 #![allow(clippy::many_single_char_names)]
-//! Minimal ZK verification utilities and batch de-duplication scaffolding.
+//! Compiled proof relations, guarded verification and batch de-duplication.
 //!
 //! This module provides:
+//! - [`verify_for_relation`], which requires the application to name the exact
+//!   [`ProofRelation`] it needs and returns actionable verification errors.
 //! - Stable proof/verifying-key hash helpers (`hash_proof`, `hash_vk`).
 //! - Batch-local de-duplication cache (`DedupCache`) and a light pre-verifier.
-//! - Closed production dispatch for transparent Halo2 IPA/STARK proof
-//!   families, with tiny-circuit scaffolding confined to unit tests.
+//! - Closed dispatch for supported Halo2 IPA and STARK relations. A backend
+//!   label is not a privacy or execution-correctness guarantee: the IVM family
+//!   only binds commitments and its host must replay execution.
 //! - A unified ZK envelope (`ZK1 | TLV*`) reader/writer helpers for tests and
 //!   clients.
 //!
@@ -41,9 +44,14 @@ use std::{
     collections::BTreeSet,
     time::{Duration, Instant},
 };
+/// Wallet-facing confidential proving with canonical relation and key selection.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub mod confidential;
 /// Confidential transfer v2 helpers, circuits, and proof builders.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub mod confidential_v2;
+mod verification;
+pub use verification::{ProofRelation, ProofVerificationError, VerifiedProof, verify_for_relation};
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
 /// P-256-specific nonnative curve primitives for hardware-selection circuit construction.
@@ -285,39 +293,40 @@ const MAX_INST_ROWS: usize = 8192;
 pub const ZK_BACKEND_HALO2_IPA: &str = "halo2/ipa";
 /// Sole canonical native STARK/FRI verifier profile for the first release.
 pub const ZK_BACKEND_STARK_FRI_V1: &str = iroha_data_model::zk::ZK_BACKEND_STARK_FRI_V1;
-/// Canonical circuit identifier suffix for proved IVM execution commitments.
-pub const IVM_EXECUTION_V1_CIRCUIT_ID: &str = "ivm-execution-v1";
+/// Canonical circuit suffix for public commitments checked by mandatory IVM replay.
+pub const IVM_REPLAY_BINDING_V1_CIRCUIT_ID: &str = "ivm-replay-binding-v1";
 /// Canonical semantic role reserved for governance ballot proofs.
 pub(crate) const GOVERNANCE_BALLOT_CIRCUIT_ID_V1: &str = "vote-ballot";
 /// Canonical semantic role reserved for governance tally proofs.
 pub(crate) const GOVERNANCE_TALLY_CIRCUIT_ID_V1: &str = "vote-tally";
-/// Exact Halo2/Pasta verifier-registry label for IVM execution commitments.
-pub const IVM_EXECUTION_V1_HALO2_BACKEND: &str = "halo2/pasta/ivm-execution-v1";
-/// Canonical first-release Halo2/Pasta/IPA circuit identifier for IVM execution proofs.
-pub const IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
+/// Exact Halo2/Pasta registry label for the IVM replay binding relation.
+pub const IVM_REPLAY_BINDING_V1_HALO2_BACKEND: &str = "halo2/pasta/ivm-replay-binding-v1";
+/// Canonical Halo2/Pasta/IPA circuit identifier for IVM replay binding proofs.
+pub const IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID: &str =
+    "halo2/pasta/ipa/ivm-replay-binding-v1";
 /// Canonical Halo2 IPA circuit identifiers admitted by generic OpenVerify v1.
 ///
 /// The list contains only semantic production circuits. Tiny arithmetic,
 /// anonymous-transfer, vote-bool, historical IVM overlay-binding, and retired
 /// recursive-spend circuits intentionally have no entry.
 const HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1: &[&str] = &[
-    IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+    IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
     "halo2/pasta/ipa/kaigi-authorization-v1",
     "halo2/pasta/ipa/kaigi-usage-v1",
     "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
 ];
-/// Halo2 IPA parameter degree used by the canonical IVM execution binding circuit.
-pub const IVM_EXECUTION_V1_IPA_K: u32 = 7;
+/// Halo2 IPA parameter degree used by the canonical IVM replay-binding circuit.
+pub const IVM_REPLAY_BINDING_V1_IPA_K: u32 = 7;
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 const HALO2_IPA_MAX_K_V1: u32 = confidential_v2::CONFIDENTIAL_TRANSFER_V2_IPA_K;
-/// Maximum encoded proof payload accepted for IVM execution proofs.
-pub const IVM_EXECUTION_V1_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
+/// Maximum encoded proof payload accepted for IVM replay-binding proofs.
+pub const IVM_REPLAY_BINDING_V1_MAX_PROOF_BYTES: u32 = 8 * 1024 * 1024;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn halo2_ipa_canonical_k_v1(circuit_id: &str) -> Option<u32> {
-    match normalize_halo2_ipa_circuit_id(circuit_id)?.as_str() {
-        IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID => Some(IVM_EXECUTION_V1_IPA_K),
+    match canonical_halo2_ipa_circuit_id(circuit_id)?.as_str() {
+        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID => Some(IVM_REPLAY_BINDING_V1_IPA_K),
         #[cfg(feature = "zk-halo2")]
         KAIGI_AUTHORIZATION_CIRCUIT_ID_V1 => Some(KAIGI_AUTHORIZATION_CIRCUIT_K_V1),
         #[cfg(feature = "zk-halo2")]
@@ -335,53 +344,54 @@ fn halo2_ipa_canonical_k_v1(circuit_id: &str) -> Option<u32> {
     }
 }
 #[cfg(feature = "zk-halo2-ipa")]
-fn is_ivm_execution_v1_circuit_id(circuit_id: &str) -> bool {
-    circuit_id == IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID
+fn is_ivm_replay_binding_v1_circuit_id(circuit_id: &str) -> bool {
+    circuit_id == IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID
 }
 /// Canonical public-input schema descriptor for
-/// `halo2/pasta/ipa/ivm-execution-v1`.
+/// `halo2/pasta/ipa/ivm-replay-binding-v1`.
 ///
-/// The execution proof instances still carry concrete values in the proof payload;
+/// The binding proof instances carry concrete values in the proof payload;
 /// this descriptor is only used for stable registry binding via
 /// `VerifyingKeyRecord.public_inputs_schema_hash`.
-pub const IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"ivm_execution_current","public_inputs":["code_hash_limb0","code_hash_limb1","code_hash_limb2","code_hash_limb3","overlay_hash_limb0","overlay_hash_limb1","overlay_hash_limb2","overlay_hash_limb3","events_commitment_limb0","events_commitment_limb1","events_commitment_limb2","events_commitment_limb3","gas_policy_commitment_limb0","gas_policy_commitment_limb1","gas_policy_commitment_limb2","gas_policy_commitment_limb3"]}"#;
-/// Returns the canonical schema descriptor bytes for `ivm-execution-v1`.
+pub const IVM_REPLAY_BINDING_PUBLIC_INPUTS_SCHEMA_V1: &[u8] = br#"{"schema":"ivm_replay_binding_v1","public_inputs":["code_hash_limb0","code_hash_limb1","code_hash_limb2","code_hash_limb3","overlay_hash_limb0","overlay_hash_limb1","overlay_hash_limb2","overlay_hash_limb3","events_commitment_limb0","events_commitment_limb1","events_commitment_limb2","events_commitment_limb3","gas_policy_commitment_limb0","gas_policy_commitment_limb1","gas_policy_commitment_limb2","gas_policy_commitment_limb3"]}"#;
+/// Returns the canonical schema descriptor bytes for `ivm-replay-binding-v1`.
 #[must_use]
-pub fn ivm_execution_public_inputs_schema_descriptor() -> &'static [u8] {
-    IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1
+pub fn ivm_replay_binding_public_inputs_schema_descriptor() -> &'static [u8] {
+    IVM_REPLAY_BINDING_PUBLIC_INPUTS_SCHEMA_V1
 }
-/// Returns the canonical schema hash for `ivm-execution-v1`.
+/// Returns the canonical schema hash for `ivm-replay-binding-v1`.
 #[must_use]
-pub fn ivm_execution_public_inputs_schema_hash() -> [u8; 32] {
-    iroha_crypto::Hash::new(ivm_execution_public_inputs_schema_descriptor()).into()
+pub fn ivm_replay_binding_public_inputs_schema_hash() -> [u8; 32] {
+    iroha_crypto::Hash::new(ivm_replay_binding_public_inputs_schema_descriptor()).into()
 }
-/// Build the canonical inline verifier key for `ivm-execution-v1`.
+/// Build the canonical inline verifier key for `ivm-replay-binding-v1`.
 ///
 /// The returned key is a real Halo2 IPA verifier key envelope
-/// (`IPAK` + `CID1` + `H2VK`) for the current IVM execution binding circuit,
+/// (`IPAK` + `CID1` + `H2VK`) for the current IVM replay-binding circuit,
 /// suitable for WSV registration.
 ///
 /// # Errors
 ///
 /// Returns an error if Halo2 verifier-key generation fails.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, String> {
+pub fn halo2_ipa_ivm_replay_binding_vk_box() -> Result<VerifyingKeyBox, String> {
     static CACHE: std::sync::OnceLock<Result<VerifyingKeyBox, String>> = std::sync::OnceLock::new();
     CACHE
         .get_or_init(|| {
-            build_halo2_ipa_ivm_execution_vk_box()
-                .map_err(|err| format!("failed to generate ivm-execution-v1 verifying key: {err}"))
+            build_halo2_ipa_ivm_replay_binding_vk_box().map_err(|err| {
+                format!("failed to generate ivm-replay-binding-v1 verifying key: {err}")
+            })
         })
         .clone()
 }
 #[cfg(feature = "zk-halo2-ipa")]
-fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
-    let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
-    let circuit = pasta_tiny::IvmExecutionBindV1::default();
+fn build_halo2_ipa_ivm_replay_binding_vk_box() -> Result<VerifyingKeyBox, halo2_backend::Error> {
+    let params = pasta_params_new(IVM_REPLAY_BINDING_V1_IPA_K);
+    let circuit = pasta_tiny::IvmReplayBindingV1::default();
     let vk = halo2_backend::keygen_vk(&params, &circuit)?;
     let mut bytes = zk1::wrap_start();
-    zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
-    zk1::wrap_append_circuit_id(&mut bytes, IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID);
+    zk1::wrap_append_ipa_k(&mut bytes, IVM_REPLAY_BINDING_V1_IPA_K);
+    zk1::wrap_append_circuit_id(&mut bytes, IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
@@ -389,12 +399,12 @@ fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_backe
 /// execution circuit, for registry-boundary regression tests.
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 pub(crate) fn relabelled_halo2_ipa_demo_vk_box_for_test() -> Result<VerifyingKeyBox, String> {
-    let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
+    let params = pasta_params_new(IVM_REPLAY_BINDING_V1_IPA_K);
     let vk = halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows)
         .map_err(|err| format!("failed to generate relabelled demo key: {err}"))?;
     let mut bytes = zk1::wrap_start();
-    zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
-    zk1::wrap_append_circuit_id(&mut bytes, IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID);
+    zk1::wrap_append_ipa_k(&mut bytes, IVM_REPLAY_BINDING_V1_IPA_K);
+    zk1::wrap_append_circuit_id(&mut bytes, IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID);
     zk1::wrap_append_vk_pasta(&mut bytes, &vk);
     Ok(VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), bytes))
 }
@@ -410,44 +420,44 @@ pub(crate) fn relabelled_halo2_ipa_demo_vk_box_for_test() -> Result<VerifyingKey
 /// Returns an error for a wrong backend, malformed or mismatched metadata, or
 /// any verifier key other than the canonical compiled circuit key.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn ensure_halo2_ipa_ivm_execution_canonical_vk_box(
+pub fn ensure_halo2_ipa_ivm_replay_binding_canonical_vk_box(
     vk_box: &VerifyingKeyBox,
 ) -> Result<(), String> {
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err(format!(
-            "ivm-execution-v1 verifier key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
+            "ivm-replay-binding-v1 verifier key backend `{}` is not `{ZK_BACKEND_HALO2_IPA}`",
             vk_box.backend
         ));
     }
     let ipa_k = zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
         &vk_box.bytes,
-        IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
     )
-    .map_err(|err| format!("ivm-execution-v1 verifier key {err}"))?;
-    if ipa_k != IVM_EXECUTION_V1_IPA_K {
+    .map_err(|err| format!("ivm-replay-binding-v1 verifier key {err}"))?;
+    if ipa_k != IVM_REPLAY_BINDING_V1_IPA_K {
         return Err(format!(
-            "ivm-execution-v1 verifier key IPAK `{ipa_k}` is not `{IVM_EXECUTION_V1_IPA_K}`"
+            "ivm-replay-binding-v1 verifier key IPAK `{ipa_k}` is not `{IVM_REPLAY_BINDING_V1_IPA_K}`"
         ));
     }
     let h2vk = zk1::h2vk_payload(&vk_box.bytes)
-        .map_err(|err| format!("ivm-execution-v1 verifier key {err}"))?;
+        .map_err(|err| format!("ivm-replay-binding-v1 verifier key {err}"))?;
     let (h2vk_k, _compress_selectors, _fixed_columns) = zk1::halo2_pasta_vk_header(h2vk)
-        .map_err(|err| format!("ivm-execution-v1 verifier key {err}"))?;
+        .map_err(|err| format!("ivm-replay-binding-v1 verifier key {err}"))?;
     if h2vk_k != ipa_k {
         return Err(format!(
-            "ivm-execution-v1 verifier key IPAK `{ipa_k}` does not match H2VK domain `{h2vk_k}`"
+            "ivm-replay-binding-v1 verifier key IPAK `{ipa_k}` does not match H2VK domain `{h2vk_k}`"
         ));
     }
-    let canonical = halo2_ipa_ivm_execution_vk_box()?;
+    let canonical = halo2_ipa_ivm_replay_binding_vk_box()?;
     if vk_box.bytes != canonical.bytes {
         return Err(
-            "ivm-execution-v1 verifier key must match the canonical compiled circuit key"
+            "ivm-replay-binding-v1 verifier key must match the canonical compiled circuit key"
                 .to_owned(),
         );
     }
     Ok(())
 }
-/// Build a governance/WSV verifier-key record for `ivm-execution-v1`.
+/// Build a governance/WSV verifier-key record for `ivm-replay-binding-v1`.
 ///
 /// The record is active, embeds the real Halo2 IPA verifier key inline, and
 /// binds to the canonical IVM execution public-input schema hash.
@@ -456,25 +466,25 @@ pub fn ensure_halo2_ipa_ivm_execution_canonical_vk_box(
 ///
 /// Returns an error if verifier-key generation fails or the key length cannot be encoded.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn halo2_ipa_ivm_execution_vk_record(
+pub fn halo2_ipa_ivm_replay_binding_vk_record(
     namespace: impl Into<String>,
     version: u32,
 ) -> Result<iroha_data_model::proof::VerifyingKeyRecord, String> {
     use iroha_data_model::{
         confidential::ConfidentialStatus, proof::VerifyingKeyRecord, zk::BackendTag,
     };
-    let vk_box = halo2_ipa_ivm_execution_vk_box()?;
+    let vk_box = halo2_ipa_ivm_replay_binding_vk_box()?;
     let mut record = VerifyingKeyRecord::new(
         version,
-        IVM_EXECUTION_V1_CIRCUIT_ID,
+        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         BackendTag::Halo2IpaPasta,
         "pallas",
-        ivm_execution_public_inputs_schema_hash(),
+        ivm_replay_binding_public_inputs_schema_hash(),
         hash_vk(&vk_box),
     );
     record.vk_len = u32::try_from(vk_box.bytes.len())
-        .map_err(|_| "ivm-execution-v1 verifying key length overflowed u32".to_owned())?;
-    record.max_proof_bytes = IVM_EXECUTION_V1_MAX_PROOF_BYTES;
+        .map_err(|_| "ivm-replay-binding-v1 verifying key length overflowed u32".to_owned())?;
+    record.max_proof_bytes = IVM_REPLAY_BINDING_V1_MAX_PROOF_BYTES;
     record.gas_schedule_id = Some("halo2_default".to_owned());
     record.key = Some(vk_box);
     record.status = ConfidentialStatus::Active;
@@ -726,13 +736,13 @@ pub fn is_production_claim_backend_label(backend: &str) -> bool {
         .iter()
         .any(|fragment| compact.contains(fragment))
 }
-/// Returns `true` when `backend` is accepted for `ivm-execution-v1` proofs.
+/// Returns `true` when `backend` is accepted for `ivm-replay-binding-v1` proofs.
 #[inline]
 #[must_use]
-pub fn is_ivm_execution_backend(backend: &str) -> bool {
+pub fn is_ivm_replay_binding_backend(backend: &str) -> bool {
     matches!(
         backend,
-        ZK_BACKEND_HALO2_IPA | IVM_EXECUTION_V1_HALO2_BACKEND
+        ZK_BACKEND_HALO2_IPA | IVM_REPLAY_BINDING_V1_HALO2_BACKEND
     ) || is_stark_fri_v1_backend(backend)
 }
 /// Return the expected OpenVerify backend tag for labels admitted by native
@@ -797,10 +807,12 @@ pub fn production_verify_backend_tag(backend: &str) -> Option<iroha_data_model::
 pub fn is_production_verify_backend_label(backend: &str) -> bool {
     production_verify_backend_tag(backend).is_some()
 }
-pub(crate) fn halo2_open_verify_circuit_id_matches_backend(
-    backend: &str,
-    circuit_id: &str,
-) -> bool {
+/// Check the exact first-release Halo2 circuit identity against its registry backend.
+///
+/// Envelopes and registry records carry the full canonical circuit ID. Short
+/// dispatcher names and backend labels are never alternative wire encodings.
+#[must_use]
+pub fn halo2_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
     if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
         || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
         || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
@@ -811,26 +823,22 @@ pub(crate) fn halo2_open_verify_circuit_id_matches_backend(
     {
         return false;
     }
-    let Some(canonical) = normalize_halo2_ipa_circuit_id(circuit_id) else {
+    let Some(canonical) = canonical_halo2_ipa_circuit_id(circuit_id) else {
         return false;
     };
-    // Final Kaigi envelopes and registry records carry one full canonical CID.
+    // Final envelopes and registry records carry one full canonical CID.
     // Internal dispatcher keys are a different field, never a second wire form.
-    if matches!(
-        canonical.as_str(),
-        "halo2/pasta/ipa/kaigi-authorization-v1" | "halo2/pasta/ipa/kaigi-usage-v1"
-    ) && circuit_id != canonical.as_str()
-    {
+    if circuit_id != canonical.as_str() {
         return false;
     }
     if !HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&canonical.as_str()) {
         return false;
     }
-    backend == ZK_BACKEND_HALO2_IPA || normalize_halo2_ipa_circuit_id(backend) == Some(canonical)
+    backend == ZK_BACKEND_HALO2_IPA || halo2_ipa_circuit_for_backend_v1(backend) == Some(canonical)
 }
 #[cfg(test)]
 fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
-    normalize_halo2_ipa_circuit_id(circuit_id).is_some_and(|normalized| {
+    canonical_halo2_ipa_circuit_id(circuit_id).is_some_and(|normalized| {
         HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1.contains(&normalized.as_str())
     })
 }
@@ -841,9 +849,11 @@ fn halo2_open_verify_circuit_id_is_production_v1(circuit_id: &str) -> bool {
 /// Keeping this mapping closed prevents valid proofs from being relabelled with
 /// arbitrary non-empty schema bytes.
 fn halo2_ipa_public_inputs_schema_v1(circuit_id: &str) -> Option<&'static [u8]> {
-    let canonical = normalize_halo2_ipa_circuit_id(circuit_id)?;
+    let canonical = canonical_halo2_ipa_circuit_id(circuit_id)?;
     match canonical.as_str() {
-        IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID => Some(IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1),
+        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID => {
+            Some(IVM_REPLAY_BINDING_PUBLIC_INPUTS_SCHEMA_V1)
+        }
         #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
         confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID => {
             Some(confidential_v2::CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1)
@@ -944,7 +954,7 @@ pub(crate) fn validate_and_prepare_verifying_key_material_v1(
                     ));
                 }
                 validate_builtin_halo2_ipa_verifying_key_v1(backend, circuit_id, vk)?;
-                let canonical_circuit_id = normalize_halo2_ipa_circuit_id(circuit_id)
+                let canonical_circuit_id = canonical_halo2_ipa_circuit_id(circuit_id)
                     .ok_or_else(|| "invalid Halo2 IPA circuit id".to_owned())?;
                 let ipa_k = zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(
                     vk.bytes.as_slice(),
@@ -1166,7 +1176,7 @@ fn limb_as_instance_bytes(limb: u64) -> [u8; 32] {
     out
 }
 #[cfg(feature = "zk-stark")]
-fn ivm_execution_public_inputs_columns(
+fn ivm_replay_binding_public_inputs_columns(
     code_hash: iroha_crypto::Hash,
     overlay_hash: iroha_crypto::Hash,
     events_commitment: iroha_crypto::Hash,
@@ -1363,20 +1373,20 @@ fn verify_halo2_ipa_payload_optional_columns(
         verify_halo2_ipa_payload_columns(params, vk, proof_payload, col_refs)
     }
 }
-/// Build a Halo2 IPA `ivm-execution-v1` proof envelope for IVM proved execution.
+/// Bind public IVM commitments in a Halo2 IPA `ivm-replay-binding-v1` envelope.
 ///
 /// The produced proof binds these public commitments:
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)`.
 ///
-/// Note: the current `ivm-execution-v1` circuit is a **binding** circuit. It does **not**
+/// Note: the current `ivm-replay-binding-v1` circuit is a **binding** circuit. It does **not**
 /// prove correct IVM execution semantics by itself, so admission still performs deterministic
 /// VM replay to recompute the overlay/commitments and reject mismatches.
 ///
 /// If `proving_key_bytes` is provided, it is used as the proving key after strict
 /// compatibility checks against `vk_box`. If omitted, the proving key is derived
-/// from `vk_box` and the canonical `IvmExecutionBindV1` circuit.
+/// from `vk_box` and the canonical `IvmReplayBindingV1` circuit.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn prove_halo2_ipa_ivm_execution_envelope(
+pub fn prove_halo2_ipa_ivm_replay_binding_envelope(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
     code_hash: iroha_crypto::Hash,
@@ -1388,7 +1398,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     use halo2_backend::Scalar;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
     use std::io::Cursor;
-    if !is_ivm_execution_v1_circuit_id(circuit_id) {
+    if !is_ivm_replay_binding_v1_circuit_id(circuit_id) {
         return Err(format!(
             "unsupported IVM execution circuit id `{circuit_id}`"
         ));
@@ -1396,17 +1406,19 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
         return Err("ivm execution proving requires halo2/ipa verifying key backend".to_owned());
     }
-    ensure_halo2_ipa_ivm_execution_canonical_vk_box(vk_box)?;
-    let params =
-        zkparse::params_for_circuit_v1(vk_box.bytes.as_slice(), IVM_EXECUTION_V1_CIRCUIT_ID)
+    ensure_halo2_ipa_ivm_replay_binding_canonical_vk_box(vk_box)?;
+    let params = zkparse::params_for_circuit_v1(
+        vk_box.bytes.as_slice(),
+        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+    )
+    .ok_or_else(|| {
+        "invalid fixed IVM execution parameter metadata in verifying key envelope".to_owned()
+    })?;
+    let parsed_vk: halo2_backend::VerifyingKey =
+        zkparse::vk_from_bytes::<pasta_tiny::IvmReplayBindingV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "invalid fixed IVM execution parameter metadata in verifying key envelope"
-                    .to_owned()
+                "missing/invalid H2VK payload for ivm-replay-binding-v1 verifying key".to_owned()
             })?;
-    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
-        pasta_tiny::IvmExecutionBindV1,
-    >(vk_box.bytes.as_slice(), &params)
-    .ok_or_else(|| "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned())?;
     let code_limbs = hash_to_u64_limbs_le(&code_hash);
     let overlay_limbs = hash_to_u64_limbs_le(&overlay_hash);
     let events_limbs = hash_to_u64_limbs_le(&events_commitment);
@@ -1438,13 +1450,13 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
     let proving_key: halo2_backend::ProvingKey = if let Some(bytes) = proving_key_bytes {
         let proving_key_raw = decode_halo2_ipa_proving_key_archive(
             bytes,
-            IVM_EXECUTION_V1_CIRCUIT_ID,
+            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             vk_commitment,
         )?;
         preflight_halo2_ipa_processed_proving_key(&proving_key_raw, &parsed_vk, &params)?;
         let mut cursor = Cursor::new(proving_key_raw.as_slice());
         let pk = crate::panic_hook::catch_unwind_suppressed(|| {
-            read_proving_key::<pasta_tiny::IvmExecutionBindV1, _>(&mut cursor)
+            read_proving_key::<pasta_tiny::IvmReplayBindingV1, _>(&mut cursor)
         })
         .map_err(|_| "failed to decode proving key: Halo2 reader panicked".to_owned())?
         .map_err(|err| format!("failed to decode proving key: {err}"))?;
@@ -1467,22 +1479,22 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         halo2_backend::keygen_pk(
             &params,
             parsed_vk.clone(),
-            &pasta_tiny::IvmExecutionBindV1::default(),
+            &pasta_tiny::IvmReplayBindingV1::default(),
         )
         .map_err(|err| format!("failed to derive proving key: {err}"))?
     };
-    let circuit = pasta_tiny::IvmExecutionBindV1 { values };
+    let circuit = pasta_tiny::IvmReplayBindingV1 { values };
     let proof_raw = create_halo2_ipa_proof(
         &params,
         &proving_key,
         circuit,
         &instance_refs,
-        "ivm-execution-v1",
+        "ivm-replay-binding-v1",
     )?;
     let mut proof_payload = zk1::wrap_start();
     zk1::wrap_append_proof(&mut proof_payload, &proof_raw);
     zk1::wrap_append_instances_pasta_fp_cols(instance_columns.as_slice(), &mut proof_payload);
-    let public_inputs = ivm_execution_public_inputs_schema_descriptor().to_vec();
+    let public_inputs = ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
     let envelope = OpenVerifyEnvelope {
         backend: BackendTag::Halo2IpaPasta,
         circuit_id: circuit_id.to_owned(),
@@ -1495,7 +1507,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
         .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
     Ok(ProofBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), encoded))
 }
-/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-execution-v1` circuit.
+/// Derive Halo2 IPA proving-key bytes for the canonical `ivm-replay-binding-v1` circuit.
 ///
 /// The returned bytes are a Norito archive containing the Halo2 `ProvingKey`
 /// serialization, canonical circuit family, and verifier-key commitment,
@@ -1503,7 +1515,7 @@ pub fn prove_halo2_ipa_ivm_execution_envelope(
 ///
 /// Note: this operation is expensive (key generation) and should be performed offline.
 #[cfg(feature = "zk-halo2-ipa")]
-pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
+pub fn derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(
     vk_box: &VerifyingKeyBox,
 ) -> Result<Vec<u8>, String> {
     if vk_box.backend.as_str() != ZK_BACKEND_HALO2_IPA {
@@ -1512,25 +1524,27 @@ pub fn derive_halo2_ipa_ivm_execution_proving_key_bytes(
                 .to_owned(),
         );
     }
-    ensure_halo2_ipa_ivm_execution_canonical_vk_box(vk_box)?;
-    let params =
-        zkparse::params_for_circuit_v1(vk_box.bytes.as_slice(), IVM_EXECUTION_V1_CIRCUIT_ID)
+    ensure_halo2_ipa_ivm_replay_binding_canonical_vk_box(vk_box)?;
+    let params = zkparse::params_for_circuit_v1(
+        vk_box.bytes.as_slice(),
+        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+    )
+    .ok_or_else(|| {
+        "invalid fixed IVM execution parameter metadata in verifying key envelope".to_owned()
+    })?;
+    let parsed_vk: halo2_backend::VerifyingKey =
+        zkparse::vk_from_bytes::<pasta_tiny::IvmReplayBindingV1>(vk_box.bytes.as_slice(), &params)
             .ok_or_else(|| {
-                "invalid fixed IVM execution parameter metadata in verifying key envelope"
-                    .to_owned()
+                "missing/invalid H2VK payload for ivm-replay-binding-v1 verifying key".to_owned()
             })?;
-    let parsed_vk: halo2_backend::VerifyingKey = zkparse::vk_from_bytes::<
-        pasta_tiny::IvmExecutionBindV1,
-    >(vk_box.bytes.as_slice(), &params)
-    .ok_or_else(|| "missing/invalid H2VK payload for ivm-execution-v1 verifying key".to_owned())?;
     let pk = halo2_backend::keygen_pk(
         &params,
         parsed_vk,
-        &pasta_tiny::IvmExecutionBindV1::default(),
+        &pasta_tiny::IvmReplayBindingV1::default(),
     )
     .map_err(|err| format!("failed to derive proving key: {err}"))?;
     encode_halo2_ipa_proving_key_archive(
-        IVM_EXECUTION_V1_CIRCUIT_ID,
+        IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
         hash_vk(vk_box),
         halo2_backend::proving_key_to_processed_bytes(&pk),
     )
@@ -1583,7 +1597,12 @@ fn stark_registry_circuit_id_matches_backend(backend: &str, circuit_id: &str) ->
         && stark_open_verify_circuit_id_matches_backend(backend, exact)
 }
 
-fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
+/// Check the canonical native-STARK circuit syntax and reserved-namespace policy.
+///
+/// This validates identity only; the protocol verifier must still establish the
+/// required relation and authenticate the trusted key and public statement.
+#[must_use]
+pub fn stark_open_verify_circuit_id_matches_backend(backend: &str, circuit_id: &str) -> bool {
     canonical_stark_fri_circuit_id_for_backend(backend, circuit_id).is_some()
         && !iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
             circuit_id,
@@ -1745,6 +1764,7 @@ fn stark_open_verify_circuit_id_uses_reserved_proof_family(circuit_id: &str) -> 
 fn stark_open_verify_circuit_id_fragment_uses_reserved_proof_family(fragment: &str) -> bool {
     let lower = fragment.to_ascii_lowercase();
     lower == "halo2"
+        || lower == "ivm-execution-v1"
         || lower
             .strip_prefix("halo2")
             .is_some_and(|suffix| suffix.starts_with('/') || suffix.starts_with(':'))
@@ -1778,8 +1798,9 @@ fn canonical_bfv_full_bootstrap_stark_circuit_id_for_backend(backend: &str) -> O
         )
     })
 }
-fn canonical_ivm_execution_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
-    is_stark_fri_v1_backend(backend).then(|| format!("{backend}:{IVM_EXECUTION_V1_CIRCUIT_ID}"))
+fn canonical_ivm_replay_binding_stark_circuit_id_for_backend(backend: &str) -> Option<String> {
+    is_stark_fri_v1_backend(backend)
+        .then(|| format!("{backend}:{IVM_REPLAY_BINDING_V1_CIRCUIT_ID}"))
 }
 fn canonical_circuit_is_governance_vote_relation_for_backend(
     backend: &str,
@@ -1957,7 +1978,7 @@ pub fn prove_stark_fri_open_verify_envelope(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StarkOpenVerifyCircuitPolicy {
     Generic,
-    IvmExecution,
+    IvmReplayBinding,
 }
 #[cfg(feature = "zk-stark")]
 fn prove_stark_fri_open_verify_envelope_with_policy(
@@ -1980,24 +2001,28 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
     }
     let env_circuit_id = canonical_stark_fri_circuit_id_for_backend(backend, circuit_id)
         .ok_or_else(|| "invalid STARK circuit_id".to_owned())?;
-    let is_ivm_execution_circuit = canonical_ivm_execution_stark_circuit_id_for_backend(backend)
-        .as_deref()
-        == Some(env_circuit_id);
-    if circuit_policy == StarkOpenVerifyCircuitPolicy::Generic && is_ivm_execution_circuit {
+    let is_ivm_replay_binding_circuit =
+        canonical_ivm_replay_binding_stark_circuit_id_for_backend(backend).as_deref()
+            == Some(env_circuit_id);
+    if circuit_policy == StarkOpenVerifyCircuitPolicy::Generic && is_ivm_replay_binding_circuit {
         return Err(
             "generic STARK OpenVerify proof cannot target the IVM execution circuit; use the IVM execution STARK prover"
                 .to_owned(),
         );
     }
-    if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmExecution && !is_ivm_execution_circuit {
-        return Err("IVM execution STARK prover requires ivm-execution-v1 circuit_id".to_owned());
+    if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmReplayBinding
+        && !is_ivm_replay_binding_circuit
+    {
+        return Err(
+            "IVM execution STARK prover requires ivm-replay-binding-v1 circuit_id".to_owned(),
+        );
     }
-    if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmExecution
-        && schema_descriptor != ivm_execution_public_inputs_schema_descriptor()
+    if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmReplayBinding
+        && schema_descriptor != ivm_replay_binding_public_inputs_schema_descriptor()
     {
         return Err("IVM execution STARK prover requires canonical public-input schema".to_owned());
     }
-    if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmExecution
+    if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmReplayBinding
         && (public_inputs.len() != 16 || !public_inputs.iter().all(|column| column.len() == 1))
     {
         return Err("IVM execution STARK prover requires single-row public inputs".to_owned());
@@ -2067,7 +2092,7 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
         STARK_BINDING_AIR_Z_COEFF,
         &terms,
     )?;
-    let envelope_bytes = if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmExecution {
+    let envelope_bytes = if circuit_policy == StarkOpenVerifyCircuitPolicy::IvmReplayBinding {
         crate::zk_stark::prove_stark_fri_reserved_air_envelope_bytes(
             params,
             STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1.to_owned(),
@@ -2100,14 +2125,14 @@ fn prove_stark_fri_open_verify_envelope_with_policy(
         .map_err(|err| format!("failed to encode OpenVerifyEnvelope: {err}"))?;
     Ok(ProofBox::new(backend.to_owned(), bytes))
 }
-/// Build a STARK/FRI `ivm-execution-v1` proof envelope for IVM proved execution.
+/// Build a STARK/FRI `ivm-replay-binding-v1` proof envelope for IVM proved execution.
 ///
-/// This is the STARK analogue to [`prove_halo2_ipa_ivm_execution_envelope`]. It binds
+/// This is the STARK analogue to [`prove_halo2_ipa_ivm_replay_binding_envelope`]. It binds
 /// `(code_hash, overlay_hash, events_commitment, gas_policy_commitment)` as backend-native
 /// public inputs in a `StarkFriOpenProofV1` wrapper. Verification uses the dedicated
 /// IVM binding AIR context, and admission still requires deterministic VM replay.
 #[cfg(feature = "zk-stark")]
-pub fn prove_stark_fri_ivm_execution_envelope(
+pub fn prove_stark_fri_ivm_replay_binding_envelope(
     backend: &str,
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
@@ -2119,13 +2144,13 @@ pub fn prove_stark_fri_ivm_execution_envelope(
     if !is_stark_fri_v1_backend(backend) {
         return Err("invalid STARK IVM execution backend".to_owned());
     }
-    let expected_circuit_id = format!("{backend}:{IVM_EXECUTION_V1_CIRCUIT_ID}");
+    let expected_circuit_id = format!("{backend}:{IVM_REPLAY_BINDING_V1_CIRCUIT_ID}");
     if circuit_id != expected_circuit_id {
         return Err(format!(
             "STARK IVM execution proving requires exact `{expected_circuit_id}` circuit_id"
         ));
     }
-    let public_inputs = ivm_execution_public_inputs_columns(
+    let public_inputs = ivm_replay_binding_public_inputs_columns(
         code_hash,
         overlay_hash,
         events_commitment,
@@ -2135,9 +2160,9 @@ pub fn prove_stark_fri_ivm_execution_envelope(
         backend,
         circuit_id,
         vk_box,
-        ivm_execution_public_inputs_schema_descriptor(),
+        ivm_replay_binding_public_inputs_schema_descriptor(),
         public_inputs,
-        StarkOpenVerifyCircuitPolicy::IvmExecution,
+        StarkOpenVerifyCircuitPolicy::IvmReplayBinding,
     )
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -2342,7 +2367,7 @@ pub mod test_utils {
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[must_use]
-    fn halo2_ivm_execution_bind_v1_envelope(
+    fn halo2_ivm_replay_binding_bind_v1_envelope(
         circuit_id: &str,
         code_hash: CryptoHash,
         overlay_hash: CryptoHash,
@@ -2366,14 +2391,14 @@ pub mod test_utils {
             CACHE.get_or_init(|| {
                 let k = 7u32;
                 let params = pasta_params_new(k);
-                let circuit = super::pasta_tiny::IvmExecutionBindV1::default();
+                let circuit = super::pasta_tiny::IvmReplayBindingV1::default();
                 let vk_h2 = keygen_vk(&params, &circuit).expect("vk");
                 let pk = keygen_pk(&params, vk_h2.clone(), &circuit).expect("pk");
                 let mut vk_bytes = super::zk1::wrap_start();
                 super::zk1::wrap_append_ipa_k(&mut vk_bytes, k);
                 super::zk1::wrap_append_circuit_id(
                     &mut vk_bytes,
-                    super::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+                    super::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 );
                 super::zk1::wrap_append_vk_pasta(&mut vk_bytes, &vk_h2);
                 KeyMaterial { k, pk, vk_bytes }
@@ -2414,7 +2439,7 @@ pub mod test_utils {
         let inst_cols_owned: Vec<Vec<Scalar>> = values.iter().map(|v| vec![*v]).collect();
         let inst_cols: Vec<&[Scalar]> = inst_cols_owned.iter().map(Vec::as_slice).collect();
         let inst_refs: Vec<&[&[Scalar]]> = vec![inst_cols.as_slice()];
-        let circuit = super::pasta_tiny::IvmExecutionBindV1 { values };
+        let circuit = super::pasta_tiny::IvmReplayBindingV1 { values };
         let material = keys();
         let params = pasta_params_new(material.k);
         let mut transcript = Blake2bWrite::<_, Curve, Challenge255<Curve>>::init(vec![]);
@@ -2439,7 +2464,7 @@ pub mod test_utils {
         let mut proof_bytes = super::zk1::wrap_start();
         super::zk1::wrap_append_proof(&mut proof_bytes, &proof_raw);
         super::zk1::wrap_append_instances_pasta_fp_cols(inst_cols.as_slice(), &mut proof_bytes);
-        let public_inputs = super::ivm_execution_public_inputs_schema_descriptor().to_vec();
+        let public_inputs = super::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
         let schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
         let vk_hash = {
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), material.vk_bytes.clone());
@@ -2476,7 +2501,7 @@ pub mod test_utils {
     ) -> FixtureEnvelope {
         halo2_ivm_binding_envelope("halo2/ipa:ivm-overlay-bind", code_hash, overlay_hash)
     }
-    /// Deterministic Halo2 IPA fixture for `ivm-execution-v1` proof attachments.
+    /// Deterministic Halo2 IPA fixture for `ivm-replay-binding-v1` proof attachments.
     ///
     /// The circuit exposes 16 instance columns (1 row each) corresponding to:
     /// - `code_hash` (4 `u64` limbs, little-endian)
@@ -2485,14 +2510,14 @@ pub mod test_utils {
     /// - `gas_policy_commitment` (4 `u64` limbs, little-endian)
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[must_use]
-    pub fn halo2_ivm_execution_envelope(
+    pub fn halo2_ivm_replay_binding_envelope(
         code_hash: CryptoHash,
         overlay_hash: CryptoHash,
         events_commitment: CryptoHash,
         gas_policy_commitment: CryptoHash,
     ) -> FixtureEnvelope {
-        halo2_ivm_execution_bind_v1_envelope(
-            super::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        halo2_ivm_replay_binding_bind_v1_envelope(
+            super::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             code_hash,
             overlay_hash,
             events_commitment,
@@ -2502,8 +2527,9 @@ pub mod test_utils {
     type FixtureBundle = fn() -> (Vec<u8>, Vec<u8>, Vec<u8>);
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     fn fixture_circuit_from_id(circuit_id: &str) -> Option<FixtureBundle> {
-        let backend = super::normalize_halo2_ipa_circuit_id(circuit_id)?;
-        let name = backend.rsplit('/').next()?;
+        let name = circuit_id
+            .strip_prefix("halo2/pasta/ipa/")
+            .unwrap_or(circuit_id);
         match name {
             "tiny-add" => Some(tiny_add_bundle),
             "tiny-add-public" => Some(tiny_add_public_bundle),
@@ -3015,7 +3041,7 @@ pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
     }
     let params = zkparse::params_for_circuit_v1(&vk_box.bytes, circuit_id)
         .ok_or_else(|| "invalid fixed Halo2 IPA verifier-key metadata".to_owned())?;
-    let canonical_circuit_id = normalize_halo2_ipa_circuit_id(circuit_id)
+    let canonical_circuit_id = canonical_halo2_ipa_circuit_id(circuit_id)
         .ok_or_else(|| "invalid Halo2 IPA circuit id".to_owned())?;
     if confidential_v2::is_confidential_transfer_v2_circuit_id(&canonical_circuit_id) {
         return validate_canonical_halo2_ipa_circuit_key(
@@ -3048,12 +3074,12 @@ pub(crate) fn validate_builtin_halo2_ipa_verifying_key_v1(
         );
     }
     let verifier_backend = canonical_circuit_id.replace("/ipa/", "/");
-    if verifier_backend == IVM_EXECUTION_V1_HALO2_BACKEND {
+    if verifier_backend == IVM_REPLAY_BINDING_V1_HALO2_BACKEND {
         return validate_canonical_halo2_ipa_circuit_key(
             backend,
             &params,
             vk_box,
-            pasta_tiny::IvmExecutionBindV1::default(),
+            pasta_tiny::IvmReplayBindingV1::default(),
         );
     }
     #[cfg(feature = "zk-halo2")]
@@ -4724,10 +4750,11 @@ fn preverify_open_verify_envelope_metadata(
         if canonical_circuit_is_soracloud_fhe_relation_for_backend(&proof.backend, env_circuit_id) {
             return Err(PreverifyResult::MalformedProof);
         }
-        if canonical_ivm_execution_stark_circuit_id_for_backend(&proof.backend).as_deref()
+        if canonical_ivm_replay_binding_stark_circuit_id_for_backend(&proof.backend).as_deref()
             == Some(env_circuit_id)
         {
-            if envelope.public_inputs.as_slice() != ivm_execution_public_inputs_schema_descriptor()
+            if envelope.public_inputs.as_slice()
+                != ivm_replay_binding_public_inputs_schema_descriptor()
             {
                 return Err(PreverifyResult::MalformedProof);
             }
@@ -4880,12 +4907,11 @@ pub fn preverify_with_budget(
     }
     PreverifyResult::Accepted
 }
-/// Normalize one portable, non-reserved Halo2 IPA circuit identifier.
+/// Validate one exact portable, non-reserved Halo2 IPA circuit identifier.
 ///
-/// The same canonicalizer is used by proof admission, verifier selection, and
-/// overlay binding so those security boundaries cannot accept different alias
-/// sets.
-pub(crate) fn normalize_halo2_ipa_circuit_id(circuit_id: &str) -> Option<String> {
+/// The first release has one full circuit spelling. Backend labels and internal
+/// dispatcher names are distinct typed roles and cannot be used as circuit IDs.
+pub(crate) fn canonical_halo2_ipa_circuit_id(circuit_id: &str) -> Option<String> {
     if circuit_id.len() > iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES
         || !iroha_data_model::zk::open_verify_circuit_id_is_portable(circuit_id)
         || iroha_data_model::zk::open_verify_circuit_id_uses_reserved_privacy_protocol_namespace_v1(
@@ -4894,31 +4920,22 @@ pub(crate) fn normalize_halo2_ipa_circuit_id(circuit_id: &str) -> Option<String>
     {
         return None;
     }
-    let trimmed = circuit_id.trim();
-    if trimmed.is_empty()
-        || trimmed == ZK_BACKEND_HALO2_IPA
-        || matches!(trimmed, "halo2/pasta" | "halo2/pasta/ipa")
+    let name = circuit_id.strip_prefix("halo2/pasta/ipa/")?;
+    (!name.is_empty() && !name.contains(['/', ':'])).then(|| circuit_id.to_owned())
+}
+
+/// Resolve an exact concrete registry backend to its distinct canonical circuit ID.
+fn halo2_ipa_circuit_for_backend_v1(backend: &str) -> Option<String> {
+    if verifier_backend_registry_tag_v1(backend)
+        != Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
     {
         return None;
     }
-    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa/") {
-        return (!rest.is_empty()).then(|| trimmed.to_string());
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix(ZK_BACKEND_HALO2_IPA) {
-        if let Some(rest) = rest.strip_prefix("::") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        if let Some(rest) = rest.strip_prefix(':') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-        if let Some(rest) = rest.strip_prefix('/') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa/{rest}"));
-        }
-    }
-    Some(format!("halo2/pasta/ipa/{trimmed}"))
+    let name = backend.strip_prefix("halo2/pasta/")?;
+    let circuit_id = format!("halo2/pasta/ipa/{name}");
+    HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1
+        .contains(&circuit_id.as_str())
+        .then_some(circuit_id)
 }
 #[cfg(feature = "zk-halo2-ipa")]
 fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
@@ -4960,7 +4977,7 @@ fn verify_halo2_ipa_envelope(proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> 
     ) {
         return false;
     }
-    let backend = match normalize_halo2_ipa_circuit_id(&env.circuit_id) {
+    let backend = match canonical_halo2_ipa_circuit_id(&env.circuit_id) {
         Some(tag) => tag,
         None => return false,
     };
@@ -5031,9 +5048,9 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if canonical_circuit_is_soracloud_fhe_relation_for_backend(backend, env_circuit_id) {
         return reject("Soracloud FHE relation requires dedicated typed Soracloud verification");
     }
-    let is_ivm_execution_circuit = canonical_ivm_execution_stark_circuit_id_for_backend(backend)
-        .as_deref()
-        == Some(env_circuit_id);
+    let is_ivm_replay_binding_circuit =
+        canonical_ivm_replay_binding_stark_circuit_id_for_backend(backend).as_deref()
+            == Some(env_circuit_id);
     let Some(vk_box) = vk else {
         return reject("missing verifying key");
     };
@@ -5092,8 +5109,8 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if open.envelope_bytes.len() > limits.max_envelope_bytes {
         return reject("inner STARK envelope exceeds verifier limits");
     }
-    if is_ivm_execution_circuit {
-        if env.public_inputs.as_slice() != ivm_execution_public_inputs_schema_descriptor() {
+    if is_ivm_replay_binding_circuit {
+        if env.public_inputs.as_slice() != ivm_replay_binding_public_inputs_schema_descriptor() {
             return reject("IVM execution STARK public-input schema mismatch");
         }
         if open.public_inputs.len() != 16
@@ -5169,8 +5186,8 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     if air.public_digest != expected_public_digest {
         return reject("STARK AIR public digest mismatch");
     }
-    let stark_ok = if is_ivm_execution_circuit {
-        crate::zk_stark::verify_stark_fri_ivm_execution_air_envelope_with_limits(
+    let stark_ok = if is_ivm_replay_binding_circuit {
+        crate::zk_stark::verify_stark_fri_ivm_replay_binding_air_envelope_with_limits(
             &open.envelope_bytes,
             limits,
             &expected_public_digest,
@@ -5183,7 +5200,11 @@ fn verify_stark_fri_open_verify_envelope_with_limits(
     }
     true
 }
-/// Verify a zero-knowledge proof using the requested backend, returning `true` when supported.
+/// Check the compiled proof relation and envelope integrity for a backend.
+///
+/// A successful binding proof does not establish execution, witness privacy,
+/// ledger authority, or current registry activation. Application callers should
+/// use [`verify_for_relation`] to require the exact relation they intend to verify.
 pub fn verify_backend(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -> bool {
     if proof.backend.as_str() != backend {
         return false;
@@ -5273,7 +5294,7 @@ mod debug_backend_tests {
     }
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
-    fn halo2_ivm_execution_fixtures_verify_for_restart_markers() {
+    fn halo2_ivm_replay_binding_fixtures_verify_for_restart_markers() {
         fn hash_for_live_proof(domain: &[u8], seed: [u8; 32]) -> iroha_crypto::Hash {
             let mut preimage = Vec::with_capacity(domain.len() + seed.len());
             preimage.extend_from_slice(domain);
@@ -5282,7 +5303,7 @@ mod debug_backend_tests {
         }
         for seed in [132_u8, 133_u8, 134_u8] {
             let marker = [seed; 32];
-            let fixture = test_utils::halo2_ivm_execution_envelope(
+            let fixture = test_utils::halo2_ivm_replay_binding_envelope(
                 hash_for_live_proof(b"zk-confidential-localnet/code", marker),
                 hash_for_live_proof(b"zk-confidential-localnet/overlay", marker),
                 hash_for_live_proof(b"zk-confidential-localnet/events", marker),
@@ -5313,11 +5334,11 @@ mod debug_backend_tests {
                 let (exact_proof, exact_vk) = relabel_halo2_ipa_open_verify_fixture(
                     &proof,
                     &vk,
-                    IVM_EXECUTION_V1_HALO2_BACKEND,
+                    IVM_REPLAY_BINDING_V1_HALO2_BACKEND,
                 );
                 assert!(
                     verify_backend(
-                        IVM_EXECUTION_V1_HALO2_BACKEND,
+                        IVM_REPLAY_BINDING_V1_HALO2_BACKEND,
                         &exact_proof,
                         Some(&exact_vk),
                     ),
@@ -5327,13 +5348,13 @@ mod debug_backend_tests {
                     norito::decode_canonical(&exact_proof.bytes).expect("exact fixture envelope");
                 exact_wrong_schema.public_inputs = b"different-nonzero-schema".to_vec();
                 let exact_wrong_schema_proof = ProofBox::new(
-                    IVM_EXECUTION_V1_HALO2_BACKEND.to_owned(),
+                    IVM_REPLAY_BINDING_V1_HALO2_BACKEND.to_owned(),
                     norito::encode_canonical(&exact_wrong_schema)
                         .expect("encode exact wrong-schema proof"),
                 );
                 assert!(
                     !verify_backend(
-                        IVM_EXECUTION_V1_HALO2_BACKEND,
+                        IVM_REPLAY_BINDING_V1_HALO2_BACKEND,
                         &exact_wrong_schema_proof,
                         Some(&exact_vk),
                     ),
@@ -5344,12 +5365,12 @@ mod debug_backend_tests {
     }
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
-    fn halo2_ivm_execution_rejects_legacy_unauthenticated_inner_headers() {
+    fn halo2_ivm_replay_binding_rejects_legacy_unauthenticated_inner_headers() {
         use halo2_proofs::halo2curves::ff::PrimeField as _;
 
         const RETIRED_LOOKUP_FLAG: u8 = 0x01;
 
-        let fixture = test_utils::halo2_ivm_execution_envelope(
+        let fixture = test_utils::halo2_ivm_replay_binding_envelope(
             iroha_crypto::Hash::new(b"legacy-inner-header/code"),
             iroha_crypto::Hash::new(b"legacy-inner-header/overlay"),
             iroha_crypto::Hash::new(b"legacy-inner-header/events"),
@@ -5382,7 +5403,7 @@ mod debug_backend_tests {
         let mut encoded_headers = Vec::new();
         for (n_in, n_out, flags) in legacy_headers {
             outer.proof_bytes = zk1_test_helpers::retired_halo2_envelope(
-                u8::try_from(IVM_EXECUTION_V1_IPA_K).expect("IVM IPA k fits u8"),
+                u8::try_from(IVM_REPLAY_BINDING_V1_IPA_K).expect("IVM IPA k fits u8"),
                 n_in,
                 n_out,
                 flags,
@@ -5411,8 +5432,8 @@ mod debug_backend_tests {
     }
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
-    fn halo2_ivm_execution_rejects_relabelled_demo_verifying_key() {
-        let fixture = test_utils::halo2_ivm_execution_envelope(
+    fn halo2_ivm_replay_binding_rejects_relabelled_demo_verifying_key() {
+        let fixture = test_utils::halo2_ivm_replay_binding_envelope(
             iroha_crypto::Hash::new(b"ivm-key-binding/code"),
             iroha_crypto::Hash::new(b"ivm-key-binding/overlay"),
             iroha_crypto::Hash::new(b"ivm-key-binding/events"),
@@ -5421,20 +5442,20 @@ mod debug_backend_tests {
         let proof = fixture.proof_box(ZK_BACKEND_HALO2_IPA);
         let mut envelope: iroha_data_model::zk::OpenVerifyEnvelope =
             norito::decode_canonical(&proof.bytes).expect("fixture envelope");
-        let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
+        let params = pasta_params_new(IVM_REPLAY_BINDING_V1_IPA_K);
         let demo_vk =
             halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows).expect("demo verifier key");
         // Two enabled selector rows make this key distinct from the one-row
         // IVM fixture even though processed VK bytes omit gate expressions.
         let canonical_vk =
-            halo2_backend::keygen_vk(&params, &pasta_tiny::IvmExecutionBindV1::default())
+            halo2_backend::keygen_vk(&params, &pasta_tiny::IvmReplayBindingV1::default())
                 .expect("canonical IVM verifier key");
         assert_ne!(
             halo2_backend::verifying_key_to_processed_bytes(&demo_vk),
             halo2_backend::verifying_key_to_processed_bytes(&canonical_vk),
         );
         let mut demo_vk_bytes = zk1::wrap_start();
-        zk1::wrap_append_ipa_k(&mut demo_vk_bytes, IVM_EXECUTION_V1_IPA_K);
+        zk1::wrap_append_ipa_k(&mut demo_vk_bytes, IVM_REPLAY_BINDING_V1_IPA_K);
         zk1::wrap_append_vk_pasta(&mut demo_vk_bytes, &demo_vk);
         let relabelled_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), demo_vk_bytes);
         assert!(
@@ -5448,12 +5469,12 @@ mod debug_backend_tests {
             "the demo key must populate only its own circuit-typed cache entry"
         );
         assert!(
-            resolve_vk_cached_for_type::<pasta_tiny::IvmExecutionBindV1, _>(
+            resolve_vk_cached_for_type::<pasta_tiny::IvmReplayBindingV1, _>(
                 ZK_BACKEND_HALO2_IPA,
                 &params,
                 &relabelled_vk,
                 || {
-                    halo2_backend::keygen_vk(&params, &pasta_tiny::IvmExecutionBindV1::default())
+                    halo2_backend::keygen_vk(&params, &pasta_tiny::IvmReplayBindingV1::default())
                 },
             )
             .is_err(),
@@ -5473,7 +5494,7 @@ mod debug_backend_tests {
                 &relabelled_proof,
                 Some(&relabelled_vk)
             ),
-            "a parseable demo key must not be relabelled as ivm-execution-v1"
+            "a parseable demo key must not be relabelled as ivm-replay-binding-v1"
         );
     }
 }
@@ -5483,7 +5504,7 @@ mod stark_backend_tag_tests {
         ZK_BACKEND_HALO2_IPA, ZK_BACKEND_STARK_FRI_V1,
         halo2_open_verify_circuit_id_is_production_v1,
         halo2_open_verify_circuit_id_matches_backend, is_developer_only_backend_label,
-        is_ivm_execution_backend, is_production_claim_backend_label,
+        is_ivm_replay_binding_backend, is_production_claim_backend_label,
         is_production_verify_backend_label, is_stark_fri_v1_backend,
         is_trusted_setup_backend_label, production_verify_backend_tag,
         stark_open_verify_circuit_id_matches_backend, verify_backend,
@@ -5615,7 +5636,7 @@ mod stark_backend_tag_tests {
         }
         for backend in [
             "halo2/ipa",
-            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa:ivm-replay-binding-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
             "stark/fri/poseidon2-goldilocks",
             "stark/fri/sha256_goldilocks.v1",
@@ -5628,53 +5649,68 @@ mod stark_backend_tag_tests {
         }
     }
     #[test]
-    fn ivm_execution_backend_allowlist_is_explicit() {
-        assert!(is_ivm_execution_backend("halo2/ipa"));
-        assert!(is_ivm_execution_backend("halo2/pasta/ivm-execution-v1"));
-        assert!(!is_ivm_execution_backend("stark/fri"));
-        assert!(is_ivm_execution_backend(
+    fn ivm_replay_binding_backend_allowlist_is_explicit() {
+        assert!(is_ivm_replay_binding_backend("halo2/ipa"));
+        assert!(is_ivm_replay_binding_backend(
+            "halo2/pasta/ivm-replay-binding-v1"
+        ));
+        assert!(!is_ivm_replay_binding_backend("stark/fri"));
+        assert!(is_ivm_replay_binding_backend(
             "stark/fri/poseidon-x7-goldilocks-6x64-v1"
         ));
-        assert!(!is_ivm_execution_backend("stark/fri/poseidon2-goldilocks"));
-        assert!(!is_ivm_execution_backend("stark/fri/sha256_goldilocks.v1"));
-        assert!(!is_ivm_execution_backend("halo2/ipa/orchard"));
-        assert!(!is_ivm_execution_backend("halo2/ipa:ivm-execution-v1"));
-        assert!(!is_ivm_execution_backend(
-            "halo2/pasta/ipa/ivm-execution-v1"
+        assert!(!is_ivm_replay_binding_backend(
+            "stark/fri/poseidon2-goldilocks"
         ));
-        assert!(!is_ivm_execution_backend(
+        assert!(!is_ivm_replay_binding_backend(
+            "stark/fri/sha256_goldilocks.v1"
+        ));
+        assert!(!is_ivm_replay_binding_backend("halo2/ipa/orchard"));
+        assert!(!is_ivm_replay_binding_backend(
+            "halo2/ipa:ivm-replay-binding-v1"
+        ));
+        assert!(!is_ivm_replay_binding_backend(
+            "halo2/pasta/ipa/ivm-replay-binding-v1"
+        ));
+        assert!(!is_ivm_replay_binding_backend(
             "halo2/ipa/orchard:production-ready"
         ));
-        assert!(!is_ivm_execution_backend("orchard:mainnet-ready"));
-        assert!(!is_ivm_execution_backend(
+        assert!(!is_ivm_replay_binding_backend("orchard:mainnet-ready"));
+        assert!(!is_ivm_replay_binding_backend(
             "penumbra-masp:external-security-review"
         ));
-        assert!(!is_ivm_execution_backend(
+        assert!(!is_ivm_replay_binding_backend(
             "jindo-lattice-pcs-zk:release-ready"
         ));
-        assert!(!is_ivm_execution_backend("stark/fri/miden"));
-        assert!(!is_ivm_execution_backend("miden-stark:dev-fixture"));
-        assert!(!is_ivm_execution_backend("stark/fri/pq-masp-stark-fri"));
-        assert!(!is_ivm_execution_backend(
+        assert!(!is_ivm_replay_binding_backend("stark/fri/miden"));
+        assert!(!is_ivm_replay_binding_backend("miden-stark:dev-fixture"));
+        assert!(!is_ivm_replay_binding_backend(
+            "stark/fri/pq-masp-stark-fri"
+        ));
+        assert!(!is_ivm_replay_binding_backend(
             "sis-with-hints:s-e-c-u-r-i-t-y-a-u-d-i-t-e-d"
         ));
-        assert!(!is_ivm_execution_backend("stark/fri/kzg"));
-        assert!(!is_ivm_execution_backend("stark/fri/prod-bn-254"));
-        assert!(!is_ivm_execution_backend("stark/fri/prod-groth-16"));
-        assert!(!is_ivm_execution_backend("stark/fri/random-profile"));
-        assert!(!is_ivm_execution_backend("stark/fri/sha512-goldilocks"));
-        assert!(!is_ivm_execution_backend("stark/fri/audit-proof-v1"));
-        assert!(!is_ivm_execution_backend("stark/fri/debug"));
-        assert!(!is_ivm_execution_backend("stark/fri/debug-proof"));
-        assert!(!is_ivm_execution_backend("stark/fri/d-e-b-u-g"));
-        assert!(!is_ivm_execution_backend("groth16/bn254"));
-        assert!(!is_ivm_execution_backend("halo2/kzg"));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/kzg"));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/prod-bn-254"));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/prod-groth-16"));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/random-profile"));
+        assert!(!is_ivm_replay_binding_backend(
+            "stark/fri/sha512-goldilocks"
+        ));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/audit-proof-v1"));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/debug"));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/debug-proof"));
+        assert!(!is_ivm_replay_binding_backend("stark/fri/d-e-b-u-g"));
+        assert!(!is_ivm_replay_binding_backend("groth16/bn254"));
+        assert!(!is_ivm_replay_binding_backend("halo2/kzg"));
     }
     #[test]
     fn production_verify_backend_allowlist_is_explicit() {
         for (backend, expected_tag) in [
             ("halo2/ipa", BackendTag::Halo2IpaPasta),
-            ("halo2/pasta/ivm-execution-v1", BackendTag::Halo2IpaPasta),
+            (
+                "halo2/pasta/ivm-replay-binding-v1",
+                BackendTag::Halo2IpaPasta,
+            ),
             (
                 "halo2/pasta/kaigi-authorization-v1",
                 BackendTag::Halo2IpaPasta,
@@ -5717,7 +5753,7 @@ mod stark_backend_tag_tests {
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
-            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa:ivm-replay-binding-v1",
             "HALO2/IPA",
             "stark/FRI",
             " halo2/ipa",
@@ -5730,17 +5766,17 @@ mod stark_backend_tag_tests {
             "h\u{0430}lo2/ipa",
             "../halo2/ipa",
             "halo2/ipa/../tiny-add",
-            "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
             "halo2//ipa",
             "halo2/ipa:",
             "halo2/ipa.",
-            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa/.ivm-replay-binding-v1",
             "halo2/ipa:ivm..execution-v1",
             "stark//fri/sha256-goldilocks",
             "stark/fri//sha256-goldilocks",
             "stark/fri/sha256..goldilocks",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1.",
-            "halo2/ipa:ivm-execution-v1 ",
+            "halo2/ipa:ivm-replay-binding-v1 ",
             "halo2/ipa/orchard",
             "halo2/ipa/penumbra",
             "halo2/ipa/masp",
@@ -6077,7 +6113,10 @@ mod stark_backend_tag_tests {
                     "non-portable STARK alias {malformed_alias:?} must fail closed"
                 );
             }
-            for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+            for near_miss in [
+                format!("halo2/pasta/ipa/generic-{label}"),
+                format!("halo2/pasta/ipa/{label}-generic"),
+            ] {
                 assert!(
                     !halo2_open_verify_circuit_id_is_production_v1(&near_miss),
                     "unregistered Halo2 near miss {near_miss:?} must fail closed"
@@ -6178,7 +6217,7 @@ mod stark_prover_tests {
         STARK_BINDING_AIR_CONSTANT, STARK_BINDING_AIR_Z_COEFF, STARK_GOLDILOCKS_MODULUS,
         STARK_OPEN_VERIFY_AIR_TRANSCRIPT_LABEL_V1, ZK_BACKEND_STARK_FRI_V1,
         canonical_stark_fri_circuit_id_for_backend, limb_as_instance_bytes,
-        prove_stark_fri_ivm_execution_envelope, prove_stark_fri_open_verify_envelope,
+        prove_stark_fri_ivm_replay_binding_envelope, prove_stark_fri_open_verify_envelope,
         stark_binding_air_terms, stark_open_verify_air_public_digest_current,
         stark_open_verify_domain_tag_current, verify_backend_with_timing,
     };
@@ -6865,9 +6904,9 @@ mod stark_prover_tests {
         }
     }
     #[test]
-    fn prove_stark_open_verify_envelope_rejects_ivm_execution_circuit_aliases() {
+    fn prove_stark_open_verify_envelope_rejects_ivm_replay_binding_circuit_aliases() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let canonical = super::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let canonical = super::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
         let prefixed_alias = format!("{backend}:{canonical}");
         let slash_alias = format!("{backend}/{canonical}");
         for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
@@ -6897,7 +6936,7 @@ mod stark_prover_tests {
     #[test]
     fn verify_stark_open_verify_envelope_rejects_ivm_alias_generic_binding_air() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let canonical = super::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let canonical = super::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
         let prefixed_alias = format!("{backend}:{canonical}");
         let slash_alias = format!("{backend}/{canonical}");
         for circuit_id in [canonical.to_owned(), prefixed_alias, slash_alias] {
@@ -6924,7 +6963,7 @@ mod stark_prover_tests {
     fn verify_stark_open_verify_envelope_rejects_namespaced_reserved_aliases() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
         for canonical in [
-            super::IVM_EXECUTION_V1_CIRCUIT_ID,
+            super::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             iroha_crypto::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
             iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID,
         ] {
@@ -7412,13 +7451,13 @@ mod stark_prover_tests {
         assert!(!report.ok);
     }
     #[test]
-    fn prove_stark_ivm_execution_envelope_emits_binding_air_proof() {
+    fn prove_stark_ivm_replay_binding_envelope_emits_binding_air_proof() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let circuit_id = format!("{backend}:ivm-execution-v1");
+        let circuit_id = format!("{backend}:ivm-replay-binding-v1");
         let vk_payload = consensus_stark_vk!(circuit_id.clone());
         let vk_bytes = norito::to_bytes(&vk_payload).expect("encode vk payload");
         let vk_box = VerifyingKeyBox::new(backend.to_owned(), vk_bytes);
-        let proof = prove_stark_fri_ivm_execution_envelope(
+        let proof = prove_stark_fri_ivm_replay_binding_envelope(
             backend,
             &circuit_id,
             &vk_box,
@@ -7432,21 +7471,21 @@ mod stark_prover_tests {
         assert!(report.ok);
     }
     #[test]
-    fn prove_stark_ivm_execution_envelope_rejects_noncanonical_circuit_ids() {
+    fn prove_stark_ivm_replay_binding_envelope_rejects_noncanonical_circuit_ids() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let canonical = format!("{backend}:ivm-execution-v1");
+        let canonical = format!("{backend}:ivm-replay-binding-v1");
         let vk_payload = consensus_stark_vk!(canonical);
         let vk_box = VerifyingKeyBox::new(
             backend.to_owned(),
             norito::to_bytes(&vk_payload).expect("encode canonical STARK VK payload"),
         );
         for circuit_id in [
-            "ivm-execution-v1",
-            "stark/fri/poseidon-x7-goldilocks-6x64-v1/ivm-execution-v1",
-            " stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1 ",
-            "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-ivm-execution-v1",
+            "ivm-replay-binding-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1/ivm-replay-binding-v1",
+            " stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1 ",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-ivm-replay-binding-v1",
         ] {
-            let err = prove_stark_fri_ivm_execution_envelope(
+            let err = prove_stark_fri_ivm_replay_binding_envelope(
                 backend,
                 circuit_id,
                 &vk_box,
@@ -7457,7 +7496,7 @@ mod stark_prover_tests {
             )
             .expect_err("STARK IVM helper must reject non-canonical circuit ids");
             assert!(
-                err.contains("exact") && err.contains("ivm-execution-v1"),
+                err.contains("exact") && err.contains("ivm-replay-binding-v1"),
                 "unexpected circuit rejection for {circuit_id:?}: {err}"
             );
         }
@@ -7816,9 +7855,9 @@ mod guardrails_tests {
     fn halo2_guardrail_envelope() -> OpenVerifyEnvelope {
         OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.to_owned(),
+            circuit_id: IVM_REPLAY_BINDING_V1_CIRCUIT_ID.to_owned(),
             vk_hash: [0x11; 32],
-            public_inputs: IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+            public_inputs: IVM_REPLAY_BINDING_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
             proof_bytes: vec![0xBB; 10],
             aux: Vec::new(),
         }
@@ -7987,7 +8026,7 @@ mod guardrails_tests {
             "halo2/ipa:unknown-native-v1",
             "HALO2/IPA",
             "stark/FRI",
-            "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
             "halo2//ipa",
             "halo2/ipa.",
             "stark//fri/sha256-goldilocks",
@@ -8008,14 +8047,14 @@ mod guardrails_tests {
         let envelope_bytes =
             norito::to_bytes(&halo2_guardrail_envelope()).expect("encode halo2 envelope");
         let wrong_proof_backend =
-            ProofBox::new("halo2/ipa:ivm-execution-v1".into(), envelope_bytes);
+            ProofBox::new("halo2/ipa:ivm-replay-binding-v1".into(), envelope_bytes);
         assert_guardrails_reject!("halo2/ipa", &wrong_proof_backend, None, ENABLED_GUARDRAILS,);
         let proof = ProofBox::new(
             "halo2/ipa".into(),
             norito::to_bytes(&halo2_guardrail_envelope()).expect("encode halo2 envelope"),
         );
         let wrong_vk_backend =
-            VerifyingKeyBox::new("halo2/ipa:ivm-execution-v1".into(), vec![0x55]);
+            VerifyingKeyBox::new("halo2/ipa:ivm-replay-binding-v1".into(), vec![0x55]);
         assert_guardrails_reject!(
             "halo2/ipa",
             &proof,
@@ -8028,12 +8067,12 @@ mod guardrails_tests {
         for (case, backend, circuit_id) in [
             (
                 "concrete backend with sibling circuit",
-                "halo2/pasta/ivm-execution-v1",
+                "halo2/pasta/ivm-replay-binding-v1",
                 "halo2/pasta/tiny-add-public",
             ),
             (
                 "concrete backend with aliased sibling circuit",
-                "halo2/ipa:ivm-execution-v1",
+                "halo2/ipa:ivm-replay-binding-v1",
                 "halo2/ipa:tiny-add-public",
             ),
             (
@@ -8321,12 +8360,12 @@ mod guardrails_tests {
             (
                 "generic STARK backend with halo2 circuit",
                 ZK_BACKEND_STARK_FRI_V1,
-                "halo2/ipa:ivm-execution-v1",
+                "halo2/ipa:ivm-replay-binding-v1",
             ),
             (
                 "generic STARK backend with colon-form halo2 circuit",
                 ZK_BACKEND_STARK_FRI_V1,
-                "halo2:ivm-execution-v1",
+                "halo2:ivm-replay-binding-v1",
             ),
             (
                 "generic STARK backend with colon-form kzg circuit",
@@ -8443,29 +8482,31 @@ mod halo2_ipa_alias_tests {
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
     use iroha_data_model::zk::{BackendTag, OpenVerifyEnvelope};
     #[test]
-    fn halo2_ipa_circuit_id_maps_to_pasta_backend() {
+    fn halo2_ipa_circuit_ids_require_one_exact_full_spelling() {
         assert_eq!(
-            normalize_halo2_ipa_circuit_id("halo2/ipa:tiny-add").as_deref(),
+            canonical_halo2_ipa_circuit_id("halo2/pasta/ipa/tiny-add").as_deref(),
             Some("halo2/pasta/ipa/tiny-add")
         );
-        assert_eq!(
-            normalize_halo2_ipa_circuit_id("halo2/pasta/tiny-add").as_deref(),
-            Some("halo2/pasta/ipa/tiny-add")
-        );
-        assert_eq!(
-            normalize_halo2_ipa_circuit_id("halo2/pasta/ipa/tiny-add").as_deref(),
-            Some("halo2/pasta/ipa/tiny-add")
-        );
-        assert_eq!(
-            normalize_halo2_ipa_circuit_id("tiny-add").as_deref(),
-            Some("halo2/pasta/ipa/tiny-add")
-        );
-        assert!(normalize_halo2_ipa_circuit_id("").is_none());
-        assert!(normalize_halo2_ipa_circuit_id("halo2/ipa").is_none());
-        assert!(normalize_halo2_ipa_circuit_id("halo2/pasta").is_none());
-        assert!(normalize_halo2_ipa_circuit_id("halo2/pasta/ipa").is_none());
+        for alias in [
+            "tiny-add",
+            "halo2/ipa:tiny-add",
+            "halo2/ipa::tiny-add",
+            "halo2/pasta/tiny-add",
+            "halo2/pasta/ipa-v1/tiny-add",
+            " halo2/pasta/ipa/tiny-add",
+            "halo2/pasta/ipa/tiny-add/extra",
+            "",
+            "halo2/ipa",
+            "halo2/pasta",
+            "halo2/pasta/ipa",
+        ] {
+            assert!(
+                canonical_halo2_ipa_circuit_id(alias).is_none(),
+                "accepted {alias}"
+            );
+        }
         assert!(
-            normalize_halo2_ipa_circuit_id(
+            canonical_halo2_ipa_circuit_id(
                 &"a".repeat(iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES + 1)
             )
             .is_none()
@@ -8481,13 +8522,16 @@ mod halo2_ipa_alias_tests {
                 format!("generic/namespace/{label}"),
             ] {
                 assert!(
-                    normalize_halo2_ipa_circuit_id(&circuit_id).is_none(),
+                    canonical_halo2_ipa_circuit_id(&circuit_id).is_none(),
                     "reserved privacy circuit id {circuit_id:?} must not map to Halo2"
                 );
             }
-            for near_miss in [format!("generic-{label}"), format!("{label}-generic")] {
+            for near_miss in [
+                format!("halo2/pasta/ipa/generic-{label}"),
+                format!("halo2/pasta/ipa/{label}-generic"),
+            ] {
                 assert!(
-                    normalize_halo2_ipa_circuit_id(&near_miss).is_some(),
+                    canonical_halo2_ipa_circuit_id(&near_miss).is_some(),
                     "portable near miss {near_miss:?} must remain mappable"
                 );
             }
@@ -8499,9 +8543,8 @@ mod halo2_ipa_alias_tests {
     #[test]
     fn halo2_open_verify_circuit_id_uses_closed_production_registry() {
         for circuit_id in [
-            "ivm-execution-v1",
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/pasta/kaigi-authorization-v1",
+            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+            "halo2/pasta/ipa/kaigi-authorization-v1",
             "halo2/pasta/ipa/kaigi-usage-v1",
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "halo2/pasta/ipa/confidential-unshield-full-merkle16-axiom-poseidon-v3",
@@ -8548,7 +8591,8 @@ mod halo2_ipa_alias_tests {
                         == Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta)
             })
         {
-            let canonical = normalize_halo2_ipa_circuit_id(backend).expect("listed circuit family");
+            let canonical =
+                halo2_ipa_circuit_for_backend_v1(backend).expect("listed circuit family");
             assert!(
                 halo2_open_verify_circuit_id_matches_backend(ZK_BACKEND_HALO2_IPA, &canonical),
                 "generic Halo2 entry point must admit exact production circuit {backend}"
@@ -8560,8 +8604,9 @@ mod halo2_ipa_alias_tests {
         }
     }
     #[test]
-    fn final_kaigi_outer_circuit_ids_have_no_short_or_dispatcher_alias() {
-        for name in ["kaigi-authorization-v1", "kaigi-usage-v1"] {
+    fn final_halo2_outer_circuit_ids_have_no_short_or_dispatcher_alias() {
+        for canonical_id in HALO2_IPA_PRODUCTION_CIRCUIT_IDS_V1 {
+            let name = canonical_id.strip_prefix("halo2/pasta/ipa/").unwrap();
             let exact_backend = format!("halo2/pasta/{name}");
             let canonical = format!("halo2/pasta/ipa/{name}");
             for backend in [ZK_BACKEND_HALO2_IPA, exact_backend.as_str()] {
@@ -8601,24 +8646,24 @@ mod halo2_ipa_alias_tests {
                     && *backend != ZK_BACKEND_HALO2_IPA
             })
         {
-            let canonical = normalize_halo2_ipa_circuit_id(backend)
-                .unwrap_or_else(|| panic!("failed to normalize exact Halo2 backend {backend}"));
+            let canonical = halo2_ipa_circuit_for_backend_v1(backend)
+                .unwrap_or_else(|| panic!("failed to map exact Halo2 backend {backend}"));
+            assert!(halo2_ipa_public_inputs_schema_v1(&canonical).is_some());
             assert_eq!(
                 halo2_ipa_public_inputs_schema_v1(backend),
-                halo2_ipa_public_inputs_schema_v1(&canonical),
-                "exact Halo2 backend and canonical circuit must select the same schema"
+                None,
+                "a backend label is not a canonical circuit ID"
             );
         }
         for alias in [
-            IVM_EXECUTION_V1_CIRCUIT_ID,
-            "halo2/ipa:ivm-execution-v1",
-            IVM_EXECUTION_V1_HALO2_BACKEND,
-            IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            "halo2/ipa:ivm-replay-binding-v1",
+            IVM_REPLAY_BINDING_V1_HALO2_BACKEND,
         ] {
             assert_eq!(
                 halo2_ipa_public_inputs_schema_v1(alias),
-                Some(IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1),
-                "generic and exact Halo2 normalization must select the same schema for {alias}"
+                None,
+                "a short circuit ID or backend cannot select a wire schema: {alias}"
             );
         }
     }
@@ -8626,7 +8671,7 @@ mod halo2_ipa_alias_tests {
     fn halo2_ipa_rejects_missing_vk() {
         let env = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.into(),
+            circuit_id: IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.into(),
             vk_hash: [0u8; 32],
             public_inputs: Vec::new(),
             proof_bytes: vec![0xAA, 0xBB],
@@ -8640,7 +8685,7 @@ mod halo2_ipa_alias_tests {
     fn verifier_rejects_proof_backend_mismatch_before_dispatch() {
         let env = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.into(),
+            circuit_id: IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.into(),
             vk_hash: [0x42; 32],
             public_inputs: Vec::new(),
             proof_bytes: vec![0xAA, 0xBB],
@@ -8666,7 +8711,7 @@ mod halo2_ipa_alias_tests {
         for (case, mutate) in cases {
             let mut env = OpenVerifyEnvelope {
                 backend: BackendTag::Halo2IpaPasta,
-                circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.into(),
+                circuit_id: IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.into(),
                 vk_hash: hash_vk(&vk),
                 public_inputs: vec![0xA5],
                 proof_bytes: vec![0xAA, 0xBB],
@@ -8684,7 +8729,7 @@ mod halo2_ipa_alias_tests {
         }
         let oversized = OpenVerifyEnvelope {
             backend: BackendTag::Halo2IpaPasta,
-            circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.into(),
+            circuit_id: IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.into(),
             vk_hash: hash_vk(&vk),
             public_inputs: vec![
                 0xA5;
@@ -8707,20 +8752,20 @@ mod halo2_ipa_alias_tests {
 mod halo2_ipa_proving_key_archive_tests {
     use super::*;
     #[test]
-    fn ivm_execution_prover_rejects_wrong_circuit_family() {
-        let vk_box = halo2_ipa_ivm_execution_vk_box().expect("ivm execution verifying key");
-        ensure_halo2_ipa_ivm_execution_canonical_vk_box(&vk_box)
+    fn ivm_replay_binding_prover_rejects_wrong_circuit_family() {
+        let vk_box = halo2_ipa_ivm_replay_binding_vk_box().expect("ivm execution verifying key");
+        ensure_halo2_ipa_ivm_replay_binding_canonical_vk_box(&vk_box)
             .expect("generated IVM verifier key must have canonical parameter provenance");
         for circuit_id in [
-            IVM_EXECUTION_V1_CIRCUIT_ID,
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/ipa::ivm-execution-v1",
-            "halo2/ipa/ivm-execution-v1",
-            "halo2/pasta/ivm-execution-v1",
-            " halo2/pasta/ipa/ivm-execution-v1 ",
-            "halo2/ipa:not-ivm-execution-v1",
+            IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+            "halo2/ipa:ivm-replay-binding-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
+            "halo2/ipa/ivm-replay-binding-v1",
+            "halo2/pasta/ivm-replay-binding-v1",
+            " halo2/pasta/ipa/ivm-replay-binding-v1 ",
+            "halo2/ipa:not-ivm-replay-binding-v1",
         ] {
-            let err = prove_halo2_ipa_ivm_execution_envelope(
+            let err = prove_halo2_ipa_ivm_replay_binding_envelope(
                 circuit_id,
                 &vk_box,
                 iroha_crypto::Hash::new(b"code"),
@@ -8810,17 +8855,20 @@ mod halo2_ipa_proving_key_archive_tests {
     }
     #[test]
     fn halo2_ipa_proving_key_preflight_rejects_untrusted_polynomial_lengths() {
-        let vk_box = halo2_ipa_ivm_execution_vk_box().expect("ivm execution verifying key");
-        let params = zkparse::params_for_circuit_v1(&vk_box.bytes, IVM_EXECUTION_V1_CIRCUIT_ID)
-            .expect("canonical IVM parameters");
+        let vk_box = halo2_ipa_ivm_replay_binding_vk_box().expect("ivm execution verifying key");
+        let params = zkparse::params_for_circuit_v1(
+            &vk_box.bytes,
+            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+        )
+        .expect("canonical IVM parameters");
         let parsed_vk =
-            zkparse::vk_from_bytes::<pasta_tiny::IvmExecutionBindV1>(&vk_box.bytes, &params)
+            zkparse::vk_from_bytes::<pasta_tiny::IvmReplayBindingV1>(&vk_box.bytes, &params)
                 .expect("canonical IVM verifying key");
-        let archive =
-            derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box).expect("derive proving key");
+        let archive = derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(&vk_box)
+            .expect("derive proving key");
         let mut proving_key = decode_halo2_ipa_proving_key_archive(
             &archive,
-            IVM_EXECUTION_V1_CIRCUIT_ID,
+            IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             hash_vk(&vk_box),
         )
         .expect("decode canonical proving key");
@@ -8872,7 +8920,7 @@ mod halo2_ipa_parameter_source_tests {
     fn ivm_vk_metadata(ipa_k: u32, h2vk_k: u32) -> Vec<u8> {
         let mut bytes = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut bytes, ipa_k);
-        zk1::wrap_append_circuit_id(&mut bytes, IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID);
+        zk1::wrap_append_circuit_id(&mut bytes, IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID);
         let mut h2vk = vec![0u8; 10 + 32];
         h2vk[0] = 0x02;
         h2vk[1..5].copy_from_slice(&h2vk_k.to_le_bytes());
@@ -8885,30 +8933,43 @@ mod halo2_ipa_parameter_source_tests {
     fn production_parameter_source_rejects_unbounded_k_before_construction() {
         let oversized = ivm_vk_metadata(u32::MAX, u32::MAX);
         let result = std::panic::catch_unwind(|| {
-            zkparse::params_for_circuit_v1(&oversized, IVM_EXECUTION_V1_CIRCUIT_ID)
+            zkparse::params_for_circuit_v1(&oversized, IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID)
         })
         .expect("invalid IPAK must be rejected without entering ParamsIPA::new");
         assert!(result.is_none());
     }
     #[test]
     fn production_parameter_source_rejects_duplicate_and_mismatched_metadata() {
-        let valid = ivm_vk_metadata(IVM_EXECUTION_V1_IPA_K, IVM_EXECUTION_V1_IPA_K);
-        let warm = zkparse::params_for_circuit_v1(&valid, IVM_EXECUTION_V1_CIRCUIT_ID)
-            .expect("valid fixed metadata warms the production parameter cache");
-        assert_eq!(warm.k(), IVM_EXECUTION_V1_IPA_K);
+        let valid = ivm_vk_metadata(IVM_REPLAY_BINDING_V1_IPA_K, IVM_REPLAY_BINDING_V1_IPA_K);
+        let warm =
+            zkparse::params_for_circuit_v1(&valid, IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID)
+                .expect("valid fixed metadata warms the production parameter cache");
+        assert_eq!(warm.k(), IVM_REPLAY_BINDING_V1_IPA_K);
         // A warm parameter entry is not authorization for another key envelope.
         assert!(zkparse::params_for_circuit_v1(&valid, "unregistered-circuit").is_none());
-        let mut duplicate = ivm_vk_metadata(IVM_EXECUTION_V1_IPA_K, IVM_EXECUTION_V1_IPA_K);
-        zk1::wrap_append_ipa_k(&mut duplicate, IVM_EXECUTION_V1_IPA_K);
-        assert!(zkparse::params_for_circuit_v1(&duplicate, IVM_EXECUTION_V1_CIRCUIT_ID).is_none());
-        let mismatched_header = ivm_vk_metadata(IVM_EXECUTION_V1_IPA_K, IVM_EXECUTION_V1_IPA_K + 1);
+        let mut duplicate =
+            ivm_vk_metadata(IVM_REPLAY_BINDING_V1_IPA_K, IVM_REPLAY_BINDING_V1_IPA_K);
+        zk1::wrap_append_ipa_k(&mut duplicate, IVM_REPLAY_BINDING_V1_IPA_K);
         assert!(
-            zkparse::params_for_circuit_v1(&mismatched_header, IVM_EXECUTION_V1_CIRCUIT_ID,)
+            zkparse::params_for_circuit_v1(&duplicate, IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID)
                 .is_none()
         );
-        let mut malformed = ivm_vk_metadata(IVM_EXECUTION_V1_IPA_K, IVM_EXECUTION_V1_IPA_K);
+        let mismatched_header =
+            ivm_vk_metadata(IVM_REPLAY_BINDING_V1_IPA_K, IVM_REPLAY_BINDING_V1_IPA_K + 1);
+        assert!(
+            zkparse::params_for_circuit_v1(
+                &mismatched_header,
+                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
+            )
+            .is_none()
+        );
+        let mut malformed =
+            ivm_vk_metadata(IVM_REPLAY_BINDING_V1_IPA_K, IVM_REPLAY_BINDING_V1_IPA_K);
         malformed.push(0);
-        assert!(zkparse::params_for_circuit_v1(&malformed, IVM_EXECUTION_V1_CIRCUIT_ID).is_none());
+        assert!(
+            zkparse::params_for_circuit_v1(&malformed, IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID)
+                .is_none()
+        );
     }
     #[cfg(feature = "zk-halo2")]
     #[test]
@@ -9036,7 +9097,7 @@ mod zkparse {
     /// after these cheap checks, so key metadata cannot select an unbounded
     /// domain.
     pub fn params_for_circuit_v1(vk_bytes: &[u8], circuit_id: &str) -> Option<PastaParams> {
-        let canonical_circuit_id = super::normalize_halo2_ipa_circuit_id(circuit_id)?;
+        let canonical_circuit_id = super::canonical_halo2_ipa_circuit_id(circuit_id)?;
         let expected_k = super::halo2_ipa_canonical_k_v1(&canonical_circuit_id)?;
         let ipa_k =
             super::zk1::ensure_halo2_ipa_vk_envelope_shape_any_k(vk_bytes, &canonical_circuit_id)
@@ -9070,25 +9131,27 @@ mod zkparse {
                     .map(|_| {
                         scope.spawn(|| {
                             start.wait();
-                            cache.get(super::super::IVM_EXECUTION_V1_IPA_K).unwrap()
+                            cache
+                                .get(super::super::IVM_REPLAY_BINDING_V1_IPA_K)
+                                .unwrap()
                         })
                     })
                     .collect();
                 let values: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
                 assert!(values.iter().all(|value| std::ptr::eq(*value, values[0])));
-                assert_eq!(values[0].k(), super::super::IVM_EXECUTION_V1_IPA_K);
+                assert_eq!(values[0].k(), super::super::IVM_REPLAY_BINDING_V1_IPA_K);
             });
             assert_eq!(cache.constructions[0].load(Ordering::SeqCst), 1);
             assert_eq!(cache.constructions[1].load(Ordering::SeqCst), 0);
             assert_eq!(cache.constructions[2].load(Ordering::SeqCst), 0);
             // The real process owner also returns one immutable object across threads.
             let first = PRODUCTION_PARAMS
-                .get(super::super::IVM_EXECUTION_V1_IPA_K)
+                .get(super::super::IVM_REPLAY_BINDING_V1_IPA_K)
                 .unwrap();
             std::thread::scope(|scope| {
                 let other = scope.spawn(|| {
                     PRODUCTION_PARAMS
-                        .get(super::super::IVM_EXECUTION_V1_IPA_K)
+                        .get(super::super::IVM_REPLAY_BINDING_V1_IPA_K)
                         .unwrap()
                 });
                 assert!(std::ptr::eq(first, other.join().unwrap()));
@@ -9751,23 +9814,23 @@ mod pasta_tiny {
     }
     /// Circuit binding sixteen single-row instance columns to witness values.
     ///
-    /// This is used by `ivm-execution-v1` fixtures to ensure the proof is bound to
+    /// This is used by `ivm-replay-binding-v1` fixtures to ensure the proof is bound to
     /// all public commitments required by `Executable::IvmProved` admission.
     ///
     /// Note: This circuit does **not** prove correct IVM execution by itself.
     #[derive(Clone)]
-    pub struct IvmExecutionBindV1 {
+    pub struct IvmReplayBindingV1 {
         /// Witness values constrained to equal the corresponding public instances.
         pub values: [Scalar; 16],
     }
-    impl Default for IvmExecutionBindV1 {
+    impl Default for IvmReplayBindingV1 {
         fn default() -> Self {
             Self {
                 values: [Scalar::from(0); 16],
             }
         }
     }
-    impl Circuit<Scalar> for IvmExecutionBindV1 {
+    impl Circuit<Scalar> for IvmReplayBindingV1 {
         type Config = (
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Advice>; 16],
             [halo2_proofs::plonk::Column<halo2_proofs::plonk::Instance>; 16],
@@ -9783,7 +9846,7 @@ mod pasta_tiny {
             let adv = std::array::from_fn(|_| meta.advice_column());
             let inst = std::array::from_fn(|_| meta.instance_column());
             let s = meta.selector();
-            meta.create_gate("ivm_execution_bind_current", |meta| {
+            meta.create_gate("ivm_replay_binding_bind_current", |meta| {
                 let s = meta.query_selector(s);
                 let mut cons = Vec::with_capacity(16);
                 for i in 0..16 {
@@ -9802,7 +9865,7 @@ mod pasta_tiny {
         ) -> Result<(), PlonkError> {
             let values = self.values;
             layouter.assign_region(
-                || "ivm_execution_bind_current",
+                || "ivm_replay_binding_bind_current",
                 |mut region| {
                     s.enable(&mut region, 0)?;
                     for (i, column) in adv.iter().enumerate() {
@@ -11242,7 +11305,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             }
             verify_test_circuit!(pasta_tiny::IvmOverlayBind::default(), columns)
         }
-        "halo2/pasta/ivm-execution-v1" => {
+        "halo2/pasta/ivm-replay-binding-v1" => {
             // Instances: 16 columns (code_hash limbs + overlay_hash limbs + events_commitment limbs + gas_policy_commitment limbs), 1 row each.
             if col_refs.len() != 16 || col_refs.iter().any(|col| col.len() != 1) {
                 return false;
@@ -11251,7 +11314,7 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
                 &params,
                 &vk_box.backend,
                 vk_box,
-                pasta_tiny::IvmExecutionBindV1::default(),
+                pasta_tiny::IvmReplayBindingV1::default(),
                 |vk| {
                     verify_halo2_ipa_payload_columns(
                         &params,
@@ -11543,7 +11606,7 @@ mod preverify_tests {
         preverify_enveloped_proof_for_backend(
             ZK_BACKEND_HALO2_IPA,
             BackendTag::Halo2IpaPasta,
-            IVM_EXECUTION_V1_CIRCUIT_ID,
+            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             vk_hash,
         )
     }
@@ -11572,7 +11635,7 @@ mod preverify_tests {
             norito::encode_canonical(&envelope).expect("encode OpenVerifyEnvelope"),
         )
     }
-    fn preverify_stark_ivm_execution_proof_for_circuit(
+    fn preverify_stark_ivm_replay_binding_proof_for_circuit(
         backend: &str,
         circuit_id: &str,
         vk_hash: [u8; 32],
@@ -11586,7 +11649,7 @@ mod preverify_tests {
             backend: BackendTag::Stark,
             circuit_id: circuit_id.to_owned(),
             vk_hash,
-            public_inputs: ivm_execution_public_inputs_schema_descriptor().to_vec(),
+            public_inputs: ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
             proof_bytes: norito::encode_canonical(&open).expect("encode IVM STARK wrapper"),
             aux: Vec::new(),
         };
@@ -12069,12 +12132,12 @@ mod preverify_tests {
     #[test]
     fn preverify_rejects_malformed_ivm_stark_open_verify_shape_before_dedup() {
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let canonical = IVM_EXECUTION_V1_CIRCUIT_ID;
+        let canonical = IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
         let prefixed_circuit_id = format!("{backend}:{canonical}");
         let slash_circuit_id = format!("{backend}/{canonical}");
         let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xC3, 0xA5, 0x5A]);
         let expected = hash_vk(&vk);
-        let accepted = preverify_stark_ivm_execution_proof_for_circuit(
+        let accepted = preverify_stark_ivm_replay_binding_proof_for_circuit(
             backend,
             &prefixed_circuit_id,
             expected,
@@ -12181,32 +12244,32 @@ mod preverify_tests {
         for (case, backend, accepted_circuit_id, mismatched_circuit_id) in [
             (
                 "concrete backend with sibling circuit",
-                "halo2/pasta/ivm-execution-v1",
-                "halo2/pasta/ivm-execution-v1",
+                "halo2/pasta/ivm-replay-binding-v1",
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
                 "halo2/pasta/tiny-add-public",
             ),
             (
                 "generic halo2 backend with cross-family circuit",
                 ZK_BACKEND_HALO2_IPA,
-                IVM_EXECUTION_V1_CIRCUIT_ID,
+                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1:spoof",
             ),
             (
                 "generic halo2 backend with bare trusted-setup circuit",
                 ZK_BACKEND_HALO2_IPA,
-                IVM_EXECUTION_V1_CIRCUIT_ID,
+                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 "kzg",
             ),
             (
                 "generic halo2 backend with prefixed trusted-setup circuit",
                 ZK_BACKEND_HALO2_IPA,
-                IVM_EXECUTION_V1_CIRCUIT_ID,
+                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 "halo2/ipa:kzg",
             ),
             (
                 "generic halo2 backend with prefixed STARK circuit",
                 ZK_BACKEND_HALO2_IPA,
-                IVM_EXECUTION_V1_CIRCUIT_ID,
+                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 "halo2/ipa:stark/fri",
             ),
         ] {
@@ -12306,12 +12369,12 @@ mod preverify_tests {
             (
                 ZK_BACKEND_HALO2_IPA,
                 BackendTag::Halo2IpaPasta,
-                IVM_EXECUTION_V1_CIRCUIT_ID,
+                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             ),
             (
-                "halo2/pasta/ivm-execution-v1",
+                "halo2/pasta/ivm-replay-binding-v1",
                 BackendTag::Halo2IpaPasta,
-                "halo2/pasta/ivm-execution-v1",
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
             ),
             (
                 "stark/fri/poseidon-x7-goldilocks-6x64-v1",
@@ -12524,7 +12587,7 @@ mod preverify_tests {
             "h\u{0430}lo2/ipa",
             "../halo2/ipa",
             "halo2/ipa/../tiny-add",
-            "halo2/ipa:ivm-execution-v1 ",
+            "halo2/ipa:ivm-replay-binding-v1 ",
             " stark/fri/poseidon-x7-goldilocks-6x64-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1 ",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1\0",

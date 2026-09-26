@@ -1728,7 +1728,6 @@ fn project_prepared_runtime_config(
     const LANE_MANIFEST_TARGET: &str = "/config/runtime/lane-manifests";
     const LANE_CACHE_TARGET: &str = "/config/runtime/lane-cache";
     const LANE_POLICY_TARGET: &str = "/config/runtime/lane-policies";
-    const SORAFS_ADMISSION_TARGET: &str = "/config/runtime/sorafs-admission";
     const SORAFS_SALT_TARGET: &str = "/config/runtime/sorafs-salt-schedule";
     const SITE_BINDINGS_TARGET: &str = "/config/runtime/sorafs_sites.json";
     let source_table = crate::secret_toml::Table::new((*table).clone());
@@ -2235,26 +2234,6 @@ fn project_prepared_runtime_config(
         remove_toml_key(&mut table, &["nexus", "compliance"], "policy_dir")?;
         None
     };
-    let captured_sorafs_admission_directory =
-        if let Some(admission) = source.torii.sorafs_discovery.admission.as_ref() {
-            let (files, validation_directory) = collect_runtime_directory(
-                &admission.envelopes_dir,
-                projection_root,
-                "sorafs-admission",
-                SORAFS_ADMISSION_TARGET,
-                "SoraFS admission envelope",
-            )?;
-            runtime_files.extend(files);
-            set_toml_string(
-                &mut table,
-                &["sorafs", "discovery", "admission"],
-                "envelopes_dir",
-                SORAFS_ADMISSION_TARGET,
-            )?;
-            Some(validation_directory)
-        } else {
-            None
-        };
     if let Some(salt_directory) = source.torii.sorafs_gateway.salt_schedule_dir.as_deref() {
         let (files, validation_directory) = collect_runtime_directory(
             salt_directory,
@@ -2343,14 +2322,6 @@ fn project_prepared_runtime_config(
             &["nexus", "compliance"],
             "policy_dir",
             policy_directory.to_string_lossy(),
-        )?;
-    }
-    if let Some(admission_directory) = captured_sorafs_admission_directory.as_deref() {
-        set_toml_string(
-            &mut validation_table,
-            &["sorafs", "discovery", "admission"],
-            "envelopes_dir",
-            admission_directory.to_string_lossy(),
         )?;
     }
     if let Some(site_source) = captured_site_bindings.as_deref() {

@@ -32775,8 +32775,10 @@ pub struct RegisterPinManifestResponseDto {
 pub struct RegisterCapacityDeclarationResponseDto {
     /// Provider identifier as hex.
     pub provider_id_hex: String,
-    /// Epoch recorded for registration.
-    pub registered_epoch: u64,
+    /// Queue admission status; finality must be checked separately.
+    pub status: String,
+    /// Hash of the exact submitted signed transaction.
+    pub tx_hash_hex: String,
     /// Epoch when the declaration becomes active.
     pub valid_from_epoch: u64,
     /// Epoch when the declaration expires.
@@ -32935,10 +32937,10 @@ const SORAFS_CAPACITY_DECLARATION_DECODE_LIMITS: norito::core::DecodeLimits =
         32,
     );
 app_api_items! {
-fn validate_sorafs_capacity_declaration_transaction<'a>(
+fn validate_sorafs_capacity_declaration_transaction(
     network_id: &NetworkId,
-    transaction: &'a SignedTransaction,
-) -> Result<&'a iroha_data_model::isi::sorafs::RegisterCapacityDeclaration> {
+    transaction: &SignedTransaction,
+) -> Result<CapacityDeclarationV1> {
     let register = validate_single_signed_instruction::<
         iroha_data_model::isi::sorafs::RegisterCapacityDeclaration,
     >(
@@ -32952,19 +32954,18 @@ fn validate_sorafs_capacity_declaration_transaction<'a>(
         "capacity declaration submission",
         "RegisterCapacityDeclaration",
     )?;
-    let record = &register.record;
-    if record.declaration.is_empty()
-        || record.declaration.len() > SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES
+    if register.declaration.is_empty()
+        || register.declaration.len() > SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES
     {
         return Err(sorafs_pin_validation_error(
             "sorafs_capacity_declaration_payload_size_invalid",
             format!(
-                "RegisterCapacityDeclaration.record.declaration must contain 1..={SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES} bytes"
+                "RegisterCapacityDeclaration.declaration must contain 1..={SORAFS_CAPACITY_DECLARATION_PAYLOAD_MAX_BYTES} bytes"
             ),
         ));
     }
     let declaration = norito::decode_from_bytes_with_limits::<CapacityDeclarationV1>(
-        &record.declaration,
+        &register.declaration,
         SORAFS_CAPACITY_DECLARATION_DECODE_LIMITS,
     )
     .map_err(|error| {
@@ -32979,42 +32980,16 @@ fn validate_sorafs_capacity_declaration_transaction<'a>(
             format!("failed to re-encode CapacityDeclarationV1 payload: {error}"),
         )
     })?;
-    if canonical != record.declaration {
+    if canonical != register.declaration {
         return Err(sorafs_pin_validation_error(
             "sorafs_capacity_declaration_payload_noncanonical",
-            "RegisterCapacityDeclaration.record.declaration must use canonical first-release Norito",
+            "RegisterCapacityDeclaration.declaration must use canonical first-release Norito",
         ));
     }
     declaration
         .validate()
         .map_err(capacity_declaration_validation_error)?;
-    if record.provider_id != ProviderId::new(declaration.provider_id) {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_capacity_declaration_record_mismatch",
-            "capacity declaration provider_id does not match its canonical payload",
-        ));
-    }
-    if record.committed_capacity_gib != declaration.committed_capacity_gib {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_capacity_declaration_record_mismatch",
-            "capacity declaration committed_capacity_gib does not match its canonical payload",
-        ));
-    }
-    if record.valid_from_epoch != declaration.valid_from
-        || record.valid_until_epoch != declaration.valid_until
-    {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_capacity_declaration_record_mismatch",
-            "capacity declaration validity window does not match its canonical payload",
-        ));
-    }
-    if record.valid_from_epoch > record.valid_until_epoch {
-        return Err(sorafs_pin_validation_error(
-            "sorafs_capacity_declaration_epoch_range_invalid",
-            "capacity declaration valid_from_epoch must not exceed valid_until_epoch",
-        ));
-    }
-    Ok(register)
+    Ok(declaration)
 }
 fn validate_sorafs_capacity_telemetry_transaction<'a>(
     network_id: &NetworkId,
@@ -33087,20 +33062,19 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
     sorafs_limits: Arc<SorafsQuotaEnforcer>,
     transaction: SignedTransaction,
 ) -> Result<impl IntoResponse> {
-    let register =
+    let declaration =
         validate_sorafs_capacity_declaration_transaction(state.network_id_ref(), &transaction)?;
     ensure_sorafs_quota_authority_registered(state.as_ref(), &transaction)?;
     let quota_subject = sorafs_transaction_quota_subject(&transaction);
-    let record = &register.record;
-    let provider_id = record.provider_id;
     if let Err(err) = sorafs_limits.enforce(SorafsAction::CapacityDeclaration, &quota_subject) {
         return Err(quota_limit_error(err));
     }
     let response = RegisterCapacityDeclarationResponseDto {
-        provider_id_hex: hex::encode(provider_id.as_bytes()),
-        registered_epoch: record.registered_epoch,
-        valid_from_epoch: record.valid_from_epoch,
-        valid_until_epoch: record.valid_until_epoch,
+        provider_id_hex: hex::encode(declaration.provider_id),
+        status: "submitted".to_owned(),
+        tx_hash_hex: hex::encode(transaction.hash().as_ref()),
+        valid_from_epoch: declaration.valid_from,
+        valid_until_epoch: declaration.valid_until,
     };
     handle_transaction_with_metrics(
         queue,
@@ -33110,7 +33084,9 @@ pub async fn handle_post_sorafs_register_capacity_declaration(
         "/v1/sorafs/capacity/declare",
     )
     .await?;
-    Ok(infallible_pretty_json_response(&response, "{}"))
+    let mut response = infallible_pretty_json_response(&response, "{}");
+    *response.status_mut() = axum::http::StatusCode::ACCEPTED;
+    Ok(response)
 }
 #[iroha_futures::telemetry_future]
 pub async fn handle_post_sorafs_record_capacity_telemetry(
@@ -34583,7 +34559,7 @@ mod sorafs_capacity_tests {
             key_pair,
             key_pair,
             [dm::InstructionBox::from(
-                iroha_data_model::isi::sorafs::RegisterCapacityDeclaration::new(record),
+                iroha_data_model::isi::sorafs::RegisterCapacityDeclaration::new(record.declaration),
             )],
         )
     }
@@ -34871,7 +34847,7 @@ mod sorafs_capacity_tests {
         .await
         .expect("handler ok")
         .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+        assert_eq!(resp.status(), axum::http::StatusCode::ACCEPTED);
         let bytes = http_body_util::BodyExt::collect(resp.into_body())
             .await
             .unwrap()
@@ -34883,10 +34859,14 @@ mod sorafs_capacity_tests {
                 .and_then(norito::json::Value::as_str),
             Some(expected_provider.as_str())
         );
+        assert!(v.get("registered_epoch").is_none());
         assert_eq!(
-            v.get("registered_epoch")
-                .and_then(norito::json::Value::as_u64),
-            Some(42)
+            v.get("status").and_then(norito::json::Value::as_str),
+            Some("submitted")
+        );
+        assert_eq!(
+            v.get("tx_hash_hex").and_then(norito::json::Value::as_str),
+            Some(hex::encode(expected_hash.as_ref()).as_str())
         );
         let mut guards = Vec::new();
         queue.get_transactions_for_block(
@@ -34930,7 +34910,7 @@ mod sorafs_capacity_tests {
             &attacker,
             [dm::InstructionBox::from(
                 iroha_data_model::isi::sorafs::RegisterCapacityDeclaration::new(
-                    sample_capacity_declaration_record(),
+                    sample_capacity_declaration_record().declaration,
                 ),
             )],
         );
@@ -34957,7 +34937,7 @@ mod sorafs_capacity_tests {
             [
                 dm::InstructionBox::from(
                     iroha_data_model::isi::sorafs::RegisterCapacityDeclaration::new(
-                        sample_capacity_declaration_record(),
+                        sample_capacity_declaration_record().declaration,
                     ),
                 ),
                 dm::InstructionBox::from(dm::Log::new(dm::Level::INFO, "extra".into())),
@@ -35016,7 +34996,7 @@ mod sorafs_capacity_tests {
             sorafs_transaction_quota_subject(&other_declaration)
         );
     }
-    routing_test! { sync capacity_declaration_rejects_noncanonical_bounded_and_mismatched_records
+    routing_test! { sync capacity_declaration_rejects_noncanonical_oversized_and_invalid_payloads
         let network_id = test_network_id(0x64);
         let key_pair = checked_capacity_keypair(0xA3, "derive capacity record validation fixture");
         let mut trailing = sample_capacity_declaration_record();
@@ -35044,28 +35024,13 @@ mod sorafs_capacity_tests {
             ),
             "sorafs_capacity_declaration_payload_size_invalid"
         );
-        let mut provider_mismatch = sample_capacity_declaration_record();
-        provider_mismatch.provider_id = ProviderId::new([0xFE; 32]);
-        let transaction =
-            signed_capacity_declaration_transaction(network_id, &key_pair, provider_mismatch);
-        assert_eq!(
-            capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&network_id, &transaction)
-                    .expect_err("provider summary mismatch must fail closed")
-            ),
-            "sorafs_capacity_declaration_record_mismatch"
-        );
-        let mut capacity_mismatch = sample_capacity_declaration_record();
-        capacity_mismatch.committed_capacity_gib += 1;
-        let transaction =
-            signed_capacity_declaration_transaction(network_id, &key_pair, capacity_mismatch);
-        assert_eq!(
-            capacity_validation_code(
-                validate_sorafs_capacity_declaration_transaction(&network_id, &transaction)
-                    .expect_err("capacity summary mismatch must fail closed")
-            ),
-            "sorafs_capacity_declaration_record_mismatch"
-        );
+        let mut invalid = sample_capacity_declaration_record();
+        let mut payload: CapacityDeclarationV1 = norito::decode_from_bytes(&invalid.declaration).unwrap();
+        payload.valid_until = payload.valid_from.saturating_sub(1);
+        invalid.declaration = norito::to_bytes(&payload).unwrap();
+        let transaction = signed_capacity_declaration_transaction(network_id, &key_pair, invalid);
+        validate_sorafs_capacity_declaration_transaction(&network_id, &transaction)
+            .expect_err("invalid canonical validity must fail closed");
     }
     #[tokio::test]
     #[cfg(feature = "app_api")]

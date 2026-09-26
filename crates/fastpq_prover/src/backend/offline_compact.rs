@@ -1,4 +1,5 @@
 //! Fixed quantity-artifact production and verification for offline callers.
+//! These artifacts disclose unmasked trace rows and provide no zero-knowledge guarantee.
 //!
 //! The two routes verify complete ordered bundles under the fixed six-lane compact V1
 //! implementation. The caller supplies independent expected public inputs and AXT
@@ -31,6 +32,13 @@ use crate::{
     gadgets::public_transfer_statement::{PublicTransferLimits, TransferSmtBuildLimits},
     proof::PublicIO,
 };
+
+#[path = "offline_compact/resources.rs"]
+mod resources;
+#[cfg(test)]
+pub(super) use resources::QUANTITY_QUERY_COUNT;
+pub(super) use resources::QUANTITY_SHARED_FRAME_BOUND;
+pub use resources::{QuantityArtifactResources, quantity_artifact_resources};
 
 /// Independently expected public inputs, ordering and complete canonical statement identity.
 ///

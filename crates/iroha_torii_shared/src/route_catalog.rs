@@ -3509,6 +3509,36 @@ pub mod sorafs {
             .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
             .with_effect(RouteEffect::Mutation)
             .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Read one chunk under an exact finalized native repair lease.
+    pub const REPAIR_SOURCE: RouteDescriptor =
+        documented_post("sorafs.repair.source", "/v1/sorafs/repair/source")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Read bounded source metadata or one chunk under a current native replication assignment.
+    pub const PROVIDER_SOURCE: RouteDescriptor =
+        documented_post("sorafs.provider.source", "/v1/sorafs/provider/source")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Stage publisher-authenticated chunks for an exact finalized provider assignment.
+    pub const PUBLISH_SOURCE: RouteDescriptor =
+        documented_post("sorafs.publish_source.stage", "/v1/sorafs/publish/source")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Prepare exact current publication assertion inputs for their authenticated publisher.
+    pub const PUBLISH_PREPARE: RouteDescriptor =
+        documented_post("sorafs.publication.prepare", "/v1/sorafs/publish/prepare")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Return native publication execution evidence to an authorized full-ledger reader.
+    pub const PUBLISH_PROOF: RouteDescriptor =
+        documented_post("sorafs.publication.proof", "/v1/sorafs/publish/proof")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// List `SoraFS` aliases after exact canonical-account authentication.
     pub const ALIASES: RouteDescriptor =
         authenticated_documented_get("sorafs.alias.list", "/v1/sorafs/aliases")
@@ -3684,6 +3714,11 @@ pub mod sorafs {
         CID_LOOKUP,
         STORAGE_MANIFEST,
         STORAGE_PLAN,
+        REPAIR_SOURCE,
+        PROVIDER_SOURCE,
+        PUBLISH_SOURCE,
+        PUBLISH_PREPARE,
+        PUBLISH_PROOF,
         STORAGE_TOKEN,
         STORAGE_CAR,
         STORAGE_CHUNK,

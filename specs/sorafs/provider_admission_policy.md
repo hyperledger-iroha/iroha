@@ -1,207 +1,110 @@
-# SoraFS Provider Admission & Identity Policy (SF-2b)
+# SoraFS native provider admission
 
-This note captures the implemented **SF-2b** admission workflow, identity
-requirements, attestation payloads, lifecycle runbooks, and observability
-surface for SoraFS storage providers. It expands the high-level process
-outlined in the SoraFS Architecture RFC and keeps rollout evidence, fixtures,
-and operator commands in one place.
+The sole runtime authority is the council policy and provider history initialized
+by signed genesis or enacted by SORA Parliament in Core. Torii constructs its registry from the same Core State
+used by its other authoritative reads. Local files, configured public keys and
+signed envelopes alone cannot authorize discovery, PoR, PoTR or gateway admission.
 
-Current source status: the Norito V1 admission and revocation signatures cover a
-nonzero council-policy id/revision/digest and exact admission-event revision and
-predecessor digest. A renewal's outer predecessor must equal the signed inner
-predecessor; a revocation signs its expected current event. These are wire and
-in-memory lineage checks only. The local-key/directory registry is still a
-provisional authority. Production admission remains closed until Parliament
-policy enactment, finalized State/Kura provider heads and tombstones, and one
-exact reader replace those local constructors. A successor envelope cannot be
-loaded as a fresh initial admission after restart.
+## Signed genesis initialization
 
-## Policy Goals
+`InitializeSorafsProviderAdmissionV1` carries a network-independent
+`InitialProviderAdmissionCouncilV1` and up to 64 `InitialProviderAdmissionV1 {
+owner, material }` entries, strictly ordered by provider id. Material is the canonical
+`ProviderAdmissionGenesisMaterialV1` proposal, advert body and validity interval;
+it contains neither a network id nor invented council signatures. The complete
+instruction is capped at 4 MiB. Register universal owner accounts before it. The
+initializer establishes an absent owner binding or requires the exact existing
+owner; conflicting bindings, duplicate providers and invalid or expired material
+fail before journal writes.
 
-- Ensure only vetted operators can publish `ProviderAdvertV1` records that the
-  network will accept.
-- Bind every advertisement key to a governance-approved identity document,
-  attested endpoints, and minimum stake contribution.
-- Provide deterministic verification tooling so Torii, gateways, and
-  `sorafs-node` enforce the same checks.
-- Support renewal and emergency revocation without breaking determinism or
-  tooling ergonomics.
+The signed genesis transaction has the explicit Genesis domain. After the signed
+header exists, Core derives the actual network identity and the revision-one council
+policy. The journal records the exact initializer entrypoint and canonical instruction
+digest. Current reads authenticate the successful direct instruction from that exact
+State/Kura genesis, its complete execution proof and revision-4 QC, then compare the
+retained material against the original template. This avoids a genesis-hash fixed
+point. Genesis material is explicitly distinct from council-verified envelopes;
+offline material construction alone cannot authorize a provider.
 
-## Identity & Stake Requirements
+Core accepts the initializer only as the exact direct instruction in the original
+signed genesis transaction with an empty committed history and admission namespace.
+A consumed direct-source marker excludes contract, trigger, sealed and batch
+execution. A second initializer rolls back its containing transaction. Genesis
+uses the same canonical policy, head, immutable history and resource counters as
+Parliament. Ownership-only pre-genesis configuration cannot admit providers. Once
+initialized, all council changes, additional providers, renewals and revocations
+use Parliament and ordinary network-bound council signatures.
 
-| Requirement | Description | Deliverable |
-|-------------|-------------|-------------|
-| Advertisement key provenance | Providers must register an Ed25519 keypair that signs every advert. The admission bundle stores the public key alongside a governance signature. | `ProviderAdmissionProposalV1` carries `advert_key` (32 bytes) and the registry verifies it through `sorafs_manifest::provider_admission`. |
-| Stake pointer | Admission requires a non-zero `StakePointer` pointing at an active staking pool. | `sorafs_manifest::provider_advert::StakePointer::validate()` enforces non-zero stake and CLI/tests surface deterministic errors. |
-| Jurisdiction tags | Providers declare jurisdiction + legal contact. | Proposal payloads include `jurisdiction_code` (ISO 3166-1 alpha-2) and optional `contact_uri`. |
-| Endpoint attestation | Each advertised endpoint must be backed by an mTLS or QUIC certificate report. | `EndpointAttestationV1` is stored per endpoint inside the admission bundle. |
+## Native effect and history
 
-## Admission Workflow
+`ProposeSorafsProviderGovernance` carries the closed `Admission` action:
 
-1. **Proposal creation**
-   - CLI: run `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission proposal …`
-     producing `ProviderAdmissionProposalV1` + attestation bundle.
-   - Validation: ensure required fields, stake > 0, canonical chunker handle in `profile_id`.
-2. **Governance endorsement**
-   - Council signs `blake3("sorafs-provider-admission-v1" || canonical_bytes)` using existing
-     envelope tooling (`sorafs_manifest::governance` module).
-   - Envelope is persisted to `governance/providers/<provider_id>/admission.json`.
-3. **Registry ingestion**
-   - The shared verifier (`sorafs_manifest::provider_admission::validate_envelope`)
-     is reused by Torii, gateways, and CLI tooling.
-   - Torii rejects adverts whose digest or expiry differs from the envelope.
-4. **Renewal & revocation**
-   - `ProviderAdmissionRenewalV1` supports optional endpoint/stake updates.
-   - The `revoke` CLI path records the revocation reason and emits a governance artefact.
+- `ConfigureCouncil` enacts the canonical `ProviderAdmissionCouncilPolicyV1` frame.
+  The first revision is one; successors bind the immediate policy digest and retain
+  the exact network and policy identity.
+- `Admit` requires a currently governed provider owner, a policy-bound council quorum,
+  an unexpired signed envelope and no retained provider admission history.
+- `Renew` requires the current owner and exact preceding admission material digest and
+  revision. The enacted current council authorizes the new envelope, including a
+  changed advert key. Policy rotation requires renewal under the new policy before
+  a provider can be admitted again.
+- `Revoke` verifies the current council and exact current envelope, then writes a
+  permanent tombstone. Revocation remains possible while the policy is paused.
+  The provider identity cannot be re-admitted; recovery uses a newly governed identity.
 
-## Implementation Tasks
+Each effect has its own Parliament subject: owner bindings, council policy and
+provider admissions do not share certificate compare-and-set heads. The normal
+Parliament certificate lifecycle binds the exact effect and current subject head;
+there is no post-genesis direct admission instruction or local administrative bypass.
 
-| Area | Task | Owner(s) | Status |
-|------|------|----------|--------|
-| Schema | Define `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) under `crates/sorafs_manifest/src/provider_admission.rs`. Implemented in `sorafs_manifest::provider_admission` with validation helpers.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ Completed |
-| CLI tooling | Extend `sorafs_manifest_builder` with subcommands: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
+Core stores immutable predecessor-linked records and the current head in native
+transactional state. Writes include the exact network, committing height/time,
+owner, revision and material. The current-head reader checks the retained record
+and its predecessor, exact policy claims and provider owner, and requires matching
+State/Kura block and durable revision-4 CommitQC authentication. A policy pause,
+owner change/removal, expired envelope, malformed state or unavailable finality
+fails closed.
+Runtime expiry uses the later of local time and the authenticated current block's
+timestamp, so a lagging or rolled-back local clock cannot revive expired admission.
+Local time must still satisfy the original issuance lower bound; committed time
+does not turn a pre-issuance local clock into a valid request. These checks apply
+to both signed-genesis material and subsequent council-signed admission records.
 
-The CLI flow now accepts intermediate certificate bundles (`--endpoint-attestation-intermediate`), emits
-canonical proposal/envelope bytes, and validates council signatures during `sign`/`verify`. Council
-signatures use the domain-separated authorization digest of the complete unsigned envelope—not merely
-the proposal digest—so retention bounds, advert routing/QoS fields, and governance notes cannot be
-rewritten after approval. Operators can provide advert bodies directly, or reuse signed adverts, and
-signature files may be supplied by pairing `--council-signature-public-key` with
-`--council-signature-file` for automation friendliness.
+The V1 limits are 4,096 permanent provider identities and 1,024 transitions per
+identity, with the last provider transition reserved for revocation. One canonical
+admission frame is at most 1 MiB; a terminal revocation is at most 16 KiB. Normal
+retained history has a 128 MiB byte budget and terminal revocations have a separate
+reserved allowance. Exhaustion rejects the effect before any state write.
 
-### CLI Reference
+## Runtime behavior
 
-Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission …`.
+Discovery validates against current finalized authority both when preparing and
+committing an advert. Pruning reads the same authority, so revocation or renewal
+is visible without restarting or editing files. A prepared old advert cannot commit
+under a substituted current envelope. Reads remain local to the node's committed
+history; this does not promise knowledge of a newer block that the node has not
+received.
 
-- `proposal`
-  - Required flags: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
-    `--stake-pool-id=<hex32>`, `--stake-amount=<canonical XOR quantity>`, `--advert-key=<hex32>`,
-    `--por-vrf-key=<normal:hex48|small:hex96>`,
-    `--jurisdiction-code=<ISO3166-1>`, at least one capability selector, and at
-    least one `--endpoint=<kind:host>`.
-    The stake amount is an exact canonical decimal XOR quantity (for example
-    `5` or `0.000000001`), not an integer micro-XOR projection.
-  - V1 selectors are exact and case-sensitive. The profile must use the
-    canonical dot-form handle; numeric IDs, registry aliases, and slash-form
-    handles fail. Generic `--capability` values are
-    `torii|quic|potr-mldsa|vendor`. Typed range and SoraNet capabilities use
-    `--range-capability=max_span=…,min_granularity=…[,sparse=…,…]` and
-    `--soranet-pq=guard|majority|strict`. Range booleans are only
-    `true|false`; stream metadata uses
-    `--stream-budget=max_in_flight=…,max_bytes_per_sec=…[,burst=…]` and repeated
-    `--transport-hint=torii|quic|soranet|vendor:<priority>` entries. Aliases,
-    case folding, whitespace normalization, duplicate structured fields, and
-    the raw `--capability=range[:streams]` form are rejected.
-  - Per-endpoint attestation expects `--endpoint-attestation-attested-at=<secs>`,
-    `--endpoint-attestation-expires-at=<secs>`, a certificate via
-    `--endpoint-attestation-leaf=<path>` or
-    `--endpoint-attestation-leaf-hex=<lowercase-hex>` (plus optional exact
-    `--endpoint-attestation-intermediate=<path>` or
-    `--endpoint-attestation-intermediate-hex=<lowercase-hex>` for each chain
-    element) and any negotiated ALPN IDs
-    (`--endpoint-attestation-alpn=<token>`). Endpoint kinds are exactly
-    `torii|quic|norito-rpc`; explicit attestation kinds are exactly
-    `mtls|quic`. QUIC endpoints may supply transport reports with
-    `--endpoint-attestation-report=<path>` or
-    `--endpoint-attestation-report-hex=<lowercase-hex>`.
-  - Output: canonical Norito proposal bytes (`--proposal-out`) and a JSON summary
-    (default stdout or `--json-out`).
-- `sign`
-  - Inputs: exact `--network-id`, `--policy-id`, `--policy-revision`,
-    `--policy-digest`, and `--admission-revision`, plus a proposal (`--proposal`),
-    signed advert (`--advert`), optional advert body (`--advert-body`), retention
-    epoch, and at least one council signature. Renewal signing also requires
-    `--expected-current-event-digest` and `--previous-envelope`.
-    Signatures can be provided
-    inline (`--council-signature=<signer_hex:signature_hex>`) or via files by combining
-    `--council-signature-public-key` with `--council-signature-file=<path>`.
-  - Produces a validated envelope (`--envelope-out`) and JSON report indicating digest bindings,
-    signer count, and input paths.
-- `verify`
-  - Validates an existing envelope (`--envelope`) against explicit trust roots supplied as repeated
-    `--trusted-council-key=<hex32>` flags and a non-zero `--signature-threshold=<count>`, optionally
-    checking the matching proposal, advert, or advert body. The JSON report highlights digest values,
-    trusted-quorum verification status, and which optional artefacts matched. Embedded signer keys are
-    never promoted to trust roots.
-- `renewal`
-  - Links a newly approved envelope to the previously ratified digest. Requires
-    `--previous-envelope=<path>` and the successor `--envelope=<path>` (both Norito payloads).
-    The CLI verifies that profile aliases, capabilities, and advert keys remain unchanged while
-    allowing stake, endpoints, and metadata updates. Outputs the canonical
-    `ProviderAdmissionRenewalV1` bytes (`--renewal-out`) plus a JSON summary.
-- `revoke`
-  - Issues an emergency `ProviderAdmissionRevocationV1` bundle for a provider whose envelope must
-    be withdrawn. Requires `--envelope=<path>`, `--reason=<text>`, at least one
-    `--council-signature`, and optional `--revoked-at`/`--notes`. The CLI signs and validates the
-    revocation digest, writes the Norito payload via `--revocation-out`, and prints a JSON report
-    capturing the digest and signature count.
-| Verification | Implement shared verifier used by Torii, gateways, and `sorafs-node`. Provide unit + CLI integration tests.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Completed |
-| Torii integration | Thread verifier into Torii advertisement ingestion, reject out-of-policy adverts, emit telemetry. | Networking TL | ✅ Completed | Torii loads canonical governance envelopes from `sorafs.discovery.admission.envelopes_dir` only after validating the configured Ed25519 `trusted_council_keys` and `signature_threshold`; missing policy, malformed entries, symlinks, corrupt state, and unsatisfied quorum abort startup instead of creating a permissive cache.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| Renewal | Add renewal / revocation schema + CLI helpers, publish lifecycle guide in docs (see runbook below and CLI commands in `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【specs/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Completed |
-| Telemetry | Define `provider_admission` dashboards & alerts (missing renewal, envelope expiry). | Observability | ✅ Completed | `dashboards/grafana/sorafs_provider_admission.json` charts accepted/warning/rejected rates, stale refresh debt, and missing envelopes; `dashboards/alerts/sorafs_provider_admission_rules.yml` alerts on `admission_missing`, `stale`, policy-reject spikes, and downgrade warnings. |
-### Renewal & Revocation Runbook
+Advert replay checkpoints retain issuance floors for revoked native identities.
+A restart cannot forget the native tombstone or restore admission by presenting an
+old envelope. The offline registry constructors remain material-verification tools;
+the production Torii constructor never selects them.
 
-#### Scheduled renewal (stake/topology updates)
-1. Build the successor proposal/advert pair with `provider-admission proposal` and `provider-admission sign`, increasing `--retention-epoch` and updating stake/endpoints as required.
-2. Execute
-   ```bash
-   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
-     renewal \
-     --previous-envelope=governance/providers/<id>/envelope.to \
-     --envelope=governance/providers/<id>/envelope_next.to \
-     --renewal-out=governance/providers/<id>/renewal.to \
-     --json-out=governance/providers/<id>/renewal.json \
-     --notes="stake top-up 2025-03"
-   ```
-   The command validates unchanged capability/profile fields via
-   `AdmissionRecord::apply_renewal`, emits `ProviderAdmissionRenewalV1`, and prints digests for the
-   governance log.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
-3. Retain the signed renewal as an offline artifact. Do not replace the local
-   registry's initial envelope with a successor: direct successor loading is
-   refused until the finalized State/Kura lineage reader is connected.
-4. Regenerate the canonical fixtures via `cargo run -p sorafs_car --features cli,dev-tools --bin provider_admission_fixtures`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
+`[sorafs.discovery.admission]` has only `enabled`, for consumers that need admission
+when discovery is disabled. Enabling discovery automatically enables the native
+reader. Retired `envelopes_dir`, `trusted_council_keys` and `signature_threshold`
+configuration fields are rejected; council keys and quorum belong in the enacted
+policy. Existing development chains need the current governed policy and admission
+effects; file-based fixtures do not seed production authority.
 
-#### Emergency revocation
-1. Identify the compromised envelope and issue a revocation:
-   ```bash
-   cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission \
-     revoke \
-     --envelope=governance/providers/<id>/envelope.to \
-     --reason="endpoint compromise" \
-     --revoked-at=$(date +%s) \
-     --notes="incident-456" \
-     --council-signature=<signer_hex:signature_hex> \
-     --revocation-out=governance/providers/<id>/revocation.to \
-     --json-out=governance/providers/<id>/revocation.json
-   ```
-   The CLI signs the `ProviderAdmissionRevocationV1`, verifies the signature set via
-   `verify_revocation_signatures`, and reports the revocation digest.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
-2. Remove the envelope from `sorafs.discovery.admission.envelopes_dir`, distribute the revocation Norito/JSON to admission caches, and record the reason hash in the governance minutes.
-3. Watch `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to confirm caches drop the revoked advert; keep the revocation artefacts in incident retrospectives.
+## Validation scope
 
-## Testing & Telemetry
-
-- Golden fixtures for admission proposals and envelopes live under
-  `fixtures/sorafs_manifest/provider_admission/`.
-- CI (`ci/check_sorafs_fixtures.sh`) regenerates proposals and verifies envelopes.
-- Generated fixtures include `metadata.json` with canonical digests; downstream tests assert
-  `proposal_digest_hex` == `ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936`.
-- Integration coverage includes:
-  - Torii rejects adverts with missing or expired admission envelopes.
-  - CLI round-trips a proposal → envelope → verification.
-  - Governance renewal rotates endpoint attestation without changing provider ID.
-- Telemetry requirements:
-  - Emit `provider_admission_envelope_{accepted,rejected}` counters in Torii. ✅ `torii_sorafs_admission_total{result,reason}` now surfaces accepted/rejected outcomes.
-  - Add expiry warnings to observability dashboards. ✅ `SoraFSProviderAdmissionEnvelopeExpired` fires on stale rejected adverts and `SoraFSProviderAdmissionMissingEnvelope` catches missing renewal distribution.
-
-## Operational Maintenance
-
-1. ✅ Finalised the Norito schema changes and landed validation helpers in
-   `sorafs_manifest::provider_admission`. No feature flags required.
-2. ✅ CLI workflows (`proposal`, `sign`, `verify`, `renewal`, `revoke`) are documented and exercised via integration tests; keep governance scripts in sync with the runbook.
-3. ✅ Torii admission/discovery ingest the envelopes and expose telemetry counters for acceptance/rejection.
-4. ✅ Provider admission observability is now covered by the Grafana dashboard
-   and Prometheus alert pack under `dashboards/`; keep the alert vectors in
-   sync when new admission reasons are added.
-5. Attach fresh signed admission, renewal, and revocation artefacts to the
-   governance archive for each live provider onboarding or emergency action.
+Focused model tests cover canonical action frames, bounded rejection, substituted
+provider identities and distinct Parliament subjects. Native tests exercise positive
+admission, exact renewal, council rotation, terminal revocation, replay refusal,
+owner removal, missing retained history and missing durable QC with a genuine
+software-signed three-of-four BLS/RS16 fixture. Genesis tests derive the network
+from the actual constructed signed Genesis-domain block and reject absent finality,
+indirect execution, malformed templates and replay. These fixtures do not qualify live
+consensus, multi-gateway deployment or operational failover. Current execution
+results belong in the root status and closure ledger.

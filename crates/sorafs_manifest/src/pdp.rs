@@ -1604,7 +1604,7 @@ fn validate_pdp_admission_v1(
     proof: &PdpProofV1,
     admission: &AdmissionRecord,
 ) -> Result<(), PdpVerificationError> {
-    if !admission.is_council_verified() {
+    if !(admission.is_council_verified() || admission.is_genesis_material()) {
         return Err(PdpVerificationError::AdmissionNotCouncilVerified);
     }
     let admission_envelope = admission.envelope();

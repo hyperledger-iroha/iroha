@@ -340,6 +340,8 @@ impl_direct_instruction_box!(crate::isi::sorafs::RegisterCapacityDispute);
 impl_direct_instruction_box!(crate::isi::sorafs::ResolveSorafsCapacityDispute);
 // Allow direct boxing of SoraFS pin registry instructions
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterPinManifest);
+impl_direct_instruction_box!(crate::isi::sorafs::AssertSorafsPublicationV1);
+impl_direct_instruction_box!(crate::isi::sorafs::InitializeSorafsProviderAdmissionV1);
 impl_direct_instruction_box!(crate::isi::sorafs::ApprovePinManifest);
 impl_direct_instruction_box!(crate::isi::sorafs::RetirePinManifest);
 // Allow direct boxing of content lane instructions.
@@ -2780,12 +2782,12 @@ pub mod prelude {
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             AdvanceSorafsReserveLifecycle, AppendSorafsPorReputationJournalEntry,
-            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, BindManifestAlias,
+            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, AssertSorafsPublicationV1, BindManifestAlias,
             CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
             CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
             DrawSorafsReserveCredit, ExpireReplicationOrder, ExpireSorafsModerationChallenge,
             FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
-            MaintainSorafsOrderbook, MatchSorafsOrderbook,
+            InitializeSorafsProviderAdmissionV1, MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
             MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
             MutateSorafsStreamTokenCustody, MutateSorafsTopologyAuthority,

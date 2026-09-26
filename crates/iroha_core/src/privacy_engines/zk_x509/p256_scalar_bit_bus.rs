@@ -25,7 +25,7 @@ use super::{
     p256_window_air::{P256WindowAirErrorV1, P256WindowScalarV1, P256WindowTraceV1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable descriptor for the aggregate-only first-release scalar-bit copy bus.
@@ -600,9 +600,9 @@ pub(crate) fn p256_scalar_bit_bus_stark_fixed_row_v1(
 }
 /// Project the verifier-preprocessed selector for the final active packed-bus
 /// row at an arbitrary aggregate-domain opening.
-pub(crate) const fn p256_scalar_bit_bus_stark_last_active_selector_v1(
-    fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
-) -> F {
+pub(crate) const fn p256_scalar_bit_bus_stark_last_active_selector_v1<A: PolynomialAirFieldV1>(
+    fixed: &[A; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
+) -> A {
     fixed[STARK_FIXED_LAST_ACTIVE_ROW]
 }
 /// Convert the typed bus rows to the sole padded aggregate layout.
@@ -1379,30 +1379,30 @@ fn compute_scalar_bit_bus_terminals_v1(
     }
     Ok([arithmetic, window])
 }
-fn stark_scalar_bit_factor_v1(
-    fixed_slot: &[F],
-    value: F,
+fn stark_scalar_bit_factor_v1<A: PolynomialAirFieldV1>(
+    fixed_slot: &[A],
+    value: A,
     challenge: P256ScalarBitBusLaneChallengesV1,
-) -> Result<F, P256ScalarBitBusErrorV1> {
-    let fixed_slot: &[F; STARK_FIXED_SLOT_WIDTH] = fixed_slot
+) -> Result<A, P256ScalarBitBusErrorV1> {
+    let fixed_slot: &[A; STARK_FIXED_SLOT_WIDTH] = fixed_slot
         .try_into()
         .map_err(|_| P256ScalarBitBusErrorV1::Topology)?;
     let active = fixed_slot[STARK_FIXED_SLOT_ACTIVE];
-    let terms = challenge.terms;
+    let terms = challenge.terms.map(A::from_base);
     let compressed = terms[0]
         .add(terms[1].mul(fixed_slot[STARK_FIXED_SLOT_SCALAR]))
         .add(terms[2].mul(fixed_slot[STARK_FIXED_SLOT_WINDOW]))
         .add(terms[3].mul(fixed_slot[STARK_FIXED_SLOT_BIT]))
         .add(terms[4].mul(value));
-    Ok(F::ONE.add(active.mul(compressed.sub(F::ONE))))
+    Ok(A::ONE.add(active.mul(compressed.sub(A::ONE))))
 }
 /// Arithmetic and window product terminals in one opened packed-bus auxiliary row.
 ///
 /// The aggregate verifier opens this projection at the verifier-fixed final logical row; no
 /// proof-supplied row index is accepted by the terminal registration.
-pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1(
-    aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
-) -> [[F; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
+pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1<A: PolynomialAirFieldV1>(
+    aux: &[A; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
+) -> [[A; P256_SCALAR_BIT_BUS_LANES_V1]; 2] {
     let final_state = (P256_SCALAR_BIT_BUS_PRODUCT_STATES_V1 - 1) * P256_SCALAR_BIT_BUS_LANES_V1;
     [
         core::array::from_fn(|lane| aux[STARK_ARITHMETIC_PRODUCTS + final_state + lane]),
@@ -1413,6 +1413,7 @@ pub(crate) fn p256_scalar_bit_bus_opened_terminals_v1(
 ///
 /// The terminal equality here binds the two bus copies. Source-side products over the arithmetic
 /// and window commitments remain a separate required adapter and activation gate.
+#[cfg(test)]
 pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
     current: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
     next: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
@@ -1421,6 +1422,24 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
     fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
     challenges: P256ScalarBitBusChallengesV1,
 ) -> Result<Vec<F>, P256ScalarBitBusErrorV1> {
+    evaluate_p256_scalar_bit_bus_stark_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        challenges,
+    )
+}
+/// The same scalar-bit copy relation over F or Fp4, including verifier-fixed selectors.
+pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
+    next: &[A; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1],
+    fixed: &[A; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
+    challenges: P256ScalarBitBusChallengesV1,
+) -> Result<Vec<A>, P256ScalarBitBusErrorV1> {
     challenges.validate_v1()?;
     if current
         .iter()
@@ -1428,7 +1447,7 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .any(|value| F::canonical(value.0).is_none())
+        .any(|value| !value.is_canonical())
     {
         return Err(P256ScalarBitBusErrorV1::Range);
     }
@@ -1438,9 +1457,9 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
         let window_bit = current[STARK_WINDOW_BITS + slot];
         let fixed_start = slot * STARK_FIXED_SLOT_WIDTH;
         let fixed_slot = &fixed[fixed_start..fixed_start + STARK_FIXED_SLOT_WIDTH];
-        let inactive = F::ONE.sub(fixed_slot[STARK_FIXED_SLOT_ACTIVE]);
-        residues.push(arithmetic_bit.mul(arithmetic_bit.sub(F::ONE)));
-        residues.push(window_bit.mul(window_bit.sub(F::ONE)));
+        let inactive = A::ONE.sub(fixed_slot[STARK_FIXED_SLOT_ACTIVE]);
+        residues.push(arithmetic_bit.mul(arithmetic_bit.sub(A::ONE)));
+        residues.push(window_bit.mul(window_bit.sub(A::ONE)));
         residues.push(arithmetic_bit.sub(window_bit));
         residues.push(inactive.mul(arithmetic_bit));
         residues.push(inactive.mul(window_bit));
@@ -1465,10 +1484,10 @@ pub(crate) fn evaluate_p256_scalar_bit_bus_stark_residues_v1(
     for lane in 0..P256_SCALAR_BIT_BUS_LANES_V1 {
         residues.push(
             fixed[STARK_FIXED_FIRST_ROW]
-                .mul(current_aux[STARK_ARITHMETIC_PRODUCTS + lane].sub(F::ONE)),
+                .mul(current_aux[STARK_ARITHMETIC_PRODUCTS + lane].sub(A::ONE)),
         );
         residues.push(
-            fixed[STARK_FIXED_FIRST_ROW].mul(current_aux[STARK_WINDOW_PRODUCTS + lane].sub(F::ONE)),
+            fixed[STARK_FIXED_FIRST_ROW].mul(current_aux[STARK_WINDOW_PRODUCTS + lane].sub(A::ONE)),
         );
         residues.push(fixed[STARK_FIXED_ACTIVE_CONTINUE].mul(
             next_aux[STARK_ARITHMETIC_PRODUCTS + lane].sub(
@@ -1699,6 +1718,9 @@ fn map_window_error_v1(error: P256WindowAirErrorV1) -> P256ScalarBitBusErrorV1 {
         }
     }
 }
+#[cfg(test)]
+#[path = "p256_scalar_bit_bus_fp4_tests.rs"]
+mod fp4_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -107,6 +107,10 @@ impl SecretScalar {
         self.0
     }
 
+    fn as_slice(&self) -> &[Scalar] {
+        core::slice::from_ref(&self.0)
+    }
+
     fn add_assign(&mut self, mut value: Scalar) {
         self.0 += value;
         value.clear_secret();
@@ -305,13 +309,13 @@ pub(super) fn build(
     let committed_row = msm(&row_weights, polynomial_commitment.points())
         .map_err(|_| Figure9FinalOpeningError::Commitment)?;
     let expected_row = application_key
-        .commit(bound_row.as_slice(), &[bound_blinding.get()])
+        .commit(bound_row.as_slice(), bound_blinding.as_slice())
         .map_err(|_| Figure9FinalOpeningError::Commitment)?;
     if expected_row.points() != [committed_row] {
         return Err(Figure9FinalOpeningError::EvaluationMismatch);
     }
     let expected_evaluation = evaluation_key
-        .commit(&[evaluation.get()], &[evaluation_blinding.get()])
+        .commit(evaluation.as_slice(), evaluation_blinding.as_slice())
         .map_err(|_| Figure9FinalOpeningError::Commitment)?;
     if expected_evaluation != evaluation_commitment {
         return Err(Figure9FinalOpeningError::EvaluationMismatch);
@@ -641,7 +645,7 @@ fn prove_hyrax_opening(
     let mask_blinding = SecretScalar::new(draw_scalar(rng, draw_count)?);
     let result_mask_blinding = SecretScalar::new(draw_scalar(rng, draw_count)?);
     let delta = application_key
-        .commit(mask.as_slice(), &[mask_blinding.get()])
+        .commit(mask.as_slice(), mask_blinding.as_slice())
         .map_err(|_| Figure9FinalOpeningError::Commitment)?
         .points()[0];
     let masked_result = SecretScalar::new(
@@ -649,7 +653,7 @@ fn prove_hyrax_opening(
             .map_err(|_| Figure9FinalOpeningError::InvalidShape)?,
     );
     let beta = evaluation_key
-        .commit(&[masked_result.get()], &[result_mask_blinding.get()])
+        .commit(masked_result.as_slice(), result_mask_blinding.as_slice())
         .map_err(|_| Figure9FinalOpeningError::Commitment)?
         .points()[0];
     transcript

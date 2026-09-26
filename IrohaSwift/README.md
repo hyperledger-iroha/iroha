@@ -1561,6 +1561,8 @@ on callback-first code.
 
 ### Verifying key registry
 
+The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+
 Inspect verifying keys via the Torii helpers:
 
 ```swift

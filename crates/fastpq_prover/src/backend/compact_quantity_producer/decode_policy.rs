@@ -12,13 +12,8 @@
 //! must still enforce actual counts, deeper nesting, cumulative charges and any
 //! stricter or partially consumed inherited budget.
 
-use super::{VerificationLimits, check, invalid, mul};
-use crate::Result;
-
-const DISTINCT_CURRENT_ROWS: usize = 375;
-const ROW_VALUES: usize = 342;
-const VALUE_BYTES: usize = core::mem::size_of::<u64>();
-const CHILD_ROW_PAYLOAD_BYTES: usize = DISTINCT_CURRENT_ROWS * ROW_VALUES * VALUE_BYTES;
+use super::{VerificationLimits, check, invalid};
+use crate::{Result, backend::offline_compact::quantity_artifact_resources};
 
 /// Reject explicit policy that cannot decode even the mandatory row payloads.
 /// Passing these necessary minima does not guarantee the final decode succeeds.
@@ -29,10 +24,11 @@ pub(super) fn preflight_decode_policy(
     if count == 0 {
         return Err(invalid("quantity decode policy requires a nonempty bundle"));
     }
-    let total_rows = mul(count, CHILD_ROW_PAYLOAD_BYTES)?;
+    let resources = quantity_artifact_resources(count, 0)?;
+    let total_rows = resources.minimum_bundle_row_bytes;
     check(
         "max_compact_producer_segment_decode_allocation_charges",
-        CHILD_ROW_PAYLOAD_BYTES,
+        resources.minimum_segment_row_bytes,
         verification.max_segment_decode_allocation_charges,
     )?;
     check(
@@ -90,6 +86,10 @@ mod tests {
     };
     use iroha_data_model::fastpq::FastpqCompactArtifactDecodeLimits;
     use norito::core::DecodeLimits;
+
+    const DISTINCT_CURRENT_ROWS: usize = crate::backend::offline_compact::QUANTITY_QUERY_COUNT;
+    const CHILD_ROW_PAYLOAD_BYTES: usize =
+        DISTINCT_CURRENT_ROWS * crate::gadgets::compact_smt_air::COLUMN_COUNT * size_of::<u64>();
 
     fn policy(count: usize) -> VerificationLimits {
         let bytes = count * CHILD_ROW_PAYLOAD_BYTES;

@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
-import org.hyperledger.iroha.android.model.instructions.RegisterCapacityDeclarationInstruction;
 import org.hyperledger.iroha.android.model.instructions.RegisterCapacityDisputeInstruction;
 import org.hyperledger.iroha.android.model.instructions.SetPricingScheduleInstruction;
 import org.hyperledger.iroha.android.model.instructions.SetPricingScheduleInstruction.CollateralPolicy;
@@ -28,8 +27,6 @@ public final class SorafsCapacityMarketplaceInstructionTests {
   private static final String DISPUTE_ID = "33".repeat(32);
 
   public static void main(final String[] args) {
-    testRegisterCapacityDeclarationBuilder();
-    testDeclarationRejectsInvalidBase64();
     testRegisterCapacityDisputeBuilder();
     testDisputeRejectsInvalidBase64();
     testDisputeValidationFailure();
@@ -37,51 +34,11 @@ public final class SorafsCapacityMarketplaceInstructionTests {
     testPricingScheduleIntegerParsing();
     testUpsertProviderCreditBuilder();
     System.out.println(
-        "[IrohaAndroid] SorafsCapacityMarketplaceInstructionTests passed (declaration/dispute/pricing/credit).");
+        "[IrohaAndroid] SorafsCapacityMarketplaceInstructionTests passed (dispute/pricing/credit).");
   }
 
-  private static void testRegisterCapacityDeclarationBuilder() {
-    final byte[] declarationBytes = randomBytes(48);
-    final RegisterCapacityDeclarationInstruction instruction =
-        RegisterCapacityDeclarationInstruction.builder()
-            .setProviderIdHex(PROVIDER_ID)
-            .setDeclarationBytes(declarationBytes)
-            .setCommittedCapacityGib(2_048L)
-            .setRegisteredEpoch(1_701_234L)
-            .setValidFromEpoch(1_701_300L)
-            .setValidUntilEpoch(1_801_300L)
-            .putMetadata("region", "ap-northeast-1")
-            .putMetadata("notes", "First slate")
-            .build();
-
-    final Map<String, String> args = instruction.toArguments();
-    assert "RegisterCapacityDeclaration".equals(args.get("action")) : "action mismatch";
-    assert PROVIDER_ID.equals(args.get("provider_id_hex")) : "provider mismatch";
-    assert args.get("declaration_b64") != null : "declaration missing";
-    assert "2048".equals(args.get("committed_capacity_gib")) : "capacity mismatch";
-    assert "region".equals("region") && "ap-northeast-1".equals(args.get("metadata.region"))
-        : "metadata region mismatch";
-    assert "First slate".equals(args.get("metadata.notes")) : "metadata notes mismatch";
-    assert instruction.committedCapacityGib() == 2_048L : "round trip committed capacity mismatch";
-    assert instruction.metadata().get("region").equals("ap-northeast-1") : "metadata mismatch";
-  }
-
-  private static void testDeclarationRejectsInvalidBase64() {
-    boolean threw = false;
-    try {
-      RegisterCapacityDeclarationInstruction.builder()
-          .setProviderIdHex(PROVIDER_ID)
-          .setDeclarationBase64("not!base64")
-          .setCommittedCapacityGib(512L)
-          .setRegisteredEpoch(1_701_234L)
-          .setValidFromEpoch(1_701_300L)
-          .setValidUntilEpoch(1_801_300L)
-          .build();
-    } catch (final IllegalArgumentException ex) {
-      threw = true;
-    }
-    assert threw : "Expected invalid declaration base64 to throw";
-  }
+  // Capacity declaration coverage lives in the Kotlin-owned JDK-8 Java consumer:
+  // SorafsCapacityDeclarationJavaConsumerTest. Consensus-derived projections are rejected.
 
   private static void testRegisterCapacityDisputeBuilder() {
     final byte[] payload = "capacity-dispute".getBytes(StandardCharsets.UTF_8);

@@ -42,8 +42,8 @@ mod sorafs_permission_tests {
         },
         sorafs::{
             capacity::{
-                CapacityDeclarationRecord, CapacityDisputeEvidence, CapacityDisputeId,
-                CapacityDisputeOutcome, CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
+                CapacityDisputeEvidence, CapacityDisputeId, CapacityDisputeOutcome,
+                CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
             },
             moderation_ledger::{
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
@@ -249,15 +249,7 @@ mod sorafs_permission_tests {
         })
     }
     fn register_capacity_declaration() -> RegisterCapacityDeclaration {
-        RegisterCapacityDeclaration::new(CapacityDeclarationRecord::new(
-            sample_provider_id(),
-            vec![0xAA],
-            100,
-            1,
-            1,
-            2,
-            Metadata::default(),
-        ))
+        RegisterCapacityDeclaration::new(vec![0xAA])
     }
     fn record_capacity_telemetry() -> RecordCapacityTelemetry {
         RecordCapacityTelemetry::new(

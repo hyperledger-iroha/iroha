@@ -3031,6 +3031,7 @@ mod tests {
         aggregate::AggregateStarkParametersV1 {
             proof_magic: *b"PMN1",
             proof_version: 1,
+            fri_commitment_layout: aggregate::AggregateFriCommitmentLayoutV1::Scalar,
             security_lanes: PROOF_MANAGED_NOTE_SECURITY_LANES_V1,
             query_count: PROOF_MANAGED_NOTE_QUERY_COUNT_V1,
             blowup_log2: PROOF_MANAGED_NOTE_BLOWUP_LOG2_V1,

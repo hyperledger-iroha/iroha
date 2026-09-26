@@ -47,6 +47,8 @@ macro_rules! for_each_instruction_type {
         $macro!(iroha_data_model::isi::verifying_keys::RegisterVerifyingKey);
         $macro!(iroha_data_model::isi::verifying_keys::UpdateVerifyingKey);
         $macro!(iroha_data_model::isi::sorafs::RegisterPinManifest);
+        $macro!(iroha_data_model::isi::sorafs::AssertSorafsPublicationV1);
+        $macro!(iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1);
         $macro!(iroha_data_model::isi::sorafs::ApprovePinManifest);
         $macro!(iroha_data_model::isi::sorafs::RetirePinManifest);
         $macro!(iroha_data_model::isi::sorafs::BindManifestAlias);

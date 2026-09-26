@@ -117,7 +117,7 @@ fn assert_readback(
         .sample_por(id, 8, 0x534f5241)
         .expect("native PoR sampling")
     {
-        assert!(proof.verify(stored.por_tree().root()));
+        assert!(proof.verify(stored.por_tree().expect("available payload tree").root()));
     }
 }
 

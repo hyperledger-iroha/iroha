@@ -199,18 +199,20 @@ fn backend_tag_anon_transfer_merkle(depth: usize, use_pow5: bool) -> String {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[test]
 fn verifier_key_cache_rejects_parseable_key_for_another_circuit() {
-    let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
+    let params = pasta_params_new(IVM_REPLAY_BINDING_V1_IPA_K);
     let attacker_vk =
         halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows).expect("attacker fixture vk");
     let mut attacker_bytes = zk1::wrap_start();
-    zk1::wrap_append_ipa_k(&mut attacker_bytes, IVM_EXECUTION_V1_IPA_K);
+    zk1::wrap_append_ipa_k(&mut attacker_bytes, IVM_REPLAY_BINDING_V1_IPA_K);
     zk1::wrap_append_vk_pasta(&mut attacker_bytes, &attacker_vk);
-    let attacker_vk_box =
-        VerifyingKeyBox::new(IVM_EXECUTION_V1_HALO2_BACKEND.to_owned(), attacker_bytes);
+    let attacker_vk_box = VerifyingKeyBox::new(
+        IVM_REPLAY_BINDING_V1_HALO2_BACKEND.to_owned(),
+        attacker_bytes,
+    );
 
-    let expected_circuit = pasta_tiny::IvmExecutionBindV1::default();
+    let expected_circuit = pasta_tiny::IvmReplayBindingV1::default();
     let result = resolve_vk_cached(
-        IVM_EXECUTION_V1_HALO2_BACKEND,
+        IVM_REPLAY_BINDING_V1_HALO2_BACKEND,
         &params,
         &attacker_vk_box,
         &expected_circuit,
@@ -218,7 +220,7 @@ fn verifier_key_cache_rejects_parseable_key_for_another_circuit() {
     );
     assert!(
         result.is_err(),
-        "a parseable demo-circuit key must not be relabeled as ivm-execution-v1"
+        "a parseable demo-circuit key must not be relabeled as ivm-replay-binding-v1"
     );
 }
 
@@ -395,9 +397,9 @@ fn preverify_basic() {
     let vk_commitment = [1u8; 32];
     let envelope = iroha_data_model::zk::OpenVerifyEnvelope {
         backend: iroha_data_model::zk::BackendTag::Halo2IpaPasta,
-        circuit_id: IVM_EXECUTION_V1_CIRCUIT_ID.to_owned(),
+        circuit_id: IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.to_owned(),
         vk_hash: vk_commitment,
-        public_inputs: IVM_EXECUTION_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
+        public_inputs: IVM_REPLAY_BINDING_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
         proof_bytes: vec![2],
         aux: Vec::new(),
     };

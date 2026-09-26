@@ -60,13 +60,13 @@ use super::{
         SHA_WORD_CAPACITY_ROW_ACTIVE_V1, ZkX509ShaWordCapacityFixedScheduleV1,
         ZkX509ShaWordStarkChallengesV1, ZkX509ShaWordStarkErrorV1,
         compile_sha_word_capacity_fixed_schedule_v1,
-        evaluate_zk_x509_sha_word_capacity_residues_v1,
+        evaluate_zk_x509_sha_word_capacity_residues_over_field_v1,
     },
 };
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use sha2::{Digest, Sha256};
@@ -146,7 +146,10 @@ pub(crate) const ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1: usize =
         + 3 * ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 * ZK_X509_SHA_BUS_LANES_V1
         + ZK_X509_SHA_BATCH_BASE_WIDTH_V1
         + ZK_X509_SHA_BATCH_AUX_WIDTH_V1;
-/// Explicit padding-zero constraints preserve the degree-four capacity bound.
+/// Maximum total degree including verifier-fixed selectors.
+///
+/// The capacity equations reach six. Call-product terminal constraints also
+/// reach six: degree-two call selectors times a degree-four active input update.
 pub(crate) const ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1: u8 =
     SHA_WORD_CAPACITY_CONSTRAINT_DEGREE_V1;
 /// Physical 64-column base commitment chunks per logical SHA segment.
@@ -228,7 +231,7 @@ pub(crate) const ZK_X509_SHA_TRACE_OPENING_BYTES_V1: usize =
 /// Maximum SHA-only aggregate wire before DEEP openings under the canonical
 /// 136-query, log-22 domain and twelve-round FRI schedule.
 #[cfg(test)]
-pub(crate) const ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1: usize = 3_492_704;
+pub(crate) const ZK_X509_SHA_MAX_ENCODED_PROOF_BYTES_V1: usize = 2_836_064;
 #[cfg(test)]
 const _: () = assert!(ZK_X509_SHA_NATIVE_REPLAY_COLUMN_BYTES_V1 == 4 * 1024 * 1024);
 #[cfg(test)]
@@ -356,10 +359,10 @@ const _: () = {
             == ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
     );
     assert!(ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1 == 796);
-    assert!(ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1 == 4);
+    assert!(ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1 == 6);
 };
 /// Stable identity of the release SHA batch and call bus.
-pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree4:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-preserve-degree3-recurrences:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof1542072:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
+pub(crate) const ZK_X509_SHA_CALL_BUS_STARK_DESCRIPTOR_V1: &[u8] = b"zk-x509-sha-call-bus-stark-v1-incompatible:29-fixed-capacity-calls=cert-tbs[3]+crl-tbs+framed-complete-signed-crl+projection[7]+issuer-spki+trust-record+policy-record+crl-record+compact-ca-leaf+compact-ca-node[12]:max-blocks616:word-rows1972128=compression655424+local-init232+local-digest232+memory1316240:four-log19-segments-whole-call-packed-active-rows480288,521952,521696,448192-no-cross-segment-call-transition:base89=word-capacity76+proof-bound-rfc-raw-length-bits13:aux78=word-capacity54+input-products4+digest-products4+rfc-consumer-products16:fixed118=word72+call-segment-length-control9+thirteen-verifier-one-hot-compact-ca-call-selectors+four-field-native-rfc-event-descriptors-of-width6:constraints796=prior588+thirteen-call-times-four-lanes-times-four-start-terminal-equalities208:degree6-including-fixed-selectors:polynomial-digest-address=digest*dynamic+(1-digest)*fixed:base-two-chunks-aux-two-chunks-per-segment:same-log-bucket-base356-aux312-base-chunks8-aux-chunks8:private-exact-length-unique-padding-transition-across-blocks-and-active-block-prefix:fine-grained-message-cap-and-fixed-role-length-enforcement:frozen-canonical-inactive-computation-memory-and-mask-suffix:selected-digest-from-unique-final-active-block:inactive-chain-and-projection-slots-canonical-sha-empty-dummy:address=(call,role,slot,input-or-digest,word):four-independent-domain-separated-goldilocks-lanes:separate-word-memory-and-call-challenge-families:segment-continuous-source-digest-and-rfc-products-with-registration-owned-terminals:compact-ca-calls16through28-each-bind-proof-carried-source-and-digest-start-and-terminal-products-by-verifier-fixed-one-hot-selectors-without-division:rfc-consumer-products-derived-algebraically-from-committed-message-bits-masks-and-verifier-fixed-event-descriptors:four-byte-streams-total-degree5-recurrences-including-fixed-selectors:proof-bound-u64-raw-length-consumers:certificate-tbs-crl-tbs-framed-complete-crl-and-framed-issuer-spki-channels:three-governance-self-digests-explicit-sha-field-frames:no-host-branch-on-opened-fixed-columns:main-common-lde-log22:protocol2-independent-per-lane-fri-mask-oracles:max-encoded-sha-proof2836064:stream-one-call-at-a-time:on-demand-full-row-widening-without-duplicated-aux-or-fixed-vectors";
 /// Semantic owner of one canonical SHA call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum ZkX509ShaCallRoleV1 {
@@ -1084,10 +1087,10 @@ impl ZkX509ShaBatchCallTraceV1 {
 }
 /// One canonical physical SHA batch row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509ShaBatchRowV1 {
-    pub(crate) base: [F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
-    pub(crate) aux: [F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1],
-    pub(crate) fixed: [F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+pub(crate) struct ZkX509ShaBatchRowV1<A = F> {
+    pub(crate) base: [A; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
+    pub(crate) aux: [A; ZK_X509_SHA_BATCH_AUX_WIDTH_V1],
+    pub(crate) fixed: [A; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
 }
 /// Compact, deterministic maximum schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2370,22 +2373,22 @@ fn compress_event_v1(event: ZkX509ShaCallEventV1, lane: ZkX509ShaCallBusLaneChal
 /// Compress one opened address/value tuple without converting its value back
 /// to a host integer. Proof-facing source adapters use this exact expression.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn compress_sha_call_fields_v1(
-    call: F,
-    role: F,
-    slot: F,
-    word_kind: F,
-    word: F,
-    value: F,
+pub(crate) fn compress_sha_call_fields_v1<A: PolynomialAirFieldV1>(
+    call: A,
+    role: A,
+    slot: A,
+    word_kind: A,
+    word: A,
+    value: A,
     lane: ZkX509ShaCallBusLaneChallengesV1,
-) -> F {
-    lane.terms[0]
-        .add(lane.terms[1].mul(call))
-        .add(lane.terms[2].mul(role))
-        .add(lane.terms[3].mul(slot))
-        .add(lane.terms[4].mul(word_kind))
-        .add(lane.terms[5].mul(word))
-        .add(lane.terms[6].mul(value))
+) -> A {
+    A::from_base(lane.terms[0])
+        .add(call.mul_base(lane.terms[1]))
+        .add(role.mul_base(lane.terms[2]))
+        .add(slot.mul_base(lane.terms[3]))
+        .add(word_kind.mul_base(lane.terms[4]))
+        .add(word.mul_base(lane.terms[5]))
+        .add(value.mul_base(lane.terms[6]))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn call_row_factor_v1(
@@ -2482,18 +2485,18 @@ fn sha_rfc_consumer_channels_v1(
     };
     Ok(consumer)
 }
-fn pack_sha_rfc_bits_v1(bits: &[F]) -> F {
+fn pack_sha_rfc_bits_v1<A: PolynomialAirFieldV1>(bits: &[A]) -> A {
     bits.iter()
         .copied()
         .enumerate()
-        .fold(F::ZERO, |packed, (bit, value)| {
-            packed.add(value.mul(F(1_u64 << bit)))
+        .fold(A::ZERO, |packed, (bit, value)| {
+            packed.add(value.mul(A::from_base(F(1_u64 << bit))))
         })
 }
-fn sha_rfc_message_byte_v1(
-    base: &[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
+fn sha_rfc_message_byte_v1<A: PolynomialAirFieldV1>(
+    base: &[A; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
     byte: usize,
-) -> Result<F, ZkX509ShaCallBusStarkErrorV1> {
+) -> Result<A, ZkX509ShaCallBusStarkErrorV1> {
     if byte >= 4 {
         return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
     }
@@ -2501,13 +2504,13 @@ fn sha_rfc_message_byte_v1(
     Ok(pack_sha_rfc_bits_v1(&base[bits_start..bits_start + 8])
         .mul(base[SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte]))
 }
-fn sha_rfc_opened_event_delta_v1(
-    base: &[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
-    fixed: &[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+fn sha_rfc_opened_event_delta_v1<A: PolynomialAirFieldV1>(
+    base: &[A; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
+    fixed: &[A; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
     stream: usize,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> Result<F, ZkX509ShaCallBusStarkErrorV1> {
+) -> Result<A, ZkX509ShaCallBusStarkErrorV1> {
     if stream >= ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 || lane >= ZK_X509_SHA_BUS_LANES_V1 {
         return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
     }
@@ -2524,11 +2527,11 @@ fn sha_rfc_opened_event_delta_v1(
     let message_factor = zk_x509_rfc5280_opened_output_factor_fields_after_challenge_validation_v1(
         role,
         channel,
-        F(2),
-        F::ZERO,
+        A::from_base(F(2)),
+        A::ZERO,
         offset,
         sha_rfc_message_byte_v1(base, stream)?,
-        F::ZERO,
+        A::ZERO,
         lane,
         challenges,
     )
@@ -2544,11 +2547,11 @@ fn sha_rfc_opened_event_delta_v1(
         zk_x509_rfc5280_opened_output_factor_fields_after_challenge_validation_v1(
             role,
             channel,
-            F(2),
-            F::ZERO,
+            A::from_base(F(2)),
+            A::ZERO,
             offset,
             length_high,
-            F::ZERO,
+            A::ZERO,
             lane,
             challenges,
         )
@@ -2557,11 +2560,11 @@ fn sha_rfc_opened_event_delta_v1(
         zk_x509_rfc5280_opened_output_factor_fields_after_challenge_validation_v1(
             role,
             channel,
-            F(2),
-            F::ZERO,
+            A::from_base(F(2)),
+            A::ZERO,
             offset,
             length_low,
-            F::ZERO,
+            A::ZERO,
             lane,
             challenges,
         )
@@ -2570,33 +2573,33 @@ fn sha_rfc_opened_event_delta_v1(
         zk_x509_rfc5280_opened_output_factor_fields_after_challenge_validation_v1(
             role,
             channel,
-            F(2),
-            F::ZERO,
+            A::from_base(F(2)),
+            A::ZERO,
             offset,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
             lane,
             challenges,
         )
         .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Challenge)?;
     let length_zero_selector = sha_rfc_zero_length_event_selector_v1(fixed, stream)?;
     Ok(fixed[start + ZK_X509_SHA_FIXED_RFC_MESSAGE_EVENT_V1]
-        .mul(message_factor.sub(F::ONE))
-        .add(length_zero_selector.mul(length_zero_factor.sub(F::ONE)))
+        .mul(message_factor.sub(A::ONE))
+        .add(length_zero_selector.mul(length_zero_factor.sub(A::ONE)))
         .add(
             fixed[start + ZK_X509_SHA_FIXED_RFC_LENGTH_HIGH_VALUE_V1]
-                .mul(length_high_factor.sub(F::ONE)),
+                .mul(length_high_factor.sub(A::ONE)),
         )
         .add(
             fixed[start + ZK_X509_SHA_FIXED_RFC_LENGTH_LOW_VALUE_V1]
-                .mul(length_low_factor.sub(F::ONE)),
+                .mul(length_low_factor.sub(A::ONE)),
         ))
 }
-fn sha_rfc_length_recomposition_residue_v1(
-    base: &[F; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
-    aux: &[F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1],
-    fixed: &[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
-) -> F {
+fn sha_rfc_length_recomposition_residue_v1<A: PolynomialAirFieldV1>(
+    base: &[A; ZK_X509_SHA_BATCH_BASE_WIDTH_V1],
+    aux: &[A; ZK_X509_SHA_BATCH_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+) -> A {
     let selector = fixed[ZK_X509_SHA_FIXED_RFC_LENGTH_PAIR_V1];
     let raw_length = pack_sha_rfc_bits_v1(
         &base[ZK_X509_SHA_LENGTH_BITS_START_V1
@@ -2613,15 +2616,15 @@ fn sha_rfc_length_recomposition_residue_v1(
 /// pairs. The final pair selects the constrained high and low values; the
 /// first three pairs are equally real output events whose values are fixed
 /// zero. This linear identity remains valid at verifier-opened LDE points.
-fn sha_rfc_zero_length_event_selector_v1(
-    fixed: &[F; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
+fn sha_rfc_zero_length_event_selector_v1<A: PolynomialAirFieldV1>(
+    fixed: &[A; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1],
     stream: usize,
-) -> Result<F, ZkX509ShaCallBusStarkErrorV1> {
+) -> Result<A, ZkX509ShaCallBusStarkErrorV1> {
     if stream >= ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 {
         return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
     }
     if stream >= 2 {
-        return Ok(F::ZERO);
+        return Ok(A::ZERO);
     }
     let start = ZK_X509_SHA_FIXED_RFC_STREAMS_V1
         .checked_add(
@@ -2924,37 +2927,80 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_v1(
     terminal: ZkX509ShaSegmentTerminalV1,
     ca_call_boundaries: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
 ) -> Result<Vec<F>, ZkX509ShaCallBusStarkErrorV1> {
+    evaluate_zk_x509_sha_batch_residues_over_field_v1(
+        current,
+        next,
+        word_challenges,
+        call_challenges,
+        rfc_challenges,
+        terminal,
+        ca_call_boundaries,
+    )
+}
+/// Complete polynomial SHA registration, including every call, RFC and CA-boundary constraint.
+///
+/// Public challenges and terminal claims embed from the base field; all opened
+/// private and fixed columns stay in the evaluation field. No row value selects
+/// a host-language branch. This does not authenticate the supplied openings.
+pub(crate) fn evaluate_zk_x509_sha_batch_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509ShaBatchRowV1<A>,
+    next: &ZkX509ShaBatchRowV1<A>,
+    word_challenges: ZkX509ShaWordStarkChallengesV1,
+    call_challenges: ZkX509ShaCallBusChallengesV1,
+    rfc_challenges: ZkX509Rfc5280StarkChallengesV1,
+    terminal: ZkX509ShaSegmentTerminalV1,
+    ca_call_boundaries: &[ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
+) -> Result<Vec<A>, ZkX509ShaCallBusStarkErrorV1> {
     call_challenges.validate()?;
     rfc_challenges
         .validate()
         .map_err(|_| ZkX509ShaCallBusStarkErrorV1::Challenge)?;
-    if usize::from(terminal.segment) >= ZK_X509_SHA_SEGMENT_COUNT_V1 {
+    if current
+        .base
+        .iter()
+        .chain(&next.base)
+        .chain(&current.aux)
+        .chain(&next.aux)
+        .chain(&current.fixed)
+        .chain(&next.fixed)
+        .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509ShaCallBusStarkErrorV1::Topology);
+    }
+    if usize::from(terminal.segment) >= ZK_X509_SHA_SEGMENT_COUNT_V1
+        || terminal
+            .source_products
+            .iter()
+            .chain(&terminal.digest_products)
+            .chain(terminal.rfc_stream_products.iter().flatten())
+            .any(|value| !value.is_canonical())
+    {
         return Err(ZkX509ShaCallBusStarkErrorV1::Terminal);
     }
     for (index, boundary) in ca_call_boundaries.iter().copied().enumerate() {
         boundary.validate_identity_v1(index)?;
     }
-    let current_word_base: &[F; SHA_WORD_CAPACITY_BASE_WIDTH_V1] = current.base
+    let current_word_base: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1] = current.base
         [..SHA_WORD_CAPACITY_BASE_WIDTH_V1]
         .try_into()
         .expect("word base prefix");
-    let next_word_base: &[F; SHA_WORD_CAPACITY_BASE_WIDTH_V1] = next.base
+    let next_word_base: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1] = next.base
         [..SHA_WORD_CAPACITY_BASE_WIDTH_V1]
         .try_into()
         .expect("word base prefix");
-    let current_word_aux: &[F; SHA_WORD_CAPACITY_AUX_WIDTH_V1] = current.aux
+    let current_word_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1] = current.aux
         [..SHA_WORD_CAPACITY_AUX_WIDTH_V1]
         .try_into()
         .expect("word aux prefix");
-    let next_word_aux: &[F; SHA_WORD_CAPACITY_AUX_WIDTH_V1] = next.aux
+    let next_word_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1] = next.aux
         [..SHA_WORD_CAPACITY_AUX_WIDTH_V1]
         .try_into()
         .expect("word aux prefix");
-    let word_fixed: &[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1] = current.fixed
+    let word_fixed: &[A; SHA_WORD_CAPACITY_FIXED_WIDTH_V1] = current.fixed
         [..SHA_WORD_CAPACITY_FIXED_WIDTH_V1]
         .try_into()
         .expect("word fixed prefix");
-    let mut residues = evaluate_zk_x509_sha_word_capacity_residues_v1(
+    let mut residues = evaluate_zk_x509_sha_word_capacity_residues_over_field_v1(
         current_word_base,
         next_word_base,
         current_word_aux,
@@ -2964,7 +3010,7 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_v1(
     )?;
     for bit in 0..ZK_X509_SHA_RFC_LENGTH_BITS_V1 {
         let value = current.base[ZK_X509_SHA_LENGTH_BITS_START_V1 + bit];
-        residues.push(value.mul(value.sub(F::ONE)));
+        residues.push(value.mul(value.sub(A::ONE)));
     }
     residues.push(sha_rfc_length_recomposition_residue_v1(
         &current.base,
@@ -2987,7 +3033,7 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_v1(
             manifest_call,
             manifest_role,
             manifest_slot,
-            F(u64::from(ZkX509ShaCallWordKindV1::Input.code())),
+            A::from_base(F(u64::from(ZkX509ShaCallWordKindV1::Input.code()))),
             input_word,
             current.base[0],
             challenge,
@@ -2996,57 +3042,57 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_v1(
             manifest_call,
             manifest_role,
             manifest_slot,
-            F(u64::from(ZkX509ShaCallWordKindV1::Digest.code())),
+            A::from_base(F(u64::from(ZkX509ShaCallWordKindV1::Digest.code()))),
             digest_word,
             current.base[0],
             challenge,
         );
         let input_before = current.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1 + lane];
-        let input_after = input_before.mul(F::ONE.add(input_event.mul(input_factor.sub(F::ONE))));
+        let input_after = input_before.mul(A::ONE.add(input_event.mul(input_factor.sub(A::ONE))));
         let digest_before = current.aux[ZK_X509_SHA_DIGEST_PRODUCTS_V1 + lane];
         let digest_after =
-            digest_before.mul(F::ONE.add(digest_event.mul(digest_factor.sub(F::ONE))));
+            digest_before.mul(A::ONE.add(digest_event.mul(digest_factor.sub(A::ONE))));
         residues.push(
-            F::ONE
+            A::ONE
                 .sub(segment_last)
                 .mul(next.aux[ZK_X509_SHA_INPUT_PRODUCTS_V1 + lane].sub(input_after)),
         );
         residues.push(
-            F::ONE
+            A::ONE
                 .sub(segment_last)
                 .mul(next.aux[ZK_X509_SHA_DIGEST_PRODUCTS_V1 + lane].sub(digest_after)),
         );
-        residues.push(segment_first.mul(input_before.sub(F::ONE)));
-        residues.push(segment_first.mul(digest_before.sub(F::ONE)));
-        residues.push(segment_last.mul(input_after.sub(terminal.source_products[lane])));
-        residues.push(segment_last.mul(digest_after.sub(terminal.digest_products[lane])));
+        residues.push(segment_first.mul(input_before.sub(A::ONE)));
+        residues.push(segment_first.mul(digest_before.sub(A::ONE)));
+        residues
+            .push(segment_last.mul(input_after.sub(A::from_base(terminal.source_products[lane]))));
+        residues
+            .push(segment_last.mul(digest_after.sub(A::from_base(terminal.digest_products[lane]))));
         for (boundary_index, boundary) in ca_call_boundaries.iter().copied().enumerate() {
             let selector = current.fixed[ZK_X509_SHA_FIXED_CA_CALL_SELECTORS_V1 + boundary_index];
             let call_first = current.fixed[SHA_WORD_CAPACITY_CALL_FIRST_V1].mul(selector);
             let call_last = current.fixed[SHA_WORD_CAPACITY_CALL_LAST_V1].mul(selector);
-            residues.push(call_first.mul(input_before.sub(boundary.source_start_products[lane])));
-            residues.push(call_first.mul(digest_before.sub(boundary.digest_start_products[lane])));
             residues.push(
-                call_last.mul(
-                    input_after.sub(
-                        boundary.source_start_products[lane].mul(boundary.source_products[lane]),
-                    ),
-                ),
+                call_first
+                    .mul(input_before.sub(A::from_base(boundary.source_start_products[lane]))),
             );
             residues.push(
-                call_last.mul(
-                    digest_after.sub(
-                        boundary.digest_start_products[lane].mul(boundary.digest_products[lane]),
-                    ),
-                ),
+                call_first
+                    .mul(digest_before.sub(A::from_base(boundary.digest_start_products[lane]))),
             );
+            residues.push(call_last.mul(input_after.sub(A::from_base(
+                boundary.source_start_products[lane].mul(boundary.source_products[lane]),
+            ))));
+            residues.push(call_last.mul(digest_after.sub(A::from_base(
+                boundary.digest_start_products[lane].mul(boundary.digest_products[lane]),
+            ))));
         }
     }
     for stream in 0..ZK_X509_SHA_RFC_PRODUCT_STREAMS_V1 {
         for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
             let before = current.aux
                 [ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1 + stream * ZK_X509_SHA_BUS_LANES_V1 + lane];
-            let after = before.mul(F::ONE.add(sha_rfc_opened_event_delta_v1(
+            let after = before.mul(A::ONE.add(sha_rfc_opened_event_delta_v1(
                 &current.base,
                 &current.fixed,
                 stream,
@@ -3054,15 +3100,18 @@ pub(crate) fn evaluate_zk_x509_sha_batch_residues_v1(
                 rfc_challenges,
             )?));
             residues.push(
-                F::ONE.sub(segment_last).mul(
+                A::ONE.sub(segment_last).mul(
                     next.aux[ZK_X509_SHA_RFC_CONSUMER_PRODUCTS_V1
                         + stream * ZK_X509_SHA_BUS_LANES_V1
                         + lane]
                         .sub(after),
                 ),
             );
-            residues.push(segment_first.mul(before.sub(F::ONE)));
-            residues.push(segment_last.mul(after.sub(terminal.rfc_stream_products[stream][lane])));
+            residues.push(segment_first.mul(before.sub(A::ONE)));
+            residues.push(
+                segment_last
+                    .mul(after.sub(A::from_base(terminal.rfc_stream_products[stream][lane]))),
+            );
         }
     }
     let padding = current.fixed[ZK_X509_SHA_FIXED_PHYSICAL_PADDING_V1];
@@ -3956,7 +4005,7 @@ mod tests {
         assert_eq!(ZK_X509_SHA_BATCH_AUX_WIDTH_V1, 78);
         assert_eq!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, 118);
         assert_eq!(ZK_X509_SHA_BATCH_CONSTRAINT_COUNT_V1, 796);
-        assert_eq!(ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1, 4);
+        assert_eq!(ZK_X509_SHA_BATCH_CONSTRAINT_DEGREE_V1, 6);
         let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes: 4,
         })

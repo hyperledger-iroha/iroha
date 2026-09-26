@@ -490,7 +490,7 @@ impl PotrReceiptV1 {
         admission: &AdmissionRecord,
     ) -> Result<(), PotrReceiptValidationError> {
         self.validate()?;
-        if !admission.is_council_verified() {
+        if !(admission.is_council_verified() || admission.is_genesis_material()) {
             return Err(PotrReceiptValidationError::UntrustedProviderAdmission);
         }
         if admission.provider_id() != &self.provider_id {

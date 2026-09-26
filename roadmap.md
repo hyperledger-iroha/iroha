@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-25.
+Last updated: 2026-09-26.
 
 The active [first-release completion goals](specs/first_release_completion_goals.md)
 coordinate privacy/ZK, SoraFS and multilane implementation on one integrated
@@ -8,6 +8,10 @@ candidate. Backward compatibility is prohibited; SoraFS signing does not require
 an HSM. Source-applied Torii MCP stateless-only and signed-history/JWT-visible-query/exact-account-read repairs postdate the aa1c Taira capture and require compilation, qualification, and a new signed candidate. Component and final qualification gates remain open until verified.
 The [September 25 integration checkpoint](docs/history/2026-09-25/first-release-integration-checkpoint.md)
 records the current ABI-24 source and scoped fixture, signer and script results.
+The [September 26 ownership/signer checkpoint](docs/history/2026-09-26/retained-ownership-and-signer-integration.md)
+records the latest integrated cuts and their outstanding runtime checks.
+The active [ZK remediation goals](specs/zk_first_release_goals.md) own the
+cryptographic correctness, bounded-proof and developer-API acceptance criteria.
 
 This is the outstanding-outcome view for Iroha 3's first release. Component owners
 below are code responsibilities, not invented individual assignments. Local
@@ -134,7 +138,7 @@ See [Norito](norito.md), [schema identity](specs/norito_schema_identity.md),
 | --- | --- | --- | --- |
 | P1 | Parliament runtime and independent review | Governance model/reducer, crypto and Torii | Exact 18-event surface, atomic Policy→Confirmation, bounded redraws, finalized beacon, private ballot/deadline/retry, rollback and restore on four validators; independent timed-OVN/threshold-BLS review and source-bound public API/SDK artifacts. See [governance pipeline](specs/governance_pipeline.md). |
 | P13 | Standalone proof-backed election semantics | Governance model, Halo2 circuits, Core/IVM and SDK owners | Retain the separate election product and close credential-linked eligibility/nullifiers, option/outcome and weight/re-vote rules, encrypted ballot/key custody, authoritative closed corpus and sound ballot/tally relations. Hard-cut the incomplete input shapes through one final V1 contract; verify keys, SDK fixtures, atomic state/restore and four-validator finality. No toy circuit, generic Binding AIR or Parliament alias supplies this statement. See [the current election audit boundary](specs/zk_audit_matrix.md#election-statement-completion). |
-| P2 | SoraFS production promotion | SoraFS, operators and evidence owners | Complete the [V1 implementation goals](specs/sorafs/v1_implementation_goals.md) and [closure ledger](specs/sorafs/v1_closure_ledger.md), including authenticated software signer authorization and durable completion without an HSM prerequisite; live four-voter/multi-provider/dual-gateway L1 with resilience/load/24-hour soak and exactly 17 fresh summaries; ordered L2 promotion legs and trusted foundational envelope. Synthetic aggregates cannot authorize promotion. |
+| P2 | SoraFS production promotion | SoraFS, operators and evidence owners | Complete the [first-release reliability goals](specs/sorafs/first_release_reliability_goals.md), [V1 implementation goals](specs/sorafs/v1_implementation_goals.md) and [closure ledger](specs/sorafs/v1_closure_ledger.md), including authenticated software signer authorization and durable completion without an HSM prerequisite; live four-voter/multi-provider/dual-gateway L1 with resilience/load/24-hour soak and exactly 17 fresh summaries; ordered L2 promotion legs and trusted foundational envelope. Synthetic aggregates cannot authorize promotion. |
 | P3 | Governance DAG deployment | DAG service and deployment broker owners | Two concrete linked service instances, both Kubo/head ingress administrations, authenticated signing/custody and sealed CAS; failover/rotation/archive/rollback/corruption/outage/disaster recovery; five-target artifacts, SBOM and L1/L2 evidence. See [DAG plan](specs/sorafs_governance_dag_plan.md). |
 | P4 | Secure QUIC, relay and VPN activation | P2P, SoraNet and privileged Linux helpers | Qualify a fixed QUIC resolution and abuse regressions before removing fail-closed gates; exact DATAGRAM accounting and deterministic fallback. Live pre-auth capacity/NAT tests; paid lease consistency; real TUN/pidfd/DNS rollback, hostile peer, rotation/loss/traffic-shape, fuzz and independent review. See [SoraNet handshake](specs/soranet_handshake.md). |
 | P5 | Musubi registry and publication deployment | Musubi service, Core/Torii, cache and deploy owners | Qualify the explicit local/registry lock model and immutable standalone test graph across supported release hosts; complete long-detach/private HTTPS runner and authenticated recovery integration; descriptor-relative/no-follow atomic cache/publication and supported non-Unix guarantees; authoritative metrics, queue crash/restart, four-peer and namespace/two-week soak; supported-host whole-process 64 MiB target. See [Musubi contract](specs/musubi.md). Complete the [contract-to-Taira workflow goals](specs/musubi_taira_workflow_goals.md): integrated private wallet, XOR funding and fee-paying sends, public immutable code creation, paid exact-domain alias scope, exact Applied deployment/readback, deployed quote and an accurate reproducible video. Qualify the wallet-aware doctor and deploy the missing public faucet-policy route. Privileged code removal/delegation needs its separate genesis-rooted management authority; ordinary developer creation does not. |

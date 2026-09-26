@@ -2257,7 +2257,7 @@ final class SccpV1Tests: XCTestCase {
             "contract_artifact_sha256": upper(0xb1, bytes: 32),
             "vk_ref": [
                 "backend": "stark/fri/v1",
-                "name": "ivm-execution-v1",
+                "name": "ivm-replay-binding-v1",
                 "version": 1,
                 "commitment": upper(0xb2, bytes: 32),
             ],

@@ -40,6 +40,11 @@ path = "tests/sora_parliament_lifecycle_smoke.rs"
 required-features = ["parliament-test-signers"]
 
 [[test]]
+name = "sorafs_publication_governance"
+path = "tests/sorafs_publication_governance.rs"
+required-features = ["parliament-test-signers"]
+
+[[test]]
 name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 

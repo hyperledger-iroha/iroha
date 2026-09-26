@@ -176,7 +176,11 @@ impl Kura {
         store.remove_da_block_file(u64::try_from(height.get())?)?;
         store.publish_commit_marker(count)?;
         drop(store);
-        if let Some((_, cached)) = self.block_data.lock().get_mut(height.get().saturating_sub(1)) {
+        if let Some((_, cached)) = self
+            .block_data
+            .lock()
+            .get_mut(height.get().saturating_sub(1))
+        {
             *cached = None;
         }
         self.update_total_disk_usage_delta(before_bytes, 0);
@@ -697,7 +701,6 @@ pub struct BlockStore {
     hashes_file: Option<FileWrap>,
     fsync: FsyncState,
     fsync_telemetry: FsyncTelemetry,
-    encode_scratch: Vec<u8>,
     read_scratch: Vec<u8>,
     data_mmap: Option<MemoryMirror>,
     data_mmap_len: u64,
@@ -771,7 +774,6 @@ impl Debug for BlockStore {
             .field("fsync_mode", &self.fsync.mode)
             .field("fsync_pending", &self.fsync.pending_since.is_some())
             .field("fsync_telemetry", &self.fsync_telemetry)
-            .field("encode_scratch_len", &self.encode_scratch.len())
             .field("read_scratch_len", &self.read_scratch.len())
             .field(
                 "mirror_kind",

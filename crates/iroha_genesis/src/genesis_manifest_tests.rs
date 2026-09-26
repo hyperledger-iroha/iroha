@@ -515,7 +515,7 @@ fn genesis_canonical_wire_roundtrip_preserves_digest() {
     let genesis = manifest.build_and_sign(&keypair).expect("sign genesis");
     let wire = genesis.0.canonical_wire().expect("canonical wire encoding");
     let framed = wire.as_framed().to_vec();
-    let versioned = wire.as_versioned().to_vec();
+    let versioned = iroha_version::codec::EncodeVersioned::encode_versioned(&genesis.0);
     let decoded =
         SignedBlock::decode_all_versioned(&versioned).expect("decode versioned signed block");
     assert_eq!(

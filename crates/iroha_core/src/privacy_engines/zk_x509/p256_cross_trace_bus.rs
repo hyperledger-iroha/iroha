@@ -56,7 +56,7 @@ use super::{
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
@@ -212,13 +212,13 @@ pub(crate) struct P256CrossTraceTagV1 {
 }
 /// Numeric verifier preprocessing for one optional product factor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct P256CrossTraceEventFixedV1 {
+pub(crate) struct P256CrossTraceEventFixedV1<A = F> {
     /// One for an active event and zero for identity padding.
-    pub(crate) active: F,
+    pub(crate) active: A,
     /// Active-coded endpoint domain.
-    pub(crate) endpoint: F,
+    pub(crate) endpoint: A,
     /// Active-coded canonical address.
-    pub(crate) address: F,
+    pub(crate) address: A,
 }
 impl P256CrossTraceEventFixedV1 {
     pub(crate) const fn inactive() -> Self {
@@ -238,13 +238,13 @@ impl P256CrossTraceEventFixedV1 {
 }
 /// Numeric first/last/continuation selectors for one native segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct P256CrossTraceBoundaryFixedV1 {
+pub(crate) struct P256CrossTraceBoundaryFixedV1<A = F> {
     /// One only on the first native row.
-    pub(crate) first: F,
+    pub(crate) first: A,
     /// One only on the final native row.
-    pub(crate) last: F,
+    pub(crate) last: A,
     /// One on every row except the final native row.
-    pub(crate) continuation: F,
+    pub(crate) continuation: A,
 }
 impl P256CrossTraceBoundaryFixedV1 {
     pub(crate) fn for_row(index: usize, rows: usize) -> Result<Self, P256CrossTraceBusErrorV1> {
@@ -871,19 +871,19 @@ fn validate_binding_fixed_schedule_v1(
 }
 /// Verifier-fixed writer multiplicity selectors at one flattened value-bus source row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct P256CrossTraceWriterFixedRowV1 {
+pub(crate) struct P256CrossTraceWriterFixedRowV1<A = F> {
     /// Two writer factors, each independently identity-padded.
-    pub(crate) events: [P256CrossTraceEventFixedV1; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    pub(crate) events: [P256CrossTraceEventFixedV1<A>; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Multiplicity one selector.
-    pub(crate) multiplicity_one: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    pub(crate) multiplicity_one: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Multiplicity 64 selector.
-    pub(crate) multiplicity_64: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    pub(crate) multiplicity_64: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Multiplicity 65 selector.
-    pub(crate) multiplicity_65: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    pub(crate) multiplicity_65: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Multiplicity 129 selector.
-    pub(crate) multiplicity_129: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    pub(crate) multiplicity_129: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Exact global value-bus boundaries.
-    pub(crate) boundary: P256CrossTraceBoundaryFixedV1,
+    pub(crate) boundary: P256CrossTraceBoundaryFixedV1<A>,
 }
 /// Compact verifier-owned writer-source schedule.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -892,20 +892,20 @@ pub(crate) struct P256CrossTraceWriterSourceFixedV1 {
 }
 /// One challenge-dependent writer-source row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct P256CrossTraceWriterAuxRowV1 {
+pub(crate) struct P256CrossTraceWriterAuxRowV1<A = F> {
     /// Active-gated copy of the actual value-bus writer cell.
-    pub(crate) event_values: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    pub(crate) event_values: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// `L^(2^0)` through `L^(2^7)` in each lane.
-    pub(crate) powers: [[[F; P256_CROSS_TRACE_WRITER_POWERS_V1]; P256_CROSS_TRACE_LANES_V1];
+    pub(crate) powers: [[[A; P256_CROSS_TRACE_WRITER_POWERS_V1]; P256_CROSS_TRACE_LANES_V1];
         P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Verifier-selected `L^m`.
     pub(crate) selected_power:
-        [[F; P256_CROSS_TRACE_LANES_V1]; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+        [[A; P256_CROSS_TRACE_LANES_V1]; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Product entering each factor slot.
     pub(crate) product_before:
-        [[F; P256_CROSS_TRACE_LANES_V1]; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+        [[A; P256_CROSS_TRACE_LANES_V1]; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
     /// Source terminal repeated as a degree-zero column.
-    pub(crate) terminal: [F; P256_CROSS_TRACE_LANES_V1],
+    pub(crate) terminal: [A; P256_CROSS_TRACE_LANES_V1],
 }
 /// Constant-memory deterministic provider for the `2^19` writer-source auxiliary rows.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -1123,13 +1123,15 @@ impl<'a> P256CrossTraceWriterSourceStreamV1<'a> {
     }
 }
 /// Pure degree-three writer-source residues over the actual committed value-bus source cell.
-pub(crate) fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1(
-    fixed: P256CrossTraceWriterFixedRowV1,
-    source_values: [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
-    current: &P256CrossTraceWriterAuxRowV1,
-    next: &P256CrossTraceWriterAuxRowV1,
+pub(crate) fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1<
+    A: PolynomialAirFieldV1,
+>(
+    fixed: P256CrossTraceWriterFixedRowV1<A>,
+    source_values: [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1],
+    current: &P256CrossTraceWriterAuxRowV1<A>,
+    next: &P256CrossTraceWriterAuxRowV1<A>,
     challenges: P256CrossTraceChallengesV1,
-) -> Vec<F> {
+) -> Vec<A> {
     let mut residues = Vec::with_capacity(P256_CROSS_TRACE_WRITER_CONSTRAINT_COUNT_V1);
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
         residues.push(
@@ -1152,7 +1154,7 @@ pub(crate) fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1(
                     ),
                 );
             }
-            let expected_selected = F::ONE
+            let expected_selected = A::ONE
                 .sub(fixed.events[slot].active)
                 .add(fixed.multiplicity_one[slot].mul(current.powers[slot][lane][0]))
                 .add(fixed.multiplicity_64[slot].mul(current.powers[slot][lane][6]))
@@ -1174,7 +1176,7 @@ pub(crate) fn evaluate_zk_x509_p256_cross_trace_writer_row_constraints_v1(
             fixed
                 .boundary
                 .first
-                .mul(current.product_before[0][lane].sub(F::ONE)),
+                .mul(current.product_before[0][lane].sub(A::ONE)),
         );
         for slot in 1..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
             let previous_after =
@@ -1333,17 +1335,17 @@ fn writer_address_v1(id: u32, limb: u8) -> Result<u32, P256CrossTraceBusErrorV1>
         .and_then(|address| address.checked_add(u32::from(limb)))
         .ok_or(P256CrossTraceBusErrorV1::Resource)
 }
-fn compress_event_v1(
-    fixed: P256CrossTraceEventFixedV1,
-    event_value: F,
+fn compress_event_v1<A: PolynomialAirFieldV1>(
+    fixed: P256CrossTraceEventFixedV1<A>,
+    event_value: A,
     challenges: P256CrossTraceLaneChallengesV1,
-) -> F {
-    F::ONE
+) -> A {
+    A::ONE
         .sub(fixed.active)
-        .add(fixed.active.mul(challenges.terms[0]))
-        .add(fixed.endpoint.mul(challenges.terms[1]))
-        .add(fixed.address.mul(challenges.terms[2]))
-        .add(event_value.mul(challenges.terms[3]))
+        .add(fixed.active.mul_base(challenges.terms[0]))
+        .add(fixed.endpoint.mul_base(challenges.terms[1]))
+        .add(fixed.address.mul_base(challenges.terms[2]))
+        .add(event_value.mul_base(challenges.terms[3]))
 }
 /// Exact maximum tagged-event count used in the four-lane soundness bound.
 #[cfg(test)]

@@ -16104,6 +16104,8 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) current_entrypoint_index: Option<u64>,
     /// One-use ordinal of a directly signed role-11 instruction, absent for nested effects.
     pub(crate) current_direct_stream_token_instruction_index: Option<u32>,
+    /// One-use marker set only for the exact directly signed genesis admission initializer.
+    pub(crate) current_direct_sorafs_admission_initialization: bool,
     /// One-use source of a sole directly signed role-15 Reserve/Complete instruction.
     pub(crate) current_direct_final_promotion_operation_origin: Option<
         iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationOriginV1,
@@ -54441,6 +54443,7 @@ impl<'state> StateBlock<'state> {
             current_entrypoint_index: None,
             current_direct_stream_token_instruction_index: None,
             current_direct_final_promotion_operation_origin: None,
+            current_direct_sorafs_admission_initialization: false,
             rwa_generated_id_ordinal: 0,
             lifecycle_transition_ordinal: 0,
             executor_fuel_remaining,

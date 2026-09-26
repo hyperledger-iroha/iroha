@@ -7222,6 +7222,50 @@
       ],
       "production_symbols": [
         {
+          "path": "crates/iroha_data_model/src/block/mod.rs",
+          "kind": "method",
+          "symbol": "SignedBlock::checked_resultless_proposal_eq",
+          "required_tokens": [
+            "pub fn checked_resultless_proposal_eq(&self, other: &Self) -> Result<bool, NoritoFrameError>",
+            "let original_len = self.checked_resultless_payload_len()?;",
+            "let candidate_len = other.checked_resultless_payload_len()?;",
+            "original_len == candidate_len",
+            "self.signatures == other.signatures",
+            "self.payload == other.payload"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/mod.rs",
+          "kind": "method",
+          "symbol": "SignedBlock::checked_resultless_payload_len",
+          "required_tokens": [
+            "fn checked_resultless_payload_len(&self) -> Result<usize, NoritoFrameError>",
+            "let proposal = SignedBlockOutputCandidate {",
+            "signatures: OutputFieldRef(&self.signatures)",
+            "payload: OutputFieldRef(&self.payload)",
+            "result: None",
+            "let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());",
+            "let payload_len = norito::core::encoded_payload_len(&proposal)?;",
+            "u64::try_from(payload_len).map_err(|_| NoritoFrameError::LengthMismatch)?;",
+            "enforce_payload_len_limit(payload_len)?;",
+            "Ok(payload_len)"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/payload.rs",
+          "kind": "method",
+          "symbol": "BlockPayload::eq",
+          "required_tokens": [
+            "self.header == other.header",
+            "self.external_entrypoints == other.external_entrypoints",
+            "self.execution_context == other.execution_context",
+            "self.da_commitments == other.da_commitments",
+            "self.da_proof_policies == other.da_proof_policies",
+            "self.da_pin_intents == other.da_pin_intents",
+            "self.npos_consensus_effects == other.npos_consensus_effects"
+          ]
+        },
+        {
           "path": "crates/iroha_core/src/native_amx.rs",
           "kind": "struct",
           "symbol": "NativeAmxSourceSessionClaimV4",
@@ -12307,7 +12351,7 @@
             "state: &'state State",
             "observed: VerifiedLaneContexts",
             "generation: u64",
-            "input: Arc<SignedBlock>",
+            "input: SignedBlock",
             "groups: Vec<VerifiedLaneDecisionGroupV1>"
           ]
         },
@@ -12324,7 +12368,7 @@
             "LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group)",
             "!observed.is_current(self)",
             "state: self,\n                observed,\n                generation,",
-            "input: Arc::new(carrier.clone()),\n                groups"
+            "input: carrier.clone(),\n                groups"
           ]
         },
         {
@@ -12336,9 +12380,8 @@
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "ensure_exec_witness_capture_available()",
             "if !self.is_current()",
-            "if carrier != *self.input {\n            return Err(",
-            "drop(self.input)",
-            "record_native_lane_decision_batch(carrier, self.groups, context)",
+            "fn record_execution(\n        self,\n        context: crate::sumeragi::v2::VerifiedHeightContext,\n    )",
+            "record_native_lane_decision_batch(self.input, self.groups, context)",
             "self.generation,\n            self.state.state_view_generation()",
             "recorded.map(Some)"
           ]
@@ -12444,7 +12487,7 @@
             "frozen.height != body.header().height().get()",
             "frozen.network_id != *state.network_id_ref()",
             "!= body.header().prev_block_hash()",
-            "snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash)",
+            "frozen\n                            .snapshot_bootstrap\n                            .map(|anchor| anchor.snapshot_block_hash)",
             "verify_origin_block_signature(",
             "BlockSignaturePolicy::RotatingLeader",
             "length > frozen.da_layout.max_payload_size_bytes",
@@ -12452,7 +12495,7 @@
             "Self::validate_static_state_dependent(",
             "Self::validate_static_with_snapshot(",
             "if generation != state.state_view_generation()",
-            "source.record_execution(body, context)?",
+            "source.record_execution(context)?",
             "recorded.into_preparation_parts().map_err(|reason| {\n            NativeCandidatePreparationError::Preparation(\n                MergeLedgerCommitError::ExecutionBatchInvalid(reason),\n            )\n        })?",
             "Arc::new(native.context().context().clone())",
             "Ok(Some(ValidatedCarrierPreparationInput {",
@@ -13727,10 +13770,8 @@
           "required_tokens": [
             "if self.context.as_ref() != context",
             "return false;",
-            "self.valid.as_ref().canonical_proposal_wire_hash()",
-            "proposal.canonical_proposal_wire_hash()",
-            "(Ok(original), Ok(candidate)) => original == candidate",
-            "_ => false"
+            "self.valid\n            .as_ref()\n            .checked_resultless_proposal_eq(proposal)",
+            ".unwrap_or(false)"
           ]
         },
         {
@@ -13747,6 +13788,7 @@
           "symbol": "Candidate",
           "required_tokens": [
             "subject: wire::BlockSubject",
+            "body: Option<SignedBlock>",
             "owner: Option<O>"
           ]
         },
@@ -13786,7 +13828,7 @@
             "&self",
             "let candidate = self",
             ".find(|row| row.subject == durable.subject())",
-            "if candidate.is_some_and(|row| row.owner.is_none())",
+            "if candidate.is_some_and(|row| match row.owner.as_ref() {\n            None => true,\n            Some(owner) => owner.needs_decoded_body() && row.body.is_none(),\n        })",
             "return Err(CarrierCustodyError::MissingOwner)",
             "!self.markers.iter().any(|row| row.durable == *durable)",
             "self.markers.len() == self.limit",
@@ -13800,7 +13842,12 @@
           "kind": "method",
           "symbol": "RetainedBodyValidationService::prepare_marker",
           "required_tokens": [
+            "body: SignedBlock",
+            "let mut decoded = Some(body)",
             "if marker.is_none() && self.markers.len() == self.limit",
+            "if owner.needs_decoded_body() && candidate.body.is_none()",
+            "if let Some(retained) = candidate.body.as_ref()",
+            "if decoded.as_ref() != Some(retained)",
             "if requires_existing_owner",
             "return Err(CarrierCustodyError::MissingOwner)",
             "if self.candidates.len() == self.limit",
@@ -13808,20 +13855,29 @@
             "let index = self.candidates.len()",
             "self.candidates.push(Candidate {",
             "subject: durable.subject()",
+            "body: None",
             "owner: None",
-            "let owner = match self.validator.prepare(context, body)",
+            "let original_body = decoded\n                    .as_ref()\n                    .expect(\"decoded body precedes original preparation\")",
+            "let owner = match self.validator.prepare(context, original_body)",
             "let vacant = self\n                            .candidates\n                            .pop()\n                            .expect(\"reserved candidate descriptor\")",
             "debug_assert_eq!(vacant.subject, durable.subject())",
             "debug_assert!(vacant.owner.is_none())",
             "return Ok(CarrierMarkerPreparation::ValidationError(error))",
+            "if owner.needs_decoded_body()",
+            "self.candidates[index].body = decoded.take()",
             "self.candidates[index].owner = Some(owner)",
-            "if !owner.matches_candidate(context, body)",
+            "let current_body = candidate\n            .body\n            .as_ref()\n            .or(decoded.as_ref())",
+            "let matches = owner.matches_candidate(context, current_body)",
+            "let ready = owner.ready_commitment()",
+            "if !matches",
+            "self.unretain_finished_body(index, &mut decoded)",
             "return Err(CarrierCustodyError::Identity)",
-            "let commitment = match owner.ready_commitment()",
+            "let commitment = match ready",
             "Some(commitment) => commitment",
-            "self.resume_candidate(index, context, body)?",
+            "self.resume_candidate(index, context, decoded.as_ref())?",
             "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
             ".ready_commitment()\n                    .ok_or(CarrierCustodyError::IncompleteCapture)?",
+            "drop(decoded)",
             "confirmed: None",
             "Ok(CarrierMarkerPreparation::Ready(commitment))"
           ]
@@ -13877,7 +13933,7 @@
             "if !self.rejected.contains_key(&key)",
             "service.preflight_marker(&durable)?",
             "self.load_validation_envelope(&durable, expected_manifest_hash)?",
-            "service.prepare_marker(",
+            "service.prepare_marker(\n            &self.context,\n            block,\n            &durable,",
             "already_validated.is_some() || reused.is_some()",
             "let validated = self.persist_validated_receipt(&durable, commitment)?",
             "service.confirm(&validated)?",
@@ -13926,12 +13982,33 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
           "kind": "method",
+          "symbol": "RetainedBodyValidationService::unretain_finished_body",
+          "required_tokens": [
+            "decoded: &mut Option<SignedBlock>",
+            "let candidate = &mut self.candidates[index]",
+            ".is_some_and(|owner| !owner.needs_decoded_body())",
+            "let retained = candidate.body.take()",
+            "if decoded.is_none()",
+            "*decoded = retained",
+            "drop(retained)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/validation_custody.rs",
+          "kind": "method",
           "symbol": "RetainedBodyValidationService::resume_candidate",
           "required_tokens": [
-            "match self.validator.resume(owner)",
-            "Ok(owner) => {\n                self.candidates[index].owner = Some(owner);\n                None\n            }",
-            "Err((owner, refusal)) => {\n                self.candidates[index].owner = Some(owner);\n                Some(refusal)\n            }",
-            "if !owner.matches_candidate(context, body)",
+            "decoded_body: Option<&SignedBlock>",
+            "let candidate = &mut self.candidates[index]",
+            "let retained_body = candidate.body.take()",
+            "let body = retained_body\n            .as_ref()\n            .or(decoded_body)",
+            "let owner = candidate\n            .owner\n            .take()",
+            "match self.validator.resume(owner, body)",
+            "Ok(owner) => {\n                candidate.owner = Some(owner);\n                None\n            }",
+            "Err((owner, refusal)) => {\n                candidate.owner = Some(owner);\n                Some(refusal)\n            }",
+            "let matches = owner.matches_candidate(context, body)",
+            "if owner.needs_decoded_body() {\n            candidate.body = retained_body;\n        } else {\n            drop(retained_body);\n        }",
+            "if !matches",
             "return Err(CarrierCustodyError::Identity)",
             "Ok(refusal)"
           ]
@@ -21102,7 +21179,7 @@
           "symbol": "AwaitingNativeSource",
           "required_tokens": [
             "context: VerifiedHeightContext",
-            "proposal: SignedBlock",
+            "proposal_hash: iroha_crypto::Hash",
             "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>",
             "pending: Option<PendingNativeSource>",
             "shell_admission: Option<CarrierShellAdmission>"
@@ -21113,6 +21190,9 @@
           "kind": "method",
           "symbol": "OwnedNativeCarrierValidator::execute_source",
           "required_tokens": [
+            "proposal: &SignedBlock",
+            "prepare_proposed_native_lane_batch_source(proposal, &waiting.recovered)",
+            "prepare_native_source_admitted(\n            proposal,\n            source,",
             "NativeLaneBatchSourcePreparationV1::ObservationChanged =>",
             "return Ok(NativeValidationPhase::AwaitingSource(waiting));",
             "&mut waiting.shell_admission",
@@ -21134,8 +21214,29 @@
         {
           "path": "crates/iroha_core/src/sumeragi/v2_apply/native_validation.rs",
           "kind": "method",
+          "symbol": "OwnedNativeCarrierValidator::prepare",
+          "required_tokens": [
+            "body: &SignedBlock",
+            "if context != self.context.context()",
+            "let class = self.classify_source(body)?",
+            "let proposal_hash = body",
+            "let result = self.execute_source(",
+            "context: self.context.clone()",
+            "proposal_hash,",
+            "shell_admission: Some(shell_admission)",
+            "},\n            body,\n        );",
+            "phase: Box::new(Some(phase))",
+            "_container_admission: container_admission"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/native_validation.rs",
+          "kind": "method",
           "symbol": "OwnedNativeCarrierValidator::resume",
           "required_tokens": [
+            "proposal: &SignedBlock",
+            "let proposal_hash = waiting.proposal_hash",
+            "match self.execute_source(waiting, proposal)",
             "LocalValidationRefusal::ObservationChanged",
             "*owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));",
             "return Err((owner, refusal));"
@@ -21147,7 +21248,18 @@
           "symbol": "NativeValidationCandidate::matches_candidate",
           "required_tokens": [
             "fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool",
-            "carrier.matches_validation_candidate(context, body)"
+            "carrier.matches_validation_candidate(context, body)",
+            ".checked_resultless_proposal_eq(body)",
+            ".unwrap_or(false)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_apply/native_validation.rs",
+          "kind": "method",
+          "symbol": "NativeValidationCandidate::needs_decoded_body",
+          "required_tokens": [
+            "fn needs_decoded_body(&self) -> bool",
+            "NativeValidationPhase::AwaitingSource(_)"
           ]
         },
         {
@@ -21338,7 +21450,7 @@
             "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
             "context: crate::sumeragi::v2::VerifiedHeightContext",
             "let Some(execution) = Self::validate_and_record_native_candidate(",
-            "source, context, genesis_account, time_source, block_cadence",
+            "source,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
             "return Ok(None);",
             "PreparedCarrier::prepare(execution)",
             ".map_err(|(_, reason)| NativeCandidatePreparationError::Preparation(reason))"
@@ -28783,9 +28895,34 @@
             ".checked_add(MAX_RETAINED_BLOCK_RECORD_BYTES.checked_next_power_of_two()?)?",
             "norito::canonical_decode_limits(input).max_total_allocated_bytes()",
             ".try_fold(0usize, usize::checked_add)",
-            "let proposal_clone = norito::canonical_decode_limits(wire).max_total_allocated_bytes();",
-            "proposal_clone,",
+            "input_graph,",
+            "metadata_encoding,",
             "decoded,"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/mod.rs",
+          "kind": "method",
+          "symbol": "SignedBlock::canonical_proposal_wire_hash",
+          "required_tokens": [
+            "let (prefix, payload) = self.borrowed_resultless_wire_parts()?;",
+            "Ok(Hash::new_from_chunks(&[&prefix, &payload]))"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/mod.rs",
+          "kind": "method",
+          "symbol": "SignedBlock::borrowed_resultless_wire_parts",
+          "required_tokens": [
+            "let proposal = SignedBlockOutputCandidate {",
+            "signatures: OutputFieldRef(&self.signatures)",
+            "payload: OutputFieldRef(&self.payload)",
+            "result: None",
+            "let payload = encode_signed_block_payload(&proposal);",
+            "Vec::with_capacity(1 + norito::core::Header::SIZE)",
+            "prefix.push(self.version());",
+            "write_signed_block_header(&payload, &mut prefix)?;",
+            "Ok((prefix, payload))"
           ]
         },
         {

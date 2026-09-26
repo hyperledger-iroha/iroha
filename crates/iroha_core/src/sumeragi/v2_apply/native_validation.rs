@@ -147,8 +147,10 @@ impl RetainedValidationOwner for NativeValidationCandidate {
             }
             NativeValidationPhase::Published { carrier, .. } => {
                 carrier.artifact().height_context == *context
-                    && carrier.block().canonical_proposal_wire_hash().ok()
-                        == body.canonical_proposal_wire_hash().ok()
+                    && carrier
+                        .block()
+                        .checked_resultless_proposal_eq(body)
+                        .unwrap_or(false)
             }
         }
     }

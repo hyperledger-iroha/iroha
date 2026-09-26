@@ -17,6 +17,10 @@
 //!   proofs are reproducible across hosts. Goldilocks is a STARK field, not an IPA
 //!   commitment group; IPA envelopes with that field identity are rejected.
 //! - The implementation targets `std`.
+//! - [`poly::Polynomial`] and standalone IPA opening envelopes are unblinded
+//!   primitives for public coefficient data. They do not by themselves prove an
+//!   application relation or hide private witnesses. Dedicated protocol modules
+//!   own their masking, statement, resource and qualification requirements.
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 #[cfg(feature = "full")]

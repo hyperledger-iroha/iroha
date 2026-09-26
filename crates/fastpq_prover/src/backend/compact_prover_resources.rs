@@ -18,7 +18,7 @@ use super::{
         LOCAL_SLOTS, MAX_PROVER_LEDGER_NODES, MAX_PROVER_OUTPUT_TERMS, MAX_PROVER_SELECTOR_MASKS,
         MAX_PROVER_SELECTOR_RUNS, TRANSITION_SLOTS,
     },
-    compact_protocol::MAX_PROVER_JOBS,
+    compact_protocol::{MAX_PROVER_JOBS, replay::TraceReplayPlan},
     compact_smt_quotient::{FIXED_COLUMN_COUNT, FIXED_ROW_COUNT, RESIDUE_COUNT},
 };
 use crate::{
@@ -26,6 +26,7 @@ use crate::{
     gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_HASH_ROWS, PHYSICAL_ROW_COUNT},
 };
 
+#[cfg(test)]
 const BLOWUP: usize = 8;
 const MASK_CYCLE_ROWS: usize = 4096;
 const QUERIES: usize = 375;
@@ -40,14 +41,15 @@ const CONSTRAINTS: usize = LOCAL_SLOTS + TRANSITION_SLOTS + RESIDUE_COUNT;
 /// rather than the length of a proof which has already been generated.
 pub(super) fn segment_charge(statement_bytes: usize, child_frame_bytes: usize) -> Result<usize> {
     let mut charge = 0usize;
-    let lde_rows = product(&[PHYSICAL_ROW_COUNT, BLOWUP])?;
+    let replay = TraceReplayPlan::new(PHYSICAL_ROW_COUNT, COLUMN_COUNT)?;
+    let lde_rows = replay.lde_rows;
 
-    // Logical-to-physical growth/boxing, physical rows, column conversion and
-    // coefficients are charged as five whole base matrices. The planner's
-    // parallel padded FFT vectors become the final LDE columns; FFT itself is
-    // in-place and has no additional matrix for each Rayon worker.
-    add(&mut charge, &[5, COLUMN_COUNT, PHYSICAL_ROW_COUNT, 8])?;
-    add(&mut charge, &[COLUMN_COUNT, lde_rows, 8])?;
+    // Logical-to-physical growth/boxing, physical rows and column conversion
+    // use four conservative base matrices. The actual replay owner retains
+    // coefficients plus one reusable stripe; its shared preflight accounts
+    // their exact payload. In-place FFTs allocate no per-worker matrix.
+    add(&mut charge, &[4, COLUMN_COUNT, PHYSICAL_ROW_COUNT, 8])?;
+    add(&mut charge, &[replay.peak_trace_bytes])?;
     add(&mut charge, &[FIXED_COLUMN_COUNT, PHYSICAL_ROW_COUNT, 8])?;
     add(&mut charge, &[FIXED_COLUMN_COUNT, lde_rows, 8])?;
     add(&mut charge, &[2, PHYSICAL_ROW_COUNT, 8])?; // Both planner coset tables.
@@ -58,9 +60,9 @@ pub(super) fn segment_charge(statement_bytes: usize, child_frame_bytes: usize) -
     )?;
     add(&mut charge, &[2, FIXED_ROW_COUNT, FIXED_COLUMN_COUNT, 8])?;
 
-    // Mixed (one), quotient chunks plus concatenated output (two), joint
-    // (one), initial FRI clone (one) and retained geometric FRI layers (less
-    // than two) fit in eight complete extension arrays. Twelve digest arrays
+    // Mixed and quotient outputs plus their bounded stripe chunks, joint,
+    // initial FRI clone and retained geometric FRI layers fit in eight
+    // complete extension arrays. Twelve digest arrays
     // cover the three complete oracle trees, geometric FRI trees, row chunks
     // and tree-building leaves. Fallible parallel collections additionally
     // retain Result slots before extracting successful values. Full trees use
@@ -148,9 +150,10 @@ mod tests {
     fn structural_charge_covers_the_trace_and_fixed_preparation() {
         let charge = segment_charge(0, 0).unwrap();
         let base = COLUMN_COUNT * PHYSICAL_ROW_COUNT * 8;
-        let lde = base * BLOWUP;
+        let replay = TraceReplayPlan::new(PHYSICAL_ROW_COUNT, COLUMN_COUNT).unwrap();
         let fixed = FIXED_COLUMN_COUNT * PHYSICAL_ROW_COUNT * (BLOWUP + 1) * 8;
-        assert!(charge > 5 * base + lde + fixed);
+        assert_eq!(replay.peak_trace_bytes, 2 * base);
+        assert!(charge > 4 * base + replay.peak_trace_bytes + fixed);
         assert_eq!(size_of::<GoldilocksDigest384V1>(), 48);
         assert_eq!(size_of::<GoldilocksFp4V1>(), 32);
         assert_eq!(MAX_PROVER_JOBS, 32);

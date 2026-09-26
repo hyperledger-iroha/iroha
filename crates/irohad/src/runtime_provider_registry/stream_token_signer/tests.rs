@@ -1,9 +1,8 @@
 //! Daemon dependency admission simulations; no metadata value qualifies physical signer.
 use super::*;
 use iroha_torii::sorafs::{
-    StreamTokenApprovedCustodyAnchorV1, StreamTokenSignerCallErrorV1,
-    StreamTokenSignerClientV1, StreamTokenSignerReceiptV1, StreamTokenObserverReplyV1,
-    StreamTokenStateObserverClientV1,
+    StreamTokenApprovedCustodyAnchorV1, StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1,
+    StreamTokenSignerClientV1, StreamTokenSignerReceiptV1, StreamTokenStateObserverClientV1,
 };
 use sorafs_manifest::{
     StreamTokenBodyV1,
@@ -57,6 +56,14 @@ impl StreamTokenSignerClientV1 for Route {
     }
 }
 impl StreamTokenStateObserverClientV1 for Route {
+    fn finalize_check(
+        &self,
+        _instruction: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+    ) -> Result<iroha_data_model::transaction::SignedTransaction, StreamTokenSignerCallErrorV1>
+    {
+        Err(StreamTokenSignerCallErrorV1::Unavailable)
+    }
+
     fn handle(&self) -> &str {
         self.route()
     }

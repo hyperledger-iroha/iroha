@@ -133,3 +133,45 @@ fn custody_control_record_roundtrips_binary_and_json() {
         record
     );
 }
+
+#[test]
+fn public_native_custody_commitments_bind_exact_authority_and_execution_record() {
+    use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+    let authority = |seed| {
+        AccountId::new(
+            KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+    };
+    let request = crate::isi::sorafs::MutateSorafsStreamTokenCustody {
+        provider_id: ProviderId::new([1; 32]),
+        expected_revision: 0,
+        expected_digest: [0; 32],
+        action: SorafsStreamTokenCustodyActionV1::Configure(vec![2; 16]),
+    };
+    let first = stream_token_custody_request_digest_v1(&request, &authority(1)).unwrap();
+    assert_ne!(
+        first,
+        stream_token_custody_request_digest_v1(&request, &authority(2)).unwrap()
+    );
+    let mut record = StreamTokenCustodyControlRecordV1 {
+        provider_id: request.provider_id,
+        revision: 1,
+        predecessor_digest: [0; 32],
+        request_digest: first,
+        execution_height: 2,
+        ordinal: 0,
+        recorded_at_unix_ms: 1000,
+        authority: authority(1),
+        control_state: vec![3; 16],
+    };
+    let digest = record.canonical_digest().unwrap();
+    record.ordinal = 1;
+    assert_ne!(digest, record.canonical_digest().unwrap());
+    record
+        .control_state
+        .resize(STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1, 1);
+    assert!(record.canonical_digest().is_err());
+}

@@ -48,8 +48,8 @@ path = "src/bin/iroha.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "ivm_execution_keygen"
-path = "src/bin/ivm_execution_keygen.rs"
+name = "ivm_replay_binding_keygen"
+path = "src/bin/ivm_replay_binding_keygen.rs"
 required-features = ["dev-tools"]
 
 [[bin]]

@@ -48,6 +48,8 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+/// Certified Parliament provider-admission effects.
+pub mod sorafs_provider_admission;
 pub mod sorafs_final_promotion_account_custody;
 /// Governed deployment custody and durable final-promotion signer-operation authority.
 pub mod sorafs_final_promotion_authority;
@@ -308,6 +310,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::defi::RegisterDefiRwaMarket>,
     dispatch_instruction::<iroha_data_model::isi::defi::ReportDefiRwaNav>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AssertSorafsPublicationV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::BindManifestAlias> => CoreAuthorized,

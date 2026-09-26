@@ -38,7 +38,7 @@ pub const ZK_VERIFIER_BACKEND_REGISTRY_LABELS_V1: &[&str] = &[
     "halo2/ipa",
     "halo2/pasta/kaigi-authorization-v1",
     "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/ivm-replay-binding-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -148,7 +148,7 @@ pub fn verifier_backend_registry_tag_v1(label: &str) -> Option<BackendTag> {
         "halo2/ipa"
         | "halo2/pasta/kaigi-authorization-v1"
         | "halo2/pasta/kaigi-usage-v1"
-        | "halo2/pasta/ivm-execution-v1"
+        | "halo2/pasta/ivm-replay-binding-v1"
         | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
         | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4" => {
@@ -676,19 +676,31 @@ fn zk_ace_digest384_v1(role: &[u8], phase: &[u8], fields: &[&[u8]]) -> Goldilock
         .into()
 }
 /// Derive the ZK-ACE identity commitment from its private witness components.
+///
+/// The temporary concatenated preimage is erased on return and unwind. The
+/// caller retains ownership of, and must erase, its original witness fields.
 pub fn derive_zk_ace_identity_commitment(
     identity_root: &[u8; 32],
     identity_blinding: &[u8; 32],
     domain_tag: &str,
 ) -> PrivacyZkAceIdentityCommitmentV1 {
-    let mut witness = [0_u8; 64];
-    witness[..32].copy_from_slice(identity_root);
-    witness[32..].copy_from_slice(identity_blinding);
+    let mut scratch = [0_u8; 64];
+    let witness = ZkAceIdentityPreimageGuard(&mut scratch);
+    witness.0[..32].copy_from_slice(identity_root);
+    witness.0[32..].copy_from_slice(identity_blinding);
     PrivacyZkAceIdentityCommitmentV1::from_digest(zk_ace_digest384_v1(
         ZK_ACE_IDENTITY_COMMITMENT_ROLE_V1,
         ZK_ACE_IDENTITY_COMMITMENT_PHASE_V1,
-        &[domain_tag.as_bytes(), &witness],
+        &[domain_tag.as_bytes(), witness.0],
     ))
+}
+/// Borrowed owner avoids moving or duplicating the populated witness scratch.
+struct ZkAceIdentityPreimageGuard<'a>(&'a mut [u8; 64]);
+
+impl Drop for ZkAceIdentityPreimageGuard<'_> {
+    fn drop(&mut self) {
+        iroha_crypto::zeroize_value_for_confidential_discard(self.0);
+    }
 }
 /// Derive the ZK-ACE replay nullifier for a specific action.
 pub fn derive_zk_ace_replay_nullifier(
@@ -982,18 +994,19 @@ mod tests {
         }
         for rejected in [
             "",
+            "halo2/pasta/ivm-execution-v1",
             " halo2/ipa",
             "halo2/ipa ",
             "HALO2/IPA",
             "halo2//ipa",
             "halo2/ipa:",
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/ipa::ivm-execution-v1",
-            "halo2/ipa/ivm-execution-v1",
-            "halo2/pasta/ipa/ivm-execution-v1",
+            "halo2/ipa:ivm-replay-binding-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
+            "halo2/ipa/ivm-replay-binding-v1",
+            "halo2/pasta/ipa/ivm-replay-binding-v1",
             "halo2/pasta/ivm_execution_v1",
-            "halo2/pasta/ivm-execution-v1/",
-            "halo2/pasta/ivm-execution-v1\0",
+            "halo2/pasta/ivm-replay-binding-v1/",
+            "halo2/pasta/ivm-replay-binding-v1\0",
             "halo2/pasta/ipa-pasta-cycle-v1",
             "halo2/pasta/ivm-overlay-bind",
             "halo2/pasta/tiny-add",
@@ -1123,7 +1136,7 @@ mod tests {
         for circuit_id in [
             "stark/fri/poseidon-x7-goldilocks-6x64-v1:generic_binding_v1",
             "halo2/ipa::transfer_v1",
-            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/ivm-replay-binding-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1:public_relation_v1",
         ] {
             let mut envelope = valid_open_verify_admission_envelope();
@@ -1421,6 +1434,50 @@ mod tests {
             }
         );
     }
+    #[test]
+    fn zk_ace_identity_preimage_is_erased_on_return_and_unwind() {
+        for unwind in [false, true] {
+            let mut scratch = [0_u8; 64];
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let guarded = ZkAceIdentityPreimageGuard(&mut scratch);
+                guarded.0.fill(0xa5);
+                if unwind {
+                    panic!("exercise private preimage cleanup");
+                }
+            }));
+            assert_eq!(result.is_err(), unwind);
+            assert_eq!(scratch, [0; 64]);
+        }
+    }
+
+    #[test]
+    fn zk_ace_identity_commitment_binds_each_private_component_and_domain() {
+        let root = [0x11; 32];
+        let blinding = [0x22; 32];
+        let domain = ZK_ACE_PQ_AUTHORIZATION_V1_DOMAIN_TAG;
+        let original = derive_zk_ace_identity_commitment(&root, &blinding, domain);
+        for index in [0, 15, 31] {
+            let mut changed_root = root;
+            changed_root[index] ^= 1;
+            assert_ne!(
+                original,
+                derive_zk_ace_identity_commitment(&changed_root, &blinding, domain)
+            );
+            let mut changed_blinding = blinding;
+            changed_blinding[index] ^= 1;
+            assert_ne!(
+                original,
+                derive_zk_ace_identity_commitment(&root, &changed_blinding, domain)
+            );
+        }
+        assert_ne!(
+            original,
+            derive_zk_ace_identity_commitment(&root, &blinding, "other-domain")
+        );
+        assert_eq!(root, [0x11; 32]);
+        assert_eq!(blinding, [0x22; 32]);
+    }
+
     #[test]
     fn zk_ace_packing_and_hash_vectors_are_stable() {
         let packed = zk_ace_pack_bytes_to_field_limbs(b"ABCDEFGH");

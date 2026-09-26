@@ -1285,6 +1285,7 @@ impl Read for GatewayPayloadReaderV1 {
 }
 fn classify_gateway_fetch_error(error: &GatewayFetchError) -> MusubiArchiveRuntimeErrorV1 {
     match error {
+        GatewayFetchError::RateLimited { .. } => retryable("MUSUBI_ARCHIVE_CHUNK_RETRYABLE"),
         GatewayFetchError::Request { .. } | GatewayFetchError::RequestBody { .. } => {
             retryable("MUSUBI_ARCHIVE_CHUNK_REQUEST_FAILED")
         }
@@ -2482,6 +2483,17 @@ operator_private_key_file = "provider.key"
     }
     #[test]
     fn gateway_stream_failures_keep_retry_and_integrity_classes() {
+        let rate_limited = classify_gateway_fetch_error(&GatewayFetchError::RateLimited {
+            provider: "redacted-provider".to_owned(),
+            retry_after: std::time::Duration::from_secs(3),
+        });
+        assert_eq!(
+            rate_limited.class(),
+            MusubiArchiveRuntimeFailureClassV1::Retryable
+        );
+        assert_eq!(rate_limited.code(), "MUSUBI_ARCHIVE_CHUNK_RETRYABLE");
+        assert_eq!(rate_limited.integrity_surface(), None);
+        assert!(!format!("{rate_limited:?}").contains("redacted-provider"));
         let retryable_error = classify_gateway_fetch_error(&GatewayFetchError::UnexpectedStatus {
             provider: "redacted-provider".to_owned(),
             status: StatusCode::TOO_MANY_REQUESTS,

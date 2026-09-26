@@ -408,7 +408,7 @@ fn retryable_mixed_list_reuses_successful_proof_results() {
     assert!(second_report.proofs[0].ok);
     assert_eq!(
         second_report.proofs[0].circuit_id.as_deref(),
-        Some(iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID),
+        Some(iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID),
         "a cached proof report must preserve registry circuit attribution"
     );
     assert!(!second_report.proofs[1].ok);

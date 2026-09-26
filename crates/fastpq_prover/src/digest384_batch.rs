@@ -16,7 +16,7 @@ use crate::backend::GpuBackend;
 use crate::gpu::GpuError;
 
 /// A fresh canonical typed prefix and its exact final byte field.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct Digest384LastFieldJob<'a> {
     prefix: GoldilocksDigest384LastFieldStreamV1,
     final_field: &'a [u8],
@@ -60,7 +60,7 @@ pub(crate) fn hash_last_fields_cpu(
         GpuError::InvalidInput("Digest384 batch output exceeds available host memory")
     })?;
     for job in jobs {
-        let mut stream = job.prefix;
+        let mut stream = job.prefix.clone();
         stream.update(job.final_field).map_err(|_| {
             GpuError::InvalidInput("Digest384 prepared CPU payload violates its length bound")
         })?;
@@ -116,10 +116,10 @@ mod tests {
     #[test]
     fn prepared_jobs_reject_consumed_or_wrong_length_streams() {
         let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain(0), &[], 8).unwrap();
-        assert!(Digest384LastFieldJob::new(prefix, b"1234567").is_err());
-        assert!(Digest384LastFieldJob::new(prefix, b"123456789").is_err());
+        assert!(Digest384LastFieldJob::new(prefix.clone(), b"1234567").is_err());
+        assert!(Digest384LastFieldJob::new(prefix.clone(), b"123456789").is_err());
         for consumed in 1..=8 {
-            let mut partially_consumed = prefix;
+            let mut partially_consumed = prefix.clone();
             partially_consumed.update(&b"12345678"[..consumed]).unwrap();
             assert!(Digest384LastFieldJob::new(partially_consumed, b"12345678").is_err());
         }
@@ -185,7 +185,7 @@ mod tests {
     #[test]
     fn unavailable_metal_reports_error_and_cpu_fallback_remains_identical() {
         let stream = GoldilocksDigest384LastFieldStreamV1::new(domain(0), &[], 0).unwrap();
-        let jobs = [Digest384LastFieldJob::new(stream, &[]).unwrap()];
+        let jobs = [Digest384LastFieldJob::new(stream.clone(), &[]).unwrap()];
         assert!(matches!(
             try_hash_last_fields_metal(&jobs),
             Err(GpuError::Unsupported(GpuBackend::Metal))

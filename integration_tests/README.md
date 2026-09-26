@@ -254,3 +254,33 @@ The new scenario rejects an unavailable network even in a developer run; require
 network startup for the whole target so sibling optional sandbox skips cannot be
 counted as successful qualification. Deterministic test signers are feature
 isolated and are not a deployment-selected custody provider.
+
+### Native SoraFS publication lifecycle
+
+`core_api::sorafs_publication::four_peer_publication_replication_retrieval_restart_and_native_repair`
+constructs four validators and three native software providers. Signed genesis
+establishes admission; real reserve funding and capacity registration precede
+challenged assignment/completion proofs. Only one provider receives publisher
+staging, so the other two must use assignment-authorized source transport. The
+scenario verifies public CID bytes, healthy restart, unavailable corrupt payload
+after restart, and the production repair worker's finalized completion and readback.
+It then executes the actual same-source `sorafs_cli deploy` with an independently
+verified saved checkpoint, requires its complete success receipt and asset
+readback, and independently challenges the resulting native completion again.
+Set `TEST_NETWORK_BIN_SORAFS_CLI` to the absolute prebuilt `sorafs_cli` artifact
+built with `cli-orchestrator`; missing CLI artifacts fail before network startup.
+Each provider explicitly declares and bounds two GiB for these two small pins;
+the test does not preallocate that disk space.
+The gateway uses a genuinely signed and acknowledged empty compliance catalog;
+its configured optional HTTPS feed is not fetched by this scenario.
+
+The explicit `sorafs_publication_governance` target requires
+`parliament-test-signers`. Its
+`four_peer_native_publication_repair_and_parliament_revocation` test adds the
+shared real seven-body Parliament corridor, then requires a specific admission
+denial across provider restart while an unaffected replica still serves bytes.
+Use the same-source Parliament daemon and ordinary CLI artifacts described above,
+`IROHA_TEST_REQUIRE_NETWORK=1`, and exact test filters. Native stream-token quota,
+sequencer and reputation deployment adapters remain separate qualification.
+Source and unit-test presence do not establish successful network qualification;
+the lifecycle and governed revocation tests must both run successfully.

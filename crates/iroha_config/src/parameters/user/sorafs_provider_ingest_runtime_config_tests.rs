@@ -81,6 +81,18 @@ fn disabled_default_is_inert() {
     assert!(emitter.into_result().is_ok());
 }
 #[test]
+fn omitted_native_source_origins_deserializes_to_an_empty_map() {
+    use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+
+    let config = ConfigReader::new()
+        .with_toml_source(TomlSource::inline(toml::Table::new()))
+        .read_and_complete::<SorafsProviderIngestRuntimeConfig>()
+        .expect("an omitted optional native source map must not prevent startup");
+    assert!(config.native_source_origins.is_empty());
+    assert!(config.native_completion_credential.is_none());
+    assert!(!config.enabled);
+}
+#[test]
 fn enabled_policy_parses_without_credentials() {
     let provider_id = provider_id();
     let mut emitter = Emitter::new();
@@ -694,4 +706,26 @@ fn disabled_policy_rejects_each_top_level_provider_qualification_field() {
         assert!(config.parse(false, None, &mut emitter).is_none());
         assert!(emitter.into_result().is_err());
     }
+}
+
+#[test]
+fn native_completion_credential_is_explicit_absolute_and_disabled_configs_reject_it() {
+    let provider = provider_id();
+    for (path, accepted) in [
+        ("/runtime/credentials/completion", true),
+        ("completion", false),
+        ("/runtime/../completion", false),
+    ] {
+        let mut config = valid_config();
+        config.native_completion_credential = Some(PathBuf::from(path));
+        let mut emitter = Emitter::new();
+        let result = config.parse(true, Some(&provider), &mut emitter);
+        let emitted = emitter.into_result();
+        assert_eq!(result.is_some() && emitted.is_ok(), accepted);
+    }
+    let mut config = SorafsProviderIngestRuntimeConfig::default();
+    config.native_completion_credential = Some(PathBuf::from("/runtime/credentials/completion"));
+    let mut emitter = Emitter::new();
+    assert!(config.parse(false, None, &mut emitter).is_none());
+    assert!(emitter.into_result().is_err());
 }

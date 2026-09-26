@@ -627,6 +627,9 @@ fn validate_operation_payload(
         (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
             decode_stream_token_observer_request(&request.binding, &request.payload)?;
         }
+        (slot, OPERATION_STREAM_TOKEN_CHECK_V1) if slot == stream_token_slot => {
+            decode_stream_token_check_request(&request.binding, &request.payload)?;
+        }
         (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
             if slot == stream_token_gateway_admission_slot =>
         {

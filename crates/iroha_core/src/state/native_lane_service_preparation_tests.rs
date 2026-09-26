@@ -813,10 +813,26 @@ impl NativeServicePreparationFixture {
 
 state_test! { consensus_stack native_service_postpublication_refusal_retains_original_owner_and_notifies_once
     use crate::sumeragi::{
-        v2_apply::native_validation::fail_next_post_publication_queue_tail_for_test,
+        v2_apply::{
+            native_validation::fail_next_post_publication_queue_tail_for_test,
+            validation_custody::RetainedValidationOwner,
+        },
         v2_body_store::{BlockSignaturePolicy, LocalValidationRefusal, V2BodyStore, V2BodyStoreCapacity},
         v2_chunks::encode_payload,
     };
+    const CHILD: &str = "IROHA_CORE_PUBLISHED_RESULTLESS_CAP_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // The archive ceiling is process-global; never lower it beside other Core tests.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .arg("native_service_postpublication_refusal_retains_original_owner_and_notifies_once")
+            .arg("--test-threads=1")
+            .arg("--nocapture")
+            .env(CHILD, "1")
+            .output()
+            .expect("run isolated Published-owner archive-cap test");
+        assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+        return;
+    }
     let fixture = native_service_retention_fixture(false);
     let directory = tempfile::tempdir().unwrap();
     let context = fixture.context.context();
@@ -853,6 +869,31 @@ state_test! { consensus_stack native_service_postpublication_refusal_retains_ori
     assert_eq!(fixture.state.committed_height(), before_height + 1);
     assert_eq!(fixture.state.committed_height() as u64, context.height);
     assert_eq!(retained.owner_for_test(subject).unwrap().published_progress_for_test(), Some((allocation, true, false)));
+    {
+        let owner = retained.owner_for_test(subject).unwrap();
+        assert!(owner.matches_candidate(context, &fixture.proposal));
+        let mut changed_context = context.clone();
+        changed_context.roster[0].power += 1;
+        assert!(!owner.matches_candidate(&changed_context, &fixture.proposal));
+        let mut changed_signature = fixture.proposal.clone();
+        let key = iroha_crypto::KeyPair::try_from_seed(
+            vec![0xfb; 32], iroha_crypto::Algorithm::BlsNormal,
+        ).unwrap();
+        changed_signature.sign(key.private_key(), 99);
+        assert_eq!(changed_signature.hash(), fixture.proposal.hash());
+        assert!(!owner.matches_candidate(context, &changed_signature));
+        let payload_len = fixture.proposal.encode_wire().unwrap().len()
+            .checked_sub(1 + norito::core::Header::SIZE).unwrap();
+        assert!(payload_len > 1);
+        let previous_cap = norito::core::max_archive_len();
+        norito::core::set_max_archive_len(u64::try_from(payload_len - 1).unwrap());
+        let hash_rejected = fixture.proposal.canonical_proposal_wire_hash().is_err();
+        let match_rejected = !owner.matches_candidate(context, &fixture.proposal);
+        norito::core::set_max_archive_len(previous_cap);
+        assert!(hash_rejected, "reference hash must reject the over-limit payload");
+        assert!(match_rejected, "Published cannot equate two failed canonical encodings");
+        assert!(owner.matches_candidate(context, &fixture.proposal));
+    }
     assert!(matches!(events.try_recv(), Err(tokio::sync::broadcast::error::TryRecvError::Empty)));
     let published_hash = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
     let published_generation = fixture.state.state_view_generation();

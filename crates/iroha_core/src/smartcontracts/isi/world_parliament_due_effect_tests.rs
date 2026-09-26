@@ -439,3 +439,35 @@ fn parliament_validation_fee_payout_lifecycle_enacts_at_the_exact_due_height() {
         },
     );
 }
+
+#[test]
+fn parliament_sorafs_admission_council_enacts_only_the_exact_certified_effect() {
+    use iroha_data_model::{
+        isi::sorafs::SorafsProviderGovernanceActionV1,
+        sorafs::provider_admission::{ProviderAdmissionCouncilPolicyV1,
+            governance::ProviderAdmissionGovernanceActionV1},
+    };
+    let state = blank_test_state();
+    let block = new_dummy_block_at_height(
+        NonZeroU64::new(PARLIAMENT_DUE_CERTIFICATE_HEIGHT).unwrap());
+    let mut state_block = state.block(block.as_ref().header());
+    let mut seed = state_block.transaction();
+    bootstrap_alice_account(&mut seed);
+    let policy = ProviderAdmissionCouncilPolicyV1 {
+        version: 1, network_id: *seed.network_id().as_bytes(), policy_id: [0xe1; 32],
+        revision: 1, predecessor_policy_digest: None,
+        trusted_signers: vec![ALICE_KEYPAIR.public_key().to_bytes().1.try_into().unwrap()],
+        signature_threshold: 1, paused: false,
+    };
+    let kind = ProposalKind::SorafsProviderGovernance(SorafsProviderGovernanceProposal {
+        action: Box::new(SorafsProviderGovernanceActionV1::Admission(
+            ProviderAdmissionGovernanceActionV1::ConfigureCouncil(norito::encode_canonical(&policy).unwrap()))),
+    });
+    let fixture = seed_due_parliament_certificate(&mut seed, kind);
+    seed.apply();
+    let mut execution = state_block.transaction();
+    assert_eq!(execute_due_parliament_certificate_v1(fixture.governance_attempt_id, &mut execution).unwrap(),
+        DueParliamentCertificateExecutionV1::Applied);
+    assert_eq!(crate::query::provider_admission::read_policy(execution.world()).unwrap(), Some(policy));
+    assert_exact_due_parliament_effect_enacted(&execution, &fixture);
+}

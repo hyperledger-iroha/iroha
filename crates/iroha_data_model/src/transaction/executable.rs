@@ -35,12 +35,13 @@ mod model {
         /// IVM smart contract bytecode accompanied by a precomputed instruction overlay.
         ///
         /// This executable is intended for proof-carrying flows where the transaction
-        /// supplies a deterministic overlay (ISIs) together with a ZK proof (via
+        /// supplies a deterministic overlay (ISIs) together with a binding proof (via
         /// [`SignedTransaction`](crate::transaction::SignedTransaction) attachments) that
-        /// binds the overlay to the executed bytecode.
+        /// binds the declared code, overlay, event and gas commitments.
         ///
-        /// Nodes verify the proof and may deterministically replay the IVM execution as an
-        /// additional safety check depending on pipeline policy.
+        /// Nodes must deterministically replay the IVM execution and compare all
+        /// outputs. The binding proof alone does not establish execution correctness
+        /// or hide execution from validators.
         IvmProved(IvmProved),
         /// Ordered, atomic mix of native instructions and deployed-contract calls.
         ///
@@ -77,7 +78,7 @@ mod model {
         /// Raw Kotodama bytecode blob.
         pub(super) Vec<u8>,
     );
-    /// Wrapper for proved IVM executions.
+    /// Claimed IVM outputs checked by a binding proof and mandatory execution replay.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::transaction::executable::model::IvmProved")]
     #[derive(
@@ -87,11 +88,11 @@ mod model {
     pub struct IvmProved {
         /// Raw Kotodama bytecode blob.
         pub bytecode: IvmBytecode,
-        /// Precomputed ordered instruction overlay to apply when the proof verifies.
+        /// Precomputed ordered overlay to apply only after proof verification and replay agree.
         pub overlay: ConstVec<InstructionBox>,
         /// Commitment to deterministic execution-side events materialized for this proved run.
         pub events_commitment: Hash,
-        /// Commitment to gas policy compliance (without revealing exact gas usage).
+        /// Commitment to the gas policy and usage recomputed during validator replay.
         pub gas_policy_commitment: Hash,
     }
     /// Bounded canonical bytes for one schema-bound Kotodama argument record.

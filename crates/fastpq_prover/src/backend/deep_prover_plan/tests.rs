@@ -106,6 +106,48 @@ fn limits() -> DeepProverLimits {
 }
 
 #[test]
+fn derived_opening_closure_mask_fits_the_actual_923_slot_degree_ledger() {
+    // One extension OOD query and 64 base queries, including the next-row
+    // closure needed to simulate quotient openings (not just visible rows).
+    // This is a conditional construction bound, not a qualified mask policy.
+    let witness_mask_coefficients = 2 * (F::COEFFICIENTS + QUERY_COUNT);
+    let quotient_mask_coefficients = 1 + QUERY_COUNT;
+    assert_eq!(witness_mask_coefficients, 136);
+    assert_eq!(quotient_mask_coefficients, 65);
+    let mut degrees = [PUBLIC_POLYNOMIAL_DEGREE + 1; COLUMN_COUNT];
+    for column in COMMITTED_COLUMNS {
+        degrees[column] = TRACE_ROWS + witness_mask_coefficients;
+    }
+    let air = relation();
+    assert_eq!(air.schema().constraints, 923);
+    let bounds = air.numerator_degree_bounds(&degrees).unwrap();
+    assert_eq!(bounds.combined_numerator(), 196_751);
+    assert_eq!(bounds.conditional_quotients().combined, 131_215);
+    // The fixed X^N split has an unequal high chunk. Silently treating both
+    // original chunks as degree <N would truncate 143 possible coefficients.
+    let quotient_bound = bounds.conditional_quotients().combined;
+    assert!(quotient_bound > 2 * TRACE_ROWS);
+    let plan = super::super::quotient_pair_masking::PairMaskingPlan::new(
+        super::super::quotient_pair_masking::PairMaskingShape {
+            split: TRACE_ROWS,
+            quotient_coefficients: quotient_bound,
+            quotient_degree_bound: quotient_bound,
+            mask_coefficients: quotient_mask_coefficients,
+            mask_degree_bound: quotient_mask_coefficients,
+        },
+        super::super::quotient_pair_masking::PairMaskingLimits {
+            max_chunk_degree_bound: FRI_DEGREES[0],
+            max_payload_bytes: 16 * 1024 * 1024,
+            max_work_units: 2 * 1024 * 1024,
+        },
+    )
+    .unwrap();
+    assert_eq!(plan.degree_bounds(), [65_601, 65_679]);
+    assert_eq!(plan.payload_bytes(), 8_401_920);
+    assert!(plan.degree_bounds().into_iter().all(|d| d < FRI_DEGREES[0]));
+}
+
+#[test]
 fn exact_source_and_full_air_plan_refuses_unmasked_private_openings() {
     with_source(|source, air| {
         for (slot, column) in [31, 36, 52, 64, 275, 302, 341].into_iter().enumerate() {
@@ -126,11 +168,11 @@ fn exact_source_and_full_air_plan_refuses_unmasked_private_openings() {
         assert_eq!(plan.widened_row_opening_bytes, 616_448);
         assert!(plan.widened_row_opening_bytes > plan.proof_byte_target);
         assert_eq!(plan.proof_byte_target, 512 * 1024);
-        assert_eq!(plan.two_max_child_frames_bytes, 1_001_566);
+        assert_eq!(plan.two_max_child_frames_bytes, 1_005_790);
         assert_eq!(plan.axt_inner_payload_ceiling_bytes, 1024 * 1024);
         assert_eq!(
             plan.axt_inner_payload_ceiling_bytes - plan.two_max_child_frames_bytes,
-            47_010
+            42_786
         );
         assert_eq!(
             plan.require_private_proof(),

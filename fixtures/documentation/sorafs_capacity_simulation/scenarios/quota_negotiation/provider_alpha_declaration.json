@@ -21,12 +21,12 @@
   ],
   "lane_commitments": [
     {
-      "lane_id": "global",
-      "max_gib": 400
-    },
-    {
       "lane_id": "archive",
       "max_gib": 120
+    },
+    {
+      "lane_id": "global",
+      "max_gib": 400
     }
   ],
   "pricing": {
@@ -40,10 +40,5 @@
   "metadata": {
     "region": "global",
     "tier": "primary"
-  },
-  "record_window": {
-    "registered_epoch": 1700500000,
-    "valid_from_epoch": 1700500000,
-    "valid_until_epoch": 1701104800
   }
 }

@@ -13,6 +13,19 @@ SPDX-License-Identifier: Apache-2.0
 - Out of scope: off-ledger traffic analysis, quantum adversaries (tracked separately under PQ roadmap), ledger availability attacks.
 
 ## Design Overview
+The Rust wallet entrypoint is `iroha_core::zk::confidential::ConfidentialProver`.
+It binds a typed `NetworkId`, canonical `AssetDefinitionId`, and an owned
+`Zeroizing<[u8; 32]>` spend key. `prove_transfer` and `prove_unshield` select the
+canonical relation/key internally, consume zeroizing note openings, and
+self-verify the resulting proof. `ConfidentialTree` accepts a complete commitment
+prefix or one membership path per actual input; no dummy path is exposed.
+The executable source example is
+[`confidential_redemption.rs`](../crates/iroha_core/examples/confidential_redemption.rs),
+run with `cargo run -p iroha_core --example confidential_redemption`.
+It is local proof construction; active-key, authenticated-root, nullifier and
+transaction authority checks remain owned by ledger admission. Secret opening
+and prover `Debug` output is redacted; returned public proof material is inspectable.
+
 - Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
 - Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
   - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
@@ -211,6 +224,17 @@ deterministic and wallets have time to adjust.
   metadata, and validate retained roots and checkpoints. Hot consensus writes
   never substitute that linear rebuild for incremental validation.
 - `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
+- Standalone confidential proof builders take one membership path per actual
+  input. Builders pad an absent slot with the canonical empty-tree path; the
+  fixed two-input circuit gates its common-root equality by the constrained
+  presence bit. A present second input must authenticate against
+  the first input's root. One-note full redemption therefore remains possible
+  when all 65,536 commitment leaves are occupied; no ledger empty leaf or
+  caller-supplied dummy path is required. These retained proof helpers do not
+  restore the retired generic monetary instructions. Tree-list builders reject
+  impossible cardinalities, capacities and indices before Merkle hashing. Every
+  generated envelope passes purpose-bound local verification for its fixed
+  transfer, full-unshield or change-unshield relation within the 192 KiB cap.
 - Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, network_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
 
 ### V1 public-amount proof scalars

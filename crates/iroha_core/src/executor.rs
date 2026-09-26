@@ -5460,6 +5460,32 @@ impl Executor {
             ValidationFail::NotPermitted("signed stream-token instruction index exceeds u32".into())
         })
     }
+    /// Recognize only the exact direct instruction in the original signed genesis transaction.
+    pub(crate) fn direct_sorafs_admission_initialization(
+        state_transaction: &StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+        instruction: &InstructionBox,
+        index: usize,
+        direct_body: bool,
+    ) -> bool {
+        use iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1;
+        if !direct_body || !is_initial_genesis_context(state_transaction) {
+            return false;
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return false;
+        };
+        let outer = transaction.hash_as_entrypoint();
+        instructions.get(index) == Some(instruction)
+            && instruction
+                .as_any()
+                .is::<InitializeSorafsProviderAdmissionV1>()
+            && state_transaction.current_network_entrypoint_hash == Some(outer)
+            && state_transaction.tx_call_hash == Some(iroha_crypto::Hash::from(outer))
+            && state_transaction.current_tx_hash == Some(transaction.hash())
+            && state_transaction.current_entrypoint_index.is_some()
+            && transaction.network_id().is_none()
+    }
     /// Bind one role-15 operation to its sole direct signed External Network entry.
     ///
     /// Contract, IVM, sealed-reveal and mixed-batch effects cannot acquire this token.
@@ -5772,6 +5798,15 @@ impl Executor {
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     )?;
                     state_transaction.current_direct_stream_token_instruction_index = direct_index;
+                    state_transaction.current_direct_sorafs_admission_initialization =
+                        Self::direct_sorafs_admission_initialization(
+                            state_transaction,
+                            transaction,
+                            &isi,
+                            index,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        );
                     state_transaction.current_direct_final_promotion_operation_origin =
                         Self::direct_final_promotion_operation_origin(
                             state_transaction,
@@ -5787,6 +5822,7 @@ impl Executor {
                         contract_runtime_context,
                     );
                     state_transaction.current_direct_stream_token_instruction_index = None;
+                    state_transaction.current_direct_sorafs_admission_initialization = false;
                     state_transaction.current_direct_final_promotion_operation_origin = None;
                     result?;
                     if let Some(authorization) = entrypoint_authorization {
@@ -15457,12 +15493,12 @@ mod tests {
         let vk_commitment = crate::zk::hash_vk(&vk);
         let mut vk_record = VerifyingKeyRecord::new_with_owner(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             None,
             "test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             vk_commitment,
         );
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -15479,9 +15515,9 @@ mod tests {
         // exercises deduplication after production-shaped proof admission.
         let envelope = OpenVerifyEnvelope::new(
             BackendTag::Halo2IpaPasta,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             vk_commitment,
-            crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
             vec![1u8, 2, 3],
         );
         let proof = ProofBox::new(
@@ -15556,12 +15592,12 @@ mod tests {
             let vk_commitment = crate::zk::hash_vk(&vk);
             let mut vk_record = VerifyingKeyRecord::new_with_owner(
                 1,
-                crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+                crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
                 "pasta",
-                crate::zk::ivm_execution_public_inputs_schema_hash(),
+                crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
                 vk_commitment,
             );
             vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -15573,9 +15609,9 @@ mod tests {
             world.verifying_keys.insert(vk_id.clone(), vk_record);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+                crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 vk_commitment,
-                crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
+                crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
                 vec![1u8, 2, 3],
             );
             let proof = ProofBox::new(

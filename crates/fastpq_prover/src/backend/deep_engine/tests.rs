@@ -9,7 +9,7 @@ use crate::{
         deep_composition::OodPair,
         deep_geometry::LDE_ROWS,
         deep_proof::{
-            FriGroup, FriRound, FriValues, OodAnswers, QuotientOpening, RowOpening, RowValues,
+            FriGroup, FriRound, FriValues, OodAnswers, QuotientMaskOpening, RowOpening, RowValues,
         },
     },
     gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
@@ -62,10 +62,11 @@ fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposit
             .collect(),
         quotients: queries
             .iter()
-            .map(|&index| QuotientOpening {
+            .map(|&index| QuotientMaskOpening {
                 index: index as u32,
                 low: F::ZERO,
                 high: F::ZERO,
+                composition_mask: F::ZERO,
             })
             .collect(),
         row_siblings: vec![digest; plans.initial.work().siblings],
@@ -126,7 +127,7 @@ fn nonconstant_coefficient_chain_checks_fiber_coordinates_cosets_and_challenges(
     let next_z = z.mul_base(geometry.trace_generator());
     let lambda = F::new([31, 37, 41, 43]).unwrap();
     // A_0(X)=X²; all other trace columns are one, and Q0=Q1=0.
-    // Its DEEP composition is exactly 1+lambda*X², independent of z.
+    // With zero R its DEEP composition is lambda+lambda²*X², independent of z.
     proof.ood.current[0] = z.mul(z);
     proof.ood.next[0] = next_z.mul(next_z);
     for row in &mut proof.rows {
@@ -142,7 +143,7 @@ fn nonconstant_coefficient_chain_checks_fiber_coordinates_cosets_and_challenges(
     )
     .unwrap();
     let betas = betas();
-    let mut coefficients = vec![F::ONE, F::ZERO, lambda];
+    let mut coefficients = vec![lambda, F::ZERO, lambda.mul(lambda)];
     let mut domain = geometry.domain();
     for round in 0..5 {
         for group in &mut proof.rounds[round].groups {
@@ -208,11 +209,74 @@ fn nonconstant_coefficient_chain_checks_fiber_coordinates_cosets_and_challenges(
 }
 
 #[test]
+fn independent_mask_highest_degree_flows_through_every_fold_and_full_terminal() {
+    use crate::backend::polynomial_field::PolynomialField;
+    let geometry = DeepGeometry::new().unwrap();
+    let queries = queries(true);
+    let (mut proof, _, composition) = constant_fixture(&queries);
+    let mask = [
+        (0, F::new([3, 5, 7, 11]).unwrap()),
+        (1, F::new([13, 17, 19, 23]).unwrap()),
+        (FRI_DEGREES[0] - 1, F::new([29, 31, 37, 41]).unwrap()),
+    ];
+    let evaluate = |coefficients: &BTreeMap<usize, F>, x: u64| {
+        coefficients
+            .iter()
+            .fold(F::ZERO, |value, (&degree, &coefficient)| {
+                value.add(coefficient.mul(F::embed_base(x).power(degree as u64)))
+            })
+    };
+    let mut coefficients = BTreeMap::from(mask);
+    for opening in &mut proof.quotients {
+        opening.composition_mask = evaluate(
+            &coefficients,
+            geometry.domain().point(opening.index as usize),
+        );
+    }
+    // Constant trace / zero quotient has H_lambda=0. The candidate FRI input
+    // is exactly R, including its highest permitted coefficient at 2N-1.
+    let betas = betas();
+    let mut domain = geometry.domain();
+    for (round, &arity) in FRI_ARITIES.iter().enumerate() {
+        for group in &mut proof.rounds[round].groups {
+            for (coordinate, value) in group.values.iter_mut().enumerate() {
+                *value = evaluate(
+                    &coefficients,
+                    domain.point(group.index as usize + coordinate * FRI_LENGTHS[round + 1]),
+                );
+            }
+        }
+        let mut folded = BTreeMap::new();
+        for (&degree, &value) in &coefficients {
+            let entry = folded.entry(degree / arity).or_insert(F::ZERO);
+            *entry = entry.add(value.mul(betas[round].power((degree % arity) as u64)));
+        }
+        coefficients = folded;
+        domain = domain.folded(arity);
+    }
+    assert_eq!(coefficients.len(), 2);
+    assert_ne!(coefficients[&1], F::ZERO);
+    for (index, value) in proof.terminal.iter_mut().enumerate() {
+        *value = evaluate(&coefficients, domain.point(index));
+    }
+    deep_proof::preflight(&proof, &queries).unwrap();
+    assert_eq!(
+        check_chains(&geometry, &composition, F::ONE, &betas, &queries, &proof).unwrap(),
+        320
+    );
+    proof.quotients[0].composition_mask = proof.quotients[0].composition_mask.add(F::ONE);
+    assert!(check_chains(&geometry, &composition, F::ONE, &betas, &queries, &proof).is_err());
+}
+
+#[test]
 fn changed_composition_and_every_fiber_coordinate_fail_linkage() {
     let geometry = DeepGeometry::new().unwrap();
     let queries = queries(true);
     let (mut proof, _, composition) = constant_fixture(&queries);
     let lambda = F::new([17, 19, 23, 29]).unwrap();
+    proof.quotients[0].composition_mask = F::ONE;
+    assert!(check_chains(&geometry, &composition, lambda, &betas(), &queries, &proof).is_err());
+    proof.quotients[0].composition_mask = F::ZERO;
     for round in 0..5 {
         for coordinate in 0..FRI_ARITIES[round] {
             proof.rounds[round].groups[0].values[coordinate] = F::ONE;
@@ -373,13 +437,13 @@ fn all_commitments_authenticate_under_their_exact_statement_and_role() {
         .iter()
         .map(|&index| {
             binding
-                .hash_leaf(Oracle::QuotientPair, index as u32, &[0; 64])
+                .hash_leaf(Oracle::QuotientAndMask, index as u32, &[0; 96])
                 .unwrap()
         })
         .collect::<Vec<_>>();
     proof.quotient_root = root_from_frontier(
         &binding,
-        Oracle::QuotientPair,
+        Oracle::QuotientAndMask,
         LDE_ROWS,
         &queries,
         &plans.initial,
@@ -420,6 +484,9 @@ fn all_commitments_authenticate_under_their_exact_statement_and_role() {
     assert_eq!(leaves, 449);
     assert_eq!(parents, 4666);
     assert_eq!(leaves + parents + 10, 5125);
+    proof.quotients[0].composition_mask = F::ONE;
+    assert!(authenticate(&binding, &proof, &plans).is_err());
+    proof.quotients[0].composition_mask = F::ZERO;
     let changed = Context::new(b"another caller statement").unwrap();
     assert!(authenticate(&changed, &proof, &plans).is_err());
     let original = proof.row_root;

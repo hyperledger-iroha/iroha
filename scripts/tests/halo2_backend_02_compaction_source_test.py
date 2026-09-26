@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Fail closed on the Halo2 backend shard-02 fixture compaction.
 
-The guard authenticates the indexed opening blob and the landed postimage,
-records both the historical and explicit constrained-pow5 test inventories,
-and pins the shared proof builders and their caller partition.
+The guard authenticates the indexed opening blob, records the current
+constrained-pow5 inventory, and pins every current code token plus the shared
+proof builders and their caller partition. The reviewed current fixture adds
+the required ff::Field import for Scalar::ZERO; assertions are unchanged.
+Comments and formatting are excluded from the current code fingerprint.
 """
 
 from __future__ import annotations
@@ -14,6 +16,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from zk_source_tokens import token_hash
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_core/src/zk/halo2_backend_02_tests.rs"
@@ -21,8 +25,7 @@ SOURCE_PATH = ROOT / "crates/iroha_core/src/zk/halo2_backend_02_tests.rs"
 PREIMAGE_BLOB = "24d6dcc6c3d5aa718563bc05f872e5034f9108a9"
 PREIMAGE_SHA256 = "2038f9e73c032bf40e6de658ed934946c515f1fd15484c382bc7174614c47c99"
 PREIMAGE_LINES = 1_616
-POSTIMAGE_BLOB = "f69c2f0458c7864d82a81d4d999a4ec45a884524"
-POSTIMAGE_SHA256 = "ce8e43d0abb32848099f29ddd649abc2df698b82dc20fc733f17eb4d9c2bb56e"
+CURRENT_CODE_SHA256 = "30229ddda4275d965c3f530da87c81f2b19b6ed56aa3131b8094889d6791d54c"
 POSTIMAGE_LINES = 960
 MINIMUM_RUST_LINE_REDUCTION = 656
 MAX_LINE_LENGTH = 100
@@ -405,8 +408,7 @@ def validate_source(source: str, preimage: str) -> None:
         "line packing detected outside protected direct tests",
     )
 
-    _require(_git_blob(source) == POSTIMAGE_BLOB, "postimage Git blob changed")
-    _require(_sha256(source) == POSTIMAGE_SHA256, "postimage SHA-256 changed")
+    _require(token_hash(source) == CURRENT_CODE_SHA256, "current code/assertion contract changed")
 
 
 def _replace_once(source: str, old: str, new: str) -> str:
@@ -430,6 +432,14 @@ class Halo2Backend02CompactionSourceTest(unittest.TestCase):
 
     def test_repository_source_contract(self) -> None:
         validate_source(self.source, self.preimage)
+
+    def test_comments_do_not_pin_obsolete_source_bytes(self) -> None:
+        changed = _replace_once(
+            self.source,
+            "// Constrained Pow5 test circuits (IPA): commit-open and merkle2.",
+            "// Constrained Pow5 IPA fixtures: commitment opening and Merkle paths.",
+        )
+        validate_source(changed, self.preimage)
 
     def test_mutations_fail_closed(self) -> None:
         comment = "// Constrained Pow5 test circuits (IPA): commit-open and merkle2."
@@ -470,8 +480,11 @@ class Halo2Backend02CompactionSourceTest(unittest.TestCase):
                 self.source, comment, 'include!("hidden_cases.rs");'
             ),
             "line packing": _replace_once(self.source, comment, "// " + "x" * 101),
-            "postimage digest": _replace_once(
-                self.source, comment, "// Audited Halo2 fixture compaction."
+            "noncanonical rejection": _mutate_function(
+                self.source,
+                "halo2_verify_anon_transfer_2x2_merkle16_pow5_ipa_zk1_noncanonical",
+                "assert!(!proof.verify_envelope(&backend, proof_envelope));",
+                "assert!(proof.verify_envelope(&backend, proof_envelope));",
             ),
             "line count": self.source + "\n// unexpected growth\n",
         }

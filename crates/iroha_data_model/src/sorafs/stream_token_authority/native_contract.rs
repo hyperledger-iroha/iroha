@@ -232,7 +232,7 @@ pub struct StreamTokenCheckV1 {
     pub phase: StreamTokenCheckPhaseV1,
 }
 
-/// Sole proposed role-11 native operation surface; not registered as an instruction.
+/// Sole role-11 native operation surface of `MutateSorafsStreamTokenAuthority`.
 #[expect(
     clippy::large_enum_variant,
     reason = "role-11 Check and Complete stay inline in canonical V1 Norito; boxing adds a wire length and decoder allocation"
@@ -275,7 +275,7 @@ pub enum StreamTokenAuthorityActionV1 {
     Check(StreamTokenCheckV1),
 }
 
-/// Exact first-release native request DTO, currently outside the instruction registry.
+/// Exact first-release request carried by the registered native role-11 instruction.
 ///
 /// Core must bind these coordinates to the actual signed transaction network, registered
 /// provider owner, custody revision/digest and separately authorized observer. Decoding this

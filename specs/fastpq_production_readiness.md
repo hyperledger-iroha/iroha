@@ -28,6 +28,47 @@ segment, cumulative queries and cumulative Norito decode charges. The opaque
 success result retains every ordered child's complete six-word row commitment.
 It grants no source finality or admission authority.
 
+The public `offline_compact::quantity_artifact_resources(segments,
+maximum_segment_statement_bytes)` planner exposes the same checked resource
+arithmetic consumed by the producer before statement hashing or private-tree
+work. It distinguishes the unavoidable row-byte floor, conservative canonical
+child/carrier bounds, sequential trace work and per-segment structural working
+charge. The latter is not peak RSS. A zero statement length reports a floor;
+the configured total statement-byte ceiling is a conservative per-child input
+for planning. Real proving still checks the actual complete contexts, private
+SMT policy, enclosing decoder limits and final output. The producer also rejects
+impossible fixed AIR/FRI/Merkle and carrier policies at that early boundary.
+Planning grants neither production admission nor a claim of zero knowledge.
+
+The actual offline producer uses the shared `TraceReplayPlan` to retain the
+65,536-row coefficient matrix and replay one of eight coset stripes at a time.
+Its owned coefficient-plus-stripe payload is exactly 358,612,992 bytes; the
+former complete trace LDE alone required 1,434,451,968 bytes. Caller trace
+buffers, complete digest trees, mixed/quotient/FRI arrays, fixed preparation,
+query rows and runtime overhead remain outside that subtotal and retain their
+separate structural charges. Three complete passes commit rows, mix columns
+and evaluate quotients; final openings replay only selected stripes. The plan
+bounds this at 11,286 column transforms of 65,536 values, including initial
+interpolation. This trades repeated CPU FFT work for less retained trace memory.
+The existing deterministic FFT, polynomial degrees, row positions, hash framing,
+transcript and proof wire are unchanged. Small reference tests compare cells,
+next-row wraparound, canonical row bytes, roots and minimal query frontiers;
+full-profile runtime/RSS and device qualification remain required. This is a
+storage prerequisite for the current unmasked candidate, not a masked DEEP
+producer or an admission change.
+
+The cryptographic completion sequence remains: (1) select and independently
+review a witness-hiding/quotient-blinding construction consistent with the
+actual opening sets and degree ledger; (2) prove its commitment and encoded
+opening layout fits the unchanged 512 KiB proof target and complete 1 MiB AXT
+carrier ceiling; (3) implement bounded-memory proving, including its complete
+commitment/evaluation workspace, and establish deterministic CPU/device
+equivalence; (4) connect the bounded verifier to authenticated source/finality,
+authorization and atomic replay state; (5) qualify exact-source full proofs,
+soundness and restart/four-validator admission. The current unmasked compact
+proof and test-only DEEP geometry cannot substitute for step (1), and widening
+the DEEP rows alone exceeds the single-proof target before other fields.
+
 The same facade exposes ordinary and AXT quantity producers under this one
 six-lane profile. They check independent expectations and explicit byte,
 trace-cell, decode and private-tree budgets before expanding a physical trace.
@@ -156,10 +197,18 @@ soundness and resource bounds.
 The subsequent [fixed FRI fiber wire cut](../docs/history/2026-09-24/fastpq-f07-fixed-fri-fibers.md)
 removes sequence counts and per-element framing from the inactive DEEP DTO's
 fixed-arity `[16,16,8,8,4]` fibers. Its profile identity binds the new layout;
-the exact maximal frame is 500,783 bytes, 5,568 fewer than the preceding
+that snapshot's exact maximal frame was 500,783 bytes, 5,568 fewer than the preceding
 candidate; 55 focused DEEP tests pass against this frame and bounded decoder.
 This does not shrink the recorded ~8 MB offline proofs or supply
 the missing `R(x)`, masked producer, privacy argument, or admission path.
+The current [hiding construction prerequisite](fastpq_deep_hiding_construction.md)
+adds explicit quotient-pair masking and an authenticated independent composition
+mask to the inactive DEEP codec/coefficient producer/verifier. It reserves
+lambda power zero for the mask and powers 1 through 606 for relation terms.
+The exact source-derived candidate DTO maximum is 502,895 bytes; native codec
+and arithmetic regressions are queued. A complete masked producer, bounded
+whole-prover resource envelope, cryptographic qualification and authenticated
+source admission are still required; the offline producer wire is unchanged.
 
 ## Completion goals
 

@@ -4,7 +4,17 @@
 //! and concrete trace providers owned by the parent STARK module.
 // This is a private continuation of the parent module's fixed protocol
 // vocabulary; it does not define an independent extension surface.
+use super::super::{
+    der_stark::ZkX509DerStarkChallengesV1,
+    rfc5280_stark::ZkX509Rfc5280StarkChallengesV1,
+    sha_call_bus_stark::{
+        ZK_X509_SHA_CA_CALL_COUNT_V1, ZkX509ShaCallBoundaryTerminalV1, ZkX509ShaCallBusChallengesV1,
+    },
+    sha_word_stark::ZkX509ShaWordStarkChallengesV1,
+};
 use super::*;
+#[path = "main_oods.rs"]
+mod main_oods;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
 #[derive(Clone, Copy)]
@@ -57,6 +67,38 @@ impl MainTracePolynomialSetV1 {
             }
         }
         Ok(())
+    }
+    fn joined_plan_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+    ) -> Result<aggregate::joined_trace::JoinedTraceCommitmentPlanV1, ZkX509StarkErrorV1> {
+        self.validate_v1(layout, kind)?;
+        aggregate::joined_trace::JoinedTraceCommitmentPlanV1::new_v1(
+            layout.parameters_v1(),
+            &layout.as_shared()?,
+            match kind {
+                MainTraceColumnKindV1::Base => {
+                    aggregate::joined_trace::JoinedTraceColumnKindV1::Base
+                }
+                MainTraceColumnKindV1::Aux => aggregate::joined_trace::JoinedTraceColumnKindV1::Aux,
+            },
+        )
+        .map_err(map_aggregate_error_v1)
+    }
+    fn commit_joined_v1(
+        &self,
+        layout: &AggregateProofLayoutV1,
+        kind: MainTraceColumnKindV1,
+        indices: &[usize],
+    ) -> Result<aggregate::StreamingRowCommitmentResultV1, ZkX509StarkErrorV1> {
+        self.joined_plan_v1(layout, kind)?
+            .commit_v1(
+                AGGREGATE_DOMAINS_V1,
+                &self.groups.iter().collect::<Vec<_>>(),
+                indices,
+            )
+            .map_err(map_aggregate_error_v1)
     }
     fn group_v1(
         &self,
@@ -111,19 +153,13 @@ fn registered_main_group_column_v1(
     matched.ok_or(ZkX509StarkErrorV1::ProfileMismatch)
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-fn commit_main_trace_group_v1<R: TryRngCore>(
+fn sample_main_trace_group_v1<R: TryRngCore>(
     layout: &AggregateProofLayoutV1,
     group_index: usize,
     kind: MainTraceColumnKindV1,
     source: &mut dyn MainTraceGroupSourceV1,
     rng: &mut R,
-) -> Result<
-    (
-        aggregate::StreamingRowCommitmentResultV1,
-        aggregate::MaskedTracePolynomialSetV1,
-    ),
-    ZkX509StarkErrorV1,
-> {
+) -> Result<aggregate::MaskedTracePolynomialSetV1, ZkX509StarkErrorV1> {
     layout.validate_exact_full_profile_registration_v1()?;
     let group = *layout
         .trace_groups
@@ -136,21 +172,16 @@ fn commit_main_trace_group_v1<R: TryRngCore>(
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
-    let (leaf_domain, node_domain, width) = match kind {
-        MainTraceColumnKindV1::Base => (BASE_LEAF_DOMAIN, BASE_NODE_DOMAIN, group.base_width),
-        MainTraceColumnKindV1::Aux => (AUX_LEAF_DOMAIN, AUX_NODE_DOMAIN, group.aux_width),
+    let width = match kind {
+        MainTraceColumnKindV1::Base => group.base_width,
+        MainTraceColumnKindV1::Aux => group.aux_width,
     };
     let mut source_error = None;
-    let result = aggregate::commit_masked_trace_polynomial_columns_v1(
-        AGGREGATE_DOMAINS_V1.digest_context,
-        leaf_domain,
-        node_domain,
-        group_index,
+    let result = aggregate::MaskedTracePolynomialSetV1::sample_columns_v1(
         group.native_trace_log2,
         layout.common_lde_log2,
         width,
         MASK_DEGREE,
-        &[],
         rng,
         |column_index| {
             let (registration, local_column) =
@@ -221,7 +252,7 @@ fn map_credential_pre_aux_error_v1(
         Error::Transcript | Error::Challenge => ZkX509StarkErrorV1::TranscriptMismatch,
     }
 }
-/// MAIN state after exactly six ordered base commitments and before X5B1.
+/// MAIN state after the joined base commitment and before X5B1.
 ///
 /// The type owns every challenge-independent child which must cross the joint credential phase. It
 /// exposes only a consuming transition accepting the opaque outer credential binding; raw challenge
@@ -250,7 +281,7 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
         self.base_polynomials
             .validate_v1(&self.layout, MainTraceColumnKindV1::Base)?;
         if self.public.consensus_context_digest == [0_u8; 32]
-            || self.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || self.trace_groups.len() != ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1
             || self.transcript.state() != self.base_transcript_state
             || self.trace_groups.iter().any(|group| {
                 group.base_root == PrivacyOuterDigestV1::default()
@@ -269,7 +300,7 @@ impl ZkX509MainAwaitingCredentialBindingV1<'_> {
 }
 /// Composition-ready MAIN state after the sole X5B1 transition.
 ///
-/// Both trace-mask sets, all six base/aux roots, the exact terminal claims, and per-registration
+/// Both trace-mask sets, the joined base/aux roots, the exact terminal claims, and per-registration
 /// composition coefficients are retained together. A future composition/DEEP/FRI continuation
 /// cannot resample challenges or return to either earlier phase.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -300,7 +331,7 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         self.aux_polynomials
             .validate_v1(&self.layout, MainTraceColumnKindV1::Aux)?;
         if self.public.consensus_context_digest == [0_u8; 32]
-            || self.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
+            || self.trace_groups.len() != ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1
             || self.terminal_claims != self.log19.terminal_claims_v1()
             || self.log19.post_base != self.binding.main_post_base()
             || self.transcript.state() != self.composition_transcript_state
@@ -385,49 +416,11 @@ impl ZkX509MainCompositionPhaseV1<'_> {
         )
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(super) fn record_main_group_commitment_v1(
-    group_index: usize,
-    kind: MainTraceColumnKindV1,
-    commitment: &aggregate::StreamingRowCommitmentResultV1,
-    trace_groups: &mut Vec<TraceGroupProofV1>,
-) -> Result<(), ZkX509StarkErrorV1> {
-    if commitment.commitment.root == PrivacyOuterDigestV1::default() {
-        return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-    }
-    match kind {
-        MainTraceColumnKindV1::Base => {
-            if group_index != trace_groups.len() {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-            trace_groups.push(main_trace_group_root_v1(kind, commitment));
-        }
-        MainTraceColumnKindV1::Aux => {
-            let expected_group = trace_groups
-                .iter()
-                .position(|group| group.aux_root == PrivacyOuterDigestV1::default())
-                .unwrap_or(trace_groups.len());
-            if trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1 || group_index != expected_group {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-            let group = trace_groups
-                .get_mut(group_index)
-                .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?;
-            if group.base_root == PrivacyOuterDigestV1::default()
-                || group.aux_root != PrivacyOuterDigestV1::default()
-            {
-                return Err(ZkX509StarkErrorV1::TranscriptMismatch);
-            }
-            group.aux_root = commitment.commitment.root;
-        }
-    }
-    Ok(())
-}
-/// Commit exactly the six canonical MAIN base groups and yield the sole outer
+/// Commit all six canonical MAIN base groups in one ordered row tree and yield the sole outer
 /// credential assembly hook.
 ///
 /// This is phase one only. The returned state cannot commit auxiliary columns
-/// until the credential layer combines its fixed six roots with the compact-CA
+/// until the credential layer combines its joined base root with the compact-CA
 /// root and supplies the resulting opaque 272-challenge X5B1 binding.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
@@ -469,94 +462,48 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
     let mut transcript =
         new_main_transcript_v1(&public.consensus_context_digest, assembly.verifier_profile)?;
     absorb_aggregate_layout_v1(&mut transcript, MAIN_LAYOUT_DOMAIN_V1, &layout)?;
-    let mut trace_groups = Vec::new();
     let mut base_polynomials = Vec::new();
-    trace_groups
-        .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     base_polynomials
         .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
         .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
     {
         let mut source = MainP256Log5TraceGroupSourceV1::for_base_v1(&layout, &p256)?;
-        let (commitment, polynomials) =
-            commit_main_trace_group_v1(&layout, 0, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(0, &commitment)?;
-        record_main_group_commitment_v1(
-            0,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
+        let polynomials =
+            sample_main_trace_group_v1(&layout, 0, MainTraceColumnKindV1::Base, &mut source, rng)?;
         base_polynomials.push(polynomials);
     }
     {
         let mut source = MainP256ScalarTraceGroupSourceV1::for_base_v1(&layout, &p256)?;
-        let (commitment, polynomials) =
-            commit_main_trace_group_v1(&layout, 1, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(1, &commitment)?;
-        record_main_group_commitment_v1(
-            1,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
+        let polynomials =
+            sample_main_trace_group_v1(&layout, 1, MainTraceColumnKindV1::Base, &mut source, rng)?;
         base_polynomials.push(polynomials);
     }
     {
-        let (commitment, polynomials) = commit_main_trace_group_v1(
+        let polynomials = sample_main_trace_group_v1(
             &layout,
             2,
             MainTraceColumnKindV1::Base,
             &mut projection,
             rng,
         )?;
-        session.accept_streaming_base_commitment_v1(2, &commitment)?;
-        record_main_group_commitment_v1(
-            2,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
         base_polynomials.push(polynomials);
     }
     {
         let mut source = MainP256Log16TraceGroupSourceV1::for_base_v1(&layout, &p256)?;
-        let (commitment, polynomials) =
-            commit_main_trace_group_v1(&layout, 3, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(3, &commitment)?;
-        record_main_group_commitment_v1(
-            3,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
+        let polynomials =
+            sample_main_trace_group_v1(&layout, 3, MainTraceColumnKindV1::Base, &mut source, rng)?;
         base_polynomials.push(polynomials);
     }
     {
-        let (commitment, polynomials) =
-            commit_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Base, &mut io, rng)?;
-        session.accept_streaming_base_commitment_v1(4, &commitment)?;
-        record_main_group_commitment_v1(
-            4,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
+        let polynomials =
+            sample_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Base, &mut io, rng)?;
         base_polynomials.push(polynomials);
     }
     {
         let mut source =
             MainLog19BaseTraceGroupSourceV1::for_main_v1(&layout, assembly, &sha, &p256)?;
-        let (commitment, polynomials) =
-            commit_main_trace_group_v1(&layout, 5, MainTraceColumnKindV1::Base, &mut source, rng)?;
-        session.accept_streaming_base_commitment_v1(5, &commitment)?;
-        record_main_group_commitment_v1(
-            5,
-            MainTraceColumnKindV1::Base,
-            &commitment,
-            &mut trace_groups,
-        )?;
+        let polynomials =
+            sample_main_trace_group_v1(&layout, 5, MainTraceColumnKindV1::Base, &mut source, rng)?;
         base_polynomials.push(polynomials);
     }
     let base_polynomials = MainTracePolynomialSetV1::from_ordered_v1(
@@ -564,6 +511,13 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
         MainTraceColumnKindV1::Base,
         base_polynomials,
     )?;
+    let commitment =
+        base_polynomials.commit_joined_v1(&layout, MainTraceColumnKindV1::Base, &[])?;
+    session.accept_streaming_base_commitment_v1(&commitment)?;
+    let trace_groups = vec![main_trace_group_root_v1(
+        MainTraceColumnKindV1::Base,
+        &commitment,
+    )];
     aggregate::absorb_base_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
         .map_err(map_aggregate_error_v1)?;
     let pre_aux = session.finish_pre_aux_v1()?;
@@ -589,7 +543,7 @@ pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRngCore>(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
     /// Consume phase one, bind all challenge-dependent children with one X5B1
-    /// capability, commit exactly six auxiliary groups, absorb terminal
+    /// capability, commit all six auxiliary groups in one ordered row tree, absorb terminal
     /// claims, and sample the complete per-registration alpha schedule.
     pub(crate) fn bind_credential_pre_aux_v1_with_rng<R: TryRngCore>(
         self,
@@ -631,95 +585,59 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
         {
             let mut source = MainP256Log5TraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
-            let (commitment, polynomials) = commit_main_trace_group_v1(
+            let polynomials = sample_main_trace_group_v1(
                 &layout,
                 0,
                 MainTraceColumnKindV1::Aux,
                 &mut source,
                 rng,
-            )?;
-            record_main_group_commitment_v1(
-                0,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
             )?;
             aux_polynomials.push(polynomials);
         }
         {
             let mut source = MainP256ScalarTraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
-            let (commitment, polynomials) = commit_main_trace_group_v1(
+            let polynomials = sample_main_trace_group_v1(
                 &layout,
                 1,
                 MainTraceColumnKindV1::Aux,
                 &mut source,
                 rng,
             )?;
-            record_main_group_commitment_v1(
-                1,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
             aux_polynomials.push(polynomials);
         }
         {
-            let (commitment, polynomials) = commit_main_trace_group_v1(
+            let polynomials = sample_main_trace_group_v1(
                 &layout,
                 2,
                 MainTraceColumnKindV1::Aux,
                 &mut projection,
                 rng,
             )?;
-            record_main_group_commitment_v1(
-                2,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
             aux_polynomials.push(polynomials);
         }
         {
             let mut source = MainP256Log16TraceGroupSourceV1::for_bound_v1(&layout, &log19.p256)?;
-            let (commitment, polynomials) = commit_main_trace_group_v1(
+            let polynomials = sample_main_trace_group_v1(
                 &layout,
                 3,
                 MainTraceColumnKindV1::Aux,
                 &mut source,
                 rng,
             )?;
-            record_main_group_commitment_v1(
-                3,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
             aux_polynomials.push(polynomials);
         }
         {
-            let (commitment, polynomials) =
-                commit_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Aux, &mut io, rng)?;
-            record_main_group_commitment_v1(
-                4,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
-            )?;
+            let polynomials =
+                sample_main_trace_group_v1(&layout, 4, MainTraceColumnKindV1::Aux, &mut io, rng)?;
             aux_polynomials.push(polynomials);
         }
         {
-            let (commitment, polynomials) = commit_main_trace_group_v1(
+            let polynomials = sample_main_trace_group_v1(
                 &layout,
                 5,
                 MainTraceColumnKindV1::Aux,
                 &mut log19,
                 rng,
-            )?;
-            record_main_group_commitment_v1(
-                5,
-                MainTraceColumnKindV1::Aux,
-                &commitment,
-                &mut trace_groups,
             )?;
             aux_polynomials.push(polynomials);
         }
@@ -728,6 +646,9 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
             MainTraceColumnKindV1::Aux,
             aux_polynomials,
         )?;
+        let commitment =
+            aux_polynomials.commit_joined_v1(&layout, MainTraceColumnKindV1::Aux, &[])?;
+        trace_groups[0].aux_root = commitment.commitment.root;
         aggregate::absorb_aux_roots_v1(&mut transcript, AGGREGATE_DOMAINS_V1, &trace_groups)
             .map_err(map_aggregate_error_v1)?;
         let terminal_claims = log19.terminal_claims_v1();
@@ -936,61 +857,36 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 })
             })
             .collect::<Result<Vec<_>, ZkX509StarkErrorV1>>()?;
-        let mut base_openings = Vec::new();
-        let mut aux_openings = Vec::new();
-        base_openings
-            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        aux_openings
-            .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
-            .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
-        for group_index in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
-            let opening_indices = aggregate::trace_group_opening_indices_v1(
-                &query_skeleton,
-                &shared_layout,
-                group_index,
-            )
-            .map_err(map_aggregate_error_v1)?;
-            let base = aggregate::replay_masked_trace_polynomial_columns_v1(
-                AGGREGATE_DOMAINS_V1.digest_context,
-                BASE_LEAF_DOMAIN,
-                BASE_NODE_DOMAIN,
-                group_index,
-                self.base_polynomials.group_v1(
-                    &self.layout,
-                    MainTraceColumnKindV1::Base,
-                    group_index,
-                )?,
-                &opening_indices,
-            )
-            .map_err(map_aggregate_error_v1)?;
-            let aux = aggregate::replay_masked_trace_polynomial_columns_v1(
-                AGGREGATE_DOMAINS_V1.digest_context,
-                AUX_LEAF_DOMAIN,
-                AUX_NODE_DOMAIN,
-                group_index,
-                self.aux_polynomials.group_v1(
-                    &self.layout,
-                    MainTraceColumnKindV1::Aux,
-                    group_index,
-                )?,
-                &opening_indices,
-            )
-            .map_err(map_aggregate_error_v1)?;
-            let trace_group = self
-                .trace_groups
-                .get_mut(group_index)
-                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
-            if base.commitment.root != trace_group.base_root
-                || aux.commitment.root != trace_group.aux_root
-            {
-                return Err(ZkX509StarkErrorV1::InternalInvariant);
-            }
-            trace_group.base_frontier = base.commitment.frontier.clone();
-            trace_group.aux_frontier = aux.commitment.frontier.clone();
-            base_openings.push(base);
-            aux_openings.push(aux);
+        let opening_indices =
+            aggregate::trace_group_opening_indices_v1(&query_skeleton, &shared_layout, 0)
+                .map_err(map_aggregate_error_v1)?;
+        let base_plan = self
+            .base_polynomials
+            .joined_plan_v1(&self.layout, MainTraceColumnKindV1::Base)?;
+        let aux_plan = self
+            .aux_polynomials
+            .joined_plan_v1(&self.layout, MainTraceColumnKindV1::Aux)?;
+        let base_openings = self.base_polynomials.commit_joined_v1(
+            &self.layout,
+            MainTraceColumnKindV1::Base,
+            &opening_indices,
+        )?;
+        let aux_openings = self.aux_polynomials.commit_joined_v1(
+            &self.layout,
+            MainTraceColumnKindV1::Aux,
+            &opening_indices,
+        )?;
+        let trace_group = self
+            .trace_groups
+            .first_mut()
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+        if base_openings.commitment.root != trace_group.base_root
+            || aux_openings.commitment.root != trace_group.aux_root
+        {
+            return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
+        trace_group.base_frontier = base_openings.commitment.frontier.clone();
+        trace_group.aux_frontier = aux_openings.commitment.frontier.clone();
         let composition_opening_indices =
             aggregate::composition_opening_indices_v1(&query_skeleton, &shared_layout)
                 .map_err(map_aggregate_error_v1)?;
@@ -1051,44 +947,27 @@ impl ZkX509MainCompositionPhaseV1<'_> {
                 .try_reserve_exact(FULL_PROFILE_TRACE_GROUPS_V1)
                 .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
             for group_index in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
-                let next_stride = self.layout.trace_groups[group_index]
-                    .next_stride(self.layout.common_lde_log2)?;
-                let next = (index + next_stride) % self.layout.common_lde_size();
+                let base_range = base_plan
+                    .group_range_v1(group_index)
+                    .map_err(map_aggregate_error_v1)?;
+                let aux_range = aux_plan
+                    .group_range_v1(group_index)
+                    .map_err(map_aggregate_error_v1)?;
                 let base = base_openings
-                    .get(group_index)
+                    .opened_rows
+                    .get(&index)
+                    .and_then(|row| row.get(base_range))
                     .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
                 let aux = aux_openings
-                    .get(group_index)
+                    .opened_rows
+                    .get(&index)
+                    .and_then(|row| row.get(aux_range))
                     .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
                 opened_groups.push(aggregate::AggregateTraceGroupQueryV1 {
-                    base_current: base
-                        .opened_rows
-                        .get(&index)
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
-                        .iter()
-                        .map(|value| value.0)
-                        .collect(),
-                    base_next: base
-                        .opened_rows
-                        .get(&next)
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
-                        .iter()
-                        .map(|value| value.0)
-                        .collect(),
-                    aux_current: aux
-                        .opened_rows
-                        .get(&index)
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
-                        .iter()
-                        .map(|value| value.0)
-                        .collect(),
-                    aux_next: aux
-                        .opened_rows
-                        .get(&next)
-                        .ok_or(ZkX509StarkErrorV1::InternalInvariant)?
-                        .iter()
-                        .map(|value| value.0)
-                        .collect(),
+                    base_current: base.iter().map(|value| value.0).collect(),
+                    base_next: Vec::new(),
+                    aux_current: aux.iter().map(|value| value.0).collect(),
+                    aux_next: Vec::new(),
                 });
             }
             queries.push(aggregate::AggregateQueryProofV1 {
@@ -2506,6 +2385,111 @@ pub(super) struct P256OpenedRowEvaluatorV1<'a> {
     pub(super) mixes: &'a [Vec<FriMixV1>],
     pub(super) lde_root: F,
 }
+/// Complete registered arithmetic relation, including scalar and value-copy terminals.
+fn p256_arithmetic_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    registration: RegisteredSegmentLayoutV1,
+    opening: RegisteredOpenedRowsV1<'_, A>,
+    fixed: &[A],
+    challenges: P256AggregateChallengesV1,
+    terminals: &P256TerminalRegistrationV1,
+) -> Result<Vec<A>, ZkX509StarkErrorV1> {
+    let identity = p256_main_registration_from_main_layout_v1(registration)?;
+    if identity.adapter_v1() != P256MainAdapterV1::Arithmetic
+        || registration.segment.constraint_count != P256_ARITHMETIC_REGISTERED_CONSTRAINT_COUNT_V1
+        || terminals
+            .buses
+            .arithmetic_scalar
+            .iter()
+            .chain(&terminals.buses.arithmetic_value_copy)
+            .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let current = opening
+        .base_current
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let next = opening
+        .base_next
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let current_aux = opening
+        .aux_current
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let next_aux = opening
+        .aux_next
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let fixed = fixed
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let mut residues = super::super::p256_aggregate_adapter::evaluate_p256_arithmetic_aggregate_residues_over_field_v1(
+        current, next, current_aux, next_aux, fixed, challenges.scalar, challenges.arithmetic_copy,
+    )?;
+    let selector = p256_arithmetic_last_selector_v1(fixed);
+    residues.extend(evaluate_p256_terminal_claim_binding_v1(
+        selector,
+        p256_arithmetic_scalar_terminal_v1(current_aux)?,
+        terminals.buses.arithmetic_scalar,
+    ));
+    residues.extend(evaluate_p256_terminal_claim_binding_v1(
+        selector,
+        p256_arithmetic_value_copy_terminal_v1(current_aux)?,
+        terminals.buses.arithmetic_value_copy,
+    ));
+    if residues.len() != registration.segment.constraint_count {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(residues)
+}
+/// Complete registered external-binding sink, including all four terminal claims.
+fn p256_binding_sink_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    registration: RegisteredSegmentLayoutV1,
+    opening: RegisteredOpenedRowsV1<'_, A>,
+    fixed: &[A],
+    challenges: P256AggregateChallengesV1,
+    terminals: &P256TerminalRegistrationV1,
+) -> Result<Vec<A>, ZkX509StarkErrorV1> {
+    let identity = p256_main_registration_from_main_layout_v1(registration)?;
+    if identity.adapter_v1() != P256MainAdapterV1::BindingSink
+        || registration.segment.constraint_count != P256_BINDING_SINK_REGISTERED_CONSTRAINT_COUNT_V1
+        || terminals.sink.iter().any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let current = opening
+        .base_current
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let next = opening
+        .base_next
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let current_aux = opening
+        .aux_current
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let next_aux = opening
+        .aux_next
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let fixed = fixed
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let mut residues = super::super::p256_aggregate_adapter::evaluate_p256_binding_sink_aggregate_residues_over_field_v1(
+        current, next, current_aux, next_aux, fixed, challenges.cross,
+    )?;
+    residues.extend(evaluate_p256_terminal_claim_binding_v1(
+        p256_binding_sink_last_selector_v1(fixed),
+        p256_binding_sink_terminal_v1(current_aux)?,
+        terminals.sink,
+    ));
+    if residues.len() != registration.segment.constraint_count {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(residues)
+}
 pub(super) fn p256_scalar_opened_residues_v1(
     registration: RegisteredSegmentLayoutV1,
     opening: RegisteredOpenedRowsV1<'_>,
@@ -2513,6 +2497,16 @@ pub(super) fn p256_scalar_opened_residues_v1(
     challenges: P256ScalarBitBusChallengesV1,
     terminals: &P256TerminalRegistrationV1,
 ) -> Result<Vec<F>, ZkX509StarkErrorV1> {
+    p256_scalar_opened_residues_over_field_v1(registration, opening, fixed, challenges, terminals)
+}
+/// Complete packed scalar-bit relation over F or Fp4, including all eight source terminals.
+pub(super) fn p256_scalar_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    registration: RegisteredSegmentLayoutV1,
+    opening: RegisteredOpenedRowsV1<'_, A>,
+    fixed: &[A; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1],
+    challenges: P256ScalarBitBusChallengesV1,
+    terminals: &P256TerminalRegistrationV1,
+) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let Some((_, 0)) = p256_instance_parts_v1(registration.segment.instance) else {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     };
@@ -2530,30 +2524,39 @@ pub(super) fn p256_scalar_opened_residues_v1(
             .chain(opening.aux_current)
             .chain(opening.aux_next)
             .chain(fixed)
-            .any(|value| F::canonical(value.0).is_none())
+            .any(|value| !value.is_canonical())
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    if terminals
+        .buses
+        .arithmetic_scalar
+        .iter()
+        .chain(&terminals.buses.window_scalar)
+        .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::P256Witness);
     }
     challenges
         .validate_v1()
         .map_err(|_| ZkX509StarkErrorV1::TranscriptMismatch)?;
-    let current: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1] = opening
+    let current: &[A; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1] = opening
         .base_current
         .try_into()
         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let next: &[F; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1] = opening
+    let next: &[A; P256_SCALAR_BIT_BUS_STARK_BASE_WIDTH_V1] = opening
         .base_next
         .try_into()
         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let current_aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1] = opening
+    let current_aux: &[A; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1] = opening
         .aux_current
         .try_into()
         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let next_aux: &[F; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1] = opening
+    let next_aux: &[A; P256_SCALAR_BIT_BUS_STARK_AUX_WIDTH_V1] = opening
         .aux_next
         .try_into()
         .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-    let mut residues = evaluate_p256_scalar_bit_bus_aggregate_residues_v1(
+    let mut residues = super::super::p256_aggregate_adapter::evaluate_p256_scalar_bit_bus_aggregate_residues_over_field_v1(
         current,
         next,
         current_aux,
@@ -2579,16 +2582,45 @@ pub(super) fn p256_scalar_opened_residues_v1(
     }
     Ok(residues)
 }
-pub(super) fn p256_opened_residues_v1(
+/// Complete registered comparison residues, including source terminal claims.
+///
+/// This is the one implementation used by existing scalar queries and the
+/// partial MAIN Fp4 adapter. Public challenges and claims remain in F.
+fn p256_comparison_opened_residues_v1<A: PolynomialAirFieldV1>(
     registration: RegisteredSegmentLayoutV1,
-    opening: RegisteredOpenedRowsV1<'_>,
-    fixed: &[F],
+    opening: RegisteredOpenedRowsV1<'_, A>,
+    fixed: &[A],
     challenges: P256AggregateChallengesV1,
     terminals: &P256TerminalRegistrationV1,
-) -> Result<Vec<F>, ZkX509StarkErrorV1> {
-    let (_, local_instance) = p256_instance_parts_v1(registration.segment.instance)
-        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
-    let mut residues = match (registration.segment.adapter, local_instance) {
+) -> Result<Vec<A>, ZkX509StarkErrorV1> {
+    let identity = p256_main_registration_from_main_layout_v1(registration)?;
+    let local_instance = identity.local_instance_v1();
+    challenges
+        .cross
+        .validate()
+        .map_err(|_| ZkX509StarkErrorV1::P256Witness)?;
+    for claim in &terminals.cross_sources {
+        if claim
+            .start
+            .iter()
+            .chain(&claim.terminal)
+            .any(|value| !value.is_canonical())
+        {
+            return Err(ZkX509StarkErrorV1::P256Witness);
+        }
+    }
+    if opening
+        .base_current
+        .iter()
+        .chain(opening.base_next)
+        .chain(opening.aux_current)
+        .chain(opening.aux_next)
+        .chain(fixed)
+        .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    let residues = match (registration.segment.adapter, local_instance) {
         (SegmentAdapterIdV1::P256Reduction, instance @ 0..=1) => {
             let claim_role = if instance == 0 {
                 P256CrossTraceTerminalRoleV1::DigestReduction
@@ -2596,26 +2628,26 @@ pub(super) fn p256_opened_residues_v1(
                 P256CrossTraceTerminalRoleV1::ResultXReduction
             };
             let claim = terminals.cross_claim(claim_role)?;
-            let current: &[F; P256_REDUCTION_BASE_WIDTH_V1] = opening
+            let current: &[A; P256_REDUCTION_BASE_WIDTH_V1] = opening
                 .base_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_REDUCTION_BASE_WIDTH_V1] = opening
+            let next: &[A; P256_REDUCTION_BASE_WIDTH_V1] = opening
                 .base_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1] = opening
+            let current_aux: &[A; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1] = opening
                 .aux_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1] = opening
+            let next_aux: &[A; P256_REDUCTION_AGGREGATE_AUX_WIDTH_V1] = opening
                 .aux_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
+            let fixed: &[A; P256_REDUCTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_reduction_aggregate_residues_v1(
+            let mut residues = super::super::p256_aggregate_adapter::evaluate_p256_reduction_aggregate_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
@@ -2633,26 +2665,26 @@ pub(super) fn p256_opened_residues_v1(
         }
         (SegmentAdapterIdV1::P256LowS, 0) => {
             let claim = terminals.cross_claim(P256CrossTraceTerminalRoleV1::WalletLowS)?;
-            let current: &[F; P256_LOW_S_BASE_WIDTH_V1] = opening
+            let current: &[A; P256_LOW_S_BASE_WIDTH_V1] = opening
                 .base_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_LOW_S_BASE_WIDTH_V1] = opening
+            let next: &[A; P256_LOW_S_BASE_WIDTH_V1] = opening
                 .base_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1] = opening
+            let current_aux: &[A; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1] = opening
                 .aux_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1] = opening
+            let next_aux: &[A; P256_LOW_S_AGGREGATE_AUX_WIDTH_V1] = opening
                 .aux_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1] = fixed
+            let fixed: &[A; P256_LOW_S_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_low_s_aggregate_residues_v1(
+            let mut residues = super::super::p256_aggregate_adapter::evaluate_p256_low_s_aggregate_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
@@ -2668,40 +2700,61 @@ pub(super) fn p256_opened_residues_v1(
             ));
             residues
         }
-        (SegmentAdapterIdV1::P256ScalarBitBus, 0) => {
-            let fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            p256_scalar_opened_residues_v1(
-                registration,
-                opening,
-                fixed,
-                challenges.scalar,
-                terminals,
-            )?
-        }
-        (SegmentAdapterIdV1::P256Window, 0) => {
-            let claim = terminals.cross_claim(P256CrossTraceTerminalRoleV1::WindowBatch)?;
-            let current: &[F; P256_WINDOW_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_WINDOW_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_window_aggregate_residues_v1(
+        _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
+    };
+    if residues.len() != registration.segment.constraint_count {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(residues)
+}
+fn p256_window_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    registration: RegisteredSegmentLayoutV1,
+    opening: RegisteredOpenedRowsV1<'_, A>,
+    fixed: &[A],
+    challenges: P256AggregateChallengesV1,
+    terminals: &P256TerminalRegistrationV1,
+) -> Result<Vec<A>, ZkX509StarkErrorV1> {
+    registration.segment.validate()?;
+    p256_main_registration_from_main_layout_v1(registration)?;
+    if registration.segment.adapter != SegmentAdapterIdV1::P256Window
+        || !matches!(
+            p256_instance_parts_v1(registration.segment.instance),
+            Some((_, 0))
+        )
+    {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+
+    let claim = terminals.cross_claim(P256CrossTraceTerminalRoleV1::WindowBatch)?;
+    if claim
+        .start
+        .iter()
+        .chain(&claim.terminal)
+        .chain(&terminals.buses.window_scalar)
+        .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::P256Witness);
+    }
+    let current: &[A; P256_WINDOW_BASE_WIDTH_V1] = opening
+        .base_current
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let next: &[A; P256_WINDOW_BASE_WIDTH_V1] = opening
+        .base_next
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let current_aux: &[A; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1] = opening
+        .aux_current
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let next_aux: &[A; P256_WINDOW_AGGREGATE_AUX_WIDTH_V1] = opening
+        .aux_next
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let fixed: &[A; P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1] = fixed
+        .try_into()
+        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+    let mut residues = super::super::p256_aggregate_adapter::evaluate_p256_window_aggregate_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
@@ -2713,126 +2766,75 @@ pub(super) fn p256_opened_residues_v1(
                     scalar: challenges.scalar,
                 },
             )?;
-            let selector = p256_window_last_selector_v1(fixed);
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_window_cross_terminal_v1(current_aux)?,
-                claim.terminal,
-            ));
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_window_scalar_terminal_v1(current_aux)?,
-                terminals.buses.window_scalar,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256ValueBus, 2) => {
-            let current: &[F; P256_BINDING_SINK_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_BINDING_SINK_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[
-                F;
-                super::super::p256_cross_trace_bus::P256_CROSS_TRACE_SINK_AUX_WIDTH_V1
-            ] =
-                opening
-                    .aux_current
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[
-                F;
-                super::super::p256_cross_trace_bus::P256_CROSS_TRACE_SINK_AUX_WIDTH_V1
-            ] =
-                opening
-                    .aux_next
-                    .try_into()
-                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_BINDING_SINK_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_binding_sink_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                challenges.cross,
-            )?;
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                p256_binding_sink_last_selector_v1(fixed),
-                p256_binding_sink_terminal_v1(current_aux)?,
-                terminals.sink,
-            ));
-            residues
-        }
-        (SegmentAdapterIdV1::P256Arithmetic, 0) => {
-            let current: &[F; P256_ARITHMETIC_BASE_WIDTH_V1] = opening
-                .base_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_ARITHMETIC_BASE_WIDTH_V1] = opening
-                .base_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_current
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_ARITHMETIC_AGGREGATE_AUX_WIDTH_V1] = opening
-                .aux_next
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1] = fixed
-                .try_into()
-                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_arithmetic_aggregate_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                challenges.scalar,
-                challenges.arithmetic_copy,
-            )?;
-            let selector = p256_arithmetic_last_selector_v1(fixed);
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_arithmetic_scalar_terminal_v1(current_aux)?,
-                terminals.buses.arithmetic_scalar,
-            ));
-            residues.extend(evaluate_p256_terminal_claim_binding_v1(
-                selector,
-                p256_arithmetic_value_copy_terminal_v1(current_aux)?,
-                terminals.buses.arithmetic_value_copy,
-            ));
-            residues
-        }
+    let selector = p256_window_last_selector_v1(fixed);
+    residues.extend(evaluate_p256_terminal_claim_binding_v1(
+        selector,
+        p256_window_cross_terminal_v1(current_aux)?,
+        claim.terminal,
+    ));
+    residues.extend(evaluate_p256_terminal_claim_binding_v1(
+        selector,
+        p256_window_scalar_terminal_v1(current_aux)?,
+        terminals.buses.window_scalar,
+    ));
+    if residues.len() != registration.segment.constraint_count {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(residues)
+}
+fn p256_value_opened_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    registration: RegisteredSegmentLayoutV1,
+    opening: RegisteredOpenedRowsV1<'_, A>,
+    fixed: &[A],
+    challenges: P256AggregateChallengesV1,
+    terminals: &P256TerminalRegistrationV1,
+) -> Result<Vec<A>, ZkX509StarkErrorV1> {
+    registration.segment.validate()?;
+    p256_main_registration_from_main_layout_v1(registration)?;
+    if [
+        terminals.buses.value_execution,
+        terminals.buses.value_sorted,
+        terminals.buses.value_arithmetic_copy,
+    ]
+    .iter()
+    .flatten()
+    .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::P256Witness);
+    }
+    let (_, local_instance) = p256_instance_parts_v1(registration.segment.instance)
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    let residues = match (registration.segment.adapter, local_instance) {
         (SegmentAdapterIdV1::P256ValueBus, 0) => {
             let claim = terminals.cross_claim(P256CrossTraceTerminalRoleV1::ValueWriter)?;
-            let current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
+            if claim
+                .start
+                .iter()
+                .chain(&claim.terminal)
+                .any(|value| !value.is_canonical())
+            {
+                return Err(ZkX509StarkErrorV1::P256Witness);
+            }
+            let current: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
                 .base_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
+            let next: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
                 .base_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1] = opening
+            let current_aux: &[A; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1] = opening
                 .aux_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1] = opening
+            let next_aux: &[A; P256_VALUE_EXECUTION_AGGREGATE_AUX_WIDTH_V1] = opening
                 .aux_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
+            let fixed: &[A; P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_value_execution_aggregate_residues_v1(
+            let mut residues = super::super::p256_aggregate_adapter::evaluate_p256_value_execution_aggregate_residues_over_field_v1(
                 current,
                 next,
                 current_aux,
@@ -2845,7 +2847,7 @@ pub(super) fn p256_opened_residues_v1(
                 },
             )?;
             let selector = p256_value_execution_last_selector_v1(fixed);
-            let value_aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = current_aux
+            let value_aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = current_aux
                 [..P256_VALUE_BUS_STARK_AUX_WIDTH_V1]
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
@@ -2867,34 +2869,35 @@ pub(super) fn p256_opened_residues_v1(
             residues
         }
         (SegmentAdapterIdV1::P256ValueBus, 1) => {
-            let current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
+            let current: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
                 .base_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
+            let next: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1] = opening
                 .base_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let current_aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = opening
+            let current_aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = opening
                 .aux_current
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let next_aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = opening
+            let next_aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1] = opening
                 .aux_next
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let fixed: &[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1] = fixed
+            let fixed: &[A; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1] = fixed
                 .try_into()
                 .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
-            let mut residues = evaluate_p256_value_bus_stark_residues_v1(
-                current,
-                next,
-                current_aux,
-                next_aux,
-                fixed,
-                challenges.value,
-            )
-            .map_err(|_| ZkX509StarkErrorV1::P256Witness)?;
+            let mut residues =
+                super::super::p256_value_bus::evaluate_p256_value_bus_stark_residues_over_field_v1(
+                    current,
+                    next,
+                    current_aux,
+                    next_aux,
+                    fixed,
+                    challenges.value,
+                )
+                .map_err(|_| ZkX509StarkErrorV1::P256Witness)?;
             residues.extend(evaluate_p256_terminal_claim_binding_v1(
                 p256_value_bus_stark_last_domain_selector_v1(fixed),
                 p256_value_bus_stark_opened_terminal_v1(current_aux),
@@ -2902,6 +2905,397 @@ pub(super) fn p256_opened_residues_v1(
             ));
             residues
         }
+        _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
+    };
+    if residues.len() != registration.segment.constraint_count {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    Ok(residues)
+}
+/// Availability of a complete per-registration Fp4 AIR implementation.
+///
+/// Each variant carries a family-specific evaluator so its public challenges
+/// and terminal claims cannot be confused with another adapter. This capability
+/// authenticates no opening, quotient or complete MAIN proof. Unsupported
+/// registrations return None, and there is no reduced-opening codec switch.
+#[derive(Clone, Copy)]
+enum MainFp4AirEvaluatorV1 {
+    P256(P256MainFp4AirEvaluatorV1),
+    Sha(ShaMainFp4AirEvaluatorV1),
+    Projection(ProjectionMainFp4AirEvaluatorV1),
+    ByteMemory(ByteMemoryMainFp4AirEvaluatorV1),
+    StrictDer(DerMainFp4AirEvaluatorV1),
+    Rfc5280(RfcMainFp4AirEvaluatorV1),
+}
+impl MainFp4AirEvaluatorV1 {
+    fn registration_v1(self) -> RegisteredSegmentLayoutV1 {
+        match self {
+            Self::P256(evaluator) => evaluator.registration,
+            Self::Sha(evaluator) => evaluator.registration,
+            Self::Projection(evaluator) => evaluator.registration,
+            Self::ByteMemory(evaluator) => evaluator.registration,
+            Self::StrictDer(evaluator) => evaluator.registration,
+            Self::Rfc5280(evaluator) => evaluator.registration,
+        }
+    }
+    fn for_registration_v1(
+        registration: RegisteredSegmentLayoutV1,
+    ) -> Result<Option<Self>, ZkX509StarkErrorV1> {
+        registration.segment.validate()?;
+        if !AggregateProofLayoutV1::for_full_profile_v1()?
+            .registered_segments
+            .contains(&registration)
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        match registration.segment.adapter {
+            SegmentAdapterIdV1::P256Reduction
+            | SegmentAdapterIdV1::P256LowS
+            | SegmentAdapterIdV1::P256ScalarBitBus
+            | SegmentAdapterIdV1::P256Window
+            | SegmentAdapterIdV1::P256Arithmetic => {
+                p256_main_registration_from_main_layout_v1(registration)?;
+                Ok(Some(Self::P256(P256MainFp4AirEvaluatorV1 { registration })))
+            }
+            SegmentAdapterIdV1::P256ValueBus
+                if matches!(
+                    p256_instance_parts_v1(registration.segment.instance),
+                    Some((_, 0 | 1 | 2))
+                ) =>
+            {
+                p256_main_registration_from_main_layout_v1(registration)?;
+                Ok(Some(Self::P256(P256MainFp4AirEvaluatorV1 { registration })))
+            }
+            SegmentAdapterIdV1::Sha256CallBus => {
+                Ok(Some(Self::Sha(ShaMainFp4AirEvaluatorV1 { registration })))
+            }
+            SegmentAdapterIdV1::Projection => {
+                Ok(Some(Self::Projection(ProjectionMainFp4AirEvaluatorV1 {
+                    registration,
+                })))
+            }
+            SegmentAdapterIdV1::ByteMemory => {
+                Ok(Some(Self::ByteMemory(ByteMemoryMainFp4AirEvaluatorV1 {
+                    registration,
+                })))
+            }
+            SegmentAdapterIdV1::StrictDer => Ok(Some(Self::StrictDer(DerMainFp4AirEvaluatorV1 {
+                registration,
+            }))),
+            SegmentAdapterIdV1::Rfc5280 => Ok(Some(Self::Rfc5280(RfcMainFp4AirEvaluatorV1 {
+                registration,
+            }))),
+            _ => Ok(None),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+struct DerMainFp4AirEvaluatorV1 {
+    registration: RegisteredSegmentLayoutV1,
+}
+struct DerMainFp4AirContextV1 {
+    challenges: ZkX509DerStarkChallengesV1,
+    public: ZkX509DerStarkPublicTerminalsV1,
+    terminals: ZkX509DerStarkTerminalClaimsV1,
+}
+impl DerMainFp4AirEvaluatorV1 {
+    fn evaluate_residues_v1(
+        self,
+        opening: RegisteredOpenedRowsV1<'_, E>,
+        fixed: &[E],
+        next_fixed: &[E],
+        context: DerMainFp4AirContextV1,
+    ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+        let residues = evaluate_zk_x509_der_stark_residues_v1(
+            opening
+                .base_current
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            opening
+                .base_next
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            opening
+                .aux_current
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            opening
+                .aux_next
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            fixed
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            next_fixed
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            context.challenges,
+            context.public,
+            context.terminals,
+        )
+        .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+        if residues.len() != self.registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Ok(residues)
+    }
+}
+#[derive(Clone, Copy)]
+struct RfcMainFp4AirEvaluatorV1 {
+    registration: RegisteredSegmentLayoutV1,
+}
+struct RfcMainFp4AirContextV1 {
+    der: ZkX509DerStarkChallengesV1,
+    rfc: ZkX509Rfc5280StarkChallengesV1,
+    terminals: ZkX509Rfc5280StarkTerminalClaimsV1,
+}
+impl RfcMainFp4AirEvaluatorV1 {
+    fn evaluate_residues_v1(
+        self,
+        opening: RegisteredOpenedRowsV1<'_, E>,
+        fixed: &[E],
+        context: RfcMainFp4AirContextV1,
+    ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+        let residues = evaluate_zk_x509_rfc5280_stark_residues_v1(
+            opening
+                .base_current
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            opening
+                .base_next
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            opening
+                .aux_current
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            opening
+                .aux_next
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            fixed
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+            context.der,
+            context.rfc,
+            context.terminals,
+        )
+        .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+        if residues.len() != self.registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Ok(residues)
+    }
+}
+#[derive(Clone, Copy)]
+struct P256MainFp4AirEvaluatorV1 {
+    registration: RegisteredSegmentLayoutV1,
+}
+#[derive(Clone, Copy)]
+struct ByteMemoryMainFp4AirEvaluatorV1 {
+    registration: RegisteredSegmentLayoutV1,
+}
+impl ByteMemoryMainFp4AirEvaluatorV1 {
+    fn evaluate_residues_v1(
+        self,
+        logical_active_rows: usize,
+        opening: RegisteredOpenedRowsV1<'_, E>,
+        fixed: &[E],
+        challenges: ZkX509IoChallengesV1,
+    ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+        io_constraint_residues_v1(
+            self.registration.segment,
+            logical_active_rows,
+            opening.base_current,
+            opening.base_next,
+            opening.aux_current,
+            opening.aux_next,
+            fixed,
+            challenges,
+        )
+    }
+}
+#[derive(Clone, Copy)]
+struct ProjectionMainFp4AirEvaluatorV1 {
+    registration: RegisteredSegmentLayoutV1,
+}
+impl ProjectionMainFp4AirEvaluatorV1 {
+    fn evaluate_residues_v1(
+        self,
+        opening: RegisteredOpenedRowsV1<'_, E>,
+        fixed: &[E],
+        challenges: ZkX509ProjectionChallengesV1,
+    ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+        let residues = projection_constraint_residues_v1(
+            opening.base_current,
+            opening.base_next,
+            opening.aux_current,
+            opening.aux_next,
+            fixed,
+            challenges,
+        )?;
+        if residues.len() != self.registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Ok(residues)
+    }
+}
+impl P256MainFp4AirEvaluatorV1 {
+    fn evaluate_residues_v1(
+        self,
+        opening: RegisteredOpenedRowsV1<'_, E>,
+        fixed: &[E],
+        challenges: P256AggregateChallengesV1,
+        terminals: &P256TerminalRegistrationV1,
+    ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+        match self.registration.segment.adapter {
+            SegmentAdapterIdV1::P256ScalarBitBus => p256_scalar_opened_residues_over_field_v1(
+                self.registration,
+                opening,
+                fixed
+                    .try_into()
+                    .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                challenges.scalar,
+                terminals,
+            ),
+            SegmentAdapterIdV1::P256Window => p256_window_opened_residues_over_field_v1(
+                self.registration,
+                opening,
+                fixed,
+                challenges,
+                terminals,
+            ),
+            SegmentAdapterIdV1::P256Arithmetic => p256_arithmetic_opened_residues_over_field_v1(
+                self.registration,
+                opening,
+                fixed,
+                challenges,
+                terminals,
+            ),
+            SegmentAdapterIdV1::P256ValueBus => {
+                match p256_instance_parts_v1(self.registration.segment.instance) {
+                    Some((_, 2)) => p256_binding_sink_opened_residues_over_field_v1(
+                        self.registration,
+                        opening,
+                        fixed,
+                        challenges,
+                        terminals,
+                    ),
+                    Some((_, 0 | 1)) => p256_value_opened_residues_over_field_v1(
+                        self.registration,
+                        opening,
+                        fixed,
+                        challenges,
+                        terminals,
+                    ),
+                    _ => Err(ZkX509StarkErrorV1::ProfileMismatch),
+                }
+            }
+            SegmentAdapterIdV1::P256Reduction | SegmentAdapterIdV1::P256LowS => {
+                p256_comparison_opened_residues_v1(
+                    self.registration,
+                    opening,
+                    fixed,
+                    challenges,
+                    terminals,
+                )
+            }
+            _ => Err(ZkX509StarkErrorV1::ProfileMismatch),
+        }
+    }
+}
+#[derive(Clone, Copy)]
+struct ShaMainFp4AirEvaluatorV1 {
+    registration: RegisteredSegmentLayoutV1,
+}
+/// Public SHA-family context bound before constraint mixing.
+struct ShaMainFp4AirContextV1<'a> {
+    word: ZkX509ShaWordStarkChallengesV1,
+    call: ZkX509ShaCallBusChallengesV1,
+    rfc: ZkX509Rfc5280StarkChallengesV1,
+    terminal: super::super::sha_call_bus_stark::ZkX509ShaSegmentTerminalV1,
+    ca_calls: &'a [ZkX509ShaCallBoundaryTerminalV1; ZK_X509_SHA_CA_CALL_COUNT_V1],
+}
+impl ShaMainFp4AirEvaluatorV1 {
+    fn evaluate_residues_v1(
+        self,
+        current: &ZkX509ShaBatchRowV1<E>,
+        next: &ZkX509ShaBatchRowV1<E>,
+        context: ShaMainFp4AirContextV1<'_>,
+    ) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+        if self.registration.segment.instance != u16::from(context.terminal.segment) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let residues =
+            super::super::sha_call_bus_stark::evaluate_zk_x509_sha_batch_residues_over_field_v1(
+                current,
+                next,
+                context.word,
+                context.call,
+                context.rfc,
+                context.terminal,
+                context.ca_calls,
+            )
+            .map_err(|_| ZkX509StarkErrorV1::ConstraintOpening)?;
+        if residues.len() != self.registration.segment.constraint_count {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        Ok(residues)
+    }
+}
+pub(super) fn p256_opened_residues_v1(
+    registration: RegisteredSegmentLayoutV1,
+    opening: RegisteredOpenedRowsV1<'_>,
+    fixed: &[F],
+    challenges: P256AggregateChallengesV1,
+    terminals: &P256TerminalRegistrationV1,
+) -> Result<Vec<F>, ZkX509StarkErrorV1> {
+    let (_, local_instance) = p256_instance_parts_v1(registration.segment.instance)
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    let mut residues = match (registration.segment.adapter, local_instance) {
+        (SegmentAdapterIdV1::P256Reduction, 0 | 1) | (SegmentAdapterIdV1::P256LowS, 0) => {
+            p256_comparison_opened_residues_v1(registration, opening, fixed, challenges, terminals)?
+        }
+        (SegmentAdapterIdV1::P256ScalarBitBus, 0) => {
+            let fixed: &[F; P256_SCALAR_BIT_BUS_STARK_FIXED_WIDTH_V1] = fixed
+                .try_into()
+                .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
+            p256_scalar_opened_residues_v1(
+                registration,
+                opening,
+                fixed,
+                challenges.scalar,
+                terminals,
+            )?
+        }
+        (SegmentAdapterIdV1::P256Window, 0) => p256_window_opened_residues_over_field_v1(
+            registration,
+            opening,
+            fixed,
+            challenges,
+            terminals,
+        )?,
+        (SegmentAdapterIdV1::P256ValueBus, 2) => p256_binding_sink_opened_residues_over_field_v1(
+            registration,
+            opening,
+            fixed,
+            challenges,
+            terminals,
+        )?,
+        (SegmentAdapterIdV1::P256Arithmetic, 0) => p256_arithmetic_opened_residues_over_field_v1(
+            registration,
+            opening,
+            fixed,
+            challenges,
+            terminals,
+        )?,
+        (SegmentAdapterIdV1::P256ValueBus, 0 | 1) => p256_value_opened_residues_over_field_v1(
+            registration,
+            opening,
+            fixed,
+            challenges,
+            terminals,
+        )?,
         _ => return Err(ZkX509StarkErrorV1::ProfileMismatch),
     };
     if residues.len() != registration.segment.constraint_count {
@@ -3095,7 +3489,7 @@ fn main_pre_aux_from_decoded_proof_v1(
     layout.validate_exact_full_profile_registration_v1()?;
     validate_zk_x509_main_verifier_profile_v1(verifier_profile)?;
     if public.consensus_context_digest == [0_u8; 32]
-        || proof.aggregate.trace_groups.len() != FULL_PROFILE_TRACE_GROUPS_V1
+        || proof.aggregate.trace_groups.len() != ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1
     {
         return Err(ZkX509StarkErrorV1::ProfileMismatch);
     }
@@ -3216,61 +3610,35 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &expected_indices,
     )
     .map_err(map_aggregate_error_v1)?;
-    let sha_shape = ZkX509ShaCallPublicShapeV1 {
-        disclosed_attributes: rfc_statement.disclosed_attribute_indices.len(),
-    };
-    let derived_fixed = derive_zk_x509_main_fixed_openings_after_grinding_v1(
-        verifier_profile,
-        sha_shape,
-        &expected_indices,
-    )?;
     let post_base = credential_binding.main_post_base();
     let p256_fixed = P256MainVerifierFixedSourceV1::new_v1()?;
-    let mut log5 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
+    let log5 = MainP256Log5VerifierConstraintSourceV1::for_main_v1(
         &layout,
         &p256_fixed,
         post_base,
         envelope.claims.p256,
     )?;
-    let mut scalar = MainP256ScalarVerifierConstraintSourceV1::for_main_v1(
-        &layout,
-        &p256_fixed,
-        post_base,
-        &envelope.claims.p256,
-    )?;
-    let mut projection =
+    let projection =
         MainProjectionVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)?;
-    let mut log16 = MainP256Log16VerifierConstraintSourceV1::for_main_v1(
-        &layout,
-        &p256_fixed,
-        post_base,
-        &envelope.claims.p256,
-    )?;
-    let mut io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)?;
+    let io = MainIoVerifierConstraintSourceV1::for_main_v1(&layout, statement, post_base)?;
     let mut log19 = MainLog19VerifierConstraintSourceV1::for_main_v1(
         &layout,
         rfc_statement,
         post_base,
         envelope.claims,
     )?;
-    log19.install_verifier_derived_fixed_openings_v1(derived_fixed)?;
-    let mut providers = MainOpenedProviderSetV1::new_v1(
+    log19.prepare_complete_oods_fixed_v1()?;
+    main_oods::verify_main_deep_constraints_v1(
         &layout,
-        vec![
-            MainOpenedGroupProviderV1::Log5(&mut log5),
-            MainOpenedGroupProviderV1::P256Scalar(&mut scalar),
-            MainOpenedGroupProviderV1::Projection(&mut projection),
-            MainOpenedGroupProviderV1::Log16(&mut log16),
-            MainOpenedGroupProviderV1::Io(&mut io),
-            MainOpenedGroupProviderV1::Log19(&mut log19),
-        ],
+        &proof.deep,
+        deep_point,
+        &alphas,
+        &log5,
+        &projection,
+        &io,
+        &log19,
     )?;
-    let mut evaluator = MainOpenedRowEvaluatorV1 {
-        providers: &mut providers,
-        alphas: &alphas,
-        mixes: &mixes,
-    };
-    aggregate::verify_opened_query_relations_with_deep_v1(
+    aggregate::verify_opened_query_relations_after_complete_oods_v1(
         &proof.aggregate,
         &proof.deep,
         deep_point,
@@ -3280,7 +3648,6 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
         &expected_indices,
         &fri_betas,
         &terminal_fields,
-        &mut evaluator,
     )
     .map_err(map_aggregate_error_v1)?;
     Ok(ZkX509MainCaBindingV1 {
@@ -3293,3 +3660,19 @@ pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
             .consumer_products,
     })
 }
+
+#[cfg(test)]
+#[path = "main_fp4_air_tests.rs"]
+mod fp4_air_tests;
+
+#[cfg(test)]
+#[path = "main_sha_fp4_air_tests.rs"]
+mod sha_fp4_air_tests;
+
+#[cfg(test)]
+#[path = "main_window_fp4_air_tests.rs"]
+mod window_fp4_air_tests;
+
+#[cfg(test)]
+#[path = "main_value_fp4_air_tests.rs"]
+mod value_fp4_air_tests;

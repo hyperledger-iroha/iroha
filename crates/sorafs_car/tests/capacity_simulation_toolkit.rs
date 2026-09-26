@@ -1,6 +1,9 @@
+//! Capacity simulation fixtures checked against the canonical declaration payloads.
 #![cfg(feature = "cli")]
 use assert_cmd::cargo::cargo_bin_cmd;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use norito::json::{self, Value};
+use sorafs_manifest::capacity::CapacityDeclarationV1;
 use std::{collections::HashMap, env, fs, path::PathBuf};
 use tempfile::{Builder, TempDir};
 fn repo_root() -> PathBuf {
@@ -52,19 +55,29 @@ fn quota_negotiation_fixtures_are_consistent() {
         .success();
         let summary_bytes = fs::read(&json_out).expect("read summary");
         let summary: Value = json::from_slice(&summary_bytes).expect("summary json parses");
-        let committed_gib = summary
-            .get("committed_capacity_gib")
-            .and_then(Value::as_u64)
-            .expect("committed_capacity_gib present");
+        assert_eq!(summary.as_object().unwrap().len(), 1);
+        let encoded = summary
+            .get("declaration_b64")
+            .and_then(Value::as_str)
+            .unwrap();
+        let bytes = STANDARD.decode(encoded).unwrap();
+        let declaration: CapacityDeclarationV1 = norito::decode_from_bytes(&bytes).unwrap();
+        declaration.validate().unwrap();
+        let committed_gib = declaration.committed_capacity_gib;
         assert_eq!(
             committed_gib, expected_committed,
             "{alias} committed capacity mismatch"
         );
-        let provider_id = summary
-            .get("provider_id_hex")
-            .and_then(Value::as_str)
-            .expect("provider_id present")
-            .to_string();
+        let source: Value = json::from_slice(&fs::read(&spec).unwrap()).unwrap();
+        let provider_id = hex::encode(declaration.provider_id);
+        assert_eq!(
+            source["provider_id_hex"].as_str(),
+            Some(provider_id.as_str())
+        );
+        assert_eq!(
+            source["committed_capacity_gib"].as_u64(),
+            Some(committed_gib)
+        );
         committed.insert(provider_id, committed_gib);
     }
     let repl_spec = base.join("replication_order.json");

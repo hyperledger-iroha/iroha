@@ -30,7 +30,7 @@ use super::{
     p256_trace::{P256EcdsaTraceMaterialV1, compile_p256_ecdsa_topology_v1},
 };
 use crate::privacy_engines::transparent_stark::{
-    GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1, TransparentTranscriptV1,
 };
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use std::sync::Arc;
@@ -3001,15 +3001,16 @@ impl<'a> P256ValueBusStarkRowProviderV1<'a> {
     }
 }
 /// Project both committed limb cells used by packed writer/copy products.
-pub(crate) fn p256_value_bus_opened_values_v1(
-    base: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
-) -> [F; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1] {
+pub(crate) fn p256_value_bus_opened_values_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
+) -> [A; P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1] {
     core::array::from_fn(|slot| base[stark_base_offset_v1(slot) + STARK_BASE_VALUE])
 }
 /// Evaluate one numeric value-bus row on the aggregate extension domain.
 ///
 /// All topology, endpoint ordering, adjacency, assertion, and boundary selectors are numeric
 /// verifier preprocessing. No proof cell is decoded as an enum or native row index.
+#[cfg(test)]
 pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
     current: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
     next: &[F; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
@@ -3018,6 +3019,24 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
     fixed: &[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1],
     challenges: P256ValueBusChallengesV1,
 ) -> Result<Vec<F>, P256ValueBusErrorV1> {
+    evaluate_p256_value_bus_stark_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        challenges,
+    )
+}
+/// Shared numeric value-bus polynomial over the base or extension field.
+pub(crate) fn evaluate_p256_value_bus_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
+    next: &[A; P256_VALUE_BUS_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1],
+    fixed: &[A; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1],
+    challenges: P256ValueBusChallengesV1,
+) -> Result<Vec<A>, P256ValueBusErrorV1> {
     challenges.validate()?;
     if current
         .iter()
@@ -3025,7 +3044,7 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .any(|value| F::canonical(value.0).is_none())
+        .any(|value| !value.is_canonical())
     {
         return Err(P256ValueBusErrorV1::Range);
     }
@@ -3033,11 +3052,11 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
     for slot in 0..P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1 {
         let base_offset = stark_base_offset_v1(slot);
         let fixed_offset = stark_fixed_offset_v1(slot);
-        let mut packed = F::ZERO;
+        let mut packed = A::ZERO;
         for bit in 0..P256_VALUE_BUS_LIMBS_V1 {
             let value = current[base_offset + STARK_BASE_BITS + bit];
-            residues.push(value.mul(value.sub(F::ONE)));
-            packed = packed.add(value.mul(F(1_u64 << bit)));
+            residues.push(value.mul(value.sub(A::ONE)));
+            packed = packed.add(value.mul(A::from_base(F(1_u64 << bit))));
         }
         let value = current[base_offset + STARK_BASE_VALUE];
         residues.push(value.sub(packed));
@@ -3050,15 +3069,15 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
         }
         for lane in 0..P256_VALUE_BUS_LANES_V1 {
             let terms = challenges.lanes[lane].terms;
-            let factor = F::ONE
+            let factor = A::ONE
                 .sub(fixed[fixed_offset + STARK_FIXED_ACTIVE])
-                .add(fixed[fixed_offset + STARK_FIXED_ACTIVE].mul(terms[0]))
-                .add(fixed[fixed_offset + STARK_FIXED_ID].mul(terms[1]))
-                .add(fixed[fixed_offset + STARK_FIXED_LIMB].mul(terms[2]))
-                .add(fixed[fixed_offset + STARK_FIXED_ACCESS].mul(terms[3]))
-                .add(fixed[fixed_offset + STARK_FIXED_MODULUS].mul(terms[4]))
-                .add(fixed[fixed_offset + STARK_FIXED_VALUE_KIND].mul(terms[5]))
-                .add(value.mul(terms[6]));
+                .add(fixed[fixed_offset + STARK_FIXED_ACTIVE].mul_base(terms[0]))
+                .add(fixed[fixed_offset + STARK_FIXED_ID].mul_base(terms[1]))
+                .add(fixed[fixed_offset + STARK_FIXED_LIMB].mul_base(terms[2]))
+                .add(fixed[fixed_offset + STARK_FIXED_ACCESS].mul_base(terms[3]))
+                .add(fixed[fixed_offset + STARK_FIXED_MODULUS].mul_base(terms[4]))
+                .add(fixed[fixed_offset + STARK_FIXED_VALUE_KIND].mul_base(terms[5]))
+                .add(value.mul_base(terms[6]));
             residues.push(
                 current_aux[stark_aux_product_offset_v1(slot + 1) + lane]
                     .sub(current_aux[stark_aux_product_offset_v1(slot) + lane].mul(factor)),
@@ -3073,14 +3092,14 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
         residues.push(
             fixed[fixed_offset + STARK_FIXED_BOOLEAN]
                 .mul(value)
-                .mul(value.sub(F::ONE)),
+                .mul(value.sub(A::ONE)),
         );
         residues.push(fixed[fixed_offset + STARK_FIXED_ZERO].mul(value));
     }
     for lane in 0..P256_VALUE_BUS_LANES_V1 {
         residues.push(
             fixed[STARK_FIXED_FIRST]
-                .mul(current_aux[stark_aux_product_offset_v1(0) + lane].sub(F::ONE)),
+                .mul(current_aux[stark_aux_product_offset_v1(0) + lane].sub(A::ONE)),
         );
         residues.push(fixed[STARK_FIXED_CONTINUATION].mul(
             next_aux[stark_aux_product_offset_v1(0) + lane].sub(
@@ -3095,9 +3114,9 @@ pub(crate) fn evaluate_p256_value_bus_stark_residues_v1(
     Ok(residues)
 }
 /// Project the terminal product from one verifier-fixed native-row opening.
-pub(crate) fn p256_value_bus_stark_opened_terminal_v1(
-    aux: &[F; P256_VALUE_BUS_STARK_AUX_WIDTH_V1],
-) -> [F; P256_VALUE_BUS_LANES_V1] {
+pub(crate) fn p256_value_bus_stark_opened_terminal_v1<A: PolynomialAirFieldV1>(
+    aux: &[A; P256_VALUE_BUS_STARK_AUX_WIDTH_V1],
+) -> [A; P256_VALUE_BUS_LANES_V1] {
     core::array::from_fn(|lane| {
         aux[stark_aux_product_offset_v1(P256_VALUE_BUS_FACTORS_PER_PACKED_ROW_V1) + lane]
     })
@@ -3113,10 +3132,10 @@ pub(crate) fn evaluate_p256_value_bus_stark_terminal_openings_v1(
     core::array::from_fn(|lane| execution[lane].sub(sorted[lane]))
 }
 /// Verifier-preprocessed selector for the final shared native-domain row.
-pub(crate) fn p256_value_bus_stark_last_domain_selector_v1(
-    fixed: &[F; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1],
-) -> F {
-    F::ONE.sub(fixed[STARK_FIXED_CONTINUATION])
+pub(crate) fn p256_value_bus_stark_last_domain_selector_v1<A: PolynomialAirFieldV1>(
+    fixed: &[A; P256_VALUE_BUS_STARK_FIXED_WIDTH_V1],
+) -> A {
+    A::ONE.sub(fixed[STARK_FIXED_CONTINUATION])
 }
 /// Gate execution/sorted terminal equality at the final shared-domain row.
 ///

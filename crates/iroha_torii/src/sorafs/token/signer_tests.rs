@@ -687,6 +687,45 @@ fn valid_same_key_renewal_cannot_relabel_a_pending_operation() {
 }
 
 #[test]
+fn current_custody_is_eligible_across_the_entire_clock_uncertainty_interval() {
+    // The attested record was issued exactly one second before the fixture clock.
+    assert!(
+        SignedFixture::with_clock_uncertainty(1_000)
+            .issuer()
+            .is_ok()
+    );
+    assert!(matches!(
+        SignedFixture::with_clock_uncertainty(1_001).issuer(),
+        Err(StreamTokenIssuerError::SignerEvidenceInvalid)
+    ));
+    // Observation, record, attester and observer expiration are all exclusive.
+    for case in 1..=4 {
+        let fixture = SignedFixture::with_expiry_case(case);
+        let mut storage = fixture.storage.clone();
+        storage
+            .stream_tokens
+            .signer
+            .as_mut()
+            .unwrap()
+            .clock_uncertainty_ms = 399;
+        assert!(fixture.issuer_with_storage(&storage).is_ok(), "case {case}");
+        storage
+            .stream_tokens
+            .signer
+            .as_mut()
+            .unwrap()
+            .clock_uncertainty_ms = 400;
+        assert!(
+            matches!(
+                fixture.issuer_with_storage(&storage),
+                Err(StreamTokenIssuerError::SignerEvidenceInvalid)
+            ),
+            "case {case}"
+        );
+    }
+}
+
+#[test]
 fn independent_local_finality_and_clock_fences_reject_signed_but_ineligible_history() {
     for fault in 0..3 {
         let signer = SignedFixture::new(1, TestSignerMode::Sign);

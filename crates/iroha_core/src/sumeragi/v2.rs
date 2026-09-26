@@ -2892,19 +2892,25 @@ impl VerifiedHeightContext {
             .parent_commit_qc
             .as_ref()
             .ok_or(AdapterError::ParentContextMismatch)?;
-        let expected_height = parent_artifact
-            .height
-            .checked_add(1)
-            .ok_or(AdapterError::ParentContextMismatch)?;
-        if context.height != expected_height
-            || context.network_id != parent_artifact.height_context.network_id
-            || context.mode != parent_artifact.height_context.mode
-            || context.da_layout != parent_artifact.height_context.da_layout
-            || context.execution_policy_hash != parent_artifact.height_context.execution_policy_hash
-            || !parent_qc
-                .as_ref()
-                .same_commit_decision(parent_artifact.commit_qc.as_ref())
-            || parent_receipt.height() != parent_artifact.height
+        wire::finality::validate_successor_height_context(
+            parent_artifact,
+            &context,
+            &proofs_of_possession,
+        )
+        .map_err(|error| match error {
+            wire::finality::V2FinalityLineageError::Context(error) => {
+                AdapterError::WireValidation(error)
+            }
+            wire::finality::V2FinalityLineageError::Artifact(error) => {
+                AdapterError::FinalityArtifact(error)
+            }
+            wire::finality::V2FinalityLineageError::Epoch => AdapterError::EpochTransitionMismatch,
+            wire::finality::V2FinalityLineageError::Parent
+            | wire::finality::V2FinalityLineageError::Cryptography(_) => {
+                AdapterError::ParentContextMismatch
+            }
+        })?;
+        if parent_receipt.height() != parent_artifact.height
             || parent_receipt.context_id() != parent_artifact.context_id()
             || parent_receipt.block_hash() != parent_artifact.block_hash
             || parent_receipt.subject() != parent_artifact.subject
@@ -2912,38 +2918,6 @@ impl VerifiedHeightContext {
             || parent_receipt.artifact_hash() != HashOf::new(parent_artifact)
         {
             return Err(AdapterError::ParentContextMismatch);
-        }
-        if let Some(snapshot) = &parent_artifact.height_context.next_epoch_snapshot {
-            if context.epoch != snapshot.epoch
-                || context.epoch_end_height != snapshot.epoch_end_height
-                || context.mode != snapshot.mode
-                || context.roster != snapshot.roster
-                || context.quorum != snapshot.quorum
-                || context.leader_seed != snapshot.leader_seed
-                || context.kagemusha_mint_finality_authorization
-                    != snapshot.kagemusha_mint_finality_authorization
-                || context.kagemusha_mint_finality_authority
-                    != snapshot.kagemusha_mint_finality_authority
-                || proofs_of_possession.as_slice() != snapshot.validator_set_pops.as_slice()
-            {
-                return Err(AdapterError::EpochTransitionMismatch);
-            }
-        } else if context.epoch != parent_artifact.height_context.epoch
-            || context.epoch_end_height != parent_artifact.height_context.epoch_end_height
-            || context.roster != parent_artifact.height_context.roster
-            || context.quorum != parent_artifact.height_context.quorum
-            || context.leader_seed != parent_artifact.height_context.leader_seed
-            || context.kagemusha_mint_finality_authorization
-                != parent_artifact
-                    .height_context
-                    .kagemusha_mint_finality_authorization
-            || context.kagemusha_mint_finality_authority
-                != parent_artifact
-                    .height_context
-                    .kagemusha_mint_finality_authority
-            || proofs_of_possession.as_slice() != parent_artifact.validator_set_pops.as_slice()
-        {
-            return Err(AdapterError::EpochTransitionMismatch);
         }
         verify_quorum_certificate(
             &parent_artifact.height_context,

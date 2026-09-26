@@ -617,7 +617,7 @@ four-validator network suites were not rerun.
   bytes through the same circuit-specific cache validation as production.
 
 ZK-X509 diagnostic registration uses the shared 136-query, eightfold-LDE
-geometry. Its combined maximum proof projection is 19,156,074 bytes, exceeding
+geometry. Its combined maximum proof projection is 18,288,618 bytes, exceeding
 the unchanged 9,437,184-byte production ceiling. Full MAIN proving rejects this resource
 preflight before witness preparation or entropy. Activation remains unavailable;
 no soundness certificate is installed. BFV arithmetic diagnostics likewise do

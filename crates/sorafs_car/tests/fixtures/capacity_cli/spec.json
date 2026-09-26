@@ -27,10 +27,5 @@
   "valid_until": 1700086400,
   "metadata": {
     "region": "global"
-  },
-  "record_window": {
-    "registered_epoch": 1700000000,
-    "valid_from_epoch": 1700000000,
-    "valid_until_epoch": 1700086400
   }
 }

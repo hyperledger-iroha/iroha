@@ -163,6 +163,7 @@ sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_node = { path = "../sorafs_node" }
 
 # Optional deps for recovery diagnostics (features: dag-recovery-verify, zk-stark)
+base64 = { workspace = true, features = ["alloc"] }
 sha2 = { version = "0.10.9", default-features = false }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 hex = { workspace = true }
@@ -183,6 +184,7 @@ x25519-dalek = { version = "2.0.1", default-features = false, features = ["stati
 blake3 = { workspace = true }
 
 [dev-dependencies]
+iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests", "sumeragi-main-loop-tests"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 serial_test = "3.5.0"

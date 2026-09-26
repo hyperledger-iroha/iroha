@@ -6,14 +6,10 @@
 //! independent, fresh challenged BeforeRelease evidence verification may release a token.
 //! Authenticated software providers use this same path. No embedded service key, observer-picked
 //! trust, or alternate signing/recovery path exists here.
-//! The owner-only software-credential constructor assembles this producer over one injected
-//! source; it does not qualify that source or activate generic signer dispatch.
-//! TODO: supply and qualify the authoritative journal/finality, observer and configured runtime
-//! adapters; injected source/provider tests exercise races and persistence, not a deployed service.
-//! TODO: the genuine state/provider adapters must reconstruct the same window and request digest
-//! from exact canonical body bytes plus independently pinned custody before admission. The generic
-//! reservation interface currently exposes the bound intent digest, not a separately authenticated
-//! prepared time window; caller-supplied times alone cannot authorize retention or provider use.
+//! The native runtime module constructs the source over the daemon's exact State and queue,
+//! separate configured operator/observer credentials, and actual Kura/QC Check consumption.
+//! Private receipt persistence and all native operation phases must complete before release.
+
 
 use super::journal::{
     SignerReceiptJournalErrorV1, SignerReceiptJournalReaderV1, SignerReceiptJournalV1,
@@ -572,3 +568,6 @@ impl Drop for PendingToken {
 }
 
 mod transport;
+
+/// Concrete State/Kura authority and configured software runtime for role-11 operations.
+pub mod native;

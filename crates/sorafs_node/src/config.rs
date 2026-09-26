@@ -2354,6 +2354,7 @@ mod tests {
             heartbeat_interval_secs: 45,
             max_attempts: 6,
             worker_concurrency: 12,
+            source: None,
         };
         let cfg = RepairConfig::from(&repair);
         assert!(cfg.enabled());

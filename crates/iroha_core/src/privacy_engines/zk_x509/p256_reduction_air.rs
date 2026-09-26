@@ -11,7 +11,7 @@
 //! are range constrained. The production value/byte buses bind `word` and
 //! `reduced` to SHA/P-256 inputs and scalar-arithmetic values respectively.
 use super::p256_air::P256_SCALAR_MODULUS_BE_V1;
-use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use crate::privacy_engines::transparent_stark::{GoldilocksFieldV1 as F, PolynomialAirFieldV1};
 use thiserror::Error;
 /// Stable descriptor for 256-bit-to-scalar canonical reduction.
 #[cfg(test)]
@@ -149,9 +149,9 @@ pub(crate) fn p256_reduction_limb_cells_v1(
 ///
 /// This is deliberately a pure column projection. Cross-source products are
 /// appended to the aggregate auxiliary trace by the caller.
-pub(crate) fn p256_reduction_opened_binding_cells_v1(
-    base: &[F; P256_REDUCTION_BASE_WIDTH_V1],
-) -> [F; 2] {
+pub(crate) fn p256_reduction_opened_binding_cells_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_REDUCTION_BASE_WIDTH_V1],
+) -> [A; 2] {
     [base[WORD], base[REDUCED]]
 }
 /// Reduction construction or constraint failure.
@@ -219,7 +219,9 @@ pub(crate) fn p256_low_s_limb_cell_v1(
 /// Project the wallet scalar cell from one opened low-S LDE base row.
 ///
 /// No auxiliary or verifier-fixed opening is interpreted here.
-pub(crate) fn p256_low_s_opened_binding_cell_v1(base: &[F; P256_LOW_S_BASE_WIDTH_V1]) -> F {
+pub(crate) fn p256_low_s_opened_binding_cell_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_LOW_S_BASE_WIDTH_V1],
+) -> A {
     base[LOW_S_VALUE]
 }
 /// Build the exact wallet low-s comparison trace.
@@ -540,19 +542,21 @@ fn compile_p256_comparison_stark_fixed_rows_v1(
     }
     Ok(rows)
 }
-fn stark_selected_limb_constant_v1(fixed: &[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1]) -> F {
-    (0..LIMBS).fold(F::ZERO, |sum, limb| {
+fn stark_selected_limb_constant_v1<A: PolynomialAirFieldV1>(
+    fixed: &[A; P256_REDUCTION_STARK_FIXED_WIDTH_V1],
+) -> A {
+    (0..LIMBS).fold(A::ZERO, |sum, limb| {
         sum.add(
             fixed[STARK_LIMB_SELECTOR_START + limb].mul(fixed[STARK_LIMB_CONSTANT_START + limb]),
         )
     })
 }
-fn stark_fields_are_canonical_v1<const BASE: usize, const AUX: usize>(
-    current: &[F; BASE],
-    next: &[F; BASE],
-    current_aux: &[F; AUX],
-    next_aux: &[F; AUX],
-    fixed: &[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1],
+fn stark_fields_are_canonical_v1<A: PolynomialAirFieldV1, const BASE: usize, const AUX: usize>(
+    current: &[A; BASE],
+    next: &[A; BASE],
+    current_aux: &[A; AUX],
+    next_aux: &[A; AUX],
+    fixed: &[A; P256_REDUCTION_STARK_FIXED_WIDTH_V1],
 ) -> bool {
     current
         .iter()
@@ -560,13 +564,20 @@ fn stark_fields_are_canonical_v1<const BASE: usize, const AUX: usize>(
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .all(|value| F::canonical(value.0).is_some())
+        .all(|value| value.is_canonical())
 }
 /// Evaluate one aggregate reduction opening as an exact polynomial vector.
 ///
 /// Limb constants, first/last boundaries, activity, and padding are numeric
 /// verifier-preprocessed openings. The evaluator therefore has no native
 /// limb/row branch on the LDE and has maximum total degree four.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Scalar wrapper retained for differential validation"
+    )
+)]
 pub(crate) fn evaluate_p256_reduction_stark_residues_v1(
     current: &[F; P256_REDUCTION_BASE_WIDTH_V1],
     next: &[F; P256_REDUCTION_BASE_WIDTH_V1],
@@ -574,6 +585,22 @@ pub(crate) fn evaluate_p256_reduction_stark_residues_v1(
     next_aux: &[F; P256_REDUCTION_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_REDUCTION_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, P256ReductionAirErrorV1> {
+    evaluate_p256_reduction_stark_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+    )
+}
+/// The same complete comparison polynomial over base or extension arithmetic.
+pub(crate) fn evaluate_p256_reduction_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; P256_REDUCTION_BASE_WIDTH_V1],
+    next: &[A; P256_REDUCTION_BASE_WIDTH_V1],
+    current_aux: &[A; P256_REDUCTION_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; P256_REDUCTION_STARK_AUX_WIDTH_V1],
+    fixed: &[A; P256_REDUCTION_STARK_FIXED_WIDTH_V1],
+) -> Result<Vec<A>, P256ReductionAirErrorV1> {
     if !stark_fields_are_canonical_v1(current, next, current_aux, next_aux, fixed) {
         return Err(P256ReductionAirErrorV1::Constraint);
     }
@@ -606,7 +633,7 @@ pub(crate) fn evaluate_p256_reduction_stark_residues_v1(
                 .add(current[QUOTIENT].mul(constant))
                 .add(current[CARRY_BEFORE])
                 .sub(current[WORD])
-                .sub(F(RADIX).mul(current[CARRY_AFTER])),
+                .sub(current[CARRY_AFTER].mul_base(F(RADIX))),
         ),
     );
     residues.push(
@@ -615,7 +642,7 @@ pub(crate) fn evaluate_p256_reduction_stark_residues_v1(
                 .sub(constant)
                 .sub(current[BORROW_BEFORE])
                 .sub(current[DIFFERENCE])
-                .add(F(RADIX).mul(current[BORROW_AFTER])),
+                .add(current[BORROW_AFTER].mul_base(F(RADIX))),
         ),
     );
     residues.push(active.mul(fixed[STARK_FIRST]).mul(current[CARRY_BEFORE]));
@@ -624,9 +651,9 @@ pub(crate) fn evaluate_p256_reduction_stark_residues_v1(
     residues.push(
         active
             .mul(fixed[STARK_LAST])
-            .mul(current[BORROW_AFTER].sub(F::ONE)),
+            .mul(current[BORROW_AFTER].sub(A::ONE)),
     );
-    let active_not_last = active.mul(F::ONE.sub(fixed[STARK_LAST]));
+    let active_not_last = active.mul(A::ONE.sub(fixed[STARK_LAST]));
     residues.push(active_not_last.mul(next[QUOTIENT].sub(current[QUOTIENT])));
     residues.push(active_not_last.mul(next[CARRY_BEFORE].sub(current[CARRY_AFTER])));
     residues.push(active_not_last.mul(next[BORROW_BEFORE].sub(current[BORROW_AFTER])));
@@ -644,6 +671,13 @@ pub(crate) fn evaluate_p256_reduction_stark_residues_v1(
 ///
 /// The same numeric topology removes native row branching from the LDE. The
 /// strict comparison has maximum total degree three.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "Scalar wrapper retained for differential validation"
+    )
+)]
 pub(crate) fn evaluate_p256_low_s_stark_residues_v1(
     current: &[F; P256_LOW_S_BASE_WIDTH_V1],
     next: &[F; P256_LOW_S_BASE_WIDTH_V1],
@@ -651,6 +685,16 @@ pub(crate) fn evaluate_p256_low_s_stark_residues_v1(
     next_aux: &[F; P256_LOW_S_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_LOW_S_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, P256ReductionAirErrorV1> {
+    evaluate_p256_low_s_stark_residues_over_field_v1(current, next, current_aux, next_aux, fixed)
+}
+/// The same complete comparison polynomial over base or extension arithmetic.
+pub(crate) fn evaluate_p256_low_s_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; P256_LOW_S_BASE_WIDTH_V1],
+    next: &[A; P256_LOW_S_BASE_WIDTH_V1],
+    current_aux: &[A; P256_LOW_S_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; P256_LOW_S_STARK_AUX_WIDTH_V1],
+    fixed: &[A; P256_LOW_S_STARK_FIXED_WIDTH_V1],
+) -> Result<Vec<A>, P256ReductionAirErrorV1> {
     if !stark_fields_are_canonical_v1(current, next, current_aux, next_aux, fixed) {
         return Err(P256ReductionAirErrorV1::Constraint);
     }
@@ -675,7 +719,7 @@ pub(crate) fn evaluate_p256_low_s_stark_residues_v1(
                 .sub(constant)
                 .sub(current[LOW_S_BORROW_BEFORE])
                 .sub(current[LOW_S_DIFFERENCE])
-                .add(F(RADIX).mul(current[LOW_S_BORROW_AFTER])),
+                .add(current[LOW_S_BORROW_AFTER].mul_base(F(RADIX))),
         ),
     );
     residues.push(
@@ -686,9 +730,9 @@ pub(crate) fn evaluate_p256_low_s_stark_residues_v1(
     residues.push(
         active
             .mul(fixed[STARK_LAST])
-            .mul(current[LOW_S_BORROW_AFTER].sub(F::ONE)),
+            .mul(current[LOW_S_BORROW_AFTER].sub(A::ONE)),
     );
-    let active_not_last = active.mul(F::ONE.sub(fixed[STARK_LAST]));
+    let active_not_last = active.mul(A::ONE.sub(fixed[STARK_LAST]));
     residues.push(active_not_last.mul(next[LOW_S_BORROW_BEFORE].sub(current[LOW_S_BORROW_AFTER])));
     let padding = fixed[STARK_PADDING];
     for value in current {
@@ -700,16 +744,16 @@ pub(crate) fn evaluate_p256_low_s_stark_residues_v1(
     }
     Ok(residues)
 }
-fn append_range_residues_v1(residues: &mut Vec<F>, value: F, bits: &[F]) {
-    let mut packed = F::ZERO;
+fn append_range_residues_v1<A: PolynomialAirFieldV1>(residues: &mut Vec<A>, value: A, bits: &[A]) {
+    let mut packed = A::ZERO;
     for (bit, cell) in bits.iter().copied().enumerate() {
         residues.push(boolean_residue_v1(cell));
-        packed = packed.add(cell.mul(F(1_u64 << bit)));
+        packed = packed.add(cell.mul_base(F(1_u64 << bit)));
     }
     residues.push(value.sub(packed));
 }
-fn boolean_residue_v1(value: F) -> F {
-    value.mul(value.sub(F::ONE))
+fn boolean_residue_v1<A: PolynomialAirFieldV1>(value: A) -> A {
+    value.mul(value.sub(A::ONE))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn less_than_witness_v1(

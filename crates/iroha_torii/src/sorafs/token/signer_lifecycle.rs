@@ -151,6 +151,7 @@ impl SignerDriverV1 {
         floor: &QueryFloor,
         historical: &[HistoricalFinalityV1],
         token_window: Option<(u64, u64)>,
+        completed: Option<&super::signer_completed_finality::CompletedFinalityV1>,
     ) -> Result<u64, StreamTokenIssuerError> {
         self.check_handles()?;
         let candidate = custody.current_anchor();
@@ -176,6 +177,7 @@ impl SignerDriverV1 {
             floor.finality,
             historical,
             observation,
+            completed,
         )?;
         self.finality.validate(
             history.anchor,
@@ -183,6 +185,7 @@ impl SignerDriverV1 {
             floor.finality,
             historical,
             observation,
+            completed,
         )?;
         self.check_handles()?;
         // Time is sampled again after potentially expensive durable finality reads. Every bound
@@ -192,16 +195,25 @@ impl SignerDriverV1 {
         if now < history.trusted_at || now < custody.verified_at_unix_ms() {
             return Err(StreamTokenIssuerError::SignerClockRollback);
         }
-        if now >= custody.statement().expires_at_unix_ms
-            || now >= self.pins.custody_trust().active_until_unix_ms
-            || now >= self.pins.observer_trust().active_until_unix_ms
-            || now >= observation.expires_at_unix_ms
+        let earliest = now
+            .checked_sub(self.pins.clock_uncertainty_ms())
+            .ok_or_else(evidence_error)?;
+        let latest = now
+            .checked_add(self.pins.clock_uncertainty_ms())
+            .ok_or_else(evidence_error)?;
+        if earliest < custody.statement().issued_at_unix_ms
+            || earliest < self.pins.custody_trust().active_from_unix_ms
+            || earliest < self.pins.observer_trust().active_from_unix_ms
+            || latest >= custody.statement().expires_at_unix_ms
+            || latest >= self.pins.custody_trust().active_until_unix_ms
+            || latest >= self.pins.observer_trust().active_until_unix_ms
+            || latest >= observation.expires_at_unix_ms
             || now < observed_at
-            || now - observed_at > self.pins.custody_trust().max_anchor_age_ms
-            || now - observed_at > self.pins.observer_trust().max_state_age_ms
+            || latest - observed_at > self.pins.custody_trust().max_anchor_age_ms
+            || latest - observed_at > self.pins.observer_trust().max_state_age_ms
             || token_window.is_some_and(|(issued, expires)| {
-                now >= expires
-                    || issued > (now / 1_000).saturating_add(super::MAX_TOKEN_FUTURE_SKEW_SECS)
+                latest >= expires
+                    || issued > (earliest / 1_000).saturating_add(super::MAX_TOKEN_FUTURE_SKEW_SECS)
             })
         {
             return Err(evidence_error());
@@ -254,6 +266,7 @@ impl SignerDriverV1 {
                 verified.custody().statement().anchor,
             )],
             token_window,
+            None,
         )?;
         Ok((verified, validated_at))
     }
@@ -314,7 +327,6 @@ impl SignerDriverV1 {
         }));
         zeroize_value_for_confidential_discard(&mut signature);
         let signing_anchor = claims.0.provenance.signing_anchor;
-        drop(claims);
         let key = self.pins.binding().public_key.to_bytes().1;
         let key_bytes: [u8; 32] = key.try_into().map_err(|_| evidence_error())?;
         let verifier = VerifyingKey::from_bytes(&key_bytes).map_err(|_| evidence_error())?;
@@ -335,6 +347,11 @@ impl SignerDriverV1 {
             after_floor.not_before,
         )
         .map_err(|_| evidence_error())?;
+        let after_native = self.finality.prepare_completed_check(
+            &claims.0,
+            Phase::AfterCommit,
+            self.observer.as_ref(),
+        )?;
         let after_reply = self
             .observer
             .observe(after_attempt.request())
@@ -367,6 +384,11 @@ impl SignerDriverV1 {
             .ttl_epoch
             .checked_mul(1_000)
             .ok_or(StreamTokenIssuerError::TimeOverflow)?;
+        let after_native = after_native.verify(
+            &after_decoded.body,
+            self.clock.as_ref(),
+            self.pins.clock_uncertainty_ms(),
+        )?;
         self.accept(
             after.custody(),
             &after_decoded.body,
@@ -380,6 +402,7 @@ impl SignerDriverV1 {
                 }),
             ],
             Some((pending.token().body.issued_at, expiry)),
+            Some(&after_native),
         )?;
 
         let release_floor = self.query_floor()?;
@@ -394,6 +417,11 @@ impl SignerDriverV1 {
             release_floor.not_before,
         )
         .map_err(|_| evidence_error())?;
+        let release_native = self.finality.prepare_completed_check(
+            &claims.0,
+            Phase::BeforeRelease,
+            self.observer.as_ref(),
+        )?;
         let release_reply = self
             .observer
             .observe(release_attempt.request())
@@ -424,6 +452,11 @@ impl SignerDriverV1 {
         {
             return Err(StreamTokenIssuerError::SignerStateChanged);
         }
+        let release_native = release_native.verify(
+            &release_decoded.body,
+            self.clock.as_ref(),
+            self.pins.clock_uncertainty_ms(),
+        )?;
         self.accept(
             released.custody(),
             &release_decoded.body,
@@ -437,6 +470,7 @@ impl SignerDriverV1 {
                 }),
             ],
             Some((pending.token().body.issued_at, expiry)),
+            Some(&release_native),
         )?;
         // The only escape of the pending signature follows the fresh exact completed observation.
         pending.0.take().ok_or_else(evidence_error)

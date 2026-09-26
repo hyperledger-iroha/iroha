@@ -5,7 +5,7 @@
 //! * b = c + q * modulus`; addition proves the analogous radix equation. The absolute value of
 //! every integer residue is below `2^43`, so equality in Goldilocks is equality over the integers
 //! rather than a field-wrap shortcut.
-use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use crate::privacy_engines::transparent_stark::{GoldilocksFieldV1 as F, PolynomialAirFieldV1};
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use p256::elliptic_curve::bigint::{Encoding as _, NonZero, U256, U512};
 use thiserror::Error;
@@ -186,11 +186,11 @@ pub(crate) fn p256_arithmetic_opened_c_limb_bits_v1(
 /// The first sixteen coefficients select bits 0 through 7 and the final sixteen select bits 8
 /// through 15. Selection is a polynomial in verifier-preprocessed coefficient columns, so the
 /// extension evaluator does not branch on a native coefficient index.
-pub(crate) fn p256_arithmetic_opened_scalar_source_bits_v1(
-    base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
-    fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
-) -> [F; 8] {
-    let high = (LIMBS..P256_ARITHMETIC_ROWS_PER_OPERATION_V1).fold(F::ZERO, |sum, coefficient| {
+pub(crate) fn p256_arithmetic_opened_scalar_source_bits_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_ARITHMETIC_BASE_WIDTH_V1],
+    fixed: &[A; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
+) -> [A; 8] {
+    let high = (LIMBS..P256_ARITHMETIC_ROWS_PER_OPERATION_V1).fold(A::ZERO, |sum, coefficient| {
         sum.add(fixed[STARK_COEFFICIENT_START + coefficient])
     });
     core::array::from_fn(|bit| {
@@ -202,12 +202,12 @@ pub(crate) fn p256_arithmetic_opened_scalar_source_bits_v1(
 /// The first sixteen verifier-preprocessed coefficient selectors form the limb selector. This
 /// projection is therefore a polynomial in the opened arithmetic row and fixed preprocessing; it
 /// never decodes a proof-supplied row index.
-pub(crate) fn p256_arithmetic_opened_operand_limbs_v1(
-    base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
-    fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
-) -> [F; 3] {
+pub(crate) fn p256_arithmetic_opened_operand_limbs_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_ARITHMETIC_BASE_WIDTH_V1],
+    fixed: &[A; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
+) -> [A; 3] {
     [A_START, B_START, C_START].map(|start| {
-        (0..LIMBS).fold(F::ZERO, |sum, limb| {
+        (0..LIMBS).fold(A::ZERO, |sum, limb| {
             sum.add(base[start + limb].mul(fixed[STARK_RANGE_SLOT_START + limb]))
         })
     })
@@ -746,28 +746,28 @@ pub(crate) fn compile_p256_arithmetic_stark_fixed_rows_v1(
     }
     Ok(rows)
 }
-fn stark_selected_limb_v1(
-    base: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
+fn stark_selected_limb_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_ARITHMETIC_BASE_WIDTH_V1],
     limb_start: usize,
-    fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
+    fixed: &[A; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
     selector_start: usize,
-) -> F {
-    (0..LIMBS).fold(F::ZERO, |sum, limb| {
+) -> A {
+    (0..LIMBS).fold(A::ZERO, |sum, limb| {
         sum.add(base[limb_start + limb].mul(fixed[selector_start + limb]))
     })
 }
-fn push_stark_range_residues_v1(
-    residues: &mut Vec<F>,
-    selected: F,
-    bits: &[F],
+fn push_stark_range_residues_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    selected: A,
+    bits: &[A],
 ) -> Result<(), ZkX509P256AirErrorV1> {
     if bits.is_empty() || bits.len() >= u64::BITS as usize {
         return Err(ZkX509P256AirErrorV1::Topology);
     }
-    let mut packed = F::ZERO;
+    let mut packed = A::ZERO;
     for (index, bit) in bits.iter().copied().enumerate() {
         residues.push(boolean_residue_v1(bit));
-        packed = packed.add(bit.mul(F(1_u64 << index)));
+        packed = packed.add(bit.mul_base(F(1_u64 << index)));
     }
     residues.push(selected.sub(packed));
     Ok(())
@@ -778,6 +778,7 @@ fn push_stark_range_residues_v1(
 /// function never branches on a native enum or row number. Kind, coefficient, modulus, range slot,
 /// and boundary selectors are verifier-preprocessed polynomial openings. Consequently the same
 /// degree-four expressions are valid on the aggregate extension domain.
+#[cfg(test)]
 pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     current: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
     next: &[F; P256_ARITHMETIC_BASE_WIDTH_V1],
@@ -785,13 +786,29 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
     next_aux: &[F; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, ZkX509P256AirErrorV1> {
+    evaluate_p256_arithmetic_stark_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+    )
+}
+/// Exact same integer-arithmetic polynomial relation over F or Fp4.
+pub(crate) fn evaluate_p256_arithmetic_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; P256_ARITHMETIC_BASE_WIDTH_V1],
+    next: &[A; P256_ARITHMETIC_BASE_WIDTH_V1],
+    current_aux: &[A; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; P256_ARITHMETIC_STARK_AUX_WIDTH_V1],
+    fixed: &[A; P256_ARITHMETIC_STARK_FIXED_WIDTH_V1],
+) -> Result<Vec<A>, ZkX509P256AirErrorV1> {
     if current
         .iter()
         .chain(next)
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .any(|value| F::canonical(value.0).is_none())
+        .any(|value| !value.is_canonical())
     {
         return Err(ZkX509P256AirErrorV1::Constraint);
     }
@@ -810,10 +827,10 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
         )?;
     }
     let canonicality = fixed[STARK_CANONICALITY_ROW];
-    let noncanonicality = F::ONE.sub(canonicality);
+    let noncanonicality = A::ONE.sub(canonicality);
     let range_slot_first = fixed[STARK_SLOT_FIRST];
     let range_slot_last = fixed[STARK_SLOT_LAST];
-    let modulus_limb = (0..LIMBS).fold(F::ZERO, |sum, limb| {
+    let modulus_limb = (0..LIMBS).fold(A::ZERO, |sum, limb| {
         sum.add(fixed[STARK_RANGE_SLOT_START + limb].mul(fixed[STARK_MODULUS_LIMBS_START + limb]))
     });
     for (
@@ -863,7 +880,7 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
                     .sub(modulus_limb)
                     .sub(current[borrow_before])
                     .sub(current[difference])
-                    .add(F(RADIX as u64).mul(current[borrow_after])),
+                    .add(A::from_base(F(RADIX as u64)).mul(current[borrow_after])),
             ),
         );
         residues.push(
@@ -874,11 +891,11 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
         residues.push(
             canonicality
                 .mul(range_slot_last)
-                .mul(current[borrow_after].sub(F::ONE)),
+                .mul(current[borrow_after].sub(A::ONE)),
         );
         residues.push(
             canonicality
-                .mul(F::ONE.sub(range_slot_last))
+                .mul(A::ONE.sub(range_slot_last))
                 .mul(next[next_borrow_before].sub(current[borrow_after])),
         );
     }
@@ -890,27 +907,27 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
         current[CARRY],
         &current[CARRY_BIT_START..CARRY_BIT_START + CARRY_BITS],
     )?;
-    let carry = current[CARRY].sub(F(CARRY_BIAS as u64));
+    let carry = current[CARRY].sub(A::from_base(F(CARRY_BIAS as u64)));
     residues.push(fixed[STARK_OPERATION_FIRST].mul(carry));
     let multiply = fixed[STARK_KIND_MULTIPLY];
     let add = fixed[STARK_KIND_ADD];
     let subtract = fixed[STARK_KIND_SUBTRACT];
     let active = multiply.add(add).add(subtract);
-    let operation_not_last = F::ONE.sub(fixed[STARK_OPERATION_LAST]);
+    let operation_not_last = A::ONE.sub(fixed[STARK_OPERATION_LAST]);
     let active_not_last = active.mul(operation_not_last);
     for column in A_START..Q_START + LIMBS {
         residues.push(active_not_last.mul(next[column].sub(current[column])));
     }
     let add_or_subtract = add.add(subtract);
-    residues.push(add_or_subtract.mul(current[Q_START].mul(current[Q_START].sub(F::ONE))));
+    residues.push(add_or_subtract.mul(current[Q_START].mul(current[Q_START].sub(A::ONE))));
     for quotient_limb in &current[Q_START + 1..Q_START + LIMBS] {
         residues.push(add_or_subtract.mul(*quotient_limb));
     }
-    let next_carry = operation_not_last.mul(next[CARRY].sub(F(CARRY_BIAS as u64)));
-    let mut multiplication_relation = carry.sub(F(RADIX as u64).mul(next_carry));
+    let next_carry = operation_not_last.mul(next[CARRY].sub(A::from_base(F(CARRY_BIAS as u64))));
+    let mut multiplication_relation = carry.sub(A::from_base(F(RADIX as u64)).mul(next_carry));
     for coefficient in 0..P256_ARITHMETIC_ROWS_PER_OPERATION_V1 {
         let selector = fixed[STARK_COEFFICIENT_START + coefficient];
-        let mut coefficient_relation = F::ZERO;
+        let mut coefficient_relation = A::ZERO;
         for left in 0..LIMBS {
             let Some(right) = coefficient.checked_sub(left) else {
                 continue;
@@ -935,13 +952,13 @@ pub(crate) fn evaluate_p256_arithmetic_stark_residues_v1(
         .add(low_b)
         .sub(low_c)
         .sub(quotient_modulus)
-        .sub(F(RADIX as u64).mul(next_carry));
+        .sub(A::from_base(F(RADIX as u64)).mul(next_carry));
     let subtraction_relation = carry
         .add(low_a)
         .sub(low_b)
         .sub(low_c)
         .add(quotient_modulus)
-        .sub(F(RADIX as u64).mul(next_carry));
+        .sub(A::from_base(F(RADIX as u64)).mul(next_carry));
     residues.push(
         multiply
             .mul(multiplication_relation)
@@ -968,8 +985,8 @@ fn append_range_residues_v1(residues: &mut Vec<F>, value: F, bits: &[F]) {
     }
     residues.push(value.sub(packed));
 }
-fn boolean_residue_v1(value: F) -> F {
-    value.mul(value.sub(F::ONE))
+fn boolean_residue_v1<A: PolynomialAirFieldV1>(value: A) -> A {
+    value.mul(value.sub(A::ONE))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn arithmetic_carries_v1(

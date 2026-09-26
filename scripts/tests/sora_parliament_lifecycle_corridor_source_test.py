@@ -15,6 +15,7 @@ MANIFEST = ROOT / "integration_tests/Cargo.toml"
 CORRIDOR = ROOT / "integration_tests/tests/sora_parliament_lifecycle_smoke.rs"
 NO_RESULT_PATHS = ROOT / "integration_tests/tests/sora_parliament_no_result_paths.rs"
 FAILURE_PATHS = ROOT / "integration_tests/tests/sora_parliament_failure_paths.rs"
+ENACTMENT = ROOT / "integration_tests/tests/sora_parliament_enactment.rs"
 USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
 ACTUAL_CONFIG = ROOT / "crates/iroha_config/src/parameters/actual.rs"
 TEST_NETWORK = ROOT / "crates/iroha_test_network/src/lib.rs"
@@ -50,7 +51,8 @@ DISTINCT_SUPERSEDING_ARTIFACT = '''let (competing_contract_code_hash, competing_
             "ParliamentSupersessionCompetitor",
             "integration-tests-supersession-competitor",
         ),
-    )?;'''
+    )
+    .await?;'''
 DISTINCT_SUPERSEDING_ARTIFACT_ASSERTION = '''assert_ne!(
         competing_contract_code_hash, code_hash,
         "the supersession fixture must install a genuinely distinct artifact head",
@@ -68,12 +70,12 @@ CERTIFIED_SUPERSEDING_DEPLOYMENT_MARKERS = (
             })''',
     "InstructionBox::from(competing_deploy_create)",
     "let competing_deploy_certificate = certify_failure_path_attempt(",
-    "assert!(current_height(&client)? < competing_deploy_certificate.enact_at_height);",
+    "assert!(current_height(&client).await? < competing_deploy_certificate.enact_at_height);",
     '''assert_eq!(
         deploy_certificate.expected_head, competing_deploy_certificate.expected_head,
         "both certified deployments must compare against the same pre-enactment head",
     );''',
-    "let competing_enacted = read_attempt(&client, competing_deploy_attempt_id)?;",
+    "let competing_enacted = read_attempt(&client, competing_deploy_attempt_id).await?;",
     '''assert_eq!(
         competing_enacted.attempt().status,
         GovernanceAttemptStatusV1::Enacted,
@@ -91,7 +93,8 @@ NO_RESULT_RESTART_CONTRACT_ABSENCE = '''assert_governed_contract_absent(
         &restart_peer.client(),
         contract_address,
         "public-finding restart effect isolation",
-    )?;'''
+    )
+    .await?;'''
 EXACT_INACTIVE_CONTRACT_PROJECTION = '''if object.len() != 3
         || object.get("found").and_then(norito::json::Value::as_bool) != Some(false)
         || object
@@ -138,21 +141,24 @@ EXACT_GOVERNED_CONTRACT_BINDING_CALLS = (
         code_hash,
         abi_hash,
         "consensus-owned certificate enactment must bind the staged contract",
-    )?;''',
+    )
+    .await?;''',
     '''assert_governed_contract_binding(
             &peer_client,
             &contract_address,
             code_hash,
             abi_hash,
             "every validator must expose the consensus-enacted contract",
-        )?;''',
+        )
+        .await?;''',
     '''assert_governed_contract_binding(
         &restart_peer.client(),
         &contract_address,
         code_hash,
         abi_hash,
         "normal restart must restore the consensus-enacted contract",
-    )?;''',
+    )
+    .await?;''',
     '''assert_governed_contract_binding(
         &client,
         &contract_address,
@@ -164,23 +170,26 @@ EXACT_GOVERNED_CONTRACT_BINDING_CALLS = (
             competing_contract_code_hash,
             competing_abi_hash,
             "all validators must retain the competing contract binding",
-        )?;''',
+        )
+        .await?;''',
     '''assert_governed_contract_binding(
         &restored_client,
         &contract_address,
         competing_contract_code_hash,
         competing_abi_hash,
         "restart must retain the competing contract binding",
-    )?;''',
+    )
+    .await?;''',
 )
 EXACT_NON_BOUNDARY_PULSE_ABSENCE = '''assert_no_global_beacon_pulse_at(
         &client,
         pulse_height - 1,
         "an unrequested non-boundary height must not emit a global pulse",
-    )?;'''
+    )
+    .await?;'''
 EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     "fn assert_governed_contract_absent(",
-    ".get_gov_contract_response(contract_address)",
+    ".get_gov_contract_response(&contract_address)",
     '.wrap_err_with(|| format!("{label}: inactive governed-contract lookup failed"))?;',
     "response.status() != iroha::http::StatusCode::OK",
     "expected governed-contract HTTP 200",
@@ -192,7 +201,8 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     "let query = FindAssetById::new(asset_id.clone());",
     "query.asset_id(),",
     '"{label}: bind the exact requested asset"',
-    "match client.client().query_single(query) {",
+    "move || Ok(client.query_single(query))",
+    "match read_on_dedicated_thread({",
     "Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(",
     "FindError::Asset(missing),",
     ")))) if missing.as_ref() == asset_id => Ok(()),",
@@ -207,7 +217,8 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
         &client,
         ballot_attempt_id,
         "a sealed corpus is no longer a cast-capable context",
-    )?;''',
+    )
+    .await?;''',
     "fn assert_no_global_beacon_pulse_at(client: &Client, height: u64, label: &str)",
     "fn exact_block(client: &Client, height: u64) -> Result<SignedBlock>",
     "NonZeroU64::new(height)",
@@ -266,7 +277,7 @@ PARLIAMENT_FAILURE_PATH_MARKERS = {
         "GovernanceAttemptStatusV1::ExecutionFailed",
         "parliament_execution_failure_root_v1(",
         "execution_failed.certificate(), Some(&runtime_certificate)",
-        "assert_runtime_upgrade_registry_empty(&restored_client)?;",
+        "assert_runtime_upgrade_registry_empty(&restored_client).await?;",
     ),
     "four_validator_narrow_policy_aborts_when_confirmation_capacity_is_one": (
         "GovernanceAttemptStatusV1::Rejected",
@@ -305,6 +316,7 @@ def read_corridor_source() -> str:
             CORRIDOR.read_text(encoding="utf-8"),
             NO_RESULT_PATHS.read_text(encoding="utf-8"),
             FAILURE_PATHS.read_text(encoding="utf-8"),
+            ENACTMENT.read_text(encoding="utf-8"),
         )
     )
 
@@ -339,26 +351,26 @@ FAIL_CLOSED_NPOS_TEST = re.compile(
 )
 AUTONOMOUS_SORTITION_PULSE_PROGRESSION = '''network.ensure_blocks(sortition_pulse_height).await?;
     assert_eq!(
-        current_height(&client)?,
+        current_height(&client).await?,
         sortition_pulse_height,
         "the demanded sortition threshold-beacon effect must autonomously finalize its exact height",
     );'''
 AUTONOMOUS_BALLOT_RELEASE_PULSE_PROGRESSION = '''network.ensure_blocks(release_height).await?;
     assert_eq!(
-        current_height(&client)?,
+        current_height(&client).await?,
         release_height,
         "the demanded ballot-release threshold-beacon effect must autonomously finalize its exact height",
     );'''
 AUTONOMOUS_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
     assert_eq!(
-        current_height(&client)?,
+        current_height(&client).await?,
         pulse_height,
         "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
     );'''
 BOUNDARY_PROGRESSION = '''network.ensure_blocks(boundary_height).await?;
-    assert_eq!(current_height(&client)?, boundary_height);'''
+    assert_eq!(current_height(&client).await?, boundary_height);'''
 SUCCESSOR_PROGRESSION = '''network.ensure_blocks(boundary_height + 1).await?;
-    assert_eq!(current_height(&client)?, boundary_height + 1);'''
+    assert_eq!(current_height(&client).await?, boundary_height + 1);'''
 SUCCESSOR_SEED_EQUALITY = (
     "assert_eq!(status.height_context.epoch_seed, successor_seed);"
 )
@@ -495,7 +507,17 @@ def parliament_lifecycle_test(source: str) -> tuple[re.Match[str], str]:
         "#[" not in leading,
         "Parliament lifecycle corridor gained an extra attribute",
     )
-    return match, match.group(0)
+    test = match.group(0)
+    require('#[path = "sora_parliament_enactment.rs"]\nmod enactment;' in source,
+            "lifecycle must retain its exact shared enactment owner")
+    require("enactment::builder(" in test and "enactment::enact(" in test,
+            "lifecycle must execute the shared builder and enactment")
+    helpers = []
+    for name in ("builder", "enact"):
+        found = list(re.finditer(rf"(?ms)^pub\(super\) (?:async )?fn {name}\(.*?^\}}\n", source))
+        require(len(found) == 1, f"shared enactment needs one exact {name} owner")
+        helpers.append(found[0].group(0))
+    return match, test + "\n" + "\n".join(helpers)
 
 
 def mutate_parliament_lifecycle_test(source: str, old: str, new: str = "") -> str:
@@ -503,8 +525,15 @@ def mutate_parliament_lifecycle_test(source: str, old: str, new: str = "") -> st
 
     match, test = parliament_lifecycle_test(source)
     require(old in test, f"Parliament lifecycle mutation target is absent: `{old}`")
-    mutated = test.replace(old, new, 1)
-    return source[: match.start()] + mutated + source[match.end() :]
+    original = match.group(0)
+    if old in original:
+        return source[:match.start()] + original.replace(old, new, 1) + source[match.end():]
+    for name in ("builder", "enact"):
+        helper = re.search(rf"(?ms)^pub\(super\) (?:async )?fn {name}\(.*?^\}}\n", source)
+        require(helper is not None, f"shared {name} owner must exist")
+        if old in helper.group(0):
+            return source[:helper.start()] + helper.group(0).replace(old, new, 1) + source[helper.end():]
+    raise ContractError("mutation must belong to the actual test or its exact invoked helper")
 
 
 def validate_optional_parliament_pulse_progression(source: str) -> None:
@@ -606,7 +635,9 @@ def validate_exact_absence_classification(source: str) -> None:
     require(
         asset_helper.count("let query = FindAssetById::new(asset_id.clone());") == 1
         and asset_helper.count("query.asset_id(),") == 1
-        and asset_helper.count("match client.client().query_single(query)") == 1
+        and asset_helper.count("move || Ok(client.query_single(query))") == 1
+        and asset_helper.count("match read_on_dedicated_thread({") == 1
+        and asset_helper.count(".await?") == 1
         and asset_helper.count("FindError::Asset(missing)") == 1
         and asset_helper.count("if missing.as_ref() == asset_id => Ok(())") == 1
         and asset_helper.count("Ok(())") == 1
@@ -615,7 +646,7 @@ def validate_exact_absence_classification(source: str) -> None:
     )
     require(
         source.count(
-            '.query(FindBlocks)\n        .filter_with(|block| block.equals("height", height).into_predicate())\n        .execute_all()'
+            '.query(FindBlocks)\n                .filter_with(|block| block.equals("height", height).into_predicate())\n                .execute_all()'
         )
         == 1
         and source.count(
@@ -1019,9 +1050,10 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "let activation_deadline = Instant::now()",
         "let mut last_activation_status_error = None;",
         "for (peer_index, peer_client) in status_poll_clients.iter().enumerate() {",
-        "let observed_height = match current_height(peer_client) {",
+        "let observed_height = match current_height(peer_client).await {",
         'Some(format!("peer {peer_index} height: {error}"));',
-        "let status = match peer_client.get_sumeragi_status() {",
+        "let status = match read_on_dedicated_thread({",
+        "move || client.get_sumeragi_status()",
         "last_activation_status_error =",
         'Some(format!("peer {peer_index} sumeragi status: {error}"));',
         "all_pulse_heights_active = false;",
@@ -1081,7 +1113,7 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
         "fail-closed NPoS beacon gates must order activation, observation, then post-observation verification",
     )
     require(
-        test.count("let observed_height = match current_height(peer_client) {") == 2
+        test.count("let observed_height = match current_height(peer_client).await {") == 2
         and test.count('Some(format!("peer {peer_index} height: {error}"));') == 2,
         "both fail-closed NPoS status gates must retry transient authoritative-height failures",
     )
@@ -1162,6 +1194,18 @@ def validate_feature_only_fault_wiring(
 
 class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
     """Mutation-resistant source checks for the dedicated network corridor."""
+
+    def test_shared_enactment_remains_the_invoked_owner(self) -> None:
+        source = read_corridor_source()
+        parliament_lifecycle_test(source)
+        for original, replacement in (
+            ('#[path = "sora_parliament_enactment.rs"]', '#[path = "other.rs"]'),
+            ("let builder = enactment::builder(", "let builder = other::builder("),
+            ("let enacted_fixture = enactment::enact(", "let enacted_fixture = other::enact("),
+            ("pub(super) async fn enact(", "pub(super) async fn disconnected_enact("),
+        ):
+            with self.subTest(original=original), self.assertRaises(ContractError):
+                parliament_lifecycle_test(source.replace(original, replacement, 1))
 
     def test_runner_and_workflow_are_exact_and_no_skip(self) -> None:
         validate_runner(RUNNER.read_text(encoding="utf-8"))
@@ -1381,8 +1425,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 1,
             ),
             "asset absence bypasses bound query": corridor.replace(
-                "match client.client().query_single(query) {",
-                "match client.client().query_single(other_query) {",
+                "move || Ok(client.query_single(query))",
+                "move || Ok(client.query_single(other_query))",
                 1,
             ),
             "asset absence accepts status-only not-found": corridor.replace(
@@ -1406,7 +1450,7 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 1,
             ),
             "unbounded block inventory query": corridor.replace(
-                ".query(FindBlocks)\n        .filter_with(|block| block.equals(\"height\", height).into_predicate())\n        .execute_all()",
+                ".query(FindBlocks)\n                .filter_with(|block| block.equals(\"height\", height).into_predicate())\n                .execute_all()",
                 ".query(FindBlocks)\n        .execute_all()",
                 1,
             ),

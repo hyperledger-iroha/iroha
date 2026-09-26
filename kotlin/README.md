@@ -809,6 +809,8 @@ transport.unregisterPushDevice(request, canonicalAuth).join()
 
 ## Verifying Key Registry
 
+The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+
 `core-jvm` exposes Torii helpers for `/v1/zk/vk/register` and
 `/v1/zk/vk/update`. They validate production verifier backends, required
 registry fields, height ranges, and inline verifier-key commitments before

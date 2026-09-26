@@ -9065,15 +9065,9 @@ impl_default!(SorafsDiscovery => {
         }
 });
 /// Governance admission registry configuration for SoraFS providers.
-#[derive(Debug, Clone)]
-pub struct SorafsAdmission {
-    /// Directory containing governance-signed provider admission envelopes.
-    pub envelopes_dir: PathBuf,
-    /// Canonical Ed25519 council keys trusted to authorise admission changes.
-    pub trusted_council_keys: Vec<PublicKey>,
-    /// Minimum number of distinct trusted council signatures required.
-    pub signature_threshold: NonZeroUsize,
-}
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsAdmission;
+
 /// Config-backed SoraFS publish peer hints exposed by Torii.
 #[derive(Debug, Clone, Default)]
 pub struct SorafsPublishDiscovery {
@@ -9212,8 +9206,10 @@ pub enum SorafsPublishBaseUrlError {
     NonCanonical,
 }
 /// Native repair worker and durable transaction-forwarder configuration.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SorafsRepair {
+    /// Optional authenticated remote source reader for finalized native repair leases.
+    pub source: Option<SorafsRepairSource>,
     /// Enable native repair processing.
     pub enabled: bool,
     /// Lease duration requested by native repair claims (seconds).
@@ -9227,6 +9223,7 @@ pub struct SorafsRepair {
 }
 impl_default!(SorafsRepair => {
         Self {
+            source: None,
             enabled: defaults::sorafs::repair::ENABLED,
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
             heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
@@ -9234,6 +9231,19 @@ impl_default!(SorafsRepair => {
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
         }
 });
+/// Account-authenticated remote repair source configuration.
+#[derive(Debug, Clone)]
+pub struct SorafsRepairSource {
+    /// Provider-id hex to origin allowlist, matched against live signed adverts.
+    /// HTTPS is required except for explicitly configured numeric loopback HTTP origins.
+    pub origins: std::collections::BTreeMap<String, String>,
+    /// Account owning the finalized repair worker lease.
+    pub authority: AccountId,
+    /// Owner-only runtime software credential; contents never enter configuration or logs.
+    pub credential: PathBuf,
+    /// Maximum duration of the complete remote repair operation in milliseconds.
+    pub timeout_ms: u64,
+}
 /// GC scheduler configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsGc {
@@ -9757,11 +9767,12 @@ pub struct SorafsModerationQuarantineKeyProviderBinding {
 }
 /// Exact public identity and qualification of one native SoraFS transaction signer.
 ///
-/// The handle is resolved through deployment-owned runtime injection. Private
-/// keys, credentials, tokens, and vendor-specific connection material are not
-/// part of this configuration boundary.
+/// A credential path explicitly selects daemon-owned software custody; omission resolves
+/// the handle through deployment-owned runtime injection. Secret bytes never enter config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsNativeTransactionSignerBinding {
+    /// Owner-only canonical private-key credential; absent selects an external provider.
+    pub software_credential: Option<PathBuf>,
     /// Stable opaque production provider handle.
     pub handle: String,
     /// Canonical transaction authority derived from `public_key`.
@@ -10496,11 +10507,16 @@ pub struct SorafsProviderIngestFinalizedArchive {
 }
 /// Non-secret production policy for supervised SoraFS provider ingest.
 ///
-/// The opaque handles identify runtime-registered providers. Credentials,
-/// bearer tokens, endpoint secrets, and signer material are never represented
-/// in configuration.
+/// The opaque handles identify qualified providers. An owner-only credential path explicitly
+/// selects native software custody; secret bytes and fetched payloads stay outside configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsProviderIngestRuntime {
+    /// Explicit admitted provider id to HTTPS origin mapping for native assignment source reads.
+    /// Explicit numeric loopback HTTP origins are allowed for local networks.
+    pub native_source_origins: BTreeMap<String, String>,
+    /// Owner-only canonical completion credential selecting the built-in software producer.
+    /// None selects explicitly injected external provider adapters.
+    pub native_completion_credential: Option<PathBuf>,
     /// Identity-pinned authenticated source-fetch provider handle.
     pub authenticated_source_fetch_handle: String,
     /// Exact non-zero authenticated source-pool adapter/public-policy revision.
@@ -10959,7 +10975,7 @@ pub struct SorafsMeteringSmoothing {
 mod stream_token_signer;
 pub use stream_token_signer::{
     SorafsStreamTokenAttesterConfig, SorafsStreamTokenAuthorityConfig,
-    SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
+    SorafsStreamTokenNativeConfig, SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
 };
 
 /// Stream-token issuance configuration for chunk-range gateways.

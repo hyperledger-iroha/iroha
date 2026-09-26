@@ -317,7 +317,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         stringify!(stark_governance_and_shielded_ivm_paths),
     )?;
     let backend = "stark/fri";
-    let ivm_circuit_id = "ivm-execution-v1";
+    let ivm_circuit_id = "ivm-replay-binding-v1";
     let ballot_circuit_id = "vote-ballot";
     let tally_circuit_id = "vote-tally";
     let builder = NetworkBuilder::new()
@@ -385,7 +385,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
         ivm_circuit_id,
         BackendTag::Stark,
         "goldilocks",
-        iroha_core::zk::ivm_execution_public_inputs_schema_hash(),
+        iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash(),
         iroha_core::zk::hash_vk(&ivm_vk_box),
     );
     ivm_vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;

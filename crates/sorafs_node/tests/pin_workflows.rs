@@ -119,7 +119,7 @@ fn por_sampling_returns_verified_proofs() {
     let stored = storage
         .manifest(&manifest_id)
         .expect("stored manifest present");
-    let tree = stored.por_tree();
+    let tree = stored.por_tree().expect("available payload tree");
     let root = tree.root();
     for (_index, proof) in samples {
         assert!(proof.verify(root));

@@ -1120,7 +1120,7 @@ test("registerVerifyingKey accepts current production backend labels", async () 
     "halo2/ipa",
     "halo2/pasta/kaigi-authorization-v1",
     "halo2/pasta/kaigi-usage-v1",
-    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/ivm-replay-binding-v1",
     "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3",
     "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4",
@@ -1154,7 +1154,7 @@ test("updateVerifyingKey accepts current production backend labels", async () =>
   });
   const backends = [
     "halo2/ipa",
-    "halo2/pasta/ivm-execution-v1",
+    "halo2/pasta/ivm-replay-binding-v1",
     "stark/fri/poseidon-x7-goldilocks-6x64-v1",
   ];
   for (const [index, backend] of backends.entries()) {
@@ -1326,6 +1326,8 @@ test("verifying key registration rejects unsupported production backends before 
   });
   const base = sampleVerifyingKeyRegisterPayload();
   const cases = [
+    ["register retired IVM execution label", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/ivm-execution-v1" })],
+    ["update retired IVM execution label", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/ivm-execution-v1" })],
     ["register retired Kaigi roster", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/kaigi-roster-v1" })],
     ["update retired Kaigi roster", () => client.updateVerifyingKey({ ...base, backend: "halo2/pasta/kaigi-roster-v1" })],
     ["register unsupported KAGEMUSHA fold", () => client.registerVerifyingKey({ ...base, backend: "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1" })],
@@ -1333,7 +1335,7 @@ test("verifying key registration rejects unsupported production backends before 
     ["register unknown native", () => client.registerVerifyingKey({ ...base, backend: "halo2/unknown-native-v1" })],
     ["register unknown IPA suffix", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:unknown-native-v1" })],
     ["register retired IPA cycle alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa-pasta-cycle-v1" })],
-    ["register retired IPA profile alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:ivm-execution-v1" })],
+    ["register retired IPA profile alias", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:ivm-replay-binding-v1" })],
     ["register leading-space backend", () => client.registerVerifyingKey({ ...base, backend: " halo2/ipa" })],
     ["register trailing-space backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa " })],
     ["register leading-tab backend", () => client.registerVerifyingKey({ ...base, backend: "\thalo2/ipa" })],
@@ -1346,11 +1348,11 @@ test("verifying key registration rejects unsupported production backends before 
     ["register removed generic STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/fri" })],
     ["register removed Poseidon2 STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/poseidon2-goldilocks" })],
     ["register removed SHA-256 STARK backend", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/sha256_goldilocks.v1" })],
-    ["register double-colon native backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa::ivm-execution-v1" })],
+    ["register double-colon native backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa::ivm-replay-binding-v1" })],
     ["register double-slash backend", () => client.registerVerifyingKey({ ...base, backend: "halo2//ipa" })],
     ["register trailing-colon backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:" })],
     ["register trailing-dot backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa." })],
-    ["register slash-dot backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/.ivm-execution-v1" })],
+    ["register slash-dot backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/.ivm-replay-binding-v1" })],
     ["register dot-dot backend", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa:ivm..execution-v1" })],
     ["register pending Orchard", () => client.registerVerifyingKey({ ...base, backend: "halo2/ipa/orchard" })],
     ["register unstable STARK latest alias", () => client.registerVerifyingKey({ ...base, backend: "stark/fri/latest" })],

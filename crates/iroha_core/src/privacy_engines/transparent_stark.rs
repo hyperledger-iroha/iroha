@@ -305,6 +305,73 @@ impl GoldilocksFieldV1 {
 pub(crate) struct GoldilocksFp4V1 {
     coefficients: [GoldilocksFieldV1; GOLDILOCKS_FP4_DEGREE_V1],
 }
+/// Polynomial AIR operations shared by base-field and out-of-domain evaluation.
+///
+/// This interface deliberately exposes no ordering, equality, or conversion
+/// back to an integer. Constraint control flow must depend on public layout,
+/// not on a witness or selector value that changes meaning outside the trace.
+pub(crate) trait PolynomialAirFieldV1: Copy {
+    /// Additive identity.
+    const ZERO: Self;
+    /// Multiplicative identity.
+    const ONE: Self;
+    /// Embed a canonical base-field constant or public transcript challenge.
+    fn from_base(value: GoldilocksFieldV1) -> Self;
+    /// Whether every underlying base-field coefficient is canonical.
+    fn is_canonical(self) -> bool;
+    /// Field addition.
+    fn add(self, rhs: Self) -> Self;
+    /// Field subtraction.
+    fn sub(self, rhs: Self) -> Self;
+    /// Field multiplication.
+    fn mul(self, rhs: Self) -> Self;
+    /// Multiply by a base-field constant without changing the evaluation field.
+    fn mul_base(self, rhs: GoldilocksFieldV1) -> Self;
+}
+impl PolynomialAirFieldV1 for GoldilocksFieldV1 {
+    const ZERO: Self = Self::ZERO;
+    const ONE: Self = Self::ONE;
+    fn from_base(value: GoldilocksFieldV1) -> Self {
+        value
+    }
+    fn is_canonical(self) -> bool {
+        Self::canonical(self.0).is_some()
+    }
+    fn add(self, rhs: Self) -> Self {
+        Self::add(self, rhs)
+    }
+    fn sub(self, rhs: Self) -> Self {
+        Self::sub(self, rhs)
+    }
+    fn mul(self, rhs: Self) -> Self {
+        Self::mul(self, rhs)
+    }
+    fn mul_base(self, rhs: GoldilocksFieldV1) -> Self {
+        Self::mul(self, rhs)
+    }
+}
+impl PolynomialAirFieldV1 for GoldilocksFp4V1 {
+    const ZERO: Self = Self::ZERO;
+    const ONE: Self = Self::ONE;
+    fn from_base(value: GoldilocksFieldV1) -> Self {
+        Self::from_base(value)
+    }
+    fn is_canonical(self) -> bool {
+        Self::is_canonical(self)
+    }
+    fn add(self, rhs: Self) -> Self {
+        Self::add(self, rhs)
+    }
+    fn sub(self, rhs: Self) -> Self {
+        Self::sub(self, rhs)
+    }
+    fn mul(self, rhs: Self) -> Self {
+        Self::mul(self, rhs)
+    }
+    fn mul_base(self, rhs: GoldilocksFieldV1) -> Self {
+        Self::mul_base(self, rhs)
+    }
+}
 impl zeroize::Zeroize for GoldilocksFp4V1 {
     fn zeroize(&mut self) {
         self.zeroize_v1();

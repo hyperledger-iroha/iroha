@@ -1054,7 +1054,7 @@ pub(crate) struct CidInfo {
     pub(crate) multihash: u64,
     pub(crate) digest: [u8; 32],
 }
-fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, CarVerifyError> {
+pub(crate) fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, CarVerifyError> {
     if manifest.chunking.profile_id.0 != 0 {
         let descriptor = chunker_registry::lookup(crate::ProfileId(manifest.chunking.profile_id.0))
             .ok_or(CarVerifyError::ChunkProfileMismatch)?;

@@ -974,10 +974,10 @@ fn zk_x509_projected_artifact_bound_exceeds_cap_and_cannot_qualify() {
         privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0),
         Some(exact_x5s1_ceiling)
     );
-    assert_eq!(exact_x5s1_ceiling, 19_156_074);
+    assert_eq!(exact_x5s1_ceiling, 18_288_618);
     assert!(exact_x5s1_ceiling > PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("projected-X5S1-maximum=19156074 bytes"));
+    assert!(descriptor.contains("projected-X5S1-maximum=18288618 bytes"));
     assert!(descriptor.contains("outer-action-proof-cap=9437184 bytes"));
     assert!(descriptor.contains("activation=unavailable-proof-cap"));
     let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];

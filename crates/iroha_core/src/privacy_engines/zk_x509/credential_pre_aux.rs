@@ -3,7 +3,7 @@
 //! The MAIN and compact-CA traces compare grand-product terminals. Those products are meaningful
 //! only when both subproofs use the same tuple challenges. MAIN's projection products have the same
 //! base-before-auxiliary chronology requirement. This module samples every credential challenge
-//! family only after all six MAIN base roots and the compact-CA base root have been committed, then
+//! family only after the joined MAIN base root and the compact-CA base root have been committed, then
 //! supplies an opaque phase token to MAIN and a binding that each local subproof absorbs before its
 //! auxiliary commitments.
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
@@ -20,7 +20,7 @@ use super::{
         P256ScalarBitBusChallengesV1, derive_zk_x509_p256_scalar_bit_bus_challenges_v1,
     },
     p256_value_bus::{P256ValueBusChallengesV1, derive_zk_x509_p256_value_bus_challenges_v1},
-    profile::{ZK_X509_PROOF_VERSION_V1, ZK_X509_SUITE_V1, ZK_X509_TRACE_GROUPS_V1},
+    profile::{ZK_X509_PROOF_VERSION_V1, ZK_X509_SUITE_V1},
     projection_air::{
         ZK_X509_PROJECTION_CHALLENGE_LABELS_V1, ZK_X509_PROJECTION_COPY_LANES_V1,
         ZkX509ProjectionChallengesV1, ZkX509ProjectionCompactionChallengesV1,
@@ -52,7 +52,7 @@ const MAIN_ROOT_KIND_V1: u8 = 1;
 const CA_ROOT_KIND_V1: u8 = 2;
 /// Consensus-critical framing and sampling order for the joint challenge set.
 pub(crate) const ZK_X509_CREDENTIAL_PRE_AUX_DESCRIPTOR_V1: &[u8] =
-    b"zk-x509-credential-pre-aux-v1:X5B1:version1:profile=main-profile-digest+ca-profile-digest:public=consensus-context-digest+ca-public-digest:base-roots=exact-main6-ordered-log5,8,15,16,18,19-then-ca1-log7:post-base-challenges=exact272-goldilocks-fields:01-sha-call=4lanes*(beta,call,role,slot,kind,word,value)=28:02-rfc=4lanes*tuple12=48:03-projection=4lanes*(copy-beta,copy-gamma,compaction-active,compaction-invocation,compaction-position,compaction-value,compaction-gamma)=28:04-io=4lanes*(beta,channel,offset,value,is-write)=20:05-der=4lanes*(tuple12-then-byte-lookup)=52:06-sha-word-memory=4lanes*(beta,address,value,is-write)=16:07-sha-word-base-fold=4:08-p256-value=4lanes*7=28:09-p256-cross=4lanes*4=16:10-p256-scalar=4lanes*5=20:11-p256-arithmetic-copy=4lanes*3=12:lane-major-within-each-family:one-private-opaque-main-post-base-capability:no-raw-constructor:bind-post-challenge-state-and-all272-canonical-challenges-into-each-local-transcript-before-aux-roots:no-caller-selected-binding";
+    b"zk-x509-credential-pre-aux-v1:X5B1:version1:profile=main-profile-digest+ca-profile-digest:public=consensus-context-digest+ca-public-digest:base-roots=exact-main1-joined-ordered-native-log5,8,15,16,18,19-then-ca1-log13:post-base-challenges=exact272-goldilocks-fields:01-sha-call=4lanes*(beta,call,role,slot,kind,word,value)=28:02-rfc=4lanes*tuple12=48:03-projection=4lanes*(copy-beta,copy-gamma,compaction-active,compaction-invocation,compaction-position,compaction-value,compaction-gamma)=28:04-io=4lanes*(beta,channel,offset,value,is-write)=20:05-der=4lanes*(tuple12-then-byte-lookup)=52:06-sha-word-memory=4lanes*(beta,address,value,is-write)=16:07-sha-word-base-fold=4:08-p256-value=4lanes*7=28:09-p256-cross=4lanes*4=16:10-p256-scalar=4lanes*5=20:11-p256-arithmetic-copy=4lanes*3=12:lane-major-within-each-family:one-private-opaque-main-post-base-capability:no-raw-constructor:bind-post-challenge-state-and-all272-canonical-challenges-into-each-local-transcript-before-aux-roots:no-caller-selected-binding";
 const SHA_CALL_CHALLENGE_FIELDS_V1: usize = 28;
 const RFC5280_CHALLENGE_FIELDS_V1: usize = 48;
 const PROJECTION_CHALLENGE_FIELDS_V1: usize = 28;
@@ -78,9 +78,9 @@ pub(crate) const ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1: usize =
         + P256_SCALAR_CHALLENGE_FIELDS_V1
         + P256_ARITHMETIC_COPY_CHALLENGE_FIELDS_V1;
 /// Exact number of verifier-owned MAIN trace groups in the first release.
-pub(crate) const ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1: usize = ZK_X509_TRACE_GROUPS_V1;
+pub(crate) const ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1: usize = 1;
 const _: () = {
-    assert!(ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 == 6);
+    assert!(ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 == 1);
     assert!(ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1 == 272);
 };
 /// MAIN-owned input to the joint pre-auxiliary challenge schedule.
@@ -161,7 +161,7 @@ impl ZkX509CredentialMainPreAuxV1 {
 ///
 /// Prover and verifier adapters accept this opaque token instead of raw challenge structures. Its
 /// fields and construction stay private to this module, so an adapter cannot fabricate the
-/// pre-auxiliary phase or sample any auxiliary challenge before X5B1 has bound all seven roots.
+/// pre-auxiliary phase or sample any auxiliary challenge before X5B1 has bound both roots.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CredentialMainPostBaseChallengesV1 {
     projection: ZkX509ProjectionChallengesV1,
@@ -236,7 +236,7 @@ pub(crate) struct ZkX509CredentialPreAuxBindingV1 {
     /// Exact MAIN commitment phase from which the joint schedule was derived.
     ///
     /// Retaining this typed provenance lets the consuming MAIN phase reject a valid X5B1 capability
-    /// minted for another six-root phase before any challenge-dependent child is mutated. It is
+    /// minted for another joined-root phase before any challenge-dependent child is mutated. It is
     /// deliberately not exposed as raw roots or digests.
     main_pre_aux: ZkX509CredentialMainPreAuxV1,
     main_post_base: ZkX509CredentialMainPostBaseChallengesV1,
@@ -640,7 +640,7 @@ mod tests {
         .expect("public digest");
         let roots =
             encode_pre_aux_roots_v1(main.main_base_roots_for_test_v1(), test_digest_v1(0x66))
-                .expect("seven roots");
+                .expect("joined MAIN and CA roots");
         let mut transcript = TransparentTranscriptV1::new(
             ZK_X509_DIGEST_CONTEXT_V1,
             ZK_X509_SUITE_V1,
@@ -786,7 +786,7 @@ mod tests {
         transcript.state()
     }
     #[test]
-    fn exact_seven_root_schedule_is_deterministic_and_valid() {
+    fn exact_two_root_schedule_is_deterministic_and_valid() {
         let binding = derive_v1(main_pre_aux_v1());
         assert_eq!(binding, derive_v1(main_pre_aux_v1()));
         assert!(binding.matches_main_pre_aux_v1(main_pre_aux_v1()));
@@ -845,7 +845,7 @@ mod tests {
         assert_ne!(changed_ca, binding);
     }
     #[test]
-    fn exact_seven_root_schedule_has_a_stable_known_answer() {
+    fn exact_two_root_schedule_has_a_stable_known_answer() {
         let binding = derive_v1(main_pre_aux_v1());
         let phase = binding.main_post_base();
         validate_main_post_base_challenges_v1(phase).expect("canonical challenge phase");
@@ -862,6 +862,14 @@ mod tests {
             &[&encoded],
         )
         .expect("challenge KAT frame");
+        println!(
+            "joined_pre_aux_challenge_digest={}",
+            hex::encode(challenge_digest.to_bytes())
+        );
+        println!(
+            "joined_pre_aux_transcript_state={}",
+            hex::encode(binding.transcript_state().to_bytes())
+        );
         assert_ne!(challenge_digest, PrivacyOuterDigestV1::default());
         assert_ne!(binding.transcript_state(), PrivacyOuterDigestV1::default());
     }
@@ -1056,19 +1064,21 @@ mod tests {
     fn main_root_order_and_local_binding_state_are_domain_bound() {
         let canonical_main = main_pre_aux_v1();
         let canonical = derive_v1(canonical_main);
-        for left in 0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 {
-            for right in left + 1..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 {
-                let mut reordered = canonical_main;
-                reordered
-                    .main_base_roots_mut_for_test_v1()
-                    .swap(left, right);
-                assert_ne!(
-                    derive_v1(reordered),
-                    canonical,
-                    "MAIN root swap {left}<->{right}"
-                );
-            }
-        }
+        assert_eq!(ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1, 1);
+        let mut swapped = canonical_main;
+        let original_main_root = swapped.main_base_roots_for_test_v1()[0];
+        swapped.main_base_roots_mut_for_test_v1()[0] = test_digest_v1(0x66);
+        let swapped_binding = derive_zk_x509_credential_pre_aux_binding_v1(
+            swapped,
+            test_digest_v1(0x44),
+            test_digest_v1(0x55),
+            original_main_root,
+        )
+        .expect("both roots remain well formed after exchanging roles");
+        assert_ne!(
+            swapped_binding, canonical,
+            "joined MAIN and CA roots are role-bound"
+        );
         let mut left = TransparentTranscriptV1::new(
             ZK_X509_DIGEST_CONTEXT_V1,
             b"local",

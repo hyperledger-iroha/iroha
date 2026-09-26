@@ -2,12 +2,14 @@
 //!
 //! Authoritative assignments come only from the daemon-owned immutable archive
 //! captured inside the Sumeragi commit corridor. Runtime-only source
-//! authentication and governed external signing remain deployment-injected
-//! boundaries: config contains only identity-pinned opaque handles and public
-//! revision/policy-digest qualifications.
+//! authentication and governed signing use explicitly selected native software custody or
+//! deployment-injected providers. Both paths retain exact public qualifications, finalized
+//! authority checks and the same durable claim/completion protocol. Secret bytes remain runtime-only.
 pub mod https_source;
 pub mod https_source_evidence;
 pub mod https_source_pool;
+#[cfg(unix)]
+pub(crate) mod native_software;
 
 use crate::sorafs_provider_ingest_finalized_query::{
     ArchivedProviderIngestFinalizedLedgerV1, PreparedProviderIngestFinalizedArchiveV1,
@@ -23,7 +25,9 @@ use iroha_config::parameters::{
 };
 use iroha_core::{
     queue::{Error as QueueError, Queue},
-    state::{BlockHashRead, State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _},
+    state::{
+        BlockHashRead, State, StateReadOnly as _, WorldReadOnly as _, WorldStateSnapshot as _,
+    },
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, HashOf};
@@ -1234,15 +1238,80 @@ impl ProviderIngestFinalizedLedgerV1 for ObservedArchivedFinalizedAssignmentLedg
 #[derive(Clone)]
 struct NativeProviderIngestLocalStorageV1 {
     node: NodeHandle,
+    state: Arc<State>,
     operation_timeout: Duration,
 }
 impl NativeProviderIngestLocalStorageV1 {
-    fn new(node: NodeHandle, operation_timeout: Duration) -> Self {
+    fn new(node: NodeHandle, state: Arc<State>, operation_timeout: Duration) -> Self {
         Self {
             node,
+            state,
             operation_timeout,
         }
     }
+}
+
+fn current_staged_publisher_assignment_v1(
+    state: &State,
+    authorization: &FinalizedProviderIngestAuthorizationV1,
+    expected_revision: Option<u64>,
+) -> std::result::Result<u64, StorageError> {
+    use iroha_core::query::provider_ingest_source::{
+        PublisherSourceBindingV1, authorize_publisher_source_v1,
+    };
+    let rejected = || {
+        StorageError::Io(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "publisher staging current native authority unavailable",
+        ))
+    };
+    authorization.validate().map_err(|_| rejected())?;
+    let view = state.view();
+    let floor = authorization.admission_finalized_cursor();
+    iroha_core::query::signer_finality::verify_signer_finality_v1(
+        &view,
+        floor.height,
+        floor.block_hash,
+    )
+    .map_err(|_| rejected())?;
+    let order_id = ReplicationOrderId::new(authorization.order_id());
+    let order = view
+        .world()
+        .replication_orders()
+        .get(&order_id)
+        .ok_or_else(rejected)?;
+    let pin = view
+        .world()
+        .pin_manifests()
+        .get(&order.manifest_digest)
+        .ok_or_else(rejected)?;
+    if expected_revision.is_some_and(|revision| revision != order.assignment_revision)
+        || pin.digest.as_bytes() != &authorization.manifest_digest()
+        || pin.root_cid.as_bytes().as_slice() != authorization.manifest_cid()
+        || pin.content_length != authorization.content_length()
+        || pin.chunk_digest_sha3_256 != authorization.chunk_digest_sha3_256()
+        || pin.por_root != authorization.por_root()
+        || pin.chunker.to_handle() != authorization.chunker_handle()
+    {
+        return Err(rejected());
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| rejected())?
+        .as_secs();
+    authorize_publisher_source_v1(
+        &view,
+        &pin.submitted_by,
+        &PublisherSourceBindingV1 {
+            provider_id: ProviderId::new(authorization.provider_id()),
+            order_id,
+            manifest_digest: order.manifest_digest,
+            assignment_revision: order.assignment_revision,
+        },
+        now,
+    )
+    .map_err(|_| rejected())?;
+    Ok(order.assignment_revision)
 }
 struct DeadlineBoundedReaderV1 {
     inner: Box<dyn Read + Send>,
@@ -1426,9 +1495,37 @@ impl ProviderIngestLocalStorageV1<VerifiedProviderIngestPayloadV1>
         std::result::Result<Option<ProviderIngestLocalStoredV1>, ProviderIngestLocalStorageErrorV1>,
     > {
         let node = self.node.clone();
+        let state = Arc::clone(&self.state);
         Box::pin(async move {
             crate::panic_recovery::join_recoverable(
                 crate::panic_recovery::spawn_blocking_recoverable(move || {
+                    let existing =
+                        verify_existing_manifest(&node, &authorization, musubi_archive.as_ref())?;
+                    if existing.is_some() {
+                        return Ok(existing);
+                    }
+                    let revision =
+                        current_staged_publisher_assignment_v1(&state, &authorization, None)
+                            .map_err(|_| ProviderIngestLocalStorageErrorV1::Retryable)?;
+                    let mut current_authority = || {
+                        current_staged_publisher_assignment_v1(
+                            &state,
+                            &authorization,
+                            Some(revision),
+                        )
+                        .map(|_| ())
+                    };
+                    if node
+                        .ingest_staged_publisher_source(
+                            &authorization,
+                            revision,
+                            &mut current_authority,
+                        )
+                        .map_err(|error| classify_storage_error(&error))?
+                        .is_none()
+                    {
+                        return Ok(None);
+                    }
                     verify_existing_manifest(&node, &authorization, musubi_archive.as_ref())
                 }),
             )
@@ -1545,6 +1642,9 @@ fn verify_existing_manifest(
         Err(NodeStorageError::Storage(StorageError::ManifestNotFound { .. })) => return Ok(None),
         Err(error) => return Err(classify_storage_error(&error)),
     };
+    if !stored.payload_available() {
+        return Err(ProviderIngestLocalStorageErrorV1::Quarantined);
+    }
     if stored.manifest_digest() != &authorization.manifest_digest()
         || stored.manifest_cid() != authorization.manifest_cid()
         || stored.content_length() != authorization.content_length()
@@ -2821,6 +2921,7 @@ fn revalidate_startup_dependencies_after_probe(
         authenticated_source,
         provider_id,
         Some(source_provider_ids),
+        config.native_completion_credential.is_some(),
     )
 }
 async fn qualify_external_runtime_adapters(
@@ -2853,6 +2954,7 @@ async fn qualify_external_runtime_adapters(
         authenticated_source.as_ref(),
         *provider_id.as_bytes(),
         expected_source_provider_ids,
+        config.native_completion_credential.is_some(),
     )?;
     let source_provider_ids = authenticated_source.source_provider_ids().to_vec();
     let dependency_probe = probe_runtime_dependencies(
@@ -3082,6 +3184,7 @@ fn assemble_native_provider_ingest_runtime(
     });
     let storage = Arc::new(NativeProviderIngestLocalStorageV1::new(
         context.node.clone(),
+        Arc::clone(&context.state),
         Duration::from_millis(config.source_operation_timeout_ms),
     ));
     let payload_builder = Arc::new(NativeCompletionPayloadBuilderV1 {
@@ -3173,6 +3276,7 @@ impl ProviderIngestWorkerV1 {
                 self.authenticated_source.as_ref(),
                 *self.provider_id.as_bytes(),
                 Some(&self.source_provider_ids),
+                self.config.native_completion_credential.is_some(),
             )
             .is_err()
         {
@@ -3644,9 +3748,10 @@ fn validate_authenticated_source_inventory(
     source: &dyn ProviderIngestAuthenticatedSourceRuntimeV1,
     local_provider_id: [u8; 32],
     expected: Option<&[[u8; 32]]>,
+    native_staging: bool,
 ) -> Result<()> {
     let provider_ids = source.source_provider_ids();
-    if provider_ids.len() < 2
+    if (!native_staging && provider_ids.len() < 2)
         || provider_ids.len() > MAX_REPLICATION_ORDER_ASSIGNMENTS
         || provider_ids
             .iter()

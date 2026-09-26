@@ -1,0 +1,484 @@
+//! Complete MAIN constraint evaluation at the transcript's Fp4 DEEP point.
+//!
+//! Fixed values come from the same closed public schedules as scalar queries.
+//! Every logical registration contributes its full quotient with its native
+//! vanishing polynomial. This additional check retains all authenticated query
+//! checks; it does not select a reduced wire format or authorize activation.
+
+use super::*;
+
+/// Exact native-subgroup Lagrange weights at an extension-field point.
+/// The largest allocation is one public native column, never a fixed matrix.
+fn lagrange_weights_v1(trace_log2: u8, point: E) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+    if trace_log2 == 0 || trace_log2 > ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 || !point.is_canonical() {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let rows = 1_usize << trace_log2;
+    let root = goldilocks_primitive_root_v1(trace_log2).map_err(map_transparent_error_v1)?;
+    let vanishing = point.pow(rows as u128).sub(E::ONE);
+    if vanishing == E::ZERO {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    let factor = vanishing.mul_base(
+        F(rows as u64)
+            .inv()
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?,
+    );
+    let mut weights = Vec::new();
+    weights
+        .try_reserve_exact(rows)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    let mut native = F::ONE;
+    for _ in 0..rows {
+        weights.push(point.sub(E::from_base(native)));
+        native = native.mul(root);
+    }
+    aggregate::batch_invert_fp4_nonzero_v1(&mut weights).map_err(map_aggregate_error_v1)?;
+    native = F::ONE;
+    let mut sum = E::ZERO;
+    for weight in &mut weights {
+        *weight = weight.mul(factor).mul_base(native);
+        sum = sum.add(*weight);
+        native = native.mul(root);
+    }
+    if native != F::ONE || sum != E::ONE {
+        return Err(ZkX509StarkErrorV1::InternalInvariant);
+    }
+    Ok(weights)
+}
+
+/// Bounded public row replay for the smaller fixed schedules.
+fn fixed_rows_at_point_v1<R: AsRef<[F]>>(
+    trace_log2: u8,
+    width: usize,
+    point: E,
+    mut row: impl FnMut(usize) -> Result<R, ZkX509StarkErrorV1>,
+) -> Result<Vec<E>, ZkX509StarkErrorV1> {
+    if width == 0 || width > ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let weights = lagrange_weights_v1(trace_log2, point)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(width)
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    result.resize(width, E::ZERO);
+    for (index, weight) in weights.into_iter().enumerate() {
+        let native = row(index)?;
+        let native = native.as_ref();
+        if native.len() != width || native.iter().any(|value| !value.is_canonical()) {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        for (target, value) in result.iter_mut().zip(native) {
+            *target = target.add(weight.mul_base(*value));
+        }
+    }
+    Ok(result)
+}
+
+/// Evaluate the compiled public affine schedule at z and omega*z together.
+/// Rotating Lagrange weights by one gives the exact next native row polynomial.
+fn log19_public_at_point_v1(
+    schedule: &MainLog19PublicFixedAffineScheduleV1,
+    point: E,
+) -> Result<[MainLog19VerifierGeneratedFixedOpeningV1<E>; 2], ZkX509StarkErrorV1> {
+    schedule.validate_v1()?;
+    let weights = lagrange_weights_v1(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1, point)?;
+    let (prefix, linear) = main_log19_weight_prefixes_v1(&weights)?;
+    let mut combined = [[E::ZERO; MAIN_LOG19_PUBLIC_FIXED_WIDTH_V1]; 2];
+    for segment in &schedule.segments {
+        for (shift, row) in combined.iter_mut().enumerate() {
+            let value =
+                main_log19_shifted_affine_segment_sum_v1(&prefix, &linear, shift, *segment)?;
+            let target = row
+                .get_mut(usize::from(segment.column))
+                .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+            *target = target.add(value);
+        }
+    }
+    let current = main_log19_generated_fixed_opening_v1(
+        main_log19_der_fixed_opening_from_prefix_v1(&weights, &prefix, 0)?,
+        combined[0],
+    );
+    let next = main_log19_generated_fixed_opening_v1(
+        main_log19_der_fixed_opening_from_prefix_v1(&weights, &prefix, 1)?,
+        combined[1],
+    );
+    Ok([current, next])
+}
+
+fn opened_rows_v1<'a>(
+    registration: RegisteredSegmentLayoutV1,
+    groups: &'a [aggregate::AggregateOpenedDeepTraceGroupV1],
+) -> Result<RegisteredOpenedRowsV1<'a, E>, ZkX509StarkErrorV1> {
+    let group = groups
+        .get(registration.trace_group)
+        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+    let base = registration.base_start..registration.base_end()?;
+    let aux = registration.aux_start..registration.aux_end()?;
+    Ok(RegisteredOpenedRowsV1 {
+        base_current: group
+            .base_current
+            .get(base.clone())
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+        base_next: group
+            .base_next
+            .get(base)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+        aux_current: group
+            .aux_current
+            .get(aux.clone())
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+        aux_next: group
+            .aux_next
+            .get(aux)
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+    })
+}
+
+fn quotient_v1(
+    segment: SegmentLayoutV1,
+    point: E,
+    residues: &[E],
+    alphas: &[E],
+) -> Result<E, ZkX509StarkErrorV1> {
+    if residues.len() != segment.constraint_count
+        || alphas.len() != segment.constraint_count
+        || residues
+            .iter()
+            .chain(alphas)
+            .any(|value| !value.is_canonical())
+    {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    let inverse = point
+        .pow(segment.trace_size() as u128)
+        .sub(E::ONE)
+        .inv()
+        .ok_or(ZkX509StarkErrorV1::ConstraintOpening)?;
+    Ok(residues
+        .iter()
+        .zip(alphas)
+        .fold(E::ZERO, |sum, (residue, alpha)| {
+            sum.add(residue.mul(*alpha))
+        })
+        .mul(inverse))
+}
+
+fn verify_composition_v1(
+    layout: &aggregate::AggregateProofLayoutV1,
+    deep: &aggregate::AggregateDeepProofV1,
+    point: E,
+    expected: E,
+) -> Result<(), ZkX509StarkErrorV1> {
+    if deep.composition_values.len() != SECURITY_LANES || SECURITY_LANES != 1 {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    let chunks =
+        aggregate::canonical_fp4_fields_v1(&deep.composition_values[0], COMPOSITION_DEGREE_CHUNKS)
+            .map_err(map_aggregate_error_v1)?;
+    let power = point.pow(
+        layout
+            .fri_degree_cap(AGGREGATE_PARAMETERS_V1)
+            .map_err(map_aggregate_error_v1)? as u128,
+    );
+    let actual = chunks
+        .iter()
+        .rev()
+        .fold(E::ZERO, |sum, chunk| sum.mul(power).add(*chunk));
+    if actual != expected {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    Ok(())
+}
+
+/// Verifier-owned fixed evaluations, prepared once for this exact DEEP point.
+/// This private owner cannot be supplied by a proof or external caller.
+struct MainDeepFixedV1 {
+    point: E,
+    public: [MainLog19VerifierGeneratedFixedOpeningV1<E>; 2],
+    sha_current: [[E; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]; ZK_X509_SHA_SEGMENT_COUNT_V1],
+    sha_next: [[E; ZK_X509_SHA_BATCH_FIXED_WIDTH_V1]; ZK_X509_SHA_SEGMENT_COUNT_V1],
+    rows: Vec<Vec<E>>,
+}
+
+fn prepare_main_deep_fixed_v1(
+    layout: &AggregateProofLayoutV1,
+    point: E,
+    p256: &MainP256Log5VerifierConstraintSourceV1<'_>,
+    projection: &MainProjectionVerifierConstraintSourceV1,
+    io: &MainIoVerifierConstraintSourceV1,
+    log19: &MainLog19VerifierConstraintSourceV1,
+) -> Result<MainDeepFixedV1, ZkX509StarkErrorV1> {
+    let public = log19_public_at_point_v1(
+        log19
+            .public_fixed
+            .as_ref()
+            .ok_or(ZkX509StarkErrorV1::TranscriptMismatch)?,
+        point,
+    )?;
+    let root19 = goldilocks_primitive_root_v1(ZK_X509_MAX_NATIVE_TRACE_LOG2_V1)
+        .map_err(map_transparent_error_v1)?;
+    let next_point = point.mul_base(root19);
+    let sha_schedule = zk_x509_sha_fixed_algebraic_schedule_v1(log19.sha_shape)
+        .map_err(map_sha_fixed_algebraic_error_v1)?;
+    let sha_current = expand_main_log19_sha_fixed_opening_v1(
+        &sha_schedule
+            .evaluate_extension_point_v1(point)
+            .map_err(map_fixed_algebraic_error_v1)?,
+        &public[0],
+    )?;
+    let sha_next = expand_main_log19_sha_fixed_opening_v1(
+        &sha_schedule
+            .evaluate_extension_point_v1(next_point)
+            .map_err(map_fixed_algebraic_error_v1)?,
+        &public[1],
+    )?;
+    let p256_combined = zk_x509_p256_fixed_algebraic_schedule_v1()
+        .map_err(map_p256_fixed_algebraic_error_v1)?
+        .evaluate_extension_point_v1(point)
+        .map_err(map_fixed_algebraic_error_v1)?;
+    let mut rows = Vec::new();
+    rows.try_reserve_exact(layout.registered_segments.len())
+        .map_err(|_| ZkX509StarkErrorV1::AllocationFailure)?;
+    for registration in layout.registered_segments.iter().copied() {
+        let evaluator = MainFp4AirEvaluatorV1::for_registration_v1(registration)?
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        let fixed = match evaluator {
+            MainFp4AirEvaluatorV1::P256(_) => {
+                let identity = p256_main_registration_from_main_layout_v1(registration)?;
+                if registration.segment.trace_log2 == ZK_X509_MAX_NATIVE_TRACE_LOG2_V1 {
+                    let kind = super::super::super::fixed_algebraic_p256::zk_x509_p256_fixed_algebraic_schedule_for_registration_v1(identity)
+                        .map_err(map_p256_fixed_algebraic_error_v1)?;
+                    let (start, width) = kind.start_width_v1();
+                    if width != registration.segment.fixed_width
+                        || p256_combined.len() != ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1
+                    {
+                        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                    }
+                    p256_combined
+                        .get(start..start + width)
+                        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+                        .to_vec()
+                } else {
+                    fixed_rows_at_point_v1(
+                        registration.segment.trace_log2,
+                        registration.segment.fixed_width,
+                        point,
+                        |row| {
+                            p256.fixed
+                                .fixed_row_v1(identity, row)
+                                .map_err(ZkX509StarkErrorV1::from)
+                        },
+                    )?
+                }
+            }
+            MainFp4AirEvaluatorV1::Projection(_) => fixed_rows_at_point_v1(
+                registration.segment.trace_log2,
+                registration.segment.fixed_width,
+                point,
+                |row| {
+                    projection
+                        .fixed_rows
+                        .get(row)
+                        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)
+                },
+            )?,
+            MainFp4AirEvaluatorV1::ByteMemory(_) => fixed_rows_at_point_v1(
+                registration.segment.trace_log2,
+                registration.segment.fixed_width,
+                point,
+                |row| io.fixed_schedule.fixed_row_v1(row),
+            )?,
+            MainFp4AirEvaluatorV1::StrictDer(_) => public[0].der.to_vec(),
+            MainFp4AirEvaluatorV1::Rfc5280(_) => public[0].rfc.to_vec(),
+            MainFp4AirEvaluatorV1::Sha(_) => sha_current
+                .get(usize::from(registration.segment.instance))
+                .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?
+                .to_vec(),
+        };
+        if fixed.len() != registration.segment.fixed_width {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        rows.push(fixed);
+    }
+    Ok(MainDeepFixedV1 {
+        point,
+        public,
+        sha_current,
+        sha_next,
+        rows,
+    })
+}
+
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+fn main_deep_composition_v1(
+    layout: &AggregateProofLayoutV1,
+    groups: &[aggregate::AggregateOpenedDeepTraceGroupV1],
+    point: E,
+    alphas: &[Vec<Vec<E>>],
+    p256: &MainP256Log5VerifierConstraintSourceV1<'_>,
+    projection: &MainProjectionVerifierConstraintSourceV1,
+    io: &MainIoVerifierConstraintSourceV1,
+    log19: &MainLog19VerifierConstraintSourceV1,
+    prepared: &MainDeepFixedV1,
+) -> Result<E, ZkX509StarkErrorV1> {
+    if point != prepared.point || prepared.rows.len() != layout.registered_segments.len() {
+        return Err(ZkX509StarkErrorV1::ProfileMismatch);
+    }
+    let mut expected = E::ZERO;
+    for (index, registration) in layout.registered_segments.iter().copied().enumerate() {
+        let opening = opened_rows_v1(registration, groups)?;
+        let evaluator = MainFp4AirEvaluatorV1::for_registration_v1(registration)?
+            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+        if evaluator.registration_v1() != registration {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        let residues = match evaluator {
+            MainFp4AirEvaluatorV1::P256(evaluator) => {
+                let identity = p256_main_registration_from_main_layout_v1(registration)?;
+                let fixed = &prepared.rows[index];
+                let terminal = p256
+                    .terminals
+                    .get(identity.signature_v1())
+                    .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
+                evaluator.evaluate_residues_v1(opening, fixed, p256.challenges, terminal)?
+            }
+            MainFp4AirEvaluatorV1::Projection(evaluator) => {
+                if registration != projection.registration {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let fixed = &prepared.rows[index];
+                evaluator.evaluate_residues_v1(opening, fixed, projection.challenges)?
+            }
+            MainFp4AirEvaluatorV1::ByteMemory(evaluator) => {
+                if registration != io.registration {
+                    return Err(ZkX509StarkErrorV1::ProfileMismatch);
+                }
+                let fixed = &prepared.rows[index];
+                evaluator.evaluate_residues_v1(
+                    io.fixed_schedule.logical_active_rows,
+                    opening,
+                    fixed,
+                    io.challenges,
+                )?
+            }
+            MainFp4AirEvaluatorV1::StrictDer(evaluator) => evaluator.evaluate_residues_v1(
+                opening,
+                &prepared.public[0].der,
+                &prepared.public[1].der,
+                DerMainFp4AirContextV1 {
+                    challenges: log19.post_base.der(),
+                    public: log19.der_public,
+                    terminals: log19.claims.der,
+                },
+            )?,
+            MainFp4AirEvaluatorV1::Rfc5280(evaluator) => evaluator.evaluate_residues_v1(
+                opening,
+                &prepared.public[0].rfc,
+                RfcMainFp4AirContextV1 {
+                    der: log19.post_base.der(),
+                    rfc: log19.post_base.rfc5280(),
+                    terminals: log19.claims.rfc5280,
+                },
+            )?,
+            MainFp4AirEvaluatorV1::Sha(evaluator) => {
+                let segment = usize::from(registration.segment.instance);
+                let current = ZkX509ShaBatchRowV1 {
+                    base: opening
+                        .base_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    aux: opening
+                        .aux_current
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed: *prepared
+                        .sha_current
+                        .get(segment)
+                        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+                };
+                let next = ZkX509ShaBatchRowV1 {
+                    base: opening
+                        .base_next
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    aux: opening
+                        .aux_next
+                        .try_into()
+                        .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
+                    fixed: *prepared
+                        .sha_next
+                        .get(segment)
+                        .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+                };
+                evaluator.evaluate_residues_v1(
+                    &current,
+                    &next,
+                    ShaMainFp4AirContextV1 {
+                        word: log19.post_base.sha_word(),
+                        call: log19.post_base.sha(),
+                        rfc: log19.post_base.rfc5280(),
+                        terminal: *log19
+                            .claims
+                            .sha
+                            .segments
+                            .get(segment)
+                            .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?,
+                        ca_calls: &log19.claims.sha.ca_calls,
+                    },
+                )?
+            }
+        };
+        expected = expected.add(quotient_v1(
+            registration.segment,
+            point,
+            &residues,
+            &alphas[index][0],
+        )?);
+    }
+    Ok(expected)
+}
+
+/// Check every complete MAIN relation using only verifier-owned context.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(super) fn verify_main_deep_constraints_v1(
+    layout: &AggregateProofLayoutV1,
+    deep: &aggregate::AggregateDeepProofV1,
+    point: E,
+    alphas: &[Vec<Vec<E>>],
+    p256: &MainP256Log5VerifierConstraintSourceV1<'_>,
+    projection: &MainProjectionVerifierConstraintSourceV1,
+    io: &MainIoVerifierConstraintSourceV1,
+    log19: &MainLog19VerifierConstraintSourceV1,
+) -> Result<(), ZkX509StarkErrorV1> {
+    layout.validate_exact_full_profile_registration_v1()?;
+    let shared = layout.as_shared()?;
+    if !aggregate::deep_point_is_admissible_v1(point, AGGREGATE_PARAMETERS_V1, &shared)
+        .map_err(map_aggregate_error_v1)?
+        || alphas.len() != layout.registered_segments.len()
+        || alphas
+            .iter()
+            .zip(&layout.registered_segments)
+            .any(|(lanes, registration)| {
+                lanes.len() != SECURITY_LANES
+                    || lanes.iter().any(|lane| {
+                        lane.len() != registration.segment.constraint_count
+                            || lane.iter().any(|value| !value.is_canonical())
+                    })
+            })
+    {
+        return Err(ZkX509StarkErrorV1::ConstraintOpening);
+    }
+    let groups = aggregate::canonical_deep_trace_groups_v1(deep, AGGREGATE_PARAMETERS_V1, &shared)
+        .map_err(map_aggregate_error_v1)?;
+    let prepared = prepare_main_deep_fixed_v1(layout, point, p256, projection, io, log19)?;
+    let expected = main_deep_composition_v1(
+        layout, &groups, point, alphas, p256, projection, io, log19, &prepared,
+    )?;
+    verify_composition_v1(&shared, deep, point, expected)
+}
+
+#[cfg(test)]
+#[path = "main_oods_tests.rs"]
+mod tests;

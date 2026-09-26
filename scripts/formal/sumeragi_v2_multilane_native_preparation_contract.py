@@ -102,7 +102,7 @@ NATIVE_CONTROL_BINDINGS = (
         "native_lane_batch_for_execution(block)", "Self::checked_execution_context_header(block)?",
         "Self::validate_execution_context_header(block)?", "Self::validate_execution_context_alignment(block, bundle)?",
     )),
-    ('crates/iroha_core/src/block/carrier_preparation.rs', 'method', 'ValidBlock::validate_and_record_native_candidate', ("source: crate::state::PreparedNativeLaneBatchSourceV1<'state>", 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_state_access_without_exec_witness()', 'let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };', 'if !body.is_resultless_proposal()', 'native_lane_batch_for_execution(body)', 'body.validate_proposal_commitments()', 'frozen.height != body.header().height().get()', 'frozen.network_id != *state.network_id_ref()', '!= body.header().prev_block_hash()', 'snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash)', 'verify_origin_block_signature(', 'BlockSignaturePolicy::RotatingLeader', 'length > frozen.da_layout.max_payload_size_bytes', 'ConsensusValidationProfile::NativePreparation', 'Self::validate_static_state_dependent(', 'Self::validate_static_with_snapshot(', 'if generation != state.state_view_generation()', 'source.record_execution(body, context)?', 'recorded.into_preparation_parts().map_err(|reason| {\n            NativeCandidatePreparationError::Preparation(\n                MergeLedgerCommitError::ExecutionBatchInvalid(reason),\n            )\n        })?', 'Arc::new(native.context().context().clone())', 'Ok(Some(ValidatedCarrierPreparationInput {', 'native: Some(native)')),
+    ('crates/iroha_core/src/block/carrier_preparation.rs', 'method', 'ValidBlock::validate_and_record_native_candidate', ("source: crate::state::PreparedNativeLaneBatchSourceV1<'state>", 'context: crate::sumeragi::v2::VerifiedHeightContext', 'ensure_state_access_without_exec_witness()', 'let Some((state, body, generation)) = source.preparation_input() else {\n            return Ok(None);\n        };', 'if !body.is_resultless_proposal()', 'native_lane_batch_for_execution(body)', 'body.validate_proposal_commitments()', 'frozen.height != body.header().height().get()', 'frozen.network_id != *state.network_id_ref()', '!= body.header().prev_block_hash()', 'frozen\n                            .snapshot_bootstrap\n                            .map(|anchor| anchor.snapshot_block_hash)', 'verify_origin_block_signature(', 'BlockSignaturePolicy::RotatingLeader', 'length > frozen.da_layout.max_payload_size_bytes', 'ConsensusValidationProfile::NativePreparation', 'Self::validate_static_state_dependent(', 'Self::validate_static_with_snapshot(', 'if generation != state.state_view_generation()', 'source.record_execution(context)?', 'recorded.into_preparation_parts().map_err(|reason| {\n            NativeCandidatePreparationError::Preparation(\n                MergeLedgerCommitError::ExecutionBatchInvalid(reason),\n            )\n        })?', 'Arc::new(native.context().context().clone())', 'Ok(Some(ValidatedCarrierPreparationInput {', 'native: Some(native)')),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::prepare_candidate", (
         "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ValidBlock::prepare_native_candidate(", "self,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
@@ -234,7 +234,7 @@ NATIVE_CONTROL_BINDINGS = (
     )),
     (NATIVE_SOURCE, "struct", "PreparedNativeLaneBatchSourceV1", (
         "state: &'state State", "observed: VerifiedLaneContexts", "generation: u64",
-        "input: Arc<SignedBlock>",
+        "input: SignedBlock",
         "groups: Vec<VerifiedLaneDecisionGroupV1>",
     )),
     (NATIVE_SOURCE, "method", "State::prepare_native_lane_batch_from_pre_state", (
@@ -244,13 +244,13 @@ NATIVE_CONTROL_BINDINGS = (
         "self.import_lane_decision_group(&observed, execution)",
         "LaneDecisionGroupPreparationV1::Ready(group) => groups.push(group)",
         "!observed.is_current(self)", "state: self,\n                observed,\n                generation,",
-        "input: Arc::new(carrier.clone()),\n                groups",
+        "input: carrier.clone(),\n                groups",
     )),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::record_execution", (
         "self,", "context: crate::sumeragi::v2::VerifiedHeightContext",
         "ensure_exec_witness_capture_available()", "if !self.is_current()",
-        "if carrier != *self.input {\n            return Err(", "drop(self.input)",
-        "record_native_lane_decision_batch(carrier, self.groups, context)",
+        "fn record_execution(\n        self,\n        context: crate::sumeragi::v2::VerifiedHeightContext,\n    )",
+        "record_native_lane_decision_batch(self.input, self.groups, context)",
         "self.generation,\n            self.state.state_view_generation()", "recorded.map(Some)",
     )),
     (NATIVE_SOURCE, "method", "PreparedNativeLaneBatchSourceV1::stage_with_start_hooks", (
@@ -955,13 +955,12 @@ RETAINED_CARRIER_BINDINGS = (
     )),
     (JOURNALS, "fn", "matches_validation_candidate", (
         "if self.context.as_ref() != context", "return false;",
-        "self.valid.as_ref().canonical_proposal_wire_hash()",
-        "proposal.canonical_proposal_wire_hash()",
-        "(Ok(original), Ok(candidate)) => original == candidate", "_ => false",
+        "self.valid\n            .as_ref()\n            .checked_resultless_proposal_eq(proposal)",
+        ".unwrap_or(false)",
     )),
     (JOURNALS, "fn", "execution_prefix_commitment", ("self.execution_prefix",)),
     (VALIDATION_CUSTODY, "struct", "Candidate", (
-        "subject: wire::BlockSubject", "owner: Option<O>",
+        "subject: wire::BlockSubject", "body: Option<SignedBlock>", "owner: Option<O>",
     )),
     (VALIDATION_CUSTODY, "enum", "CarrierMarkerPreparation", (
         "Ready(wire::ExecutionCommitment)", "Deferred(LocalValidationRefusal)", "ValidationError(E)",
@@ -988,34 +987,56 @@ RETAINED_CARRIER_BINDINGS = (
     )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::preflight_marker", (
         "&self", "let candidate = self", ".find(|row| row.subject == durable.subject())",
-        "if candidate.is_some_and(|row| row.owner.is_none())",
+        "if candidate.is_some_and(|row| match row.owner.as_ref() {\n            None => true,\n            Some(owner) => owner.needs_decoded_body() && row.body.is_none(),\n        })",
         "return Err(CarrierCustodyError::MissingOwner)",
         "!self.markers.iter().any(|row| row.durable == *durable)",
         "self.markers.len() == self.limit", "candidate.is_none() && self.candidates.len() == self.limit",
         "return Err(CarrierCustodyError::Capacity)", "Ok(())",
     )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::prepare_marker", (
+        "body: SignedBlock", "let mut decoded = Some(body)",
         "if marker.is_none() && self.markers.len() == self.limit",
+        "if owner.needs_decoded_body() && candidate.body.is_none()",
+        "if let Some(retained) = candidate.body.as_ref()",
+        "if decoded.as_ref() != Some(retained)",
         "if requires_existing_owner", "return Err(CarrierCustodyError::MissingOwner)",
         "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
         "let index = self.candidates.len()", "self.candidates.push(Candidate {",
-        "subject: durable.subject()", "owner: None",
-        "let owner = match self.validator.prepare(context, body)",
+        "subject: durable.subject()", "body: None", "owner: None",
+        'let original_body = decoded\n                    .as_ref()\n                    .expect("decoded body precedes original preparation")',
+        "let owner = match self.validator.prepare(context, original_body)",
         'let vacant = self\n                            .candidates\n                            .pop()\n                            .expect("reserved candidate descriptor")',
         "debug_assert_eq!(vacant.subject, durable.subject())", "debug_assert!(vacant.owner.is_none())",
         "return Ok(CarrierMarkerPreparation::ValidationError(error))",
-        "self.candidates[index].owner = Some(owner)", "if !owner.matches_candidate(context, body)",
-        "return Err(CarrierCustodyError::Identity)", "let commitment = match owner.ready_commitment()",
-        "Some(commitment) => commitment", "self.resume_candidate(index, context, body)?",
+        "if owner.needs_decoded_body()", "self.candidates[index].body = decoded.take()",
+        "self.candidates[index].owner = Some(owner)",
+        "let current_body = candidate\n            .body\n            .as_ref()\n            .or(decoded.as_ref())",
+        "let matches = owner.matches_candidate(context, current_body)",
+        "let ready = owner.ready_commitment()", "if !matches",
+        "self.unretain_finished_body(index, &mut decoded)",
+        "return Err(CarrierCustodyError::Identity)", "let commitment = match ready",
+        "Some(commitment) => commitment", "self.resume_candidate(index, context, decoded.as_ref())?",
         "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
         ".ready_commitment()\n                    .ok_or(CarrierCustodyError::IncompleteCapture)?",
-        "confirmed: None", "Ok(CarrierMarkerPreparation::Ready(commitment))",
+        "drop(decoded)", "confirmed: None", "Ok(CarrierMarkerPreparation::Ready(commitment))",
+    )),
+    (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::unretain_finished_body", (
+        "decoded: &mut Option<SignedBlock>", "let candidate = &mut self.candidates[index]",
+        ".is_some_and(|owner| !owner.needs_decoded_body())",
+        "let retained = candidate.body.take()", "if decoded.is_none()",
+        "*decoded = retained", "drop(retained)",
     )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::resume_candidate", (
-        "match self.validator.resume(owner)",
-        "Ok(owner) => {\n                self.candidates[index].owner = Some(owner);\n                None\n            }",
-        "Err((owner, refusal)) => {\n                self.candidates[index].owner = Some(owner);\n                Some(refusal)\n            }",
-        "if !owner.matches_candidate(context, body)", "return Err(CarrierCustodyError::Identity)", "Ok(refusal)",
+        "decoded_body: Option<&SignedBlock>", "let candidate = &mut self.candidates[index]",
+        "let retained_body = candidate.body.take()",
+        "let body = retained_body\n            .as_ref()\n            .or(decoded_body)",
+        "let owner = candidate\n            .owner\n            .take()",
+        "match self.validator.resume(owner, body)",
+        "Ok(owner) => {\n                candidate.owner = Some(owner);\n                None\n            }",
+        "Err((owner, refusal)) => {\n                candidate.owner = Some(owner);\n                Some(refusal)\n            }",
+        "let matches = owner.matches_candidate(context, body)",
+        "if owner.needs_decoded_body() {\n            candidate.body = retained_body;\n        } else {\n            drop(retained_body);\n        }",
+        "if !matches", "return Err(CarrierCustodyError::Identity)", "Ok(refusal)",
     )),
     (VALIDATION_CUSTODY, "method", "RetainedBodyValidationService::confirm", (
         "if owner.ready_commitment() != Some(receipt.execution_commitment())",
@@ -1047,7 +1068,8 @@ RETAINED_CARRIER_BINDINGS = (
     (RETAINED_VALIDATION, "method", "V2BodyStore::execute_retained_durable_validation", (
         "if !service.matches_store(&self.instance_identity())",
         "if !self.rejected.contains_key(&key)", "service.preflight_marker(&durable)?",
-        "self.load_validation_envelope(&durable, expected_manifest_hash)?", "service.prepare_marker(",
+        "self.load_validation_envelope(&durable, expected_manifest_hash)?",
+        "service.prepare_marker(\n            &self.context,\n            block,\n            &durable,",
         "already_validated.is_some() || reused.is_some()",
         "let validated = self.persist_validated_receipt(&durable, commitment)?",
         "service.confirm(&validated)?",
@@ -1056,6 +1078,64 @@ RETAINED_CARRIER_BINDINGS = (
     )),
 )
 PREPARATION_OWNER_BINDINGS += RETAINED_CARRIER_BINDINGS
+
+# Actual codec-owned resultless comparison preserves both error/cap checks and
+# every signed proposal field. It removes whole-proposal buffers only; dynamic
+# instruction equality retains its nested encoding allocations.
+RESULTLESS_BLOCK = "crates/iroha_data_model/src/block/mod.rs"
+RESULTLESS_PAYLOAD = "crates/iroha_data_model/src/block/payload.rs"
+RESULTLESS_COMPARISON_BINDINGS = (
+    (RESULTLESS_BLOCK, "method", "SignedBlock::checked_resultless_proposal_eq", (
+        "pub fn checked_resultless_proposal_eq(&self, other: &Self) -> Result<bool, NoritoFrameError>",
+        "let original_len = self.checked_resultless_payload_len()?;",
+        "let candidate_len = other.checked_resultless_payload_len()?;",
+        "original_len == candidate_len", "self.signatures == other.signatures",
+        "self.payload == other.payload",
+    )),
+    (RESULTLESS_BLOCK, "method", "SignedBlock::checked_resultless_payload_len", (
+        "fn checked_resultless_payload_len(&self) -> Result<usize, NoritoFrameError>",
+        "let proposal = SignedBlockOutputCandidate {", "signatures: OutputFieldRef(&self.signatures)",
+        "payload: OutputFieldRef(&self.payload)", "result: None",
+        "let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());",
+        "let payload_len = norito::core::encoded_payload_len(&proposal)?;",
+        "u64::try_from(payload_len).map_err(|_| NoritoFrameError::LengthMismatch)?;",
+        "enforce_payload_len_limit(payload_len)?;", "Ok(payload_len)",
+    )),
+    (RESULTLESS_PAYLOAD, "method", "BlockPayload::eq", (
+        "self.header == other.header", "self.external_entrypoints == other.external_entrypoints",
+        "self.execution_context == other.execution_context", "self.da_commitments == other.da_commitments",
+        "self.da_proof_policies == other.da_proof_policies", "self.da_pin_intents == other.da_pin_intents",
+        "self.npos_consensus_effects == other.npos_consensus_effects",
+    )),
+)
+RESULTLESS_COMPARISON_BODIES = {
+    "SignedBlock::checked_resultless_proposal_eq": """{
+        let original_len = self.checked_resultless_payload_len()?;
+        let candidate_len = other.checked_resultless_payload_len()?;
+        Ok(original_len == candidate_len && self.signatures == other.signatures && self.payload == other.payload)
+    }""",
+    "SignedBlock::checked_resultless_payload_len": """{
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures), payload: OutputFieldRef(&self.payload), result: None,
+        };
+        let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());
+        let payload_len = norito::core::encoded_payload_len(&proposal)?;
+        u64::try_from(payload_len).map_err(|_| NoritoFrameError::LengthMismatch)?;
+        enforce_payload_len_limit(payload_len)?;
+        Ok(payload_len)
+    }""",
+    "BlockPayload::eq": """{
+        self.header == other.header && self.external_entrypoints == other.external_entrypoints
+            && self.execution_context == other.execution_context && self.da_commitments == other.da_commitments
+            && self.da_proof_policies == other.da_proof_policies && self.da_pin_intents == other.da_pin_intents
+            && self.npos_consensus_effects == other.npos_consensus_effects
+    }""",
+    "matches_validation_candidate": """{
+        if self.context.as_ref() != context { return false; }
+        self.valid.as_ref().checked_resultless_proposal_eq(proposal).unwrap_or(false)
+    }""",
+}
+PREPARATION_OWNER_BINDINGS += RESULTLESS_COMPARISON_BINDINGS
 
 
 # The original service State/Queue pair and exact route cut now discharge the
@@ -2487,14 +2567,14 @@ NATIVE_VALIDATION_OWNER_BODIES = {
         Published { carrier: PublishedNativeCarrier, outbox_published: bool, queue_cleaned: bool, },
     }""",
     "AwaitingNativeSource": """{
-        class: CurrentCarrierSourceClass, context: VerifiedHeightContext, proposal: SignedBlock,
+        class: CurrentCarrierSourceClass, context: VerifiedHeightContext, proposal_hash: iroha_crypto::Hash,
         recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>, pending: Option<PendingNativeSource>,
         shell_admission: Option<CarrierShellAdmission>,
     }""",
     "NativeValidationCandidate::matches_candidate": """{
         match self.phase.as_ref().as_ref().expect("original Native validation phase") {
             NativeValidationPhase::AwaitingSource(source) => {
-                source.context.context() == context && source.proposal == *body
+                source.context.context() == context
             }
             NativeValidationPhase::Stopped { context_id, proposal_hash, .. } => {
                 *context_id == context.id() && body.canonical_proposal_wire_hash().is_ok_and(|hash| hash == *proposal_hash)
@@ -2504,7 +2584,7 @@ NATIVE_VALIDATION_OWNER_BODIES = {
             }
             NativeValidationPhase::Published { carrier, .. } => {
                 carrier.artifact().height_context == *context
-                    && carrier.block().canonical_proposal_wire_hash().ok() == body.canonical_proposal_wire_hash().ok()
+                    && carrier.block().checked_resultless_proposal_eq(body).unwrap_or(false)
             }
         }
     }""",
@@ -2516,6 +2596,10 @@ NATIVE_VALIDATION_OWNER_BODIES = {
                 Some(carrier.artifact().commit_qc.execution_commitment)
             }
         }
+    }""",
+    "NativeValidationCandidate::needs_decoded_body": """{
+        matches!(self.phase.as_ref().as_ref().expect("original Native validation phase"),
+            NativeValidationPhase::AwaitingSource(_))
     }""",
 }
 NATIVE_CURRENT_OWNER_BINDINGS = (
@@ -2532,11 +2616,14 @@ NATIVE_CURRENT_OWNER_BINDINGS = (
         "carrier: RetainedCarrier<CarrierShellAdmission>", "carrier: PublishedNativeCarrier",
     )),
     (NATIVE_VALIDATION, "struct", "AwaitingNativeSource", (
-        "context: VerifiedHeightContext", "proposal: SignedBlock",
+        "context: VerifiedHeightContext", "proposal_hash: iroha_crypto::Hash",
         "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>",
         "pending: Option<PendingNativeSource>", "shell_admission: Option<CarrierShellAdmission>",
     )),
     (NATIVE_VALIDATION, "method", "OwnedNativeCarrierValidator::execute_source", (
+        "proposal: &SignedBlock",
+        "prepare_proposed_native_lane_batch_source(proposal, &waiting.recovered)",
+        "prepare_native_source_admitted(\n            proposal,\n            source,",
         "NativeLaneBatchSourcePreparationV1::ObservationChanged =>",
         "return Ok(NativeValidationPhase::AwaitingSource(waiting));",
         "&mut waiting.shell_admission",
@@ -2551,17 +2638,30 @@ NATIVE_CURRENT_OWNER_BINDINGS = (
          ".take()",
      )),
     (NATIVE_VALIDATION, "method", "OwnedNativeCarrierValidator::resume", (
+        "proposal: &SignedBlock", "let proposal_hash = waiting.proposal_hash",
+        "match self.execute_source(waiting, proposal)",
         "LocalValidationRefusal::ObservationChanged",
         "*owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));",
         "return Err((owner, refusal));",
     )),
+    (NATIVE_VALIDATION, "method", "OwnedNativeCarrierValidator::prepare", (
+        "body: &SignedBlock", "if context != self.context.context()",
+        "let class = self.classify_source(body)?", "let proposal_hash = body",
+        "let result = self.execute_source(", "context: self.context.clone()",
+        "proposal_hash,", "shell_admission: Some(shell_admission)", "},\n            body,\n        );",
+        "phase: Box::new(Some(phase))", "_container_admission: container_admission",
+    )),
     (NATIVE_VALIDATION, "method", "NativeValidationCandidate::matches_candidate", (
         "fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool",
         "carrier.matches_validation_candidate(context, body)",
+        ".checked_resultless_proposal_eq(body)", ".unwrap_or(false)",
     )),
     (NATIVE_VALIDATION, "method", "NativeValidationCandidate::ready_commitment", (
         "fn ready_commitment(&self) -> Option<wire::ExecutionCommitment>",
         "evidence_ready.then(|| carrier.ready_commitment()).flatten()",
+    )),
+    (NATIVE_VALIDATION, "method", "NativeValidationCandidate::needs_decoded_body", (
+        "fn needs_decoded_body(&self) -> bool", "NativeValidationPhase::AwaitingSource(_)",
     )),
     (NATIVE_VALIDATION, "method", "NativeValidationCandidate::try_publish", (
         'NativeValidationPhase::Executed {\n                carrier,\n                evidence_ready: true,\n            }',
@@ -2921,7 +3021,7 @@ NATIVE_REPLAY_BINDINGS = (
         "source: crate::state::PreparedNativeLaneBatchSourceV1<'state>",
         "context: crate::sumeragi::v2::VerifiedHeightContext",
         "let Some(execution) = Self::validate_and_record_native_candidate(",
-        "source, context, genesis_account, time_source, block_cadence",
+        "source,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
         "return Ok(None);", "PreparedCarrier::prepare(execution)",
         ".map_err(|(_, reason)| NativeCandidatePreparationError::Preparation(reason))",
     )),
@@ -3015,7 +3115,7 @@ def _validate_native_replay(items: dict[str, str], errors: list[str]) -> None:
 
     ordered("ValidBlock::prepare_native_candidate",
             "let Some(execution) = Self::validate_and_record_native_candidate(",
-            "source, context, genesis_account, time_source, block_cadence",
+            "source,\n            context,\n            genesis_account,\n            time_source,\n            block_cadence",
             "return Ok(None);", "PreparedCarrier::prepare(execution)")
     struct = items.get("ValidatedReplayExecution", "")
     expected = "{ pub(crate) valid: ValidBlock, pub(crate) state: Box<StateBlock<'state>>, pub(crate) native: Option<crate::state::NativeExecutionCustody>, }"
@@ -3046,8 +3146,8 @@ def _validate_native_replay(items: dict[str, str], errors: list[str]) -> None:
             errors.append("Native replay incomplete source must retain its explicit refusal: " + result)
     kernel = items.get("ValidBlock::validate_and_record_native_candidate", "")
     controls = items.get("ValidBlock::prepare_native_execution_controls", "")
-    parent = ".parent_commit_qc.as_ref().map(|qc| qc.subject.block_hash).or_else(|| frozen.snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash))"
-    for name, body, expected in (("shared preflight", kernel, parent), ("execution controls", controls, parent.replace("|| frozen", "|| { frozen").replace("block_hash))", "block_hash) })"))):
+    parent = ".parent_commit_qc.as_ref().map(|qc| qc.subject.block_hash).or_else(|| { frozen.snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash) })"
+    for name, body, expected in (("shared preflight", kernel, parent), ("execution controls", controls, parent)):
         if _code(expected) not in body:
             errors.append("Native replay " + name + " must join the exact QC or authenticated snapshot parent")
     ordered("replay_blocks_from_kura_range_inner",
@@ -3359,7 +3459,7 @@ def validate_native_preparation_contract(
             Checkpointed(DecisionBoundCarrierJournals<Admission,
                 super::DetachedCarrierComponents, crate::kura::KuraWsvCheckpointReceipt>),
         }""",
-        "Candidate": "{ subject: wire::BlockSubject, owner: Option<O> }",
+        "Candidate": "{ subject: wire::BlockSubject, body: Option<SignedBlock>, owner: Option<O> }",
         "CarrierMarkerPreparation": """{
             Ready(wire::ExecutionCommitment), Deferred(LocalValidationRefusal), ValidationError(E),
         }""",
@@ -3370,7 +3470,9 @@ def validate_native_preparation_contract(
         }""",
         "RetainedBodyValidationService::preflight_marker": """{
             let candidate = self.candidates.iter().find(|row| row.subject == durable.subject());
-            if candidate.is_some_and(|row| row.owner.is_none()) {
+            if candidate.is_some_and(|row| match row.owner.as_ref() {
+                None => true, Some(owner) => owner.needs_decoded_body() && row.body.is_none(),
+            }) {
                 return Err(CarrierCustodyError::MissingOwner);
             }
             if (!self.markers.iter().any(|row| row.durable == *durable)
@@ -3383,12 +3485,20 @@ def validate_native_preparation_contract(
         "SelectedValidationCarrier": """{
             service: &'a mut RetainedBodyValidationService<P>, index: usize, owner: Option<P::Owner>,
         }""",
+        "RetainedBodyValidationService::unretain_finished_body": """{
+            let candidate = &mut self.candidates[index];
+            if candidate.owner.as_ref().is_some_and(|owner| !owner.needs_decoded_body()) {
+                let retained = candidate.body.take();
+                if decoded.is_none() { *decoded = retained; } else { drop(retained); }
+            }
+        }""",
         "SelectedValidationCarrier::try_consume": """{
             let owner = self.owner.take().expect("live selection retains its original owner");
             match publish(&self.service.validator, owner) {
                 Ok(value) => {
                     let subject = self.service.candidates[self.index].subject;
                     self.service.markers.retain(|row| row.durable.subject() != subject);
+                    drop(self.service.candidates[self.index].body.take());
                     Ok(value)
                 }
                 Err((owner, error)) => { self.owner = Some(owner); Err(error) }
@@ -3497,6 +3607,7 @@ def validate_native_preparation_contract(
             Ok(Self { validator, identity, candidates, markers, limit, _descriptor_admission: descriptor_admission, })
         }""",
     })
+    retained_bodies.update(RESULTLESS_COMPARISON_BODIES)
     retained_bodies.update(NATIVE_VALIDATION_OWNER_BODIES)
     retained_bodies.update(NATIVE_CURRENT_RUNNER_OWNER_BODIES)
     for symbol, body in retained_bodies.items():
@@ -3515,25 +3626,38 @@ def validate_native_preparation_contract(
         if _code(forbidden) in descriptor_new:
             errors.append(f"Native preparation descriptor admission loses executable relation: {forbidden}")
     ordered("RetainedBodyValidationService::prepare_marker",
+            "let mut decoded = Some(body)",
             "if marker.is_none() && self.markers.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
+            "if owner.needs_decoded_body() && candidate.body.is_none()",
+            "if let Some(retained) = candidate.body.as_ref()",
+            "if decoded.as_ref() != Some(retained)", "return Err(CarrierCustodyError::Identity)",
             "if requires_existing_owner", "return Err(CarrierCustodyError::MissingOwner)",
             "if self.candidates.len() == self.limit", "return Err(CarrierCustodyError::Capacity)",
             "let index = self.candidates.len()", "self.candidates.push(Candidate {",
-            "subject: durable.subject()", "owner: None",
-            "self.validator.prepare(context, body)", "Err(error) => {",
+            "subject: durable.subject()", "body: None", "owner: None",
+            "let original_body = decoded.as_ref()",
+            "self.validator.prepare(context, original_body)", "Err(error) => {",
             "self.candidates.pop()", "return Ok(CarrierMarkerPreparation::ValidationError(error))",
+            "if owner.needs_decoded_body()", "self.candidates[index].body = decoded.take()",
             "self.candidates[index].owner = Some(owner)",
-            "if !owner.matches_candidate(context, body)",
-            "let commitment = match owner.ready_commitment()", "Some(commitment) => commitment", "None => {",
-            "self.resume_candidate(index, context, body)?",
+            "let current_body = candidate.body.as_ref().or(decoded.as_ref())",
+            "let matches = owner.matches_candidate(context, current_body)",
+            "let ready = owner.ready_commitment()", "if !matches",
+            "self.unretain_finished_body(index, &mut decoded)", "return Err(CarrierCustodyError::Identity)",
+            "self.unretain_finished_body(index, &mut decoded)",
+            "let commitment = match ready", "Some(commitment) => commitment", "None => {",
+            "self.resume_candidate(index, context, decoded.as_ref())?",
             "return Ok(CarrierMarkerPreparation::Deferred(refusal))",
             ".ready_commitment().ok_or(CarrierCustodyError::IncompleteCapture)?",
-            "self.markers.push(Marker {", "Ok(CarrierMarkerPreparation::Ready(commitment))")
-    ordered("RetainedBodyValidationService::resume_candidate", "self.candidates[index].owner.take()",
-            "match self.validator.resume(owner)",
-            "Ok(owner) => { self.candidates[index].owner = Some(owner); None }",
-            "Err((owner, refusal)) => { self.candidates[index].owner = Some(owner); Some(refusal) }",
-            "if !owner.matches_candidate(context, body)",
+            "drop(decoded)", "self.markers.push(Marker {", "Ok(CarrierMarkerPreparation::Ready(commitment))")
+    ordered("RetainedBodyValidationService::resume_candidate",
+            "let candidate = &mut self.candidates[index]", "let retained_body = candidate.body.take()",
+            "let body = retained_body.as_ref().or(decoded_body)",
+            "candidate.owner.take()", "match self.validator.resume(owner, body)",
+            "Ok(owner) => { candidate.owner = Some(owner); None }",
+            "Err((owner, refusal)) => { candidate.owner = Some(owner); Some(refusal) }",
+            "let matches = owner.matches_candidate(context, body)",
+            "if owner.needs_decoded_body()", "candidate.body = retained_body", "drop(retained_body)", "if !matches",
             "Ok(refusal)")
     prepare = items.get("RetainedBodyValidationService::prepare_marker", "")
     if prepare.count(_code("self.validator.prepare(")) != 1:
@@ -3545,6 +3669,16 @@ def validate_native_preparation_contract(
         errors.append("Native preparation retained carrier does not resume exactly its installed owner")
     if _code("Some(commitment) => commitment, None => {") not in prepare or _code("self.validator.resume(") in prepare:
         errors.append("Native preparation retained carrier moves a ready owner through capture resumption")
+    for symbol in ("RetainedBodyValidationService::prepare_marker",
+                   "RetainedBodyValidationService::resume_candidate",
+                   "RetainedBodyValidationService::unretain_finished_body"):
+        body = items.get(symbol, "")
+        for forbidden in (".clone()", "mem::forget", "ManuallyDrop"):
+            # Only the durable scalar marker may be cloned after decoded-body
+            # release; the retained signed body and owner must remain affine.
+            checked = body.replace(_code("durable.clone()"), "")
+            if _code(forbidden) in checked:
+                errors.append(f"Native preparation retained carrier {symbol} duplicates or leaks original body custody")
     ordered("RetainedBodyValidationService::confirm",
             "owner.ready_commitment() != Some(receipt.execution_commitment())",
             "return Err(CarrierCustodyError::Identity)", "marker.confirmed = Some(receipt.clone())")
@@ -3575,12 +3709,13 @@ def validate_native_preparation_contract(
                 fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
                     self.matches_validation_candidate(context, body)
                 }
+                fn needs_decoded_body(&self) -> bool { self.ready_commitment().is_none() }
                 fn ready_commitment(&self) -> Option<wire::ExecutionCommitment> { self.ready_commitment() }
             }
         """)
         if phase_impl not in custody or _code("RetainedValidationOwner: sealed::Owner + Send + 'static") not in custody:
             errors.append("Native preparation retained carrier loses its sealed phase delegation")
-        resume_api = _code("""fn resume(&mut self, owner: Self::Owner,)
+        resume_api = _code("""fn resume(&mut self, owner: Self::Owner, body: &SignedBlock,)
             -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)>;""")
         if resume_api not in custody:
             errors.append("Native preparation retained carrier loses its original-owner local capture refusal")
@@ -4191,8 +4326,7 @@ def validate_native_preparation_contract(
             "finalize_lane_consensus_contexts(block, Some(context.context()))")
     ordered("PreparedNativeLaneBatchSourceV1::record_execution",
             "ensure_exec_witness_capture_available()", "if !self.is_current()",
-            "if carrier != *self.input {\n            return Err(", "drop(self.input);",
-            "record_native_lane_decision_batch(carrier, self.groups, context)",
+            "record_native_lane_decision_batch(self.input, self.groups, context)",
             "self.generation,\n            self.state.state_view_generation()", "recorded.map(Some)")
     ordered("PreparedNativeLaneBatchSourceV1::stage_with_start_hooks",
             "ensure_state_access_without_exec_witness()", "native_lane_batch_for_scratch(&self.input)",
@@ -4205,6 +4339,10 @@ def validate_native_preparation_contract(
         for forbidden in ("CheckedCarrierApplications", "groups.clone()", "commit_inner("):
             if forbidden in body:
                 errors.append(f"Native preparation {symbol} has forbidden executable relation {forbidden}")
+    source_record = items.get("PreparedNativeLaneBatchSourceV1::record_execution", "")
+    for forbidden in ("self.input.clone()", "drop(self.input)", "Arc::new", "canonical_resultless_proposal()"):
+        if _code(forbidden) in source_record:
+            errors.append(f"Native preparation owned source replaces or duplicates executable relation {forbidden}")
 
     recorded = items.get("State::record_native_lane_decision_batch")
     if recorded is not None:
@@ -4291,7 +4429,7 @@ def validate_native_preparation_contract(
     ordered("ValidBlock::validate_and_record_native_candidate", "ensure_state_access_without_exec_witness()",
             "source.preparation_input()", "verify_origin_block_signature(",
             "Self::validate_static_state_dependent(", "Self::validate_static_with_snapshot(",
-            "if generation != state.state_view_generation()", "source.record_execution(body, context)?",
+            "if generation != state.state_view_generation()", "source.record_execution(context)?",
             "recorded.into_preparation_parts()", "Ok(Some(ValidatedCarrierPreparationInput")
     ordered("RecordedNativeLaneBatchV1::into_preparation_parts", "self.prepared\n            .verify_source_binding()",
             "verify_execution_output_seal(&self.carrier)", "validate_native_output_source(&self.carrier)",

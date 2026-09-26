@@ -25,7 +25,9 @@ use super::{
     compact_prover_resources::check_segment_charge,
     compact_public_batch::{BatchContextLimits, PublicTransferBatch, preflight_prepared},
     offline_compact::{
-        ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits, VerificationLimits,
+        ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits,
+        QUANTITY_SHARED_FRAME_BOUND as SHARED_FRAME_BOUND, VerificationLimits,
+        quantity_artifact_resources,
     },
 };
 use crate::{
@@ -40,9 +42,6 @@ use crate::{
     },
 };
 
-// Exact valid maximal-byte shape at the fixed 375-query geometry, not the
-// larger invalid loose decode shape. The engine independently checks this cap.
-const SHARED_FRAME_BOUND: usize = 4_017_376;
 static PRODUCER: Mutex<()> = Mutex::new(());
 
 #[path = "compact_quantity_producer/decode_policy.rs"]
@@ -69,6 +68,7 @@ fn add(left: usize, right: usize) -> Result<usize> {
         .ok_or_else(|| invalid("producer byte count overflows"))
 }
 
+#[cfg(test)]
 fn mul(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right)
         .ok_or_else(|| invalid("producer work count overflows"))
@@ -107,30 +107,9 @@ fn check_statement(
             "quantity producer requires a nonempty complete bundle",
         ));
     }
-    let bundle = verification.bundle;
-    check("max_bundle_segments", count, bundle.max_segments)?;
-    check("max_queries", 375, bundle.segment.max_queries)?;
-    check(
-        "max_bundle_queries",
-        mul(count, 375)?,
-        bundle.max_total_queries,
-    )?;
-    check(
-        "max_proof_bytes",
-        SHARED_FRAME_BOUND,
-        bundle.segment.max_proof_bytes,
-    )?;
-    check(
-        "max_bundle_segment_bytes",
-        mul(count, SHARED_FRAME_BOUND)?,
-        bundle.max_total_segment_bytes,
-    )?;
-    check(
-        "max_compact_prover_trace_cells",
-        mul(count, mul(COLUMN_COUNT, PHYSICAL_ROW_COUNT)?)?,
-        proving.max_total_trace_cells,
-    )?;
-    check_segment_charge(0, SHARED_FRAME_BOUND, proving.max_segment_charge_bytes)?;
+    // Reject every known fixed-geometry/carrier deficit before canonical
+    // statement encoding, public preparation or private-tree construction.
+    quantity_artifact_resources(count, 0)?.check_proving_limits(proving, verification)?;
     decode_policy::preflight_decode_policy(count, verification)?;
     // Canonical framing is measured before allocating an encoded statement.
     // Public preparation below separately charges keys, paths, rows and claims.
@@ -182,13 +161,7 @@ impl Artifact {
         // Each scalar/sequence field has at most ten compact prefix bytes.
         // These deliberately conservative framing allowances avoid allocating
         // dummy proof frames while retaining the exact final codec checks.
-        let roots = count
-            .checked_sub(1)
-            .ok_or_else(|| invalid("quantity producer requires a nonempty complete bundle"))?;
-        let carrier = add(
-            1024,
-            add(mul(roots, 64)?, mul(count, SHARED_FRAME_BOUND + 32)?)?,
-        )?;
+        let carrier = quantity_artifact_resources(count, 0)?.maximum_bundle_frame_bytes;
         check(
             "max_bundle_wire_bytes",
             carrier,

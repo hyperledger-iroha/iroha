@@ -26696,7 +26696,7 @@ pub(crate) mod tests {
             .expect("empty SCCP state accepts focused confidential limits");
 
         let fixture = crate::zk::test_utils::halo2_fixture_envelope(
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             [0_u8; 32],
         );
         let proof = fixture.proof_box("halo2/ipa");

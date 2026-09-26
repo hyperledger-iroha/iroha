@@ -142,7 +142,7 @@ pub(crate) fn hash_last_fields(
                 .prefix()
                 .lane_prefix_v1(lane)
                 .expect("fixed canonical lane");
-            prefixes.extend_from_slice(&prefix.state());
+            prefixes.extend_from_slice(prefix.state());
             prefixes.push(prefix.next_rate_position() as u64);
         }
         slices.extend_from_slice(&[payload.len() as u64, job.final_field().len() as u64]);

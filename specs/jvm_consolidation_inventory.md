@@ -345,3 +345,14 @@ with those superseded Java suites. Remaining duplicate Java implementation
 retirement still requires its other consumers to migrate. This ownership change
 does not complete candidate-specific JVM/Android execution, device qualification,
 SDK package provenance, or the full SCCP production release gate.
+
+
+The capacity-declaration instruction now has one Kotlin-owned declaration payload,
+with canonical bounded Base64, defensive byte ownership and strict rejection of
+caller-provided registration time or derived provider/capacity/validity/metadata fields.
+The duplicate Java implementation is removed. `SorafsCapacityDeclarationJavaConsumerTest`
+preserves payload/action/Base64 coverage and replaces retired projection assertions with
+explicit refusal tests through the canonical Kotlin API. The focused `:core-jvm:test --tests
+org.hyperledger.iroha.sdk.sorafs.SorafsCapacityDeclarationJavaConsumerTest` passed with JDK 21
+and the enforced JDK 8 API/source targets. The remaining capacity dispute/pricing/credit Java
+builders are unchanged.

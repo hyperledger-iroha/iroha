@@ -72,6 +72,20 @@ def _asserted_value(source: str, name: str) -> int:
     return int(match.group(1).replace("_", ""))
 
 
+def _maximum_frontier(leaf_count: int, maximum_opened: int) -> int:
+    """Exact maximal binary frontier over at most this many opened leaves."""
+    if leaf_count <= 0 or leaf_count & (leaf_count - 1) or not 0 < maximum_opened <= leaf_count:
+        raise GeometryError("invalid Merkle geometry")
+    if leaf_count == 1:
+        return 0
+    # Above half the leaves, the frontier only shrinks. Below that point,
+    # maximally dispersed leaves fill each ancestor level before sharing paths.
+    opened = min(maximum_opened, leaf_count // 2)
+    height = leaf_count.bit_length() - 1
+    occupied_height = (opened - 1).bit_length()
+    return opened * (height - occupied_height) + (1 << occupied_height) - opened
+
+
 def screen(
     profile: str, stark: str, credential: str, accumulator: str, native_test: str
 ) -> dict[str, int | bool]:
@@ -121,6 +135,36 @@ def screen(
         or combined != main_pre_deep + ca_pre_deep + deep + main_claim + ca_claim + outer
     ):
         raise GeometryError("X5S1 component sizes disagree with the canonical maximum")
+    if any("AggregateFriCommitmentLayoutV1::Paired" not in source for source in (profile, stark, accumulator)):
+        raise GeometryError("X509 paired FRI commitment layout is missing")
+
+    main_log = _constant(profile, "ZK_X509_MAX_NATIVE_TRACE_LOG2_V1") + blowup.bit_length() - 1
+    if main_log != _constant(profile, "ZK_X509_SHARED_STARK_MAIN_LDE_LOG2_V1"):
+        raise GeometryError("MAIN shared-domain logarithm disagrees with the profile")
+    ca_log = _constant(profile, "ZK_X509_CA_FRI_LDE_LOG2_V1")
+    terminal_log = _constant(profile, "ZK_X509_CA_FRI_TERMINAL_LOG2_V1")
+    groups = _constant(profile, "ZK_X509_TRACE_GROUPS_V1")
+    ca_chunks = _constant(profile, "ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1")
+    ca_deep = deep - (wide_main - main_pre_deep)
+    ca_columns, ca_remainder = divmod(ca_deep // 32 - ca_chunks, 2)
+    if ca_deep % 32 or ca_remainder:
+        raise GeometryError("CA DEEP opening width is inconsistent")
+
+    def complete_oods_candidate(current: int, width: int, log: int, group_count: int) -> int:
+        domain = 1 << log
+        return (current - q * width * 8
+                - 2 * group_count * (_maximum_frontier(domain, 2 * q) - _maximum_frontier(domain, q)) * 48
+                - 2 * (group_count - 1) * (_maximum_frontier(domain, q) + 1) * 48)
+
+    candidate_main = complete_oods_candidate(wide_main, columns, main_log, groups)
+    candidate_ca = complete_oods_candidate(ca_inner, ca_columns, ca_log, 1)
+    candidate = candidate_main + candidate_ca + main_claim + ca_claim + outer
+    paired_saving = sum(
+        (_maximum_frontier(1 << layer_log, 2 * q)
+         - _maximum_frontier(1 << (layer_log - 1), q)) * 48
+        for log in (main_log, ca_log)
+        for layer_log in range(log, terminal_log, -1)
+    )
 
     log19_columns = _constant(stark, "MAIN_LOG19_BASE_WIDTH_V1") + _constant(
         stark, "MAIN_LOG19_AUX_WIDTH_V1"
@@ -170,6 +214,12 @@ def screen(
         "proof_cap_bytes": cap,
         "combined_current_max_bytes": combined,
         "combined_excess_bytes": combined - cap,
+        "implemented_paired_fri_saving_bytes": paired_saving,
+        "candidate_main_inner_bytes": candidate_main,
+        "candidate_ca_inner_bytes": candidate_ca,
+        "candidate_complete_relation_bytes": candidate,
+        "candidate_headroom_bytes": cap - candidate,
+        "candidate_requires_complete_fp4_air_and_shared_trace_commitments": True,
         "current_main_inner_max_bytes": wide_main,
         "main_section_cap_bytes": main_section_cap,
         "current_trace_columns": columns,

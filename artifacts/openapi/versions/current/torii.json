@@ -32469,16 +32469,16 @@
             "format": "uint64",
             "type": "integer"
           },
-          "processed_through_epoch": {
-            "description": "Last reward epoch processed for this lane and recipient; null includes epoch zero.",
+          "latest_unprocessed_epoch": {
+            "description": "Latest unprocessed reward epoch for this exact asset included in amount; null when the obligation contains only retained dust.",
             "format": "uint64",
             "type": [
               "integer",
               "null"
             ]
           },
-          "latest_unprocessed_epoch": {
-            "description": "Latest unprocessed reward epoch for this exact asset included in amount; null when the obligation contains only retained dust.",
+          "processed_through_epoch": {
+            "description": "Last reward epoch processed for this lane and recipient; null includes epoch zero.",
             "format": "uint64",
             "type": [
               "integer",
@@ -107624,6 +107624,401 @@
           "stableRouteId": "sorafs.provider_advert.submit"
         },
         "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/provider/source": {
+      "post": {
+        "description": "Read bounded canonical source metadata or one digest-verified chunk for the authenticated target provider owner under an exact live native replication assignment. Current and retained-floor same-State durable finality, both provider admissions, the approved retained manifest, exact order and assignment revision, and CanCompleteSorafsReplicationOrder permission are checked before and after payload I/O. Only healthy admitted payload is served. A missing chunk_index requests the Metadata variant once; a present index requests only the Chunk variant with its exact ordinal and bytes, without repeating the complete metadata. Each response is bounded to 4 MiB plus 4 KiB of framing. The response is source material, not completion evidence or a capability to sign or submit completion.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 4096,
+                "type": "string",
+                "x-iroha-norito-schema": "iroha_data_model::sorafs::publication::SorafsAssignedSourceRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 4198400,
+                  "type": "string",
+                  "x-iroha-norito-schema": "sorafs_car::publisher::ProviderSourceResponseV1"
+                }
+              }
+            },
+            "description": "Canonical ProviderSourceResponseV1 metadata or one verified chunk, matching the exact request selector; private and non-cacheable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated source material must not be cached.",
+                "schema": {
+                  "enum": [
+                    "private, no-store"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed canonical request or invalid chunk index."
+          },
+          "401": {
+            "description": "Fresh exact-network canonical account signature required."
+          },
+          "403": {
+            "description": "Current owner permission, native assignment, admission, retention or finality rejected."
+          },
+          "404": {
+            "description": "Manifest unavailable at this source provider."
+          },
+          "413": {
+            "description": "Request or encoded source metadata exceeds fixed bounds."
+          },
+          "429": {
+            "description": "Query admission capacity exhausted."
+          },
+          "503": {
+            "description": "Healthy source payload or storage service unavailable."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.provider.source"
+        },
+        "x-iroha-tool-effect": "expensive"
+      }
+    },
+    "/v1/sorafs/publish/prepare": {
+      "post": {
+        "description": "Return the authenticated publisher's current paid pin and automatic replication order from one finalized native State view. This is informational input for a fresh signed AssertSorafsPublicationV1 transaction; the returned rows are not independent client-verifiable evidence.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 4096,
+                "type": "string",
+                "x-iroha-norito-schema": "iroha_data_model::sorafs::pin_registry::ManifestDigest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 2097152,
+                  "type": "string",
+                  "x-iroha-norito-schema": "iroha_data_model::sorafs::publication::SorafsPublicationPreparationV1"
+                }
+              }
+            },
+            "description": "Current informational pin and assignment.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated response must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Automatic assignment has not appeared."
+          },
+          "400": {
+            "description": "Malformed or noncanonical bounded Norito request."
+          },
+          "401": {
+            "description": "Fresh exact-network canonical account signature required."
+          },
+          "403": {
+            "description": "Publisher, permission, or current assignment authority rejected."
+          },
+          "404": {
+            "description": "Pin does not exist."
+          },
+          "409": {
+            "description": "Source staging conflict, quota exhaustion, or expired assignment."
+          },
+          "413": {
+            "description": "Bounded request or proof carrier exceeded."
+          },
+          "503": {
+            "description": "Current native finalized authority unavailable."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.publication.prepare"
+        },
+        "x-iroha-tool-effect": "expensive"
+      }
+    },
+    "/v1/sorafs/publish/proof": {
+      "post": {
+        "description": "Return SorafsPublicationProofV1 containing at most 1024 consecutive signed RS16 native finality artifacts from the caller's independent checkpoint and the exact executed SignedBlockWire carrier. CanReadAllLedgerData is required because the carrier includes the full block. The caller must verify its independently retained network/checkpoint, every successor, exact signed challenged assertion and successful execution output within its monotonic deadline. HTTP success and returned finality without this verification are not publication evidence.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 4096,
+                "type": "string",
+                "x-iroha-norito-schema": "iroha_data_model::sorafs::publication::SorafsPublicationProofRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/x-norito": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 33554432,
+                  "type": "string",
+                  "x-iroha-norito-schema": "iroha_data_model::sorafs::publication::SorafsPublicationProofV1"
+                }
+              }
+            },
+            "description": "Untrusted bounded native publication evidence.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated response must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Requested transaction has not been applied."
+          },
+          "400": {
+            "description": "Malformed or noncanonical bounded Norito request."
+          },
+          "401": {
+            "description": "Fresh exact-network canonical account signature required."
+          },
+          "403": {
+            "description": "Publisher, permission, or current assignment authority rejected."
+          },
+          "409": {
+            "description": "Source staging conflict, quota exhaustion, or expired assignment."
+          },
+          "413": {
+            "description": "Bounded request or proof carrier exceeded."
+          },
+          "503": {
+            "description": "Current native finalized authority unavailable."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.publication.proof"
+        },
+        "x-iroha-tool-effect": "expensive"
+      }
+    },
+    "/v1/sorafs/publish/source": {
+      "post": {
+        "description": "Stage one canonical PublisherSourceRequestV1 under the publisher account signature and exact current finalized automatic provider assignment. The Metadata variant reserves a restart-persistent source session once; each subsequent Chunk variant carries only the exact provider, order, assignment revision, manifest digest, canonical header digest and one digest-checked chunk, without repeating the complete metadata. Each request is bounded to 4 MiB plus 4 KiB of framing. Verified metadata is cached within fixed session and metadata-byte limits, with durable file identity checked before reuse. Both finalized time and local UTC must precede the assignment deadline. HTTP 204 means source staging only. It does not admit a pin, imply replication, or prove completion; the native worker independently revalidates the full CAR/PoR and submits its governed completion.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 4198400,
+                "type": "string",
+                "x-iroha-norito-schema": "sorafs_car::publisher::PublisherSourceRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Metadata reservation or exact chunk persisted in unadmitted source staging."
+          },
+          "400": {
+            "description": "Malformed or noncanonical bounded Norito request."
+          },
+          "401": {
+            "description": "Fresh exact-network canonical account signature required."
+          },
+          "403": {
+            "description": "Publisher, permission, or current assignment authority rejected."
+          },
+          "409": {
+            "description": "Source staging conflict, quota exhaustion, or expired assignment."
+          },
+          "413": {
+            "description": "Bounded request or proof carrier exceeded."
+          },
+          "503": {
+            "description": "Current native finalized authority unavailable."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.publish_source.stage"
+        },
+        "x-iroha-tool-effect": "write"
+      }
+    },
+    "/v1/sorafs/repair/source": {
+      "post": {
+        "description": "Read exactly one bounded, digest-verified chunk for the canonical network-authenticated owner of an active native repair lease. The current finalized task, exact revision and lease generation, worker permission, provider admissions and approved manifest are checked before and after payload I/O. The retained finalized floor must belong to the same chain. Quarantined content, revoked providers, expired leases, stale revisions and mismatched chunk lengths are refused.",
+        "requestBody": {
+          "content": {
+            "application/x-norito": {
+              "schema": {
+                "format": "binary",
+                "maxLength": 4096,
+                "type": "string",
+                "x-iroha-norito-schema": "iroha_data_model::sorafs::repair_source::RepairSourceRequestV1"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "maxLength": 4194304,
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Exact verified chunk bytes."
+          },
+          "400": {
+            "description": "Malformed canonical request."
+          },
+          "401": {
+            "description": "Fresh exact-network canonical account signature required."
+          },
+          "403": {
+            "description": "Current native lease, admission or worker permission rejected."
+          },
+          "404": {
+            "description": "Manifest chunk unavailable."
+          },
+          "409": {
+            "description": "Chunk metadata differs from the request."
+          },
+          "413": {
+            "description": "Request exceeds fixed bounds."
+          },
+          "503": {
+            "description": "Authenticated finality or healthy source payload unavailable."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "tags": [
+          "SoraFS"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "sorafs.repair.source"
+        },
+        "x-iroha-tool-effect": "expensive"
       }
     },
     "/v1/sorafs/replication": {

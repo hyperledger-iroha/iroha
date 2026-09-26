@@ -920,6 +920,13 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
         calls: AtomicU64,
     }
     impl iroha_torii::sorafs::StreamTokenStateObserverClientV1 for ObserverProbe {
+        fn finalize_check(
+            &self,
+            _: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+        ) -> Result<iroha_data_model::transaction::SignedTransaction, StreamTokenSignerCallErrorV1>
+        {
+            panic!("metadata must not submit a native custody check")
+        }
         fn handle(&self) -> &str {
             self.calls.fetch_add(1, Ordering::SeqCst);
             "state://sorafs/stream-token/observer-primary"

@@ -2,7 +2,7 @@
 // belongs exclusively to the caller's independently pinned shared evidence verifier.
 use crate::runtime_provider_registry::StreamTokenSignerRuntimeBindingV1;
 use iroha_torii::sorafs::{
-    StreamTokenSignerCallErrorV1, StreamTokenSignerReceiptV1, StreamTokenObserverReplyV1,
+    StreamTokenObserverReplyV1, StreamTokenSignerCallErrorV1, StreamTokenSignerReceiptV1,
 };
 use sorafs_manifest::signer::{
     custody::SIGNER_CUSTODY_MAX_BYTES_V1,
@@ -36,10 +36,7 @@ const STREAM_TOKEN_HARDWARE_DECODE_POLICY_V1: DecodeResourcePolicyV1 = DecodeRes
     operation_resource_caps(MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1, 2 * 1024 * 1024, 5),
 );
 
-fn stream_token_backend_error(
-    error: StreamTokenSignerCallErrorV1,
-    mutating: bool,
-) -> BrokerError {
+fn stream_token_backend_error(error: StreamTokenSignerCallErrorV1, mutating: bool) -> BrokerError {
     match error {
         StreamTokenSignerCallErrorV1::Unavailable => BrokerError::Unavailable,
         StreamTokenSignerCallErrorV1::Refused => BrokerError::Rejected,
@@ -80,6 +77,85 @@ fn prepare_stream_token_broker_request(
     reserve_external_canonical_decode(payload.len(), SIGNER_STREAM_TOKEN_MAX_PAYLOAD_BYTES_V1)?;
     prepare_stream_token_signing_payload_v1(payload, signer_backend.custody())
         .map_err(|_| BrokerError::Rejected)
+}
+
+fn decode_stream_token_check_request(
+    binding: &ProviderBindingWireV1,
+    bytes: &[u8],
+) -> Result<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority, BrokerError> {
+    use iroha_data_model::sorafs::stream_token_authority::{
+        STREAM_TOKEN_AUTHORITY_REQUEST_MAX_BYTES_V1, StreamTokenAuthorityActionV1,
+        validate_stream_token_check_claim_v1,
+    };
+    let metadata = required_binding_ref!(binding, stream_token_signer_binding);
+    let instruction = decode_canonical::<
+        iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+    >(bytes, STREAM_TOKEN_AUTHORITY_REQUEST_MAX_BYTES_V1)?;
+    let StreamTokenAuthorityActionV1::Check(check) = &instruction.request.action else {
+        return Err(BrokerError::Rejected);
+    };
+    let sorafs_manifest::signer::protocol::SignerPurposeBindingV1::StreamToken { provider_id } =
+        metadata.custody().purpose
+    else {
+        return Err(BrokerError::BindingMismatch);
+    };
+    if instruction.request.network_id != metadata.custody().network_id
+        || instruction.request.provider_id.0 != provider_id
+        || check.reviewed.request.binding_digest
+            != stream_token_binding_digest_v1(metadata.custody())
+                .map_err(|_| BrokerError::BindingMismatch)?
+    {
+        return Err(BrokerError::BindingMismatch);
+    }
+    validate_stream_token_check_claim_v1(
+        &instruction.request,
+        metadata.custody().network_id,
+        instruction.request.provider_id,
+        instruction.request.expected_control_revision,
+        instruction.request.expected_control_digest,
+        &check.expected_operator,
+        &check.expected_observer,
+        check.challenge,
+        check.floor,
+        &check.reviewed,
+        &check.phase,
+    )
+    .map_err(|_| BrokerError::Rejected)?;
+    Ok(instruction)
+}
+
+fn decode_stream_token_check_result(
+    binding: &ProviderBindingWireV1,
+    payload: &[u8],
+    result: &[u8],
+) -> Result<iroha_data_model::transaction::SignedTransaction, BrokerError> {
+    use iroha_data_model::{isi::InstructionBox, transaction::Executable};
+    let instruction = decode_stream_token_check_request(binding, payload)?;
+    let iroha_data_model::sorafs::stream_token_authority::StreamTokenAuthorityActionV1::Check(
+        check,
+    ) = &instruction.request.action
+    else {
+        return Err(BrokerError::Protocol);
+    };
+    let signed =
+        decode_canonical::<iroha_data_model::transaction::SignedTransaction>(result, 32 * 1024)?;
+    let metadata = required_binding_ref!(binding, stream_token_signer_binding);
+    if signed.authority() != &check.expected_observer
+        || signed.network_id().map(|network| *network.as_bytes())
+            != Some(metadata.custody().network_id)
+    {
+        return Err(BrokerError::BindingMismatch);
+    }
+    let Executable::Instructions(instructions) = signed.instructions() else {
+        return Err(BrokerError::Protocol);
+    };
+    if instructions.len() != 1 || instructions.first() != Some(&InstructionBox::from(instruction)) {
+        return Err(BrokerError::Protocol);
+    }
+    signed
+        .verify_signature()
+        .map_err(|_| BrokerError::Protocol)?;
+    Ok(signed)
 }
 
 fn validate_stream_token_metadata_result(
