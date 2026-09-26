@@ -48,8 +48,10 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::time::TimeSource;
+#[cfg(test)]
+use std::collections::BTreeMap;
 use std::{
-    collections::{BTreeMap, BTreeSet, VecDeque},
+    collections::{BTreeSet, VecDeque},
     num::{NonZeroU64, NonZeroUsize},
     time::Duration,
 };
@@ -203,7 +205,6 @@ pub(crate) struct PreparedCandidateWork {
 impl PreparedCandidateWork {
     /// Construct work for a batch containing only available single-route entries.
     #[must_use]
-    #[cfg(test)]
     pub(crate) fn single_route_batch(candidate_count: usize) -> Self {
         Self {
             native_lane_decisions: None,
@@ -266,6 +267,8 @@ impl CandidateWorkUnavailable {
 /// Why the complete snapshot cannot currently produce a useful carrier, independently of its row count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CandidateWorkDeferral {
+    /// Committed State moved during assembly or differs from this parent height.
+    CommittedStateMoved,
     /// The authenticated native source or its applying State is not available.
     NativeLaneSource,
     /// The exact committed merge frontier or installed reducer view is moving.
@@ -445,7 +448,8 @@ pub(crate) struct NativeCandidateAssembly {
 
 /// Borrowed readiness of one authenticated preparation. An exact-height
 /// threshold-key lifecycle certificate takes the current carrier even when a
-/// Native group is ready; all application work remains lane-owned.
+/// Native group is ready. Ordinary single-route work uses the leader's bounded
+/// queue snapshot directly; Native groups retain their original decision owner.
 struct NativeCandidateWork<'source>(&'source NativeLaneCandidatePreparation);
 
 fn lifecycle_certificate<'a>(
@@ -471,6 +475,21 @@ fn lifecycle_certificate<'a>(
         .as_any()
         .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
         .map(|instruction| &instruction.certificate)
+}
+
+fn contains_lifecycle_instruction(accepted: &AcceptedTransaction<'_>) -> bool {
+    let TransactionEntrypoint::External(transaction) = accepted.entrypoint() else {
+        return false;
+    };
+    transaction
+        .instructions()
+        .explicit_instructions()
+        .any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+                .is_some()
+        })
 }
 
 fn exact_height_lifecycle_transaction(
@@ -528,6 +547,41 @@ impl CandidateWorkProvider for NativeCandidateWork<'_> {
                 ..PreparedCandidateWork::default()
             });
         }
+        if !candidates.is_empty() {
+            let unavailable = candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    let single_coordinator = matches!(
+                        candidate.routing_plan(),
+                        RoutingPlan::Single(leg) if leg.role == RouteLegRole::Coordinator
+                    );
+                    (!single_coordinator
+                        || candidate.transaction().entrypoint().admission_intent()
+                            != TransactionAdmissionIntent::Ordinary
+                        || contains_lifecycle_instruction(candidate.transaction()))
+                    .then_some(index)
+                })
+                .collect::<BTreeSet<_>>();
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    unavailable,
+                    "multi-route application work requires its certified Native source",
+                )
+                .into());
+            }
+            // A ready Native batch receives every even-height opportunity;
+            // ordinary work receives the odd-height opportunity. This bounded
+            // choice is local to the leader and never depends on peer queues.
+            if self.0.work.is_some() && context.height.is_multiple_of(2) {
+                return Err(CandidateWorkUnavailable::new(
+                    (0..candidates.len()).collect(),
+                    "ready Native batch has this height's proposal opportunity",
+                )
+                .into());
+            }
+            return Ok(PreparedCandidateWork::single_route_batch(candidates.len()));
+        }
         if self.0.waits.iter().any(|wait| {
             matches!(
                 wait,
@@ -540,13 +594,6 @@ impl CandidateWorkProvider for NativeCandidateWork<'_> {
         }
         if let Some(mut ready) = self.0.work.as_ref() {
             return ready.prepare(context, view, candidates);
-        }
-        if !candidates.is_empty() {
-            return Err(CandidateWorkUnavailable::new(
-                (0..candidates.len()).collect(),
-                "Native candidate input cannot execute ordinary application queue entries",
-            )
-            .into());
         }
         // Admission certificates and other independently useful controls can
         // advance while exact source waits remain with NativeCandidateAssembly.
@@ -649,7 +696,6 @@ impl V2CandidateAssembler {
         &self,
         request: CandidateRequest<'_, &NativeLaneDecisionHandoff>,
     ) -> Result<NativeCandidateAssembly, CandidateError> {
-        validate_request(&request)?;
         if !request.work_provider.belongs_to(request.state) {
             return Err(CandidateError::NativeLaneDecisionInvalid(
                 "Native handoff belongs to another State owner".into(),
@@ -662,10 +708,51 @@ impl V2CandidateAssembler {
                 "Native candidate cannot retain a retired certified merge attachment".into(),
             ));
         }
-        let source = request
-            .work_provider
-            .prepare_candidate()
-            .map_err(CandidateError::WorkPreparationFailed)?;
+        if request.queue.transaction_selection_durability_faulted()
+            || request.output_guard.restart_required()
+        {
+            return Err(CandidateError::RestartRequired);
+        }
+        let state_generation = request.state.state_view_generation();
+        let moved_source = || NativeLaneCandidatePreparation {
+            work: None,
+            waits: vec![crate::state::LaneDecisionGroupPreparationV1::ObservationChanged],
+        };
+        let moved_outcome = || CandidateAssemblyOutcome::WorkDeferred {
+            report: CandidateScanReport::default(),
+            reason: CandidateWorkDeferral::CommittedStateMoved,
+        };
+        // Native preparation reads original body and Decision sources. Check the
+        // global parent before that I/O so a locally lagging or superseded
+        // height does not turn an ordinary async State mismatch into a fatal
+        // source error. The handoff remains with the process-lived driver.
+        if !validate_request_at_generation(&request, state_generation)? {
+            if request.queue.transaction_selection_durability_faulted()
+                || request.output_guard.restart_required()
+            {
+                return Err(CandidateError::RestartRequired);
+            }
+            return Ok(NativeCandidateAssembly {
+                source: moved_source(),
+                outcome: Ok(moved_outcome()),
+            });
+        }
+        let source = match request.work_provider.prepare_candidate() {
+            Ok(source) => source,
+            Err(_)
+                if request.queue.transaction_selection_durability_faulted()
+                    || request.output_guard.restart_required() =>
+            {
+                return Err(CandidateError::RestartRequired);
+            }
+            Err(_) if !candidate_state_generation_is_current(request.state, state_generation) => {
+                return Ok(NativeCandidateAssembly {
+                    source: moved_source(),
+                    outcome: Ok(moved_outcome()),
+                });
+            }
+            Err(error) => return Err(CandidateError::WorkPreparationFailed(error)),
+        };
         let CandidateRequest {
             context,
             directive,
@@ -710,9 +797,41 @@ impl V2CandidateAssembler {
     /// or proposal framing which itself exceeds frozen body/chunk limits.
     pub(crate) fn assemble<Work: CandidateWorkProvider>(
         &self,
-        mut request: CandidateRequest<'_, Work>,
+        request: CandidateRequest<'_, Work>,
     ) -> Result<CandidateAssemblyOutcome, CandidateError> {
-        validate_request(&request)?;
+        let state = request.state;
+        let output_guard = request.output_guard;
+        let state_generation = state.state_view_generation();
+        let result = self.assemble_at_generation(request, state_generation);
+        // A State publication can race any bounded pre-sign preparation read,
+        // not just the explicit parent checks. Retry errors from that moving
+        // cut only while the fail-stop signing guard is still open. A genuine
+        // Queue durability fault and every armed signing failure remain fatal.
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| !matches!(error, CandidateError::RestartRequired))
+            && !output_guard.restart_required()
+            && !candidate_state_generation_is_current(state, state_generation)
+        {
+            return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                report: CandidateScanReport::default(),
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+            });
+        }
+        result
+    }
+    fn assemble_at_generation<Work: CandidateWorkProvider>(
+        &self,
+        mut request: CandidateRequest<'_, Work>,
+        state_generation: u64,
+    ) -> Result<CandidateAssemblyOutcome, CandidateError> {
+        if !validate_request_at_generation(&request, state_generation)? {
+            return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                report: CandidateScanReport::default(),
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+            });
+        }
         if request.queue.transaction_selection_durability_faulted() {
             return Err(CandidateError::RestartRequired);
         }
@@ -733,7 +852,6 @@ impl V2CandidateAssembler {
             .ok_or(CandidateError::RestartRequired)?;
         drop(state_view);
         let mut pool = self.snapshot_routable_candidates(
-            request.context,
             request.queue,
             request.state,
             &request.attachments,
@@ -785,6 +903,27 @@ impl V2CandidateAssembler {
                 );
                 continue;
             }
+            let unavailable_admission = self.unavailable_ordinary_admission_indices(
+                request.queue,
+                request.state,
+                &selected,
+                candidate_ledger_time_ms,
+            );
+            if !unavailable_admission.is_empty() {
+                let unavailable = CandidateWorkUnavailable::new(
+                    unavailable_admission,
+                    "Ordinary input no longer passes admission against the committed parent",
+                );
+                remove_unavailable_candidates(&mut selected, &unavailable, &mut report)?;
+                fill_selection(
+                    &mut selected,
+                    &mut reserve,
+                    selection_max,
+                    exact_payload_limit,
+                    &mut report,
+                );
+                continue;
+            }
             // Restore exact FIFO payload order after any unavailable-work removal
             // and refill. Routing contexts and work receipts are positional and
             // must be prepared against that exact order.
@@ -822,7 +961,12 @@ impl V2CandidateAssembler {
                         if request.queue.transaction_selection_durability_faulted() {
                             return Err(CandidateError::RestartRequired);
                         }
-                        validate_request(&request)?;
+                        if !validate_request_at_generation(&request, state_generation)? {
+                            return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                                report,
+                                reason: CandidateWorkDeferral::CommittedStateMoved,
+                            });
+                        }
                         return Ok(CandidateAssemblyOutcome::WorkDeferred { report, reason });
                     }
                     Err(CandidateWorkError::Failed(reason)) => {
@@ -869,14 +1013,24 @@ impl V2CandidateAssembler {
                 if request.queue.transaction_selection_durability_faulted() {
                     return Err(CandidateError::RestartRequired);
                 }
-                validate_request(&request)?;
+                if !validate_request_at_generation(&request, state_generation)? {
+                    return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                        report,
+                        reason: CandidateWorkDeferral::CommittedStateMoved,
+                    });
+                }
                 return Ok(CandidateAssemblyOutcome::NoProposalWork(report));
             }
             if carrier_attachments.required_beacon_pulse_pending {
                 if request.queue.transaction_selection_durability_faulted() {
                     return Err(CandidateError::RestartRequired);
                 }
-                validate_request(&request)?;
+                if !validate_request_at_generation(&request, state_generation)? {
+                    return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                        report,
+                        reason: CandidateWorkDeferral::CommittedStateMoved,
+                    });
+                }
                 return Ok(CandidateAssemblyOutcome::AwaitingRequiredBeacon(report));
             }
             let algorithm = request
@@ -1090,8 +1244,9 @@ impl V2CandidateAssembler {
             // All fitting is complete. The final builder header can have a
             // later ledger time than the prospective header when retained
             // Network inputs advance the clock. Probe scheduled work against
-            // the exact header that will be signed, before entering the
-            // fail-stop signing region.
+            // the exact header that will be signed. This probe acquires State
+            // writers, so it must finish before taking the publication lease
+            // and entering the fail-stop signing region.
             let prepared_header = builder.carrier_context_header();
             let independent_proposal_work =
                 candidate_has_proposal_work(&selected, &carrier_attachments, &prepared_work);
@@ -1115,7 +1270,12 @@ impl V2CandidateAssembler {
                     if request.queue.transaction_selection_durability_faulted() {
                         return Err(CandidateError::RestartRequired);
                     }
-                    validate_request(&request)?;
+                    if !validate_request_at_generation(&request, state_generation)? {
+                        return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                            report,
+                            reason: CandidateWorkDeferral::CommittedStateMoved,
+                        });
+                    }
                     return Ok(CandidateAssemblyOutcome::WorkDeferred {
                         report,
                         reason: CandidateWorkDeferral::EvidenceEnvelope,
@@ -1135,10 +1295,18 @@ impl V2CandidateAssembler {
             }
             // Candidate signing begins only after the complete actual carrier
             // fits. The sizing projection never signs or publishes placeholder bytes.
-            let _native_publication = prepared_work
-                .native_lane_decisions
-                .as_ref()
-                .map(|_| request.state.consensus_publication_lease());
+            // Every selection and admission check above observed the same committed
+            // generation. Exclude publication until the private-key action and
+            // canonical bytes are complete; a moving parent is a retry, not an
+            // output-guard failure after signing.
+            let _state_publication = request.state.consensus_publication_lease();
+            if !candidate_state_generation_is_current(request.state, state_generation) {
+                return Ok(CandidateAssemblyOutcome::WorkDeferred {
+                    report,
+                    reason: CandidateWorkDeferral::CommittedStateMoved,
+                });
+            }
+            validate_request(&request)?;
             if prepared_work
                 .native_lane_decisions
                 .as_ref()
@@ -1148,6 +1316,18 @@ impl V2CandidateAssembler {
                     report,
                     reason: CandidateWorkDeferral::NativeLaneSource,
                 });
+            }
+            report.selected = selected.len();
+            report.native_selected = prepared_work
+                .native_lane_decisions
+                .as_ref()
+                .map_or(0, |native| native.batch().groups.len());
+            let selected_hashes = selected
+                .iter()
+                .map(|record| record.transaction.hash_as_entrypoint())
+                .collect::<Vec<_>>();
+            if !selection_lease.retain_only(&selected_hashes) {
+                return Err(CandidateError::RestartRequired);
             }
             let candidate_creation_time = builder.creation_time();
             let signing = request
@@ -1200,18 +1380,6 @@ impl V2CandidateAssembler {
             // committed tip after all bounded external work so an accidental
             // concurrent block-sync commit cannot publish a stale candidate.
             validate_request(&request)?;
-            report.selected = selected.len();
-            report.native_selected = prepared_work
-                .native_lane_decisions
-                .as_ref()
-                .map_or(0, |native| native.batch().groups.len());
-            let selected_hashes = selected
-                .iter()
-                .map(|record| record.transaction.hash_as_entrypoint())
-                .collect::<Vec<_>>();
-            if !selection_lease.retain_only(&selected_hashes) {
-                return Err(CandidateError::RestartRequired);
-            }
             signing.complete();
             return Ok(CandidateAssemblyOutcome::Assembled(AssembledV2Candidate {
                 tag,
@@ -1274,6 +1442,23 @@ impl V2CandidateAssembler {
         }
         Ok(unavailable)
     }
+    fn unavailable_ordinary_admission_indices(
+        &self,
+        queue: &Queue,
+        state: &State,
+        selected: &[CandidateRecord],
+        ledger_time_ms: u64,
+    ) -> BTreeSet<usize> {
+        let state_view = state.view();
+        queue.preflight_ordinary_candidate_batch_in_view(
+            selected
+                .iter()
+                .enumerate()
+                .map(|(index, candidate)| (index, &candidate.transaction, &candidate.routing_plan)),
+            &state_view,
+            ledger_time_ms,
+        )
+    }
     fn prospective_candidate_creation_time(
         &self,
         view: wire::View,
@@ -1297,7 +1482,6 @@ impl V2CandidateAssembler {
     }
     fn snapshot_routable_candidates(
         &self,
-        context: &wire::HeightContext,
         queue: &Queue,
         state: &State,
         attachments: &CandidateAttachments,
@@ -1313,99 +1497,57 @@ impl V2CandidateAssembler {
             .as_ref()
             .and_then(|entry| entry.execution_batch.as_ref())
             .is_some();
-        let mut carrier_queue_plan_bindings = BTreeMap::new();
+        let mut carrier_queue_plan_entrypoints = BTreeSet::new();
         for certificate in &attachments.queue_plan_admissions {
             let admission = crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(
                 state.network_id_ref(),
                 certificate,
             )
             .map_err(CandidateError::MergeApplicationContext)?;
-            let binding = admission.certificate().certificate.binding.clone();
-            if carrier_queue_plan_bindings
-                .insert(binding.entrypoint_hash.clone(), binding)
-                .is_some()
-            {
+            if !carrier_queue_plan_entrypoints.insert(
+                admission
+                    .certificate()
+                    .certificate
+                    .binding
+                    .entrypoint_hash
+                    .clone(),
+            ) {
                 return Err(CandidateError::MergeApplicationContext(
                     "Sumeragi carrier repeats a QueuePlan entrypoint".to_owned(),
                 ));
             }
         }
         let mut records = Vec::with_capacity(pending.len());
-        let mut queue_plan_barrier = false;
         for (source_ordinal, transaction) in pending.into_iter().enumerate() {
             report.inspected = report.inspected.saturating_add(1);
             if record_ordinary_execution_carrier_exclusion(certified_execution_selected, report) {
                 continue;
             }
-            // A QueuePlan item remains an ordinary FIFO cut, but cannot make an
-            // exact-height lifecycle control behind it miss its only block.
-            if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction) {
+            if transaction.entrypoint().admission_intent()
+                == TransactionAdmissionIntent::QueuePlanSynced
+            {
+                // The authenticated carrier and autonomous lane own this input.
+                // A local Queue copy is never selected here, so its binding or
+                // route cannot veto independent Ordinary proposal work.
+                report.work_deferred = report.work_deferred.saturating_add(1);
                 continue;
             }
             let entrypoint_hash = transaction.hash_as_entrypoint();
-            let queue_plan_synced = transaction.entrypoint().admission_intent()
-                == TransactionAdmissionIntent::QueuePlanSynced;
-            let queue_plan_binding = if queue_plan_synced {
-                match carrier_queue_plan_bindings.get(&entrypoint_hash) {
-                    Some(binding) => Some(binding.clone()),
-                    None => match state
-                        .queue_plan_pending_binding_for_entrypoint(entrypoint_hash.clone())
-                    {
-                        Ok(Some(binding)) => Some(binding),
-                        Ok(None) => {
-                            // A QueuePlan transaction is a FIFO barrier until the same carrier or
-                            // canonical parent state owns its exact admission certificate.
-                            // Continue only to find an independent exact-height control.
-                            queue_plan_barrier = true;
-                            continue;
-                        }
-                        Err(_) => return Err(CandidateError::RestartRequired),
-                    },
-                }
-            } else {
-                None
-            };
             let routing_plan = match queue.route_plan_with_state(&transaction, state) {
                 Ok(plan) => plan,
+                Err(crate::queue::RoutingResolveError::OrdinaryRouteUnavailable { .. }) => {
+                    report.unresolved = report.unresolved.saturating_add(1);
+                    continue;
+                }
                 Err(_) => {
                     report.unresolved = report.unresolved.saturating_add(1);
                     return Err(CandidateError::RestartRequired);
                 }
             };
-            if queue_plan_barrier
-                && !exact_height_lifecycle_candidate(
-                    context,
-                    CandidateDescriptor::new(&transaction, &routing_plan),
-                )
-            {
-                continue;
-            }
-            if let Some(binding) = queue_plan_binding
-                && let Err(reason) = crate::torii_proxy::validate_queue_plan_binding_for_request(
-                    &binding,
-                    state.network_id_ref(),
-                    transaction.entrypoint(),
-                    &routing_plan,
-                )
-            {
-                return Err(CandidateError::MergeApplicationContext(format!(
-                    "QueuePlan candidate differs from its immutable admission binding: {reason}"
-                )));
-            }
             if queue.transaction_selection_durability_faulted() {
                 return Err(CandidateError::RestartRequired);
             }
             report.routable = report.routable.saturating_add(1);
-            if queue_plan_synced {
-                // The certificate is proposal-native control work; the
-                // transaction itself must cross the autonomous lane and merge
-                // corridor. Keep it as a strict FIFO cut even after the exact
-                // admission binding becomes canonical, so later ordinary work
-                // cannot overtake it while the lane author takes ownership.
-                report.work_deferred = report.work_deferred.saturating_add(1);
-                queue_plan_barrier = true;
-                continue;
-            }
             let encoded_len = transaction.encoded_len();
             if encoded_len > payload_limit {
                 report.payload_deferred = report.payload_deferred.saturating_add(1);
@@ -1707,20 +1849,21 @@ fn attachments_for_selected_lifecycle(
 ///
 /// Scheduled state transitions are independently derived from the exact parent
 /// and body header. They need no synthetic transaction or additional wire flag.
-/// This is the common fail-closed boundary used after fresh assembly, before
-/// validating an inbound body, and before re-proposing a recovered locked body.
+/// This is the fail-closed boundary before validating an inbound body or
+/// re-proposing a recovered locked body. Fresh assembly uses the same
+/// independent-work predicate with a start-work probe completed before its
+/// State publication lease.
 pub(crate) fn candidate_block_has_proposal_work(
     block: &SignedBlock,
     state: &State,
     time_trigger_clock_progress_required: bool,
 ) -> Result<bool, crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>>
 {
-    Ok(
-        candidate_block_has_independent_proposal_work(block, time_trigger_clock_progress_required)
-            || state.deterministic_start_work_pending(&block.header())? == Some(true),
-    )
+    if candidate_block_has_independent_proposal_work(block, time_trigger_clock_progress_required) {
+        return Ok(true);
+    }
+    Ok(state.deterministic_start_work_pending(&block.header())? == Some(true))
 }
-
 fn candidate_block_has_independent_proposal_work(
     block: &SignedBlock,
     time_trigger_clock_progress_required: bool,
@@ -1771,6 +1914,29 @@ fn record_ordinary_execution_carrier_exclusion(
     }
     report.carrier_excluded = report.carrier_excluded.saturating_add(1);
     true
+}
+fn candidate_state_generation_is_current(state: &State, expected: u64) -> bool {
+    expected % 2 == 0 && state.state_view_generation() == expected
+}
+fn validate_request_at_generation<Work>(
+    request: &CandidateRequest<'_, Work>,
+    expected: u64,
+) -> Result<bool, CandidateError> {
+    let validation = validate_request(request);
+    if !candidate_state_generation_is_current(request.state, expected) {
+        return Ok(false);
+    }
+    // A local State at a different height may still be catching up to this
+    // parent, or may already have superseded it. Both are ordinary asynchronous
+    // progress; a conflicting hash at the same height or a network mismatch is not.
+    if matches!(&validation, Err(CandidateError::ParentStateMismatch))
+        && request.state.network_id_ref() == &request.context.network_id
+        && u64::try_from(request.state.committed_height())
+            .is_ok_and(|height| height != request.parent.height())
+    {
+        return Ok(false);
+    }
+    validation.map(|()| true)
 }
 fn validate_request<Work>(request: &CandidateRequest<'_, Work>) -> Result<(), CandidateError> {
     request
@@ -2784,7 +2950,7 @@ pub(super) mod tests {
         (state, context, anchor, key)
     }
     #[test]
-    fn native_source_wait_never_selects_ordinary_fallback() {
+    fn native_source_wait_allows_independent_ordinary_snapshot() {
         let (_, context, _, _) = snapshot_parent_fixture();
         let pending = NativeLaneCandidatePreparation {
             work: None,
@@ -2795,12 +2961,13 @@ pub(super) mod tests {
             ],
         };
         let original = pending.waits.as_ptr();
-        let ordinary = record(71, "ordinary fallback forbidden", 0);
-        let error = NativeCandidateWork(&pending)
+        let ordinary = record(71, "ordinary leader snapshot", 0);
+        let prepared = NativeCandidateWork(&pending)
             .prepare(&context, 0, &[ordinary.descriptor()])
-            .unwrap_err();
-        assert!(matches!(error, CandidateWorkError::Unavailable(unavailable)
-            if unavailable.indices() == &BTreeSet::from([0])));
+            .expect("ordinary input does not wait for an unrelated Native source");
+        assert_eq!(prepared.native_amx_receipts, vec![None]);
+        assert!(prepared.native_lane_decisions.is_none());
+        assert!(prepared.lane_payload_ownerships.is_empty());
         assert_eq!(pending.waits.as_ptr(), original);
         assert_eq!(pending.waits.len(), 1);
         assert!(
@@ -3113,6 +3280,174 @@ pub(super) mod tests {
             BTreeSet::from([0]),
             "a changed Native-AMX topology must defer without hiding later live work"
         );
+    }
+    #[test]
+    fn candidate_admission_preflight_skips_unregistered_ordinary_input() {
+        let (state, _context, _anchor, _) = snapshot_parent_fixture();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(4));
+        let queue = Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        );
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(2), nonzero(64 * 1024), nonzero(2))
+                .expect("candidate limits"),
+            time_source.clone(),
+        );
+        let missing_key = KeyPair::try_from_seed(vec![0x41; 32], Algorithm::Ed25519)
+            .expect("deterministic missing authority");
+        let missing = TransactionBuilder::new_with_time_source(
+            *state.network_id_ref(),
+            AccountId::new(missing_key.public_key().clone()),
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+        .with_instructions([iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "missing authority".into(),
+        )])
+        .sign(missing_key.private_key());
+        let missing = AcceptedTransaction::new_unchecked(Cow::Owned(missing));
+        let ready = record(0x42, "registered authority", 1);
+        let ready_authority = ready.transaction.as_ref().authority().clone();
+        let mut world = state.world.block();
+        world.accounts.insert(
+            ready_authority,
+            iroha_data_model::account::AccountValue::new(
+                iroha_data_model::account::AccountDetails::default(),
+            ),
+        );
+        world.commit();
+        let selected = [
+            CandidateRecord {
+                entrypoint_hash: missing.hash_as_entrypoint(),
+                encoded_len: missing.encoded_len(),
+                transaction: missing,
+                routing_plan: RoutingPlan::single(RoutingDecision::default()),
+                source_ordinal: 0,
+            },
+            ready,
+        ];
+        assert_eq!(
+            assembler.unavailable_ordinary_admission_indices(&queue, &state, &selected, 4),
+            BTreeSet::from([0]),
+            "an unavailable authority must not hide a later eligible local input"
+        );
+    }
+    #[test]
+    fn candidate_generation_gate_accepts_only_the_same_stable_state_cut() {
+        let (state, context, anchor, key) = snapshot_parent_fixture();
+        let generation = state.state_view_generation();
+        assert_eq!(generation % 2, 0);
+        assert!(candidate_state_generation_is_current(&state, generation));
+        assert!(!candidate_state_generation_is_current(
+            &state,
+            generation.saturating_add(1),
+        ));
+        assert!(!candidate_state_generation_is_current(
+            &state,
+            generation.saturating_add(2),
+        ));
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let guard = ConsensusOutputGuard::isolated();
+        let local = context.leader(0);
+        let request = CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(
+                EventTag::new(
+                    context.height,
+                    0,
+                    crate::sumeragi::v2_core::Generation::new(0),
+                ),
+                local,
+                None,
+                None,
+                None,
+            ),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: SingleRouteWorkProvider,
+        };
+        assert!(validate_request_at_generation(&request, generation).unwrap());
+        assert!(!validate_request_at_generation(&request, generation + 2).unwrap());
+    }
+    #[test]
+    fn state_publication_during_preparation_defers_a_pre_sign_failure() {
+        struct PublishThenFail<'state>(&'state State);
+        impl CandidateWorkProvider for PublishThenFail<'_> {
+            fn prepare(
+                &mut self,
+                context: &wire::HeightContext,
+                view: wire::View,
+                _candidates: &[CandidateDescriptor<'_>],
+            ) -> Result<PreparedCandidateWork, CandidateWorkError> {
+                let header = BlockHeader::new(
+                    NonZeroU64::new(context.height).unwrap(),
+                    self.0.latest_block_hash_fast(),
+                    None,
+                    1_000,
+                    view,
+                );
+                self.0
+                    .block(header)
+                    .commit_world_overlay_for_testing()
+                    .expect("publish the next committed State generation");
+                Err(CandidateWorkError::Failed(
+                    "preparation observed a superseded State cut".into(),
+                ))
+            }
+        }
+
+        let (state, context, anchor, key) = snapshot_parent_fixture();
+        let initial_generation = state.state_view_generation();
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(1_000));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let guard = ConsensusOutputGuard::isolated();
+        let local = context.leader(0);
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let outcome = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(1), nonzero(64 * 1024), nonzero(1)).unwrap(),
+            time_source,
+        )
+        .assemble(CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(tag, local, None, None, None),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: PublishThenFail(&state),
+        })
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            CandidateAssemblyOutcome::WorkDeferred {
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+                ..
+            }
+        ));
+        assert_eq!(state.state_view_generation(), initial_generation + 2);
+        assert!(!guard.restart_required());
     }
     #[test]
     fn candidate_build_uses_the_exact_preflight_creation_time() {
@@ -4811,8 +5146,8 @@ pub(super) mod tests {
         );
     }
     #[test]
-    fn queue_plan_intent_remains_an_autonomous_fifo_barrier_after_exact_binding() {
-        let (state, height_context, anchor, key) = snapshot_parent_fixture();
+    fn certified_queue_plan_intent_does_not_order_later_ordinary_input() {
+        let (state, _, anchor, key) = snapshot_parent_fixture();
         let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
         let queue = Queue::test(
             iroha_config::parameters::actual::Queue::default(),
@@ -4826,9 +5161,8 @@ pub(super) mod tests {
             time_source,
         );
         let mut blocked_report = CandidateScanReport::default();
-        let blocked = assembler
+        let unbound = assembler
             .snapshot_routable_candidates(
-                &height_context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
@@ -4836,9 +5170,12 @@ pub(super) mod tests {
                 64 * 1024,
                 &mut blocked_report,
             )
-            .expect("an absent marker is a normal bounded wait");
-        assert!(blocked.is_empty());
+            .expect("an absent marker is a local autonomous admission wait");
+        assert_eq!(unbound.len(), 1);
+        assert_eq!(unbound[0].entrypoint_hash, follower.hash_as_entrypoint());
         assert_eq!(blocked_report.inspected, 2);
+        assert_eq!(blocked_report.routable, 1);
+        assert_eq!(blocked_report.work_deferred, 1);
 
         let routing_plan = queue
             .route_plan_with_state(&queue_plan, &state)
@@ -4881,7 +5218,6 @@ pub(super) mod tests {
         let mut bound_report = CandidateScanReport::default();
         let bound = assembler
             .snapshot_routable_candidates(
-                &height_context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
@@ -4889,15 +5225,45 @@ pub(super) mod tests {
                 64 * 1024,
                 &mut bound_report,
             )
-            .expect("exact parent-state binding preserves the autonomous FIFO cut");
-        assert!(bound.is_empty());
+            .expect("exact parent-state binding leaves later Ordinary work eligible");
+        assert_eq!(bound.len(), 1);
+        assert_eq!(bound[0].entrypoint_hash, follower.hash_as_entrypoint());
         assert_eq!(bound_report.inspected, 2);
         assert_eq!(bound_report.routable, 1);
         assert_eq!(bound_report.work_deferred, 1);
+
+        state
+            .replace_queue_plan_registry_owner_for_test(
+                &binding,
+                Hash::new(b"stale QueuePlan registry owner"),
+            )
+            .expect("make the unselected local QueuePlan binding inconsistent");
+        assert!(
+            state
+                .queue_plan_pending_binding_for_entrypoint(queue_plan.hash_as_entrypoint())
+                .is_err(),
+            "the old local QueuePlan lookup would stop candidate assembly"
+        );
+        let mut stale_report = CandidateScanReport::default();
+        let stale = assembler
+            .snapshot_routable_candidates(
+                &queue,
+                &state,
+                &CandidateAttachments::default(),
+                vec![queue_plan, follower.clone()],
+                64 * 1024,
+                &mut stale_report,
+            )
+            .expect("unselected local QueuePlan state must not veto independent Ordinary work");
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].entrypoint_hash, follower.hash_as_entrypoint());
+        assert_eq!(stale_report.inspected, 2);
+        assert_eq!(stale_report.routable, 1);
+        assert_eq!(stale_report.work_deferred, 1);
     }
 
     #[test]
-    fn exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier() {
+    fn exact_height_lifecycle_control_preempts_independent_ordinary_input() {
         let (state, context, _, _) = snapshot_parent_fixture();
         let (_, time_source) = TimeSource::new_mock(Duration::from_millis(3));
         let queue = Queue::test(
@@ -4927,24 +5293,24 @@ pub(super) mod tests {
         let mut report = CandidateScanReport::default();
         let mut pool = assembler
             .snapshot_routable_candidates(
-                &context,
                 &queue,
                 &state,
                 &CandidateAttachments::default(),
                 vec![
                     ordinary_before,
                     queue_plan,
-                    ordinary_after,
+                    ordinary_after.clone(),
                     first.transaction.clone(),
                     second.transaction.clone(),
                 ],
                 64 * 1024,
                 &mut report,
             )
-            .expect("bounded scan preserves the exact-height control after the FIFO cut");
-        assert_eq!(pool.len(), 3);
-        assert_eq!(pool[1].entrypoint_hash, first.entrypoint_hash);
-        assert_eq!(pool[2].entrypoint_hash, second.entrypoint_hash);
+            .expect("bounded scan preserves the exact-height control after QueuePlan input");
+        assert_eq!(pool.len(), 4);
+        assert_eq!(pool[1].entrypoint_hash, ordinary_after.hash_as_entrypoint());
+        assert_eq!(pool[2].entrypoint_hash, first.entrypoint_hash);
+        assert_eq!(pool[3].entrypoint_hash, second.entrypoint_hash);
         prioritize_exact_height_lifecycle_candidates(&context, &mut pool);
         assert_eq!(pool[0].entrypoint_hash, first.entrypoint_hash);
         assert_eq!(pool[1].entrypoint_hash, second.entrypoint_hash);
@@ -5287,6 +5653,7 @@ pub(super) mod tests {
     #[test]
     fn snapshot_candidate_parent_is_exact_and_one_shot() {
         let (state, context, anchor, key) = snapshot_parent_fixture();
+        let state = Arc::new(state);
         assert_eq!(
             validate_candidate_parent(&context, CandidateParent::Snapshot(&anchor), &state)
                 .expect("exact authenticated snapshot parent"),
@@ -5352,6 +5719,77 @@ pub(super) mod tests {
             validate_candidate_parent(&context, CandidateParent::Snapshot(&anchor), &state),
             Err(CandidateError::ParentStateMismatch)
         ));
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(4));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let local = context.leader(0);
+        let request = CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(
+                EventTag::new(
+                    context.height,
+                    0,
+                    crate::sumeragi::v2_core::Generation::new(0),
+                ),
+                local,
+                None,
+                None,
+                None,
+            ),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &output_guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: SingleRouteWorkProvider,
+        };
+        assert!(!validate_request_at_generation(&request, state.state_view_generation()).unwrap());
+        let handoff = NativeLaneDecisionHandoff::empty_for_test(Arc::clone(&state));
+        let native = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(1), nonzero(64 * 1024), nonzero(1)).unwrap(),
+            time_source,
+        )
+        .assemble_native(CandidateRequest {
+            context: &context,
+            directive: LocalProposalDirective::for_test(
+                EventTag::new(
+                    context.height,
+                    0,
+                    crate::sumeragi::v2_core::Generation::new(0),
+                ),
+                local,
+                None,
+                None,
+                None,
+            ),
+            local_validator: local,
+            parent: CandidateParent::Snapshot(&anchor),
+            state: &state,
+            queue: &queue,
+            key_pair: &key,
+            output_guard: &output_guard,
+            attachments: CandidateAttachments::default(),
+            work_provider: &handoff,
+        })
+        .expect("Native source preparation must defer a superseded parent");
+        assert!(native.source.work.is_none());
+        assert!(matches!(
+            native.source.waits.as_slice(),
+            [crate::state::LaneDecisionGroupPreparationV1::ObservationChanged]
+        ));
+        assert!(matches!(
+            native.outcome,
+            Ok(CandidateAssemblyOutcome::WorkDeferred {
+                reason: CandidateWorkDeferral::CommittedStateMoved,
+                ..
+            })
+        ));
+        assert!(!output_guard.restart_required());
     }
     #[test]
     fn limits_require_scan_to_cover_maximum_batch() {

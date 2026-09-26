@@ -16,7 +16,8 @@ internal interface KagemushaCoreCoordinatorEndpointV1 {
  *
  * Contract matching proves ABI compatibility only. A generic bridge refuses [open] until its
  * qualified Rust backend is installed. Returned Norito archives stay opaque at this layer.
- * Explicit close revokes the handle. The native ABI never reopens in the same process.
+ * Explicit close and every post-dispatch failure revoke the handle. The native ABI never
+ * reopens in the same process.
  */
 class KagemushaCoreCoordinatorBridgeV1 private constructor(
     private val endpoint: KagemushaCoreCoordinatorEndpointV1,
@@ -28,14 +29,26 @@ class KagemushaCoreCoordinatorBridgeV1 private constructor(
         check(handle != 0L) { "KAGEMUSHA native coordinator handle is closed" }
         val request = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields)
         val nativeFields = KagemushaCoreCoordinatorFrameV1.decodeRequest(method, request).toTypedArray()
-        val response = try {
-            endpoint.invoke(handle, method.code, nativeFields)
+        return try {
+            val response = endpoint.invoke(handle, method.code, nativeFields)
                 ?: throw IllegalStateException("KAGEMUSHA native coordinator rejected or could not execute the method")
-        } catch (error: LinkageError) {
-            throw IllegalStateException("KAGEMUSHA native coordinator is unavailable", error)
+            val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, response.toList())
+            KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request, responseFrame)
+        } catch (error: Throwable) {
+            // Dispatch may have advanced hardware even when JNI or response decoding failed.
+            // Drop the local handle before asking native Core to revoke its owner.
+            val closing = handle
+            handle = 0L
+            try {
+                endpoint.close(closing)
+            } catch (_: Throwable) {
+                // The original uncertain result remains the failure; no retry is allowed here.
+            }
+            if (error is LinkageError) {
+                throw IllegalStateException("KAGEMUSHA native coordinator is unavailable", error)
+            }
+            throw error
         }
-        val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, request, response.toList())
-        return KagemushaCoreCoordinatorFrameV1.decodeResponse(method, request, responseFrame)
     }
 
     /** Revoke this handle before native teardown; reopening requires a fresh process. */

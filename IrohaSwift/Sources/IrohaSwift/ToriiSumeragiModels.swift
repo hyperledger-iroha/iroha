@@ -1274,7 +1274,8 @@ public struct ToriiSumeragiV2LivenessStatus: Decodable, Sendable, Equatable {
     }
 }
 
-/// Authoritative protocol-v2-only snapshot returned by `/v1/sumeragi/status`.
+/// Structurally validated protocol-v2 snapshot returned by `/v1/sumeragi/status`.
+/// Decoding does not verify validator signatures or establish a monetary finality anchor.
 public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
     public let protocolVersion: UInt16
     public let nodeFingerprint: String

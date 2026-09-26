@@ -13969,48 +13969,8 @@ impl NodeHandle {
                 }
                 continue;
             }
-            match storage.manifest_has_shared_chunks(manifest.manifest_id()) {
-                Ok(true) => {
-                    report.skipped.push(GcSkip {
-                        manifest_id: manifest.manifest_id().to_owned(),
-                        reason: GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1.to_string(),
-                    });
-                    iroha_logger::warn!(
-                        manifest_id = %manifest.manifest_id(),
-                        "GC retention blocked by shared chunks"
-                    );
-                    global_or_default().inc_sorafs_gc_blocked(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1);
-                    let payload = GcAuditPayloadV1 {
-                        version: GC_AUDIT_PAYLOAD_VERSION_V1,
-                        manifest_digest: digest,
-                        provider_id,
-                        evicted_at_unix: now_unix,
-                        freed_bytes: 0,
-                        reason: GC_AUDIT_REASON_RETENTION_EXPIRED_V1.to_string(),
-                        blocked_reason: Some(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1.to_string()),
-                    };
-                    if let Err(err) = self.publish_gc_audit_event(payload) {
-                        report.errors = report.errors.saturating_add(1);
-                        iroha_logger::error!(
-                            %err,
-                            manifest_id = %manifest.manifest_id(),
-                            "GC blocked outcome could not be durably audited"
-                        );
-                        break;
-                    }
-                    continue;
-                }
-                Ok(false) => {}
-                Err(err) => {
-                    report.errors = report.errors.saturating_add(1);
-                    iroha_logger::warn!(
-                        %err,
-                        manifest_id = %manifest.manifest_id(),
-                        "GC eviction skipped: failed to inspect shared chunks"
-                    );
-                    continue;
-                }
-            }
+            // Chunk files are private to each manifest directory. Equal digests, including
+            // repeated chunks in one manifest, do not make another manifest's bytes live here.
             let reason = GC_AUDIT_REASON_RETENTION_EXPIRED_V1;
             let transaction = match self.evict_manifest_with_gc_audit(
                 &gc_guard,

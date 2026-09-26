@@ -115,7 +115,7 @@ impl ValidBlock {
             ));
         };
         let recorded = source
-            .record_execution(block.clone(), context)
+            .record_execution(context)
             .map_err(|error| Self::execution_context_error(error.to_string()))?
             .ok_or_else(|| {
                 Self::execution_context_error("native source observation changed before execution")

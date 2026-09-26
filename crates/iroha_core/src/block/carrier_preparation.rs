@@ -141,8 +141,13 @@ impl ValidBlock {
     ) -> Result<Option<crate::state::PreparedCarrier<'state>>, NativeCandidatePreparationError>
     {
         let Some(execution) = Self::validate_and_record_native_candidate(
-            source, context, genesis_account, time_source, block_cadence,
-        )? else {
+            source,
+            context,
+            genesis_account,
+            time_source,
+            block_cadence,
+        )?
+        else {
             return Ok(None);
         };
         crate::state::PreparedCarrier::prepare(execution)
@@ -158,7 +163,8 @@ impl ValidBlock {
         genesis_account: &AccountId,
         time_source: &TimeSource,
         block_cadence: Duration,
-    ) -> Result<Option<ValidatedCarrierPreparationInput<'state>>, NativeCandidatePreparationError> {
+    ) -> Result<Option<ValidatedCarrierPreparationInput<'state>>, NativeCandidatePreparationError>
+    {
         use crate::state::MergeLedgerCommitError;
         crate::sumeragi::witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
@@ -181,7 +187,11 @@ impl ValidBlock {
                     .parent_commit_qc
                     .as_ref()
                     .map(|qc| qc.subject.block_hash)
-                    .or_else(|| frozen.snapshot_bootstrap.map(|anchor| anchor.snapshot_block_hash))
+                    .or_else(|| {
+                        frozen
+                            .snapshot_bootstrap
+                            .map(|anchor| anchor.snapshot_block_hash)
+                    })
                     != body.header().prev_block_hash()
             {
                 return Err(Self::execution_context_error(
@@ -247,8 +257,7 @@ impl ValidBlock {
             return Ok(None);
         }
         preflight.map_err(|error| NativeCandidatePreparationError::Preflight(Box::new(error)))?;
-        let body = body.clone();
-        let Some(recorded) = source.record_execution(body, context)? else {
+        let Some(recorded) = source.record_execution(context)? else {
             return Ok(None);
         };
         let (block, state, native) = recorded.into_preparation_parts().map_err(|reason| {

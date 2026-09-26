@@ -15,6 +15,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Test
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaKeyMintExpectedSelectionV1
 
 private fun fakeSec1(byte: Byte): ByteArray = byteArrayOf(0x04) + ByteArray(64) { byte }
 
@@ -61,6 +62,37 @@ private class TestJournalIo(private val onSync: () -> Unit) : SelectionJournalIo
 }
 
 class AndroidKeyMintOneUseSelectionCandidateV1Test {
+    @Test fun canonicalCoreSelectionPassesCollectorToVerifierShapeBoundary() {
+        val device = FakeDevice()
+        val runner = SelectionCandidateRunnerV1(device, FakeStore())
+        val prepared = runner.prepare(lane, before, after)
+            as KeyMintOneUsePreparationResultV1.Prepared
+        val selected = coreFrame()
+        val evidence = runner.collect(selected, lane, before, after, prepared.publicKey())
+            as KeyMintOneUseSelectionResultV1.Evidence
+        val raw = evidence.toRawAttestationEvidenceV1()
+        val expected = KagemushaKeyMintExpectedSelectionV1(
+            raw.canonicalSelectionFrame(), raw.laneCommitment(),
+            raw.secureIndexBeforeLittleEndian(), raw.secureIndexAfterLittleEndian(),
+            raw.attestationNonce(), prepared.publicKey(),
+        )
+        assertEquals(460, expected.canonicalSelectionFrame().size)
+        assertContentEquals(selected, expected.canonicalSelectionFrame())
+        assertContentEquals(selected, device.signedBytes)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaKeyMintExpectedSelectionV1(
+                selected.copyOf().also { it[219] = (it[219].toInt() xor 1).toByte() },
+                lane, before, after, prepared.attestationNonce(), prepared.publicKey(),
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaKeyMintExpectedSelectionV1(
+                selected.copyOf().also { it[444] = (it[444].toInt() xor 1).toByte() },
+                lane, before, after, prepared.attestationNonce(), prepared.publicKey(),
+            )
+        }
+    }
+
     @Test fun collectedEvidenceCopiesEveryVerifierInputByte() {
         val nonce = ByteArray(32) { 6 }
         val challenge = keyMintPreparedChallengeV1(nonce, lane, before, after)
@@ -203,12 +235,33 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
         }
     }
 
-    private fun frame(body: ByteArray = byteArrayOf(1, 2, 3)): ByteArray {
+    private fun frame(body: ByteArray? = null): ByteArray {
+        if (body == null) return coreFrame()
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000"
             .toByteArray(Charsets.US_ASCII)
         return domain + ByteArray(8) { offset ->
             if (offset == 0) body.size.toByte() else 0
         } + body
+    }
+
+    private fun coreFrame(): ByteArray = ByteArray(460).also { selected ->
+        val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000"
+            .toByteArray(Charsets.US_ASCII)
+        domain.copyInto(selected)
+        selected[49] = 0x93.toByte() // 403-byte Core body.
+        selected[50] = 1
+        selected[57] = 1 // V1 wire version.
+        for ((offset, value) in listOf(
+            59 to 0x11, 91 to 0x12, 123 to 0x13, 155 to 0x14,
+            187 to 0x15, 251 to 0x16, 291 to 0x17, 332 to 0x18,
+            364 to 0x19, 396 to 0x1a,
+        )) selected.fill(value.toByte(), offset, offset + 32)
+        lane.copyInto(selected, 219)
+        selected[283] = 1 // Policy epoch.
+        selected[323] = 1 // Hardware generation.
+        selected[331] = 2 // SendSplit requires candidate and terminal commitments.
+        before.copyInto(selected, 428)
+        after.copyInto(selected, 444)
     }
 
     private val lane = ByteArray(32) { 5 }
@@ -449,6 +502,36 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
             throw AssertionError("reused index accepted")
         } catch (_: IllegalArgumentException) { }
         assertFalse(store.reserved)
+    }
+
+    @Test fun malformedOrSubstitutedCoreSelectionCannotConsumePreparedOneUseKey() {
+        val device = FakeDevice()
+        val store = FakeStore()
+        val runner = SelectionCandidateRunnerV1(device, store)
+        val prepared = runner.prepare(lane, before, after)
+            as KeyMintOneUsePreparationResultV1.Prepared
+        val eventsBefore = store.events.toList()
+        val canonical = coreFrame()
+        val malformed = listOf(
+            frame(byteArrayOf(1, 2, 3)),
+            canonical.copyOfRange(0, canonical.size - 1),
+            canonical.copyOf().also { it[331] = 9 },
+            canonical.copyOf().also { it[219] = (it[219].toInt() xor 1).toByte() },
+            canonical.copyOf().also { it[428] = (it[428].toInt() xor 1).toByte() },
+            canonical.copyOf().also { it[444] = (it[444].toInt() xor 1).toByte() },
+            canonical.copyOf().also { it.fill(0, 364, 396) },
+        )
+        malformed.forEach { selected ->
+            assertFailsWith<IllegalArgumentException> {
+                runner.collect(selected, lane, before, after, prepared.publicKey())
+            }
+            assertEquals(eventsBefore, store.events)
+            assertFalse(store.reserved)
+            assertEquals(0, device.signCalls)
+        }
+        assertTrue(runner.collect(canonical, lane, before, after, prepared.publicKey())
+            is KeyMintOneUseSelectionResultV1.Evidence)
+        assertEquals(1, device.signCalls)
     }
 
     @Test fun fileIntentSurvivesRecreationAndDifferentFrameCannotReuseTheSameSlot() {

@@ -4,9 +4,9 @@ use super::*;
 use iroha_config::base::read::ConfigReader;
 use iroha_core::{
     beacon,
-    kura::{BlockIndex, BlockStore},
+    kura::{BlockIndex, BlockStore, Kura},
 };
-use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair, MerkleTree};
+use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, decode_framed_signed_block},
     consensus::GlobalThresholdBeaconChainAnchorV1,
@@ -112,11 +112,14 @@ fn runtime_workspace() -> Result<tempfile::TempDir> {
         .or_else(|| std::env::var_os("IROHA_RELEASE_ARTIFACT_ROOT"))
         .ok_or_else(|| eyre!("an explicit owner-only external beacon fixture root is required"))?;
     let root = validate_runtime_root(Path::new(&root))?;
-    Ok(tempfile::Builder::new()
+    let workspace = tempfile::Builder::new()
         .prefix("beacon-production-")
-        .tempdir_in(root)?)
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(root)?;
+    validate_runtime_root(workspace.path())?;
+    Ok(workspace)
 }
-fn binary(variable: &str, kind: ReleasePrebuiltBinary) -> Result<PathBuf> {
+fn binary(variable: &str, kind: Option<ReleasePrebuiltBinary>) -> Result<PathBuf> {
     let path = std::env::var_os(variable)
         .map(PathBuf::from)
         .ok_or_else(|| eyre!("{variable} must name the exact prebuilt binary"))?;
@@ -124,7 +127,16 @@ fn binary(variable: &str, kind: ReleasePrebuiltBinary) -> Result<PathBuf> {
         path.is_absolute() && path.is_file(),
         "prebuilt executable is absent"
     );
-    revalidate_release_prebuilt_binary(kind, &path)?;
+    if let Some(kind) = kind {
+        revalidate_release_prebuilt_binary(kind, &path)?;
+    } else {
+        // The Taira gate publishes this feature-isolated executable as its own
+        // native artifact. It has no slot in the separate Sumeragi v2 bundle.
+        ensure!(
+            std::env::var_os("IROHA_RELEASE_PREBUILT_MANIFEST_SHA256").is_none(),
+            "beacon custody fixture cannot use a Sumeragi prebuilt contract"
+        );
+    }
     Ok(path)
 }
 
@@ -268,17 +280,16 @@ async fn status_height(clients: &[iroha::client::Client], deadline: Instant) -> 
                     .map(|client| validator_status_until(client, deadline)),
             )
             .await?;
-            if statuses
-                .iter()
-                .all(|s| s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0)
-            {
+            if statuses.iter().all(|s| {
+                s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0 && s.peers == 3
+            }) {
                 return Ok(statuses[0].blocks);
             }
             sleep(Duration::from_millis(200)).await;
         }
     })
     .await
-    .wrap_err("four validators did not reach the same drained committed height")?
+    .wrap_err("four validators did not reach the same drained committed height and full mesh")?
 }
 fn exact_height_reached(
     statuses: &[iroha_torii_shared::status::Status],
@@ -987,10 +998,8 @@ fn verify_pulse(
     let epoch_length = npos.epoch_length_blocks().get();
     ensure!(
         epoch_length == epoch_retention::EPOCH_LENGTH,
-        "fixture must exercise the real catalog merge at mandatory height 10"
+        "fixture must exercise the native catalog decision at mandatory height 10"
     );
-    let catalog_tree: MerkleTree<TransactionEntrypoint> =
-        [catalog_entrypoint_hash].into_iter().collect();
     let pulse_height = epoch_length
         .checked_sub(1)
         .filter(|height| *height > 1)
@@ -1010,31 +1019,39 @@ fn verify_pulse(
         // All fixture children have stopped. This is a strict read-only native
         // journal reader, so validation cannot repair or rewrite the evidence.
         let native = config(config_path)?;
-        let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
+        let mut store = BlockStore::open_read_only(
+            Kura::canonical_storage_paths(native.kura.store_dir.value()).0,
+        )?;
         ensure!(
             store.read_index_count()? >= epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // Native completion has already authenticated this exact native catalog
-        // transaction as Applied on all four peers. Bind it to the sole leaf of
-        // the execution-bearing merge at the mandatory pulse height, excluding
-        // unrelated transactions, QueuePlan admissions and anchor padding.
+        // Native completion has already authenticated this exact catalog
+        // transaction as Applied on all four peers. The first-release carrier
+        // executes it through a native lane decision, not a merge entry. Bind
+        // the sole native decision to this pulse and exclude unrelated work.
         let context = block
             .execution_context()
             .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
-        let reference = context.merge_entry.as_ref().ok_or_else(|| {
-            eyre!("catalog transaction did not execute on the mandatory pulse carrier")
+        let decisions = context.native_lane_decisions.as_deref().ok_or_else(|| {
+            eyre!("catalog transaction has no native decision on the mandatory pulse carrier")
         })?;
+        decisions
+            .validate_structure()
+            .map_err(|error| eyre!("invalid mandatory pulse native decisions: {error}"))?;
         ensure!(
-            reference.execution_batch_hash.is_some()
-                && reference.entrypoint_count == Some(1)
-                && reference.entrypoint_merkle_root == catalog_tree.root()
+            decisions.base_state_height == anchor_height
+                && decisions.groups.len() == 1
+                && decisions.groups[0].payload.input.entrypoint.hash() == catalog_entrypoint_hash
+                && decisions.groups[0].payload.descriptor.slots.len() == 1
+                && context.merge_entry.is_none()
                 && block.external_entrypoint_count() == 0
                 && context.queue_plan_admissions.is_empty()
-                && context.autonomous_lane_payloads.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction native catalog merge"
+                && context.autonomous_lane_payloads.is_empty()
+                && context.lane_payload_ownerships.is_empty(),
+            "mandatory pulse carrier is not the exact one-transaction native catalog decision"
         );
         // Canonical QueuePlan admissions and autonomous anchors are genuine
         // protocol content even when they contain no external transaction row.
@@ -1131,6 +1148,7 @@ impl Runtime<'_> {
         for index in 0..4 {
             ready(self.api + index, 200, deadline).await?;
         }
+        status_height(self.clients, deadline).await?;
         Ok(())
     }
     async fn signed_snapshot_restart(&mut self, applied_height: u64) -> Result<()> {
@@ -1487,16 +1505,13 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     )?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let daemon = binary(
-        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL",
-        ReleasePrebuiltBinary::IrohadMessageControl,
-    )?;
+    let daemon = binary("TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY", None)?;
     let launcher = binary(
         "TEST_NETWORK_BIN_IROHAD_TAIRA",
-        ReleasePrebuiltBinary::IrohadTaira,
+        Some(ReleasePrebuiltBinary::IrohadTaira),
     )?;
-    let cli = binary("TEST_NETWORK_BIN_IROHA", ReleasePrebuiltBinary::Iroha)?;
-    let kagami = binary("KAGAMI_BIN", ReleasePrebuiltBinary::Kagami)?;
+    let cli = binary("TEST_NETWORK_BIN_IROHA", Some(ReleasePrebuiltBinary::Iroha))?;
+    let kagami = binary("KAGAMI_BIN", Some(ReleasePrebuiltBinary::Kagami))?;
     let workspace = runtime_workspace()?;
     let (api, p2p, reservations) = reserve_ports()?;
     let preparation_started = Instant::now();
@@ -1529,6 +1544,46 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         preparation_started.elapsed().as_secs_f64()
     );
     let directory = &prepared.directory;
+    // The running fixture uses its feature-isolated daemon for beacon custody.
+    // Qualify the shipping launcher separately against every exact generated
+    // core-testnet config before any peer starts: its deployment profile guard
+    // must accept the same four-node inputs the reset will materialize.
+    let launcher_check_deadline = Instant::now() + PHASE_BUDGET;
+    let launcher_check = async {
+        for peer in 0..4 {
+            let mut check = command(&launcher, directory);
+            check
+                .args(["--sora", "--config"])
+                .arg(directory.join(format!("peer{peer}.toml")))
+                .args(["--genesis-manifest-json"])
+                .arg(prepared.genesis_directory.join("genesis.json"))
+                .arg("--check-config");
+            let output = run(check, launcher_check_deadline)
+                .await
+                .wrap_err_with(|| {
+                    format!("shipping Taira launcher rejected generated peer{peer} config")
+                })?;
+            if output != b"Ready: configuration and available genesis are valid\n" {
+                let diagnostic = workspace
+                    .path()
+                    .join(format!("launcher-check-peer{peer}.stdout"));
+                private_file(&diagnostic, &output)?;
+                return Err(eyre!(
+                    "shipping Taira launcher did not complete offline genesis validation for peer{peer}; private stdout: {}",
+                    diagnostic.display()
+                ));
+            }
+        }
+        Ok::<(), color_eyre::Report>(())
+    }
+    .await;
+    if let Err(error) = launcher_check {
+        eprintln!(
+            "beacon fixture launcher precheck retained at {}",
+            workspace.keep().display()
+        );
+        return Err(error);
+    }
     let fresh = fresh_client(directory, &prepared.network_id)?;
     let clients = (0..4)
         .map(|index| client(&directory.join("client.toml"), api + index))

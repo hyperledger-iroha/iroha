@@ -168,34 +168,43 @@ fn validate_taira_launcher_profile_v1(
     }
     let inrou = &runtime.inrou;
     if !inrou.enabled {
-        return Err("Taira launcher requires enabled Inrou PortableVM V1 hosting".to_owned());
-    }
-    let uid = inrou
-        .portable_vm_uid
-        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_uid".to_owned())?
-        .get();
-    let gid = inrou
-        .portable_vm_gid
-        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_gid".to_owned())?
-        .get();
-    if soracloud_runtime_defaults::inrou_portable_vm_identity_slot(uid, gid).is_none() {
-        return Err(format!(
-            "Taira Inrou uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
-            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE,
-            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
-        ));
-    }
-    if inrou.guest_image_max_bytes.get() != TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1
-        || inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
-        || inrou.max_memory_bytes.get() != TAIRA_INROU_MAX_MEMORY_BYTES_V1
-        || inrou.max_storage_bytes.get() != TAIRA_INROU_MAX_STORAGE_BYTES_V1
-    {
-        return Err("Taira launcher requires the exact V1 Inrou resource ceilings".to_owned());
-    }
-    if inrou.start_grace != Duration::from_millis(TAIRA_INROU_START_GRACE_MS_V1)
-        || inrou.stop_grace != Duration::from_millis(TAIRA_INROU_STOP_GRACE_MS_V1)
-    {
-        return Err("Taira launcher requires the exact V1 Inrou lifecycle graces".to_owned());
+        if inrou.portable_vm_uid.is_some()
+            || inrou.portable_vm_gid.is_some()
+            || inrou.trusted_guest_artifact.is_some()
+        {
+            return Err(
+                "disabled Taira Inrou hosting cannot retain a PortableVM identity or trusted guest artifact"
+                    .to_owned(),
+            );
+        }
+    } else {
+        let uid = inrou
+            .portable_vm_uid
+            .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_uid".to_owned())?
+            .get();
+        let gid = inrou
+            .portable_vm_gid
+            .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_gid".to_owned())?
+            .get();
+        if soracloud_runtime_defaults::inrou_portable_vm_identity_slot(uid, gid).is_none() {
+            return Err(format!(
+                "Taira Inrou uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
+                soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE,
+                soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
+            ));
+        }
+        if inrou.guest_image_max_bytes.get() != TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1
+            || inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
+            || inrou.max_memory_bytes.get() != TAIRA_INROU_MAX_MEMORY_BYTES_V1
+            || inrou.max_storage_bytes.get() != TAIRA_INROU_MAX_STORAGE_BYTES_V1
+        {
+            return Err("Taira launcher requires the exact V1 Inrou resource ceilings".to_owned());
+        }
+        if inrou.start_grace != Duration::from_millis(TAIRA_INROU_START_GRACE_MS_V1)
+            || inrou.stop_grace != Duration::from_millis(TAIRA_INROU_STOP_GRACE_MS_V1)
+        {
+            return Err("Taira launcher requires the exact V1 Inrou lifecycle graces".to_owned());
+        }
     }
     let egress = &runtime.egress;
     if egress.default_allow
@@ -782,10 +791,10 @@ pub fn main_entry() {
     }
 }
 
-// This branch exists only in the existing feature-isolated native test daemon.
+// This branch exists only in the feature-isolated native beacon test daemon.
 // It reuses the production registry, private codecs and authenticated mint factory;
 // it does not attest Linux/Inrou hosting or alter the shipping launcher's guard.
-#[cfg(any(test, feature = "test-network-message-control"))]
+#[cfg(any(test, feature = "test-network-production-beacon-custody"))]
 fn validate_production_beacon_fixture_profile(config: &Config) -> Result<(), String> {
     let peers = config.common.trusted_peers.value();
     if config.common.chain.as_ref() != TAIRA_CHAIN_ID_V1
@@ -808,7 +817,7 @@ fn validate_production_beacon_fixture_profile(config: &Config) -> Result<(), Str
     }
     Ok(())
 }
-#[cfg(feature = "test-network-message-control")]
+#[cfg(feature = "test-network-production-beacon-custody")]
 pub(crate) fn dispatch_production_beacon_fixture_if_requested() -> bool {
     if !std::env::args_os().any(|arg| arg == "--test-network-production-beacon-custody") {
         return false;
@@ -888,6 +897,13 @@ mod tests {
         runtime
     }
 
+    fn canonical_core_runtime_profile() -> SoracloudRuntime {
+        let mut runtime = canonical_runtime_profile();
+        // Core testnet has no Inrou table; its disabled limits use the typed defaults.
+        runtime.inrou = Default::default();
+        runtime
+    }
+
     #[test]
     fn offline_introspection_never_requires_the_runtime_signer() {
         for argument in ["--check-config", "--help", "-h", "--version", "-V"] {
@@ -929,20 +945,14 @@ mod tests {
             )
             .is_err()
         );
-        let mut disabled_inrou = runtime.clone();
-        disabled_inrou.inrou.enabled = false;
-        disabled_inrou.inrou.portable_vm_uid = None;
-        disabled_inrou.inrou.portable_vm_gid = None;
-        assert!(
-            validate_taira_launcher_profile_v1(
-                TAIRA_CHAIN_ID_V1,
-                TAIRA_CHAIN_DISCRIMINANT_V1,
-                TAIRA_VALIDATOR_COUNT_V1,
-                TAIRA_VALIDATOR_COUNT_V1,
-                &disabled_inrou,
-            )
-            .is_err()
-        );
+        validate_taira_launcher_profile_v1(
+            TAIRA_CHAIN_ID_V1,
+            TAIRA_CHAIN_DISCRIMINANT_V1,
+            TAIRA_VALIDATOR_COUNT_V1,
+            TAIRA_VALIDATOR_COUNT_V1,
+            &canonical_core_runtime_profile(),
+        )
+        .expect("canonical Core-only Taira profile");
         let mut exact_inrou = runtime.clone();
         for slot in 0..soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_SLOT_COUNT {
             let id = soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE + slot;
@@ -982,6 +992,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn launcher_core_profile_rejects_stale_inrou_custody() {
+        let runtime = canonical_core_runtime_profile();
+        let assert_rejected = |runtime: &SoracloudRuntime| {
+            let error = validate_taira_launcher_profile_v1(
+                TAIRA_CHAIN_ID_V1,
+                TAIRA_CHAIN_DISCRIMINANT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                runtime,
+            )
+            .expect_err("disabled Inrou cannot retain guest custody");
+            assert!(error.contains("disabled Taira Inrou hosting"), "{error}");
+        };
+
+        let mut stale_uid = runtime.clone();
+        stale_uid.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        assert_rejected(&stale_uid);
+
+        let mut stale_gid = runtime.clone();
+        stale_gid.inrou.portable_vm_gid = NonZeroU32::new(70_000);
+        assert_rejected(&stale_gid);
+
+        let mut stale_guest = runtime;
+        stale_guest.inrou.trusted_guest_artifact = Some(
+            iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                manifest_digest_hex: String::new(),
+                content_cid: String::new(),
+            },
+        );
+        assert_rejected(&stale_guest);
     }
 
     #[test]

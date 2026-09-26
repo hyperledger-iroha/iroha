@@ -24697,6 +24697,13 @@ function buildIdentifierResolveRequest(options, context) {
     `${context} options`,
   );
   const policyId = requireNonEmptyString(record.policyId, `${context}.policyId`);
+  if (policyId.startsWith("phone#")) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires signed canonicality attestation support for phone policies`,
+      `${context}.policyId`,
+    );
+  }
   if (record.input !== undefined && record.input !== null) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -25695,6 +25702,12 @@ function normalizeIdentifierPolicySummary(
     result.output_opening_public_key = requireExactNonEmptyString(
       record.output_opening_public_key,
       `${context}.output_opening_public_key`,
+    );
+  }
+  if (record.phone_retail_attestor_public_key !== undefined && record.phone_retail_attestor_public_key !== null) {
+    result.phone_retail_attestor_public_key = requireExactNonEmptyString(
+      record.phone_retail_attestor_public_key,
+      `${context}.phone_retail_attestor_public_key`,
     );
   }
   if (record.input_encryption !== undefined && record.input_encryption !== null) {
@@ -34298,6 +34311,18 @@ export function buildIdentifierRequestForPolicy(policySummary, options = {}) {
     policySummary,
     "buildIdentifierRequestForPolicy.policy",
   );
+  // TODO: Carry the attestor statement and independent trust pins for phone requests.
+  if (
+    normalizedPolicy.policy_id.startsWith("phone#") ||
+    normalizedPolicy.normalization === "phone_e164" ||
+    normalizedPolicy.program_id === "phone_retail"
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "buildIdentifierRequestForPolicy requires signed canonicality attestation support for phone policies",
+      "buildIdentifierRequestForPolicy.policy",
+    );
+  }
   const record = ensureRecord(options, "buildIdentifierRequestForPolicy options");
   assertSupportedOptionKeys(
     record,

@@ -2517,7 +2517,8 @@ def test_world_storage_mode_delegates_exact_original_owners(fixture, symbol, old
     ("SERVICE_QUEUE", "impl<'service> OriginalCarrierQueue", "#[cfg(test)]", ""),
     ("APPLY", "impl V2ApplyService {\n    /// Borrow this service", "#[cfg(test)]", ""),
     ("RUNNER_HISTORY", "fn schedule_local_proposal", "native.retain_candidate_source(source);", "drop(source);"),
-    ("RUNNER_HISTORY", "fn schedule_local_proposal", "native.retain_candidate_source(source);", "let assembly = outcome?; native.retain_candidate_source(source);"),
+    ("RUNNER_HISTORY", "fn schedule_local_proposal", "let assembly = match outcome {", "let assembly = outcome?;"),
+    ("RUNNER_HISTORY", "fn schedule_local_proposal", "if !output_guard.restart_required()", "if true"),
 ])
 def test_native_preparation_requires_typed_errors_and_current_original_owners(fixture, owner, anchor, old, new):
     root, helper, checker, _ = fixture

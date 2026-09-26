@@ -774,6 +774,24 @@ fn snapshot_restore_keeps_mixed_old_and_current_epoch_credits_spendable() {
         hardware_profile_id: profile.hardware_profile_id,
         policy_epoch: profile.policy_epoch,
     };
+    assert_eq!(
+        proof_release.purpose(),
+        KagemushaReleasePurposeV1::Production
+    );
+    assert!(proof_release.validate_state_context(context).is_ok());
+    let mut experimental_release = proof_release.clone();
+    experimental_release.purpose = KagemushaReleasePurposeV1::TestnetExperiment(
+        iroha_data_model::kagemusha::KagemushaTestnetExperimentScopeV1 {
+            asset_identity_digest: [0xA1; 32],
+            asset_incarnation: [0xA2; 32],
+            asset_scale: 2,
+            liability_pool_id: [0xA3; 32],
+        },
+    );
+    assert_eq!(
+        experimental_release.validate_state_context(context),
+        Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool),
+    );
     let liability_pool_id = derive_liability_pool_id(&lane, payment_context.asset_incarnation)
         .expect("snapshot-test liability pool");
     let state = KagemushaStateV1::build(

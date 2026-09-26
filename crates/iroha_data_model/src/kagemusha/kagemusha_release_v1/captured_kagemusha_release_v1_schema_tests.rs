@@ -62,6 +62,12 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::KagemushaInternalValidationReceiptV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaInternalValidationReceiptV1",
     ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaTestnetExperimentScopeV1>(
+        "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaTestnetExperimentScopeV1",
+    ),
+    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleasePurposeV1>(
+        "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleasePurposeV1",
+    ),
     crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseManifestV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseManifestV1",
     ),

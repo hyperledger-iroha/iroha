@@ -458,10 +458,13 @@ def load_edge_validators(roster_path: Path) -> list[EdgeValidator]:
 
 
 def _render_proxy_headers(host_expr: str, *, forwarded_host_expr: str | None = None) -> list[str]:
+    # This TLS edge is the Torii trust boundary. Discard client-supplied XFF
+    # prefixes instead of appending them, so a malformed prefix cannot make
+    # Torii fall back to treating the loopback proxy as the public caller.
     lines = [
         f"    proxy_set_header Host {host_expr};",
         "    proxy_set_header X-Real-IP $remote_addr;",
-        "    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;",
+        "    proxy_set_header X-Forwarded-For $remote_addr;",
         "    proxy_set_header X-Forwarded-Proto $scheme;",
     ]
     if forwarded_host_expr is not None:

@@ -187,8 +187,10 @@ struct PastaSha256BoundedJobV1<F: ScalarField> {
 
 /// Exact ordinary SHA message cells used by the terminal semantic planner.
 ///
-/// Tests retain the terminal words to inspect the same assigned job. The production recursive
-/// claim consumes [`PastaSha256TypedClaimJobV1`], which binds those words in-circuit.
+/// Every dynamic byte is the exact Base cell consumed by [`PastaSha256JobsV1`]. Tests retain
+/// the terminal words to inspect the same assigned job. The production recursive claim obtains
+/// [`PastaSha256TypedClaimJobV1`] from [`PastaSha256JobsV1::typed_claim_jobs`] to bind those
+/// words in-circuit.
 pub(super) struct PastaSha256ClaimJobV1<'a, F: ScalarField> {
     /// Exact, unpadded SHA message cells.
     pub(super) message: &'a [PastaSha256ByteV1<F>],

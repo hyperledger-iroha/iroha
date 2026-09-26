@@ -31,7 +31,10 @@ pub mod isi {
         asset::definition::{
             validate_asset_alias_against_names, validate_asset_description, validate_asset_name,
         },
-        asset::{ASSET_TRANSFER_CONTROL_METADATA_KEY, AssetBalancePolicy},
+        asset::{
+            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY,
+            AssetBalancePolicy,
+        },
         isi::error::{InstructionExecutionError, InvalidParameterError, RepetitionError},
         nexus::{AxtAssetIncarnationV1, DataSpaceCatalog, LaneVisibility},
     };
@@ -1271,6 +1274,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            crate::smartcontracts::isi::asset::isi::ensure_account_not_retained_by_retail_daily_limit(
+                state_transaction,
+                &account_id,
+            )?;
             if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
                 &state_transaction.world,
                 &account_id,
@@ -2428,6 +2435,11 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_retail_daily_limit(
+                state_transaction,
+                &BTreeSet::from([asset_definition_id.clone()]),
+                &format!("unregister asset definition {asset_definition_id}"),
+            )?;
             crate::smartcontracts::isi::asset::isi::ensure_asset_definitions_not_retained_by_transfer_controls(
                 state_transaction,
                 &BTreeSet::from([asset_definition_id.clone()]),
@@ -3043,7 +3055,7 @@ pub mod isi {
         #[metrics(+"set_key_value_asset_definition")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let SetKeyValue {
@@ -3051,6 +3063,19 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if key.as_ref() == ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+                && !crate::executor::is_initial_genesis_context(state_transaction)
+                && state_transaction
+                    .world
+                    .asset_definition(&asset_definition_id)?
+                    .owned_by()
+                    != authority
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "issuer usage policy requires asset-definition owner".into(),
+                )
+                .into());
+            }
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -3080,10 +3105,23 @@ pub mod isi {
         #[metrics(+"remove_key_value_asset_definition")]
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_definition_id = self.object().clone();
+            if self.key().as_ref() == ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+                && !crate::executor::is_initial_genesis_context(state_transaction)
+                && state_transaction
+                    .world
+                    .asset_definition(&asset_definition_id)?
+                    .owned_by()
+                    != authority
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "issuer usage policy requires asset-definition owner".into(),
+                )
+                .into());
+            }
             let value = state_transaction
                 .world
                 .asset_definition_mut(&asset_definition_id)
@@ -3685,8 +3723,9 @@ mod tests {
             AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
         },
         asset::{
-            ASSET_TRANSFER_CONTROL_METADATA_KEY, Asset, AssetDefinition, AssetDefinitionAlias,
-            AssetDefinitionId, AssetId, AssetTransferControlRecord, AssetTransferControlStoreV1,
+            ASSET_ISSUER_USAGE_POLICY_METADATA_KEY, ASSET_TRANSFER_CONTROL_METADATA_KEY, Asset,
+            AssetBalancePolicy, AssetDefinition, AssetDefinitionAlias, AssetDefinitionId, AssetId,
+            AssetIssuerUsagePolicyV1, AssetTransferControlRecord, AssetTransferControlStoreV1,
             Mintable, NewAssetDefinition, ResolvedAssetDefinitionAliasV1,
         },
         block::BlockHeader,
@@ -3736,6 +3775,90 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         State::new_for_testing(World::default(), kura, query)
+    }
+    #[test]
+    fn issuer_usage_policy_metadata_requires_definition_owner_in_native_execution() {
+        let domain_id = DomainId::try_new("retail", "universal").expect("domain id");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain_id.clone(),
+            "kina".parse().expect("asset name"),
+        );
+        let world = World::with_assets(
+            [Domain::new(domain_id).build(&ALICE_ID)],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(BOB_ID.clone()).build(&BOB_ID),
+            ],
+            [AssetDefinition::numeric(
+                definition_id.clone(),
+                "Digital Kina".to_owned(),
+                AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&ALICE_ID)],
+            [],
+            [],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        // Height two is deliberately outside the initial-genesis permission exception.
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let policy_key: Name = ASSET_ISSUER_USAGE_POLICY_METADATA_KEY
+            .parse()
+            .expect("issuer policy key");
+        let policy_value = Json::new(AssetIssuerUsagePolicyV1::default());
+        let unauthorized_set = SetKeyValue::asset_definition(
+            definition_id.clone(),
+            policy_key.clone(),
+            policy_value.clone(),
+        )
+        .execute(&BOB_ID, &mut tx)
+        .expect_err("metadata delegate cannot change issuer policy");
+        assert!(
+            unauthorized_set
+                .to_string()
+                .contains("issuer usage policy requires asset-definition owner")
+        );
+        assert!(
+            tx.world
+                .asset_definition(&definition_id)
+                .expect("definition")
+                .metadata()
+                .get(&policy_key)
+                .is_none()
+        );
+        SetKeyValue::asset_definition(definition_id.clone(), policy_key.clone(), policy_value)
+            .execute(&ALICE_ID, &mut tx)
+            .expect("issuer owner can set policy");
+        let unauthorized_remove =
+            RemoveKeyValue::asset_definition(definition_id.clone(), policy_key.clone())
+                .execute(&BOB_ID, &mut tx)
+                .expect_err("metadata delegate cannot remove issuer policy");
+        assert!(
+            unauthorized_remove
+                .to_string()
+                .contains("issuer usage policy requires asset-definition owner")
+        );
+        assert!(
+            tx.world
+                .asset_definition(&definition_id)
+                .expect("definition")
+                .metadata()
+                .get(&policy_key)
+                .is_some()
+        );
+        RemoveKeyValue::asset_definition(definition_id.clone(), policy_key)
+            .execute(&ALICE_ID, &mut tx)
+            .expect("issuer owner can remove policy");
+        let ordinary_key: Name = "ordinary_note".parse().expect("ordinary key");
+        SetKeyValue::asset_definition(definition_id, ordinary_key, Json::new(true))
+            .execute(&BOB_ID, &mut tx)
+            .expect("native issuer restriction does not cover ordinary metadata");
     }
     fn fixture_keypair(seed: u8, algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], algorithm)

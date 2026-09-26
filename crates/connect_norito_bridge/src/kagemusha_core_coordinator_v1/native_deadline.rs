@@ -14,10 +14,10 @@ use std::{
 };
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
-const MAX_LIFETIME: Duration = Duration::from_secs(120);
+pub(crate) const MAX_LIFETIME: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NativeDeadlineErrorV1 {
+pub(crate) enum NativeDeadlineErrorV1 {
     Unavailable,
     Invalid,
     Expired,
@@ -27,13 +27,13 @@ type Result<T> = std::result::Result<T, NativeDeadlineErrorV1>;
 
 /// Native-created same-process clock reading. No host timestamp constructor or wire codec.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct NativeContinuousInstantV1 {
+pub(crate) struct NativeContinuousInstantV1 {
     process_id: u32,
     nanos: u128,
 }
 
 impl NativeContinuousInstantV1 {
-    pub(super) fn now() -> Result<Self> {
+    pub(crate) fn now() -> Result<Self> {
         let process_id = std::process::id();
         let nanos = platform_nanos()?;
         if process_id == 0 || process_id != std::process::id() {
@@ -64,14 +64,23 @@ struct DeadlineState {
 /// Clones retain the original expiry and shared monotonic floor; cloning never renews a lease.
 /// A forked process cannot reuse its parent's pending challenge even within the same boot.
 #[derive(Clone)]
-pub(super) struct NativeDeadlineV1(Arc<DeadlineState>);
+pub(crate) struct NativeDeadlineV1(Arc<DeadlineState>);
 
 impl NativeDeadlineV1 {
     pub(super) fn start(lifetime: Duration) -> Result<Self> {
         Self::from_reading(NativeContinuousInstantV1::now()?, lifetime)
     }
 
-    fn from_reading(started: NativeContinuousInstantV1, lifetime: Duration) -> Result<Self> {
+    /// Fixed suspend-inclusive expiry for app-side early rejection only. Native phase checks
+    /// remain authoritative, and this value must never be interpreted as Unix time.
+    pub(super) fn expiry_continuous_ms(&self) -> Result<u64> {
+        u64::try_from(self.0.expires_nanos / 1_000_000).map_err(|_| NativeDeadlineErrorV1::Invalid)
+    }
+
+    pub(crate) fn from_reading(
+        started: NativeContinuousInstantV1,
+        lifetime: Duration,
+    ) -> Result<Self> {
         if lifetime.is_zero() || lifetime > MAX_LIFETIME || started.process_id == 0 {
             return Err(NativeDeadlineErrorV1::Invalid);
         }
@@ -87,7 +96,7 @@ impl NativeDeadlineV1 {
     }
 
     /// Check against the actual continuous clock, returning the exact successful observation.
-    pub(super) fn check(&self) -> Result<NativeContinuousInstantV1> {
+    pub(crate) fn check(&self) -> Result<NativeContinuousInstantV1> {
         let mut last_seen = self
             .0
             .last_seen
@@ -135,7 +144,7 @@ impl NativeDeadlineV1 {
     }
 
     #[cfg(test)]
-    pub(super) fn expired_for_test() -> Self {
+    pub(crate) fn expired_for_test() -> Self {
         let now = NativeContinuousInstantV1::now().unwrap();
         Self(Arc::new(DeadlineState {
             started: now,
@@ -237,6 +246,31 @@ mod tests {
         assert_eq!(
             deadline.check_reading(tick(150)),
             Err(NativeDeadlineErrorV1::Expired)
+        );
+    }
+
+    #[test]
+    fn exported_continuous_millisecond_expiry_is_fixed_and_never_wall_clock_time() {
+        let deadline =
+            NativeDeadlineV1::from_reading(tick(1_000_000_001), Duration::from_millis(2)).unwrap();
+        assert_eq!(deadline.expiry_continuous_ms(), Ok(1_002));
+        assert_eq!(deadline.clone().expiry_continuous_ms(), Ok(1_002));
+        assert_eq!(
+            deadline.check_reading(tick(1_002_000_000)),
+            Ok(tick(1_002_000_000))
+        );
+        assert_eq!(
+            deadline.check_reading(tick(1_002_000_001)),
+            Err(NativeDeadlineErrorV1::Expired)
+        );
+        let overflow = NativeDeadlineV1::from_reading(
+            tick((u128::from(u64::MAX) + 1) * 1_000_000),
+            Duration::from_nanos(1),
+        )
+        .unwrap();
+        assert_eq!(
+            overflow.expiry_continuous_ms(),
+            Err(NativeDeadlineErrorV1::Invalid)
         );
     }
 

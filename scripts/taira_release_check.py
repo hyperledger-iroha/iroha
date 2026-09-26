@@ -1636,13 +1636,13 @@ TORII_BEACON_STAGES = (('production beacon readiness leaves setup ingress open',
     'tests_runtime_handlers::readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress',
 )), )
 STAGES += (("exact-height native lifecycle installation", (
-    'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+    'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
     'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
     'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
 )), )
 TORII_BEACON_STAGES += (("authenticated exact-roster Ordinary lifecycle ingress", (
     'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
-    'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+    'tests_runtime_handlers::ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
 )), )
@@ -1766,6 +1766,7 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
 
 
 STAGES += (("native beacon reset authority, bounded recovery and public input assembly", (
+    'taira_public_reset::host::beacon::tests::beacon_observation_clients_dispatch_with_the_retained_operator_signer',
     'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
     'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
     'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
@@ -2137,13 +2138,13 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
         'state::tests::native_candidate_handoff_rejects_foreign_original_state',
         'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
-        'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+        'sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot',
         'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
         'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
         'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
-        'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier',
-        'sumeragi::v2_apply::tests::current_carrier_rejects_unrelated_ordinary_external_transaction',
-        'block::valid::tests::only_exact_height_lifecycle_control_exempts_lane_ownership_coverage',
+        'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_preempts_independent_ordinary_input',
+        'sumeragi::v2_apply::tests::current_carrier_accepts_signed_direct_ordinary_route_without_local_queue',
+        'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
         'state::tests::native_preparation_preserves_local_recorder_conflict',
     )),
     ('native preparation and recorded controls preserve original validation', (
@@ -3615,7 +3616,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
     copies = None
     completed = False
     try:
-        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control"} for key in records):
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control", "iroha3d-beacon-custody"} for key in records):
             raise CheckError("native artifact isolation requires known nonempty selections")
         for directory in (root, target):
             info = directory.stat()
@@ -3626,7 +3627,8 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
         paths = {}
         for selection, record in records.items():
             package = {"iroha3d": "irohad", "iroha": "iroha_cli",
-                       "iroha3d-message-control": "irohad"}.get(selection)
+                       "iroha3d-message-control": "irohad",
+                       "iroha3d-beacon-custody": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
             if record["manifest_path"] != str(native_package_root(root, package) / "Cargo.toml"):
@@ -3934,14 +3936,16 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
                              *, message_control: bool = False,
+                             beacon_custody: bool = False,
                              focused_fixture: bool = False) -> NativeArtifactCopies:
     """Copy each build before a separate fixture feature graph can replace Cargo outputs."""
-    if message_control and focused_fixture:
-        raise CheckError("message-control codegen cannot use the focused fixture graph")
-    expected = {"iroha3d": ("iroha3d-message-control", "irohad")} if message_control else {
+    if (message_control and beacon_custody) or (focused_fixture and (message_control or beacon_custody)):
+        raise CheckError("feature-isolated daemon codegen cannot use another fixture graph")
+    expected = {"iroha3d": ("iroha3d-message-control", "irohad")} if message_control else (
+        {"iroha3d": ("iroha3d-beacon-custody", "irohad")} if beacon_custody else {
         "iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
-        "iroha3d_taira": ("taira-launcher", "irohad")}
-    if not message_control:
+        "iroha3d_taira": ("taira-launcher", "irohad")})
+    if not message_control and not beacon_custody:
         # Audit the complete shipping table even in the mutable diagnostic.
         # Only its known four-peer inputs need production codegen there; the
         # immutable release and signed build retain every shipping binary.
@@ -3960,8 +3964,10 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
                *(["--features", "irohad/test-network-message-control"] if message_control else []),
+               *(["--features", "irohad/test-network-production-beacon-custody"] if beacon_custody else []),
                "--message-format=json-render-diagnostics"]
     phase = ("message-control fixture codegen" if message_control else
+             "beacon-custody fixture codegen" if beacon_custody else
              "focused four-peer fixture codegen" if focused_fixture else "shipping codegen")
     print(f"[taira-check] build native network binaries: {phase}", flush=True)
     progress = CargoBuildProgress(phase, {("bin", name) for name in expected},
@@ -3970,7 +3976,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
     production_libraries: set[str] = set()
-    audit_production_graph = not message_control and not focused_fixture
+    audit_production_graph = not message_control and not beacon_custody and not focused_fixture
     stream_error: CheckError | None = None
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
@@ -4082,9 +4088,9 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
                 if "kagami" not in binaries:
                     raise CheckError("beacon fixture requires the isolated shipping Kagami artifact")
                 private_fixture_root = beacon_fixture_root()
-                with compile_network_binaries(root, env, lock_fds, message_control=True) as control:
+                with compile_network_binaries(root, env, lock_fds, beacon_custody=True) as control:
                     beacon_env = network_env | {
-                        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": control["iroha3d-message-control"],
+                        "TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY": control["iroha3d-beacon-custody"],
                         "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
                         "KAGAMI_BIN": binaries["kagami"],
                     }
@@ -4778,18 +4784,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
-        # This integration target compiles late in the complete test graph. Check
-        # its Rust metadata first so a four-peer fixture type error does not wait
-        # for every unrelated test executable to finish codegen. Configuration
-        # shares the already-warm focused network graph. This check publishes no
-        # test pass or qualification checkpoint; the complete build still follows.
-        if "network" in selections:
-            early_compile = tuple(name for name in ("config", "network") if name in selections)
-            check_test_harnesses(root, env, harnesses=early_compile, lock_fds=lock_fds)
-        # The complete --no-run build type-checks this same selected feature graph
-        # and requires one executable for every selected native harness. Keep the
-        # faster metadata-only failure probe in focused prequalification; repeating
-        # it before release codegen adds no qualification evidence.
+        # Check the complete selected test graph before code generation so Rust
+        # import and type errors in any harness stop early. This publishes no test
+        # pass or qualification checkpoint; the complete --no-run build still
+        # requires one executable for every selected native harness.
+        check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             for name in compile_only:

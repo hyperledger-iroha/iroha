@@ -136,6 +136,10 @@ fn eight_independent_parties_authenticate_but_cannot_release_plaintext() {
         verify_bfv_eight_party_decryption_v1(&fixture.statement, &fixture.contributions),
         Err(BfvError::EightPartyShareRelationProofUnavailable),
     );
+    assert!(matches!(
+        super::super::require_ram_lfe_bfv_production_qualification_v1(),
+        Err(BfvError::ProductionQualificationUnavailable(_))
+    ));
 }
 
 #[test]
@@ -222,6 +226,77 @@ fn roster_missing_replay_wrong_signer_and_late_share_mutations_fail_authenticati
 }
 
 #[test]
+fn roster_signing_keys_require_canonical_nonzero_ed25519() {
+    let fixture = eight_party_fixture();
+    for member in &fixture.statement.members {
+        validate_bfv_eight_party_signing_key_v1(&member.signing_public_key)
+            .expect("honest Ed25519 roster member");
+    }
+
+    let secp = KeyPair::from_seed(vec![0x91; 32], Algorithm::Secp256k1);
+    assert!(matches!(
+        validate_bfv_eight_party_signing_key_v1(secp.public_key()),
+        Err(BfvError::InvalidParameters(message)) if message.contains("must use Ed25519")
+    ));
+
+    let mut erased = fixture.statement.members[0].signing_public_key.clone();
+    erased.zeroize_for_confidential_discard();
+    assert!(validate_bfv_eight_party_signing_key_v1(&erased).is_err());
+    let mut erased_roster = fixture.statement.clone();
+    erased_roster.members[0].signing_public_key = erased;
+    assert!(validate_bfv_eight_party_decryption_statement_v1(&erased_roster).is_err());
+    assert!(PublicKey::from_bytes(Algorithm::Ed25519, &[0; 32]).is_err());
+}
+
+#[test]
+fn correctly_signed_non_ed25519_roster_is_rejected_before_share_authentication() {
+    let fixture = eight_party_fixture();
+    let secp = KeyPair::from_seed(vec![0x91; 32], Algorithm::Secp256k1);
+    let mut statement = fixture.statement.clone();
+    statement.members[7].signing_public_key = secp.public_key().clone();
+    assert!(statement.members[6].signing_public_key < statement.members[7].signing_public_key);
+
+    let encoded = norito::encode_canonical(&statement).expect("encode non-Ed25519 statement");
+    assert!(encoded.len() <= BFV_EIGHT_PARTY_STATEMENT_MAX_BYTES_V1);
+    assert!(matches!(
+        decode_bfv_eight_party_decryption_statement_bytes_v1(&encoded),
+        Err(BfvError::InvalidParameters(message)) if message.contains("must use Ed25519")
+    ));
+    let digest = Hash::new_from_chunks(&[
+        BFV_EIGHT_PARTY_DECRYPTION_STATEMENT_DIGEST_DOMAIN_V1,
+        encoded.as_slice(),
+    ]);
+    let mut contributions = fixture.contributions.clone();
+    for (index, contribution) in contributions.iter_mut().enumerate() {
+        contribution.payload.statement_digest = digest;
+        contribution.payload.contribution_commitment =
+            fixture_contribution_commitment(digest, index, &fixture.private_shares[index]);
+        let signer = if index == 7 {
+            &secp
+        } else {
+            &fixture.signing_keys[index]
+        };
+        contribution.signature = SignatureOf::try_new(signer.private_key(), &contribution.payload)
+            .expect("sign with exact changed roster");
+        contribution
+            .signature
+            .verify(
+                &statement.members[index].signing_public_key,
+                &contribution.payload,
+            )
+            .expect("every declaration is correctly signed under its roster key");
+    }
+    assert!(matches!(
+        validate_bfv_eight_party_decryption_authentication_v1(&statement, &contributions),
+        Err(BfvError::InvalidParameters(message)) if message.contains("must use Ed25519")
+    ));
+    assert!(matches!(
+        verify_bfv_eight_party_decryption_v1(&statement, &contributions),
+        Err(BfvError::InvalidParameters(message)) if message.contains("must use Ed25519")
+    ));
+}
+
+#[test]
 fn invalid_roster_aggregate_and_polynomial_shapes_are_rejected() {
     let fixture = eight_party_fixture();
     let mut duplicate_key = fixture.statement.clone();
@@ -251,6 +326,8 @@ fn canonical_norito_roundtrip_preserves_exact_statement_and_signatures() {
         .expect("decode bounded statement");
     let contributions_bytes =
         norito::encode_canonical(&fixture.contributions).expect("encode contributions");
+    assert!(statement_bytes.len() <= BFV_EIGHT_PARTY_STATEMENT_MAX_BYTES_V1);
+    assert!(contributions_bytes.len() <= BFV_EIGHT_PARTY_CONTRIBUTIONS_MAX_BYTES_V1);
     let decoded_contributions =
         decode_bfv_eight_party_decryption_contributions_bytes_v1(&contributions_bytes)
             .expect("decode bounded contributions");
@@ -268,6 +345,10 @@ fn bounded_norito_decoders_reject_oversize_and_wrong_count_inputs() {
     let fixture = eight_party_fixture();
     let oversized = vec![0_u8; BFV_EIGHT_PARTY_STATEMENT_MAX_BYTES_V1 + 1];
     assert!(decode_bfv_eight_party_decryption_statement_bytes_v1(&oversized).is_err());
+    let oversized_contributions = vec![0_u8; BFV_EIGHT_PARTY_CONTRIBUTIONS_MAX_BYTES_V1 + 1];
+    assert!(
+        decode_bfv_eight_party_decryption_contributions_bytes_v1(&oversized_contributions).is_err()
+    );
 
     let mut over_degree = fixture.statement.clone();
     over_degree.aggregate_public_key.b.push(0);

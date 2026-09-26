@@ -165,11 +165,13 @@ pub use kagemusha_core_coordinator_v1::{
     KagemushaCoreCoordinatorMethodV1, KagemushaCoreSenderCandidateArchiveV1,
     KagemushaCoreSenderPreparationArchiveV1, KagemushaCoreSenderPreparationSelectorV1,
     KagemushaCoreSenderRecoveryArchiveV1, KagemushaCoreSenderWalletContextV1,
-    KagemushaEnrollmentAttemptJournalV1, KagemushaEnrollmentJournalDispatchV1,
-    KagemushaEnrollmentJournalErrorV1, KagemushaEnrollmentJournalPinsV1,
-    KagemushaEnrollmentJournalReservationV1, KagemushaEnrollmentJournalResultV1,
-    KagemushaEnrollmentJournalSelectionV1, KagemushaEnrollmentJournalStoreV1,
-    KagemushaEnrollmentLiveSelectionV1, KagemushaExclusiveCoordinatorBackendV1,
+    KagemushaEnrollmentAttemptJournalV1, KagemushaEnrollmentContextProviderV1,
+    KagemushaEnrollmentJournalDispatchV1, KagemushaEnrollmentJournalErrorV1,
+    KagemushaEnrollmentJournalPinsV1, KagemushaEnrollmentJournalReservationV1,
+    KagemushaEnrollmentJournalResultV1, KagemushaEnrollmentJournalSelectionV1,
+    KagemushaEnrollmentJournalStoreV1, KagemushaEnrollmentLiveSelectionV1,
+    KagemushaEnrollmentPhaseOneBackendV1, KagemushaEnrollmentProvisionedContextV1,
+    KagemushaKernelEnrollmentDelegateV1, KagemushaQualifiedEnrollmentDelegateV1,
     PendingIssuerEnrollmentV1, PreparedIssuerProofV1, SignedAppPreparationErrorV1,
     SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
     install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
@@ -180,19 +182,73 @@ pub use kagemusha_core_coordinator_v1::{
     kagemusha_core_coordinator_validate_storage_path_v1, verify_signed_app_preparation_v1,
 };
 mod kagemusha_device_bridge_v1;
+mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;
+mod kagemusha_testnet_finality_chain_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_mint_runtime_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_mobile_host_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_startup_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
+pub use kagemusha_mobile_bootstrap_v1::{
+    KAGEMUSHA_MOBILE_BOOTSTRAP_MAX_BYTES_V1, KagemushaMobileBootstrapApprovalPayloadV1,
+    KagemushaMobileBootstrapApprovalV1, KagemushaMobileBootstrapCheckpointV1,
+    KagemushaMobileBootstrapPackageV1, KagemushaMobileBootstrapPinsV1,
+    KagemushaMobileBootstrapReplayPinV1, KagemushaMobileBootstrapScopeV1,
+    KagemushaVerifiedMobileBootstrapV1, verify_kagemusha_mobile_bootstrap_v1,
+};
 pub use kagemusha_reserve_finality_v1::{
     connect_norito_kagemusha_reserve_finality_hint_v1,
     connect_norito_kagemusha_reserve_finality_verify_v1,
     connect_norito_kagemusha_top_up_signed_request_validate_v1,
 };
+pub use kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1;
+#[cfg(unix)]
+pub use kagemusha_testnet_native_mint_runtime_v1::{
+    KagemushaTestnetNativeMintInstallV1, KagemushaTestnetNativeMintReservationV1,
+    KagemushaTestnetNativeMintRuntimeV1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_mobile_host_v1::{
+    KagemushaTestnetNativeMobileHostV1, KagemushaTestnetNativePinnedMintV1,
+    KagemushaTestnetNativeReservedMintV1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_startup_v1::{
+    KAGEMUSHA_TESTNET_NATIVE_STARTUP_CONTRACT_V1, KagemushaTestnetNativeStartupContextV1,
+    KagemushaTestnetNativeStartupFreshnessProviderV1, KagemushaTestnetNativeStartupFreshnessV1,
+    connect_norito_kagemusha_testnet_native_startup_activate_v1,
+    connect_norito_kagemusha_testnet_native_startup_contract_v1,
+    install_kagemusha_testnet_native_startup_context_v1,
+    with_kagemusha_testnet_native_mobile_host_v1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_value_ledger_v1::{
+    KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1, KagemushaTestnetMintLedgerCreditArchiveV1,
+    connect_norito_kagemusha_testnet_value_credit_v1, credit_kagemusha_testnet_native_value_v1,
+    install_kagemusha_testnet_native_value_ledger_v1,
+};
 pub use kagemusha_testnet_observation_v1::{
-    KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
-    KagemushaTestnetObservationInstallErrorV1, KagemushaTestnetStateObservationArchiveV1,
+    KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1, KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1,
+    KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1,
+    KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
+    KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1,
+    KagemushaTestnetFinalizedMintObservationArchiveV1, KagemushaTestnetObservationInstallErrorV1,
+    KagemushaTestnetStateObservationArchiveV1,
     connect_norito_kagemusha_testnet_state_proof_observe_v1,
     install_kagemusha_testnet_state_observation_owner_v1,
     load_and_install_kagemusha_testnet_state_observation_owner_v1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_observation_v1::{
+    KagemushaTestnetDurableObservationModeV1, KagemushaTestnetValueAdmissionArchiveV1,
+    connect_norito_kagemusha_testnet_finalized_mint_observe_v1,
+    connect_norito_kagemusha_testnet_value_admit_v1,
+    reserve_kagemusha_testnet_mint_before_submission_v1,
 };
 #[cfg(any(test, feature = "dev-tools"))]
 mod kagemusha_sender_release_evidence;
@@ -1463,8 +1519,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_open_v1(
 ///
 /// The bridge strictly validates the closed method and request frame before
 /// dispatch to the process's install-once backend. It then bounds and validates
-/// the complete response frame before exposure. A monetary result is never
-/// synthesized from host input, and no installed backend means unavailable.
+/// the complete response frame and publishes it while the sole owner lock is held.
+/// A delegated error, invalid response or failed output allocation revokes this
+/// process's handle so recovery starts from authenticated durable state in a new
+/// process. A monetary result is never synthesized from host input, and no
+/// installed backend means unavailable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     handle: u64,
@@ -1507,52 +1566,26 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     else {
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
-    let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if method == KagemushaCoreCoordinatorMethodV1::InitialEnrollment {
-            backend.invoke_initial_enrollment(handle, &request_frame)
-        } else if method == KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest {
-            backend.acknowledge_committed_app_attest(handle, &request_frame)
-        } else if method == KagemushaCoreCoordinatorMethodV1::ExportOutgoingStateProof {
-            let fields = kagemusha_core_coordinator_decode_request_v1(&request_frame)
-                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
-            let operation_id: [u8; 32] = fields[0]
-                .as_slice()
-                .try_into()
-                .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)?;
-            let pair = backend.export_outgoing_state_proof(handle, operation_id)?;
-            if pair.operation_id != operation_id {
-                return Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected);
-            }
-            kagemusha_core_coordinator_encode_response_v1(&[
-                pair.operation_id.to_vec(),
-                pair.public_inputs_archive,
-                pair.paired_proof_archive,
-            ])
-            .map_err(|_| KagemushaCoreCoordinatorBackendErrorV1::Rejected)
-        } else {
-            backend.invoke(handle, method, &request_frame)
-        }
-    })) {
-        Ok(Ok(response_frame)) => response_frame,
-        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
-            return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
-        }
-        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)) | Err(_) => {
-            return ERR_KAGEMUSHA_V1;
-        }
-    };
-    if response_frame.len() > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-        || kagemusha_core_coordinator_v1::archive_boundary::validate_response(
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.invoke_checked_with_output(
+            handle,
             method,
             &request_frame,
-            &response_frame,
+            |response_frame| unsafe { write_bytes_usize(output_ptr, output_len, response_frame) },
         )
-        .is_err()
-    {
-        return ERR_KAGEMUSHA_V1;
+    })) {
+        Ok(Ok(())) => 0,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Backend(
+            KagemushaCoreCoordinatorBackendErrorV1::Unavailable,
+        ))) => ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Backend(
+            KagemushaCoreCoordinatorBackendErrorV1::Rejected,
+        )))
+        | Err(_) => ERR_KAGEMUSHA_V1,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Output(
+            error,
+        ))) => error,
     }
-    unsafe { write_bytes_usize(output_ptr, output_len, &response_frame) }
-        .map_or_else(|error| error, |()| 0)
 }
 
 /// Revoke an opened coordinator handle before delegating hardware-session teardown.
@@ -2708,12 +2741,12 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
             .get("attestation")
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
-    let phone_retail_canonicality = object
-        .get("phone_retail_canonicality")
-        .filter(|value| !matches!(value, JsonValue::Null))
-        .map(|value| norito::json::from_value(value.clone()))
-        .transpose()
-        .map_err(|_| BridgeError::IdentifierReceipt)?;
+    let phone_retail_canonicality = match object.get("phone_retail_canonicality") {
+        None | Some(JsonValue::Null) => None,
+        Some(value) => Some(
+            norito::json::from_value(value.clone()).map_err(|_| BridgeError::IdentifierReceipt)?,
+        ),
+    };
     Ok(IdentifierResolutionReceipt {
         payload,
         attestation,
@@ -11184,12 +11217,12 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     method: jni::sys::jint,
     fields: jni::objects::JObjectArray<'_>,
 ) -> jni::sys::jobjectArray {
-    let Ok(method) = u8::try_from(method) else {
+    let Ok(method_code) = u8::try_from(method) else {
         return ptr::null_mut();
     };
-    if KagemushaCoreCoordinatorMethodV1::from_code(method).is_none() {
+    let Some(method) = KagemushaCoreCoordinatorMethodV1::from_code(method_code) else {
         return ptr::null_mut();
-    }
+    };
     let Ok(field_count) = env.get_array_length(&fields) else {
         return ptr::null_mut();
     };
@@ -11230,57 +11263,37 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     };
 
     let handle = u64::from_ne_bytes(handle.to_ne_bytes());
-    let mut output_ptr = ptr::null_mut();
-    let mut output_len = 0_usize;
-    let status = unsafe {
-        connect_norito_kagemusha_core_coordinator_invoke_v1(
-            handle,
-            method,
-            request_frame.as_ptr(),
-            request_frame.len(),
-            &mut output_ptr,
-            &mut output_len,
-        )
-    };
-    if status != 0 {
-        connect_norito_free(output_ptr);
+    let Some(backend) =
+        kagemusha_core_coordinator_v1::installed_kagemusha_core_coordinator_backend_v1()
+    else {
         return ptr::null_mut();
+    };
+    // JNI publication is part of the same exclusive hardware operation. A Java allocation
+    // failure after dispatch has an uncertain monetary effect: the checked owner revokes the
+    // handle before another invocation can select a successor.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.invoke_checked_with_output(handle, method, &request_frame, |response_frame| {
+            let response_fields =
+                kagemusha_core_coordinator_decode_response_v1(response_frame).map_err(|_| ())?;
+            let byte_array_class = env.find_class("[B").map_err(|_| ())?;
+            let output = env
+                .new_object_array(
+                    response_fields.len() as jni::sys::jsize,
+                    byte_array_class,
+                    jni::objects::JObject::null(),
+                )
+                .map_err(|_| ())?;
+            for (index, field) in response_fields.iter().enumerate() {
+                let field = env.byte_array_from_slice(field).map_err(|_| ())?;
+                env.set_object_array_element(&output, index as jni::sys::jsize, &field)
+                    .map_err(|_| ())?;
+            }
+            Ok::<_, ()>(output.into_raw())
+        })
+    })) {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) | Err(_) => ptr::null_mut(),
     }
-    if output_ptr.is_null()
-        || output_len == 0
-        || output_len > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-    {
-        connect_norito_free(output_ptr);
-        return ptr::null_mut();
-    }
-    let response_frame = unsafe { slice::from_raw_parts(output_ptr, output_len) }.to_vec();
-    connect_norito_free(output_ptr);
-    let Ok(response_fields) = kagemusha_core_coordinator_decode_response_v1(&response_frame) else {
-        return ptr::null_mut();
-    };
-
-    let Ok(byte_array_class) = env.find_class("[B") else {
-        return ptr::null_mut();
-    };
-    let Ok(output) = env.new_object_array(
-        response_fields.len() as jni::sys::jsize,
-        byte_array_class,
-        jni::objects::JObject::null(),
-    ) else {
-        return ptr::null_mut();
-    };
-    for (index, field) in response_fields.iter().enumerate() {
-        let Ok(field) = env.byte_array_from_slice(field) else {
-            return ptr::null_mut();
-        };
-        if env
-            .set_object_array_element(&output, index as jni::sys::jsize, &field)
-            .is_err()
-        {
-            return ptr::null_mut();
-        }
-    }
-    output.into_raw()
 }
 
 #[cfg(any(

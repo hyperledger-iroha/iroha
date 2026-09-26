@@ -8997,9 +8997,7 @@ pub(crate) mod valid {
             ))
         }
         /// A quorum-certified threshold-key lifecycle action must execute at
-        /// its exact global height. It is the sole direct external control
-        /// without a lane payload; ordinary application entries still require
-        /// complete lane ownership coverage.
+        /// its exact global height and remain the sole direct external control.
         fn sole_exact_height_lifecycle_control_without_lane_ownership(
             block: &SignedBlock,
             state: &impl StateReadOnly,
@@ -9052,6 +9050,53 @@ pub(crate) mod valid {
                     if leg.role == crate::queue::RouteLegRole::Coordinator
                         && leg.route.dataspace_id == DataSpaceId::UNIVERSAL
             )
+        }
+        /// Direct ordinary inputs are ordered by the signed global proposal.
+        /// A peer need not have observed them in its local asynchronous queue.
+        fn direct_ordinary_entries_without_lane_ownership(
+            block: &SignedBlock,
+            state: &impl StateReadOnly,
+            bundle: &BlockExecutionContextBundle,
+        ) -> bool {
+            if !bundle.lane_payload_ownerships.is_empty()
+                || bundle.native_lane_decisions.is_some()
+                || !bundle.autonomous_lane_payloads.is_empty()
+                || bundle.merge_entry.is_some()
+                || block.external_entrypoint_count() != bundle.external.len()
+            {
+                return false;
+            }
+            let mut lifecycle = false;
+            for (entrypoint, context) in block
+                .external_entrypoints_slice()
+                .iter()
+                .zip(&bundle.external)
+            {
+                let TransactionEntrypoint::External(signed) = entrypoint else {
+                    return false;
+                };
+                if signed.admission_intent()
+                    != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+                    || context.entrypoint_hash != entrypoint.hash()
+                    || context.native_amx_receipt.is_some()
+                    || !matches!(
+                        routing_plan_from_execution_context(context),
+                        Ok(crate::queue::RoutingPlan::Single(_))
+                    )
+                {
+                    return false;
+                }
+                lifecycle |= signed.instructions().explicit_instructions().any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1>()
+                        .is_some()
+                });
+            }
+            !lifecycle
+                || Self::sole_exact_height_lifecycle_control_without_lane_ownership(
+                    block, state, bundle,
+                )
         }
         fn validate_execution_context_lane_payload_ownerships(
             block: &SignedBlock,
@@ -9290,9 +9335,7 @@ pub(crate) mod valid {
             }
             if covered_indices.len() != bundle.external.len() {
                 if covered_indices.is_empty()
-                    && Self::sole_exact_height_lifecycle_control_without_lane_ownership(
-                        block, state, bundle,
-                    )
+                    && Self::direct_ordinary_entries_without_lane_ownership(block, state, bundle)
                 {
                     return Ok(());
                 }
@@ -16281,7 +16324,7 @@ pub(crate) mod valid {
             ));
         }
         #[test]
-        fn only_exact_height_lifecycle_control_exempts_lane_ownership_coverage() {
+        fn direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership() {
             use iroha_data_model::isi::consensus_keys::{
                 ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
                 ThresholdKeyLifecycleCertificateV1,
@@ -16299,18 +16342,13 @@ pub(crate) mod valid {
             );
             let state_view = state.view();
             let ordinary_bundle = block.execution_context().expect("ordinary route");
-            let error = ValidBlock::validate_execution_context_lane_payload_ownerships(
+            ValidBlock::validate_execution_context_lane_payload_ownerships(
                 &block,
                 &topology,
                 &state_view,
                 ordinary_bundle,
             )
-            .expect_err("ordinary application transaction still needs lane ownership");
-            assert!(matches!(
-                error,
-                BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("do not cover execution context index 0")
-            ));
+            .expect("ordinary input binds its route in the signed global proposal");
 
             let (authority, signer) = gen_account_in("lifecycle-control-coverage-cert");
             let certificate = ThresholdKeyLifecycleCertificateV1 {

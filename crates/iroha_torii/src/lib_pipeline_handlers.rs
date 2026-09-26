@@ -107,7 +107,7 @@ async fn handler_post_transactions_batch(
                 prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));
             }
             // Keep route/policy preflight before the first durable write. Ordinary
-            // inputs have exactly the same authenticated lifecycle exception.
+            // inputs must be single-route; lifecycle controls need their own QC.
             prepared
                 .into_iter()
                 .map(|(hash, prepared)| {
@@ -123,7 +123,7 @@ async fn handler_post_transactions_batch(
                             if prepared.transaction.entrypoint().admission_intent()
                                 != TransactionAdmissionIntent::QueuePlanSynced
                             {
-                                threshold_key_lifecycle_ingress::authenticate(
+                                ordinary_transaction_ingress::authenticate(
                                     &worker_app,
                                     prepared.transaction.entrypoint(),
                                     &prepared.routing_plan,

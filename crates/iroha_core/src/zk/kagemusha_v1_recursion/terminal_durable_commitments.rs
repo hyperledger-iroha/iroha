@@ -771,7 +771,7 @@ pub(super) fn constrain_outgoing_terminal_recovery_opening_v1<F: KagemushaPoseid
     range: &RangeChip<F>,
     jobs: &mut PastaSha256JobsV1<F>,
     opening: Option<&KagemushaAuthenticatedTerminalRecoveryOpeningV1<'_, F>>,
-) -> Result<(), String> {
+) -> Result<[PastaSha256ByteV1<F>; 32], String> {
     let opening = opening.ok_or_else(|| {
         "outgoing terminal recovery lacks authenticated prepared-intent and body sources".to_owned()
     })?;
@@ -896,6 +896,7 @@ pub(super) fn constrain_outgoing_terminal_recovery_opening_v1<F: KagemushaPoseid
 mod tests {
     use super::*;
     use crate::zk::kagemusha_v1_recursion::guard_bundle::assign_bytes;
+    use crate::zk::kagemusha_v1_recursion::terminal_authorization::constrain_terminal_apple_signed_body_v1;
     use crate::zk::{
         kagemusha_v1_poseidon::digest_limbs,
         kagemusha_v1_state::{terminal_journal_commitment_v1, terminal_recovery_commitment_v1},
@@ -1451,13 +1452,15 @@ mod tests {
         PreparationCarrier,
         JournalRevision,
         TerminalBodyCommitment,
+        SignedTerminalBody,
     }
 
     fn complete_outgoing_opening_circuit<F: KagemushaPoseidonFieldV1>(
         mutation: CompleteOutgoingMutation,
     ) -> Result<TestCircuit<F>, String> {
         use iroha_data_model::kagemusha::{
-            KagemushaCommitEvidenceV1, KagemushaHardwareTerminalBodyV1,
+            KagemushaCommitEvidenceV1, KagemushaHardwarePlatformClassV1,
+            KagemushaHardwareSelectionSigningLayoutV1, KagemushaHardwareTerminalBodyV1,
             KagemushaTrustedCommitTimeV1,
         };
         use sha2::{Digest as _, Sha256};
@@ -1517,9 +1520,10 @@ mod tests {
             private_journal_commitment: journal,
             private_recovery_commitment: recovery,
         };
-        let mut body_commitment = body
+        let signed_body_commitment = body
             .canonical_commitment()
             .map_err(|_| "native complete-opening terminal body failed".to_owned())?;
+        let mut body_commitment = signed_body_commitment;
         let mut preparation_carrier = SEND_PREPARATION_ID;
         let revision = if matches!(mutation, CompleteOutgoingMutation::JournalRevision) {
             REVISION + 1
@@ -1530,7 +1534,9 @@ mod tests {
             CompleteOutgoingMutation::SealedTransitionByte => streams[0][0] ^= 1,
             CompleteOutgoingMutation::PreparationCarrier => preparation_carrier[0] ^= 1,
             CompleteOutgoingMutation::TerminalBodyCommitment => body_commitment[0] ^= 1,
-            CompleteOutgoingMutation::None | CompleteOutgoingMutation::JournalRevision => {}
+            CompleteOutgoingMutation::None
+            | CompleteOutgoingMutation::JournalRevision
+            | CompleteOutgoingMutation::SignedTerminalBody => {}
         }
 
         let zero = ctx.load_constant(F::ZERO);
@@ -1640,7 +1646,34 @@ mod tests {
                 Some(&streams),
             )?;
         let mut jobs = PastaSha256JobsV1::default();
-        constrain_outgoing_terminal_recovery_opening_v1(ctx, &range, &mut jobs, Some(&opening))?;
+        let derived_body = constrain_outgoing_terminal_recovery_opening_v1(
+            ctx,
+            &range,
+            &mut jobs,
+            Some(&opening),
+        )?;
+        // Keep the signed-field check on the bytes derived by the complete outgoing opening.
+        // The raw assertion signature and issuer enrollment still need the live recursive fold.
+        let mut signed_subject = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+        signed_subject[KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT]
+            .copy_from_slice(&signed_body_commitment);
+        if matches!(mutation, CompleteOutgoingMutation::SignedTerminalBody) {
+            signed_subject
+                [KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT.start + 15] ^=
+                1;
+        }
+        let assigned_subject = constrain_terminal_apple_signed_body_v1(
+            ctx,
+            &range,
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            Some(&signed_subject),
+            &signed_subject,
+            &derived_body,
+        )?;
+        assert_eq!(
+            assigned_subject.len(),
+            KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES
+        );
         assert_eq!(jobs.typed_claim_jobs()?.len(), 6);
         builder.calculate_params(Some(UNUSABLE_ROWS));
         Ok(TestCircuit { builder, jobs })
@@ -1662,6 +1695,7 @@ mod tests {
                 CompleteOutgoingMutation::PreparationCarrier,
                 CompleteOutgoingMutation::JournalRevision,
                 CompleteOutgoingMutation::TerminalBodyCommitment,
+                CompleteOutgoingMutation::SignedTerminalBody,
             ] {
                 assert!(
                     MockProver::run(

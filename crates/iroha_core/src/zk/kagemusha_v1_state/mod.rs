@@ -48,6 +48,10 @@ mod one_use_key_ratchet;
 mod outgoing_operation_index;
 #[cfg(unix)]
 mod private_journal;
+#[cfg(all(test, unix))]
+pub(crate) use private_journal::TestPersistenceFailure;
+#[cfg(unix)]
+pub(crate) use private_journal::{PrivateJournal, PrivateJournalError, PrivateJournalFormat};
 mod receive_fold;
 mod receive_fold_operation;
 mod recovery_metadata;
@@ -92,6 +96,9 @@ pub(crate) use mint_fold_private_inputs::{
     KagemushaMintFoldOpeningWitnessV1, KagemushaMintFoldPrivateInputsV1,
 };
 pub use mint_inbox::*;
+pub(crate) use mint_inbox::{
+    KagemushaTestnetVerifiedMintProofsV1, verify_applied_top_up_mint_stage_experimental_v1,
+};
 pub use mint_inbox_operations::{
     KagemushaPendingCreditWatermarkV1, MintCreditStageOutcomeV1, PendingCreditFoldV1,
 };
@@ -140,7 +147,7 @@ use iroha_data_model::{
         KagemushaEncryptedCreditEnvelopeV1, KagemushaLifecycleBindingV1, KagemushaMintCreditV1,
         KagemushaOperationKindV1, KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
         KagemushaPaymentOutputV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
-        KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
+        KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1, KagemushaReleasePurposeV1,
         kagemusha_asset_identity_digest_v1, kagemusha_ciphertext_digest_v1,
         kagemusha_device_key_reference_v1, kagemusha_liability_pool_id_v1,
         kagemusha_pasta_state_commitment_v1, kagemusha_peer_credit_opening_commitment_v1,
@@ -395,6 +402,7 @@ pub type DigestV1 = [u8; 32];
 pub struct KagemushaStateProofReleaseV1 {
     artifacts: KagemushaRecursionArtifactsV1,
     enabled_profiles: Arc<[KagemushaEnabledProfileV1]>,
+    purpose: KagemushaReleasePurposeV1,
 }
 
 impl KagemushaStateProofReleaseV1 {
@@ -415,6 +423,7 @@ impl KagemushaStateProofReleaseV1 {
                 canonical_empty_effect_digest,
             ),
             Arc::from(release.enabled_profiles()),
+            release.purpose(),
         )
     }
 
@@ -422,6 +431,12 @@ impl KagemushaStateProofReleaseV1 {
     #[must_use]
     pub const fn release_id(&self) -> DigestV1 {
         self.artifacts.release_id
+    }
+
+    /// Return the purpose authenticated by the signed release manifest.
+    #[must_use]
+    pub const fn purpose(&self) -> KagemushaReleasePurposeV1 {
+        self.purpose
     }
 
     /// Return the release-fixed digest representing an empty durable transition effect.
@@ -435,12 +450,17 @@ impl KagemushaStateProofReleaseV1 {
         artifacts: KagemushaRecursionArtifactsV1,
         enabled_profiles: Vec<KagemushaEnabledProfileV1>,
     ) -> Result<Self, KagemushaStateErrorV1> {
-        Self::from_release_parts(artifacts, enabled_profiles.into())
+        Self::from_release_parts(
+            artifacts,
+            enabled_profiles.into(),
+            KagemushaReleasePurposeV1::Production,
+        )
     }
 
     fn from_release_parts(
         artifacts: KagemushaRecursionArtifactsV1,
         enabled_profiles: Arc<[KagemushaEnabledProfileV1]>,
+        purpose: KagemushaReleasePurposeV1,
     ) -> Result<Self, KagemushaStateErrorV1> {
         // A state-proof release installs one paired recursive artifact package. Allowing an
         // enabled profile to name another suite or verifier would create apparently valid
@@ -459,6 +479,7 @@ impl KagemushaStateProofReleaseV1 {
         Ok(Self {
             artifacts,
             enabled_profiles,
+            purpose,
         })
     }
 
@@ -473,7 +494,9 @@ impl KagemushaStateProofReleaseV1 {
         &self,
         context: KagemushaStateContextV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if context.release_id != self.release_id() {
+        if self.purpose != KagemushaReleasePurposeV1::Production
+            || context.release_id != self.release_id()
+        {
             return Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool);
         }
         let enabled = self

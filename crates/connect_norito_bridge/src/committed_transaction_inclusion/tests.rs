@@ -269,6 +269,91 @@ fn response(rows: Vec<CommittedTransaction>) -> Vec<u8> {
 }
 
 #[test]
+fn kagemusha_testnet_anchor_requires_signed_consecutive_chain_from_independent_context() {
+    let (block, _) = selected_block();
+    let bundle = finality_bundle(&block);
+    let trusted_context = bundle.commitment.height_context_id;
+    let chain = json::to_json(&vec![bundle.clone()]).unwrap();
+    let anchor = crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            network(),
+            trusted_context,
+            chain.as_bytes(),
+        )
+        .unwrap();
+    assert_eq!(anchor.network_id, network());
+    assert_eq!(anchor.block_height, 1);
+    assert_eq!(anchor.height_context_id, trusted_context);
+
+    #[cfg(unix)]
+    {
+        let mut pinned_anchor = None;
+        let (newly_pinned, returned_anchor) =
+            crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
+                network(),
+                trusted_context,
+                chain.as_bytes(),
+                |verified| {
+                    pinned_anchor = Some(verified.anchor());
+                    Ok(true)
+                },
+            )
+            .unwrap();
+        assert!(newly_pinned);
+        assert!(Some(returned_anchor) == pinned_anchor);
+
+        let (newly_pinned, retry_anchor) =
+            crate::kagemusha_testnet_finality_chain_v1::verify_then_pin_chain(
+                network(),
+                trusted_context,
+                chain.as_bytes(),
+                |_| Ok(false),
+            )
+            .unwrap();
+        assert!(!newly_pinned);
+        assert!(retry_anchor == returned_anchor);
+    }
+
+    let wrong_context = HeightContextId(HashOf::from_untyped_unchecked(Hash::prehashed([7; 32])));
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            network(),
+            wrong_context,
+            chain.as_bytes(),
+        )
+        .is_err());
+    let wrong_network =
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::prehashed([9; 32])));
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            wrong_network,
+            trusted_context,
+            chain.as_bytes(),
+        )
+        .is_err());
+
+    // Repeating a valid signed bundle cannot advance a consecutive chain.
+    let repeated = json::to_json(&vec![bundle.clone(), bundle]).unwrap();
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        verify_kagemusha_testnet_finality_anchor_from_chain_v1(
+            network(),
+            trusted_context,
+            repeated.as_bytes(),
+        )
+        .is_err());
+
+    #[cfg(unix)]
+    assert!(crate::kagemusha_testnet_finality_chain_v1::
+        pin_kagemusha_testnet_authenticated_finality_chain_v1(
+            [0x71; 32],
+            network(),
+            trusted_context,
+            chain.as_bytes(),
+        )
+        .is_err()); // A valid chain cannot install a pin without the private native owner.
+}
+
+#[test]
 fn authentic_current_row_and_four_negative_evidence_cases() {
     let (block, selected) = selected_block();
     let bundle = finality_bundle(&block);

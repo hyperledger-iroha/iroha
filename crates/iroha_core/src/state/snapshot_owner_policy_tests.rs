@@ -160,10 +160,9 @@ fn snapshot_owner_policy_fixture_with_stored_history(
             (LaneId::new(3), validator.clone()),
             (custody_asset.clone(), Quantity::from(1_000_000_u64)),
         );
-        world.public_lane_stake_reserves.insert(
-            custody_asset,
-            Quantity::from(1_000_000_u64),
-        );
+        world
+            .public_lane_stake_reserves
+            .insert(custody_asset, Quantity::from(1_000_000_u64));
         world.commit();
     }
     // The fixture models a committed staking owner at both snapshot cuts.

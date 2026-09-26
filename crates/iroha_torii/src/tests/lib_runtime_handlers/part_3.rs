@@ -1191,6 +1191,7 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
     assert!(
         super::ingest_queue_plan_admission_publication(&app, &certificate_only)
             .expect_err("certificate-only bytes cannot publish recoverable input")
+            .to_string()
             .contains("complete lane admitted input cannot be decoded")
     );
     assert!(
@@ -1264,6 +1265,7 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
     assert!(
         super::ingest_queue_plan_admission_publication(&app, &unsupported)
             .expect_err("unsupported publication schema must fail")
+            .to_string()
             .contains("schema_version")
     );
 }
@@ -1383,7 +1385,7 @@ fn queue_plan_publication_ingest_requires_configured_certified_receiver() {
             .local_peer_id = receiver.clone();
         let error = super::ingest_queue_plan_admission_publication(&app, &publication)
             .expect_err("missing or uncertified publication receiver");
-        assert!(error.contains(if receiver.is_none() {
+        assert!(error.to_string().contains(if receiver.is_none() {
             "no configured peer identity"
         } else {
             "not in the certified coordinator roster"
@@ -1449,6 +1451,7 @@ fn queue_plan_admission_publication_retains_future_until_catch_up() {
     assert!(
         super::ingest_queue_plan_admission_publication(&app, &incomplete)
             .expect_err("one attestation must not authorize a four-validator publication")
+            .to_string()
             .contains("exact durability quorum")
     );
     assert_eq!(
@@ -4301,6 +4304,78 @@ async fn queue_plan_synced_attempt_window_is_parallel_bounded_and_released_at_qu
         norito::decode_from_bytes(&torii_body_bytes(response, "bounded-window quorum").await)
             .unwrap();
     assert_eq!(certificate.attestations.len(), 3);
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn peer_queue_plan_publication_waits_for_state_after_durable_block_write() {
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xd4_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive delayed peer publication validator key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xd4,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .unwrap()
+        .unwrap();
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_006))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
+    let publication = QueuePlanAdmissionPublicationV1 {
+        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+        certificate: queue_plan_synced_test_complete_input(&request, &snapshot.body),
+    };
+    let hash = Hash::new(&publication.certificate);
+    let expected_bytes = publication.certificate.clone();
+    let successor = make_empty_signed_block(1, None, 1_700_000_000_000);
+    let successor_header = successor.header().clone();
+    app.kura.store_block(Arc::new(successor)).unwrap();
+    let error = super::ingest_queue_plan_admission_publication(&app, &publication)
+        .expect_err("Kura's one-block lead must remain a typed publication overlap");
+    assert!(matches!(
+        error,
+        QueuePlanAdmissionPublicationIngestError::Persistence(ref source)
+            if super::queue_plan_publication_wait::publication_overlap_height(source) == Some(1)
+    ));
+    let sender = PeerId::from(signers[1].public_key().clone());
+    let work_app = app.clone();
+    let work = tokio::spawn(async move {
+        super::process_incoming_queue_plan_admission_publication(
+            &work_app,
+            &sender,
+            &publication,
+        )
+        .await;
+    });
+    // State publication is asynchronous and may legitimately take longer than
+    // the synchronous 250 ms reconciliation probe.
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    assert!(!work.is_finished(), "peer publication must await State catch-up");
+    assert_eq!(
+        app.kura.pending_queue_plan_admission_certificate(hash).unwrap(),
+        None,
+    );
+    app.state
+        .append_committed_block_header_for_tests(successor_header);
+    tokio::time::timeout(Duration::from_secs(10), work)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        app.kura.pending_queue_plan_admission_certificate(hash).unwrap(),
+        Some(expected_bytes),
+    );
 }
 
 #[cfg(feature = "connect")]

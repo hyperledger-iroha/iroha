@@ -495,6 +495,7 @@ state_test! { consensus_stack native_service_control_only_admission_retains_one_
     let receipt = store.execute_retained_durable_validation(
         durable.clone(), durable.manifest_hash(), &mut retained,
     ).unwrap().into_validated_receipt().unwrap();
+    assert!(retained.body_for_test(subject).is_none());
     let allocation = retained.owner_for_test(subject).unwrap().phase_allocation_for_test();
     let cached = store.execute_retained_durable_validation(
         durable.clone(), durable.manifest_hash(), &mut retained,
@@ -507,6 +508,7 @@ state_test! { consensus_stack native_service_control_only_admission_retains_one_
     let published = retained.select(&receipt).unwrap()
         .try_consume(|validator, owner| owner.try_publish(validator, finality))
         .unwrap_or_else(|error| panic!("current first-admission source must publish: {error}"));
+    assert!(retained.body_for_test(subject).is_none());
     assert!(published.native_apply().is_none(), "control publication grants no economic Native Apply");
     assert_eq!(fixture.service.candidate_executions_for_test(), 1);
     assert_eq!(fixture.state.committed_height() as u64, context.height);
@@ -612,6 +614,7 @@ fn assert_native_service_body_store_retention(fixture: Box<NativeServicePreparat
         Err(V2BodyStoreError::Io { .. })
     ));
     let owner = service.owner_for_test(subject).unwrap();
+    assert!(service.body_for_test(subject).is_none());
     let allocations = native_service_retained_source_allocations(owner);
     let commitment = owner.ready_commitment().unwrap();
     assert_eq!(fixture.service.candidate_executions_for_test(), 1);
@@ -634,6 +637,7 @@ fn assert_native_service_body_store_retention(fixture: Box<NativeServicePreparat
             .unwrap();
         assert_eq!(receipt.execution_commitment(), commitment);
         assert_eq!(fixture.service.candidate_executions_for_test(), 1);
+        assert!(service.body_for_test(subject).is_none());
         assert_eq!(
             native_service_retained_source_allocations(service.owner_for_test(subject).unwrap()),
             allocations,

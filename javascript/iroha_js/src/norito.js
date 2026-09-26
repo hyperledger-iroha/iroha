@@ -3,6 +3,10 @@ import { requireNetworkPrefix } from "./networkPrefix.js";
 import { createNoritoReplicationOrderValidator } from "./noritoReplicationOrderValidator.js";
 import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
+import {
+  parseStrictLosslessIntegerJson,
+  stringifyStrictLosslessIntegerJson,
+} from "./strictLosslessJson.js";
 
 import { Buffer } from "buffer";
 import {
@@ -49,7 +53,6 @@ import {
   createNoritoGovernanceInstructionBoundary,
   parseStrictGovernanceInstructionJson,
 } from "./noritoGovernanceBoundary.js";
-import { stringifyStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { createNoritoNftMarketCodecs, NFT_MARKET_INSTRUCTION_NAMES_V1, NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
 import {createNoritoGameCodecs} from './noritoGameCodecs.js';
@@ -428,6 +431,26 @@ const UPDATE_VERIFYING_KEY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "verifying_key
 const TOP_UP_KAGEMUSHA_WIRE_ID = "iroha.kagemusha.v1.top_up";
 const TOP_UP_KAGEMUSHA_INNER_TYPE_NAME =
   `${TEXT_IROHA_DATA_MODEL_ISI}kagemusha_v1::TopUpKagemushaV1`;
+const RETAIL_INSTRUCTION_NAMES_V1 = Object.freeze([
+  "ActivateRetailDailyLimitV1",
+  "BindRetailIdentityV1",
+  "RetailMonetaryMovementV1",
+]);
+const RETAIL_INSTRUCTION_WIRE_IDS_V1 = Object.freeze([
+  "iroha.asset.retail_day.activate.v1",
+  "iroha.asset.retail_day.identity.bind.v1",
+  "iroha.asset.retail_day.monetary_movement.v1",
+]);
+const RETAIL_INSTRUCTION_JSON_PREFIXES_V1 = RETAIL_INSTRUCTION_NAMES_V1.map(
+  (name) => `{"${name}":`,
+);
+const RETAIL_INSTRUCTION_NAME_SET_V1 = new Set(RETAIL_INSTRUCTION_NAMES_V1);
+
+function isRetailInstructionObject(value) {
+  return isPlainObject(value) && Object.keys(value).some(
+    (name) => RETAIL_INSTRUCTION_NAME_SET_V1.has(name),
+  );
+}
 
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   ...Object.fromEntries(NFT_MARKET_INSTRUCTION_NAMES_V1.map((name, index) => [NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[index], `${TEXT_IROHA_DATA_MODEL_ISI}nft_market::${name}`])),
@@ -520,6 +543,10 @@ const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
   [UPDATE_VERIFYING_KEY_WIRE_ID]:
     `${TEXT_IROHA_DATA_MODEL_ISI}verifying_keys::${TEXT_UPDATE_VERIFYING_KEY}`,
   [TOP_UP_KAGEMUSHA_WIRE_ID]: TOP_UP_KAGEMUSHA_INNER_TYPE_NAME,
+  ...Object.fromEntries(RETAIL_INSTRUCTION_NAMES_V1.map((name, index) => [
+    RETAIL_INSTRUCTION_WIRE_IDS_V1[index],
+    `${TEXT_IROHA_DATA_MODEL_ISI}retail_daily_limit::${name}`,
+  ])),
 });
 const INSTRUCTION_WIRE_SCHEMA_BINDINGS = /* @__PURE__ */ (() => Object.freeze(
   Object.entries(INNER_TYPE_NAME_BY_WIRE_ID).map(
@@ -708,9 +735,13 @@ function encodeNormalizedInstruction(normalized, networkPrefix, nativeRuntime) {
     const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
     return toBuffer(native.noritoEncodeInstruction(exactJson, networkPrefix));
   }
-  validateInstructionObjectNumbers(normalized);
+  const retail = isRetailInstructionObject(normalized);
+  if (!retail) validateInstructionObjectNumbers(normalized);
   const native = resolveNative("noritoEncodeInstruction", nativeRuntime);
-  return toBuffer(native.noritoEncodeInstruction(JSON.stringify(normalized), networkPrefix));
+  const json = retail
+    ? stringifyStrictLosslessIntegerJson(normalized, "retail instruction")
+    : JSON.stringify(normalized);
+  return toBuffer(native.noritoEncodeInstruction(json, networkPrefix));
 }
 
 /** Serialize one canonical direct public ballot without rounding its u64 duration. */
@@ -1617,11 +1648,14 @@ export function noritoDecodeInstructionBoxArchive(bytes, networkPrefix) {
 function decodeInstructionBoxArchive(bytes, networkPrefix, nativeRuntime) {
   requireNetworkPrefix(networkPrefix);
   const native = resolveNative("noritoDecodeInstructionBoxArchive", nativeRuntime);
-  const decoded = parsePublicPlainBallotInstructionJson(
-    native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix),
-    "standalone public ballot InstructionBox",
-  );
-  if (!isPublicPlainBallotInstruction(decoded)) validateInstructionObjectNumbers(decoded);
+  const json = native.noritoDecodeInstructionBoxArchive(toBuffer(bytes), networkPrefix);
+  const retail = RETAIL_INSTRUCTION_JSON_PREFIXES_V1.some((prefix) => json.startsWith(prefix));
+  const decoded = retail
+    ? parseStrictLosslessIntegerJson(json, "retail instruction archive")
+    : parsePublicPlainBallotInstructionJson(json, "standalone public ballot InstructionBox");
+  if (!retail && !isPublicPlainBallotInstruction(decoded)) {
+    validateInstructionObjectNumbers(decoded);
+  }
   validateDecodedInstructionProofAttachments(decoded);
   return decoded;
 }
@@ -1642,14 +1676,14 @@ function decodeInstruction(bytes, networkPrefix, options, nativeRuntime) {
   const buffer = toBuffer(bytes);
   const native = resolveNative("noritoDecodeInstruction", nativeRuntime);
   const json = native.noritoDecodeInstruction(buffer, networkPrefix);
-  const decoded = parsePublicPlainBallotInstructionJson(
-    json,
-    "standalone public ballot instruction",
-  );
+  const retail = RETAIL_INSTRUCTION_JSON_PREFIXES_V1.some((prefix) => json.startsWith(prefix));
+  const decoded = retail
+    ? parseStrictLosslessIntegerJson(json, "retail instruction frame")
+    : parsePublicPlainBallotInstructionJson(json, "standalone public ballot instruction");
   validateDecodedInstructionProofAttachments(decoded);
   // Raw mode preserves the owner's exact numeric tokens. Parsed mode must
   // never return a rounded integer or non-finite value to signing callers.
-  if (options.parseJson !== false && !isPublicPlainBallotInstruction(decoded)) {
+  if (options.parseJson !== false && !retail && !isPublicPlainBallotInstruction(decoded)) {
     validateInstructionObjectNumbers(decoded);
   }
   return options.parseJson === false ? json : decoded;

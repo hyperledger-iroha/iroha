@@ -10,8 +10,8 @@ mod context_release;
 #[path = "taira_public_reset_context.rs"]
 mod reset_context;
 pub(super) use reset_context::{
-    DerivedResetContext, ResetContextInputs, ResetTopologyIntentV1, decode_reset_topology_intent,
-    derive_reset_context,
+    DerivedResetContext, ResetArtifactIntentV1, ResetContextInputs, ResetTopologyIntentV1,
+    decode_reset_topology_intent, derive_reset_context, validate_topology_intent,
 };
 
 pub(super) fn topology_canary_request(bytes: &[u8]) -> Result<AccountOnboardingPlanRequestV1> {
@@ -280,7 +280,7 @@ fn validate_candidate_inrou_scope(
     }
 }
 
-fn validate_validator_pin_fee_asset(
+pub(super) fn validate_validator_pin_fee_asset(
     configured: &iroha::data_model::asset::AssetDefinitionId,
     faucet_asset: &str,
 ) -> Result<()> {

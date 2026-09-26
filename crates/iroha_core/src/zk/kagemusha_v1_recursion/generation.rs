@@ -965,6 +965,10 @@ pub struct KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
     pub hardware_profile: KagemushaHardwareProfileV1,
     /// Credential validated against `hardware_profile` inside terminal authorization.
     pub hardware_credential: KagemushaHardwareCredentialV1,
+    /// Original App Attest assertion and canonical selection for an Apple terminal. Its signed
+    /// body field is constrained to the outgoing SHA-derived body in both recursive parities.
+    /// Monetary admission remains closed until the full assertion and issuer fold is present.
+    pub apple_selection: Option<KagemushaAppAttestHardwareTransitionSelectionV1>,
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -989,6 +993,7 @@ impl KagemushaTerminalAuthorizationPrivateGenerationWitnessV1 {
             authorization_counter_after: self.authorization_counter_after,
             hardware_profile: self.hardware_profile,
             hardware_credential: self.hardware_credential,
+            apple_selection: self.apple_selection,
         }
     }
 }
@@ -3609,6 +3614,8 @@ fn prove_kagemusha_typed_sha_claim_v1(
     let mut ep_parent_history = ep_seed;
 
     for (eq_leaf, ep_leaf) in eq_leaves.leaves().iter().zip(ep_leaves.leaves()) {
+        #[cfg(test)]
+        let stage_started = std::time::Instant::now();
         let eq_shard_circuit = KagemushaMintHashShardCircuitV1::<Fp>::build(eq_leaf)
             .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
         if !same_base_params(&eq_shard_circuit.params(), &eq.shard_circuit_params) {
@@ -3627,6 +3634,8 @@ fn prove_kagemusha_typed_sha_claim_v1(
             recovery_seed,
         )?;
         halo2_proofs::release_allocator_slack();
+        #[cfg(test)]
+        let eq_shard_done = std::time::Instant::now();
 
         let ep_shard_circuit = KagemushaMintHashShardCircuitV1::<Fq>::build(ep_leaf)
             .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
@@ -3646,6 +3655,8 @@ fn prove_kagemusha_typed_sha_claim_v1(
             recovery_seed,
         )?;
         halo2_proofs::release_allocator_slack();
+        #[cfg(test)]
+        let ep_shard_done = std::time::Instant::now();
         let eq_shard_verified = verify_eq_succinct_protocol_with_transcript_binding(
             &eq.shard_parameters,
             &eq.shard_protocol,
@@ -3843,6 +3854,8 @@ fn prove_kagemusha_typed_sha_claim_v1(
             recovery_seed,
         )?;
         halo2_proofs::release_allocator_slack();
+        #[cfg(test)]
+        let eq_claim_done = std::time::Instant::now();
         let (ep_claim_circuit, built_ep_instances) = build_kagemusha_mint_hash_claim_ep_v1(
             &eq.carrier_parameters,
             &ep.carrier_parameters,
@@ -3870,6 +3883,8 @@ fn prove_kagemusha_typed_sha_claim_v1(
         )?;
         drop(audits);
         halo2_proofs::release_allocator_slack();
+        #[cfg(test)]
+        let ep_claim_done = std::time::Instant::now();
         let eq_claim_verified =
             verify_eq_mint_hash_claim_hybrid_succinct_protocol_with_transcript_binding(
                 &eq.carrier_parameters,
@@ -3911,6 +3926,17 @@ fn prove_kagemusha_typed_sha_claim_v1(
         // before starting the next stage instead of retaining their high-water mark for the
         // complete certificate chain.
         halo2_proofs::release_allocator_slack();
+        #[cfg(test)]
+        eprintln!(
+            "KAGEMUSHA typed-SHA stage {}/{}: Eq shard {} ms, Ep shard {} ms, fold/audit/Eq claim {} ms, Ep claim {} ms, finalization {} ms",
+            successor.eq.next_stage,
+            eq_leaves.leaves().len(),
+            eq_shard_done.duration_since(stage_started).as_millis(),
+            ep_shard_done.duration_since(eq_shard_done).as_millis(),
+            eq_claim_done.duration_since(ep_shard_done).as_millis(),
+            ep_claim_done.duration_since(eq_claim_done).as_millis(),
+            ep_claim_done.elapsed().as_millis(),
+        );
     }
 
     let terminal = previous_state.ok_or_else(|| {
@@ -4925,6 +4951,32 @@ pub fn prove_kagemusha_finalized_mint_from_checkpoint_v1(
         KagemushaMintAuthorityStepV1::FinalizedMint,
         certificate,
         checkpoint,
+        CheckpointReleasePurposeV1::Production,
+    )
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Prove one finalized reserve top-up under a signed Experimental proof release.
+/// The caller's node lane must remain explicitly testnet-scoped.
+pub(crate) fn prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1(
+    eq: &KagemushaLoadedEqMintAuthorityArtifactsV1,
+    ep: &KagemushaLoadedEpMintAuthorityArtifactsV1,
+    hash_eq: &KagemushaLoadedEqMintHashArtifactsV1,
+    hash_ep: &KagemushaLoadedEpMintHashArtifactsV1,
+    verifier: &super::KagemushaAuthenticatedRecursiveVerifierV1,
+    certificate: KagemushaMintCertificateWitnessV1,
+    checkpoint: &KagemushaMintAuthorityCheckpointV1,
+) -> Result<KagemushaGeneratedMintAuthorityProofV1, KagemushaArtifactGenerationErrorV1> {
+    prove_kagemusha_mint_authority_from_checkpoint_v1(
+        eq,
+        ep,
+        hash_eq,
+        hash_ep,
+        verifier,
+        KagemushaMintAuthorityStepV1::FinalizedMint,
+        certificate,
+        checkpoint,
+        CheckpointReleasePurposeV1::TestnetExperiment,
     )
 }
 
@@ -4953,8 +5005,42 @@ pub fn prove_kagemusha_mint_authority_rotation_from_checkpoint_v1(
         KagemushaMintAuthorityStepV1::Rotate,
         certificate,
         checkpoint,
+        CheckpointReleasePurposeV1::Production,
     )?
     .into_checkpoint(KagemushaMintAuthorityStepV1::Rotate, statement)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Advance an Experimental mint checkpoint across a signed roster boundary.
+pub(crate) fn prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1(
+    eq: &KagemushaLoadedEqMintAuthorityArtifactsV1,
+    ep: &KagemushaLoadedEpMintAuthorityArtifactsV1,
+    hash_eq: &KagemushaLoadedEqMintHashArtifactsV1,
+    hash_ep: &KagemushaLoadedEpMintHashArtifactsV1,
+    verifier: &super::KagemushaAuthenticatedRecursiveVerifierV1,
+    certificate: KagemushaMintCertificateWitnessV1,
+    checkpoint: &KagemushaMintAuthorityCheckpointV1,
+) -> Result<KagemushaMintAuthorityCheckpointV1, KagemushaArtifactGenerationErrorV1> {
+    let statement = certificate.statement.clone();
+    prove_kagemusha_mint_authority_from_checkpoint_v1(
+        eq,
+        ep,
+        hash_eq,
+        hash_ep,
+        verifier,
+        KagemushaMintAuthorityStepV1::Rotate,
+        certificate,
+        checkpoint,
+        CheckpointReleasePurposeV1::TestnetExperiment,
+    )?
+    .into_checkpoint(KagemushaMintAuthorityStepV1::Rotate, statement)
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+#[derive(Clone, Copy)]
+enum CheckpointReleasePurposeV1 {
+    Production,
+    TestnetExperiment,
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
@@ -4967,6 +5053,7 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
     step: KagemushaMintAuthorityStepV1,
     certificate: KagemushaMintCertificateWitnessV1,
     checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    release_purpose: CheckpointReleasePurposeV1,
 ) -> Result<KagemushaGeneratedMintAuthorityProofV1, KagemushaArtifactGenerationErrorV1> {
     if !matches!(
         step,
@@ -4976,9 +5063,15 @@ fn prove_kagemusha_mint_authority_from_checkpoint_v1(
             "a durable checkpoint may advance only by rotation or finalized mint".to_owned(),
         ));
     }
-    let (eq_current, ep_current) = verifier
-        .verify_mint_authority_checkpoint(checkpoint)
-        .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
+    let (eq_current, ep_current) = match release_purpose {
+        CheckpointReleasePurposeV1::Production => {
+            verifier.verify_mint_authority_checkpoint(checkpoint)
+        }
+        CheckpointReleasePurposeV1::TestnetExperiment => {
+            verifier.verify_experimental_mint_authority_checkpoint_for_testnet(checkpoint)
+        }
+    }
+    .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;
     certificate
         .validate_for_step(step)
         .map_err(KagemushaArtifactGenerationErrorV1::CircuitBuild)?;

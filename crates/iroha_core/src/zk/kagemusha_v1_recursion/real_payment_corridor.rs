@@ -4,9 +4,10 @@
 //! proves Bootstrap -> FinalizedMint with one reusable carrier key pair. Certificate preflight
 //! tests are not proof evidence; the explicitly ignored real-proof gate is expensive.
 //!
-//! TODO: connect these funded inputs to the revised terminal/payment-proof corridor once its
-//! post-commit proof shape is fixed. No rotation or fabricated positive bootstrap substitutes
-//! for the pending SendSplit -> transported authorization -> ReceiveFold qualification.
+//! The separate sender-closure diagnostic now decides a generated post-commit payment proof
+//! against Core's exact public projection. TODO: qualify a physical sender commit, durably install
+//! the payment, and generate the receiver's ReceiveFold proof before opening the handoff gate.
+//! No rotation or fabricated positive bootstrap substitutes for that qualification.
 
 use std::fs::{File, OpenOptions, TryLockError};
 

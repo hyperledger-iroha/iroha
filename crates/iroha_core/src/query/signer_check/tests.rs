@@ -208,6 +208,7 @@ fn complete_external_bytes_and_signature_are_retained_by_the_single_owner() {
 }
 
 mod account_envelope;
+mod release_manifest;
 mod stream_token;
 mod topology;
 

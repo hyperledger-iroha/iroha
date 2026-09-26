@@ -26,7 +26,7 @@ struct ExpectedRequest<'a> {
     canonical: &'a [u8],
 }
 
-fn trusted_anchor(
+pub(crate) fn trusted_anchor(
     network: [u8; 32],
     height: u64,
     context: [u8; 32],

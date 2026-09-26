@@ -2,13 +2,14 @@
 
 pub(crate) mod kagemusha_v1_reserve;
 
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 use halo2_base::gates::circuit::BaseCircuitParams;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
+    NetworkId,
     account::AccountId,
     asset::{AssetBalancePolicy, AssetBalanceScope, AssetDefinitionId, AssetId},
     block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
@@ -28,8 +29,8 @@ use iroha_data_model::{
         KagemushaAuthenticatedReleaseV1, KagemushaEnabledProfileV1, KagemushaHardwareProfileV1,
         KagemushaInternalValidationReceiptV1, KagemushaLifecycleBindingV1,
         KagemushaMintCreditStatementV1, KagemushaMintCreditV1, KagemushaReleaseAttestationV1,
-        KagemushaReleaseAuthorityPolicyV1, KagemushaReleaseManifestV1,
-        kagemusha_liability_pool_id_v1,
+        KagemushaReleaseAuthorityPolicyV1, KagemushaReleaseManifestV1, KagemushaReleasePurposeV1,
+        kagemusha_asset_identity_digest_v1, kagemusha_liability_pool_id_v1,
     },
     nexus::AxtAssetIncarnationV1,
 };
@@ -51,6 +52,8 @@ use crate::zk::{
         prove_kagemusha_finalized_mint_from_checkpoint_v1,
         prove_kagemusha_mint_authority_bootstrap_v1,
         prove_kagemusha_mint_authority_rotation_from_checkpoint_v1,
+        prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1,
+        prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1,
         verify_kagemusha_mint_finality_helper_v1,
     },
     kagemusha_v1_state::KagemushaStateProofReleaseV1,
@@ -340,6 +343,9 @@ impl KagemushaV1RuntimeVerifier for RejectAllKagemushaV1RuntimeVerifier {
 }
 
 struct AuthenticatedKagemushaV1ReleaseRuntime {
+    network_id: NetworkId,
+    release_id: [u8; 32],
+    purpose: KagemushaReleasePurposeV1,
     artifacts: KagemushaAuthenticatedArtifactSetV1<KagemushaDirectoryArtifactResolverV1>,
     verifier: KagemushaAuthenticatedRecursiveVerifierV1,
     eq_mint_prover: KagemushaLoadedEqMintAuthorityArtifactsV1,
@@ -347,6 +353,75 @@ struct AuthenticatedKagemushaV1ReleaseRuntime {
     eq_mint_hash_prover: KagemushaLoadedEqMintHashArtifactsV1,
     ep_mint_hash_prover: KagemushaLoadedEpMintHashArtifactsV1,
     enabled_profiles: Vec<KagemushaEnabledProfileV1>,
+}
+
+#[derive(Clone, Copy)]
+struct KagemushaMintScopeSubjectV1<'a> {
+    network_id: NetworkId,
+    release_id: [u8; 32],
+    asset: &'a AssetDefinitionId,
+    asset_incarnation: AxtAssetIncarnationV1,
+    scale: u32,
+    liability_pool_id: [u8; 32],
+}
+
+impl<'a> KagemushaMintScopeSubjectV1<'a> {
+    fn from_top_up(request: &'a KagemushaTopUpRequestV1) -> Self {
+        Self {
+            network_id: request.network_id,
+            release_id: request.release_id,
+            asset: &request.asset,
+            asset_incarnation: request.asset_incarnation,
+            scale: request.scale,
+            liability_pool_id: request.liability_pool_id,
+        }
+    }
+
+    fn from_statement(statement: &'a KagemushaMintCreditStatementV1) -> Self {
+        let lifecycle = &statement.lifecycle;
+        Self {
+            network_id: lifecycle.network_id,
+            release_id: lifecycle.release_id,
+            asset: &lifecycle.asset,
+            asset_incarnation: lifecycle.asset_incarnation,
+            scale: lifecycle.scale,
+            liability_pool_id: lifecycle.liability_pool_id,
+        }
+    }
+}
+
+fn require_release_mint_scope_v1(
+    purpose: KagemushaReleasePurposeV1,
+    expected_network_id: NetworkId,
+    expected_release_id: [u8; 32],
+    subject: KagemushaMintScopeSubjectV1<'_>,
+) -> Result<(), String> {
+    if subject.network_id != expected_network_id || subject.release_id != expected_release_id {
+        return Err(
+            "Kagemusha V1 mint differs from its authenticated release or network".to_owned(),
+        );
+    }
+    if let KagemushaReleasePurposeV1::TestnetExperiment(scope) = purpose {
+        let asset_identity_digest = kagemusha_asset_identity_digest_v1(subject.asset)
+            .map_err(|error| format!("invalid Kagemusha V1 scoped asset: {error}"))?;
+        let canonical_pool = kagemusha_liability_pool_id_v1(
+            &subject.network_id,
+            subject.asset,
+            subject.asset_incarnation,
+        )
+        .map_err(|error| format!("invalid Kagemusha V1 scoped liability pool: {error}"))?;
+        if asset_identity_digest != scope.asset_identity_digest
+            || *subject.asset_incarnation.as_bytes() != scope.asset_incarnation
+            || subject.scale != scope.asset_scale
+            || subject.liability_pool_id != scope.liability_pool_id
+            || subject.liability_pool_id != canonical_pool
+        {
+            return Err(
+                "Kagemusha V1 mint differs from signed Experimental asset scope".to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Operational state of one authenticated KAGEMUSHA verifier release.
@@ -476,6 +551,27 @@ pub struct AuthenticatedKagemushaV1RuntimeVerifier {
     lifecycle: KagemushaVerifierReleaseLifecycleV1,
 }
 
+fn require_production_release_purpose_v1(purpose: KagemushaReleasePurposeV1) -> Result<(), String> {
+    if purpose == KagemushaReleasePurposeV1::Production {
+        Ok(())
+    } else {
+        Err(
+            "experimental KAGEMUSHA release cannot enter production top-up or redemption"
+                .to_owned(),
+        )
+    }
+}
+
+fn require_experimental_release_purpose_v1(
+    purpose: KagemushaReleasePurposeV1,
+) -> Result<(), String> {
+    if matches!(purpose, KagemushaReleasePurposeV1::TestnetExperiment(_)) {
+        Ok(())
+    } else {
+        Err("testnet top-up requires a signed Experimental release".to_owned())
+    }
+}
+
 impl AuthenticatedKagemushaV1RuntimeVerifier {
     /// Construct a registry containing one fully authenticated release.
     ///
@@ -484,7 +580,7 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
     /// Returns an error for an inaccessible artifact directory, malformed release-fixed state,
     /// missing or substituted artifact bytes, or a recursive profile/key identity mismatch.
     pub fn from_authenticated_release(
-        release: &KagemushaAuthenticatedReleaseV1,
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
         artifact_root: impl AsRef<Path>,
         profile: KagemushaRecursiveVerifierProfileV1,
     ) -> Result<Self, String> {
@@ -504,20 +600,21 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
     /// protocol authentication failure.
     pub fn install_authenticated_release(
         &mut self,
-        release: &KagemushaAuthenticatedReleaseV1,
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
         artifact_root: impl AsRef<Path>,
         profile: KagemushaRecursiveVerifierProfileV1,
     ) -> Result<(), String> {
+        require_production_release_purpose_v1(release.purpose())?;
         let release_id = release.release_id();
         if self.releases.contains_key(&release_id) {
             return Err("Kagemusha V1 release is already installed".to_owned());
         }
         let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_root)
             .map_err(|error| format!("failed to open Kagemusha V1 artifact directory: {error}"))?;
-        let state_release = KagemushaStateProofReleaseV1::from_authenticated_release(release)
+        let state_release = KagemushaStateProofReleaseV1::from_authenticated_release(&release)
             .map_err(|error| format!("invalid Kagemusha V1 state proof release: {error}"))?;
         let artifacts = KagemushaAuthenticatedArtifactSetV1::new(
-            release,
+            &release,
             state_release.canonical_empty_effect_digest(),
             resolver,
         )
@@ -535,12 +632,102 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
             .map_err(|error| format!("failed to load Kagemusha V1 Eq mint-hash prover: {error}"))?;
         let ep_mint_hash_prover = load_kagemusha_ep_mint_hash_artifacts_v1(&artifacts, &profile)
             .map_err(|error| format!("failed to load Kagemusha V1 Ep mint-hash prover: {error}"))?;
-        let verifier = KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile)
+        let mut verifier = KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile)
             .map_err(|error| format!("failed to load Kagemusha V1 recursive verifier: {error}"))?;
+        verifier
+            .authorize_monetary_release(Arc::clone(&release))
+            .map_err(|error| {
+                format!("failed to authorize Kagemusha V1 monetary release: {error}")
+            })?;
         self.lifecycle.register(release_id)?;
         self.releases.insert(
             release_id,
             AuthenticatedKagemushaV1ReleaseRuntime {
+                network_id: release.network_id(),
+                release_id,
+                purpose: release.purpose(),
+                artifacts,
+                verifier,
+                eq_mint_prover,
+                ep_mint_prover,
+                eq_mint_hash_prover,
+                ep_mint_hash_prover,
+                enabled_profiles: release.enabled_profiles().to_vec(),
+            },
+        );
+        Ok(())
+    }
+
+    /// Construct a testnet-only runtime for a signed Experimental top-up release.
+    ///
+    /// This lane proves finalized reserve top-ups but cannot verify redemption, Guard bundles,
+    /// payments, or qualified wallet hardware transactions.
+    ///
+    /// # Errors
+    /// Rejects production purpose, mismatched artifacts or profile, or a duplicate release.
+    pub fn from_authenticated_experimental_release(
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        artifact_root: impl AsRef<Path>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+    ) -> Result<Self, String> {
+        let mut registry = Self {
+            releases: BTreeMap::new(),
+            lifecycle: KagemushaVerifierReleaseLifecycleV1::default(),
+        };
+        registry.install_authenticated_experimental_release(release, artifact_root, profile)?;
+        Ok(registry)
+    }
+
+    /// Add one signed Experimental proof release to the explicit testnet top-up lane.
+    ///
+    /// # Errors
+    /// Rejects production purpose, substituted artifacts, incompatible profile, or duplication.
+    pub fn install_authenticated_experimental_release(
+        &mut self,
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        artifact_root: impl AsRef<Path>,
+        profile: KagemushaRecursiveVerifierProfileV1,
+    ) -> Result<(), String> {
+        require_experimental_release_purpose_v1(release.purpose())?;
+        let release_id = release.release_id();
+        if self.releases.contains_key(&release_id) {
+            return Err("Kagemusha V1 release is already installed".to_owned());
+        }
+        let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_root)
+            .map_err(|error| format!("failed to open Kagemusha V1 artifact directory: {error}"))?;
+        let state_release = KagemushaStateProofReleaseV1::from_authenticated_release(&release)
+            .map_err(|error| format!("invalid Kagemusha V1 state proof release: {error}"))?;
+        let artifacts = KagemushaAuthenticatedArtifactSetV1::new(
+            &release,
+            state_release.canonical_empty_effect_digest(),
+            resolver,
+        )
+        .map_err(|error| format!("invalid Kagemusha V1 artifact set: {error}"))?;
+        profile
+            .validate_against_artifacts(&artifacts)
+            .map_err(|error| format!("invalid Kagemusha V1 recursive profile: {error}"))?;
+        let eq_mint_prover = load_kagemusha_eq_mint_authority_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Eq mint prover: {error}"))?;
+        let ep_mint_prover = load_kagemusha_ep_mint_authority_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Ep mint prover: {error}"))?;
+        let eq_mint_hash_prover = load_kagemusha_eq_mint_hash_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Eq mint-hash prover: {error}"))?;
+        let ep_mint_hash_prover = load_kagemusha_ep_mint_hash_artifacts_v1(&artifacts, &profile)
+            .map_err(|error| format!("failed to load Kagemusha V1 Ep mint-hash prover: {error}"))?;
+        let mut verifier = KagemushaAuthenticatedRecursiveVerifierV1::load(&artifacts, profile)
+            .map_err(|error| format!("cannot load Kagemusha V1 recursive verifier: {error}"))?;
+        verifier
+            .authorize_experimental_proof_release(Arc::clone(&release))
+            .map_err(|error| {
+                format!("cannot authorize Kagemusha V1 experimental proof release: {error}")
+            })?;
+        self.lifecycle.register(release_id)?;
+        self.releases.insert(
+            release_id,
+            AuthenticatedKagemushaV1ReleaseRuntime {
+                network_id: release.network_id(),
+                release_id,
+                purpose: release.purpose(),
                 artifacts,
                 verifier,
                 eq_mint_prover,
@@ -619,6 +806,12 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
         request: &KagemushaTopUpRequestV1,
         runtime: &AuthenticatedKagemushaV1ReleaseRuntime,
     ) -> Result<VerifiedKagemushaTopUpAuthorizationV1, String> {
+        require_release_mint_scope_v1(
+            runtime.purpose,
+            runtime.network_id,
+            runtime.release_id,
+            KagemushaMintScopeSubjectV1::from_top_up(request),
+        )?;
         let artifacts = runtime.artifacts.recursion_artifacts();
         if request.artifact_manifest_digest != artifacts.artifact_manifest_digest {
             return Err("Kagemusha V1 artifact manifest identity mismatch".to_owned());
@@ -647,12 +840,17 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
             .mint_authorization
             .as_ref()
             .ok_or_else(|| "Kagemusha V1 top-up lacks mint authorization".to_owned())?;
-        runtime
-            .verifier
-            .verify_mint_authorization(mint_authorization)
-            .map_err(|error| {
-                format!("invalid Kagemusha V1 paired mint authorization proof: {error}")
-            })?;
+        let proof_result = match runtime.purpose {
+            KagemushaReleasePurposeV1::Production => runtime
+                .verifier
+                .verify_mint_authorization(mint_authorization),
+            KagemushaReleasePurposeV1::TestnetExperiment(_) => runtime
+                .verifier
+                .verify_experimental_mint_authorization_for_testnet_observation(mint_authorization),
+        };
+        proof_result.map_err(|error| {
+            format!("invalid Kagemusha V1 paired mint authorization proof: {error}")
+        })?;
         let request_digest = request
             .canonical_digest()
             .map_err(|error| format!("invalid Kagemusha V1 top-up request: {error}"))?;
@@ -681,7 +879,144 @@ impl AuthenticatedKagemushaV1RuntimeVerifier {
 
 #[cfg(test)]
 mod release_lifecycle_tests {
-    use super::{KagemushaVerifierReleaseLifecycleV1, KagemushaVerifierReleaseStatusV1};
+    use super::{
+        KagemushaMintScopeSubjectV1, KagemushaReleasePurposeV1,
+        KagemushaVerifierReleaseLifecycleV1, KagemushaVerifierReleaseStatusV1,
+        require_experimental_release_purpose_v1, require_production_release_purpose_v1,
+        require_release_mint_scope_v1,
+    };
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        NetworkId,
+        asset::AssetDefinitionId,
+        kagemusha::{
+            KagemushaTestnetExperimentScopeV1, kagemusha_asset_identity_digest_v1,
+            kagemusha_liability_pool_id_v1,
+        },
+        nexus::AxtAssetIncarnationV1,
+    };
+    use iroha_model_base::domain::DomainId;
+
+    #[test]
+    fn production_runtime_rejects_signed_experimental_purpose() {
+        assert!(
+            require_production_release_purpose_v1(KagemushaReleasePurposeV1::Production).is_ok()
+        );
+        let purpose =
+            KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: [1; 32],
+                asset_incarnation: [2; 32],
+                asset_scale: 2,
+                liability_pool_id: [3; 32],
+            });
+        assert!(require_production_release_purpose_v1(purpose).is_err());
+        assert!(require_experimental_release_purpose_v1(purpose).is_ok());
+        assert!(
+            require_experimental_release_purpose_v1(KagemushaReleasePurposeV1::Production).is_err()
+        );
+    }
+
+    #[test]
+    fn experimental_mint_scope_rejects_each_substitution_before_debit() {
+        let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"experimental scope network",
+        )));
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("experimental-scope", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
+        let other_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("experimental-scope", "universal").unwrap(),
+            "other".parse().unwrap(),
+        );
+        let asset_incarnation =
+            AxtAssetIncarnationV1::try_from_bytes(Hash::new(b"scope incarnation").into()).unwrap();
+        let liability_pool_id =
+            kagemusha_liability_pool_id_v1(&network_id, &asset, asset_incarnation).unwrap();
+        let release_id = [8; 32];
+        let purpose =
+            KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: kagemusha_asset_identity_digest_v1(&asset).unwrap(),
+                asset_incarnation: *asset_incarnation.as_bytes(),
+                asset_scale: 2,
+                liability_pool_id,
+            });
+        let subject = KagemushaMintScopeSubjectV1 {
+            network_id,
+            release_id,
+            asset: &asset,
+            asset_incarnation,
+            scale: 2,
+            liability_pool_id,
+        };
+        let check =
+            |candidate| require_release_mint_scope_v1(purpose, network_id, release_id, candidate);
+        assert!(check(subject).is_ok());
+        assert!(
+            check(KagemushaMintScopeSubjectV1 {
+                asset: &other_asset,
+                ..subject
+            })
+            .is_err()
+        );
+        assert!(
+            check(KagemushaMintScopeSubjectV1 {
+                asset_incarnation: AxtAssetIncarnationV1::try_from_bytes(
+                    Hash::new(b"other incarnation").into(),
+                )
+                .unwrap(),
+                ..subject
+            })
+            .is_err()
+        );
+        assert!(
+            check(KagemushaMintScopeSubjectV1 {
+                scale: 3,
+                ..subject
+            })
+            .is_err()
+        );
+        assert!(
+            check(KagemushaMintScopeSubjectV1 {
+                liability_pool_id: [10; 32],
+                ..subject
+            })
+            .is_err()
+        );
+        assert!(
+            check(KagemushaMintScopeSubjectV1 {
+                release_id: [11; 32],
+                ..subject
+            })
+            .is_err()
+        );
+        assert!(
+            check(KagemushaMintScopeSubjectV1 {
+                network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
+                    Hash::new(b"other network"),
+                )),
+                ..subject
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn runtime_authorizes_native_verifier_before_publishing_release() {
+        // TODO: Replace this source-level regression with a complete signed artifact fixture.
+        let source = include_str!("kagemusha.rs");
+        let installer = source
+            .split_once("    pub fn install_authenticated_release(")
+            .expect("runtime installer")
+            .1;
+        let authorization = installer
+            .find(".authorize_monetary_release(Arc::clone(&release))")
+            .expect("native monetary authorization");
+        let publication = installer
+            .find("self.lifecycle.register(release_id)?;")
+            .expect("lifecycle publication");
+        assert!(authorization < publication);
+    }
 
     fn release(tag: u8) -> [u8; 32] {
         [tag; 32]
@@ -1041,6 +1376,7 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
         let lifecycle = &request.voucher.statement.lifecycle;
         let release_id = lifecycle.release_id;
         let runtime = self.runtime_for_terminal_verification(release_id)?;
+        require_production_release_purpose_v1(runtime.purpose)?;
         let enabled = runtime
             .enabled_profiles
             .binary_search_by_key(&lifecycle.hardware_profile_id, |profile| {
@@ -1073,6 +1409,13 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .releases
             .get(&release_id)
             .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
+        if release_id != runtime.release_id || authority_generation.network_id != runtime.network_id
+        {
+            return Err(
+                "Kagemusha V1 bootstrap differs from its authenticated release or network"
+                    .to_owned(),
+            );
+        }
         let certificate = kagemusha_mint_authority_bootstrap_certificate_v1(
             release_id,
             runtime.verifier.mint_genesis_authorization_id(),
@@ -1089,9 +1432,14 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             certificate,
         )
         .map_err(|error| format!("failed to prove Kagemusha mint bootstrap: {error}"))?;
-        runtime
-            .verifier
-            .verify_mint_authority_checkpoint(&checkpoint)?;
+        match runtime.purpose {
+            KagemushaReleasePurposeV1::Production => runtime
+                .verifier
+                .verify_mint_authority_checkpoint(&checkpoint)?,
+            KagemushaReleasePurposeV1::TestnetExperiment(_) => runtime
+                .verifier
+                .verify_experimental_mint_authority_checkpoint_for_testnet(&checkpoint)?,
+        };
         Ok(checkpoint)
     }
 
@@ -1127,6 +1475,12 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             Self::verify_top_up_authorization_against_runtime(request, runtime)?;
         let statement = verified_authorization
             .mint_statement(request, record.reserve_receipt.committed_at_ms)?;
+        require_release_mint_scope_v1(
+            runtime.purpose,
+            runtime.network_id,
+            runtime.release_id,
+            KagemushaMintScopeSubjectV1::from_statement(&statement),
+        )?;
         let membership = finality
             .top_up_membership_witness
             .clone()
@@ -1149,15 +1503,30 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
                 .kagemusha_mint_finality_authority
                 .clone(),
         };
-        let generated = prove_kagemusha_finalized_mint_from_checkpoint_v1(
-            &runtime.eq_mint_prover,
-            &runtime.ep_mint_prover,
-            &runtime.eq_mint_hash_prover,
-            &runtime.ep_mint_hash_prover,
-            &runtime.verifier,
-            certificate,
-            authority_checkpoint,
-        )
+        let generated = match runtime.purpose {
+            KagemushaReleasePurposeV1::Production => {
+                prove_kagemusha_finalized_mint_from_checkpoint_v1(
+                    &runtime.eq_mint_prover,
+                    &runtime.ep_mint_prover,
+                    &runtime.eq_mint_hash_prover,
+                    &runtime.ep_mint_hash_prover,
+                    &runtime.verifier,
+                    certificate,
+                    authority_checkpoint,
+                )
+            }
+            KagemushaReleasePurposeV1::TestnetExperiment(_) => {
+                prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1(
+                    &runtime.eq_mint_prover,
+                    &runtime.ep_mint_prover,
+                    &runtime.eq_mint_hash_prover,
+                    &runtime.ep_mint_hash_prover,
+                    &runtime.verifier,
+                    certificate,
+                    authority_checkpoint,
+                )
+            }
+        }
         .map_err(|error| format!("failed to prove finalized Kagemusha mint: {error}"))?;
         let mint_credit = KagemushaMintCreditV1 {
             version: iroha_data_model::kagemusha::KAGEMUSHA_WIRE_VERSION_V1,
@@ -1170,6 +1539,12 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             encrypted_credit: request.encrypted_credit.clone(),
             artifact_manifest_digest: request.artifact_manifest_digest,
         };
+        require_release_mint_scope_v1(
+            runtime.purpose,
+            runtime.network_id,
+            runtime.release_id,
+            KagemushaMintScopeSubjectV1::from_statement(&mint_credit.statement),
+        )?;
         let _verified_finality = verify_kagemusha_mint_finality_helper_v1(
             &runtime.verifier,
             runtime.artifacts.recursion_artifacts(),
@@ -1199,6 +1574,16 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
             .releases
             .get(&release_id)
             .ok_or_else(|| "Kagemusha V1 proof release is not installed".to_owned())?;
+        if release_id != runtime.release_id
+            || finality_artifact.height_context.network_id != runtime.network_id
+            || authority_checkpoint.release_id != runtime.release_id
+            || authority_checkpoint.statement.lifecycle.network_id != runtime.network_id
+        {
+            return Err(
+                "Kagemusha V1 rotation differs from its authenticated release or network"
+                    .to_owned(),
+            );
+        }
         finality_artifact
             .verify()
             .map_err(|error| format!("invalid boundary finality artifact: {error}"))?;
@@ -1254,19 +1639,39 @@ impl KagemushaV1RuntimeVerifier for AuthenticatedKagemushaV1RuntimeVerifier {
                 .kagemusha_mint_finality_authority
                 .clone(),
         };
-        let checkpoint = prove_kagemusha_mint_authority_rotation_from_checkpoint_v1(
-            &runtime.eq_mint_prover,
-            &runtime.ep_mint_prover,
-            &runtime.eq_mint_hash_prover,
-            &runtime.ep_mint_hash_prover,
-            &runtime.verifier,
-            certificate,
-            authority_checkpoint,
-        )
+        let checkpoint = match runtime.purpose {
+            KagemushaReleasePurposeV1::Production => {
+                prove_kagemusha_mint_authority_rotation_from_checkpoint_v1(
+                    &runtime.eq_mint_prover,
+                    &runtime.ep_mint_prover,
+                    &runtime.eq_mint_hash_prover,
+                    &runtime.ep_mint_hash_prover,
+                    &runtime.verifier,
+                    certificate,
+                    authority_checkpoint,
+                )
+            }
+            KagemushaReleasePurposeV1::TestnetExperiment(_) => {
+                prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1(
+                    &runtime.eq_mint_prover,
+                    &runtime.ep_mint_prover,
+                    &runtime.eq_mint_hash_prover,
+                    &runtime.ep_mint_hash_prover,
+                    &runtime.verifier,
+                    certificate,
+                    authority_checkpoint,
+                )
+            }
+        }
         .map_err(|error| format!("failed to prove Kagemusha mint roster rotation: {error}"))?;
-        runtime
-            .verifier
-            .verify_mint_authority_checkpoint(&checkpoint)?;
+        match runtime.purpose {
+            KagemushaReleasePurposeV1::Production => runtime
+                .verifier
+                .verify_mint_authority_checkpoint(&checkpoint)?,
+            KagemushaReleasePurposeV1::TestnetExperiment(_) => runtime
+                .verifier
+                .verify_experimental_mint_authority_checkpoint_for_testnet(&checkpoint)?,
+        };
         Ok(checkpoint)
     }
 }
@@ -1313,7 +1718,60 @@ pub fn load_authenticated_kagemusha_v1_runtime_verifier(
         .authenticate(&receipt, &policy, &attestation)
         .map_err(|error| format!("unauthenticated Kagemusha V1 proof release: {error}"))?;
     AuthenticatedKagemushaV1RuntimeVerifier::from_authenticated_release(
-        &release,
+        Arc::new(release),
+        artifact_root,
+        profile,
+    )
+}
+
+/// Authenticate an explicitly experimental proof release for testnet top-up execution.
+///
+/// The node must select this loader only under an explicit testnet configuration and supply
+/// its independently configured network identity. Production redemption, Guard, payments, and
+/// hardware transactions remain unavailable to this release.
+///
+/// # Errors
+/// Rejects a production release, different node network, invalid threshold approval, or
+/// substituted profile and artifact bytes.
+pub fn load_authenticated_kagemusha_v1_experimental_runtime_verifier(
+    manifest_bytes: &[u8],
+    validation_receipt_bytes: &[u8],
+    authority_policy_bytes: &[u8],
+    attestation_bytes: &[u8],
+    recursive_profile_json: &[u8],
+    artifact_root: impl AsRef<Path>,
+    expected_network_id: NetworkId,
+) -> Result<AuthenticatedKagemushaV1RuntimeVerifier, String> {
+    let manifest = KagemushaReleaseManifestV1::decode_canonical_exact(manifest_bytes)
+        .map_err(|error| format!("invalid Experimental Kagemusha V1 manifest: {error}"))?;
+    let receipt = KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(
+        validation_receipt_bytes,
+    )
+    .map_err(|error| format!("invalid Experimental Kagemusha V1 receipt: {error}"))?;
+    let policy = KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(authority_policy_bytes)
+        .map_err(|error| format!("invalid Experimental Kagemusha V1 authority policy: {error}"))?;
+    let attestation = KagemushaReleaseAttestationV1::decode_canonical_exact(attestation_bytes)
+        .map_err(|error| format!("invalid Experimental Kagemusha V1 attestation: {error}"))?;
+    require_experimental_release_purpose_v1(manifest.purpose)?;
+    if manifest.network_id != expected_network_id {
+        return Err("Experimental Kagemusha release differs from the node network".to_owned());
+    }
+    if recursive_profile_json.is_empty()
+        || recursive_profile_json.len() > KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1
+    {
+        return Err(format!(
+            "Kagemusha V1 recursive profile must contain at most {KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1} bytes"
+        ));
+    }
+    let profile_file: KagemushaRecursiveVerifierProfileFileV1 =
+        norito::json::from_slice(recursive_profile_json)
+            .map_err(|error| format!("invalid Kagemusha V1 recursive profile JSON: {error}"))?;
+    let profile = profile_file.try_into_profile()?;
+    let release = manifest
+        .authenticate_experimental(&receipt, &policy, &attestation)
+        .map_err(|error| format!("unauthenticated Experimental Kagemusha release: {error}"))?;
+    AuthenticatedKagemushaV1RuntimeVerifier::from_authenticated_experimental_release(
+        Arc::new(release),
         artifact_root,
         profile,
     )

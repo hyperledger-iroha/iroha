@@ -1,5 +1,260 @@
 # Sumeragi liveness redesign goals
 
+The async proposal contract is the refactor target: at each height the leader
+samples a bounded subset of locally available signed transactions against one
+committed parent and signs their chosen order in a proposal. Followers validate
+that proposal and execute it deterministically from the parent; they do not
+reconstruct the leader's queue, arrival order, or unselected transactions.
+Unselected inputs retain local custody for later attempts. Certified QueuePlan
+and lane controls are authenticated proposal inputs with their own owners, not
+FIFO barriers for unrelated Ordinary work. The queue-selection correction below
+implements part of this contract; lane close and Commit still violate the
+single-finality-owner target.
+
+Current async-queue counterexample, 2026-09-24: a same-source four-validator
+autoscale replay admitted and committed Ordinary work and expanded an elastic
+lane, then committed an empty-lane drain intent at height 8. After one planned
+peer shutdown, the other three validators continued committing global blocks
+past height 14, but all three retained the same close intent with no drain
+certificate or retirement. The test now reaches this phase without requiring
+a prior lane block: an expanded lane with no work must also retire. The
+production `NativeRunnerProcess` owns the active lane reducer but has no
+drain-vote, drain-certificate, or certified-merge producer;
+the old `V2LaneWorkAdapter` contains those operations but is not constructed by
+the runner. Complete the drain protocol under the sole process-lived lane
+owner, including retained signed output and exact carrier attachment, then
+prove close-to-retirement under four- and seven-validator loss, reordering,
+backpressure, and restart. A local asynchronous Ordinary queue must neither
+block that certificate nor bind execution to its admission-time lane. Its
+signed bytes remain durable while the leader derives a bounded proposal route
+from committed State. These are open acceptance conditions, not a release claim.
+
+The leader's bounded Queue scan no longer treats a certified
+`QueuePlanSynced` input, its live reservation, a held selection lease, or an
+exact durability transition as a FIFO wall for later local arrivals. Each
+owner still excludes its own signed transaction; the candidate assembler keeps
+QueuePlan execution in its autonomous corridor while sampling later Ordinary
+inputs. This removes one concrete async-queue stall. Conflict checks against
+certified reservations and whole-batch execution preflight remain open. The
+leader may use local FIFO for fair sampling, but block validity and forward
+progress must depend on the signed proposal and committed parent, not the
+local position of an unselected transaction. Preserve the reservation's exact
+ownership and fee capacity while qualifying this change.
+
+The leader now rechecks the chosen Ordinary subset's aggregate fee reservations
+against the same committed parent used for individual admission. A selected
+input that would overbook payer, sponsor-window, or relay-lease capacity is
+deferred without consuming its Queue owner; unrelated selected inputs may fill
+the candidate. Unselected local arrivals hold no capacity in this proposal.
+This is a conservative admission bound, not a full sequential execution proof
+or a replacement for follower validation. The two-input fee-capacity
+regression, all 49 candidate-assembly tests, all 387 Queue tests, the Core
+library check, and the multilane source-binding gate passed on the preceding
+source cut.
+
+The leader's bounded Queue snapshot and candidate assembler now exclude a
+local QueuePlanSynced copy before looking up its registry binding or routing
+it. That copy belongs to the authenticated carrier and autonomous lane owner;
+its local arrival, stale registry projection, and unavailable route cannot
+veto a later independent Ordinary input. The bounded scan cursor advances past
+an excluded copy, so a one-entry window can reach later work on the next
+attempt even if a global block commits between those attempts. Committed
+parent changes no longer reset the local cursor to the same excluded head.
+The carrier still authenticates its own complete admissions and
+rejects duplicate entrypoints. This removes a local queue-to-proposal coupling;
+it does not resolve the separate lane close/Commit deadlock or prove network
+liveness.
+
+On the current `optimizations` source, all 388 Core Queue tests, all 49
+candidate assembly tests, all 423 QueuePlan contract controls, the multilane
+structural source-binding gate, and the optimized daemon build pass. The focused
+release-inventory owner and include-manifest checks passed before the last
+test-only and Queue source correction. The registered test rename is reflected
+in the release inventory and its exact digests. A four-validator mixed-arrival
+run passed in 66.66 seconds: all four Ordinary inputs and the QueuePlan input
+were Applied on every validator; node logs show Ordinary execution before the
+QueuePlan control. The corrected seven-validator fixture also passed the same
+exact-status assertion on all seven peers in 126.87 seconds. Repeat runs then
+exposed two unresolved conditions: a four-peer global-status polling run
+stalled at height 6 after progressing through height 5, and a seven-peer run
+lost a validator at height 1 when a retained Ready Validate successor received
+`UnexpectedPlan` and tripped the consensus output guard. The regression now
+reads peer-local state-resolved finality to avoid a global Torii fanout per
+missing hash; that cut passed once on four peers in 55.97 seconds. A scheduler
+change to prioritize an authenticated physical Validate completion ahead of
+unrelated Ready rank, while retaining it when its own capacity is unavailable,
+is under qualification. These runs do not close the
+no-fault repeatability or loss/reordering/restart matrix. The broader proof-ledger gate
+still reports old-adapter `cfg_attr` restrictions and extensive fixed-scaling
+source-inventory drift; those failures are not liveness evidence.
+
+A 2026-09-24 four-validator autoscale run exposed a second local-custody
+counterexample at committed height 6. A newly expanded lane closed before an
+uncarried QueuePlan input reached the global ledger. Nexus revalidation treated
+the resulting inactive route as corrupt durable ownership and failed the
+validator's whole Queue, even though the same Queue already had an exact,
+fsynced terminalization path for unadmitted claims after authenticated close.
+The current candidate routes this case through that terminal path, retaining
+selected and reserved claims until their owners release, while preserving the
+draining authority of canonically admitted inputs. Both focused close tests
+pass; a four-peer close-overlap run and broader fault qualification remain
+pending.
+
+The active runner now admits `LaneRelayMessage::DrainVote` to the process-lived
+Native collector. It authenticates the remote signer, committed frontier and
+embedded close committee without consulting its own asynchronous Queue or
+Kura. Three exact votes from a four-validator close committee aggregate into
+one certificate in the focused Core test; a mismatched transport sender and a
+signed frontier outside committed State are rejected. The relay and collector
+tests, production Core library check, and formal source-binding gate pass on
+the current `optimizations` working tree. This is receipt and aggregation,
+not issuance or delivery: no validator yet signs and retransmits a Native
+drain vote, and no leader carries the certificate in a global proposal. The
+authenticated network ingress retains each vote in a bounded relay; the Native
+owner checks the transport signer, signature, committee, and committed frontier
+after dequeue. The exact-output service now returns a signed vote to its source
+when its per-target and shared capacity are full, without tripping the
+fail-stop guard. This is a retained-delivery primitive, not an active Native
+vote producer. The Native owner must keep and retry its original signed vote
+across that refusal and across ordinary asynchronous message loss.
+inactive adapter still contains the retired merge-candidate route and must
+not become a competing owner. The Native cut still needs retained vote
+delivery and a leader-proposed retirement control validated from the
+committed parent. As a separate queue correction, an
+unbound Ordinary journal row no longer vetoes lane retirement when its local
+claim index is absent or stale; actual reservations and globally admitted
+controls continue to block it. The retirement protocol and network proof
+remain open.
+
+The first Native signer boundary is now connected: the process-owned State/Kura
+pair opens one shared drain/Commit guard, and the actual `LockAndCommit` WAL
+signing path fsyncs its immutable value lock before creating a Commit
+signature. The guard takes the already-authenticated Native opening capability
+instead of rechecking committee proofs during every signature. Same-value
+retries in later voting views are allowed; conflicting
+same-height values and a drain below the signed frontier are rejected across
+restart. The direct restart test, all 13 guard tests, and the production Native
+Commit dispatch regression, Core library check, and formal binding gate pass on
+`22846b4f74`. This is a safety prerequisite, not a working drain protocol:
+the active runner collects authenticated drain votes but does not issue or
+carry a certificate. The remaining candidate, Apply, and geometry paths still
+consult receiver-local Kura evidence, so they cannot yet
+be treated as deterministic validation in an asynchronous network.
+
+The old merge validation path is also unsuitable for this async protocol:
+`State::validate_merge_lane_drain_certificate_payload_with_releases` checks
+receiver-local Kura and pending-work evidence when it has no replay proposal,
+and `V2LaneWorkAdapter::accept_lane_drain_vote` checks the receiver's local
+Queue before accepting an authenticated vote. Two honest validators can have
+different queues and recovery schedules at the same committed parent. The
+Native replacement must separate a validator's conservative local condition
+for **issuing its own vote** from deterministic checks of an incoming vote or
+leader-proposed certificate. The latter checks must use the signed evidence,
+close-committee identity, frontier, and committed parent, never receiver-local
+unselected work.
+
+The target retirement flow has one global ordering step. After the close
+intent commits, the Native process stops admitting new work for that exact
+incarnation and retains previously signed Native decisions until they either
+apply or are proven obsolete. Each close-committee validator derives the same
+frontier from committed State and durable lane evidence, durably locks its
+vote, and gossips it with retry. Any peer may aggregate exactly `2f + 1`
+matching votes from the exact `3f + 1` close committee. The global leader
+samples the available certificate as a proposal control alongside a bounded
+local transaction subset; followers validate it against the committed parent
+and the block's global QC orders it. The certificate must not require an
+additional view-bound merge-signature round just to retire an empty lane.
+Receiving or aggregating a valid drain vote must not wait for the receiver's
+local transaction queue or source-recovery schedule. Only issuance of that
+validator's own vote checks its retained Native WAL and unresolved lane-owned
+effects. The old adapter currently rejects received votes when its local
+blocker predicate is true; that rule cannot be carried into the Native owner.
+Changing the current merge-entry commitment layout and Kura replay is part of
+this migration, so the existing certificate-only merge tests remain a safety
+baseline until the new block path has equivalent replay and fault tests.
+
+The close/Commit intersection is an unresolved protocol deadlock, not merely
+a missing timer. In a four-validator lane, two validators can durably sign
+Commit for height `h` before a QC or global application is available. If the
+global close commits with replicated frontier `h-1`, their signing guards
+correctly refuse a drain vote below `h`; the other two validators cannot form
+the required three-vote drain certificate. A naive local vote producer would
+leave both the lane decision and retirement without a reachable next action.
+Before enabling issuance, the first-release design must either make that
+pending value globally resolvable at close or remove provisional lane Commit
+as a separate finality authority and return its work to global leader
+ordering. Prove the chosen resolution under lost QC/body messages and restart;
+an empty-lane happy path alone cannot qualify retirement.
+
+The simplification target is one global finality authority. A lane may attest
+to signed payload availability and retain a prepared candidate, but a
+lane-local Commit signature must not make economic work irreversible before a
+global block QC orders it. At close, the global leader either proposes a
+recoverable pre-close payload or releases its signed transactions for later
+bounded selection. The close and that disposition are committed in the global
+chain; no separate quorum vote asserting the *absence* of an unseen lane QC is
+needed. This is a target contract, not the current implementation. The present
+lane Commit and drain certificate paths remain until the shared global owner,
+recovery, deterministic Apply, and four/seven-validator fault tests replace
+them as one reviewed cutover.
+
+The first-release ownership rule is simple: a signed Ordinary transaction is
+asynchronous local input, so queue arrival order and admission-time routing are
+not consensus facts. At each turn the leader samples at most `max_queue_scan`
+local inputs, resolves each against one committed parent State, and proposes a
+bounded executable subset. A temporarily unavailable route defers that input
+without blocking independent later inputs; the next turn may retry it. The
+proposal and its parent commit to the selected bytes and routing, and every
+validator checks those facts before voting. QueuePlan admissions, lane decisions,
+and drain certificates have separate authenticated global ownership; their
+exact committed/certified identities must not be inferred from a node's local
+queue. Retirement waits for those lane-owned obligations, never for unselected
+Ordinary input. The remaining code still stores Ordinary admission-time routing
+hints in the plan journal, so removing that extra owner is an explicit refactor
+milestone rather than a completed architectural claim. Journal replay now
+authenticates the original signed bytes and context even when both the old hint
+and current route are unavailable. It retains FIFO custody without assigning
+execution authority or a fee reservation; proposal and gossip defer until a
+committed single route exists, and candidate admission is checked then.
+The leader's bounded snapshot now rechecks current fee, manifest, authority,
+privacy, and compliance admission for each signed external Ordinary input before
+signing, retaining an ineligible input so later sampled work can proceed. This
+also rejects aggregate fee overbooking within the selected Ordinary subset,
+but does not prove that the batch executes successfully in sequence. The leader
+now binds selection and admission to one State generation, then excludes State
+publication while it rechecks the parent and signs. The start-of-block work
+probe finishes before that publication lease because it acquires State
+writers; selected Queue ownership is narrowed before the fail-stop private-key
+operation. Any unsigned
+preparation error observed across a changed State generation defers the attempt,
+and a locally lagging or already-superseded parent height also defers. A
+same-height hash conflict, wrong network, Queue durability fault, or armed
+signing failure remains fatal.
+Native source preparation checks the committed parent before body/Decision I/O.
+A local predecessor that is behind or already superseded, or a State publication
+racing an unsuccessful source read, yields a retained retry rather than a fatal
+worker error. A same-height conflicting parent and a stable source error remain
+fatal. The original Decision handoff stays with the process-lived Native owner
+through this pre-preparation deferral.
+Aggregate execution preflight remains open;
+a fresh route and individual admission checks do not establish whole-block
+executability.
+
+Validation on 2026-09-24 before the shared checkout advanced: all 386
+`queue::tests` and all 49 `sumeragi::v2_candidate::tests` passed, including
+State movement during preparation and an already-committed successor height.
+The checkout then advanced to merge commit `22846b4f74`. On that revision,
+the rebuilt Core binary passed all 49 candidate tests and three focused
+closed-route Queue regressions. The multilane source-binding checker, all
+101 admission-capacity contract
+tests, nine focused in-flight binding tests, and three focused Native
+history-owner mutations passed. The exact-revision `iroha3d` build passed,
+followed by four-validator real-network passes for
+`four_peer_async_ordinary_queues_commit_leader_snapshot` and
+`four_peer_simultaneous_queue_plan_collectors_make_progress`. These ingress
+results do not qualify autoscale retirement, adverse delivery, or restart; the
+missing Native drain certificate and merge carrier remain release blockers.
+
 Current production-adapter candidate, 2026-09-22: retained validation has bounded
 candidate descriptor slots and a finite shared allocation pool covering those
 slots, two concrete World journal shell sets, the retained effects `Box` and the
@@ -112,6 +367,38 @@ Remove independent decisions around them; do not add a third scheduling authorit
 | Existing launched lifecycle owner/coordinator | Work identity, ready/running/waiting/terminal state, capacity, result custody and reconstruction | Sole authority for executable work. Every wait names an actual dependency and a reachable wake event. |
 | Runtime ingress and worker adapters | Authenticated messages, opaque jobs, physical queues and results | Authenticate and execute; derive eligibility from authoritative state instead of maintaining competing scheduling state. |
 | Kura, body store and safety WAL | Canonical durable artifacts and validated persistence receipts | Reconstruct work from those artifacts; simplify duplicate journals only after preserving all crash boundaries and bounded recovery. |
+
+The leader samples the finite set of eligible inputs already available at a
+proposal boundary, orders that sample deterministically, and proposes. Async
+arrivals after the sample remain for a later proposal. A local admission
+collector may wait for peer receipts, but it must never reserve the only
+receiver capacity needed for those peers to serve one another; admission
+backpressure must not create a network-wide resource cycle before the leader
+can take its sample. Peers in an asynchronous network need not have identical
+queues at that instant; they agree on the signed proposal's ordered contents
+and validate and execute those contents deterministically.
+Kura can store the next block before State publishes its corresponding view.
+Authenticated peer publications that arrive in this overlap wait for the State
+height notification, then reclassify the same bytes against the new frontier;
+the fixed synchronous reconciliation probe is not a validity verdict. The
+bounded publication worker retains the input while waiting, and its sender's
+durable copy remains available if the worker deadline expires.
+
+The first direct-input cut changes `AccountTransactionDraft::new` to sign an
+`Ordinary` intent. Torii durably queues signed single-route application work
+without preproposal QueuePlan quorum collection. The leader's bounded sampler
+selects an ordered local snapshot without waiting for matching peer queues or
+lane Decisions; the signed global proposal fixes the order. Peers validate the
+signed inputs and route contexts from that proposal and execute them through
+the common State path without lane payload ownership. A ready Native batch and
+ordinary work receive alternating height opportunities, while an exact-height
+lifecycle control takes its height immediately and retains its own quorum check.
+Explicit multi-route and special private-settlement carriers retain
+`QueuePlanSynced` custody. The failed four-validator autoscale replay before
+this cut admitted 0/96 load submissions under 429/503 QueuePlan pressure.
+Focused Core/Torii checks, the four-peer direct-input replay, and the same-source
+daemon build are required before claiming this cut works; the full unchanged
+four/seven-validator campaign and L1–L6 remain open.
 
 The runner's former independently transitioned
 `LifecycleProducerClaimDispositionV1` in

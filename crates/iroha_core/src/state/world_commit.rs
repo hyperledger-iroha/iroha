@@ -108,6 +108,7 @@ impl<'state> PreparedWorldCommit<'state> {
             );
             Self::prune_emergency_validators(world, &pending.catalog_update);
         }
+        super::retail_daily_limit_state::validate_immutable_policy_transition(world)?;
         Ok(PreparedWorldEffects { da_pins })
     }
 

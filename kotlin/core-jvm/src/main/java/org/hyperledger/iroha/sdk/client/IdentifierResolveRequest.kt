@@ -14,6 +14,10 @@ class IdentifierResolveRequest private constructor(
             outputOpening: RamLfeOutputOpening,
         ): IdentifierResolveRequest {
             val normalizedPolicyId = HttpClientTransport.normalizeNonBlank(policyId, "policyId")
+            // TODO: Accept a typed signed canonicality statement once the phone attestor API is wired.
+            require(normalizedPolicyId != "phone#retail") {
+                "phone#retail requires canonicality attestation support"
+            }
             val normalizedEncryptedInput =
                 HttpClientTransport.normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
             return IdentifierResolveRequest(normalizedPolicyId, normalizedEncryptedInput, outputOpening)

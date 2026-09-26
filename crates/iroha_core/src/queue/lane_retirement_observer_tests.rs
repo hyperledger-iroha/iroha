@@ -40,8 +40,16 @@ mod lane_retirement_observer {
         }
         impl Wake for Reenter {
             fn wake(self: Arc<Self>) {
-                assert!(self.outer.try_lock_or_wait().is_ok(), "outer fence released");
-                assert!(self.queue.lane_reservation_transition_lock.try_lock_or_wait().is_ok());
+                assert!(
+                    self.outer.try_lock_or_wait().is_ok(),
+                    "outer fence released"
+                );
+                assert!(
+                    self.queue
+                        .lane_reservation_transition_lock
+                        .try_lock_or_wait()
+                        .is_ok()
+                );
                 assert!(self.queue.push_remove_lock.try_lock_or_wait().is_ok());
                 assert!(self.queue.lane_reservations.try_lock_or_wait().is_ok());
                 self.wakes.fetch_add(1, Ordering::SeqCst);
@@ -52,32 +60,66 @@ mod lane_retirement_observer {
             let queue = Arc::new(Queue::test(config_factory(), &time_source));
             let outer = Arc::new(PublicationMutex::default());
             let guard = outer.lock();
-            let cut = queue.try_lock_lane_retirement_observer().unwrap().try_into_cut().unwrap();
+            let cut = queue
+                .try_lock_lane_retirement_observer()
+                .unwrap()
+                .try_into_cut()
+                .unwrap();
             let mut waits = [
-                queue.lane_reservation_transition_lock.try_lock_or_wait().err().unwrap().wait_for_release(),
-                queue.push_remove_lock.try_lock_or_wait().err().unwrap().wait_for_release(),
-                queue.lane_reservations.try_lock_or_wait().err().unwrap().wait_for_release(),
+                queue
+                    .lane_reservation_transition_lock
+                    .try_lock_or_wait()
+                    .err()
+                    .unwrap()
+                    .wait_for_release(),
+                queue
+                    .push_remove_lock
+                    .try_lock_or_wait()
+                    .err()
+                    .unwrap()
+                    .wait_for_release(),
+                queue
+                    .lane_reservations
+                    .try_lock_or_wait()
+                    .err()
+                    .unwrap()
+                    .wait_for_release(),
             ];
-            let probe = Arc::new(Reenter { queue: Arc::clone(&queue), outer: Arc::clone(&outer), wakes: AtomicUsize::new(0) });
+            let probe = Arc::new(Reenter {
+                queue: Arc::clone(&queue),
+                outer: Arc::clone(&outer),
+                wakes: AtomicUsize::new(0),
+            });
             let waker = Waker::from(Arc::clone(&probe));
             for wait in &mut waits {
-                assert!(Pin::new(wait).poll(&mut Context::from_waker(&waker)).is_pending());
+                assert!(
+                    Pin::new(wait)
+                        .poll(&mut Context::from_waker(&waker))
+                        .is_pending()
+                );
             }
             let released = cut.release_deferred();
             assert_eq!(probe.wakes.load(Ordering::SeqCst), 0);
             if unwind {
-                assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                    let _released = released;
-                    let _outer = guard;
-                    panic!("Queue completion unwind");
-                })).is_err());
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+                        let _released = released;
+                        let _outer = guard;
+                        panic!("Queue completion unwind");
+                    }))
+                    .is_err()
+                );
             } else {
                 drop(guard);
                 drop(released);
             }
             assert_eq!(probe.wakes.load(Ordering::SeqCst), 3);
             for wait in &mut waits {
-                assert!(Pin::new(wait).poll(&mut Context::from_waker(&waker)).is_ready());
+                assert!(
+                    Pin::new(wait)
+                        .poll(&mut Context::from_waker(&waker))
+                        .is_ready()
+                );
             }
             assert!(!queue.transaction_selection_durability_faulted());
         }
@@ -86,11 +128,20 @@ mod lane_retirement_observer {
     #[test]
     fn refused_cut_retains_original_notifications_through_outer_fence() {
         use crate::publication_lock::PublicationMutex;
-        struct Reenter { queue: Arc<Queue>, outer: Arc<PublicationMutex>, wakes: AtomicUsize }
+        struct Reenter {
+            queue: Arc<Queue>,
+            outer: Arc<PublicationMutex>,
+            wakes: AtomicUsize,
+        }
         impl Wake for Reenter {
             fn wake(self: Arc<Self>) {
                 assert!(self.outer.try_lock_or_wait().is_ok());
-                assert!(self.queue.lane_reservation_transition_lock.try_lock_or_wait().is_ok());
+                assert!(
+                    self.queue
+                        .lane_reservation_transition_lock
+                        .try_lock_or_wait()
+                        .is_ok()
+                );
                 assert!(self.queue.push_remove_lock.try_lock_or_wait().is_ok());
                 assert!(self.queue.lane_reservations.try_lock_or_wait().is_ok());
                 self.wakes.fetch_add(1, Ordering::SeqCst);
@@ -103,20 +154,39 @@ mod lane_retirement_observer {
             let observer = queue.try_lock_lane_retirement_observer().unwrap();
             let guard = outer.lock();
             let mut wait = waiting(&queue).wait_for_release();
-            let callback = Arc::new(Reenter { queue: Arc::clone(&queue), outer: Arc::clone(&outer), wakes: AtomicUsize::new(0) });
+            let callback = Arc::new(Reenter {
+                queue: Arc::clone(&queue),
+                outer: Arc::clone(&outer),
+                wakes: AtomicUsize::new(0),
+            });
             let waker = Waker::from(Arc::clone(&callback));
-            assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(&waker)).is_pending());
+            assert!(
+                Pin::new(&mut wait)
+                    .poll(&mut Context::from_waker(&waker))
+                    .is_pending()
+            );
             let mutation = (!reservations).then(|| queue.push_remove_lock.lock());
             let reservation = reservations.then(|| queue.lane_reservations.lock());
             let (error, cleanup) = observer.try_into_cut().err().expect("held inner owner");
-            assert_eq!(error.field, if reservations { "lane_reservations" } else { "push_remove_lock" });
+            assert_eq!(
+                error.field,
+                if reservations {
+                    "lane_reservations"
+                } else {
+                    "push_remove_lock"
+                }
+            );
             assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
             drop((mutation, reservation));
             assert_eq!(callback.wakes.load(Ordering::SeqCst), 0);
             drop(guard);
             drop(cleanup);
             assert_eq!(callback.wakes.load(Ordering::SeqCst), 1);
-            assert!(Pin::new(&mut wait).poll(&mut Context::from_waker(Waker::noop())).is_ready());
+            assert!(
+                Pin::new(&mut wait)
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_ready()
+            );
         }
     }
 
@@ -310,7 +380,10 @@ mod lane_retirement_observer {
             .expect("retry outer")
             .try_into_cut()
             .expect("retry owners");
-        assert!(retry.lane_has_pending_work(LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation));
+        assert!(
+            !retry.lane_has_pending_work(LaneId::SINGLE, DataSpaceId::UNIVERSAL, incarnation),
+            "a locally queued Ordinary transaction has no consensus claim on its old lane"
+        );
         assert!(queue.contains_entrypoint_hash(hash));
         assert_eq!(queue.active_len(), 1);
     }
@@ -637,21 +710,9 @@ mod replay_terminal_release {
 
     use super::*;
 
-    fn select(fixture: &GloballyBoundGuardFixture) -> GlobalQueueSelectionLease {
-        install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
-        let (selected, lease) = fixture
-            .queue
-            .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
-            .expect("select the original QueuePlan owner");
-        assert_eq!(selected.len(), 1);
-        assert_eq!(
-            selected[0].hash_as_entrypoint(),
-            fixture.binding.entrypoint_hash
-        );
-        lease
-    }
-
-    fn defer_committed_cleanup(fixture: &GloballyBoundGuardFixture) -> concread::release::ReleaseFuture {
+    fn defer_committed_cleanup(
+        fixture: &GloballyBoundGuardFixture,
+    ) -> concread::release::ReleaseFuture {
         commit_globally_bound_fixture_directly(fixture);
         assert_eq!(
             fixture
@@ -680,15 +741,15 @@ mod replay_terminal_release {
     }
 
     #[test]
-    fn original_selection_drop_finishes_canonical_cleanup_without_another_apply() {
+    fn selection_attempt_drop_finishes_canonical_cleanup_without_another_apply() {
         let fixture = globally_bound_guard_fixture();
-        let lease = select(&fixture);
+        let attempt = fixture.queue.begin_selection_attempt();
         let mut wait = defer_committed_cleanup(&fixture);
         let height = fixture.state.committed_height();
         let (wake_tx, wake_rx) = mpsc::sync_channel(8);
         fixture.queue.set_sumeragi_wake(wake_tx);
 
-        drop(lease);
+        drop(attempt);
 
         fixture.assert_terminally_removed();
         assert!(poll_lane_retirement_release(&mut wait).is_ready());
@@ -701,20 +762,41 @@ mod replay_terminal_release {
     }
 
     #[test]
-    fn selection_narrowing_finishes_only_released_canonical_owners() {
+    fn unrelated_ordinary_selection_does_not_hold_autonomous_canonical_cleanup() {
         let fixture = globally_bound_guard_fixture();
-        let mut lease = select(&fixture);
-        let mut wait = defer_committed_cleanup(&fixture);
-        assert!(lease.retain_only(&[fixture.binding.entrypoint_hash]));
-        fixture.assert_live_journal_claim();
-        assert!(poll_lane_retirement_release(&mut wait).is_pending());
-
-        assert!(lease.retain_only(&[]));
-
-        fixture.assert_terminally_removed();
-        assert!(poll_lane_retirement_release(&mut wait).is_ready());
+        let original_hash = fixture.transaction.hash_as_entrypoint();
+        let ordinary_hash = fixture.follower_transaction.hash_as_entrypoint();
+        fixture
+            .queue
+            .push(fixture.follower_transaction.clone(), fixture.state.view())
+            .expect("admit independent Ordinary input");
+        let (selected, mut lease) = fixture
+            .queue
+            .bounded_pending_snapshot(&fixture.state.view(), nonzero!(2_usize))
+            .expect("Ordinary leader sampling remains healthy");
+        assert_eq!(
+            selected
+                .iter()
+                .map(AcceptedTransaction::hash_as_entrypoint)
+                .collect::<Vec<_>>(),
+            vec![ordinary_hash]
+        );
+        commit_globally_bound_fixture_directly(&fixture);
+        assert_eq!(
+            fixture
+                .queue
+                .remove_state_committed_replay_owners_preserving_globally_bound(
+                    &fixture.state.view(),
+                    None,
+                )
+                .expect("canonical QueuePlan cleanup ignores an unrelated Ordinary lease"),
+            1
+        );
+        assert!(!fixture.queue.contains_entrypoint_hash(original_hash));
+        assert!(fixture.queue.contains_entrypoint_hash(ordinary_hash));
+        assert!(lease.retain_only(&[ordinary_hash]));
         drop(lease);
-        fixture.assert_terminally_removed();
+        assert!(fixture.queue.contains_entrypoint_hash(ordinary_hash));
     }
 
     #[test]
@@ -772,7 +854,6 @@ mod replay_terminal_release {
     #[test]
     fn local_release_without_canonical_evidence_retains_original_claim() {
         let fixture = globally_bound_guard_fixture();
-        let lease = select(&fixture);
         assert_eq!(
             fixture
                 .queue
@@ -783,7 +864,6 @@ mod replay_terminal_release {
                 .expect("uncommitted owner has no terminal authority"),
             0,
         );
-        drop(lease);
         fixture.assert_restored_fifo_owner();
         let attempt = fixture.queue.begin_selection_attempt();
         drop(attempt);
@@ -796,13 +876,13 @@ mod replay_terminal_release {
     #[test]
     fn terminal_cleanup_durability_failure_retains_owner_and_wakes_recovery() {
         let fixture = globally_bound_guard_fixture();
-        let lease = select(&fixture);
+        let attempt = fixture.queue.begin_selection_attempt();
         let mut wait = defer_committed_cleanup(&fixture);
         fixture
             .queue
             .inject_plan_journal_fault(QueuePlanJournalTestFault::GeneralParentSync);
 
-        drop(lease);
+        drop(attempt);
 
         let hash = fixture.binding.entrypoint_hash;
         assert!(fixture.queue.transaction_selection_durability_faulted());
@@ -929,10 +1009,20 @@ mod replay_terminal_custody {
 }
 
 /// Run a regression while one actual inner retirement mutex is held.
-pub(crate) fn with_retirement_inner_fence_for_test<R>(queue: &Queue, reservations: Option<bool>, run: impl FnOnce() -> R) -> R {
+pub(crate) fn with_retirement_inner_fence_for_test<R>(
+    queue: &Queue,
+    reservations: Option<bool>,
+    run: impl FnOnce() -> R,
+) -> R {
     match reservations {
-        Some(true) => { let _held = queue.lane_reservations.lock(); run() },
-        Some(false) => { let _held = queue.push_remove_lock.lock(); run() },
+        Some(true) => {
+            let _held = queue.lane_reservations.lock();
+            run()
+        }
+        Some(false) => {
+            let _held = queue.push_remove_lock.lock();
+            run()
+        }
         None => run(),
     }
 }

@@ -15,11 +15,15 @@ class IdentifierPolicySummary @JvmOverloads constructor(
     @JvmField val note: String?,
     @JvmField val outputOpeningPublicKey: String,
     @JvmField val proofVerifier: RamLfeProofVerifierMetadata? = null,
+    @JvmField val phoneRetailAttestorPublicKey: String? = null,
 ) {
     init {
         require(programId.isNotBlank()) { "programId must not be blank" }
         requirePublicKeyLiteral(resolverPublicKey, "resolverPublicKey")
         requirePublicKeyLiteral(outputOpeningPublicKey, "outputOpeningPublicKey")
+        if (phoneRetailAttestorPublicKey != null) {
+            requirePublicKeyLiteral(phoneRetailAttestorPublicKey, "phoneRetailAttestorPublicKey")
+        }
     }
 
     fun encryptedRequest(encryptedInputHex: String, outputOpening: RamLfeOutputOpening): IdentifierResolveRequest =

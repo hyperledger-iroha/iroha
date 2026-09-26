@@ -199,7 +199,7 @@ fn emit_transfer_asset_scoped() {
 }
 fn emit_claim_identifier() {
     let account_id = parity_account_id();
-    let policy_id = IdentifierPolicyId::new("phone".parse().unwrap(), "e164".parse().unwrap());
+    let policy_id = IdentifierPolicyId::new("email".parse().unwrap(), "retail".parse().unwrap());
     let program_id: RamLfeProgramId = "parity_test".parse().unwrap();
     let dummy_hash = iroha_crypto::Hash::new([0xAB; 32]);
     let execution = RamLfeExecutionReceiptPayload {

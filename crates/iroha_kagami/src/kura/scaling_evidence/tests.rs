@@ -18,6 +18,34 @@ fn push_with(
 }
 
 #[test]
+fn fixture_finality_commits_exact_network_inputs_and_typed_outputs() {
+    for lanes in [1, 4] {
+        let fixture = Fixture::new(lanes);
+        for height in &fixture.heights {
+            let commitment = &height
+                .proof
+                .finality_artifact
+                .commit_qc
+                .execution_commitment;
+            assert_eq!(
+                commitment.transaction_input_commitment,
+                height.block.network_input_merkle_commitment()
+            );
+            assert_eq!(
+                commitment.transaction_output_commitment,
+                height.block.output_merkle_commitment()
+            );
+            for bytes in height.queries() {
+                let query: CommittedTransaction = canonical(&bytes).unwrap();
+                assert!(
+                    query.verify_inclusion_in_authenticated_execution(&height.block, commitment)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn one_and_four_lane_signed_runs_authenticate_every_warmup_and_measurement_effect() {
     for lanes in [1, 4] {
         let fixture = Fixture::new(lanes);

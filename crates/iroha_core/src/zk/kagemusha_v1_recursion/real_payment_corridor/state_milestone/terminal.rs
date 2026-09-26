@@ -109,6 +109,7 @@ fn generation_private(
         authorization_counter_after: private.authorization_counter_after,
         hardware_profile: private.hardware_profile.clone(),
         hardware_credential: private.hardware_credential.clone(),
+        apple_selection: private.apple_selection.clone(),
     }
 }
 
@@ -624,6 +625,7 @@ pub(super) fn prove_outgoing_terminal(
         authorization_counter_after: openings.authorization_counter_after,
         hardware_profile: funded.material.hardware_profile.clone(),
         hardware_credential: funded.material.hardware_credential.clone(),
+        apple_selection: None,
     };
     // Setup placeholders are used solely for host validation and the no-cycle terminal binding;
     // generation derives actual reciprocal audits and actual PK/VK identities before proving.

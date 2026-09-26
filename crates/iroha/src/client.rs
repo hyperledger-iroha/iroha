@@ -421,8 +421,9 @@ macro_rules! sorafs_transaction_methods {
     ($submitter:ident; $($name:ident => $route:expr),+ $(,)?) => {
         $(
             #[doc = concat!("Submit the exact `", stringify!($route), "` `SoraFS` transaction.")]
+            /// The caller must sign a transaction with `QueuePlanSynced` admission.
             /// # Errors
-            /// Returns errors from route validation, compatibility admission, or transport.
+            /// Returns errors from route validation, admission intent, compatibility admission, or transport.
             pub fn $name(
                 &self,
                 transaction: &SignedTransaction,
@@ -436,8 +437,9 @@ macro_rules! sorafs_transaction_methods {
 macro_rules! sorafs_transaction_submitter {
     ($name:ident($route:ident: $route_type:ty), $validate:path, $path:expr, $error:literal) => {
         #[doc = concat!("Submit a caller-signed transaction to one exact `", stringify!($route_type), "` route.")]
+        /// The caller must select `QueuePlanSynced` before signing.
         /// # Errors
-        /// Returns an error if route validation, compatibility admission, construction, or
+        /// Returns an error if route validation, admission intent, compatibility admission, construction, or
         /// transport fails.
         pub fn $name(
             &self,
@@ -445,6 +447,9 @@ macro_rules! sorafs_transaction_submitter {
             transaction: &SignedTransaction,
         ) -> Result<HashOf<SignedTransaction>> {
             $validate($route, transaction)?;
+            if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+                return Err(eyre!("SoraFS native transaction route requires QueuePlanSynced admission"));
+            }
             self.ensure_transaction_submit_compatibility()?;
             let payload = PreparedTransactionPayload::from_transaction(transaction);
             let hash = payload.hash();
@@ -16207,7 +16212,10 @@ pub struct AccountTransactionDraft {
 }
 
 impl AccountTransactionDraft {
-    /// Create a queue-plan-synchronized transaction draft.
+    /// Create an ordinary transaction draft for direct leader selection.
+    ///
+    /// Multi-route transactions must select `QueuePlanSynced` explicitly before
+    /// signing, because their participant custody needs a certified admission.
     pub fn new(
         executable: impl Into<Executable>,
         fee_payment: FeePaymentIntent,
@@ -16217,7 +16225,7 @@ impl AccountTransactionDraft {
             executable: executable.into(),
             fee_payment,
             metadata,
-            admission_intent: TransactionAdmissionIntent::QueuePlanSynced,
+            admission_intent: TransactionAdmissionIntent::Ordinary,
             attachments: None,
             time_to_live: None,
         }
@@ -25844,6 +25852,10 @@ mod tests {
 
         assert_eq!(first.authority(), &first_client.account);
         assert_eq!(first.network_id(), Some(&first_client.network_id));
+        assert_eq!(
+            first.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
         assert_eq!(second.authority(), &second_client.account);
         assert_eq!(second.network_id(), Some(&second_client.network_id));
         assert_ne!(first.authority(), second.authority());
@@ -33359,6 +33371,21 @@ mod tests {
         )
     }
 
+    fn empty_queue_plan_transaction(client: &Client) -> SignedTransaction {
+        let account = account_context(client);
+        account
+            .prepare_transaction(
+                AccountTransactionDraft::new(
+                    Vec::<InstructionBox>::new(),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                )
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+            )
+            .and_then(|payload| account.sign_transaction(payload))
+            .expect("build QueuePlanSynced client test transaction")
+    }
+
     #[derive(Debug)]
     struct DelayedCapabilityTransport {
         capability_requests: Arc<AtomicUsize>,
@@ -34116,7 +34143,7 @@ mod tests {
     fn nonblocking_queue_plan_exact_outcome_unknown_is_structured_and_never_retried() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let response = exact_queue_plan_outcome_unknown_response(&identity);
@@ -34143,7 +34170,7 @@ mod tests {
     fn nonblocking_prepared_queue_plan_exact_outcome_unknown_uses_local_identity() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let payload = PreparedTransactionPayload::from_transaction(&transaction);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
@@ -34171,7 +34198,7 @@ mod tests {
     fn nonblocking_queue_plan_claimed_invalid_evidence_remains_ambiguous() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let mut response = exact_queue_plan_outcome_unknown_response(&identity);
@@ -34206,7 +34233,7 @@ mod tests {
     fn nonblocking_queue_plan_post_dispatch_transport_error_remains_ambiguous() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -34244,7 +34271,7 @@ mod tests {
     async fn async_nonblocking_queue_plan_ambiguities_are_structured_and_never_retried() {
         for scenario in ["exact", "claimed-invalid", "truncated"] {
             let mut client = client_with_base_url(base_url());
-            let transaction = empty_transaction(&client);
+            let transaction = empty_queue_plan_transaction(&client);
             let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
                 .expect("client transaction must use QueuePlanSynced admission");
             let response = match scenario {
@@ -34329,7 +34356,7 @@ mod tests {
         for asynchronous in [false, true] {
             for (scenario, header_name, mut header_value, expected_diagnostic) in cases.clone() {
                 let mut client = client_with_base_url(base_url());
-                let transaction = empty_transaction(&client);
+                let transaction = empty_queue_plan_transaction(&client);
                 let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
                     .expect("client transaction must use QueuePlanSynced admission");
                 if header_value.is_empty() {
@@ -34387,7 +34414,7 @@ mod tests {
         );
 
         client.transaction_status_timeout = Duration::from_secs(1);
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let hash = transaction.hash();
         let status = PipelineTransactionStatusResponse::new(
             hash.to_string(),
@@ -34868,7 +34895,7 @@ mod tests {
     #[test]
     fn confirmation_handler_preserves_exact_queue_plan_outcome_unknown() {
         let client = client_with_base_url(base_url());
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transactions use QueuePlanSynced admission");
         let envelope = ErrorEnvelope::new(
@@ -36338,6 +36365,84 @@ mod tests {
             "strict native SoraFS routes must carry an unambiguous signature-bound QueuePlanSynced intent"
         );
     }
+    fn build_sorafs_transaction<Exec: Into<Executable>>(
+        client: &Client,
+        executable: Exec,
+    ) -> SignedTransaction {
+        let account = account_context(client);
+        let payload = account
+            .prepare_transaction(
+                AccountTransactionDraft::new(
+                    executable,
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                )
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+            )
+            .expect("prepare SoraFS transaction");
+        account
+            .sign_transaction(payload)
+            .expect("sign SoraFS transaction")
+    }
+    #[test]
+    fn sorafs_native_transaction_routes_reject_ordinary_intent_before_http() {
+        use iroha_data_model::isi::sorafs::{
+            RequestSorafsReserveMovement, SubmitSorafsModerationCommit, SubmitSorafsRepairTask,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
+        with_mock_http(responder, |mock_transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(mock_transport);
+            let repair = build_transaction(
+                &client,
+                [SubmitSorafsRepairTask::new([0x51; 32], vec![0x01])],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
+            let moderation = build_transaction(
+                &client,
+                [SubmitSorafsModerationCommit::new(vec![0x01])],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
+            let reserve = build_transaction(
+                &client,
+                [RequestSorafsReserveMovement::new(
+                    [0x62; 32],
+                    iroha_data_model::sorafs::capacity::ProviderId::new([0x64; 32]),
+                    iroha_data_model::sorafs::reserve::ReserveMovementKindV1::TopUp,
+                    "1".parse().expect("reserve quantity"),
+                    1,
+                    [0x65; 32],
+                )],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
+            for transaction in [&repair, &moderation, &reserve] {
+                assert_eq!(
+                    transaction.admission_intent(),
+                    TransactionAdmissionIntent::Ordinary
+                );
+            }
+            for result in [
+                client.post_sorafs_repair_report(&repair),
+                client.post_sorafs_moderation_ballot_commit(&moderation),
+                client.post_sorafs_reserve_top_up(&reserve),
+            ] {
+                let error = result.expect_err("ordinary SoraFS intent must fail locally");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("requires QueuePlanSynced admission")
+                );
+            }
+        });
+        assert!(
+            store.lock().expect("snapshot store").is_empty(),
+            "invalid signed intent must not trigger capability lookup or command HTTP"
+        );
+    }
     macro_rules! assert_sorafs_routes {
         ($($route:expr => $path:expr),+ $(,)?) => {
             $(assert_eq!(format!("/{}", $route.path()), $path);)+
@@ -36351,7 +36456,6 @@ mod tests {
         let expected_hash = with_mock_http(responder, |mock_transport| {
             let mut client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
-            client.add_transaction_nonce = true;
             client.transaction_ttl = Some(Duration::from_secs(1));
             let commit = moderation_ballot_commit_fixture();
             let commit_payload = to_bytes(&commit).expect("encode canonical commit");
@@ -36363,6 +36467,7 @@ mod tests {
                         FeePaymentIntent::authority(Vec::new(), None),
                         Metadata::default(),
                     )
+                    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
                     .with_time_to_live(SORAFS_MODERATION_TRANSACTION_TTL),
                 )
                 .expect("prepare exact moderation transaction");
@@ -36380,7 +36485,7 @@ mod tests {
                 transaction.admission_intent(),
                 TransactionAdmissionIntent::QueuePlanSynced
             );
-            assert!(transaction.nonce().is_some());
+            assert!(transaction.nonce().is_none());
             assert!(transaction.metadata().is_empty());
             let Executable::Instructions(instructions) = transaction.instructions() else {
                 panic!("moderation transaction must contain instructions");
@@ -36641,14 +36746,12 @@ mod tests {
         let expected_hash = with_mock_http(responder, |mock_transport| {
             let client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
-            let transaction = build_transaction(
+            let transaction = build_sorafs_transaction(
                 &client,
                 [iroha_data_model::isi::sorafs::SubmitSorafsRepairTask::new(
                     [0x51; 32],
                     vec![0x01],
                 )],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
             );
             assert_sorafs_routes! {
                 SorafsRepairCommandRoute::Report => "/v1/sorafs/audit/repair/report",
@@ -36681,7 +36784,7 @@ mod tests {
             let mut client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client.transaction_ttl = Some(Duration::from_secs(300));
-            let transaction = build_transaction(
+            let transaction = build_sorafs_transaction(
                 &client,
                 [
                     iroha_data_model::isi::sorafs::RequestSorafsReserveMovement::new(
@@ -36693,8 +36796,6 @@ mod tests {
                         [0x65; 32],
                     ),
                 ],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
             );
             assert_sorafs_routes! {
                 SorafsReserveCommandRoute::TopUp => "/v1/sorafs/reserve/top-up",

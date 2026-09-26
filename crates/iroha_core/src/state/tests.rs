@@ -8846,7 +8846,7 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
             &active_lanes,
         )
         .expect("historical certificate structure remains valid before retirement");
-    State::lane_drain_frontier_from_replay_state(&state.view(), certificate.body.final_frontier)
+    State::lane_drain_frontier_from_committed_state(&state.view(), certificate.body.final_frontier)
         .expect("ordered replay accepts the exact replicated frontier");
     let mut mismatched_body = certificate.body.clone();
     mismatched_body.final_frontier = LaneDrainFrontierV1::ordinary(
@@ -8858,7 +8858,7 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
     );
     let_row! { mismatched_votes = keypairs .iter() .map(|keypair| { crate::lane_consensus::LaneDrainVoteV1::new_signed( mismatched_body.clone(), PeerId::new(keypair.public_key().clone()), keypair.private_key(), ) .expect("structurally valid mismatched drain vote") }) .collect::<Vec<_>>() };
     let_row! { mismatched_certificate = crate::lane_consensus::aggregate_lane_drain_votes( mismatched_body, certificate.validator_set.clone(), &mismatched_votes, ) .expect("aggregate mismatched drain certificate") };
-    let_row! { error = State::lane_drain_frontier_from_replay_state(&state.view(), mismatched_certificate.body.final_frontier)
+    let_row! { error = State::lane_drain_frontier_from_committed_state(&state.view(), mismatched_certificate.body.final_frontier)
         .expect_err("ordered replay rejects a signed frontier drift") };
     assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(reason)
         if reason.contains("exact replicated frontier")));
@@ -8886,7 +8886,7 @@ state_test! { sync retired_lane_cleanup_preserves_frontier_for_historical_drain_
             &active_lanes,
         )
         .expect("historical certificate structure survives lane cleanup");
-    State::lane_drain_frontier_from_replay_state(&state.view(), certificate.body.final_frontier)
+    State::lane_drain_frontier_from_committed_state(&state.view(), certificate.body.final_frontier)
         .expect("retirement cleanup retains the replicated historical frontier");
 }
 state_test! { sync autoscale_cooldown_active_suppresses_repeated_transitions
@@ -9506,6 +9506,63 @@ state_test! { sync pending_drain_body_and_candidate_use_embedded_close_committee
     assert_eq!(&body.intent.validator_set, &recovered_committee);
     assert_eq!(body.final_frontier.lane_block_height, 0);
     assert!(body.final_frontier.lane_block_descriptor_hash.is_none());
+    let (committed_body, committed_committee) = state
+        .committed_autoscale_lane_drain_body_for_frontier(body.final_frontier)
+        .expect("read exact committed drain frontier")
+        .expect("committed close remains pending");
+    assert_eq!(committed_body, body);
+    assert_eq!(committed_committee, embedded_committee);
+    let mut native_drain = crate::sumeragi::v2_runner::native_drain::NativeDrainOwner::new();
+    let foreign_signer = PeerId::new(unrelated_keypairs[0].public_key().clone());
+    let transport_mismatch = crate::lane_consensus::LaneDrainVoteV1::new_signed(
+        body.clone(),
+        PeerId::new(keypairs[0].public_key().clone()),
+        keypairs[0].private_key(),
+    )
+    .expect("valid embedded-committee vote");
+    assert!(!native_drain
+        .accept_remote_vote(
+            &state,
+            foreign_signer,
+            transport_mismatch,
+            std::time::Instant::now(),
+        )
+        .expect("transport sender cannot impersonate the signed vote"));
+    let mut wrong_frontier = body.clone();
+    wrong_frontier.final_frontier = LaneDrainFrontierV1::ordinary(
+        lane_id,
+        DataSpaceId::UNIVERSAL,
+        incarnation,
+        1,
+        Some(Hash::new(b"uncommitted-native-drain-frontier")),
+    );
+    let wrong_signer = PeerId::new(keypairs[0].public_key().clone());
+    let wrong_vote = crate::lane_consensus::LaneDrainVoteV1::new_signed(
+        wrong_frontier,
+        wrong_signer.clone(),
+        keypairs[0].private_key(),
+    )
+    .expect("well-formed signed frontier outside committed State");
+    assert!(!native_drain
+        .accept_remote_vote(&state, wrong_signer, wrong_vote, std::time::Instant::now())
+        .expect("signed frontier cannot override the committed State prefix"));
+    for (index, keypair) in keypairs.iter().take(3).enumerate() {
+        let signer = PeerId::new(keypair.public_key().clone());
+        let vote = crate::lane_consensus::LaneDrainVoteV1::new_signed(
+            body.clone(),
+            signer.clone(),
+            keypair.private_key(),
+        )
+        .expect("signed close-committee drain vote");
+        assert!(native_drain
+            .accept_remote_vote(&state, signer, vote, std::time::Instant::now())
+            .expect("exact committed drain vote is collectable"));
+        assert_eq!(native_drain.certificate().is_some(), index == 2);
+    }
+    crate::lane_consensus::validate_lane_drain_certificate(
+        native_drain.certificate().expect("three of four votes seal drain"),
+    )
+    .expect("Native collector seals the exact committed body");
     let certificate = autoscale_drain_certificate_for_test(body, &keypairs);
     let_row! { candidate = state .merge_drain_candidate_for_next_carrier(&parent_header, 7, certificate.clone(), ConsensusMode::Permissioned) .expect("valid exact drain certificate produces a cert-only candidate") };
     assert!(candidate.lane_snapshots.is_empty());

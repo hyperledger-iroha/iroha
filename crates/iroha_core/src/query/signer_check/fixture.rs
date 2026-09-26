@@ -16,7 +16,7 @@ use iroha_data_model::{
         Log, Register, RegisterBox, Revoke, RevokeBox, Unregister, UnregisterBox,
         sorafs::{
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
-            MutateSorafsTopologyAuthority,
+            MutateSorafsReleaseManifestAuthority, MutateSorafsTopologyAuthority,
         },
     },
     permission::Permission,
@@ -97,6 +97,7 @@ pub(crate) fn commit(
                 let instruction = instruction.as_any();
                 instruction.is::<MutateSorafsFinalPromotionAuthority>()
                     || instruction.is::<MutateSorafsFinalPromotionAccountCustody>()
+                    || instruction.is::<MutateSorafsReleaseManifestAuthority>()
                     || instruction.is::<MutateSorafsTopologyAuthority>()
                     || instruction.is::<Log>()
                     // Existing adversarial cases execute observer/operator

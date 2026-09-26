@@ -26,8 +26,12 @@ state_test! { sync native_transport_backpressure_keeps_exact_ticket_and_serves_o
     let mut transport = NativeLaneTransport::new(Arc::clone(&fixture.state),Arc::clone(&guard),local,nonzero!(1_usize));
     assert!(matches!(transport.retain(&observed,native_transport_packet_for_test(&fixture,lane)),NativeTransportAdmission::Retained));
     let repeated = native_transport_packet_for_test(&fixture,lane);
-    let original = repeated.canonical_bytes.clone();
-    let NativeTransportAdmission::Retry(returned) = transport.retain(&observed,repeated) else {panic!("full transport must retain source custody")};
+    assert!(matches!(transport.retain(&observed,repeated),NativeTransportAdmission::Retained),"an exact retransmission shares the original fanout even at capacity");
+    let mut different = native_transport_packet_for_test(&fixture,lane);
+    different.envelope = native_driver_control_for_test(&fixture,lane,1);
+    different.canonical_bytes = norito::encode_canonical(&different.envelope).unwrap();
+    let original = different.canonical_bytes.clone();
+    let NativeTransportAdmission::Retry(returned) = transport.retain(&observed,different) else {panic!("a distinct control must retain source custody while full")};
     assert_eq!(returned.canonical_bytes,original);
     let mut ticket_owner = None;
     let mut original_frame = None;
@@ -40,10 +44,14 @@ state_test! { sync native_transport_backpressure_keeps_exact_ticket_and_serves_o
         Err(NetworkActorAdmissionError::Backpressured {message:post,ticket:Some(ticket),rank:1})
     }).unwrap();
     assert_eq!(first,NativeTransportProgress::Backpressured {instance:lane.instance_id(),peer:peers[0].clone(),rank:1});
+    assert!(matches!(transport.retain(&observed,native_transport_packet_for_test(&fixture,lane)),NativeTransportAdmission::Retained),"a retry cannot replace the original returned post or ticket");
     for peer in &peers[1..] {
         assert_eq!(transport.poll_for_test(&observed,|post,ticket| {
             assert_eq!(&post.peer_id,peer);assert!(ticket.is_none());Ok(())
         }).unwrap(),NativeTransportProgress::Admitted {instance:lane.instance_id(),peer:peer.clone()});
+    }
+    for _ in 0..16 {
+        assert!(matches!(transport.retain(&observed,native_transport_packet_for_test(&fixture,lane)),NativeTransportAdmission::Retained),"retransmission rearms admitted peers once without multiplying the blocked ticket");
     }
     assert_eq!(ticket_owner.as_ref().unwrap().waiter_count(),1);
     assert_eq!(ticket_owner.as_ref().unwrap().ticket_drop_cancellations(),0);
@@ -58,6 +66,11 @@ state_test! { sync native_transport_backpressure_keeps_exact_ticket_and_serves_o
         assert_eq!(ticket.as_ref().unwrap().rank(),Some(1));
         accepted_ticket = ticket;Ok(())
     }).unwrap(),NativeTransportProgress::Admitted {instance:lane.instance_id(),peer:peers[0].clone()});
+    for peer in &peers[1..] {
+        assert_eq!(transport.poll_for_test(&current,|post,ticket| {
+            assert_eq!(&post.peer_id,peer);assert!(ticket.is_none());Ok(())
+        }).unwrap(),NativeTransportProgress::Admitted {instance:lane.instance_id(),peer:peer.clone()});
+    }
     assert_eq!(transport.poll_for_test(&current,|_,_|panic!("drained")).unwrap(),NativeTransportProgress::Idle);
     assert_eq!(ticket_owner.as_ref().unwrap().ticket_drop_cancellations(),0,"the test actor owns the returned exact ticket now");
     drop(transport);assert!(!guard.restart_required());drop(accepted_ticket);

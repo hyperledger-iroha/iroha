@@ -769,7 +769,7 @@ mod json_support {
 }
 /// Prelude exports for `SoraFS` gateway events.
 pub mod prelude {
-    pub use super::{
+    pub use super::model::{
         SorafsGarPolicy, SorafsGarPolicyDetail, SorafsGarViolation, SorafsGatewayEvent,
         SorafsGatewayEventSet, SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind,
         SorafsOrderbookLedgerEvent, SorafsOrderbookLedgerEventKind, SorafsProofHealthAlert,

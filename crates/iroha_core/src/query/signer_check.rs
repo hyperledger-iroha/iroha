@@ -22,12 +22,14 @@ use iroha_data_model::{
         InstructionBox,
         sorafs::{
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
-            MutateSorafsStreamTokenAuthority, MutateSorafsTopologyAuthority,
+            MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
+            MutateSorafsTopologyAuthority,
         },
     },
     sorafs::{
         final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
         final_promotion_authority::FinalPromotionAuthorityActionV1,
+        release_manifest_authority::ReleaseManifestActionV1,
         stream_token_authority::StreamTokenAuthorityActionV1, topology_authority::TopologyActionV1,
     },
     transaction::{
@@ -148,17 +150,26 @@ impl NativeCheckRoundV1 {
 pub(crate) enum NativeCustodyCheckPurposeV1 {
     FinalPromotion,
     FinalPromotionAccount,
+    ReleaseManifest,
     StreamToken,
     /// Proof binding only; role-16 Core execution and current authority remain closed.
     Topology,
 }
 /// Purpose-typed native instructions can enter the common proof path.
 ///
-/// The role-16 variant only binds a signed Check to execution evidence. It cannot produce a
-/// topology authority result while its Core instruction remains explicitly closed.
+/// The role-13 and role-16 variants bind signed Checks to execution evidence only. Their
+/// Core instructions remain closed and cannot produce signer or topology authority.
 pub(crate) enum NativeCustodyCheckRefV1<'a> {
     FinalPromotion(&'a MutateSorafsFinalPromotionAuthority),
     FinalPromotionAccount(&'a MutateSorafsFinalPromotionAccountCustody),
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "release-manifest native Check has no production caller yet"
+        )
+    )]
+    ReleaseManifest(&'a MutateSorafsReleaseManifestAuthority),
     #[cfg_attr(
         not(test),
         expect(
@@ -217,6 +228,21 @@ impl NativeCustodyCheckRefV1<'_> {
                     None,
                 ))
             }
+            Self::ReleaseManifest(instruction) => {
+                let ReleaseManifestActionV1::Check(check) = &instruction.action else {
+                    return Err(Error::Transaction);
+                };
+                // This binds a signed role-13 Check only to exact execution evidence. Its Core
+                // instruction remains closed, so this cannot grant signer-operation authority.
+                Ok((
+                    NativeCustodyCheckPurposeV1::ReleaseManifest,
+                    check.challenge,
+                    check.network_id,
+                    check.floor.height,
+                    check.floor.block_hash,
+                    None,
+                ))
+            }
             Self::StreamToken(instruction) => {
                 let StreamTokenAuthorityActionV1::Check(check) = &instruction.request.action else {
                     return Err(Error::Transaction);
@@ -251,6 +277,7 @@ impl NativeCustodyCheckRefV1<'_> {
         match self {
             Self::FinalPromotion(instruction) => (*instruction).clone().into(),
             Self::FinalPromotionAccount(instruction) => (*instruction).clone().into(),
+            Self::ReleaseManifest(instruction) => (*instruction).clone().into(),
             Self::StreamToken(instruction) => (*instruction).clone().into(),
             Self::Topology(instruction) => (*instruction).clone().into(),
         }
@@ -459,7 +486,7 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
     }
     check_history_span_v1(bound.floor.height, applied_height)?;
     let mut parent: Option<(V2FinalityArtifact, KuraV2CommitReceipt)> = None;
-    let mut check_artifact = None;
+    let mut check_block_hash = None;
     let mut applied_floor = bound.floor;
     for height in bound.floor.height..=applied_height {
         round.ensure_live()?;
@@ -514,10 +541,36 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
             }
         }
         if height == check_height {
-            // Retain the target context only after checking its exact successor
-            // chain from the independent floor above. An unverified artifact's
-            // own context is never an expected-context authority.
-            check_artifact = Some((artifact.clone(), artifact.context_id()));
+            // Verify execution against this same authenticated lineage body. Keeping only
+            // its hash avoids a second Kura body read or a whole-block overlap while
+            // the remaining finalized successor chain is checked below.
+            let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
+                &block,
+                &artifact,
+                artifact.context_id(),
+                &entry_hash,
+            )
+            .map_err(|_| Error::Execution)?;
+            let proofs = block
+                .network_execution_proof(&entry_hash)
+                .ok_or(Error::Execution)?;
+            if !proofs.verify(&anchor) {
+                return Err(Error::Execution);
+            }
+            let entry_index =
+                usize::try_from(anchor.entry_index()).map_err(|_| Error::Execution)?;
+            let actual = block
+                .network_entrypoint_at(entry_index)
+                .ok_or(Error::Execution)?;
+            let (_, output) = block
+                .network_output_at(anchor.entry_index())
+                .ok_or(Error::Execution)?;
+            if bounded_entry(actual).map_err(|_| Error::Execution)? != bound.entry_bytes
+                || !output.result.is_ok()
+            {
+                return Err(Error::Execution);
+            }
+            check_block_hash = Some(*block.hash().as_ref());
         }
         applied_floor = NativeCheckFloorV1 {
             height,
@@ -527,37 +580,7 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
         parent = Some((artifact, receipt));
     }
     round.ensure_live()?;
-    let block = view
-        .canonical_block_by_height(height_index)
-        .map_err(|_| Error::Execution)?;
-    let (artifact, expected_context) = check_artifact.ok_or(Error::Execution)?;
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        &block,
-        &artifact,
-        expected_context,
-        &entry_hash,
-    )
-    .map_err(|_| Error::Execution)?;
-    // Construct both paths from the very same executed image authenticated by
-    // the anchor, without rereading another State frontier or block body.
-    let proofs = block
-        .network_execution_proof(&entry_hash)
-        .ok_or(Error::Execution)?;
-    if !proofs.verify(&anchor) {
-        return Err(Error::Execution);
-    }
-    let index = usize::try_from(anchor.entry_index()).map_err(|_| Error::Execution)?;
-    let actual = block.network_entrypoint_at(index).ok_or(Error::Execution)?;
-    let (_, output) = block
-        .network_output_at(anchor.entry_index())
-        .ok_or(Error::Execution)?;
-    if bounded_entry(actual).map_err(|_| Error::Execution)? != bound.entry_bytes
-        || !output.result.is_ok()
-    {
-        return Err(Error::Execution);
-    }
-    round.ensure_live()?;
-    let check_block_hash = *block.hash().as_ref();
+    let check_block_hash = check_block_hash.ok_or(Error::Execution)?;
     Ok(AuthenticatedCheckExecutionCutV1 {
         view,
         check_height,

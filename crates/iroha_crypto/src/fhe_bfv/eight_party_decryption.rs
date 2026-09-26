@@ -10,7 +10,7 @@ use super::{
     BfvCiphertext, BfvError, BfvParameters, BfvPublicKey, bfv_ciphertext_digest,
     bfv_public_key_digest, poly_add_mod, validate_poly, validate_registered_bfv_parameters,
 };
-use crate::{Hash, PublicKey, SignatureOf};
+use crate::{Algorithm, Hash, PublicKey, SignatureOf};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[cfg(feature = "json")]
@@ -99,11 +99,40 @@ pub struct BfvEightPartySignedDecryptionContributionV1 {
     pub signature: SignatureOf<BfvEightPartyDecryptionContributionPayloadV1>,
 }
 
+fn validate_bfv_eight_party_signing_key_v1(key: &PublicKey) -> Result<(), BfvError> {
+    let (algorithm, payload) = key.try_to_bytes().map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV eight-party signing public key is malformed: {err}"
+        ))
+    })?;
+    if algorithm != Algorithm::Ed25519 {
+        return Err(BfvError::InvalidParameters(
+            "BFV eight-party signing public key must use Ed25519".into(),
+        ));
+    }
+    if payload.len() != 32 || payload.iter().all(|byte| *byte == 0) {
+        return Err(BfvError::InvalidParameters(
+            "BFV eight-party signing public key must have nonzero canonical Ed25519 bytes".into(),
+        ));
+    }
+    let canonical = PublicKey::from_bytes(Algorithm::Ed25519, payload).map_err(|err| {
+        BfvError::InvalidParameters(format!(
+            "BFV eight-party signing public key is invalid: {err}"
+        ))
+    })?;
+    if &canonical != key {
+        return Err(BfvError::InvalidParameters(
+            "BFV eight-party signing public key is not canonical".into(),
+        ));
+    }
+    Ok(())
+}
+
 /// Validate public roster, key-sum, ciphertext, and registered-parameter bounds.
 ///
 /// # Errors
-/// Rejects malformed or unfrozen context, repeated/out-of-order roster keys, invalid polynomial
-/// shapes, or a claimed aggregate key that does not sum from the roster's public shares.
+/// Rejects malformed or unfrozen context, non-Ed25519 or out-of-order roster keys, invalid
+/// polynomial shapes, or a claimed aggregate key that does not sum from the roster's public shares.
 pub fn validate_bfv_eight_party_decryption_statement_v1(
     statement: &BfvEightPartyDecryptionStatementV1,
 ) -> Result<(), BfvError> {
@@ -134,11 +163,7 @@ pub fn validate_bfv_eight_party_decryption_statement_v1(
     let mut sum = vec![0; usize::from(params.polynomial_degree)];
     let mut previous_key: Option<&PublicKey> = None;
     for member in &statement.members {
-        member.signing_public_key.try_to_bytes().map_err(|err| {
-            BfvError::InvalidParameters(format!(
-                "BFV eight-party signing public key is malformed: {err}"
-            ))
-        })?;
+        validate_bfv_eight_party_signing_key_v1(&member.signing_public_key)?;
         if previous_key.is_some_and(|previous| previous >= &member.signing_public_key) {
             return Err(BfvError::InvalidParameters(
                 "BFV eight-party roster keys must be distinct and strictly ordered".into(),

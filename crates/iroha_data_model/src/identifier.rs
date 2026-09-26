@@ -233,27 +233,27 @@ impl IdentifierPolicy {
 )]
 #[norito_schema(name = "iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1")]
 pub struct PhoneRetailCanonicalityPayloadV1 {
-    /// Network where this phone claim is valid.
+    /// Exact genesis-derived network identity for replay protection.
     pub network_id: NetworkId,
-    /// Retail phone policy governing this claim.
+    /// The sole first-release phone policy, `phone#retail`.
     pub policy_id: IdentifierPolicyId,
-    /// Hidden-function program that produced the encrypted output.
+    /// Pinned first-release hidden program, `phone_retail`.
     pub program_id: RamLfeProgramId,
-    /// Hash of the encrypted phone input.
+    /// Digest of the encrypted BFV input whose plaintext was checked.
     pub input_ciphertext_hash: Hash,
-    /// Hash of the encrypted canonicalization output.
+    /// Digest of the evaluated encrypted output.
     pub output_ciphertext_hash: Hash,
-    /// Hash of the output opened by the trusted verifier.
+    /// Opened output digest verified by the program's opening key.
     pub opened_output_hash: Hash,
     /// Stable keyed digest of the canonical E.164 value within this network.
     pub canonical_phone_nullifier: Hash,
-    /// Universal account bound by this statement.
+    /// Universal account receiving the phone binding.
     pub uaid: UniversalAccountId,
-    /// Canonical account bound by this statement.
+    /// Canonical account receiving the phone binding.
     pub account_id: AccountId,
-    /// Attestation issue time in milliseconds since Unix epoch.
+    /// Time the attestor signed its canonicality statement.
     pub issued_at_ms: u64,
-    /// Attestation expiry time in milliseconds since Unix epoch.
+    /// Exclusive expiry for this attestation.
     pub expires_at_ms: u64,
 }
 /// Attestor signature over the exact canonicality statement.
@@ -273,9 +273,9 @@ pub struct PhoneRetailCanonicalityPayloadV1 {
 )]
 #[norito_schema(name = "iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1")]
 pub struct PhoneRetailCanonicalityAttestationV1 {
-    /// Exact payload covered by the attestor signature.
+    /// Exact statement covered by the trusted canonicalization attestor's signature.
     pub payload: PhoneRetailCanonicalityPayloadV1,
-    /// Signature from the authority pinned by the retail phone policy.
+    /// Signature under the key pinned in the identifier policy.
     pub signature: Signature,
 }
 impl PhoneRetailCanonicalityAttestationV1 {
@@ -407,7 +407,10 @@ impl IdentifierResolutionReceipt {
     pub const fn expires_at_ms(&self) -> Option<u64> {
         self.payload.execution.expires_at_ms
     }
-    /// Verify the receipt signature against the provided public key.
+    /// Verify only the resolver's receipt signature against the provided key.
+    /// `phone#retail` callers must also verify the separate canonicality
+    /// attestation and its bindings to the network, program, ciphertexts,
+    /// opening, and beneficiary.
     ///
     /// # Errors
     /// Returns the underlying signature verification error when the signature is invalid.
@@ -527,6 +530,55 @@ mod tests {
             .normalize(" +1 (555) 123-4567 ")
             .expect("phone should normalize");
         assert_eq!(normalized, "+15551234567");
+    }
+    #[test]
+    fn phone_normalization_rejects_non_e164_country_code_and_length() {
+        for raw in ["+012345", "+1", "+1234567890123456", "+１２３４", "abc123"] {
+            assert!(
+                IdentifierNormalization::PhoneE164.normalize(raw).is_err(),
+                "{raw}"
+            );
+        }
+        assert_eq!(
+            IdentifierNormalization::PhoneE164
+                .normalize("001-555-123-4567")
+                .unwrap(),
+            "+15551234567"
+        );
+    }
+    #[test]
+    fn phone_retail_canonicality_attestation_roundtrips_and_verifies() {
+        let signer = checked_seed_keypair(0xA3);
+        let payload = PhoneRetailCanonicalityPayloadV1 {
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::new(b"phone-network"),
+            )),
+            policy_id: "phone#retail".parse().expect("policy id"),
+            program_id: "phone_retail".parse().expect("program id"),
+            input_ciphertext_hash: Hash::new(b"phone-input"),
+            output_ciphertext_hash: Hash::new(b"phone-output"),
+            opened_output_hash: Hash::new(b"phone-opening"),
+            canonical_phone_nullifier: Hash::new(b"private-nullifier-fixture"),
+            uaid: UniversalAccountId::from_hash(Hash::new(b"phone-uaid")),
+            account_id: AccountId::new(signer.public_key().clone()),
+            issued_at_ms: 100,
+            expires_at_ms: 200,
+        };
+        let attestation = PhoneRetailCanonicalityAttestationV1 {
+            signature: checked_signature(&signer, &payload).into(),
+            payload,
+        };
+        let bytes = norito::to_bytes(&attestation).expect("encode phone attestation");
+        let decoded: PhoneRetailCanonicalityAttestationV1 =
+            norito::decode_from_bytes(&bytes).expect("decode phone attestation");
+        assert_eq!(decoded, attestation);
+        decoded
+            .verify(signer.public_key())
+            .expect("trusted signature");
+        let json = norito::json::to_vec(&attestation).expect("encode phone attestation JSON");
+        let decoded_json: PhoneRetailCanonicalityAttestationV1 =
+            norito::json::from_slice(&json).expect("decode phone attestation JSON");
+        assert_eq!(decoded_json, attestation);
     }
     #[test]
     fn email_normalization_lowercases_and_trims() {

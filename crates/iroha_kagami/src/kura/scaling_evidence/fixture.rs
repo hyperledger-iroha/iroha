@@ -151,7 +151,9 @@ pub(super) fn signed_proof(
         ordinary_writes_root,
         wire.len() as u64,
         Hash::new(&wire),
-    );
+    )
+    .with_transaction_commitments_from_block(block)
+    .expect("fixture finality must commit exact Network inputs and typed outputs");
     let subject = BlockSubject {
         parent_block_hash: block.header().prev_block_hash(),
         block_hash: block.hash(),

@@ -27,6 +27,10 @@ use std::{
     time::Duration, vec::Vec,
 };
 pub mod proofs;
+/// Finality-verified historical retail activation; not a current-state proof.
+pub mod retail_activation_proof;
+/// Root-relative retail state inclusion; supplied root still needs current finality.
+pub mod retail_state_map_inclusion;
 fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
     let limit = norito::core::max_archive_len();
     if limit == u64::MAX {
@@ -142,9 +146,7 @@ pub enum SetExecutionOutputsError {
     },
 }
 /// Private payload-only forwarding adapter; no extra codec field/frame is introduced.
-#[cfg(feature = "transparent_api")]
 struct OutputFieldRef<'a, T>(&'a T);
-#[cfg(feature = "transparent_api")]
 impl<T: norito::core::SerializePayload> norito::core::SerializePayload for OutputFieldRef<'_, T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoFrameError> {
         norito::core::SerializePayload::serialize(self.0, writer)
@@ -156,16 +158,14 @@ impl<T: norito::core::SerializePayload> norito::core::SerializePayload for Outpu
         norito::core::SerializePayload::encoded_len_exact(self.0)
     }
 }
-/// Encode-only borrow of the sole `SignedBlock` layout for pre-mutation sizing.
+/// Encode-only borrow of the sole `SignedBlock` layout for pre-mutation sizing and proposal hashing.
 /// No raw source constructor or alternate accepted decoder is exposed.
-#[cfg(feature = "transparent_api")]
 #[derive(Encode)]
 struct SignedBlockOutputCandidate<'a> {
     signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
     payload: OutputFieldRef<'a, BlockPayload>,
     result: Option<OutputFieldRef<'a, BlockResult>>,
 }
-#[cfg(feature = "transparent_api")]
 impl norito::NoritoSchema for SignedBlockOutputCandidate<'_> {
     fn nominal_name() -> String {
         <SignedBlock as norito::NoritoSchema>::nominal_name()
@@ -438,9 +438,22 @@ impl SignedBlock {
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        self.canonical_resultless_proposal()
-            .encode_wire()
-            .map(|wire| Hash::new(&wire))
+        self.borrowed_resultless_wire().map(|wire| Hash::new(&wire))
+    }
+    /// Encode the resultless proposal by borrowing the exact signed layout, including the
+    /// signature set and payload. The frame still uses the canonical `SignedBlock` schema ID.
+    fn borrowed_resultless_wire(&self) -> Result<Vec<u8>, NoritoFrameError> {
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: None,
+        };
+        let payload = encode_signed_block_payload(&proposal);
+        let mut frame = Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len());
+        frame.push(self.version());
+        write_signed_block_header(&payload, &mut frame)?;
+        frame.extend_from_slice(&payload);
+        Ok(frame)
     }
     /// Hash this exact canonical block wire, including deterministic execution results.
     ///
@@ -1333,7 +1346,7 @@ fn borrow_framed_signed_block_payload(bytes: &[u8]) -> Result<(u8, &[u8]), Norit
     validate_signed_block_header(framed_payload)?;
     Ok((version, framed_payload))
 }
-fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
+fn encode_signed_block_payload<T: norito::core::SerializePayload>(block: &T) -> Vec<u8> {
     norito::core::reset_decode_state();
     norito::codec::encode_adaptive(block)
 }
@@ -3598,3 +3611,7 @@ mod tests {
 #[cfg(all(test, feature = "transparent_api"))]
 #[path = "output_attachment_tests.rs"]
 mod output_attachment_tests;
+
+#[cfg(test)]
+#[path = "proposal_wire_hash_tests.rs"]
+mod proposal_wire_hash_tests;

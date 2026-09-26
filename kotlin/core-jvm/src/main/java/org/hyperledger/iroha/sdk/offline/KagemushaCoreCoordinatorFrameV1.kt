@@ -7,6 +7,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaSelectionFrameV1
 
 /** Closed native coordinator methods. Frame schema 2 is the sole supported V1 protocol frame. */
 enum class KagemushaCoreCoordinatorMethodV1(@JvmField val code: Int) {
@@ -160,7 +161,7 @@ object KagemushaCoreCoordinatorFrameV1 {
                 qualification(fields, end + 2)
             }
             KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT -> when (number(fields, 0)) {
-                1 -> { count(fields, 2); bounded(fields, 1, 512) }
+                1, 7 -> { count(fields, 2); bounded(fields, 1, 512) }
                 2 -> {
                     count(fields, 11); ticket(fields, 1)
                     require(field(fields, 2).size == 273) { "invalid signed app preparation" }; bounded(fields, 3, 8 * 1024)
@@ -188,13 +189,8 @@ object KagemushaCoreCoordinatorFrameV1 {
                             .decode(ByteBuffer.wrap(keyID))
                     }.isSuccess) { "invalid App Attest key ID" }
                 val selection = field(fields, 2)
-                val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
-                require(selection.size == 460 && selection.copyOfRange(0, domain.size).contentEquals(domain) &&
-                    ByteBuffer.wrap(selection, domain.size, 8).order(ByteOrder.LITTLE_ENDIAN).long == 403L) {
-                    "invalid App Attest selection"
-                }
                 bounded(fields, 3, 8 * 1024)
-                require(number(fields, 4).toUInt() != UInt.MAX_VALUE) { "App Attest counter exhausted" }
+                KagemushaSelectionFrameV1.requireAppAttest(selection, number(fields, 4).toUInt())
                 digest(fields, 5); digest(fields, 6)
             }
         }
@@ -234,7 +230,11 @@ object KagemushaCoreCoordinatorFrameV1 {
                 nonempty(response, 3); nonempty(response, 4); equal(response, 3, request, senderInputs(request, 1))
             }
             KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT -> when (number(request, 0)) {
-                1 -> { count(response, 5); ticket(response, 0); (1..4).forEach { digest(response, it) } }
+                1, 7 -> {
+                    count(response, 7); ticket(response, 0); (1..5).forEach { digest(response, it) }
+                    // Fixed suspend-inclusive native expiry, never Unix time.
+                    nativeContinuousDeadline(response, 6)
+                }
                 2 -> {
                     count(response, 4); equal(response, 0, request, 1)
                     equal(response, 1, request, 7); equal(response, 2, request, 8)
@@ -283,6 +283,13 @@ object KagemushaCoreCoordinatorFrameV1 {
     private fun ticket(fields: List<ByteArray>, index: Int) {
         val value = field(fields, index)
         require(value.size == 8 && value.any { it.toInt() != 0 }) { "invalid enrollment ticket" }
+    }
+
+    private fun nativeContinuousDeadline(fields: List<ByteArray>, index: Int) {
+        val value = field(fields, index)
+        require(value.size == 8 && value.any { it.toInt() != 0 }) {
+            "invalid native continuous deadline"
+        }
     }
 
     private fun digest(fields: List<ByteArray>, index: Int) {

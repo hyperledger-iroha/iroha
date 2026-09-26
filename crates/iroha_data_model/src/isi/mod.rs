@@ -173,6 +173,9 @@ impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransfe
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferBlacklist);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetTransferControl);
 impl_direct_instruction_box!(crate::isi::asset_transfer_control::SetAssetHoldingLimit);
+impl_direct_instruction_box!(crate::isi::retail_daily_limit::ActivateRetailDailyLimitV1);
+impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV1);
+impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
 // Allow direct boxing of ZK asset and voting instructions
 impl_direct_instruction_box!(crate::isi::zk::RegisterZkAsset);
 impl_direct_instruction_box!(crate::isi::zk::ScheduleConfidentialPolicyTransition);
@@ -1871,6 +1874,7 @@ pub mod register;
 pub mod registry;
 /// Repo settlement instructions.
 pub mod repo;
+pub mod retail_daily_limit;
 /// Runtime upgrade instructions and payloads.
 pub mod runtime_upgrade;
 /// Real-world asset lot instructions.
@@ -2669,13 +2673,7 @@ pub mod prelude {
     #[cfg(feature = "governance")]
     pub use super::governance::parliament::*;
     pub use super::{
-        AggregateOracleFeed, Burn, BurnBox, CustomInstruction, ExecuteTrigger, Grant, GrantBox,
-        Instruction, InstructionBox, Log, Mint, MintBox, OpenOracleDispute, ProposeOracleChange,
-        RecordTwitterBinding, Register, RegisterBox, RegisterOracleFeed, RemoveKeyValue,
-        RemoveKeyValueBox, ResolveOracleDispute, Revoke, RevokeBox, RevokeTwitterBinding,
-        RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
-        Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
-        UnregisterBox, Upgrade, VoteOracleChangeStage,
+        GrantBox, Instruction, InstructionBox, RemoveKeyValueBox, RevokeBox, SetKeyValueBox,
         account_recovery::{
             ApproveAccountRecovery, CancelAccountRecovery, ClearAccountRecoveryPolicy,
             FinalizeAccountRecovery, ProposeAccountRecovery, ReplaceAccountController,
@@ -2716,7 +2714,13 @@ pub mod prelude {
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
         ministry::SubmitAgendaProposal,
+        mint_burn::{Burn, BurnBox, Mint, MintBox},
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
+        oracle::{
+            AggregateOracleFeed, OpenOracleDispute, ProposeOracleChange, RecordTwitterBinding,
+            RegisterOracleFeed, ResolveOracleDispute, RevokeTwitterBinding, RollbackOracleChange,
+            SubmitOracleObservation, VoteOracleChangeStage,
+        },
         privacy::{
             BootstrapPrivacyOrchardPoolV1, BootstrapPrivacyPgcAccountsV1,
             BootstrapPrivacyProofManagedPoolV1, BootstrapPrivacyZkAmsRegistryV1,
@@ -2740,7 +2744,11 @@ pub mod prelude {
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
         },
+        register::{Register, RegisterBox, Unregister, UnregisterBox},
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
+        retail_daily_limit::{
+            ActivateRetailDailyLimitV1, BindRetailIdentityV1, RetailMonetaryMovementV1,
+        },
         rwa::{
             ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
@@ -2804,6 +2812,11 @@ pub mod prelude {
             ClaimPublicLaneRewards, ExitPublicLaneValidator, FinalizePublicLaneUnbond,
             RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
             RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+        },
+        transfer::{Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox},
+        transparent::{
+            CustomInstruction, ExecuteTrigger, Grant, Log, RemoveKeyValue, Revoke, SetKeyValue,
+            SetParameter, Upgrade,
         },
         vpn::{OpenVpnLeaseEscrow, RefundExpiredVpnLease, SettleVpnLease},
     };

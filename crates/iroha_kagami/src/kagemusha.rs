@@ -13,35 +13,56 @@ use iroha_core::{
         KagemushaArtifactByteResolverV1, KagemushaDirectoryArtifactResolverV1,
     },
 };
-use iroha_crypto::{sha256, sha256_reader_bounded};
-use iroha_data_model::kagemusha::{
-    KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1, KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
-    KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1, KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
-    KagemushaArtifactBindingV1, KagemushaArtifactRoleV1, KagemushaAuthenticatedReleaseV1,
-    KagemushaInternalValidationReceiptV1, KagemushaReleaseAttestationV1,
-    KagemushaReleaseAuthorityPolicyV1, KagemushaReleaseManifestV1,
+use iroha_crypto::{ExposedPrivateKey, KeyPair, SignatureOf, sha256, sha256_reader_bounded};
+use iroha_data_model::{
+    id::NetworkId,
+    kagemusha::{
+        KAGEMUSHA_HALO2_K_V1, KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
+        KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        KAGEMUSHA_RELEASE_EVIDENCE_FILE_MAX_BYTES_V1, KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
+        KAGEMUSHA_WIRE_VERSION_V1, KagemushaArtifactBindingV1, KagemushaArtifactRoleV1,
+        KagemushaAuthenticatedReleaseV1, KagemushaEvidenceFileV1,
+        KagemushaInternalValidationReceiptV1, KagemushaReleaseApprovalV1,
+        KagemushaReleaseAttestationV1, KagemushaReleaseAuthorityPolicyV1,
+        KagemushaReleaseManifestV1, KagemushaReleasePurposeV1, KagemushaTestnetExperimentScopeV1,
+    },
 };
 use norito::json::{Map as JsonMap, Value as JsonValue};
 use std::{
+    collections::BTreeMap,
     fmt::Write as _,
     io::{Read as _, Write},
     path::{Path, PathBuf},
 };
 #[cfg(unix)]
 use std::{fs, fs::OpenOptions};
+use zeroize::Zeroizing;
 
 const KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1: usize = 50;
 const _: [(); KAGEMUSHA_RELEASE_ARTIFACT_ROLE_COUNT_V1] = [(); KagemushaArtifactRoleV1::ALL.len()];
+const EXPERIMENTAL_ARTIFACT_INVENTORY_JSON_MAX_BYTES_V1: usize = 64 * 1024;
 const AUTHORITY_REVIEW_PROJECTION_MAX_BYTES_V1: usize = 128 * 1024 * 1024;
 const AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1: &str =
     "iroha.kagemusha_v1.authority_review_projection";
 const AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1: &str = "closed filesystem provenance, exact Rust-compatible release identities, derived measurements, and threshold-signed observations from a separately pinned trusted verifier policy; candidate code is never executed by this verifier";
+const TESTNET_AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1: &str =
+    "iroha.kagemusha_v1.testnet_experiment_authority_review_projection";
+const TESTNET_AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1: &str = "testnet experiment only: closed structural evidence, exact Rust-compatible release identities, and threshold-signed observations; no production hardware, endurance, resource, or independent-review qualification";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthorityReviewPurposeV1 {
+    Production,
+    TestnetExperiment,
+}
 const CANDIDATE_CONTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:release-candidate-context";
 const VERIFICATION_RECORDS_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:verification-records";
 const NATIVE_ARTIFACT_MANIFEST_MAX_BYTES_V1: usize = 64 * 1024;
 const NATIVE_ARTIFACT_SCHEMA_V1: &str = "iroha.native-sdk-abi24-artifact.v1";
 const AUTHENTICATED_RELEASE_REPORT_SCHEMA_V1: &str =
     "iroha.kagemusha.v1.authenticated-release-report";
+const AUTHENTICATED_EXPERIMENTAL_RELEASE_REPORT_SCHEMA_V1: &str =
+    "iroha.kagemusha.v1.authenticated-experimental-release-report";
 const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_compiled_profile_catalog_v1",
     "iroha_privacy_validate_compiled_profile_catalog_v1",
@@ -49,7 +70,7 @@ const REQUIRED_PRIVACY_C_EXPORTS_V1: [&str; 5] = [
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_free_buffer",
 ];
-const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 63] = [
+const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 76] = [
     "connect_norito_bridge_abi_version",
     "connect_norito_free",
     "connect_norito_kagemusha_v1_payment_request_validate",
@@ -76,6 +97,11 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 63] = [
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
+    "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+    "connect_norito_kagemusha_testnet_value_admit_v1",
+    "connect_norito_kagemusha_testnet_value_credit_v1",
+    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -105,6 +131,14 @@ const REQUIRED_C_JNI_SYMBOLS_V1: [&str; 63] = [
     "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeObserveV1",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeContractV1",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeObserveV1",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeContractV1",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeAdmitV1",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeContractV1",
+    "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeCreditV1",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeContractV1",
+    "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeActivateV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeContractV1",
     "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeCreateV1",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion",
@@ -124,9 +158,21 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Prepare an unsigned testnet candidate from checked artifacts and typed evidence.
+    #[command(name = "prepare-experimental-release-v1")]
+    PrepareExperimentalReleaseV1(PrepareExperimentalReleaseV1Args),
     /// Authenticate one complete KAGEMUSHA V1 release and its deployment evidence.
     #[command(name = "authenticate-release-v1")]
     AuthenticateReleaseV1(AuthenticateReleaseV1Args),
+    /// Authenticate one signed proof-only testnet release and its exact 50 artifacts.
+    #[command(name = "authenticate-experimental-release-v1")]
+    AuthenticateExperimentalReleaseV1(AuthenticateExperimentalReleaseV1Args),
+    /// Sign one experimental release approval with one owner-held authority key.
+    #[command(name = "sign-experimental-release-approval-v1")]
+    SignExperimentalReleaseApprovalV1(SignExperimentalReleaseApprovalV1Args),
+    /// Assemble independently signed approvals into one testnet attestation.
+    #[command(name = "assemble-experimental-release-v1")]
+    AssembleExperimentalReleaseV1(AssembleExperimentalReleaseV1Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -169,9 +215,155 @@ struct AuthenticateReleaseV1Args {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
+            Command::PrepareExperimentalReleaseV1(args) => {
+                prepare_experimental_release_v1(&args, writer)
+            }
             Command::AuthenticateReleaseV1(args) => authenticate_release_v1(&args, writer),
+            Command::AuthenticateExperimentalReleaseV1(args) => {
+                authenticate_experimental_release_v1(&args, writer)
+            }
+            Command::SignExperimentalReleaseApprovalV1(args) => {
+                sign_experimental_release_approval_v1(&args, writer)
+            }
+            Command::AssembleExperimentalReleaseV1(args) => {
+                assemble_experimental_release_v1(&args, writer)
+            }
         }
     }
+}
+
+#[derive(Debug, ClapArgs)]
+struct PrepareExperimentalReleaseV1Args {
+    /// Canonical Norito typed structural-evidence receipt from a trusted evidence producer.
+    #[arg(long, value_name = "PATH")]
+    validation_receipt: PathBuf,
+    /// Typed JSON array of all 50 role-to-content-address bindings.
+    #[arg(long, value_name = "PATH")]
+    artifact_inventory: PathBuf,
+    /// Canonical absolute directory of the 50 content-addressed proof artifacts.
+    #[arg(long, value_name = "PATH")]
+    artifact_root: PathBuf,
+    /// Canonical absolute directory of all SHA-256-addressed receipt evidence files.
+    #[arg(long, value_name = "PATH")]
+    evidence_root: PathBuf,
+    /// Independently trusted canonical Norito release-authority policy.
+    #[arg(long, value_name = "PATH")]
+    authority_policy: PathBuf,
+    /// Canonical projection from the separately trusted release-evidence verifier.
+    #[arg(long, value_name = "PATH")]
+    authority_review_projection: PathBuf,
+    /// Independently reviewed SHA-256 pin of that exact projection.
+    #[arg(long, value_name = "LOWER_HEX")]
+    authority_review_projection_sha256: String,
+    /// Exact checked genesis-derived network identity.
+    #[arg(long, value_name = "NETWORK_ID")]
+    network_id: String,
+    /// Exact normalized asset identity digest.
+    #[arg(long, value_name = "LOWER_HEX")]
+    asset_identity_digest: String,
+    /// Exact asset incarnation.
+    #[arg(long, value_name = "LOWER_HEX")]
+    asset_incarnation: String,
+    /// Decimal asset scale.
+    #[arg(long, value_name = "DECIMAL")]
+    asset_scale: u32,
+    /// Exact reserve-liability pool identifier.
+    #[arg(long, value_name = "LOWER_HEX")]
+    liability_pool_id: String,
+    /// New owner-only directory for the canonical unsigned manifest and verified receipt.
+    #[arg(long, value_name = "DIR")]
+    output_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct AuthenticateExperimentalReleaseV1Args {
+    /// Canonical Norito testnet-experimental release manifest.
+    #[arg(long, value_name = "PATH")]
+    manifest: PathBuf,
+    /// Canonical Norito structurally evidenced experimental validation receipt.
+    #[arg(long, value_name = "PATH")]
+    validation_receipt: PathBuf,
+    /// Independently trusted canonical Norito release-authority policy.
+    #[arg(long, value_name = "PATH")]
+    authority_policy: PathBuf,
+    /// Canonical Norito threshold attestation over the experimental release.
+    #[arg(long, value_name = "PATH")]
+    attestation: PathBuf,
+    /// Canonical absolute directory containing all 50 signed artifacts.
+    #[arg(long, value_name = "PATH")]
+    artifact_root: PathBuf,
+    #[command(flatten)]
+    pins: ExperimentalOperatorPinsV1,
+}
+
+#[derive(Debug, Clone, ClapArgs)]
+struct ExperimentalOperatorPinsV1 {
+    /// Independently pinned genesis-derived network identity as lowercase hex.
+    #[arg(long, value_name = "LOWER_HEX")]
+    expected_network_id: String,
+    /// Independently pinned release identifier as lowercase hex.
+    #[arg(long, value_name = "LOWER_HEX")]
+    expected_release_id: String,
+    /// Independently pinned asset identity digest as lowercase hex.
+    #[arg(long, value_name = "LOWER_HEX")]
+    expected_asset_identity_digest: String,
+    /// Independently pinned asset incarnation as lowercase hex.
+    #[arg(long, value_name = "LOWER_HEX")]
+    expected_asset_incarnation: String,
+    /// Independently pinned decimal asset scale.
+    #[arg(long, value_name = "DECIMAL")]
+    expected_asset_scale: u32,
+    /// Independently pinned reserve-liability pool identifier as lowercase hex.
+    #[arg(long, value_name = "LOWER_HEX")]
+    expected_liability_pool_id: String,
+}
+
+#[derive(Debug, ClapArgs)]
+struct SignExperimentalReleaseApprovalV1Args {
+    /// Canonical Norito testnet-experimental release manifest.
+    #[arg(long, value_name = "PATH")]
+    manifest: PathBuf,
+    /// Canonical Norito structurally evidenced experimental validation receipt.
+    #[arg(long, value_name = "PATH")]
+    validation_receipt: PathBuf,
+    /// Independently trusted canonical Norito release-authority policy.
+    #[arg(long, value_name = "PATH")]
+    authority_policy: PathBuf,
+    /// Canonical absolute directory containing all 50 signed artifacts.
+    #[arg(long, value_name = "PATH")]
+    artifact_root: PathBuf,
+    /// One owner-held mode-0600 Kagami private-key record.
+    #[arg(long, value_name = "PATH")]
+    signer_private_key: PathBuf,
+    /// New owner-only file for this authority's canonical Norito approval.
+    #[arg(long, value_name = "PATH")]
+    approval_output: PathBuf,
+    #[command(flatten)]
+    pins: ExperimentalOperatorPinsV1,
+}
+
+#[derive(Debug, ClapArgs)]
+struct AssembleExperimentalReleaseV1Args {
+    /// Canonical Norito testnet-experimental release manifest.
+    #[arg(long, value_name = "PATH")]
+    manifest: PathBuf,
+    /// Canonical Norito structurally evidenced experimental validation receipt.
+    #[arg(long, value_name = "PATH")]
+    validation_receipt: PathBuf,
+    /// Independently trusted canonical Norito release-authority policy.
+    #[arg(long, value_name = "PATH")]
+    authority_policy: PathBuf,
+    /// Canonical absolute directory containing all 50 signed artifacts.
+    #[arg(long, value_name = "PATH")]
+    artifact_root: PathBuf,
+    /// One canonical Norito approval; repeat for each independent authority.
+    #[arg(long, value_name = "PATH", required = true)]
+    approval: Vec<PathBuf>,
+    /// New owner-only file for the canonical threshold attestation.
+    #[arg(long, value_name = "PATH")]
+    attestation_output: PathBuf,
+    #[command(flatten)]
+    pins: ExperimentalOperatorPinsV1,
 }
 
 struct AuthenticatedReleaseInputsV1 {
@@ -251,6 +443,7 @@ fn authenticate_release_v1<T: Write>(
         &authority_projection_bytes,
         &inputs.manifest,
         &inputs.receipt,
+        AuthorityReviewPurposeV1::Production,
     )?;
 
     let artifact_root = canonical_artifact_root(&args.artifact_root)?;
@@ -324,6 +517,597 @@ fn decode_authenticated_release_inputs_v1(
         policy,
         authenticated,
     })
+}
+
+fn experimental_receipt_evidence_files_v1(
+    receipt: &KagemushaInternalValidationReceiptV1,
+) -> color_eyre::Result<Vec<KagemushaEvidenceFileV1>> {
+    let mut files = vec![
+        receipt.evidence_closure.evidence_manifest,
+        receipt.evidence_closure.observer_policy,
+        receipt.circuit_shape_report,
+    ];
+    for optional in [
+        receipt.security_review_report,
+        receipt.kat_report,
+        receipt.fuzz_report,
+        receipt.resource_report,
+    ] {
+        append_optional_experimental_evidence_v1(&mut files, optional)?;
+    }
+    for profile in &receipt.profile_qualifications {
+        files.push(profile.profile.qualification_report);
+        files.extend(profile.relations.iter().map(|row| row.report));
+        files.extend(profile.helper_circuits.iter().map(|row| row.report));
+        for optional in profile
+            .recursive_depths
+            .iter()
+            .map(|row| row.report)
+            .chain([
+                profile.aggregate_balance.report,
+                profile.thermal.report,
+                profile.envelope.report,
+            ])
+            .chain(profile.acceptance_cases.iter().map(|row| row.report))
+        {
+            append_optional_experimental_evidence_v1(&mut files, optional)?;
+        }
+    }
+    for optional in receipt.reproducible_builds.iter().map(|row| row.report) {
+        append_optional_experimental_evidence_v1(&mut files, optional)?;
+    }
+    Ok(files)
+}
+
+fn append_optional_experimental_evidence_v1(
+    files: &mut Vec<KagemushaEvidenceFileV1>,
+    file: KagemushaEvidenceFileV1,
+) -> Outcome {
+    match (file.sha256 == [0; 32], file.byte_len) {
+        (true, 0) => Ok(()),
+        (false, 1..=KAGEMUSHA_RELEASE_EVIDENCE_FILE_MAX_BYTES_V1) => {
+            files.push(file);
+            Ok(())
+        }
+        _ => bail!("optional experimental evidence has a partial or oversized file binding"),
+    }
+}
+
+fn rehash_experimental_receipt_evidence_v1(
+    receipt: &KagemushaInternalValidationReceiptV1,
+    evidence_root: &Path,
+) -> color_eyre::Result<usize> {
+    rehash_experimental_evidence_files_v1(
+        &experimental_receipt_evidence_files_v1(receipt)?,
+        evidence_root,
+    )
+}
+
+fn rehash_experimental_evidence_files_v1(
+    files: &[KagemushaEvidenceFileV1],
+    evidence_root: &Path,
+) -> color_eyre::Result<usize> {
+    let root = canonical_artifact_root(evidence_root)?;
+    let mut unique = BTreeMap::new();
+    for file in files {
+        if let Some(previous_len) = unique.insert(file.sha256, file.byte_len)
+            && previous_len != file.byte_len
+        {
+            bail!("experimental receipt reuses an evidence digest with a different length");
+        }
+    }
+    for (digest, byte_len) in &unique {
+        let path = root.join(hex::encode(digest));
+        if hash_immutable_file_exact(&path, *byte_len, "KAGEMUSHA V1 receipt evidence")? != *digest
+        {
+            bail!("experimental receipt evidence differs from its typed SHA-256 binding");
+        }
+    }
+    Ok(unique.len())
+}
+
+fn prepare_experimental_release_v1<T: Write>(
+    args: &PrepareExperimentalReleaseV1Args,
+    writer: &mut std::io::BufWriter<T>,
+) -> Outcome {
+    let receipt_bytes = read_bounded_immutable_file(
+        &args.validation_receipt,
+        KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "KAGEMUSHA V1 typed experimental validation receipt",
+    )?;
+    let receipt =
+        KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&receipt_bytes)
+            .map_err(|source| eyre!("invalid typed experimental receipt: {source}"))?;
+    let inventory_bytes = read_bounded_immutable_file(
+        &args.artifact_inventory,
+        EXPERIMENTAL_ARTIFACT_INVENTORY_JSON_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental artifact inventory",
+    )?;
+    let artifacts: Vec<KagemushaArtifactBindingV1> = norito::json::from_slice(&inventory_bytes)
+        .map_err(|source| eyre!("invalid typed experimental artifact inventory: {source}"))?;
+    validate_exact_release_inventory_v1(&artifacts)?;
+    let artifact_root = canonical_artifact_root(&args.artifact_root)?;
+    rehash_all_release_artifacts_v1(&artifacts, &artifact_root)?;
+    let evidence_file_count =
+        rehash_experimental_receipt_evidence_v1(&receipt, &args.evidence_root)?;
+    let policy_bytes = read_bounded_immutable_file(
+        &args.authority_policy,
+        KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental authority policy",
+    )?;
+    let policy = KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(&policy_bytes)
+        .map_err(|source| eyre!("invalid experimental authority policy: {source}"))?;
+    let network_id = args
+        .network_id
+        .parse::<NetworkId>()
+        .map_err(|source| eyre!("invalid genesis-derived network identity: {source}"))?;
+    let scope = KagemushaTestnetExperimentScopeV1 {
+        asset_identity_digest: parse_lower_sha256(
+            &args.asset_identity_digest,
+            "experimental asset identity digest",
+        )?,
+        asset_incarnation: parse_lower_sha256(
+            &args.asset_incarnation,
+            "experimental asset incarnation",
+        )?,
+        asset_scale: args.asset_scale,
+        liability_pool_id: parse_lower_sha256(
+            &args.liability_pool_id,
+            "experimental reserve-liability pool identifier",
+        )?,
+    };
+    scope
+        .validate()
+        .map_err(|source| eyre!("invalid experimental monetary scope: {source}"))?;
+    let receipt_digest = receipt
+        .canonical_experimental_digest()
+        .map_err(|source| eyre!("invalid experimental receipt digest: {source}"))?;
+    let manifest = KagemushaReleaseManifestV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        network_id,
+        purpose: KagemushaReleasePurposeV1::TestnetExperiment(scope),
+        release_id: [0; 32],
+        source_tree_digest: receipt.source_tree_digest,
+        cargo_lock_digest: receipt.cargo_lock_digest,
+        profile_digest: receipt.profile_digest,
+        eq_protocol_digest: receipt.eq_protocol_digest,
+        ep_protocol_digest: receipt.ep_protocol_digest,
+        hardware_policy_digest: receipt.hardware_policy_digest,
+        validation_receipt_digest: receipt_digest,
+        halo2_k: KAGEMUSHA_HALO2_K_V1,
+        helper_protocols: receipt.helper_protocols.clone(),
+        enabled_profiles: receipt
+            .profile_qualifications
+            .iter()
+            .map(|qualification| qualification.profile)
+            .collect(),
+        artifacts,
+    }
+    .seal()
+    .map_err(|source| eyre!("cannot seal experimental release manifest: {source}"))?;
+    let subject = manifest
+        .experimental_release_attestation_subject(&receipt, &policy)
+        .map_err(|source| eyre!("experimental release candidate is inconsistent: {source}"))?;
+    let projection_bytes = read_bounded_immutable_file(
+        &args.authority_review_projection,
+        AUTHORITY_REVIEW_PROJECTION_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental authority-review projection",
+    )?;
+    let projection_sha256 = parse_lower_sha256(
+        &args.authority_review_projection_sha256,
+        "experimental authority-review projection SHA-256",
+    )?;
+    if sha256(&projection_bytes) != projection_sha256 {
+        bail!("experimental authority-review projection differs from its independent SHA-256 pin");
+    }
+    validate_authority_review_projection_v1(
+        &projection_bytes,
+        &manifest,
+        &receipt,
+        AuthorityReviewPurposeV1::TestnetExperiment,
+    )?;
+    let manifest_bytes = norito::encode_canonical(&manifest)?;
+    let output_dir = crate::secure_fs::prepare_empty_private_directory(&args.output_dir)?;
+    crate::secure_fs::write_private_file_atomic(
+        &output_dir.join("validation-receipt.norito"),
+        &receipt_bytes,
+    )?;
+    crate::secure_fs::write_private_file_atomic(
+        &output_dir.join("manifest.norito"),
+        &manifest_bytes,
+    )?;
+    // TODO: the trusted evidence producer must validate each report's semantic claims and
+    // source-tree provenance; this preparer proves byte existence and closed release bindings.
+    let mut report = JsonMap::new();
+    insert_json_field(
+        &mut report,
+        "status",
+        "prepared_unsigned_experimental_candidate",
+    )?;
+    insert_json_field(&mut report, "release_authenticated", &false)?;
+    insert_json_field(&mut report, "hardware_qualified", &false)?;
+    insert_json_field(&mut report, "monetary_admission", &false)?;
+    insert_json_field(&mut report, "release_id", &hex::encode(manifest.release_id))?;
+    insert_json_field(
+        &mut report,
+        "validation_receipt_digest",
+        &hex::encode(receipt_digest),
+    )?;
+    insert_json_field(
+        &mut report,
+        "authority_policy_digest",
+        &hex::encode(subject.authority_policy_digest),
+    )?;
+    insert_json_field(&mut report, "artifact_count", &50_u64)?;
+    insert_json_field(
+        &mut report,
+        "evidence_file_count",
+        &u64::try_from(evidence_file_count)?,
+    )?;
+    write!(
+        writer,
+        "{}",
+        norito::json::to_json(&JsonValue::Object(report))?
+    )?;
+    Ok(())
+}
+
+fn authenticate_experimental_release_v1<T: Write>(
+    args: &AuthenticateExperimentalReleaseV1Args,
+    writer: &mut std::io::BufWriter<T>,
+) -> Outcome {
+    let manifest_bytes = read_bounded_immutable_file(
+        &args.manifest,
+        KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental release manifest",
+    )?;
+    let receipt_bytes = read_bounded_immutable_file(
+        &args.validation_receipt,
+        KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental validation receipt",
+    )?;
+    let policy_bytes = read_bounded_immutable_file(
+        &args.authority_policy,
+        KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental authority policy",
+    )?;
+    let attestation_bytes = read_bounded_immutable_file(
+        &args.attestation,
+        KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental release attestation",
+    )?;
+    let manifest = KagemushaReleaseManifestV1::decode_canonical_exact(&manifest_bytes)
+        .map_err(|source| eyre!("invalid experimental release manifest: {source}"))?;
+    let receipt =
+        KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&receipt_bytes)
+            .map_err(|source| eyre!("invalid experimental validation receipt: {source}"))?;
+    let policy = KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(&policy_bytes)
+        .map_err(|source| eyre!("invalid experimental authority policy: {source}"))?;
+    let attestation = KagemushaReleaseAttestationV1::decode_canonical_exact(&attestation_bytes)
+        .map_err(|source| eyre!("invalid experimental release attestation: {source}"))?;
+    let authenticated = manifest
+        .authenticate_experimental(&receipt, &policy, &attestation)
+        .map_err(|source| eyre!("experimental release authentication failed: {source}"))?;
+    let KagemushaReleasePurposeV1::TestnetExperiment(signed_scope) = authenticated.purpose() else {
+        bail!("experimental command requires a signed testnet-experiment purpose");
+    };
+    validate_experimental_operator_pins_v1(
+        &args.pins,
+        *authenticated.network_id().as_bytes(),
+        authenticated.release_id(),
+        signed_scope,
+    )?;
+    validate_exact_release_inventory_v1(&manifest.artifacts)?;
+    let artifact_root = canonical_artifact_root(&args.artifact_root)?;
+    rehash_all_release_artifacts_v1(&manifest.artifacts, &artifact_root)?;
+
+    let approved_signers = authenticated
+        .approved_signers()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let mut report = JsonMap::new();
+    insert_json_field(
+        &mut report,
+        "schema",
+        AUTHENTICATED_EXPERIMENTAL_RELEASE_REPORT_SCHEMA_V1,
+    )?;
+    insert_json_field(&mut report, "schema_version", &1_u64)?;
+    insert_json_field(&mut report, "status", "authenticated")?;
+    insert_json_field(&mut report, "purpose", "testnet_experiment")?;
+    insert_json_field(&mut report, "proof_only", &true)?;
+    insert_json_field(&mut report, "hardware_qualified", &false)?;
+    insert_json_field(&mut report, "monetary_admission", &false)?;
+    insert_json_field(&mut report, "runtime_loaded", &false)?;
+    insert_json_field(&mut report, "artifacts_rehashed", &true)?;
+    insert_json_field(
+        &mut report,
+        "network_id",
+        &hex::encode(authenticated.network_id().as_bytes()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "release_id",
+        &hex::encode(authenticated.release_id()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "manifest_digest",
+        &hex::encode(authenticated.manifest_digest()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "validation_receipt_digest",
+        &hex::encode(authenticated.receipt_digest()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "authority_policy_digest",
+        &hex::encode(authenticated.authority_policy_digest()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "attestation_digest",
+        &hex::encode(authenticated.attestation_digest()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "asset_identity_digest",
+        &hex::encode(signed_scope.asset_identity_digest),
+    )?;
+    insert_json_field(
+        &mut report,
+        "asset_incarnation",
+        &hex::encode(signed_scope.asset_incarnation),
+    )?;
+    insert_json_field(&mut report, "asset_scale", &signed_scope.asset_scale)?;
+    insert_json_field(
+        &mut report,
+        "liability_pool_id",
+        &hex::encode(signed_scope.liability_pool_id),
+    )?;
+    insert_json_field(
+        &mut report,
+        "authority_threshold",
+        &u64::from(policy.threshold),
+    )?;
+    insert_json_field(&mut report, "approved_signers", &approved_signers)?;
+    write!(
+        writer,
+        "{}",
+        norito::json::to_json(&JsonValue::Object(report))?
+    )?;
+    Ok(())
+}
+
+fn validate_experimental_operator_pins_v1(
+    pins: &ExperimentalOperatorPinsV1,
+    signed_network_id: [u8; 32],
+    signed_release_id: [u8; 32],
+    signed_scope: KagemushaTestnetExperimentScopeV1,
+) -> Outcome {
+    let expected_scope = KagemushaTestnetExperimentScopeV1 {
+        asset_identity_digest: parse_lower_sha256(
+            &pins.expected_asset_identity_digest,
+            "expected asset identity digest",
+        )?,
+        asset_incarnation: parse_lower_sha256(
+            &pins.expected_asset_incarnation,
+            "expected asset incarnation",
+        )?,
+        asset_scale: pins.expected_asset_scale,
+        liability_pool_id: parse_lower_sha256(
+            &pins.expected_liability_pool_id,
+            "expected liability pool identifier",
+        )?,
+    };
+    expected_scope
+        .validate()
+        .map_err(|source| eyre!("invalid independent experimental scope pins: {source}"))?;
+    if signed_network_id
+        != parse_lower_sha256(&pins.expected_network_id, "expected network identity")?
+        || signed_release_id
+            != parse_lower_sha256(&pins.expected_release_id, "expected release identifier")?
+        || signed_scope != expected_scope
+    {
+        bail!("signed experimental release differs from independent operator pins");
+    }
+    Ok(())
+}
+
+fn read_experimental_release_material_v1(
+    manifest_path: &Path,
+    receipt_path: &Path,
+    policy_path: &Path,
+) -> color_eyre::Result<(
+    KagemushaReleaseManifestV1,
+    KagemushaInternalValidationReceiptV1,
+    KagemushaReleaseAuthorityPolicyV1,
+)> {
+    let manifest_bytes = read_bounded_immutable_file(
+        manifest_path,
+        KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental release manifest",
+    )?;
+    let receipt_bytes = read_bounded_immutable_file(
+        receipt_path,
+        KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental validation receipt",
+    )?;
+    let policy_bytes = read_bounded_immutable_file(
+        policy_path,
+        KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental authority policy",
+    )?;
+    let manifest = KagemushaReleaseManifestV1::decode_canonical_exact(&manifest_bytes)
+        .map_err(|source| eyre!("invalid experimental release manifest: {source}"))?;
+    let receipt =
+        KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&receipt_bytes)
+            .map_err(|source| eyre!("invalid experimental validation receipt: {source}"))?;
+    let policy = KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(&policy_bytes)
+        .map_err(|source| eyre!("invalid experimental authority policy: {source}"))?;
+    Ok((manifest, receipt, policy))
+}
+
+fn check_experimental_release_material_v1(
+    manifest: &KagemushaReleaseManifestV1,
+    receipt: &KagemushaInternalValidationReceiptV1,
+    policy: &KagemushaReleaseAuthorityPolicyV1,
+    pins: &ExperimentalOperatorPinsV1,
+    artifact_root: &Path,
+) -> color_eyre::Result<iroha_data_model::kagemusha::KagemushaReleaseAttestationSubjectV1> {
+    let subject = manifest
+        .experimental_release_attestation_subject(receipt, policy)
+        .map_err(|source| eyre!("invalid experimental release signing subject: {source}"))?;
+    let KagemushaReleasePurposeV1::TestnetExperiment(signed_scope) = manifest.purpose else {
+        bail!("experimental signing requires a signed testnet-experiment purpose");
+    };
+    validate_experimental_operator_pins_v1(
+        pins,
+        *manifest.network_id.as_bytes(),
+        manifest.release_id,
+        signed_scope,
+    )?;
+    validate_exact_release_inventory_v1(&manifest.artifacts)?;
+    let artifact_root = canonical_artifact_root(artifact_root)?;
+    rehash_all_release_artifacts_v1(&manifest.artifacts, &artifact_root)?;
+    Ok(subject)
+}
+
+fn load_experimental_signing_key_v1(path: &Path) -> color_eyre::Result<KeyPair> {
+    let raw = Zeroizing::new(crate::secure_fs::read_private_file(path)?);
+    let text = std::str::from_utf8(raw.as_slice())
+        .map_err(|_| eyre!("experimental authority private-key file is not UTF-8"))?;
+    let canonical = text
+        .strip_suffix('\n')
+        .ok_or_else(|| eyre!("experimental authority private-key file lacks its final newline"))?;
+    if canonical.is_empty() || canonical.chars().any(char::is_whitespace) {
+        bail!("experimental authority private-key file is not one canonical key record");
+    }
+    let exposed = canonical
+        .parse::<ExposedPrivateKey>()
+        .map_err(|_| eyre!("invalid experimental authority private-key record"))?;
+    let reencoded = Zeroizing::new(exposed.to_string());
+    if reencoded.as_str() != canonical {
+        bail!("experimental authority private-key encoding is not canonical");
+    }
+    KeyPair::from_private_key(exposed.0)
+        .map_err(|_| eyre!("cannot derive experimental authority public key"))
+}
+
+fn sign_experimental_release_approval_v1<T: Write>(
+    args: &SignExperimentalReleaseApprovalV1Args,
+    writer: &mut std::io::BufWriter<T>,
+) -> Outcome {
+    let (manifest, receipt, policy) = read_experimental_release_material_v1(
+        &args.manifest,
+        &args.validation_receipt,
+        &args.authority_policy,
+    )?;
+    let subject = check_experimental_release_material_v1(
+        &manifest,
+        &receipt,
+        &policy,
+        &args.pins,
+        &args.artifact_root,
+    )?;
+    let signing_key = load_experimental_signing_key_v1(&args.signer_private_key)?;
+    if policy
+        .authorized_signers
+        .binary_search(signing_key.public_key())
+        .is_err()
+    {
+        bail!("experimental signing key is absent from the independently trusted policy");
+    }
+    let payload = subject.approval_payload();
+    let approval = KagemushaReleaseApprovalV1 {
+        public_key: signing_key.public_key().clone(),
+        signature: SignatureOf::try_new(signing_key.private_key(), &payload)
+            .map_err(|_| eyre!("experimental release approval signature failed"))?,
+    };
+    approval
+        .signature
+        .verify(&approval.public_key, &payload)
+        .map_err(|_| eyre!("experimental release approval self-verification failed"))?;
+    let encoded = norito::encode_canonical(&approval)?;
+    crate::secure_fs::write_private_file_atomic(&args.approval_output, &encoded)?;
+    let mut report = JsonMap::new();
+    insert_json_field(&mut report, "status", "signed_one_approval")?;
+    insert_json_field(&mut report, "release_id", &hex::encode(subject.release_id))?;
+    insert_json_field(&mut report, "signer", &approval.public_key.to_string())?;
+    write!(
+        writer,
+        "{}",
+        norito::json::to_json(&JsonValue::Object(report))?
+    )?;
+    Ok(())
+}
+
+fn assemble_experimental_release_v1<T: Write>(
+    args: &AssembleExperimentalReleaseV1Args,
+    writer: &mut std::io::BufWriter<T>,
+) -> Outcome {
+    let (manifest, receipt, policy) = read_experimental_release_material_v1(
+        &args.manifest,
+        &args.validation_receipt,
+        &args.authority_policy,
+    )?;
+    let subject = check_experimental_release_material_v1(
+        &manifest,
+        &receipt,
+        &policy,
+        &args.pins,
+        &args.artifact_root,
+    )?;
+    let mut approvals = Vec::with_capacity(args.approval.len());
+    for path in &args.approval {
+        let bytes = read_bounded_immutable_file(
+            path,
+            KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
+            "KAGEMUSHA V1 experimental release approval",
+        )?;
+        let approval: KagemushaReleaseApprovalV1 = norito::decode_canonical(&bytes)
+            .map_err(|source| eyre!("invalid canonical experimental approval: {source}"))?;
+        approvals.push(approval);
+    }
+    approvals.sort_by(|left, right| left.public_key.cmp(&right.public_key));
+    let attestation = KagemushaReleaseAttestationV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        subject,
+        approvals,
+    };
+    let authenticated = manifest
+        .authenticate_experimental(&receipt, &policy, &attestation)
+        .map_err(|source| eyre!("experimental threshold assembly failed: {source}"))?;
+    let encoded = norito::encode_canonical(&attestation)?;
+    crate::secure_fs::write_private_file_atomic(&args.attestation_output, &encoded)?;
+    let mut report = JsonMap::new();
+    insert_json_field(&mut report, "status", "assembled_experimental_attestation")?;
+    insert_json_field(
+        &mut report,
+        "release_id",
+        &hex::encode(authenticated.release_id()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "attestation_digest",
+        &hex::encode(authenticated.attestation_digest()),
+    )?;
+    insert_json_field(
+        &mut report,
+        "approved_signers",
+        &authenticated
+            .approved_signers()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+    )?;
+    write!(
+        writer,
+        "{}",
+        norito::json::to_json(&JsonValue::Object(report))?
+    )?;
+    Ok(())
 }
 
 fn validate_exact_release_inventory_v1(
@@ -434,7 +1218,10 @@ fn validate_authority_review_projection_v1(
     bytes: &[u8],
     manifest: &KagemushaReleaseManifestV1,
     receipt: &KagemushaInternalValidationReceiptV1,
+    purpose: AuthorityReviewPurposeV1,
 ) -> color_eyre::Result<()> {
+    let (expected_schema, expected_scope) =
+        authority_review_contract_v1(purpose, manifest.purpose)?;
     let projection = decode_authority_review_projection_json_v1(bytes)?;
     let root = exact_json_object(
         &projection,
@@ -451,9 +1238,9 @@ fn validate_authority_review_projection_v1(
             "verifier_commands",
         ],
     )?;
-    if json_string(root, "schema")? != AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1
+    if json_string(root, "schema")? != expected_schema
         || json_u64(root, "schema_version")? != 1
-        || json_string(root, "verification_scope")? != AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1
+        || json_string(root, "verification_scope")? != expected_scope
     {
         bail!("KAGEMUSHA V1 authority-review projection contract is unsupported");
     }
@@ -512,6 +1299,26 @@ fn validate_authority_review_projection_v1(
         bail!("KAGEMUSHA V1 authority-review verification-record digest is stale");
     }
     Ok(())
+}
+
+fn authority_review_contract_v1(
+    purpose: AuthorityReviewPurposeV1,
+    release_purpose: KagemushaReleasePurposeV1,
+) -> color_eyre::Result<(&'static str, &'static str)> {
+    Ok(match (purpose, release_purpose) {
+        (AuthorityReviewPurposeV1::Production, KagemushaReleasePurposeV1::Production) => (
+            AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1,
+            AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1,
+        ),
+        (
+            AuthorityReviewPurposeV1::TestnetExperiment,
+            KagemushaReleasePurposeV1::TestnetExperiment(_),
+        ) => (
+            TESTNET_AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1,
+            TESTNET_AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1,
+        ),
+        _ => bail!("authority-review projection purpose differs from signed release"),
+    })
 }
 
 fn decode_authority_review_projection_json_v1(bytes: &[u8]) -> color_eyre::Result<JsonValue> {
@@ -632,6 +1439,7 @@ fn is_release_digest_field(field: &str) -> bool {
             | "provider_id"
             | "product_class_digest"
             | "firmware_policy_digest"
+            | "app_attestation_authority_policy_digest"
             | "enrollment_attestation_verifier_digest"
             | "attestation_trust_roots_digest"
             | "allowed_suite_commitment"
@@ -1243,6 +2051,322 @@ fn same_input_metadata(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 mod tests {
     use super::*;
 
+    fn experimental_args() -> AuthenticateExperimentalReleaseV1Args {
+        AuthenticateExperimentalReleaseV1Args {
+            manifest: PathBuf::from("manifest.norito"),
+            validation_receipt: PathBuf::from("receipt.norito"),
+            authority_policy: PathBuf::from("policy.norito"),
+            attestation: PathBuf::from("attestation.norito"),
+            artifact_root: PathBuf::from("artifacts"),
+            pins: ExperimentalOperatorPinsV1 {
+                expected_network_id: "11".repeat(32),
+                expected_release_id: "22".repeat(32),
+                expected_asset_identity_digest: "33".repeat(32),
+                expected_asset_incarnation: "44".repeat(32),
+                expected_asset_scale: 2,
+                expected_liability_pool_id: "55".repeat(32),
+            },
+        }
+    }
+
+    #[test]
+    fn experimental_command_requires_all_independent_pins() {
+        use clap::Parser as _;
+
+        let command = [
+            "kagami",
+            "kagemusha",
+            "authenticate-experimental-release-v1",
+            "--manifest",
+            "manifest.norito",
+            "--validation-receipt",
+            "receipt.norito",
+            "--authority-policy",
+            "policy.norito",
+            "--attestation",
+            "attestation.norito",
+            "--artifact-root",
+            "artifacts",
+            "--expected-network-id",
+            "11",
+            "--expected-release-id",
+            "22",
+            "--expected-asset-identity-digest",
+            "33",
+            "--expected-asset-incarnation",
+            "44",
+            "--expected-asset-scale",
+            "2",
+            "--expected-liability-pool-id",
+            "55",
+        ];
+        assert!(crate::Cli::try_parse_from(command).is_ok());
+        assert!(crate::Cli::try_parse_from(command[..command.len() - 2].iter().copied()).is_err());
+    }
+
+    #[test]
+    fn experimental_prepare_command_requires_evidence_and_output_custody() {
+        use clap::Parser as _;
+
+        let command = "kagami kagemusha prepare-experimental-release-v1 \
+                       --validation-receipt receipt.norito --artifact-inventory artifacts.json \
+                       --artifact-root artifacts --evidence-root evidence \
+                       --authority-policy policy.norito \
+                       --authority-review-projection projection.json \
+                       --authority-review-projection-sha256 11 \
+                       --network-id network --asset-identity-digest 22 \
+                       --asset-incarnation 33 --asset-scale 2 \
+                       --liability-pool-id 44 --output-dir out";
+        assert!(crate::Cli::try_parse_from(command.split_whitespace()).is_ok());
+        assert!(
+            crate::Cli::try_parse_from(
+                command
+                    .replace("--evidence-root evidence", "")
+                    .split_whitespace()
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn experimental_preparation_rehashes_every_artifact_and_evidence_file() {
+        let parent = fs::canonicalize(std::env::temp_dir()).expect("canonical temporary parent");
+        let artifact_dir = tempfile::Builder::new()
+            .prefix(".kagemusha-experimental-artifacts-")
+            .tempdir_in(&parent)
+            .expect("artifact fixture directory");
+        let evidence_dir = tempfile::Builder::new()
+            .prefix(".kagemusha-experimental-evidence-")
+            .tempdir_in(parent)
+            .expect("evidence fixture directory");
+        let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_dir.path())
+            .expect("content-addressed artifact resolver");
+        let artifacts = KagemushaArtifactRoleV1::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(index, role)| {
+                use iroha_core::zk::kagemusha_v1_recursion::{
+                    KagemushaArtifactDescriptorV1, KagemushaArtifactKindV1,
+                };
+                let descriptor = KagemushaArtifactDescriptorV1::for_role(role);
+                let byte_len = if descriptor.kind == KagemushaArtifactKindV1::Parameters {
+                    usize::try_from(descriptor.byte_limit).expect("fixed parameter length")
+                } else {
+                    1
+                };
+                let bytes = vec![u8::try_from(index + 1).expect("bounded role index"); byte_len];
+                let digest = sha256(&bytes);
+                fs::write(resolver.path_for_digest(digest), &bytes)
+                    .expect("write real content-addressed artifact");
+                KagemushaArtifactBindingV1 {
+                    role,
+                    sha256: digest,
+                    byte_len: u64::try_from(byte_len).expect("bounded artifact length"),
+                }
+            })
+            .collect::<Vec<_>>();
+        rehash_all_release_artifacts_v1(&artifacts, artifact_dir.path())
+            .expect("all 50 real artifact bindings match");
+        let evidence_bytes = b"observed structural circuit rows";
+        let evidence = KagemushaEvidenceFileV1 {
+            sha256: sha256(evidence_bytes),
+            byte_len: u64::try_from(evidence_bytes.len()).expect("small evidence"),
+        };
+        let evidence_path = evidence_dir.path().join(hex::encode(evidence.sha256));
+        fs::write(&evidence_path, evidence_bytes).expect("write real evidence file");
+        assert_eq!(
+            rehash_experimental_evidence_files_v1(&[evidence, evidence], evidence_dir.path())
+                .expect("deduplicated evidence rehash"),
+            1
+        );
+        let wrong_length = KagemushaEvidenceFileV1 {
+            byte_len: evidence.byte_len + 1,
+            ..evidence
+        };
+        assert!(
+            rehash_experimental_evidence_files_v1(&[evidence, wrong_length], evidence_dir.path())
+                .is_err()
+        );
+        fs::write(&evidence_path, vec![0xee; evidence_bytes.len()])
+            .expect("substitute evidence bytes");
+        assert!(rehash_experimental_evidence_files_v1(&[evidence], evidence_dir.path()).is_err());
+        fs::write(resolver.path_for_digest(artifacts[0].sha256), [0xff])
+            .expect("substitute one proof artifact");
+        assert!(rehash_all_release_artifacts_v1(&artifacts, artifact_dir.path()).is_err());
+    }
+
+    #[test]
+    fn experimental_optional_evidence_requires_a_complete_binding_when_present() {
+        let absent = KagemushaEvidenceFileV1 {
+            sha256: [0; 32],
+            byte_len: 0,
+        };
+        let present = KagemushaEvidenceFileV1 {
+            sha256: sha256(b"reviewed experimental evidence"),
+            byte_len: 30,
+        };
+        let mut files = Vec::new();
+        append_optional_experimental_evidence_v1(&mut files, absent)
+            .expect("canonical absence needs no file");
+        assert!(files.is_empty());
+        append_optional_experimental_evidence_v1(&mut files, present)
+            .expect("complete optional binding is rehashed");
+        assert_eq!(files, vec![present]);
+        assert!(
+            append_optional_experimental_evidence_v1(
+                &mut files,
+                KagemushaEvidenceFileV1 {
+                    sha256: present.sha256,
+                    byte_len: 0,
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            append_optional_experimental_evidence_v1(
+                &mut files,
+                KagemushaEvidenceFileV1 {
+                    sha256: [0; 32],
+                    byte_len: present.byte_len,
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            append_optional_experimental_evidence_v1(
+                &mut files,
+                KagemushaEvidenceFileV1 {
+                    sha256: present.sha256,
+                    byte_len: KAGEMUSHA_RELEASE_EVIDENCE_FILE_MAX_BYTES_V1 + 1,
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(files, vec![present]);
+    }
+
+    #[test]
+    fn experimental_issuance_commands_require_one_key_or_approval_at_a_time() {
+        use clap::Parser as _;
+
+        let pins = "--expected-network-id 11 --expected-release-id 22 \
+                    --expected-asset-identity-digest 33 --expected-asset-incarnation 44 \
+                    --expected-asset-scale 2 --expected-liability-pool-id 55";
+        let sign = format!(
+            "kagami kagemusha sign-experimental-release-approval-v1 \
+             --manifest manifest.norito --validation-receipt receipt.norito \
+             --authority-policy policy.norito --artifact-root artifacts \
+             --signer-private-key signer.key --approval-output approval.norito {pins}"
+        );
+        assert!(crate::Cli::try_parse_from(sign.split_whitespace()).is_ok());
+        assert!(
+            crate::Cli::try_parse_from(
+                sign.replace("--signer-private-key signer.key", "")
+                    .split_whitespace()
+            )
+            .is_err()
+        );
+        let assemble = format!(
+            "kagami kagemusha assemble-experimental-release-v1 \
+             --manifest manifest.norito --validation-receipt receipt.norito \
+             --authority-policy policy.norito --artifact-root artifacts \
+             --approval approval-a.norito --approval approval-b.norito \
+             --attestation-output attestation.norito {pins}"
+        );
+        assert!(crate::Cli::try_parse_from(assemble.split_whitespace()).is_ok());
+        assert!(
+            crate::Cli::try_parse_from(
+                assemble
+                    .replace(
+                        "--approval approval-a.norito --approval approval-b.norito",
+                        ""
+                    )
+                    .split_whitespace()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn experimental_operator_pins_reject_every_changed_monetary_identity() {
+        let args = experimental_args();
+        let scope = KagemushaTestnetExperimentScopeV1 {
+            asset_identity_digest: [0x33; 32],
+            asset_incarnation: [0x44; 32],
+            asset_scale: 2,
+            liability_pool_id: [0x55; 32],
+        };
+        validate_experimental_operator_pins_v1(&args.pins, [0x11; 32], [0x22; 32], scope)
+            .expect("all signed identities match independent pins");
+        assert!(
+            validate_experimental_operator_pins_v1(&args.pins, [0x12; 32], [0x22; 32], scope)
+                .is_err()
+        );
+        assert!(
+            validate_experimental_operator_pins_v1(&args.pins, [0x11; 32], [0x23; 32], scope)
+                .is_err()
+        );
+        for changed in [
+            KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: [0x34; 32],
+                ..scope
+            },
+            KagemushaTestnetExperimentScopeV1 {
+                asset_incarnation: [0x45; 32],
+                ..scope
+            },
+            KagemushaTestnetExperimentScopeV1 {
+                asset_scale: 3,
+                ..scope
+            },
+            KagemushaTestnetExperimentScopeV1 {
+                liability_pool_id: [0x56; 32],
+                ..scope
+            },
+        ] {
+            assert!(
+                validate_experimental_operator_pins_v1(&args.pins, [0x11; 32], [0x22; 32], changed)
+                    .is_err()
+            );
+        }
+        let mut malformed = args;
+        malformed.pins.expected_asset_identity_digest = "AA".repeat(32);
+        assert!(
+            validate_experimental_operator_pins_v1(&malformed.pins, [0x11; 32], [0x22; 32], scope)
+                .is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn experimental_signing_key_requires_owner_only_canonical_custody() {
+        let parent = fs::canonicalize(std::env::temp_dir()).expect("canonical temporary parent");
+        let directory = tempfile::Builder::new()
+            .prefix(".kagemusha-approval-key-")
+            .tempdir_in(parent)
+            .expect("private key fixture directory");
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+            .expect("harden fixture directory");
+        let key = KeyPair::random();
+        let key_path = directory.path().join("signer.key");
+        let canonical = Zeroizing::new(
+            format!("{}\n", ExposedPrivateKey(key.private_key().clone())).into_bytes(),
+        );
+        crate::secure_fs::write_private_file_atomic(&key_path, canonical.as_slice())
+            .expect("write owner-only key fixture");
+        assert_eq!(
+            load_experimental_signing_key_v1(&key_path)
+                .expect("load canonical signer")
+                .public_key(),
+            key.public_key()
+        );
+        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o644))
+            .expect("weaken fixture custody");
+        assert!(load_experimental_signing_key_v1(&key_path).is_err());
+    }
+
     #[test]
     fn parser_rejects_epoch_key_derivation_commands() {
         use clap::{Parser as _, error::ErrorKind};
@@ -1338,10 +2462,74 @@ mod tests {
     }
 
     #[test]
+    fn app_attestation_policy_digest_projection_is_exact_hex() {
+        let raw = norito::json!({
+            "app_attestation_authority_policy_digest": (vec![0x5a_u8; 32]),
+        });
+        let normalized = normalize_release_projection_value(raw).unwrap();
+        assert_eq!(
+            normalized
+                .get("app_attestation_authority_policy_digest")
+                .and_then(JsonValue::as_str),
+            Some("5a".repeat(32).as_str()),
+        );
+        assert!(
+            normalize_release_projection_value(norito::json!({
+                "app_attestation_authority_policy_digest": (vec![0x5a_u8; 31]),
+            }))
+            .is_err(),
+        );
+    }
+
+    #[test]
     fn authority_projection_rejects_corruption_and_noncanonical_json() {
         assert!(decode_authority_review_projection_json_v1(b"{not-json}").is_err());
         assert!(decode_authority_review_projection_json_v1(b"{}").is_err());
         assert!(decode_authority_review_projection_json_v1(b"{}\n").is_ok());
+    }
+
+    #[test]
+    fn authority_projection_contract_rejects_release_purpose_confusion() {
+        assert_eq!(
+            authority_review_contract_v1(
+                AuthorityReviewPurposeV1::Production,
+                KagemushaReleasePurposeV1::Production,
+            )
+            .expect("production contract"),
+            (
+                AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1,
+                AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1,
+            )
+        );
+        let experimental =
+            KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: [1; 32],
+                asset_incarnation: [2; 32],
+                asset_scale: 2,
+                liability_pool_id: [3; 32],
+            });
+        assert_eq!(
+            authority_review_contract_v1(
+                AuthorityReviewPurposeV1::TestnetExperiment,
+                experimental,
+            )
+            .expect("experimental contract"),
+            (
+                TESTNET_AUTHORITY_REVIEW_PROJECTION_SCHEMA_V1,
+                TESTNET_AUTHORITY_REVIEW_VERIFICATION_SCOPE_V1,
+            )
+        );
+        assert!(
+            authority_review_contract_v1(AuthorityReviewPurposeV1::Production, experimental)
+                .is_err()
+        );
+        assert!(
+            authority_review_contract_v1(
+                AuthorityReviewPurposeV1::TestnetExperiment,
+                KagemushaReleasePurposeV1::Production,
+            )
+            .is_err()
+        );
     }
 
     #[test]

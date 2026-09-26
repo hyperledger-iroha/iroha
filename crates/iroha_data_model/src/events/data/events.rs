@@ -2780,8 +2780,9 @@ mod tests {
 }
 #[allow(unused_imports)]
 pub mod prelude {
+    pub use super::model::{DataEvent, MetadataChanged};
     pub use super::{
-        DataEvent, HasOrigin, MetadataChanged,
+        HasOrigin,
         account::{
             AccountControllerReplaced, AccountCreated, AccountEvent, AccountEventSet,
             AccountPermissionChanged, AccountRecoveryApproved, AccountRecoveryCancelled,

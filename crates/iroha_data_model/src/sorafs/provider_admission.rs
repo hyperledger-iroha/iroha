@@ -16,6 +16,8 @@ use sorafs_manifest::provider_admission::{
 };
 use thiserror::Error;
 
+pub mod governance;
+
 /// Sole first-release policy layout.
 pub const PROVIDER_ADMISSION_COUNCIL_POLICY_VERSION_V1: u16 = 1;
 /// Maximum distinct strong council signers retained in one policy.

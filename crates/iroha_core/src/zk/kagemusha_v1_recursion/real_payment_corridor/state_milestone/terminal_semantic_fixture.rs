@@ -465,6 +465,7 @@ fn assert_complete_semantic_queue_matches_original(
         authorization_counter_after: 1,
         hardware_profile: material.hardware_profile.clone(),
         hardware_credential: material.hardware_credential.clone(),
+        apple_selection: None,
     };
     private
         .validate_against(&public)

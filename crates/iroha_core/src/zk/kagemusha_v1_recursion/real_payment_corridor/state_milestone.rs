@@ -4,8 +4,11 @@
 //! production release nor qualifies physical hardware. Its separate terminal diagnostic also
 //! proves internal TerminalAuthorization, and its separate wrapper diagnostic measures the
 //! genuine CommitWrapper protocol seed. The sender-closure diagnostic re-proves this chain under
-//! the actual wrapper identity. All entry points stop before payment finalization,
-//! transport/decryption, receiver staging, and ReceiveFold; the 1024-handoff gate remains closed.
+//! the actual wrapper identity. The funded sender fixture also opens its request-bound encrypted
+//! peer credit with a receiver-owned key. The sender-closure entry point now finalizes the exact
+//! generated payment envelope in a private test verifier, but does not install a hardware-backed
+//! state-machine commit, stage the receiver, or prove ReceiveFold; the 1024-handoff gate remains
+//! closed.
 
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
@@ -16,6 +19,7 @@ use crate::zk::{
         KagemushaStateProofVerificationRequestV1, VerifiedKagemushaMintFinalityHelperV1,
         deferred_parent::kagemusha_protocol_structure_digest_v1,
         mint_authorization::mint_authorization_public_instances_v1,
+        native_backend::payment_terminal_public_inputs_v1,
         state_relation::PUBLIC_INSTANCE_COUNT,
         terminal_authorization::{
             KagemushaCommitEvidenceOpeningV1, TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
@@ -43,12 +47,18 @@ use crate::zk::{
     },
 };
 use halo2_proofs::halo2curves::ff::Field as _;
+use iroha_crypto::kagemusha::kagemusha_x25519_public_key_v1;
 use iroha_data_model::kagemusha::{
-    KagemushaCommitEvidenceV1, KagemushaMintCreditV1, KagemushaOutboxReservationV1,
+    KagemushaCommitEvidenceV1, KagemushaCreditOpeningV1, KagemushaEncryptedCreditAadV1,
+    KagemushaMintCreditV1, KagemushaOutboxReservationV1, KagemushaPaymentOutputV1,
     KagemushaPaymentV1, KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentRuntimeV1,
-    KagemushaTrustedCommitTimeV1,
+    KagemushaTrustedCommitTimeV1, kagemusha_peer_credit_opening_commitment_v1,
 };
 use norito::SerializePayload;
+use rand::{SeedableRng as _, rngs::StdRng};
+use zeroize::Zeroizing;
+
+use crate::kagemusha_v1_crypto::{open_kagemusha_credit_v1, seal_kagemusha_credit_v1_with_rng};
 
 #[path = "state_milestone/recovery_checkpoint.rs"]
 mod recovery_checkpoint;
@@ -72,6 +82,85 @@ const BOOTSTRAP_TIME: u64 = 50;
 const STAGE_TIME: u64 = 150;
 const MINT_TIME: u64 = 200;
 const SEND_TIME: u64 = 300;
+
+/// Receiver-owned material for this deterministic diagnostic only. Production keys and entropy
+/// must instead come from the qualified platform provider; this fixture grants no authority.
+struct DiagnosticReceiverCreditV1 {
+    private_key: Zeroizing<[u8; 32]>,
+    credit_commitment_opening: [u8; 32],
+    recipient_binding_opening: [u8; 32],
+    recovery_nonce: [u8; 32],
+}
+
+impl DiagnosticReceiverCreditV1 {
+    fn new() -> Self {
+        Self {
+            private_key: Zeroizing::new(digest(b"diagnostic-receiver-x25519-private", 1)),
+            credit_commitment_opening: digest(b"diagnostic-peer-credit-opening", 1),
+            recipient_binding_opening: digest(b"diagnostic-peer-recipient-opening", 1),
+            recovery_nonce: digest(b"diagnostic-peer-recovery-nonce", 1),
+        }
+    }
+
+    fn public_key(&self) -> [u8; 32] {
+        kagemusha_x25519_public_key_v1(&self.private_key)
+            .expect("diagnostic receiver owns a valid X25519 private key")
+    }
+
+    fn opening(&self, credit_id: [u8; 32], amount: u128) -> KagemushaCreditOpeningV1 {
+        KagemushaCreditOpeningV1 {
+            version: KAGEMUSHA_WIRE_VERSION_V1,
+            credit_id,
+            amount,
+            credit_commitment_opening: self.credit_commitment_opening,
+            recipient_binding_opening: self.recipient_binding_opening,
+            recovery_nonce: self.recovery_nonce,
+        }
+    }
+
+    fn commitment(&self, request: &KagemushaPaymentRequestV1) -> [u8; 32] {
+        kagemusha_peer_credit_opening_commitment_v1(
+            request.canonical_digest().expect("signed receiver request"),
+            self.public_key(),
+            request.amount,
+            self.credit_commitment_opening,
+            self.recipient_binding_opening,
+            self.recovery_nonce,
+        )
+        .expect("request-bound private peer-credit opening commitment")
+    }
+
+    fn seal_for(
+        &self,
+        output: &KagemushaPaymentOutputV1,
+        request: &KagemushaPaymentRequestV1,
+    ) -> Vec<u8> {
+        let aad = KagemushaEncryptedCreditAadV1::for_peer(output, request)
+            .expect("Core-derived peer-credit associated data");
+        let opening = self.opening(output.credit_id, request.amount);
+        let mut rng = StdRng::from_seed(digest(b"diagnostic-peer-credit-entropy", 1));
+        let envelope = seal_kagemusha_credit_v1_with_rng(
+            &opening,
+            &aad,
+            request.recipient_encryption_key,
+            &mut rng,
+        )
+        .expect("seal exact diagnostic peer credit");
+        assert_eq!(
+            open_kagemusha_credit_v1(
+                &envelope,
+                &aad,
+                request.recipient_encryption_key,
+                &self.private_key,
+            )
+            .expect("receiver opens exact diagnostic peer credit"),
+            opening,
+        );
+        envelope
+            .canonical_bytes_against_recipient_key(request.recipient_encryption_key)
+            .expect("canonical encrypted peer credit")
+    }
+}
 
 fn ensure(condition: bool, label: &str) -> Result<(), String> {
     condition.then_some(()).ok_or_else(|| label.to_owned())
@@ -159,13 +248,14 @@ impl DiagnosticMintStageProofV1 {
     }
 }
 
-/// Concrete test verifier pinned to generated protocols and retained private State proofs.
+/// Concrete test verifier pinned to generated protocols and retained private proof material.
 #[derive(Clone)]
 struct DiagnosticVerifier<'a> {
     funded: &'a RealFundedPrerequisite,
     keys: &'a StateKeys,
     artifacts: KagemushaRecursionArtifactsV1,
     states: Rc<RefCell<BTreeMap<DigestV1, Rc<KagemushaGeneratedRecursiveStateProofV1>>>>,
+    payments: Rc<RefCell<BTreeMap<DigestV1, Rc<wrapper::ProvenSenderWrapperV1>>>>,
 }
 
 impl DiagnosticVerifier<'_> {
@@ -268,6 +358,121 @@ impl DiagnosticVerifier<'_> {
                 .insert(proof.proof.semantic_digest, proof)
                 .is_none()
         );
+    }
+
+    /// Retain only an exact generated payment whose native Core projection and paired proof decide.
+    fn retain_payment(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
+        wrapper: Rc<wrapper::ProvenSenderWrapperV1>,
+    ) -> Result<(), String> {
+        ensure(
+            !self
+                .payments
+                .borrow()
+                .contains_key(&payment.proof.semantic_digest),
+            "diagnostic payment proof was already retained",
+        )?;
+        self.verify_retained_payment(request, payment, &wrapper)?;
+        let mut payments = self.payments.borrow_mut();
+        payments.insert(payment.proof.semantic_digest, wrapper);
+        Ok(())
+    }
+
+    /// Recompute the production payment column and decide both genuine wrapper equations.
+    fn verify_retained_payment(
+        &self,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
+        retained: &wrapper::ProvenSenderWrapperV1,
+    ) -> Result<(), String> {
+        payment
+            .validate_shape_against(request)
+            .map_err(|error| error.to_string())?;
+        let view = retained
+            .committed
+            .candidate
+            .recovery_view()
+            .map_err(|error| error.to_string())?;
+        let PreparedOutgoingRecoveryViewV1::Send {
+            request: original_request,
+            output,
+            encrypted_credit,
+            ..
+        } = view.prepared
+        else {
+            return Err("retained diagnostic wrapper is not a SendSplit".to_owned());
+        };
+        ensure(
+            request == original_request
+                && payment.output == *output
+                && payment.encrypted_credit.as_slice() == encrypted_credit
+                && payment.commit_certificate == retained.committed.commit_certificate
+                && payment.proof == retained.payment.proof
+                && request.release_id == self.artifacts.release_id
+                && payment.proof.eq_protocol_digest
+                    == self.artifacts.commit_wrapper_eq_protocol_digest
+                && payment.proof.ep_protocol_digest
+                    == self.artifacts.commit_wrapper_ep_protocol_digest,
+            "payment differs from the exact retained Core sender and wrapper",
+        )?;
+        let eq_history = KagemushaEqAccumulatorV1::try_from_bytes(&payment.proof.eq_history)
+            .map_err(|error| error.to_string())?;
+        let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&payment.proof.ep_history)
+            .map_err(|error| error.to_string())?;
+        let public = payment_terminal_public_inputs_v1(
+            request,
+            payment,
+            self.funded
+                .material
+                .authorization_relation
+                .statement
+                .context
+                .vk_digest,
+        )?;
+        let mut eq_instances = public.public_prefix::<Fp>()?;
+        eq_instances.extend(history_values::<Fp>(eq_history.as_bytes()));
+        let mut ep_instances = public.public_prefix::<Fq>()?;
+        ep_instances.extend(history_values::<Fq>(ep_history.as_bytes()));
+        ensure(
+            eq_instances == retained.payment.eq_public_instances
+                && ep_instances == retained.payment.ep_public_instances
+                && retained.incoming.eq_instances.len() == 1
+                && retained.incoming.eq_instances[0].as_slice() == eq_instances.as_slice()
+                && retained.incoming.ep_instances.len() == 1
+                && retained.incoming.ep_instances[0].as_slice() == ep_instances.as_slice()
+                && eq_history == retained.incoming.eq_history
+                && ep_history == retained.incoming.ep_history
+                && native_parent_protocol_digest_v1(
+                    &retained.eq_protocol,
+                    KagemushaPastaParityV1::Eq,
+                )? == payment.proof.eq_protocol_digest
+                && native_parent_protocol_digest_v1(
+                    &retained.ep_protocol,
+                    KagemushaPastaParityV1::Ep,
+                )? == payment.proof.ep_protocol_digest,
+            "Core payment public projection differs from the genuine wrapper",
+        )?;
+        let eq_current = decide_eq(
+            &self.funded.eq,
+            &retained.eq_protocol,
+            &payment.proof.eq_proof,
+            &eq_instances,
+            &eq_history,
+        )?;
+        let ep_current = decide_ep(
+            &self.funded.ep,
+            &retained.ep_protocol,
+            &payment.proof.ep_proof,
+            &ep_instances,
+            &ep_history,
+        )?;
+        ensure(
+            eq_current == retained.payment.eq_current_accumulator
+                && ep_current == retained.payment.ep_current_accumulator,
+            "diagnostic payment current accumulator differs from the generated proof",
+        )
     }
 }
 
@@ -431,10 +636,16 @@ impl KagemushaRecursiveVerifierV1 for DiagnosticVerifier<'_> {
 
     fn verify_payment_and_decide(
         &self,
-        _: &KagemushaPaymentRequestV1,
-        _: &KagemushaPaymentV1,
+        request: &KagemushaPaymentRequestV1,
+        payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
-        Err("diagnostic milestone stops before Payment".to_owned())
+        let retained = self
+            .payments
+            .borrow()
+            .get(&payment.proof.semantic_digest)
+            .cloned()
+            .ok_or_else(|| "no genuine diagnostic payment proof retained".to_owned())?;
+        self.verify_retained_payment(request, payment, &retained)
     }
 
     fn verify_terminal_authorization_and_decide(
@@ -1015,8 +1226,9 @@ fn send_preparation(
         },
     };
     let prepared_one_use_authorization_digest = openings.prepared_authorization_digest();
-    // A distinct, issuer-signed receiver credential is sufficient for this candidate-only
-    // milestone. Ciphertext bytes are only shape/commitment inputs; no delivery is claimed.
+    // A distinct, issuer-signed receiver credential and receiver-owned X25519 key are used
+    // throughout this diagnostic. No hardware qualification or delivery is claimed.
+    let receiver_credit = DiagnosticReceiverCreditV1::new();
     let mut receiver = material.hardware_credential.clone();
     let receiver_key = deterministic_signing_key(1);
     receiver.device_public_key = device_public_key(&receiver_key);
@@ -1046,7 +1258,7 @@ fn send_preparation(
         liability_pool_id: state.liability_pool_id,
         recipient: material.recipient.clone(),
         amount: 400,
-        recipient_encryption_key: digest(b"diagnostic-send-x25519", 1),
+        recipient_encryption_key: receiver_credit.public_key(),
         hardware_credential: receiver,
         request_id: digest(b"diagnostic-send-request", 1),
         issued_at_ms: 250,
@@ -1062,13 +1274,17 @@ fn send_preparation(
     request
         .validate_against_profile(&material.hardware_profile)
         .expect("signed diagnostic receiver request");
+    let ciphertext_commitment = receiver_credit.commitment(&request);
     let preparation = SendSplitPreparationV1 {
         request,
+        // The unpersisted first-pass candidate derives the exact Core credit ID and output.
+        // The funded path replaces these bytes with the receiver-sealed peer envelope before
+        // generating any proof; the shape-only preflight cannot spend this provisional credit.
         encrypted_credit: material.authorization_relation.encrypted_credit.clone(),
         transition_nullifier: canonical_predecessor_conflict_nullifier_v1(
             prepared_one_use_authorization_digest,
         ),
-        ciphertext_commitment: digest(b"diagnostic-send-ciphertext-commitment", 1),
+        ciphertext_commitment,
         successor_state_nonce_commitment: digest(b"diagnostic-send-successor-nonce", 1),
         commit_evidence: openings
             .commit_evidence()
@@ -1475,6 +1691,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         keys: &state_keys,
         artifacts,
         states: Rc::new(RefCell::new(BTreeMap::new())),
+        payments: Rc::new(RefCell::new(BTreeMap::new())),
     };
     recursive_verifier.retain_state(bootstrap.clone());
     assert_state_mutations_rejected(&state_keys, &bootstrap);
@@ -1884,14 +2101,34 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         return;
     }
 
-    let (send_inputs, sender_openings) = send_preparation(
+    let (mut send_inputs, sender_openings) = send_preparation(
         &funded.material,
         machine.state(),
         machine.journal_revision(),
     );
+    let provisional = machine
+        .prepare_send_split(send_inputs.clone())
+        .expect("Core derives the signed receiver's exact peer credit identity");
+    let original_output = *provisional
+        .send_output()
+        .expect("Core's first-pass SendSplit output");
+    send_inputs.encrypted_credit =
+        DiagnosticReceiverCreditV1::new().seal_for(&original_output, &send_inputs.request);
     let candidate = machine
         .prepare_send_split(send_inputs.clone())
-        .expect("Core prepares SendSplit from genuine funded balance");
+        .expect("Core prepares receiver-sealed SendSplit from genuine funded balance");
+    assert_eq!(
+        candidate.send_output(),
+        Some(&original_output),
+        "the peer envelope must not change Core's proof-derived public credit",
+    );
+    assert_ne!(
+        candidate.semantic_digest().expect("sealed payment body"),
+        provisional
+            .semantic_digest()
+            .expect("provisional payment body"),
+        "the final candidate must bind the receiver-sealed ciphertext bytes",
+    );
     let send_preview = machine
         .diagnostic_send_split_preview(&candidate, SEND_TIME)
         .expect("exact original Core send preview");
@@ -2227,6 +2464,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                     keys: &rebound,
                     artifacts: rebound_artifacts,
                     states: Rc::new(RefCell::new(BTreeMap::new())),
+                    payments: Rc::new(RefCell::new(BTreeMap::new())),
                 };
                 let rebound_protocols = || {
                     RecursiveStateProtocolBindings::new(
@@ -2395,22 +2633,79 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
                 payment
                     .validate_shape_against(request)
                     .expect("closed sender proof has canonical payment shape");
-                // A structurally sealed fixture certificate is not an authenticated physical
-                // commit. Core's diagnostic verifier must therefore refuse finalization even
-                // after the paired wrapper and full sender proof lineage are decided.
+                let request = request.clone();
+                let closed = Rc::new(closed);
                 assert!(matches!(
                     DurableOutgoingEnvelopeV1::finalize_payment(
                         closed.committed.clone(),
-                        payment,
+                        payment.clone(),
                         Vec::new(),
                         rebound_artifacts,
                         &rebound_verifier,
                     ),
                     Err(KagemushaStateErrorV1::ProofRejected(reason))
-                        if reason == "diagnostic milestone stops before Payment"
+                        if reason == "no genuine diagnostic payment proof retained"
                 ));
+                rebound_verifier
+                    .retain_payment(&request, &payment, Rc::clone(&closed))
+                    .expect("Core's exact payment projection decides the generated wrapper");
+                assert!(
+                    rebound_verifier
+                        .retain_payment(&request, &payment, Rc::clone(&closed))
+                        .is_err(),
+                    "the diagnostic verifier cannot replace retained proof provenance",
+                );
+                let mut changed = payment.clone();
+                changed.proof.eq_proof[0] ^= 1;
+                assert!(matches!(
+                    DurableOutgoingEnvelopeV1::finalize_payment(
+                        closed.committed.clone(),
+                        changed,
+                        Vec::new(),
+                        rebound_artifacts,
+                        &rebound_verifier,
+                    ),
+                    Err(KagemushaStateErrorV1::ProofRejected(_))
+                ));
+                let mut changed = payment.clone();
+                changed.proof.ep_proof[0] ^= 1;
+                assert!(matches!(
+                    DurableOutgoingEnvelopeV1::finalize_payment(
+                        closed.committed.clone(),
+                        changed,
+                        Vec::new(),
+                        rebound_artifacts,
+                        &rebound_verifier,
+                    ),
+                    Err(KagemushaStateErrorV1::ProofRejected(_))
+                ));
+                let mut changed_request = request.clone();
+                changed_request.amount += 1;
+                assert!(
+                    rebound_verifier
+                        .verify_payment_and_decide(&changed_request, &payment)
+                        .is_err()
+                );
+                let finalized = DurableOutgoingEnvelopeV1::finalize_payment(
+                    closed.committed.clone(),
+                    payment.clone(),
+                    Vec::new(),
+                    rebound_artifacts,
+                    &rebound_verifier,
+                )
+                .expect("Core finalizes exact generated payment in this diagnostic fixture");
+                assert_eq!(
+                    finalized.envelope,
+                    crate::zk::kagemusha_v1_state::KagemushaOutgoingEnvelopeV1::Payment(
+                        payment.clone()
+                    )
+                );
+                assert_eq!(
+                    finalized.canonical_envelope_bytes,
+                    norito::encode_canonical(&payment).expect("canonical exact payment bytes"),
+                );
                 eprintln!(
-                    "KAGEMUSHA diagnostic re-proved Bootstrap/MintFold/SendSplit and terminal/wrapper under one actual wrapper identity; Core rejects fixture payment finalization and receiver handoff remains unqualified",
+                    "KAGEMUSHA diagnostic re-proved Bootstrap/MintFold/SendSplit and terminal/wrapper under one actual wrapper identity; exact generated Payment verified and finalized only against a structural test certificate; physical commit and receiver handoff remain unqualified",
                 );
             }
         }
@@ -2478,10 +2773,10 @@ fn real_bootstrap_mint_fold_send_split_commit_wrapper_milestone() {
         .expect("genuine wrapper seed milestone");
 }
 
-/// Re-prove the funded sender chain and terminal pair under its actual wrapper identity.
+/// Re-prove the funded sender chain under its actual wrapper identity and decide Core PaymentV1.
 #[test]
 #[cfg(unix)]
-#[ignore = "expensive genuine sender graph closure; Core payment and receiver remain unqualified"]
+#[ignore = "expensive genuine sender closure and diagnostic PaymentV1; hardware and receiver remain unqualified"]
 fn real_bootstrap_mint_fold_send_split_sender_closure_milestone() {
     let _exclusive_proof = exclusive_real_proof_test_lock();
     std::thread::Builder::new()
@@ -2491,6 +2786,98 @@ fn real_bootstrap_mint_fold_send_split_sender_closure_milestone() {
         .expect("start genuine funded sender closure milestone")
         .join()
         .expect("genuine funded sender closure milestone");
+}
+
+#[test]
+fn diagnostic_peer_credit_requires_receiver_key_and_exact_request_bound_output() {
+    let material = core_bound_mint_recipient_material(
+        digest(b"peer-credit-preflight-release", 0),
+        digest(b"vk-set", 0),
+        digest(b"peer-credit-preflight-manifest", 0),
+        1_000,
+    );
+    let preview = bootstrap_preview(&material, provisional_artifacts(&material));
+    let (send, _) = send_preparation(&material, &preview.state, 0);
+    let receiver = DiagnosticReceiverCreditV1::new();
+    assert_eq!(send.request.recipient_encryption_key, receiver.public_key());
+    assert_eq!(
+        send.ciphertext_commitment,
+        receiver.commitment(&send.request)
+    );
+    let mut altered_request_digest = send.request.canonical_digest().unwrap();
+    altered_request_digest[0] ^= 1;
+    assert_ne!(
+        send.ciphertext_commitment,
+        kagemusha_peer_credit_opening_commitment_v1(
+            altered_request_digest,
+            receiver.public_key(),
+            send.request.amount,
+            receiver.credit_commitment_opening,
+            receiver.recipient_binding_opening,
+            receiver.recovery_nonce,
+        )
+        .unwrap(),
+    );
+    let output = KagemushaPaymentOutputV1 {
+        version: KAGEMUSHA_WIRE_VERSION_V1,
+        request_digest: send.request.canonical_digest().unwrap(),
+        amount: send.request.amount,
+        sender_before_commitment: digest(b"peer-credit-sender-before", 0),
+        sender_after_commitment: digest(b"peer-credit-sender-after", 0),
+        transition_nullifier: send.transition_nullifier,
+        credit_id: [0; 32],
+        ciphertext_commitment: send.ciphertext_commitment,
+        commit_evidence: send.commit_evidence,
+        committed_at_ms: SEND_TIME,
+    }
+    .seal_credit_id_against(&send.request)
+    .unwrap();
+    let encrypted = receiver.seal_for(&output, &send.request);
+    let envelope = iroha_data_model::kagemusha::KagemushaEncryptedCreditEnvelopeV1::
+        decode_canonical_shape_exact_against_recipient_key(
+            &encrypted,
+            send.request.recipient_encryption_key,
+        )
+        .unwrap();
+    let aad = KagemushaEncryptedCreditAadV1::for_peer(&output, &send.request).unwrap();
+    assert_eq!(
+        open_kagemusha_credit_v1(
+            &envelope,
+            &aad,
+            receiver.public_key(),
+            &receiver.private_key,
+        )
+        .unwrap(),
+        receiver.opening(output.credit_id, send.request.amount),
+    );
+    assert!(
+        open_kagemusha_credit_v1(&envelope, &aad, receiver.public_key(), &[0x77; 32]).is_err(),
+        "another recipient cannot open the credit",
+    );
+    let mut substituted_aad = aad;
+    substituted_aad.context_digest[0] ^= 1;
+    assert!(
+        open_kagemusha_credit_v1(
+            &envelope,
+            &substituted_aad,
+            receiver.public_key(),
+            &receiver.private_key,
+        )
+        .is_err(),
+        "another payment context cannot open the credit",
+    );
+    let mut corrupted_envelope = envelope;
+    corrupted_envelope.ciphertext_and_tag[0] ^= 1;
+    assert!(
+        open_kagemusha_credit_v1(
+            &corrupted_envelope,
+            &aad,
+            receiver.public_key(),
+            &receiver.private_key,
+        )
+        .is_err(),
+        "modified ciphertext cannot open the credit",
+    );
 }
 
 #[test]

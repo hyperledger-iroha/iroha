@@ -46,6 +46,12 @@ BINDINGS = (
         "builder.with_npos_consensus_effects(npos_effects_prefix(original, low))",
     )),
     (CANDIDATE, "method", "V2CandidateAssembler::assemble", (
+        "let state_generation = state.state_view_generation()",
+        "let result = self.assemble_at_generation(request, state_generation)",
+        "!output_guard.restart_required()",
+        "CandidateWorkDeferral::CommittedStateMoved",
+    )),
+    (CANDIDATE, "method", "V2CandidateAssembler::assemble_at_generation", (
         "let original_npos_effects = request.attachments.npos_consensus_effects.clone()",
         "request.attachments.npos_consensus_effects = original_npos_effects.clone()",
         "candidate_economic_work_first(request.context.height)", "mandatory.queue_plan_admissions.clear()",
@@ -55,7 +61,13 @@ BINDINGS = (
         "if first_admission_size.is_none() && evidence_count > 0",
         'reason: CandidateWorkDeferral::EvidenceEnvelope',
         "CandidateAssemblyOutcome::WorkDeferred", "begin_fail_stop_operation()",
-        "candidate_block_has_proposal_work(", "if canonical_wire.len() != encoded_bytes",
+        "let prepared_header = builder.carrier_context_header()",
+        "deterministic_start_work_pending(&prepared_header)",
+        "let _state_publication = request.state.consensus_publication_lease()",
+        "selection_lease.retain_only(&selected_hashes)",
+        "candidate_block_has_independent_proposal_work(",
+        "if canonical_wire.len() != encoded_bytes",
+        "if block.header() != prepared_header",
     )),
     (CAPACITY, "fn", "publish_authenticated_capacity", (
         "verified: &VerifiedHeightContext", "config: &SumeragiV2Config",
@@ -356,7 +368,14 @@ def validate_owners(root, models, errors, rust_binding_item):
         "V2CandidateAssembler::assemble_native": (
             "if !request.work_provider.belongs_to(request.state)",
             "if request.attachments.certified_merge_entry.is_some() || request.attachments.certified_merge_carrier_header.is_some()",
-            "let source = request.work_provider.prepare_candidate()",
+            "let state_generation = request.state.state_view_generation()",
+            "if !validate_request_at_generation(&request, state_generation)?",
+            "request.queue.transaction_selection_durability_faulted()",
+            "request.output_guard.restart_required()",
+            "request.work_provider.prepare_candidate()",
+            "Err(_) if !candidate_state_generation_is_current(request.state, state_generation)",
+            "source: moved_source()",
+            "reason: CandidateWorkDeferral::CommittedStateMoved",
             "let outcome = self.assemble(CandidateRequest {",
             "work_provider: NativeCandidateWork(&source)",
             "Ok(NativeCandidateAssembly { source, outcome })",
@@ -372,7 +391,11 @@ def validate_owners(root, models, errors, rust_binding_item):
         "schedule_local_proposal": (
             "let Some(assembly) = native.assemble_candidate(",
             "proposal_state.defer_candidate_snapshot(owner, Instant::now())",
-            "native.retain_candidate_source(source)", "let assembly = outcome?",
+            "native.retain_candidate_source(source)",
+            "let assembly = match outcome {",
+            "if !output_guard.restart_required()",
+            "&& proposal_state.defer_pre_signing_candidate_history_admission(",
+            "Err(error) => return Err(error.into())",
         ),
     }
     for symbol, relations in native_relations.items():
@@ -395,14 +418,24 @@ def validate_owners(root, models, errors, rust_binding_item):
                 break
             cursor = found + len(_code(relation))
 
-    ordered("V2CandidateAssembler::assemble", "let original_npos_effects =", "fit_evidence_prefix(",
+    ordered("V2CandidateAssembler::assemble_at_generation", "let original_npos_effects =", "fit_evidence_prefix(",
             "let mut builder = self.prepare_block_builder(", "let (fitted, count) = fit_evidence_prefix(",
             "report.evidence_deferred =", "CandidateAssemblyOutcome::WorkDeferred", "begin_fail_stop_operation()")
     ordered("schedule_local_proposal", "let Some(assembly) = native.assemble_candidate(",
-            "native.retain_candidate_source(source)", "let assembly = outcome?", "let candidate = match assembly")
+            "native.retain_candidate_source(source)",
+            "let assembly = match outcome {",
+            "if !output_guard.restart_required()",
+            "&& proposal_state.defer_pre_signing_candidate_history_admission(",
+            "Err(error) => return Err(error.into())",
+            "let candidate = match assembly")
     ordered("NativeRunnerProcess::assemble_candidate", "self.poll_candidate()?", "if completed.owner == owner",
             "self.retain_candidate_source(assembly.source)", "if self.candidate_job.is_some()",
             "self.capture_decisions()?", "mpsc::sync_channel(1)", "assembler.assemble_native(CandidateRequest {")
+    ordered("V2CandidateAssembler::assemble_native",
+            "let state_generation = request.state.state_view_generation()",
+            "if !validate_request_at_generation(&request, state_generation)?",
+            "request.work_provider.prepare_candidate()",
+            "let outcome = self.assemble(CandidateRequest {")
     ordered("publish_authenticated_capacity", "capacity.check_payload_size(",
             "require_local_payload_capacity(capacity.layout, config)?", "slot.set(capacity)")
     ordered("run_inner", "terminal.verified_context(), &shared_config,)",
@@ -412,6 +445,22 @@ def validate_owners(root, models, errors, rust_binding_item):
     ordered("run_pending_kura_lifecycle_height", "require_local_payload_capacity(",
             ".map_err(V2RunnerError::Service)?", "beacon_readiness.begin_height(")
     ordered("candidate_limits", "require_local_payload_capacity(", "CandidateLimits::new(")
+    ordered("V2CandidateAssembler::assemble_at_generation",
+            "let prepared_header = builder.carrier_context_header()",
+            "deterministic_start_work_pending(&prepared_header)",
+            "let _state_publication = request.state.consensus_publication_lease()",
+            "selection_lease.retain_only(&selected_hashes)",
+            "begin_fail_stop_operation()",
+            "if block.header() != prepared_header",
+            "candidate_block_has_independent_proposal_work(")
+    candidate = items.get("V2CandidateAssembler::assemble_at_generation", "")
+    lease = _code("let _state_publication = request.state.consensus_publication_lease()")
+    if lease in candidate:
+        after_lease = candidate.split(lease, 1)[1]
+        if any(_code(call) in after_lease for call in (
+                "deterministic_start_work_pending(",
+                "candidate_block_has_proposal_work(")):
+            errors.append("Admission capacity candidate reopened a State block under its publication lease")
     if ".min(" in items.get("candidate_limits", ""):
         errors.append("Admission capacity candidate silently narrows the signed envelope")
     ordered("SumeragiHandle::check_queue_plan_input_capacity", "self.authenticated_admission_capacity()?",

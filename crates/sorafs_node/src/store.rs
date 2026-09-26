@@ -374,8 +374,7 @@ pub struct StorageBackend {
     manifests_dir: PathBuf,
     index_path: PathBuf,
     _lock_file: File,
-    access_metadata_lock: Mutex<()>,
-    persisted_access_counter: AtomicU64,
+    access_counter: AtomicU64,
     durability_healthy: AtomicBool,
     durability_failure: Mutex<Option<String>>,
     retiring_manifests: Mutex<BTreeSet<String>>,
@@ -399,13 +398,12 @@ impl Drop for ManifestRetirementIntent<'_> {
 #[derive(Debug)]
 struct StorageState {
     index: ManifestIndex,
-    manifests: BTreeMap<String, StoredManifest>,
+    manifests: BTreeMap<String, Arc<StoredManifest>>,
     total_bytes: u64,
     reserved_bytes: u64,
     pdp_tree_bytes: u64,
     reserved_pdp_tree_bytes: u64,
     inflight_manifests: BTreeSet<String>,
-    access_counter: u64,
     chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
 struct IngestReservation<'a> {
@@ -508,7 +506,7 @@ pub struct StoredManifest {
     stored_at_unix_secs: u64,
     retention_epoch: u64,
     retention_source: Option<RetentionSourceV1>,
-    last_access: u64,
+    last_access: Arc<AtomicU64>,
     files: Vec<StoredFileRecord>,
     chunk_files: Vec<ChunkFileRecord>,
     por_tree: Arc<PorMerkleTree>,
@@ -752,7 +750,7 @@ impl StoredManifest {
             stored_at_unix_secs: self.stored_at_unix_secs,
             retention_epoch: self.retention_epoch,
             retention_source: try_clone_retention_source(self.retention_source.as_ref())?,
-            last_access: self.last_access,
+            last_access: Arc::clone(&self.last_access),
             files,
             chunk_files,
             por_tree: Arc::clone(&self.por_tree),
@@ -821,10 +819,10 @@ impl StoredManifest {
     pub fn retention_source(&self) -> Option<&RetentionSourceV1> {
         self.retention_source.as_ref()
     }
-    /// Monotonic access counter recorded for LRU eviction ordering.
+    /// Process-local access sequence. Reads never persist recency or authorize eviction.
     #[must_use]
     pub fn last_access(&self) -> u64 {
-        self.last_access
+        self.last_access.load(Ordering::Relaxed)
     }
     /// Number of chunks stored for the manifest.
     #[must_use]
@@ -2540,7 +2538,7 @@ impl StorageBackend {
                 })?;
             manifests.insert(
                 try_clone_text(&entry.manifest_id, "runtime manifest map key")?,
-                stored_manifest,
+                Arc::new(stored_manifest),
             );
         }
         let max_capacity = config.max_capacity_bytes().0;
@@ -2583,7 +2581,6 @@ impl StorageBackend {
             pdp_tree_bytes,
             reserved_pdp_tree_bytes: 0,
             inflight_manifests: BTreeSet::new(),
-            access_counter,
             chunk_refcounts,
         };
         Ok(Self {
@@ -2592,8 +2589,7 @@ impl StorageBackend {
             manifests_dir,
             index_path,
             _lock_file: lock_file,
-            access_metadata_lock: Mutex::new(()),
-            persisted_access_counter: AtomicU64::new(access_counter),
+            access_counter: AtomicU64::new(access_counter),
             durability_healthy: AtomicBool::new(true),
             durability_failure: Mutex::new(None),
             retiring_manifests: Mutex::new(BTreeSet::new()),
@@ -2714,7 +2710,7 @@ impl StorageBackend {
             .expect("storage state poisoned")
             .manifests
             .values()
-            .cloned()
+            .map(|manifest| manifest.as_ref().clone())
             .collect()
     }
     /// Returns the count of manifests recorded in the on-disk index.
@@ -2741,27 +2737,6 @@ impl StorageBackend {
             state.index.gc_freed_bytes_total,
             state.index.gc_evictions_total,
         )
-    }
-    /// Returns true if any chunks in the manifest are referenced by more than one manifest.
-    pub(crate) fn manifest_has_shared_chunks(
-        &self,
-        manifest_id: &str,
-    ) -> Result<bool, StorageError> {
-        self.ensure_durability_healthy()?;
-        let state = self.state.read().expect("storage state poisoned");
-        let manifest =
-            state
-                .manifests
-                .get(manifest_id)
-                .ok_or_else(|| StorageError::ManifestNotFound {
-                    manifest_id: manifest_id.to_owned(),
-                })?;
-        for chunk in &manifest.chunk_files {
-            if refcount(&state.chunk_refcounts, &chunk.digest).is_some_and(|count| count > 1) {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
     /// Evict a stored manifest and reclaim its payload bytes.
     pub fn evict_manifest(&self, manifest_id: &str) -> Result<u64, StorageError> {
@@ -3008,7 +2983,7 @@ impl StorageBackend {
             Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
             Err(AtomicWriteError::BeforeCommit(source)) => return Err(StorageError::Io(source)),
         };
-        *manifest = updated;
+        *manifest = Arc::new(updated);
         if let Some(error) = durability_error {
             self.fail_stop_durability(&error);
             return Err(error.into_storage_error());
@@ -3112,7 +3087,7 @@ impl StorageBackend {
             Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
             Err(AtomicWriteError::BeforeCommit(source)) => return Err(StorageError::Io(source)),
         };
-        *manifest = updated;
+        *manifest = Arc::new(updated);
         if let Some(error) = durability_error {
             self.fail_stop_durability(&error);
             return Err(error.into_storage_error());
@@ -3292,15 +3267,7 @@ impl StorageBackend {
         let files = stored_files_from_plan(plan)?;
         let persisted_files = persistent_file_records(&files)?;
         let chunk_profile_handle = try_canonical_profile_handle(manifest)?;
-        let last_access = {
-            let mut state = self.state.write().expect("storage state poisoned");
-            self.ensure_durability_healthy()?;
-            let next_access = state.access_counter.checked_add(1).ok_or_else(|| {
-                corrupt_storage_state(&self.index_path, "manifest access counter overflow")
-            })?;
-            state.access_counter = next_access;
-            next_access
-        };
+        let last_access = self.next_access_sequence()?;
         let chunk_count = persistent_u32("chunk_count", plan.chunks.len())?;
         let metadata_record = StoredManifestRecord {
             manifest_id: try_clone_text(&manifest_id, "stored manifest id")?,
@@ -3463,7 +3430,7 @@ impl StorageBackend {
         state.index = new_index;
         state.total_bytes = new_total_bytes;
         state.pdp_tree_bytes = new_pdp_tree_bytes;
-        state.manifests.insert(runtime_manifest_id, stored_manifest);
+        state.manifests.insert(runtime_manifest_id, Arc::new(stored_manifest));
         state.chunk_refcounts = refcounts;
         reservation.release(&mut state);
         if let Some(error) = durability_error {
@@ -3511,7 +3478,7 @@ impl StorageBackend {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.ensure_durability_healthy()?;
-        let manifest = manifest.try_clone_runtime()?;
+        let manifest = Arc::clone(manifest);
         drop(state);
         let result = work(&manifest);
         drop(io_guard);
@@ -3549,7 +3516,7 @@ impl StorageBackend {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.ensure_durability_healthy()?;
-        let manifest = manifest.try_clone_runtime()?;
+        let manifest = Arc::clone(manifest);
         drop(state);
         let result = work(&manifest);
         drop(io_guard);
@@ -3628,145 +3595,23 @@ impl StorageBackend {
         }
         self.ensure_durability_healthy()
     }
+    fn next_access_sequence(&self) -> Result<u64, StorageError> {
+        self.access_counter
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |previous| previous.checked_add(1))
+            .map(|previous| previous + 1)
+            .map_err(|_| corrupt_storage_state(&self.index_path, "manifest access counter overflow"))
+    }
     fn with_manifest_for_access<T, F>(&self, manifest_id: &str, work: F) -> Result<T, StorageError>
     where
         F: FnOnce(&StoredManifest) -> Result<T, StorageError>,
     {
-        self.ensure_durability_healthy()?;
-        if self.manifest_retirement_pending(manifest_id) {
-            return Err(StorageError::ManifestRetirementInProgress {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        let mut state = self.state.write().expect("storage state poisoned");
-        if self.manifest_retirement_pending(manifest_id) {
-            return Err(StorageError::ManifestRetirementInProgress {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        let io_lock = state
-            .manifests
-            .get(manifest_id)
-            .map(|manifest| Arc::clone(&manifest.io_lock))
-            .ok_or_else(|| StorageError::ManifestNotFound {
-                manifest_id: manifest_id.to_owned(),
-            })?;
-        let _io_guard = io_lock
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.ensure_durability_healthy()?;
-        let next_access = state.access_counter.checked_add(1).ok_or_else(|| {
-            corrupt_storage_state(&self.index_path, "manifest access counter overflow")
-        })?;
-        let mut manifest = state
-            .manifests
-            .get(manifest_id)
-            .ok_or_else(|| StorageError::ManifestNotFound {
-                manifest_id: manifest_id.to_owned(),
-            })?
-            .try_clone_runtime()?;
-        manifest.last_access = next_access;
-        let retention_source = try_clone_retention_source(manifest.retention_source.as_ref())?;
-        let record = manifest.to_record()?;
-        let metadata_path = manifest
-            .manifest_path
-            .parent()
-            .ok_or_else(|| {
-                corrupt_storage_state(
-                    &manifest.manifest_path,
-                    "manifest path has no parent directory",
-                )
-            })?
-            .join(METADATA_FILE_NAME);
-        let mut new_index = try_clone_manifest_index(&state.index)?;
-        let entry = new_index
-            .entries
-            .iter_mut()
-            .find(|entry| entry.manifest_id == manifest_id)
-            .ok_or_else(|| {
-                corrupt_storage_state(
-                    &self.index_path,
-                    "stored manifest is missing its index entry",
-                )
-            })?;
-        entry.last_access = next_access;
-        entry.retention_source = retention_source;
-        let metadata_bytes = norito::to_bytes(&record).map_err(StorageError::Norito)?;
-        let index_bytes = norito::to_bytes(&new_index).map_err(StorageError::Norito)?;
-        ensure_persistent_artifact_size(
-            "manifest metadata",
-            &metadata_bytes,
-            MAX_MANIFEST_METADATA_BYTES,
-        )?;
-        ensure_persistent_artifact_size("storage index", &index_bytes, MAX_STORAGE_INDEX_BYTES)?;
-        let state_manifest = manifest.try_clone_runtime()?;
-        let state_entry =
-            state
-                .manifests
-                .get_mut(manifest_id)
-                .ok_or_else(|| StorageError::ManifestNotFound {
-                    manifest_id: manifest_id.to_owned(),
-                })?;
-        *state_entry = state_manifest;
-        state.access_counter = next_access;
-        state.index = new_index;
-        drop(state);
-        let mut durability_error = None;
-        {
-            let _metadata_guard = self
-                .access_metadata_lock
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.ensure_durability_healthy()?;
-            if next_access > self.persisted_access_counter.load(Ordering::Acquire) {
-                let mut persisted = true;
-                for (path, bytes, label) in [
-                    (
-                        metadata_path.as_path(),
-                        metadata_bytes.as_slice(),
-                        "manifest access metadata",
-                    ),
-                    (
-                        self.index_path.as_path(),
-                        index_bytes.as_slice(),
-                        "storage index access metadata",
-                    ),
-                ] {
-                    match write_atomic_classified(path, bytes) {
-                        Ok(()) => {}
-                        Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => {
-                            iroha_logger::error!(
-                                %error,
-                                manifest_id = %manifest_id,
-                                "storage fail-stopped after uncertain access-metadata commit"
-                            );
-                            self.fail_stop_durability(&error);
-                            durability_error = Some(error);
-                            persisted = false;
-                            break;
-                        }
-                        Err(AtomicWriteError::BeforeCommit(err)) => {
-                            iroha_logger::warn!(
-                                %err,
-                                manifest_id = %manifest_id,
-                                %label,
-                                "failed to persist storage access metadata"
-                            );
-                            persisted = false;
-                        }
-                    }
-                }
-                if persisted {
-                    self.persisted_access_counter
-                        .store(next_access, Ordering::Release);
-                }
-            }
-        }
-        if let Some(error) = durability_error {
-            return Err(error.into_storage_error());
-        }
-        self.ensure_durability_healthy()?;
-        work(&manifest)
+        self.with_manifest_io(manifest_id, |manifest| {
+            // Recency is advisory process-local state. In particular, no reader may publish
+            // an index snapshot after a concurrent admission or retirement has committed.
+            let next_access = self.next_access_sequence()?;
+            manifest.last_access.fetch_max(next_access, Ordering::Relaxed);
+            work(manifest)
+        })?
     }
     /// Verify an entire offline payload under one manifest lifecycle read lease.
     ///
@@ -4159,7 +4004,7 @@ impl StoredManifest {
             stored_at_unix_secs,
             retention_epoch,
             retention_source,
-            last_access,
+            last_access: Arc::new(AtomicU64::new(last_access)),
             files,
             chunk_files,
             por_tree: runtime_proofs.por_tree,
@@ -4222,7 +4067,7 @@ impl StoredManifest {
             stored_at_unix_secs: self.stored_at_unix_secs,
             retention_epoch: self.retention_epoch,
             retention_source: try_clone_retention_source(self.retention_source.as_ref())?,
-            last_access: self.last_access,
+            last_access: self.last_access(),
             files,
             chunk_files,
             por_commitment: match &self.por_commitment {

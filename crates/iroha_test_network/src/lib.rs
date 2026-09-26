@@ -5965,6 +5965,7 @@ pub struct NetworkBuilder {
     block_sync_gossip_period: Duration,
     consensus_mode: ConsensusMode,
     auto_populate_trusted_peer_pops: bool,
+    genesis_committee_keys_for_global_peers: bool,
     npos_genesis_bootstrap_stake: Option<Quantity>,
     permissioned_lane_authority_bootstrap: PermissionedLaneAuthorityBootstrap,
     consensus_message_control: bool,
@@ -7093,6 +7094,7 @@ impl NetworkBuilder {
             block_sync_gossip_period: DEFAULT_BLOCK_SYNC,
             consensus_mode: ConsensusMode::Permissioned,
             auto_populate_trusted_peer_pops: true,
+            genesis_committee_keys_for_global_peers: false,
             npos_genesis_bootstrap_stake: Some(
                 SumeragiNposParameters::default().min_self_bond().clone(),
             ),
@@ -7551,6 +7553,14 @@ impl NetworkBuilder {
     pub fn with_npos_consensus(self) -> Self {
         self.with_consensus_mode(ConsensusMode::Npos)
     }
+    /// Register live Committee-role keys for the global peers in generated genesis.
+    ///
+    /// Autoscale participant lanes require Committee authority even when their
+    /// candidates already vote in global consensus with Validator-role keys.
+    pub fn with_genesis_committee_keys_for_global_peers(mut self) -> Self {
+        self.genesis_committee_keys_for_global_peers = true;
+        self
+    }
     /// Automatically generate BLS key material and PoP records for trusted peers.
     ///
     /// Enabled by default; calling this method is only necessary when chaining builder combinators.
@@ -7855,6 +7865,7 @@ impl NetworkBuilder {
             block_sync_gossip_period,
             consensus_mode,
             auto_populate_trusted_peer_pops,
+            genesis_committee_keys_for_global_peers,
             npos_genesis_bootstrap_stake,
             permissioned_lane_authority_bootstrap,
             consensus_message_control,
@@ -8041,6 +8052,16 @@ impl NetworkBuilder {
             "every signed observer must provide a BLS PoP"
         );
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
+        if genesis_committee_keys_for_global_peers {
+            assert!(
+                custom_genesis.is_none(),
+                "custom genesis owns its Committee-key registration"
+            );
+            genesis_post_topology_isi.push(genesis_participant_committee_key_instructions(
+                &topology_entries,
+                &peer_topology,
+            ));
+        }
         if let Some(initial) = initial_consensus_message_control {
             for (receiver_index, peer) in peers.iter_mut().enumerate() {
                 let rules = (initial.factory)(receiver_index, &peer_topology);
@@ -15444,6 +15465,40 @@ mod tests {
             has_register && has_activate,
             "npos bootstrap should register and activate validators in genesis"
         );
+    }
+    #[test]
+    fn autoscale_genesis_bootstrap_registers_committee_keys_for_global_peers() {
+        init_instruction_registry();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_npos_consensus()
+                .with_genesis_committee_keys_for_global_peers(),
+        );
+        let global_peers: HashSet<_> = network
+            .peers
+            .iter()
+            .map(|peer| peer.id().public_key().clone())
+            .collect();
+        let mut committee_keys = HashSet::new();
+        for tx in network.genesis().0.external_transactions() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if let Some(key) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::consensus_keys::RegisterConsensusKey>()
+                    {
+                        assert_eq!(
+                            key.id().role,
+                            iroha_data_model::consensus::ConsensusKeyRole::Committee
+                        );
+                        assert!(global_peers.contains(&key.record().public_key));
+                        assert!(committee_keys.insert(key.record().public_key.clone()));
+                    }
+                }
+            }
+        }
+        assert_eq!(committee_keys, global_peers);
     }
     #[test]
     fn default_npos_builder_bootstraps_validators() {

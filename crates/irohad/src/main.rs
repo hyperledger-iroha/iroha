@@ -912,7 +912,7 @@ pub struct Args {
     )]
     test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode,
     /// Use real consumed Taira custody in the explicit Core-only native fixture.
-    #[cfg(all(unix, feature = "test-network-message-control"))]
+    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
     #[arg(long = "test-network-production-beacon-custody", hide = true)]
     test_network_production_beacon_custody: bool,
     /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
@@ -6710,6 +6710,34 @@ fn authorize_kura_runtime_start(
         (true, true) | (false, false) => Ok(()),
     }
 }
+fn require_kagemusha_v1_release_network(
+    release_network: NetworkId,
+    state_network: NetworkId,
+) -> Result<(), String> {
+    if release_network != state_network {
+        return Err(format!(
+            "KAGEMUSHA V1 signed release network {release_network} differs from node network {state_network}"
+        ));
+    }
+    Ok(())
+}
+
+fn select_kagemusha_v1_experimental_release_loader(
+    purpose: iroha_data_model::kagemusha::KagemushaReleasePurposeV1,
+    allow_testnet_experimental_release: bool,
+) -> Result<bool, String> {
+    match purpose {
+        iroha_data_model::kagemusha::KagemushaReleasePurposeV1::Production => Ok(false),
+        iroha_data_model::kagemusha::KagemushaReleasePurposeV1::TestnetExperiment(_) => {
+            if allow_testnet_experimental_release {
+                Ok(true)
+            } else {
+                Err("signed KAGEMUSHA TestnetExperiment release requires settlement.kagemusha.allow_testnet_experimental_release".to_owned())
+            }
+        }
+    }
+}
+
 fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> Result<(), String> {
     let Some(files) = config.settlement.kagemusha.proof_release.as_ref() else {
         return Ok(());
@@ -6722,6 +6750,17 @@ fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> 
         &files.manifest,
         iroha_data_model::kagemusha::KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
         "KAGEMUSHA V1 release manifest",
+    )?;
+    let release_manifest =
+        iroha_data_model::kagemusha::KagemushaReleaseManifestV1::decode_canonical_exact(&manifest)
+            .map_err(|error| format!("invalid KAGEMUSHA V1 release manifest: {error}"))?;
+    require_kagemusha_v1_release_network(release_manifest.network_id, state.network_id)?;
+    let experimental_release = select_kagemusha_v1_experimental_release_loader(
+        release_manifest.purpose,
+        config
+            .settlement
+            .kagemusha
+            .allow_testnet_experimental_release,
     )?;
     let receipt = read(
         &files.validation_receipt,
@@ -6743,7 +6782,17 @@ fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> 
         iroha_core::smartcontracts::isi::kagemusha::KAGEMUSHA_RECURSIVE_PROFILE_MAX_BYTES_V1,
         "KAGEMUSHA V1 recursive verifier profile",
     )?;
-    let verifier =
+    let verifier = if experimental_release {
+        iroha_core::smartcontracts::isi::kagemusha::load_authenticated_kagemusha_v1_experimental_runtime_verifier(
+            &manifest,
+            &receipt,
+            &policy,
+            &attestation,
+            &profile,
+            &files.artifact_directory,
+            state.network_id,
+        )?
+    } else {
         iroha_core::smartcontracts::isi::kagemusha::load_authenticated_kagemusha_v1_runtime_verifier(
             &manifest,
             &receipt,
@@ -6751,7 +6800,8 @@ fn install_kagemusha_v1_runtime_verifier(state: &mut State, config: &Config) -> 
             &attestation,
             &profile,
             &files.artifact_directory,
-        )?;
+        )?
+    };
     state.install_kagemusha_v1_runtime_verifier(verifier);
     Ok(())
 }
@@ -12111,15 +12161,20 @@ fn read_config_and_genesis_with_filesystem_space(
     if config.kura.init_mode != InitMode::Fast {
         preflight_fastpq_bn254_poseidon_words(&config.zk.fastpq);
     }
-    if config.kura.init_mode == InitMode::Fast {
-        // Fast constructs one inert State VM for structural completeness. Cap
-        // that VM at one minimum-stack worker and leave the global Rayon pool
-        // uninitialized; no contract or proof route is available in this mode.
-        let _ = ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
-        ivm::set_scheduler_thread_limits(Some(1), Some(1));
-        println!("{}", scheduler_banner_line(1));
-    } else {
-        apply_concurrency_config(&config.concurrency);
+    // An offline configuration check never starts a VM or worker pool. Keep
+    // stdout reserved for its single Ready/Pending result, and leave scheduler
+    // setup to the real daemon startup path.
+    if !args.startup.check_config {
+        if config.kura.init_mode == InitMode::Fast {
+            // Fast constructs one inert State VM for structural completeness. Cap
+            // that VM at one minimum-stack worker and leave the global Rayon pool
+            // uninitialized; no contract or proof route is available in this mode.
+            let _ = ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
+            ivm::set_scheduler_thread_limits(Some(1), Some(1));
+            println!("{}", scheduler_banner_line(1));
+        } else {
+            apply_concurrency_config(&config.concurrency);
+        }
     }
     // Apply Norito settings immediately so subsequent Norito decode/encode (e.g., genesis)
     // uses the configured archive bounds and GPU offload policy.
@@ -14007,7 +14062,7 @@ fn configure_reports(args: &Args) {
 /// runtime-provider bindings.
 pub fn main_entry() {
     soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
-    #[cfg(all(unix, feature = "test-network-message-control"))]
+    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
     if taira_runtime_signer::dispatch_production_beacon_fixture_if_requested() {
         return;
     }
@@ -14358,7 +14413,7 @@ fn run_main_with_config_guard(
     launcher_runtime_factory: Option<IrohaLauncherRuntimeFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
-    #[cfg(all(unix, feature = "test-network-message-control"))]
+    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
     if args.test_network_production_beacon_custody && launcher_config_guard.is_none() {
         return Err(Report::new(MainError::Config)
             .attach("production beacon fixture requires its explicit launcher registry boundary"));
@@ -16287,8 +16342,12 @@ mod tests {
         assert!(compact_source.contains(
             "if!emergency_fast&&config.telemetry_profile.expensive_metrics_enabled(){letfastpq_device_labels=FastpqDeviceLabels::from_config(&config.zk.fastpq);install_fastpq_execution_mode_probe(&fastpq_device_labels);"
         ));
+        assert!(
+            compact_source
+                .contains("if!args.startup.check_config{ifconfig.kura.init_mode==InitMode::Fast{")
+        );
         assert!(compact_source.contains(
-            "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}"
+            "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
         ));
         assert!(compact_source.contains(
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
@@ -16901,6 +16960,47 @@ mod tests {
     }
     mod replay_startup_config {
         use super::*;
+        #[test]
+        fn kagemusha_release_network_must_match_node_before_replay() {
+            let network =
+                NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"kagemusha-release-network"),
+                ));
+            let foreign =
+                NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                    iroha_crypto::Hash::new(b"foreign-kagemusha-release-network"),
+                ));
+            assert!(require_kagemusha_v1_release_network(network, network).is_ok());
+            assert!(require_kagemusha_v1_release_network(foreign, network).is_err());
+        }
+
+        #[test]
+        fn experimental_release_requires_explicit_node_permission() {
+            use iroha_data_model::kagemusha::{
+                KagemushaReleasePurposeV1, KagemushaTestnetExperimentScopeV1,
+            };
+
+            let experiment =
+                KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
+                    asset_identity_digest: [1; 32],
+                    asset_incarnation: [2; 32],
+                    asset_scale: 2,
+                    liability_pool_id: [3; 32],
+                });
+            assert_eq!(
+                select_kagemusha_v1_experimental_release_loader(
+                    KagemushaReleasePurposeV1::Production,
+                    false,
+                ),
+                Ok(false)
+            );
+            assert!(select_kagemusha_v1_experimental_release_loader(experiment, false).is_err());
+            assert_eq!(
+                select_kagemusha_v1_experimental_release_loader(experiment, true),
+                Ok(true)
+            );
+        }
+
         #[test]
         fn installs_actual_zk_and_settlement_config_before_kura_replay() {
             let mut config_table = crate::config_tests::minimal_config_table();
@@ -19978,7 +20078,7 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
-                #[cfg(all(unix, feature = "test-network-message-control"))]
+                #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
                 test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
@@ -20045,7 +20145,7 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
-                #[cfg(all(unix, feature = "test-network-message-control"))]
+                #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
                 test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,

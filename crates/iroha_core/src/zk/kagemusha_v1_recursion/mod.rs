@@ -37,6 +37,10 @@ mod mint_helper;
 #[cfg(feature = "zk-halo2-ipa")]
 mod mint_transport_decider;
 mod native_backend;
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+// TODO: Verify a pinned shard protocol and contiguous full-carrier coverage in the
+// live Claim/Terminal fold before any partial-MSM shard can authorize value.
+mod partial_msm_shard;
 #[cfg(feature = "zk-halo2-ipa")]
 mod provider_policy_root;
 mod relation;
@@ -50,6 +54,8 @@ mod terminal_body_commitment;
 mod terminal_durable_commitments;
 #[cfg(feature = "zk-halo2-ipa")]
 mod testnet_observation;
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+mod testnet_value_ledger;
 mod transport_decider;
 #[cfg(feature = "zk-halo2-ipa")]
 mod typed_sha_consumer;
@@ -150,6 +156,11 @@ pub use generation::{
     prove_kagemusha_redemption_v1, prove_kagemusha_terminal_authorization_hash_claim_v1,
     prove_kagemusha_terminal_authorization_v1,
 };
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) use generation::{
+    prove_kagemusha_testnet_finalized_mint_from_checkpoint_v1,
+    prove_kagemusha_testnet_mint_authority_rotation_from_checkpoint_v1,
+};
 pub use guard_bundle::{
     KAGEMUSHA_HARDWARE_POLICY_TREE_DEPTH_V1, KagemushaGuardBundleRelationWitnessV1,
     KagemushaPlatformCredentialRelationCircuitV1, KagemushaPlatformCredentialRelationWitnessV1,
@@ -221,9 +232,15 @@ pub(crate) use terminal_authorization::{
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use testnet_observation::{
-    KagemushaTestnetLineageTrialV1, KagemushaTestnetProofObservationOwnerV1,
-    KagemushaTestnetStateObservationScopeV1, KagemushaTestnetStateProofObservationV1,
-    observe_kagemusha_testnet_state_proof_v1,
+    KagemushaTestnetExperimentalMintAdmissionV1, KagemushaTestnetExperimentalMintTrialV1,
+    KagemushaTestnetFinalizedMintObservationV1, KagemushaTestnetLineageTrialV1,
+    KagemushaTestnetProofObservationOwnerV1, KagemushaTestnetStateObservationScopeV1,
+    KagemushaTestnetStateProofObservationV1, KagemushaTestnetValueAdmissionV1,
+    KagemushaVerifiedFinalityChainV1, observe_kagemusha_testnet_state_proof_v1,
+};
+#[cfg(all(unix, feature = "zk-halo2-ipa"))]
+pub use testnet_value_ledger::{
+    KagemushaTestnetMintCreditLedgerV1, KagemushaTestnetMintLedgerCreditV1,
 };
 
 use iroha_data_model::isi::KagemushaRedemptionRequestV1;

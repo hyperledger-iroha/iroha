@@ -3118,7 +3118,7 @@ fn ingress_stays_closed_until_replay_owner_acknowledges_ready() {
     assert!(!crate::sumeragi::SumeragiHandle::emergency_fast_disabled().admission_ready());
 }
 #[test]
-fn authenticated_lane_drain_vote_retains_original_owner_without_live_consumer() {
+fn authenticated_lane_drain_vote_enters_one_bounded_native_relay() {
     let (handle, _receiver, relay_receiver) = test_sumeragi_handle(1);
     handle.ingress_ready.store(true, Ordering::Release);
     let keypair = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
@@ -3164,25 +3164,41 @@ fn authenticated_lane_drain_vote_retains_original_owner_without_live_consumer() 
         keypair.private_key(),
     )
     .expect("sign valid lane-drain vote");
-    let super::SumeragiIngressDisposition::Rejected(LaneRelayMessage::DrainVote {
+    assert!(matches!(
+        handle.try_incoming_lane_relay_owned(LaneRelayMessage::DrainVote {
+            sender: signer.clone(),
+            vote: vote.clone(),
+        }),
+        super::SumeragiIngressDisposition::Accepted
+    ));
+    let LaneRelayMessage::DrainVote {
         sender,
         vote: queued_vote,
-    }) = handle.try_incoming_lane_relay_owned(LaneRelayMessage::DrainVote {
-        sender: signer.clone(),
-        vote: vote.clone(),
-    })
+    } = relay_receiver
+        .try_recv()
+        .expect("one Native drain relay owner")
     else {
-        panic!("a valid drain vote has no current serialized consumer");
+        panic!("drain relay changed its authenticated message kind");
     };
     assert_eq!(sender, signer);
     assert_eq!(queued_vote, vote);
     assert!(relay_receiver.try_recv().is_err());
     let mismatched_sender = PeerId::new(KeyPair::random().public_key().clone());
-    assert!(!handle.try_incoming_lane_drain_vote(mismatched_sender, vote.clone()));
+    assert!(handle.try_incoming_lane_drain_vote(mismatched_sender.clone(), vote.clone()));
+    assert!(matches!(
+        relay_receiver.try_recv(),
+        Ok(LaneRelayMessage::DrainVote { sender, vote: queued })
+            if sender == mismatched_sender && queued == vote
+    ));
     assert!(relay_receiver.try_recv().is_err());
     let mut tampered = vote;
     tampered.bls_signature[0] ^= 0x01;
-    assert!(!handle.try_incoming_lane_drain_vote(signer, tampered));
+    assert!(handle.try_incoming_lane_drain_vote(signer.clone(), tampered.clone()));
+    assert!(matches!(
+        relay_receiver.try_recv(),
+        Ok(LaneRelayMessage::DrainVote { sender, vote: queued })
+            if sender == signer && queued == tampered
+    ));
     assert!(relay_receiver.try_recv().is_err());
 }
 #[test]

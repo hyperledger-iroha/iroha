@@ -104,6 +104,11 @@ APPROVED_KAGEMUSHA_C_EXPORTS = (
     "connect_norito_kagemusha_core_coordinator_invoke_v1",
     "connect_norito_kagemusha_core_coordinator_close_v1",
     "connect_norito_kagemusha_testnet_state_proof_observe_v1",
+    "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+    "connect_norito_kagemusha_testnet_value_admit_v1",
+    "connect_norito_kagemusha_testnet_value_credit_v1",
+    "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+    "connect_norito_kagemusha_testnet_native_startup_activate_v1",
     "connect_norito_kagemusha_device_capabilities_v1",
     "connect_norito_kagemusha_device_execute_v1",
     "connect_norito_kagemusha_device_command_response_v1_verify",
@@ -151,6 +156,14 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
         "Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeCloseV1",
         "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeContractV1",
         "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetStateProofObservationJniV1_nativeObserveV1",
+        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetFinalizedMintObservationJniV1_nativeObserveV1",
+        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueAdmissionJniV1_nativeAdmitV1",
+        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_probe_KagemushaTestnetValueCreditJniV1_nativeCreditV1",
+        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeContractV1",
+        "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaTestnetNativeStartupJniV1_nativeActivateV1",
         "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeContractV1",
         "Java_org_hyperledger_iroha_sdk_offline_probe_Pixel6TestnetDiagnosticSelectionJniV1_nativeCreateV1",
         "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaReserveFinalityJniV1_nativeBridgeAbiVersion",
@@ -163,7 +176,19 @@ REQUIRED_SYMBOLS: Mapping[str, tuple[str, ...]] = {
     "csharp": (
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
-        *APPROVED_KAGEMUSHA_C_EXPORTS,
+        # Durable journal-backed testnet admission has no Windows C declaration
+        # or Rust export. Keep the cross-platform C# inventory exact per host.
+        *(
+            symbol for symbol in APPROVED_KAGEMUSHA_C_EXPORTS
+            if os.name != "nt"
+            or symbol not in {
+                "connect_norito_kagemusha_testnet_finalized_mint_observe_v1",
+                "connect_norito_kagemusha_testnet_value_admit_v1",
+                "connect_norito_kagemusha_testnet_value_credit_v1",
+                "connect_norito_kagemusha_testnet_native_startup_contract_v1",
+                "connect_norito_kagemusha_testnet_native_startup_activate_v1",
+            }
+        ),
         "connect_norito_validation_fee_hijiri_quote_request_v1",
         "connect_norito_validation_fee_hijiri_quote_response_verify_v1",
         "connect_norito_private_settlement_committee_proof_response_verify_v1",

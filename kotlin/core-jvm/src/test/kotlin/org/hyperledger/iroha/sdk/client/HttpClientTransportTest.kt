@@ -97,7 +97,7 @@ class HttpClientTransportTest {
 
         transport.issueIdentifierClaimReceipt(
             accountId,
-            IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening()),
+            IdentifierResolveRequest.encrypted("email#retail", "abcd", sampleOpening()),
             applicationAuth(accountId),
         ).join()
 
@@ -112,7 +112,7 @@ class HttpClientTransportTest {
         )
         @Suppress("UNCHECKED_CAST")
         val body = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
-        assertEquals("phone#retail", body["policy_id"])
+        assertEquals("email#retail", body["policy_id"])
         assertEquals("abcd", body["encrypted_input"])
         assertTrue(body["output_opening"] is Map<*, *>)
     }
@@ -129,7 +129,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             transport.issueIdentifierClaimReceipt(
                 accountId,
-                IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening()),
+                IdentifierResolveRequest.encrypted("email#retail", "abcd", sampleOpening()),
                 applicationAuth(testAccountId(0x34)),
             )
         }
@@ -141,7 +141,7 @@ class HttpClientTransportTest {
         )
         assertFailsWith<IllegalArgumentException> {
             injected.resolveIdentifier(
-                IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening()),
+                IdentifierResolveRequest.encrypted("email#retail", "abcd", sampleOpening()),
                 applicationAuth(),
             )
         }
@@ -225,7 +225,7 @@ class HttpClientTransportTest {
     @Test
     fun identifierHiddenFunctionRequestsCarryOutputOpening() {
         val opening = sampleOpening()
-        val request = IdentifierResolveRequest.encrypted("phone#retail", "abcd", opening)
+        val request = IdentifierResolveRequest.encrypted("email#retail", "abcd", opening)
 
         assertEquals(opening, request.outputOpening)
     }
@@ -233,7 +233,7 @@ class HttpClientTransportTest {
     @Test
     fun identifierHiddenFunctionRequestsRejectMalformedCiphertextEnvelopeFields() {
         assertFailsWith<IllegalArgumentException> {
-            IdentifierResolveRequest.encrypted("phone#retail", "abc", sampleOpening())
+            IdentifierResolveRequest.encrypted("email#retail", "abc", sampleOpening())
         }
         assertFailsWith<IllegalArgumentException> {
             IdentifierResolveRequest.encrypted(" ", "abcd", sampleOpening())
@@ -248,7 +248,13 @@ class HttpClientTransportTest {
             IdentifierResolveRequest.encrypted(samplePlaintextOnlyPolicy(), "abcd", sampleOpening())
         }
         assertFailsWith<IllegalArgumentException> {
-            HttpClientTransport.buildIdentifierResolvePayload("phone#retail", "abc", sampleOpening())
+            HttpClientTransport.buildIdentifierResolvePayload("email#retail", "abc", sampleOpening())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            IdentifierResolveRequest.encrypted("phone#retail", "abcd", sampleOpening())
+        }
+        assertFailsWith<IllegalArgumentException> {
+            HttpClientTransport.buildIdentifierResolvePayload("phone#retail", "abcd", sampleOpening())
         }
     }
 

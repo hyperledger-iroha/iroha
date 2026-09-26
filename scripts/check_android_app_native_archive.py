@@ -8,7 +8,9 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import stat
+import subprocess
 import sys
 from typing import NoReturn
 import zipfile
@@ -22,7 +24,9 @@ CLIENT_BUILD_RELATIVE_PATH = (
     Path("gradle-build") / "iroha_kotlin_sdk" / "client-android"
 )
 MAX_PROVENANCE_BYTES = 64 * 1024
+MAX_SOURCE_SEAL_BYTES = 64 * 1024
 BUILD_ENVIRONMENT_SCHEMA = "iroha.mobile-native-build-environment.v1"
+SOURCE_SEAL_SCHEMA = "iroha.norito-bridge-source-seal.v1"
 ANDROID_NDK_BASE_REVISION = "28.0.12674087"
 ANDROID_NDK_SOURCE_PROPERTIES_SHA256 = (
     "55368a3554d27b8413b75a4b2e83ea7f6b66fef4068f7a7f71cf2910c6e3357b"
@@ -253,6 +257,16 @@ def strict_provenance(payload: bytes) -> dict[str, object]:
         fail("native provenance does not bind the production ABI-24 release")
     if decoded["android_ndk_revision"] != ANDROID_NDK_BASE_REVISION:
         fail("native provenance Android NDK base revision is not exact")
+    if decoded["source_tree_dirty"] is not False:
+        fail("native provenance must attest a clean source tree")
+    if not isinstance(decoded["source_commit"], str) or not re.fullmatch(
+        r"[0-9a-f]{40}", decoded["source_commit"]
+    ):
+        fail("native provenance source commit is not canonical")
+    for field in ("source_fingerprint_sha256", "cargo_lock_sha256"):
+        value = decoded[field]
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            fail(f"native provenance {field} is not canonical SHA-256")
     build_environment = decoded["build_environment"]
     if not isinstance(build_environment, dict):
         fail("native provenance build environment must be an object")
@@ -274,6 +288,83 @@ def strict_provenance(payload: bytes) -> dict[str, object]:
     if not isinstance(libraries, dict) or set(libraries) != set(ABIS):
         fail("native provenance ABI inventory is not exact")
     return decoded
+
+
+def authenticate_source_seal(
+    *,
+    iroha_root: Path,
+    artifact_root: Path,
+    client_build_root: Path,
+    provenance: dict[str, object],
+) -> None:
+    """Bind an app archive to the live, clean Android dependency closure."""
+    seal_path = (
+        client_build_root
+        / "native/sourceSeal/production/source-seal-v1.json"
+    )
+    try:
+        seal_size = seal_path.lstat().st_size
+    except OSError as error:
+        fail(f"Android source seal is missing or unreadable: {error}")
+    if seal_size > MAX_SOURCE_SEAL_BYTES:
+        fail("Android source seal exceeds its byte limit")
+    seal_bytes = read_regular(seal_path, artifact_root, "Android source seal")
+    try:
+        seal = json.loads(seal_bytes.decode("utf-8"), object_pairs_hook=strict_object)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        fail(f"Android source seal is not strict UTF-8 JSON: {error}")
+    if not isinstance(seal, dict) or set(seal) != {
+        "schema", "platform", "targets", "source_commit", "source_tree_dirty",
+        "source_status", "source_fingerprint_sha256",
+    }:
+        fail("Android source seal field inventory is not exact")
+    if (
+        seal["schema"] != SOURCE_SEAL_SCHEMA
+        or seal["platform"] != "android"
+        or seal["targets"] != ["aarch64-linux-android", "x86_64-linux-android"]
+        or seal["source_tree_dirty"] is not False
+        or seal["source_status"] != ""
+        or seal["source_commit"] != provenance["source_commit"]
+        or seal["source_fingerprint_sha256"]
+        != provenance["source_fingerprint_sha256"]
+    ):
+        fail("Android source seal disagrees with clean native provenance")
+    cargo_lock = iroha_root / "Cargo.lock"
+    if sha256(read_regular(cargo_lock, iroha_root, "canonical Cargo.lock")) != provenance[
+        "cargo_lock_sha256"
+    ]:
+        fail("native provenance disagrees with canonical Cargo.lock")
+    seal_script = iroha_root / "scripts/norito_bridge_source_seal.py"
+    canonical_existing_path(
+        str(seal_script), directory=False, label="Android source-seal verifier"
+    )
+    target_directory = client_build_root / "native/cargo-target/production"
+    canonical_existing_path(
+        str(target_directory), directory=True, label="Android native Cargo target"
+    )
+    environment = os.environ.copy()
+    environment["NORITO_BRIDGE_SEAL_CARGO_TARGET_DIR"] = str(target_directory)
+    try:
+        result = subprocess.run(
+            [
+                sys.executable, "-I", "-S", "-B", str(seal_script), "verify",
+                "--root", str(iroha_root), "--platform", "android",
+                "--snapshot", str(seal_path),
+                "--lockfile-path", str(cargo_lock),
+            ],
+            cwd=iroha_root,
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=300,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        fail(f"Android source-seal verification could not complete: {error}")
+    if result.returncode != 0:
+        fail("Android source seal does not match the live Iroha source tree")
+    if read_regular(seal_path, artifact_root, "Android source seal") != seal_bytes:
+        fail("Android source seal changed during live verification")
 
 
 def exact_generated_libraries(
@@ -351,6 +442,12 @@ def verify(args: argparse.Namespace) -> None:
         "generated native provenance",
     )
     provenance = strict_provenance(provenance_bytes)
+    authenticate_source_seal(
+        iroha_root=iroha_root,
+        artifact_root=artifact_root,
+        client_build_root=client_build_root,
+        provenance=provenance,
+    )
     aar_path = client_build_root / "outputs/aar/client-android-release.aar"
     aar_bytes = read_regular(
         aar_path,
@@ -481,6 +578,12 @@ def verify(args: argparse.Namespace) -> None:
     # Retain a live reference until every ZIP comparison has completed.
     if not aar_bytes:
         fail("authenticated client-android Release AAR is empty")
+    authenticate_source_seal(
+        iroha_root=iroha_root,
+        artifact_root=artifact_root,
+        client_build_root=client_build_root,
+        provenance=provenance,
+    )
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

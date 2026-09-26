@@ -244,10 +244,12 @@ def test_admission_capacity_requires_exact_owner_ledger(captured, mutation):
     ("fit_evidence_prefix", "bytes <= payload_limit", "true"),
     ("fit_evidence_prefix", "chunks <= layout.max_chunk_count as usize", "true"),
     ("fit_evidence_prefix", "canonical_proposal_wire_len(signatory, algorithm)", "estimated_input_len(signatory, algorithm)"),
-    ("V2CandidateAssembler::assemble", "candidate_economic_work_first(request.context.height)", "candidate_economic_work_first(view)"),
-    ("V2CandidateAssembler::assemble", "autonomous_lane_payloads: prepared_work.autonomous_lane_payloads.clone()", "autonomous_lane_payloads: Vec::new()"),
-    ("V2CandidateAssembler::assemble", "report.evidence_deferred = evidence_count - count", "report.evidence_deferred = 0"),
-    ("V2CandidateAssembler::assemble", "if first_admission_size.is_none() && evidence_count > 0", "if false"),
+    ("V2CandidateAssembler::assemble_at_generation", "candidate_economic_work_first(request.context.height)", "candidate_economic_work_first(view)"),
+    ("V2CandidateAssembler::assemble_at_generation", "autonomous_lane_payloads: prepared_work.autonomous_lane_payloads.clone()", "autonomous_lane_payloads: Vec::new()"),
+    ("V2CandidateAssembler::assemble_at_generation", "report.evidence_deferred = evidence_count - count", "report.evidence_deferred = 0"),
+    ("V2CandidateAssembler::assemble_at_generation", "if first_admission_size.is_none() && evidence_count > 0", "if false"),
+    ("V2CandidateAssembler::assemble_at_generation", "deterministic_start_work_pending(&prepared_header)", "deterministic_start_work_pending(&candidate_header)"),
+    ("V2CandidateAssembler::assemble_at_generation", "if block.header() != prepared_header", "if false"),
     ("NativeRunnerProcess::assemble_candidate", "if completed.owner == owner", "if true"),
     ("NativeRunnerProcess::assemble_candidate", "if self.candidate_job.is_some()", "if false"),
     ("NativeRunnerProcess::assemble_candidate", "self.retain_candidate_source(assembly.source);", ""),
@@ -255,9 +257,13 @@ def test_admission_capacity_requires_exact_owner_ledger(captured, mutation):
     ("NativeRunnerProcess::assemble_candidate", "output_guard: &guard", "output_guard: &foreign_guard"),
     ("V2CandidateAssembler::assemble_native", "!request.work_provider.belongs_to(request.state)", "false"),
     ("V2CandidateAssembler::assemble_native", "request.attachments.certified_merge_entry.is_some()", "false"),
+    ("V2CandidateAssembler::assemble_native", "if !validate_request_at_generation(&request, state_generation)?", "if false"),
+    ("V2CandidateAssembler::assemble_native", "Err(_) if !candidate_state_generation_is_current(request.state, state_generation)", "Err(_) if false"),
     ("V2CandidateAssembler::assemble_native", "work_provider: NativeCandidateWork(&source)", "work_provider: OrdinaryWork::default()"),
     ("NativeCandidateWork::prepare", "if !candidates.is_empty()", "if false"),
     ("schedule_local_proposal", "native.retain_candidate_source(source);", ""),
+    ("schedule_local_proposal", "!output_guard.restart_required()", "true"),
+    ("schedule_local_proposal", "&& proposal_state.defer_pre_signing_candidate_history_admission(", "&& proposal_state.defer_history_admission("),
     ("candidate_attachments", "let npos_consensus_effects =", "effects.v2_evidence_admissions.clear(); let npos_consensus_effects ="),
     ("publish_authenticated_capacity", "require_local_payload_capacity(capacity.layout, config)?;", ""),
     ("publish_authenticated_capacity", "layout: context.da_layout", "layout: default_layout()"),
@@ -323,6 +329,22 @@ def test_admission_capacity_rejects_publication_before_local_capacity(captured):
     changed = dict(items)
     changed[key] = source
     assert any("ordering" in e for e in validate(captured, altered=changed))
+
+
+def test_candidate_rejects_state_block_probe_under_publication_lease(captured):
+    _, checker, _, items = captured
+    c = checker.admission_capacity_contract
+    key = next(k for k in items if k[2] == "V2CandidateAssembler::assemble_at_generation")
+    source = c._code(items[key])
+    lease = c._code("let _state_publication = request.state.consensus_publication_lease()")
+    assert source.count(lease) == 1
+    changed = dict(items)
+    changed[key] = source.replace(
+        lease,
+        lease + c._code("request.state.deterministic_start_work_pending(&candidate_header)?;"),
+        1,
+    )
+    assert any("reopened a State block" in e for e in validate(captured, altered=changed))
 
 
 def test_admission_capacity_rejects_sizing_before_memory_admission(captured):

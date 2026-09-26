@@ -3,16 +3,21 @@
 
 package org.hyperledger.iroha.sdk.offline.probe
 
-import android.os.Build
-import android.util.Log
+import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
+import android.os.UserManager
+import android.util.Log
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.PrivateKey
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.cert.CertificateFactory
@@ -37,6 +42,9 @@ import org.bouncycastle.asn1.BERTags
 /** Physical, non-monetary KeyMint one-use diagnostic; run on each release device family. */
 @RunWith(AndroidJUnit4::class)
 class AndroidKeyMintSingleUseDeviceTest {
+    private val restartAlias = "iroha_keymint_pixel6_restart_diagnostic_v1"
+    private val restartMarker = "iroha_keymint_pixel6_restart_diagnostic_v1.marker"
+
     /** Diagnostic only: a missing feature flag must not be mistaken for proof of hardware use. */
     @Test
     fun strongBoxOneUseWithoutFeatureFlagDiagnostic() {
@@ -99,6 +107,117 @@ class AndroidKeyMintSingleUseDeviceTest {
             if (store.containsAlias(alias)) store.deleteEntry(alias)
         }
     }
+
+    /** Stage 1: provision an unused StrongBox key, then end this instrumentation process. */
+    @Test
+    fun pixel6RestartStage1ProvisionUnusedKey() {
+        requirePixel6RestartProbe()
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        check(!store.containsAlias(restartAlias)) { "restart diagnostic alias already exists" }
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val marker = File(context.noBackupFilesDir, restartMarker)
+        check(!marker.exists()) { "restart diagnostic marker already exists" }
+        val challenge = MessageDigest.getInstance("SHA-256").digest(
+            "iroha:kagemusha:pixel6-restart-diagnostic:v1".toByteArray(Charsets.US_ASCII),
+        )
+        val specification = KeyGenParameterSpec.Builder(restartAlias, KeyProperties.PURPOSE_SIGN)
+            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+            .setDigests(KeyProperties.DIGEST_SHA256)
+            .setAttestationChallenge(challenge)
+            .setIsStrongBoxBacked(true)
+            .setMaxUsageCount(1)
+            .build()
+        val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore")
+        generator.initialize(specification)
+        generator.generateKeyPair()
+        val certificate = store.getCertificate(restartAlias) as X509Certificate
+        val facts = attestationFacts(certificate)
+        assertArrayEquals(challenge, facts.challenge)
+        assertEquals(2, facts.attestationLevel)
+        assertEquals(2, facts.keyMintLevel)
+        assertFalse(facts.hardwareRollback)
+        assertEquals(null, facts.hardwareUsageLimit)
+        assertEquals(1, facts.softwareUsageLimit)
+        Log.i("IrohaKeyMintProbe", "restart stage 1: unused alias provisioned; " +
+            "hardware303=${facts.hardwareRollback}, hardware405=${facts.hardwareUsageLimit}, " +
+            "software303=${facts.softwareRollback}, software405=${facts.softwareUsageLimit}; " +
+            "boot=${diagnosticBootId()}")
+    }
+
+    /** Stage 2: a new app process performs the first signature and records only public evidence. */
+    @Test
+    fun pixel6RestartStage2SignOnceInNewProcess() {
+        requirePixel6RestartProbe()
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val key = store.getKey(restartAlias, null) as? PrivateKey
+            ?: error("restart diagnostic key was not retained across app restart")
+        val certificate = store.getCertificate(restartAlias) as X509Certificate
+        val message = MessageDigest.getInstance("SHA-256").digest(
+            "iroha:kagemusha:pixel6-restart-first-signature:v1".toByteArray(Charsets.US_ASCII),
+        )
+        val signature = Signature.getInstance("SHA256withECDSA").run {
+            initSign(key)
+            update(message)
+            sign()
+        }
+        assertTrue(Signature.getInstance("SHA256withECDSA").run {
+            initVerify(certificate.publicKey)
+            update(message)
+            verify(signature)
+        })
+        val signatureDigest = MessageDigest.getInstance("SHA-256").digest(signature)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        val marker = File(InstrumentationRegistry.getInstrumentation().targetContext.noBackupFilesDir,
+            restartMarker)
+        FileOutputStream(marker).use { output ->
+            output.write((diagnosticBootId() + "\n" + signatureDigest + "\n")
+                .toByteArray(Charsets.US_ASCII))
+            output.fd.sync()
+        }
+        Log.i("IrohaKeyMintProbe", "restart stage 2: first signature verified; " +
+            "signature SHA-256=$signatureDigest; alias remains=${store.containsAlias(restartAlias)}")
+    }
+
+    /** Stage 3: after a device reboot, the consumed alias cannot produce a second signature. */
+    @Test
+    fun pixel6RestartStage3RejectSecondUseAfterReboot() {
+        requirePixel6RestartProbe()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val userManager = context.getSystemService(Context.USER_SERVICE) as UserManager
+        assertTrue("unlock the Pixel 6 with its PIN after reboot before testing one-use persistence",
+            userManager.isUserUnlocked)
+        val marker = File(InstrumentationRegistry.getInstrumentation().targetContext.noBackupFilesDir,
+            restartMarker)
+        val recorded = marker.readLines(Charsets.US_ASCII)
+        check(recorded.size == 2 && recorded[1].matches(Regex("[0-9a-f]{64}"))) {
+            "first-use diagnostic marker is absent or malformed"
+        }
+        check(recorded[0] != diagnosticBootId()) { "device was not rebooted after first use" }
+        val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val second = runCatching {
+            val key = store.getKey(restartAlias, null) as? PrivateKey
+                ?: error("consumed key alias is absent")
+            Signature.getInstance("SHA256withECDSA").run {
+                initSign(key)
+                update("nonmonetary second-use diagnostic".toByteArray(Charsets.US_ASCII))
+                sign()
+            }
+        }
+        Log.i("IrohaKeyMintProbe", "restart stage 3: second signed=${second.isSuccess}; " +
+            "failure=${second.exceptionOrNull()?.javaClass?.name}; boot=${diagnosticBootId()}")
+        assertFalse("consumed one-use alias signed after reboot", second.isSuccess)
+        if (store.containsAlias(restartAlias)) store.deleteEntry(restartAlias)
+        check(marker.delete()) { "cannot remove restart diagnostic marker" }
+    }
+
+    private fun requirePixel6RestartProbe() {
+        assertTrue("restart probe requires the physical Pixel 6",
+            isPixel6HardwareV1(Build.MANUFACTURER, Build.DEVICE))
+        assertTrue("restart probe requires Android 12 or later", Build.VERSION.SDK_INT >= 31)
+    }
+
+    private fun diagnosticBootId(): String = File("/proc/sys/kernel/random/boot_id")
+        .readText(Charsets.US_ASCII).trim().also { check(it.matches(Regex("[0-9a-f-]{36}"))) }
 
     @Test
     fun hardwareOneUseKeySignsExactlyOnceAndReturnsAttestation() {

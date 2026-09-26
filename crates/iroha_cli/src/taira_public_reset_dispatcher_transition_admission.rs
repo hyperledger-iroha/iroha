@@ -76,7 +76,12 @@ pub(super) fn validate_plan(plan: &Plan) -> Result<()> {
             && p.progress.path == coordination.join("progress.json").to_string_lossy()
             && p.completed.path
                 == format!(
-                    "{RUNTIME}/journal-v1/completed/{}.json",
+                    "{RUNTIME}/journal-v1/{}/{}.json",
+                    if p.rolled_back {
+                        "rolled-back"
+                    } else {
+                        "completed"
+                    },
                     p.authorization_sha256
                 )
             && p.dispatcher.path == FIXED_DISPATCHER
@@ -211,7 +216,12 @@ fn sealed(plan: &Plan) -> Result<()> {
     let p = &plan.predecessor;
     let lease: HostLeaseV1 = json::from_slice(&read(&p.lease)?)?;
     let progress: HostProgressV1 = json::from_slice(&read(&p.progress)?)?;
-    validate_sealed_records(plan, &lease, &progress, &record(&p.completed)?)?;
+    let terminal = record(&p.completed)?;
+    if p.rolled_back {
+        validate_rolled_back_records(plan, &lease, &progress, &terminal)?;
+    } else {
+        validate_sealed_records(plan, &lease, &progress, &terminal)?;
+    }
     for name in [
         "progress.successor.json",
         ".progress.json.next",
@@ -220,6 +230,94 @@ fn sealed(plan: &Plan) -> Result<()> {
         need(
             !storage::exists(&coordination_root(plan).join(name))?,
             "unfinished host progress publication exists",
+        )?;
+    }
+    Ok(())
+}
+
+/// Admit a completed rollback as a fresh transition predecessor only when the
+/// physical host progress and native terminal receipt agree on every target.
+pub(super) fn validate_rolled_back_records(
+    plan: &Plan,
+    lease: &HostLeaseV1,
+    progress: &HostProgressV1,
+    terminal: &Value,
+) -> Result<()> {
+    let p = &plan.predecessor;
+    need(p.rolled_back, "rolled-back predecessor flag required")?;
+    need(
+        lease.schema == LEASE_SCHEMA_V1
+            && lease.inventory_sha256 == p.inventory_sha256
+            && lease.authorization_semantic_sha256 == p.authorization_sha256
+            && lease.authorization_nonce == p.authorization_nonce,
+        "rolled-back lease differs",
+    )?;
+    let touched = SLUGS[..4]
+        .iter()
+        .map(|slug| (*slug).to_owned())
+        .collect::<Vec<_>>();
+    let mut rolled_back = touched.iter().rev().cloned().collect::<Vec<_>>();
+    let edge_touched = terminal
+        .get("edge_touched")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| eyre!("rolled-back edge touch flag missing"))?;
+    let mut expected_touched = touched.clone();
+    if edge_touched {
+        expected_touched.push(SLUGS[4].to_owned());
+        rolled_back.insert(0, SLUGS[4].to_owned());
+    }
+    need(
+        progress.schema == HOST_PROGRESS_SCHEMA_V1
+            && progress.inventory_sha256 == p.inventory_sha256
+            && progress.authorization_sha256 == p.authorization_sha256
+            && progress.authorization_nonce == p.authorization_nonce
+            && progress.prepared_action.is_none()
+            && progress.rolling_back
+            && !progress.sealed
+            && progress.touched_hosts == expected_touched
+            && progress.rolled_back_hosts == rolled_back
+            && progress.last_rollback_rank == 1
+            && progress.next_forward_ordinal == p.sealed_forward_ordinal,
+        "host rollback is incomplete or differs",
+    )?;
+    qualification::names(
+        terminal,
+        "schema qualification_scope deployment_id inventory_sha256 authorization_sha256 authorization_nonce status phase next_step recovery_intent touched_validators edge_touched edge_rollback_complete rollback_next_validator failure_summary rollback_failures",
+    )?;
+    let _: super::super::super::executor_model::JournalV1 = json::from_value(terminal.clone())?;
+    need(
+        terminal.get("next_step").and_then(Value::as_u64) == Some(u64::from(p.completed_next_step))
+            && terminal.get("touched_validators") == Some(&json::to_value(&touched)?)
+            && terminal
+                .get("edge_rollback_complete")
+                .and_then(Value::as_bool)
+                == Some(edge_touched)
+            && terminal
+                .get("rollback_next_validator")
+                .and_then(Value::as_u64)
+                == Some(4)
+            && terminal.get("recovery_intent") == Some(&Value::Null)
+            && terminal
+                .get("failure_summary")
+                .and_then(Value::as_str)
+                .is_some_and(|summary| !summary.is_empty() && summary.len() <= 512)
+            && terminal
+                .get("rollback_failures")
+                .and_then(Value::as_array)
+                .is_some_and(Vec::is_empty),
+        "native terminal rollback is incomplete",
+    )?;
+    for (name, expected) in [
+        ("schema", super::super::super::JOURNAL_SCHEMA_V1),
+        ("inventory_sha256", p.inventory_sha256.as_str()),
+        ("authorization_sha256", p.authorization_sha256.as_str()),
+        ("authorization_nonce", p.authorization_nonce.as_str()),
+        ("status", "rolled_back"),
+        ("phase", "rolled_back"),
+    ] {
+        need(
+            text(terminal, name)? == expected,
+            "rolled-back receipt differs",
         )?;
     }
     Ok(())

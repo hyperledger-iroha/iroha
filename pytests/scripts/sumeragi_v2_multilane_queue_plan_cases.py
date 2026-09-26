@@ -56,18 +56,40 @@ def test_queue_plan_autonomous_only_contract_rejects_candidate_fifo_bypass(
     replace_once_after(
         path,
         "fn snapshot_routable_candidates(",
-        "            if queue_plan_synced {\n",
-        "            if false {\n",
+        "== TransactionAdmissionIntent::QueuePlanSynced",
+        "== TransactionAdmissionIntent::Ordinary",
     )
     errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
     assert any(
         "V2CandidateAssembler::snapshot_routable_candidates" in error
-        and "if queue_plan_synced" in error
+        and "TransactionAdmissionIntent::QueuePlanSynced" in error
         for error in errors
     ), errors
 
 
-def test_queue_plan_autonomous_only_contract_rejects_virtual_fifo_cut_bypass(
+def test_queue_plan_autonomous_only_contract_rejects_local_candidate_lookup(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/sumeragi/v2_candidate.rs"
+    replace_once_after(
+        path,
+        "fn snapshot_routable_candidates(",
+        "            let entrypoint_hash = transaction.hash_as_entrypoint();\n",
+        "            let _ = state.queue_plan_pending_binding_for_entrypoint("
+        "transaction.hash_as_entrypoint());\n"
+        "            let entrypoint_hash = transaction.hash_as_entrypoint();\n",
+    )
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any(
+        "V2CandidateAssembler::snapshot_routable_candidates" in error
+        and "unselected local QueuePlan input regains proposal authority" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_autonomous_only_contract_rejects_local_snapshot_lookup(
     tmp_path: Path,
 ) -> None:
     module = load_checker()
@@ -76,22 +98,65 @@ def test_queue_plan_autonomous_only_contract_rejects_virtual_fifo_cut_bypass(
     replace_once_after(
         path,
         "pub(crate) fn bounded_pending_snapshot(",
-        "if live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut) {",
-        "if live_reservation_fifo_cut.is_none() {",
+        "                let transaction = self.txs.get(hash)?;\n",
+        "                let _ = self.global_admission_registry_match_for_hash("
+        "*hash, state_view);\n"
+        "                let transaction = self.txs.get(hash)?;\n",
     )
     errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
     assert any(
         "Queue::bounded_pending_snapshot" in error
-        and "live_reservation_fifo_cut.is_some_and" in error
+        and "unselected local QueuePlan registry regains proposal authority" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_autonomous_only_contract_rejects_parent_cursor_reset(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    replace_once_after(
+        path,
+        "pub(crate) fn bounded_pending_snapshot(",
+        "        let mut remaining_scan = max_scan.get();\n",
+        "        let _ = scan_cursor.parent_hash;\n"
+        "        let mut remaining_scan = max_scan.get();\n",
+    )
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any(
+        "Queue::bounded_pending_snapshot" in error
+        and "committed parent resets local async sampling progress" in error
+        for error in errors
+    ), errors
+
+
+def test_queue_plan_autonomous_only_contract_requires_exact_reservation_skip(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    models = copy_queue_plan_autonomous_only_fixture(tmp_path, module)
+    path = tmp_path / "crates/iroha_core/src/queue.rs"
+    replace_once_after(
+        path,
+        "pub(crate) fn bounded_pending_snapshot(",
+        "if live_reservations.contains(hash) {",
+        "if false {",
+    )
+    errors = validate_queue_plan_autonomous_only_fixture(tmp_path, module, models)
+    assert any(
+        "Queue::bounded_pending_snapshot" in error
+        and "if live_reservations.contains(hash) {" in error
         for error in errors
     ), errors
 
 
 @pytest.mark.parametrize(("old", "new"), [
-    ("canonical_queue_plan_fence.get_or_insert(scan_start + offset);", "let _ = scan_start + offset;"),
-    ("scan_cursor.next_index = fence;", "scan_cursor.next_index = scan_start;"),
+    ("if global_owners.contains_key(hash) {", "if false {"),
+    ("scan_cursor.next_index = scan_start", "scan_cursor.next_index = 0"),
 ])
-def test_queue_plan_autonomous_only_contract_retains_canonical_scan_fence(
+def test_queue_plan_autonomous_only_contract_retains_exact_owner_and_bounded_scan(
     tmp_path: Path, old: str, new: str
 ) -> None:
     module = load_checker()
@@ -1350,7 +1415,7 @@ def test_queue_plan_pending_membership_contract_rejects_historical_authority_ord
 
 @pytest.mark.parametrize("relative,anchor,old,new", [
     ("crates/iroha_core/src/sumeragi/v2_candidate.rs", "fn snapshot_routable_candidates(",
-     "&binding,\n                    state.network_id_ref(),", "&binding,\n                    &NetworkId::default(),"),
+     "state.network_id_ref(),\n                certificate,", "&NetworkId::default(),\n                certificate,"),
     ("crates/iroha_core/src/sumeragi/v2_lane_work.rs", "impl CandidateWorkProvider for &mut V2LaneWorkAdapter {",
      "== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)",
      "== iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced && false)"),
@@ -1473,8 +1538,8 @@ def test_retained_queue_plan_route_authority_accepts_actual_sources() -> None:
     ("Queue::immutable_queued_routing_plan_in_view", "&& claim.routing_plan == plan", "&& true"),
     ("Queue::immutable_queued_routing_plan_with_view", "authority == QueuePlanPendingRouteAuthority::Active", "true"),
     ("Queue::reserve_transactions_for_lane_bounded", "Ok((_, QueuePlanPendingRouteAuthority::Draining)) => continue,", "Ok((routing_plan, QueuePlanPendingRouteAuthority::Draining)) => routing_plan,"),
-    ("Queue::pop_from_queue", "self.restore_popped_hash_locked(hash)", "Ok::<(), String>(())"),
-    ("Queue::bounded_pending_snapshot", "Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n                                    blocked_by_fifo_predecessor = true;\n                                    return None;\n                                }", "Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {},"),
+    ("Queue::pop_from_queue", "Ok(None) => {\n                    let queue_guard = self.push_remove_lock.lock();\n                    let restore_error = self.restore_popped_hash_locked(hash);", "Ok(None) => {\n                    let queue_guard = self.push_remove_lock.lock();\n                    let restore_error = Ok::<(), String>(());"),
+    ("Queue::bounded_pending_snapshot", "== TransactionAdmissionIntent::QueuePlanSynced", "== TransactionAdmissionIntent::Ordinary"),
     ("Queue::push_with_lane_internal_with_state_and_routing", "Ok(Some(canonical_binding)) if canonical_binding == *binding", "Ok(Some(canonical_binding))"),
     ("Queue::revalidate_pending_transactions", "Ok((plan, _)) => plan,", "Ok((plan, QueuePlanPendingRouteAuthority::Active)) => plan,"),
     ("Queue::durable_plan_admission_claim_with_state", "context: claim.admission_context,", "context: current_context,"),
@@ -1485,7 +1550,7 @@ def test_retained_queue_plan_route_authority_accepts_actual_sources() -> None:
     "exact-network", "close-incarnation", "immutable-pin", "active-incarnation",
     "global-owner-required", "canonical-custody-required", "exact-retry-context",
     "retry-retained-authority", "immutable-plan", "ordinary-pop-projection",
-    "ordinary-reservation-exclusion", "pop-restores-custody", "fifo-defers-draining",
+    "ordinary-reservation-exclusion", "pop-restores-custody", "candidate-skips-autonomous",
     "ingress-exact-pending-owner", "refresh-retains-draining", "lookup-keeps-original-context",
 ])
 def test_retained_queue_plan_route_authority_rejects_semantic_mutation(
@@ -1654,7 +1719,12 @@ def test_canonical_queue_plan_retry_literal_bindings_match_actual_owners() -> No
     ('State::canonical_queue_plan_input_decode_limits', 'one_elements.checked_mul(2)?', 'one_elements'),
     ('State::canonical_queue_plan_input_decode_limits', 'one_allocated.checked_mul(2)?', 'one_allocated'),
     ('State::canonical_queue_plan_input_read_working_set_bytes', '?.checked_add(state_graph)', '?.checked_add(0)'),
-    ('canonical_admission_read_working_set_bytes', 'let proposal_clone = norito::canonical_decode_limits(wire).max_total_allocated_bytes();', 'let proposal_clone = 0usize;'),
+    ('canonical_admission_read_working_set_bytes', 'let input_graph = norito::canonical_decode_limits(input).max_total_allocated_bytes();', 'let input_graph = 0usize;'),
+    ('SignedBlock::canonical_proposal_wire_hash', 'self.borrowed_resultless_wire().map(|wire| Hash::new(&wire))', 'self.canonical_resultless_proposal().encode_wire().map(|wire| Hash::new(&wire))'),
+    ('SignedBlock::borrowed_resultless_wire', 'let proposal = SignedBlockOutputCandidate {', 'let _duplicate = self.clone(); let proposal = SignedBlockOutputCandidate {'),
+    ('SignedBlock::borrowed_resultless_wire', 'payload: OutputFieldRef(&self.payload)', 'payload: OutputFieldRef(&self.payload.clone())'),
+    ('SignedBlock::borrowed_resultless_wire', 'frame.push(self.version());', 'frame.push(0);'),
+    ('SignedBlock::borrowed_resultless_wire', 'write_signed_block_header(&payload, &mut frame)?;', ''),
     ('canonical_queue_plan_synced_response', 'if tokio::time::Instant::now() >= read_deadline', 'if false'),
     ('canonical_queue_plan_synced_response', 'if tokio::time::Instant::now() >= read_deadline', 'if tokio::time::Instant::now() < read_deadline'),
     ('execute_incoming_torii_proxy_request_with_admission', '.checked_sub(TORII_PROXY_RESPONSE_EGRESS_RESERVE)', '.checked_sub(Duration::ZERO)'),
@@ -1681,7 +1751,12 @@ def test_canonical_queue_plan_retry_literal_bindings_match_actual_owners() -> No
     'both-state-element-observations',
     'both-state-allocation-observations',
     'state-graph-charged',
-    'full-proposal-clone-charged',
+    'owned-input-graph-charged',
+    'proposal-hash-borrows-source',
+    'proposal-hash-no-hidden-clone',
+    'proposal-hash-no-payload-clone',
+    'proposal-hash-version-bound',
+    'proposal-hash-header-bound',
     'original-deadline-required',
     'deadline-direction',
     'egress-budget-retained',
@@ -1801,7 +1876,7 @@ def test_canonical_queue_plan_retry_rejects_owner_reordering(symbol: str, first:
     ("submit_prepared_transaction_ingress", "if response.status() == StatusCode::ACCEPTED", "if true"),
     ("submit_prepared_transaction_ingress", "reservation.commit();", "drop(reservation);"),
     ("submit_prepared_transaction_ingress", "queue_plan_synced_transport_unavailable", "accept_without_transport"),
-    ("execute_torii_transaction_via_proxy", "threshold_key_lifecycle_ingress::submit(", "direct_ordinary_queue_push("),
+    ("execute_torii_transaction_via_proxy", "ordinary_transaction_ingress::submit(", "direct_ordinary_queue_push("),
     ("execute_torii_transaction_via_proxy", "durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())", "durable_retry_claim"),
     ("execute_torii_transaction_via_proxy", "let already_durably_admitted = durable_retry_claim.is_some();", "let already_durably_admitted = true;"),
     ("execute_torii_transaction_via_proxy", "queue_plan_binding_from_durable_admission(&claim)", "new_binding_from_fresh_route(&claim)"),
@@ -1842,7 +1917,7 @@ def test_canonical_queue_plan_retry_rejects_delegated_ingress_reordering(symbol:
     ("handler_post_transactions_batch", "canonical_queue_plan_submission_response(", "assume_canonical("),
     ("handler_post_transactions_batch", "routing::accept_decoded_signed_transaction_for_ingress_with_precheck(", "accept_without_authentication("),
     ("handler_post_transactions_batch", "prepare_fresh_transaction_ingress(&worker_app, transaction)?", "unchecked_route(transaction)"),
-    ("handler_post_transactions_batch", "threshold_key_lifecycle_ingress::authenticate(", "allow_ordinary_economic_input("),
+    ("handler_post_transactions_batch", "ordinary_transaction_ingress::authenticate(", "allow_ordinary_economic_input("),
     ("handler_post_transactions_batch", ".collect::<Result<Vec<_>, Error>>()", ".filter_map(Result::ok).collect::<Vec<_>>()"),
     ("handler_post_transactions_batch", "let hash = transaction.hash();", "let hash = transaction.hash(); submit_prepared_transaction_ingress(unprepared);"),
     ("handler_post_transactions_batch", "drop(permit);", "drop(permit); routing::push_accepted_transaction(unchecked);"),
@@ -1860,7 +1935,7 @@ def test_canonical_queue_plan_retry_rejects_batch_caller_mutation(symbol: str, o
 
 @pytest.mark.parametrize("first,last", [
     ("AuthenticatedQueuePlanRetry::from_signed(", "prepare_fresh_transaction_ingress("),
-    ("threshold_key_lifecycle_ingress::authenticate(", "drop(permit);"),
+    ("ordinary_transaction_ingress::authenticate(", "drop(permit);"),
     (".collect::<Result<Vec<_>, Error>>()", "for (hash, entry) in prepared"),
     ("outcomes.push(TransactionBatchEntryOutcome", "let accepted = outcomes.iter()"),
 ])
@@ -1972,7 +2047,7 @@ def test_replay_terminal_queue_plan_custody_accepts_actual_sources() -> None:
     ("Queue::resume_replay_terminal_cleanup", "self.mark_accepted_work_validation_fault(", "ignore_fault("),
     ("Queue::resume_unowned_replay_terminal_cleanup", ".swap(false, Ordering::AcqRel)", ".load(Ordering::Acquire)"),
     ("Queue::resume_unowned_replay_terminal_cleanup", "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending", "true"),
-    ("Queue::bounded_pending_snapshot", "Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {", "Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => { blocked_by_fifo_predecessor = true;"),
+    ("Queue::bounded_pending_snapshot", "== TransactionAdmissionIntent::QueuePlanSynced", "== TransactionAdmissionIntent::Ordinary"),
     ("GlobalQueueSelectionLease::retain_only", "\n        drop(owners);", ""),
     ("GlobalQueueSelectionLease::retain_only", "\n        drop(queue_guard);", ""),
     ("GlobalQueueSelectionLease::retain_only", "queue.resume_replay_terminal_cleanup(hash);", ""),

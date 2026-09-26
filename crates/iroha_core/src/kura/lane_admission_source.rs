@@ -61,7 +61,6 @@ pub(crate) fn canonical_admission_read_decode_limits() -> Option<norito::DecodeL
 pub(crate) fn canonical_admission_read_working_set_bytes() -> Option<usize> {
     let wire = usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).ok()?;
     let decoded = canonical_admission_read_decode_limits()?.max_total_allocated_bytes();
-    let proposal_clone = norito::canonical_decode_limits(wire).max_total_allocated_bytes();
     let metadata_wire =
         MAX_KURA_V2_FINALITY_RECORD_BYTES.checked_add(MAX_RETAINED_BLOCK_RECORD_BYTES)?;
     // ByteSink grows by doubling from 1 KiB. Account its capacity, not just
@@ -74,12 +73,10 @@ pub(crate) fn canonical_admission_read_working_set_bytes() -> Option<usize> {
     [
         wire,                           // Original complete executed carrier bytes.
         decoded,           // Cumulative metadata, block and selected-input decode graph.
-        proposal_clone,    // Full block clone; transient metadata is not cloned with it.
         wire,              // Canonical payload scratch, counted before allocation.
         wire,              // Canonical version-prefixed payload.
         wire,              // Canonical framed bytes.
         metadata_wire,     // Original immutable finality + retained metadata snapshots.
-        metadata_wire,     // Headerless DecodeAll source copies.
         metadata_encoding, // Canonical metadata comparison buffer capacities.
         MAX_V2_FINALITY_ARTIFACT_BYTES, // Cryptographic finality serialization scratch.
         input_graph,       // Owned certificate clone retained by complete-input validation.

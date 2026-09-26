@@ -22136,6 +22136,23 @@ impl World {
                         "Phone retail claim {opaque_id} has untrusted policy metadata"
                     ));
                 }
+                let program = self
+                    .ram_lfe_program_policies
+                    .view()
+                    .get(&policy.program_id)
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("Phone retail claim {opaque_id} lacks its pinned program")
+                    })?;
+                if program.owner != policy.owner
+                    || program.backend != iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1
+                    || program.commitment.backend != program.backend
+                    || program.verification_mode != iroha_crypto::RamLfeVerificationMode::Signed
+                {
+                    return Err(format!(
+                        "Phone retail claim {opaque_id} has untrusted program metadata"
+                    ));
+                }
                 let program_id_bytes = norito::encode_canonical(&policy.program_id)
                     .map_err(|err| format!("Phone retail program encoding failed: {err}"))?;
                 let (expected_id, expected_receipt_hash) =
@@ -28590,6 +28607,20 @@ impl State {
     /// The shared handle does not create another Kura instance or publication authority.
     pub(crate) fn kura_handle(&self) -> Arc<Kura> {
         Arc::clone(&self.kura)
+    }
+    /// Borrow the one Native drain/Commit signer lock for this Kura instance.
+    /// Restored State families over the same Kura share the durable decision.
+    pub(crate) fn lane_drain_signing_guard(
+        &self,
+    ) -> Result<
+        Arc<crate::lane_drain::LaneDrainSigningGuard>,
+        crate::lane_drain::LaneDrainSigningGuardError,
+    > {
+        let active_incarnations = self
+            .lane_incarnations_snapshot()
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        self.kura.lane_drain_signing_guard(&active_incarnations)
     }
     /// Install or clear the node-local Soracloud runtime handle.
     pub fn set_soracloud_runtime(
@@ -36431,6 +36462,25 @@ impl State {
             .ok()
         })
     }
+    /// Resolve a received drain frontier against one committed State generation.
+    /// Local Queue and Kura arrivals cannot determine whether a signed remote
+    /// vote belongs to the unique pending close or its exact committee.
+    pub(crate) fn committed_autoscale_lane_drain_body_for_frontier(
+        &self,
+        certified: LaneDrainFrontierV1,
+    ) -> Result<Option<(LaneDrainCertificateBodyV1, Vec<PeerId>)>, MergeLedgerCommitError> {
+        let _lease = self.consensus_publication_lease();
+        let state = self.view();
+        let frontier = Self::lane_drain_frontier_from_committed_state(&state, certified)?;
+        drop(state);
+        Ok(
+            self.pending_autoscale_lane_drain_body_with_frontier(|lane, dataspace, incarnation| {
+                frontier
+                    .matches_route(lane, dataspace, incarnation)
+                    .then_some(frontier)
+            }),
+        )
+    }
     /// Authenticate a committed close for one exact autoscale lane incarnation.
     ///
     /// The close remains terminal after its drain certificate is committed, so
@@ -37748,7 +37798,7 @@ impl State {
             replay
                 .validate_drain_payload(&state, carrier_height, active_lanes, certificates)
                 .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
-            Self::lane_drain_frontier_from_replay_state(&state, certificate.body.final_frontier)?
+            Self::lane_drain_frontier_from_committed_state(&state, certificate.body.final_frontier)?
         } else {
             Self::evidence_aware_lane_drain_frontier_from_world(
                 &self.world.view(),
@@ -41073,7 +41123,8 @@ impl State {
     /// Fixed single-slot memory envelope for a cold canonical complete-input read.
     ///
     /// Includes the enforced cumulative Norito decoder graph budget, maximum
-    /// historical carrier wire, proposal clone and counted authentication buffers.
+    /// historical carrier wire and counted authentication buffers. Proposal hashing
+    /// borrows the original carrier payload without cloning its owned graph.
     /// The caller must retain this charge until the synchronous read and returned
     /// input/certificate have physically finished, including cancellation.
     /// Returns `None` when the target cannot represent the protocol envelope.
@@ -41254,6 +41305,7 @@ impl State {
     /// `None` means no immutable owner exists, or the exact owner was already
     /// applied. Malformed, stale, or partially replicated marker state fails
     /// closed.
+    #[cfg(test)]
     pub(crate) fn queue_plan_pending_binding_for_entrypoint(
         &self,
         entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -57836,7 +57888,7 @@ impl<'state> StateBlock<'state> {
             replay
                 .validate_merge_stage(&self._curr_block, &*self, entry)
                 .map_err(LaneLifecycleError::Storage)?;
-            State::lane_drain_frontier_from_replay_state(&*self, certificate.body.final_frontier)
+            State::lane_drain_frontier_from_committed_state(&*self, certificate.body.final_frontier)
         } else {
             State::evidence_aware_lane_drain_frontier_from_world(
                 &self.world,
@@ -68200,6 +68252,17 @@ impl SnapshotNexusRuntime {
         }
     }
 }
+#[path = "state/retail_contract_state_snapshot.rs"]
+#[cfg_attr(
+    not(test),
+    allow(
+        dead_code,
+        reason = "TODO: publish only after a finalized accumulated root and restricted read ACL"
+    )
+)]
+mod retail_contract_state_snapshot;
+#[path = "state/retail_daily_limit_state.rs"]
+pub(crate) mod retail_daily_limit_state;
 pub(crate) mod deserialize {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::peer::PeerId;

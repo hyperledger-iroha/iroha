@@ -72,6 +72,31 @@ export * from "./dist/toriiBrowserExplorerTypes.js";
 export type * from "./dist/subscriptionTypes.js";
 export * from "./dist/sorafsOrderbookSubmission.js";
 
+/** One raw contract-state value under a separately trusted accumulated root. */
+export interface ContractStateValueInclusionProofV1 {
+  readonly version: 1;
+  readonly path: string;
+  readonly value: ReadonlyArray<number> | Uint8Array;
+  readonly leaf_count: number | string;
+  readonly steps: ReadonlyArray<{
+    readonly bit: number;
+    readonly prefix: ReadonlyArray<number> | Uint8Array;
+    readonly sibling: string | Uint8Array;
+  }>;
+}
+/** Verify exact key/value membership; the caller authenticates trustedRoot through v2 finality. */
+export function verifyContractStateValueInclusionV1(
+  proof: ContractStateValueInclusionProofV1,
+  expectedPath: string,
+  trustedRoot: string | Uint8Array,
+): boolean;
+/** Decode duplicate-key-free Torii JSON and verify against an authenticated root. */
+export function verifyContractStateValueInclusionJsonV1(
+  payload: string | Uint8Array,
+  expectedPath: string,
+  trustedRoot: string | Uint8Array,
+): boolean;
+
 export type JsonValue =
   | null
   | boolean
@@ -2109,6 +2134,7 @@ export interface IdentifierPolicySummary {
   normalization: string;
   resolver_public_key: string;
   output_opening_public_key: string;
+  phone_retail_attestor_public_key?: string;
   backend: string;
   input_encryption?: string;
   input_encryption_public_parameters?: string;
@@ -13862,6 +13888,58 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   /** Immutable ownership intent; null means intentionally unowned global. */
   owningDomain: string | null;
 }): object;
+
+/** Exact JSON text preserves 64-bit dataspace IDs across the native signing boundary. */
+export function buildActivateRetailDailyLimitV1InstructionJson(options: {
+  definition: {
+    id: string;
+    name: string;
+    description: string | null;
+    alias: string | null;
+    spec: { scale: 2 };
+    mintable: "Infinitely";
+    logo: string | null;
+    metadata: Record<string, never>;
+    balance_scope_policy: "DataspaceRestricted";
+    owning_domain: string;
+  };
+  policy: {
+    asset_definition_id: string;
+    physical_dataspace: number | string | bigint;
+    revision: number | string | bigint;
+    daily_cap: string;
+    identity_issuer: string;
+    identity_issuer_public_key: string;
+    monetary_issuer_account: string;
+    reserve_account: string;
+    institutional_exceptions: [];
+  };
+}): string;
+
+/** Wrap an issuer-signed identity attestation without creating signing material. */
+export function buildBindRetailIdentityV1InstructionJson(options: {
+  attestation: {
+    body: {
+      domain: "iroha.bpng.retail-identity.v1";
+      asset_definition_id: string;
+      physical_dataspace: number | string | bigint;
+      policy_revision: number | string | bigint;
+      account_id: string;
+      identity: { digest: ReadonlyArray<number> };
+      uniqueness_evidence_digest: ReadonlyArray<number>;
+    };
+    signature: string;
+  };
+}): string;
+
+/** Build a typed monetary effect; bank receipt authentication remains external. */
+export function buildRetailMonetaryMovementV1InstructionJson(options: {
+  assetDefinitionId: string;
+  purpose: "mint_to_reserve" | "credit_retail" | "defund_retail" | "burn_reserve";
+  retailAccount: string | null;
+  amount: string;
+  operationDigest: ReadonlyArray<number>;
+}): string;
 
 export function buildGrantAccountPermissionInstruction(options: {
   accountId?: string;

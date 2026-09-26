@@ -112,7 +112,7 @@ fn fresh_proposal_captures_native_decisions_before_worker_assembly() {
         "return Ok(());",
         "NativeCandidateAssembly { source, outcome } = assembly;",
         "native.retain_candidate_source(source);",
-        "let assembly = outcome?;",
+        "let assembly = match outcome {",
     ] {
         let offset = remainder
             .find(anchor)

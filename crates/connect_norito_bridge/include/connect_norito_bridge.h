@@ -578,6 +578,23 @@ int32_t connect_norito_kagemusha_v1_redemption_voucher_text_validate(
 #define CONNECT_NORITO_KAGEMUSHA_CONTRACT_VECTOR_DIGEST_HEX_V1 \
   "13b51124f0329fc47b0aa3bf551f83f1806920c9898e7c07cd7f0730eb57fbb9"
 
+// Experimental native startup. Rust provisioning must independently install the
+// immutable policy, release archives, verifier profile, private paths and trusted
+// freshness provider before activation. The app supplies only a signed bootstrap.
+// Activation retains the actual host for the process lifetime; it does not open
+// the production Core coordinator or create a private mint. Exact-checkpoint
+// retries are reverified against fresh native time/replay state. Partial durable
+// installation failures require process restart; there is no reset/close ABI.
+// The contract writes [1, 1048576] and returns 2; capacity is in uint32_t words.
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_NATIVE_STARTUP_MAX_BYTES_V1 1048576
+#if !defined(_WIN32)
+int32_t connect_norito_kagemusha_testnet_native_startup_contract_v1(
+    uint32_t* output, size_t capacity);
+// Zero means active, -312 means no native context, and -311 means rejected.
+int32_t connect_norito_kagemusha_testnet_native_startup_activate_v1(
+    const uint8_t* signed_bootstrap, size_t signed_bootstrap_length);
+#endif
+
 // Testnet-only paired State proof observation. A release-authenticated native
 // verifier and operator-pinned network/release must be installed from Rust.
 // Stock builds return DEVICE_UNAVAILABLE. The response is a canonical Norito
@@ -595,6 +612,59 @@ int32_t connect_norito_kagemusha_testnet_state_proof_observe_v1(
     const uint8_t* public_inputs_archive, size_t public_inputs_archive_length,
     const uint8_t* paired_proof_archive, size_t paired_proof_archive_length,
     uint8_t* output_observation, size_t output_capacity, size_t* output_length);
+
+// Observe an actual Applied top-up and paired MintFold proof using a private
+// pre-send reservation and separately authenticated finality context already
+// pinned by the Rust-only durable owner. Caller coordinates must match that
+// pin; they cannot establish trust themselves. The reservation and its credit
+// opening never cross this ABI. The original status
+// response is bounded Torii JSON; the independent finality network, height,
+// and context are exact raw coordinates, and State inputs/proof are canonical
+// Norito archives. The returned record declares hardware_qualified
+// false and grants no payment, redemption, or production wallet capability.
+// A missing durable owner or reservation fails closed. output_length is aligned
+// and disjoint from all input/output spans; full output capacity is mandatory.
+#if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1 16777216
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1 32
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 512
+int32_t connect_norito_kagemusha_testnet_finalized_mint_observe_v1(
+    const uint8_t* operation_id, size_t operation_id_length,
+    const uint8_t* status_json, size_t status_json_length,
+    const uint8_t* anchor_network_id, size_t anchor_network_id_length,
+    uint64_t anchor_height,
+    const uint8_t* anchor_context_id, size_t anchor_context_id_length,
+    const uint8_t* public_inputs_archive, size_t public_inputs_archive_length,
+    const uint8_t* paired_proof_archive, size_t paired_proof_archive_length,
+    uint8_t* output_observation, size_t output_capacity, size_t* output_length);
+
+// Return the exact positive amount admitted by the installed durable testnet
+// owner for one already observed Applied top-up and paired MintFold proof.
+// The owner must retain its pre-send reservation and independently pinned
+// finality context. The caller supplies only the operation ID, not an anchor.
+// The canonical Norito KagemushaTestnetValueAdmissionArchiveV1 is inspectable
+// evidence; copying it does not grant a production spend capability. A testnet
+// ledger must credit each operation and proof-bound credit ID at most once.
+// Full output capacity is required, and output_length must be naturally
+// aligned and disjoint from the input and output spans.
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1 768
+int32_t connect_norito_kagemusha_testnet_value_admit_v1(
+    const uint8_t* operation_id, size_t operation_id_length,
+    uint8_t* output_admission, size_t output_capacity, size_t* output_length);
+
+// Durably credit one already observed Applied top-up to the installed native
+// Experimental testnet value ledger. A trusted Rust host must first install the
+// signed-release durable proof owner and its separate private credit ledger.
+// The caller supplies only the operation ID. The canonical Norito
+// KagemushaTestnetMintLedgerCreditArchiveV1 reports the counted credit and
+// total admitted value; it is copyable inspection data, not a spend credential
+// or production hardware qualification. Full output capacity is mandatory.
+// output_length must be naturally aligned and disjoint from input/output spans.
+#define CONNECT_NORITO_KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1 512
+int32_t connect_norito_kagemusha_testnet_value_credit_v1(
+    const uint8_t* operation_id, size_t operation_id_length,
+    uint8_t* output_credit, size_t output_capacity, size_t* output_length);
+#endif
 
 // Exact bounded KAGEMUSHA Core coordinator contract. The contract probe
 // returns the number of uint32_t words written (12) on success. It is an ABI

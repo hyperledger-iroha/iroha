@@ -16,7 +16,7 @@ use iroha_core::beacon::{
     GlobalThresholdBeaconDkgPhaseV1, GlobalThresholdBeaconDkgStateV1,
     global_threshold_beacon_roster_hash_v1,
 };
-use iroha_crypto::PublicKey;
+use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::{
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
@@ -107,6 +107,41 @@ pub(in super::super) struct PreparedBeaconInputsV1 {
     authorization_nonce: String,
     request: NativeRequestV1,
     final_units: Vec<PreparedBeaconUnitV1>,
+}
+
+/// Validate the exact native seat map before rendering immutable FD200 units.
+pub(in super::super) fn validated_unit_credential_paths(
+    inputs: &PreparedBeaconInputsV1,
+) -> Result<[Option<String>; 4]> {
+    if inputs.schema != "iroha.taira.public-reset.beacon-inputs.v1" || inputs.final_units.len() != 4
+    {
+        return Err(eyre!(
+            "native beacon inputs have a different schema or unit count"
+        ));
+    }
+    reset::validate_nonce(&inputs.authorization_nonce)?;
+    let mut seen_seats = BTreeSet::new();
+    let mut paths = std::array::from_fn(|_| None);
+    for (index, unit) in inputs.final_units.iter().enumerate() {
+        let slug = reset::VALIDATOR_SLUGS[index];
+        let seat = unit.signer_index;
+        let expected = format!(
+            "/var/lib/taira/.public-reset-control-v1/beacon/{}/ceremony/seat-{seat}/{CREDENTIAL_FILE}",
+            inputs.authorization_nonce
+        );
+        if unit.validator != slug
+            || unit.config_file != "beacon.toml"
+            || !(1..=4).contains(&seat)
+            || !seen_seats.insert(seat)
+            || unit.credential_path != expected
+        {
+            return Err(eyre!(
+                "native beacon validator and credential seat map differ"
+            ));
+        }
+        paths[index] = Some(expected);
+    }
+    Ok(paths)
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -820,8 +855,38 @@ fn observe_new(
     }
 }
 
+/// Keep the account signer from each client config separate from the dedicated
+/// operator signer required by the authenticated-height status read.
+fn retained_beacon_operator_key(
+    input: Option<&reset::PinnedInput>,
+    inventory: &InventoryV1,
+) -> Result<KeyPair> {
+    let input =
+        input.ok_or_else(|| eyre!("beacon bootstrap requires its retained operator key"))?;
+    validate_pinned_validator_operator_key(input, inventory)?;
+    let descriptor = u32::try_from(input.file.as_raw_fd())
+        .map_err(|_| eyre!("beacon operator key descriptor is invalid"))?;
+    let key = crate::operator_key::load_operator_key_pair_fd(descriptor)?;
+    revalidate_pinned(input, "beacon operator key")?;
+    Ok(key)
+}
+
+fn signed_beacon_client(
+    config: ClientConfig,
+    operator_key: &KeyPair,
+    deadline: Instant,
+) -> Result<Client> {
+    let mut builder = Client::builder(config);
+    builder.operator_key_pair = Some(operator_key.clone());
+    Ok(builder.build()?.with_request_deadline(deadline))
+}
+
 impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     fn beacon_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
+        let operator_key = retained_beacon_operator_key(
+            self.runtime.validator_operator_key.as_ref(),
+            &self.admitted.inventory,
+        )?;
         self.runtime
             .validator_client_configs
             .iter()
@@ -833,9 +898,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     &self.admitted.inventory,
                 )?;
                 config.torii_api_url = selected.probe_origin.parse()?;
-                Ok(Client::builder(config)
-                    .build()?
-                    .with_request_deadline(deadline))
+                signed_beacon_client(config, &operator_key, deadline)
             })
             .collect::<Result<Vec<_>>>()?
             .try_into()
@@ -1377,11 +1440,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         config.torii_api_url = self.admitted.inventory.validator_clients[0]
             .probe_origin
             .parse()?;
-        let blocking = iroha::blocking::Client::from_client(
-            Client::builder(config)
-                .build()?
-                .with_request_deadline(deadline),
+        let operator_key = retained_beacon_operator_key(
+            self.runtime.validator_operator_key.as_ref(),
+            &self.admitted.inventory,
         )?;
+        let blocking = iroha::blocking::Client::from_client(signed_beacon_client(
+            config,
+            &operator_key,
+            deadline,
+        )?)?;
         if !path.try_exists()? {
             if recovery_only {
                 return Err(eyre!("submitted beacon install has no retained envelope"));
@@ -2310,6 +2377,136 @@ pub(in super::super) fn derive_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn beacon_observation_clients_dispatch_with_the_retained_operator_signer() {
+        use iroha_crypto::{Algorithm, ExposedPrivateKey};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let directory = reset::private_custody_test_dir("taira-beacon-operator-");
+        let mut inventory = reset::sample_inventory_fixture();
+        let operator = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519).unwrap();
+        inventory.operator_public_key = operator.public_key().to_string();
+        let path = directory.path().join("operator.key");
+        let encoded =
+            zeroize::Zeroizing::new(ExposedPrivateKey(operator.private_key().clone()).to_string());
+        fs::write(&path, encoded.as_bytes()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        let pinned = pin_validator_operator_key(&path, &inventory).unwrap();
+
+        assert!(retained_beacon_operator_key(None, &inventory).is_err());
+        let mut wrong = inventory.clone();
+        wrong.operator_public_key = KeyPair::try_from_seed(vec![0x82; 32], Algorithm::Ed25519)
+            .unwrap()
+            .public_key()
+            .to_string();
+        assert!(retained_beacon_operator_key(Some(&pinned), &wrong).is_err());
+        let admitted = retained_beacon_operator_key(Some(&pinned), &inventory).unwrap();
+        assert_eq!(admitted.public_key(), operator.public_key());
+
+        let mut table: toml::Table =
+            toml::from_str(include_str!("../../../defaults/client.toml")).unwrap();
+        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            inventory.next_genesis_hash.parse::<Hash>().unwrap(),
+        ));
+        table.insert(
+            "chain".into(),
+            toml::Value::String(inventory.chain_id.clone()),
+        );
+        table.insert(
+            "network_id".into(),
+            toml::Value::String(network.to_string()),
+        );
+        table["account"].as_table_mut().unwrap().insert(
+            "chain_discriminant".into(),
+            toml::Value::Integer(i64::from(inventory.chain_discriminant)),
+        );
+        let (config, _) = ClientConfig::load_bytes_with_musubi_publication(
+            Path::new("beacon-client-fixture.toml"),
+            toml::to_string(&table).unwrap().as_bytes(),
+        )
+        .unwrap();
+        assert_ne!(config.key_pair.public_key(), admitted.public_key());
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let origin = format!("http://{}/", listener.local_addr().unwrap());
+        let expected_key = admitted.public_key().to_string().to_ascii_lowercase();
+        let server = std::thread::spawn(move || {
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while !request.ends_with(b"\r\n\r\n") {
+                    let count = stream.read(&mut chunk).unwrap();
+                    assert!(count > 0 && request.len() + count < 16 * 1024);
+                    request.extend_from_slice(&chunk[..count]);
+                }
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(request.starts_with("get /v1/sumeragi/status http/1.1"));
+                assert!(
+                    request.contains(&format!("x-iroha-operator-public-key: {expected_key}\r\n"))
+                );
+                assert!(request.contains("x-iroha-operator-signature:"));
+                stream
+                    .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                    .unwrap();
+            }
+        });
+        for _ in 0..4 {
+            let mut peer = config.clone();
+            peer.torii_api_url = origin.parse().unwrap();
+            let client =
+                signed_beacon_client(peer, &admitted, Instant::now() + Duration::from_secs(3))
+                    .unwrap();
+            assert_eq!(
+                client.operator_key_pair().unwrap().public_key(),
+                admitted.public_key()
+            );
+            let error = client.get_sumeragi_status().unwrap_err();
+            assert!(error.to_string().contains("401"));
+        }
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn prepared_unit_paths_bind_four_distinct_beacon_seats() {
+        let inventory = reset::sample_inventory_fixture();
+        let nonce = inventory.authorization_nonce.clone();
+        let mut inputs = PreparedBeaconInputsV1 {
+            schema: "iroha.taira.public-reset.beacon-inputs.v1".into(),
+            authorization_nonce: nonce.clone(),
+            request: inventory.beacon_bootstrap.request.clone(),
+            final_units: reset::VALIDATOR_SLUGS
+                .iter()
+                .enumerate()
+                .map(|(index, slug)| {
+                    let seat = index + 1;
+                    PreparedBeaconUnitV1 {
+                        validator: (*slug).into(),
+                        signer_index: seat as u16,
+                        credential_path: format!(
+                            "/var/lib/taira/.public-reset-control-v1/beacon/{nonce}/ceremony/seat-{seat}/{CREDENTIAL_FILE}"
+                        ),
+                        config_file: "beacon.toml".into(),
+                    }
+                })
+                .collect(),
+        };
+        let paths = validated_unit_credential_paths(&inputs).unwrap();
+        assert_eq!(
+            paths[0].as_deref(),
+            Some(inputs.final_units[0].credential_path.as_str())
+        );
+        inputs.final_units[1].signer_index = 1;
+        assert!(validated_unit_credential_paths(&inputs).is_err());
+        inputs.final_units[1].signer_index = 2;
+        inputs.final_units[1].validator = reset::VALIDATOR_SLUGS[0].into();
+        assert!(validated_unit_credential_paths(&inputs).is_err());
+    }
 
     #[test]
     fn beacon_install_envelope_requires_ordinary_exact_certificate() {

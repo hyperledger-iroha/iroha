@@ -2498,7 +2498,10 @@
           "proposal_state.defer_candidate_snapshot(owner, Instant::now());",
           "let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;",
           "native.retain_candidate_source(source);",
-          "let assembly = outcome?;",
+          "let assembly = match outcome {",
+          "if !output_guard.restart_required()",
+          "&& proposal_state.defer_pre_signing_candidate_history_admission(",
+          "Err(error) => return Err(error.into())",
           "let candidate = match assembly",
           "CandidateAssemblyOutcome::NoProposalWork(report)",
           "if report.work_deferred > 0",
@@ -4992,7 +4995,10 @@
           "proposal_state.defer_candidate_snapshot(owner, Instant::now());",
           "let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;",
           "native.retain_candidate_source(source);",
-          "let assembly = outcome?;",
+          "let assembly = match outcome {",
+          "if !output_guard.restart_required()",
+          "&& proposal_state.defer_pre_signing_candidate_history_admission(",
+          "Err(error) => return Err(error.into())",
           "let candidate = match assembly",
           "CandidateAssemblyOutcome::NoProposalWork(report)",
           "if report.work_deferred > 0",
@@ -6684,9 +6690,12 @@
           "symbol": "Queue::lane_has_pending_route_work",
           "required_tokens": [
             "reservation_owned_hashes: &HashSet<EntrypointHash>",
-            "self.routing_plans.iter().any(|entry| {\n            !reservation_owned_hashes.contains(entry.key())",
-            "self.txs.contains_key(entry.key())",
-            "entry.value().legs().into_iter().any(|leg|",
+            "self.routing_plans.iter().any(|entry| {",
+            "if reservation_owned_hashes.contains(entry.key()) {\n                return false;\n            }",
+            "let Some(tx) = self.txs.get(entry.key()) else {\n                return false;\n            };",
+            "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
+            "is_some_and(|claim| claim.global_admission_identity.is_some())",
+            "entry\n                .value()\n                .legs()\n                .into_iter()\n                .any(|leg|",
             "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id"
           ]
         },
@@ -13176,9 +13185,12 @@
           "symbol": "Queue::lane_has_pending_route_work",
           "required_tokens": [
             "reservation_owned_hashes: &HashSet<EntrypointHash>",
-            "self.routing_plans.iter().any(|entry| {\n            !reservation_owned_hashes.contains(entry.key())",
-            "self.txs.contains_key(entry.key())",
-            "entry.value().legs().into_iter().any(|leg|",
+            "self.routing_plans.iter().any(|entry| {",
+            "if reservation_owned_hashes.contains(entry.key()) {\n                return false;\n            }",
+            "let Some(tx) = self.txs.get(entry.key()) else {\n                return false;\n            };",
+            "Self::ordinary_single_route_is_reassignable(tx.as_accepted().entrypoint(), &entry)",
+            "is_some_and(|claim| claim.global_admission_identity.is_some())",
+            "entry\n                .value()\n                .legs()\n                .into_iter()\n                .any(|leg|",
             "leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id"
           ]
         },
@@ -26489,18 +26501,14 @@
           "kind": "method",
           "symbol": "V2CandidateAssembler::snapshot_routable_candidates",
           "required_tokens": [
-            "let mut queue_plan_barrier = false;",
-            "if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)",
-            "let queue_plan_synced =",
+            "crate::torii_proxy::decode_and_validate_lane_admitted_input_v1(",
+            "state.network_id_ref(),",
+            "if transaction.entrypoint().admission_intent()",
             "TransactionAdmissionIntent::QueuePlanSynced",
-            "Ok(None) => {",
-            "queue_plan_barrier = true;",
-            "if queue_plan_barrier",
-            "exact_height_lifecycle_candidate(",
-            "crate::torii_proxy::validate_queue_plan_binding_for_request(",
-            "report.routable = report.routable.saturating_add(1)",
-            "if queue_plan_synced",
             "report.work_deferred = report.work_deferred.saturating_add(1)",
+            "continue;",
+            "let routing_plan = match queue.route_plan_with_state(&transaction, state)",
+            "report.routable = report.routable.saturating_add(1)",
             "records.push(CandidateRecord {"
           ]
         },
@@ -26510,23 +26518,19 @@
           "symbol": "Queue::bounded_pending_snapshot",
           "required_tokens": [
             "let live_reservations = self.lane_reservations.lock().live_hashes()",
-            "let mut live_reservation_fifo_cut = None",
-            "for hash in &live_reservations",
-            "let order = self.fifo_order_by_hash.get(hash)?",
-            "live_reservation_fifo_cut.map_or(order.value().ordinal",
-            "let parent_hash = state_view.latest_block_hash()",
+            "let mut scan_start = scan_cursor.next_index",
             ".skip(scan_start)",
-            "if live_reservations.contains(hash) || global_owners.contains_key(hash)",
-            "let Some(fifo_order) = self.fifo_order_by_hash.get(hash)",
-            "live_reservation_fifo_cut.is_some_and(|cut| fifo_order.value().ordinal >= cut)",
-            "blocked_by_fifo_predecessor = true",
-            "canonical_queue_plan_fence.get_or_insert(scan_start + offset)",
-            "scan_cursor.next_index = fence",
+            "if live_reservations.contains(hash) {",
+            "if global_owners.contains_key(hash) {",
+            "if self.durability_transition_active(hash) {",
+            "let transaction = self.txs.get(hash)?",
+            "== TransactionAdmissionIntent::QueuePlanSynced",
+            "let Some(_) = self.fifo_order_by_hash.get(hash)",
             "scan_cursor.next_index = scan_start",
             "self.wake_sumeragi()",
-            "if !open {\n                            match State::queue_plan_pending_route_authority_in_view(\n                                state_view, &binding,\n                            ) {\n                                Ok(Some(QueuePlanPendingRouteAuthority::Draining)) => {\n                                    blocked_by_fifo_predecessor = true;\n                                    return None;\n                                }",
+            "== TransactionAdmissionIntent::QueuePlanSynced",
             "if self.replay_terminal_cleanup_pending(*hash) {\n                    return None;\n                }",
-            "Ok(Some((_, QueuePlanAdmissionRegistryMatch::Absent))) => {\n                        // An uncarried local claim has no canonical ordering\n                        // promise. Keep its exact Queue ownership, but let the\n                        // leader choose later independently eligible work.\n                        return None;\n                    }"
+            "if transaction\n                    .value()\n                    .as_accepted()\n                    .entrypoint()\n                    .admission_intent()\n                    == TransactionAdmissionIntent::QueuePlanSynced"
           ]
         },
         {
@@ -28461,6 +28465,17 @@
           "kind": "method",
           "symbol": "V2CandidateAssembler::assemble",
           "required_tokens": [
+            "let state_generation = state.state_view_generation()",
+            "let result = self.assemble_at_generation(request, state_generation)",
+            "!output_guard.restart_required()",
+            "CandidateWorkDeferral::CommittedStateMoved"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_candidate.rs",
+          "kind": "method",
+          "symbol": "V2CandidateAssembler::assemble_at_generation",
+          "required_tokens": [
             "let original_npos_effects = request.attachments.npos_consensus_effects.clone()",
             "request.attachments.npos_consensus_effects = original_npos_effects.clone()",
             "candidate_economic_work_first(request.context.height)",
@@ -28473,8 +28488,13 @@
             "reason: CandidateWorkDeferral::EvidenceEnvelope",
             "CandidateAssemblyOutcome::WorkDeferred",
             "begin_fail_stop_operation()",
-            "candidate_block_has_proposal_work(",
-            "if canonical_wire.len() != encoded_bytes"
+            "let prepared_header = builder.carrier_context_header()",
+            "deterministic_start_work_pending(&prepared_header)",
+            "let _state_publication = request.state.consensus_publication_lease()",
+            "selection_lease.retain_only(&selected_hashes)",
+            "candidate_block_has_independent_proposal_work(",
+            "if canonical_wire.len() != encoded_bytes",
+            "if block.header() != prepared_header"
           ]
         },
         {
@@ -28530,7 +28550,14 @@
           "kind": "method",
           "symbol": "Queue::immutable_queued_routing_plan_in_view",
           "required_tokens": [
-            "let exact_claim = claim.entrypoint_hash == tx.as_accepted().hash_as_entrypoint()\n                && claim.signed_transaction_hash\n                    == crate::tx::exact_signed_transaction_hash(tx.as_accepted().entrypoint())\n                && claim.routing_plan == plan;\n            if !exact_claim {\n                return Err(RoutingResolveError::StaleRoutingPlan);\n            }\n            Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?",
+            "let exact_claim = claim.entrypoint_hash == tx.as_accepted().hash_as_entrypoint()\n                && claim.signed_transaction_hash\n                    == crate::tx::exact_signed_transaction_hash(tx.as_accepted().entrypoint())\n                && claim.routing_plan == plan;\n            if !exact_claim {\n                return Err(RoutingResolveError::StaleRoutingPlan);\n            }",
+            "if ordinary_single && claim.global_admission_identity.is_none() {",
+            "Self::durable_plan_claim_original_context_authenticates_in_view(",
+            "Self::durable_plan_claim_route_authority_in_view(state_view, &claim)?",
+            "if ordinary_single && authority == QueuePlanPendingRouteAuthority::Active {",
+            ".try_route_plan_with_view(tx.as_accepted(), state_view)",
+            "resolve_routing_plan_for_queue_admission(plan, nexus, committed_height)",
+            "return Ok((fresh, authority));",
             "Ok((plan, authority))"
           ]
         },
@@ -28959,7 +28986,7 @@
           "symbol": "execute_torii_transaction_via_proxy",
           "required_tokens": [
             "accepted_transaction: iroha_core::tx::AcceptedTransaction<'static>",
-            "if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n        return threshold_key_lifecycle_ingress::submit(\n            app.clone(),\n            accepted_transaction,\n            routing_plan,\n            minimal_response,\n            format,\n        )\n        .await;\n    }",
+            "if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {\n        return ordinary_transaction_ingress::submit(\n            app.clone(),\n            accepted_transaction,\n            routing_plan,\n            minimal_response,\n            format,\n        )\n        .await;\n    }",
             "durable_retry_claim.filter(|claim| claim.global_admission_identity.is_some())",
             "let already_durably_admitted = durable_retry_claim.is_some();",
             "if durable_retry_claim.is_none() {",
@@ -29012,10 +29039,10 @@
             "canonical_queue_plan_submission_response(\n                    &worker_app,\n                    &authenticated,\n                    true,\n                    ResponseFormat::Json,\n                )",
             "prepared.push((hash, PreparedTransactionIngress::Canonical(response)));\n                    continue;",
             "routing::accept_decoded_signed_transaction_for_ingress_with_precheck(\n                        worker_app.state.clone(),\n                        transaction,\n                        &worker_app.telemetry,\n                        precheck.single_ed25519_prechecked,\n                        precheck.precheck_rejection,\n                    )?",
-            "prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));\n            }\n            // Keep route/policy preflight before the first durable write. Ordinary\n            // inputs have exactly the same authenticated lifecycle exception.\n            prepared\n                .into_iter()\n                .map(|(hash, prepared)| {",
+            "prepared.push((hash, PreparedTransactionIngress::Fresh(accepted)));\n            }\n            // Keep route/policy preflight before the first durable write. Ordinary\n            // inputs must be single-route; lifecycle controls need their own QC.\n            prepared\n                .into_iter()\n                .map(|(hash, prepared)| {",
             "PreparedTransactionIngress::Canonical(response) => {\n                            PreparedBatchEntry::Canonical(response)\n                        }",
             "prepare_fresh_transaction_ingress(&worker_app, transaction)?;",
-            "if prepared.transaction.entrypoint().admission_intent()\n                                != TransactionAdmissionIntent::QueuePlanSynced\n                            {\n                                threshold_key_lifecycle_ingress::authenticate(\n                                    &worker_app,\n                                    prepared.transaction.entrypoint(),\n                                    &prepared.routing_plan,\n                                )",
+            "if prepared.transaction.entrypoint().admission_intent()\n                                != TransactionAdmissionIntent::QueuePlanSynced\n                            {\n                                ordinary_transaction_ingress::authenticate(\n                                    &worker_app,\n                                    prepared.transaction.entrypoint(),\n                                    &prepared.routing_plan,\n                                )",
             "PreparedBatchEntry::Fresh(prepared)",
             "Ok((hash, prepared))\n                })\n                .collect::<Result<Vec<_>, Error>>()\n        },\n    )\n    .await?;\n    drop(permit);",
             "let mut outcomes = Vec::with_capacity(prepared.len());\n    for (hash, entry) in prepared {",

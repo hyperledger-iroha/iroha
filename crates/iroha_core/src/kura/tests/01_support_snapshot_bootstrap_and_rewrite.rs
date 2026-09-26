@@ -829,7 +829,12 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
         "fixture finality artifacts must form a contiguous chain"
     );
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(network_id, epoch, epoch_end_height, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+            network_id,
+            epoch,
+            epoch_end_height,
+            &roster,
+        );
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -2259,6 +2264,107 @@ fn block_store_read_only_finality_verifies_without_mutation() {
     assert!(BlockStore::new(&path).read_verified_v2_finality(1).is_err());
     drop(reader);
     assert_eq!(snapshot_regular_files_recursively(&path), before);
+}
+#[test]
+fn bounded_kura_sidecar_decode_preserves_valid_finality_and_retained_records() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("store finality sidecars");
+
+    let finality_path = kura.v2_finality_artifact_path(1);
+    let finality_bytes = fs::read(&finality_path).expect("read finality sidecar");
+    let decoded_finality: KuraV2FinalityRecord =
+        decode_bounded_kura_sidecar(&finality_bytes).expect("decode bounded finality sidecar");
+    assert_eq!(decoded_finality.artifact, artifact);
+    assert_eq!(decoded_finality.encode(), finality_bytes);
+
+    let retained_path = kura.retained_block_record_path(1);
+    let retained_bytes = fs::read(&retained_path).expect("read retained sidecar");
+    let decoded_retained: KuraRetainedBlockRecord =
+        decode_bounded_kura_sidecar(&retained_bytes).expect("decode bounded retained sidecar");
+    assert_eq!(decoded_retained.block_hash, block.hash());
+    assert_eq!(decoded_retained.encode(), retained_bytes);
+    assert_eq!(
+        Kura::decode_canonical_retained_block_record(&retained_path, &retained_bytes)
+            .expect("canonical retained reader"),
+        decoded_retained
+    );
+}
+#[test]
+fn bounded_kura_sidecar_decode_rejects_nested_sequence_and_allocation_bombs() {
+    let advertised_nested_elements = u64::MAX.to_le_bytes();
+    let error = decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&advertised_nested_elements)
+        .expect_err("short malformed record cannot advertise an unbounded nested sequence");
+    assert!(matches!(
+        error,
+        norito::Error::SequenceLengthExceeded { .. }
+    ));
+
+    let nested = vec![vec![7_u8; 32], vec![9_u8; 32]];
+    let encoded = nested.encode();
+    let zero_allocation = norito::DecodeLimits::new(
+        encoded.len().saturating_mul(8),
+        encoded.len(),
+        encoded.len().saturating_mul(8),
+        0,
+        norito::core::MAX_VALUE_NESTING_DEPTH,
+    );
+    let error = norito::with_decode_limits(zero_allocation, || {
+        decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&encoded)
+    })
+    .expect_err("nested allocation must obey an enclosing resource budget");
+    assert!(matches!(
+        error,
+        norito::Error::TotalAllocationExceeded { .. }
+    ));
+}
+#[test]
+fn bounded_kura_sidecar_decode_shares_cumulative_budget_across_records() {
+    let record = vec![vec![7_u8; 32], vec![9_u8; 32]];
+    let bytes = record.encode();
+    let limits = norito::canonical_decode_limits(bytes.len());
+    let (decoded, single_usage) = norito::core::with_decode_limits_measured(limits, || {
+        decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&bytes)
+    });
+    assert_eq!(decoded.expect("measure one complete record"), record);
+    let per_record = single_usage.total_allocated_bytes();
+    assert!(per_record > 0);
+    let pair_allocation = per_record.checked_mul(2).expect("fixture budget fits");
+    let pair_limits = |allocated| {
+        norito::DecodeLimits::new(
+            limits.max_sequence_elements(),
+            limits.max_field_bytes(),
+            single_usage.total_elements().checked_mul(2).unwrap(),
+            allocated,
+            limits.max_nesting_depth(),
+        )
+    };
+    let decode_pair = || -> std::result::Result<_, norito::Error> {
+        let first = decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&bytes)?;
+        let second = decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&bytes)?;
+        Ok((first, second))
+    };
+    let (decoded, pair_usage) =
+        norito::core::with_decode_limits_measured(pair_limits(pair_allocation), decode_pair);
+    assert_eq!(
+        decoded.expect("exact cumulative allowance"),
+        (record.clone(), record)
+    );
+    assert_eq!(pair_usage.total_allocated_bytes(), pair_allocation);
+    assert_eq!(
+        pair_usage.total_elements(),
+        single_usage.total_elements() * 2
+    );
+    let error = norito::with_decode_limits(pair_limits(pair_allocation - 1), decode_pair)
+        .expect_err("second sidecar must retain the first sidecar's cumulative allocation charges");
+    assert!(matches!(
+        error,
+        norito::Error::TotalAllocationExceeded { .. }
+    ));
 }
 #[test]
 fn block_store_read_only_finality_rejects_invalid_signature_and_binding() {

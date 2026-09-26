@@ -4,8 +4,9 @@
 //! reports the full compiled wrapper structure against the incoming State seed without changing
 //! the candidate's already-bound wrapper identities. No release is admitted, no Core journal is
 //! advanced, and the native monetary gates remain closed.
-//! TODO: qualify the sender's hardware commit and complete Core payment finalization before a
-//! ReceiveFold handoff; a diagnostic proof alone cannot authorize money.
+//! TODO: qualify the sender's hardware commit and install the Core finalized payment in a
+//! durable sender journal before a ReceiveFold handoff; a diagnostic proof alone cannot
+//! authorize money.
 
 use super::terminal::{ProvenSenderTerminalV1, instance_digest, terminal_public};
 use super::*;

@@ -714,6 +714,16 @@ pub(crate) struct NativeLaneDecisionPreparation {
 }
 
 impl NativeLaneDecisionHandoff {
+    /// Empty original-owner handoff for candidate parent-race tests.
+    #[cfg(test)]
+    pub(crate) fn empty_for_test(state: Arc<State>) -> Self {
+        Self {
+            state,
+            decisions: BTreeMap::new(),
+            recovered_sources: BTreeMap::new(),
+        }
+    }
+
     /// Retain authenticated source evidence; current route readiness is still rechecked.
     pub(crate) fn with_recovered_sources(
         mut self,

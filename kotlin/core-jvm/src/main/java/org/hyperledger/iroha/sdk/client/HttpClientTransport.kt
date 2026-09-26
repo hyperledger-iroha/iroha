@@ -2884,6 +2884,9 @@ class HttpClientTransport private constructor(
             outputOpening: RamLfeOutputOpening,
         ): Map<String, Any> {
             val normalizedPolicyId = normalizeNonBlank(policyId, "policyId")
+            require(normalizedPolicyId != "phone#retail") {
+                "phone#retail requires canonicality attestation support"
+            }
             val normalizedEncryptedInput = normalizeEvenLengthHex(encryptedInputHex, "encryptedInputHex")
             val payload = LinkedHashMap<String, Any>(); payload["policy_id"] = normalizedPolicyId
             payload["encrypted_input"] = normalizedEncryptedInput

@@ -149,7 +149,7 @@ impl V2BodyStore {
             .map_err(|error| V2BodyStoreError::BlockDecode(error.to_string()))?;
         match service.prepare_marker(
             &self.context,
-            &block,
+            block,
             &durable,
             already_validated.is_some() || reused.is_some(),
         )? {

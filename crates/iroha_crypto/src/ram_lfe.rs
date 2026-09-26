@@ -17,12 +17,12 @@
 use crate::{
     BFV_EXACT_EVALUATOR_MAX_MULTIPLICATIVE_DEPTH_U8, BfvAffineCircuit, BfvCiphertext, BfvError,
     BfvEvaluationKeyBundle, BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvParameters,
-    BfvRnsModulusChain, Hash, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+    BfvRnsModulusChain, BfvSecretKey, Hash, RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT, RAM_LFE_BFV_PLAINTEXT_MODULUS, add_ciphertexts_rns_exact,
-    add_plain_scalar, decrypt, derive_identifier_key_material_from_seed, evaluate_affine_circuit,
-    multiply_ciphertexts_rns_exact, multiply_plain_scalar, registered_bfv_parameter_digest,
-    registered_bfv_rns_modulus_chain, subtract_ciphertexts_rns_exact,
-    validate_registered_bfv_parameters,
+    add_plain_scalar, decrypt, decrypt_identifier, derive_identifier_key_material_from_seed,
+    evaluate_affine_circuit, multiply_ciphertexts_rns_exact, multiply_plain_scalar,
+    registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain,
+    subtract_ciphertexts_rns_exact, validate_registered_bfv_parameters,
 };
 use hex::FromHex as _;
 use hkdf::Hkdf;
@@ -481,6 +481,9 @@ pub enum RamLfeError {
 /// The signed canonicality statement is the consensus-visible proof that this
 /// private derivation was performed for the encrypted input.
 ///
+/// TODO: Expose this operation through a separately deployed attestor that
+/// pins its decryption key and nullifier secret for the policy lifetime.
+///
 /// # Errors
 /// Returns an error for a noncanonical phone, a secret shorter than 32 bytes,
 /// or an HKDF expansion failure.
@@ -503,10 +506,97 @@ pub fn derive_phone_retail_nullifier_v1(
     }
     let hkdf = Hkdf::<Sha3_512>::new(Some(network_id), secret);
     let mut material = Zeroizing::new([0_u8; Hash::LENGTH]);
-    let info = [PHONE_RETAIL_NULLIFIER_DOMAIN, canonical_phone.as_bytes()].concat();
+    let info = Zeroizing::new([PHONE_RETAIL_NULLIFIER_DOMAIN, canonical_phone.as_bytes()].concat());
     hkdf.expand(&info, material.as_mut())
         .map_err(|_| RamLfeError::DerivationFailed)?;
     Ok(Hash::prehashed(*material))
+}
+/// Decrypt a BFV input at the trusted attestor boundary and derive its phone
+/// nullifier only if the encrypted plaintext itself is exact canonical E.164.
+/// The plaintext remains local to the attestor and is never a ledger field.
+///
+/// # Errors
+/// Returns an error if BFV decryption fails, the plaintext is not canonical E.164,
+/// the nullifier secret is shorter than 32 bytes, or HKDF expansion fails.
+pub fn derive_phone_retail_nullifier_from_ciphertext_v1(
+    public_parameters: &BfvIdentifierPublicParameters,
+    secret_key: &BfvSecretKey,
+    ciphertext: &BfvIdentifierCiphertext,
+    nullifier_secret: &[u8],
+    network_id: &[u8; Hash::LENGTH],
+) -> Result<Hash, RamLfeError> {
+    let plaintext = Zeroizing::new(
+        decrypt_identifier(public_parameters, secret_key, ciphertext)
+            .map_err(|err| RamLfeError::Bfv(err.to_string()))?,
+    );
+    let phone = std::str::from_utf8(&plaintext).map_err(|_| RamLfeError::NonCanonicalPhone)?;
+    derive_phone_retail_nullifier_v1(nullifier_secret, network_id, phone)
+}
+#[cfg(test)]
+mod phone_retail_nullifier_tests {
+    use super::*;
+    use crate::{encrypt_identifier_from_seed, ram_lfe_bfv_parameters_v1};
+
+    #[test]
+    fn canonical_phone_nullifier_is_stable_and_network_scoped() {
+        let secret = [0xA5; 32];
+        let first = derive_phone_retail_nullifier_v1(&secret, &[1; 32], "+15551234567")
+            .expect("canonical phone");
+        assert_eq!(
+            first,
+            derive_phone_retail_nullifier_v1(&secret, &[1; 32], "+15551234567").unwrap()
+        );
+        assert_ne!(
+            first,
+            derive_phone_retail_nullifier_v1(&secret, &[2; 32], "+15551234567").unwrap()
+        );
+        assert_ne!(
+            first,
+            derive_phone_retail_nullifier_v1(&secret, &[1; 32], "+15551234568").unwrap()
+        );
+        for invalid in ["15551234567", "+05551234567", "+1", "+1555 1234567"] {
+            assert_eq!(
+                derive_phone_retail_nullifier_v1(&secret, &[1; 32], invalid),
+                Err(RamLfeError::NonCanonicalPhone)
+            );
+        }
+        assert_eq!(
+            derive_phone_retail_nullifier_v1(&[1; 31], &[1; 32], "+15551234567"),
+            Err(RamLfeError::WeakPhoneNullifierSecret)
+        );
+    }
+    #[test]
+    fn independently_encrypted_same_phone_has_one_nullifier() {
+        let (parameters, decryption_key, _) = derive_identifier_key_material_from_seed(
+            &ram_lfe_bfv_parameters_v1(),
+            63,
+            b"phone-program-secret",
+            b"phone_retail",
+        )
+        .expect("derive attestor decryption key");
+        let encrypt = |phone: &[u8], seed: &[u8]| {
+            encrypt_identifier_from_seed(&parameters, phone, seed).expect("encrypt phone")
+        };
+        let first = encrypt(b"+15551234567", b"phone-encryption-one");
+        let second = encrypt(b"+15551234567", b"phone-encryption-two");
+        assert_ne!(first, second, "BFV encryption is randomized");
+        let derive = |ciphertext: &BfvIdentifierCiphertext| {
+            derive_phone_retail_nullifier_from_ciphertext_v1(
+                &parameters,
+                &decryption_key,
+                ciphertext,
+                &[0xC3; 32],
+                &[7; 32],
+            )
+        };
+        assert_eq!(derive(&first).unwrap(), derive(&second).unwrap());
+        for invalid in [b"15551234567".as_slice(), b"+1", b"+1555 1234567"] {
+            assert_eq!(
+                derive(&encrypt(invalid, b"invalid-phone-seed")),
+                Err(RamLfeError::NonCanonicalPhone)
+            );
+        }
+    }
 }
 /// Runtime evaluator interface for hidden-function services.
 pub trait Evaluator: Send + Sync {

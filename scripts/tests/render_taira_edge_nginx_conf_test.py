@@ -427,7 +427,8 @@ def test_public_edge_is_the_only_trusted_torii_forwarding_hop() -> None:
         for index in range(1, 5)
     ]
     rendered = MODULE.render_edge_nginx_conf(validators)
-    assert "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;" in rendered
+    assert "proxy_set_header X-Forwarded-For $remote_addr;" in rendered
+    assert "$proxy_add_x_forwarded_for" not in rendered
     assert "proxy_set_header X-Real-IP $remote_addr;" in rendered
 
 

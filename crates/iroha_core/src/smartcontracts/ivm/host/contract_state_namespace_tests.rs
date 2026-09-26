@@ -56,6 +56,12 @@ fn state_set_budget_exhaustion_traps_without_staging_a_write() {
 #[test]
 fn contract_state_namespace_access_covers_consensus_owned_prefixes() {
     for key in [
+        "retail_day_policy_v1",
+        "retail_day_policy_v1/deadbeef/7",
+        "retail_day_activation_v1/deadbeef",
+        "retail_day_identity_v1/deadbeef/7/cafebabe",
+        "retail_day_usage_v1/deadbeef/7/cafebabe/86400000",
+        "retail_day_monetary_operation_v1/deadbeef/cafebabe",
         "sc",
         "sc/0123456789abcdef/counter",
         "da_ingest_quota_v1",
@@ -101,6 +107,11 @@ fn contract_state_namespace_access_covers_consensus_owned_prefixes() {
         );
     }
     for key in [
+        "retail_day_policy_v1x/deadbeef",
+        "retail_day_activation_v1x/deadbeef",
+        "retail_day_identity_v1x/deadbeef",
+        "retail_day_usage_v1x/deadbeef",
+        "retail_day_monetary_operation_v1x/deadbeef",
         "scatter/counter",
         "da_ingest_quota_v1x",
         "faucet_claim_consumed_v1x",
@@ -120,6 +131,31 @@ fn contract_state_namespace_access_covers_consensus_owned_prefixes() {
             CoreHost::contract_state_namespace_access(key),
             ContractStateNamespaceAccess::User,
             "delimiter-aware matching must not reserve similarly named user state"
+        );
+    }
+}
+
+#[test]
+fn retail_daily_state_paths_reject_generic_read_write_and_delete_admission() {
+    for root in [
+        crate::state::retail_daily_limit_state::POLICY_ROOT,
+        crate::state::retail_daily_limit_state::ACTIVATION_ROOT,
+        crate::state::retail_daily_limit_state::IDENTITY_ROOT,
+        crate::state::retail_daily_limit_state::USAGE_ROOT,
+        crate::state::retail_daily_limit_state::MONETARY_OPERATION_ROOT,
+    ] {
+        let path: StatePath = format!("{root}deadbeef/7")
+            .parse()
+            .expect("bounded native retail path");
+        assert_eq!(
+            CoreHost::ensure_contract_state_read_allowed(&path),
+            Err(ivm::VMError::PermissionDenied),
+            "raw and contract-scoped STATE_GET/SCAN must hide {path}"
+        );
+        assert_eq!(
+            CoreHost::ensure_contract_state_write_allowed(&path),
+            Err(ivm::VMError::PermissionDenied),
+            "raw and contract-scoped STATE_SET/DEL must reject {path}"
         );
     }
 }

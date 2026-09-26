@@ -163,6 +163,20 @@ fn assert_native_preparation_success_in_fixture(
         if atomic { 2 } else { 1 }
     );
     let original_groups = source.groups_for_test().as_ptr();
+    let owned_admission = source
+        .preparation_input()
+        .expect("source remains current")
+        .1
+        .execution_context()
+        .expect("Native context")
+        .queue_plan_admissions()
+        .first()
+        .expect("new admission");
+    assert!(
+        !owned_admission.is_empty(),
+        "allocation identity requires real admission bytes"
+    );
+    let owned_admission_bytes = owned_admission.as_ptr();
     let original_body = source.groups_for_test()[0]
         .body()
         .canonical_bytes()
@@ -199,6 +213,18 @@ fn assert_native_preparation_success_in_fixture(
     assert_eq!(
         custody.sources_for_test()[0].contexts().as_ptr(),
         original_contexts
+    );
+    assert_eq!(
+        prepared
+            .block()
+            .execution_context()
+            .expect("recorded Native context")
+            .queue_plan_admissions()
+            .first()
+            .expect("recorded admission")
+            .as_ptr(),
+        owned_admission_bytes,
+        "the frozen source admission backing moves through recording without a second block clone",
     );
     assert_eq!(prepared.block().canonical_resultless_proposal(), carrier);
     prepared.block().validate_proposal_commitments().unwrap();

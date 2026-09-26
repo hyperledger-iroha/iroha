@@ -6,8 +6,10 @@
 
 use std::sync::Arc;
 
+use iroha_data_model::NetworkId;
 use iroha_data_model::kagemusha::{
     KagemushaAuthenticatedReleaseV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
+    KagemushaReleasePurposeV1,
 };
 use norito::{Decode, Encode};
 use rand::{TryRngCore as _, rngs::OsRng};
@@ -19,6 +21,29 @@ use crate::zk::kagemusha_v1_state::{
 };
 
 const DOMAIN: &str = "iroha:kagemusha:v1:hardware-journal-certificate";
+
+fn require_signed_transaction_network_v1(
+    release_network: NetworkId,
+    lane_network: NetworkId,
+) -> Result<(), String> {
+    if release_network != lane_network {
+        return Err(
+            "Kagemusha hardware transaction lane differs from signed release network".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn require_production_transaction_release_v1(
+    purpose: KagemushaReleasePurposeV1,
+) -> Result<(), String> {
+    if purpose != KagemushaReleasePurposeV1::Production {
+        return Err(
+            "experimental Kagemusha release cannot authorize hardware transactions".to_owned(),
+        );
+    }
+    Ok(())
+}
 /// Maximum one independent hardware journal certificate, unrelated to history length.
 pub const KAGEMUSHA_HARDWARE_TRANSACTION_MAX_BYTES_V1: usize = 64 * 1024;
 
@@ -286,6 +311,8 @@ impl KagemushaHardwareTransactionVerifierV1 {
         profile_id: [u8; 32],
         transport: Arc<dyn KagemushaHardwareCheckpointTransportV1>,
     ) -> Result<Self, String> {
+        require_production_transaction_release_v1(release.purpose())?;
+        require_signed_transaction_network_v1(release.network_id(), lane.network_id)?;
         if release.enabled_profile(profile_id).is_none()
             || lane.device_lane_id == [0; 32]
             || lane.network_id.as_bytes() == &[0; 32]
@@ -460,6 +487,39 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{NetworkId, asset::AssetDefinitionId, block::BlockHeader};
     use iroha_model_base::domain::DomainId;
+
+    #[test]
+    fn hardware_transaction_lane_requires_the_signed_release_network() {
+        let release = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"hardware-transaction-release-network"),
+        ));
+        let foreign = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"hardware-transaction-foreign-network"),
+        ));
+        assert!(require_signed_transaction_network_v1(release, release).is_ok());
+        assert!(require_signed_transaction_network_v1(release, foreign).is_err());
+    }
+
+    #[test]
+    fn hardware_transaction_owner_requires_production_purpose() {
+        use iroha_data_model::kagemusha::KagemushaTestnetExperimentScopeV1;
+
+        assert!(
+            require_production_transaction_release_v1(KagemushaReleasePurposeV1::Production)
+                .is_ok()
+        );
+        assert!(
+            require_production_transaction_release_v1(
+                KagemushaReleasePurposeV1::TestnetExperiment(KagemushaTestnetExperimentScopeV1 {
+                    asset_identity_digest: [1; 32],
+                    asset_incarnation: [2; 32],
+                    asset_scale: 2,
+                    liability_pool_id: [3; 32],
+                },)
+            )
+            .is_err()
+        );
+    }
 
     #[test]
     fn checkpoint_read_challenge_must_equal_certificate_request_identity() {

@@ -2023,10 +2023,10 @@ _LOCKED_COMMIT_PROGRESS_WITNESS_HELPER_SHA256 = {
 _PRODUCTION_LIVENESS_RELEASE_COUNT = 881
 _PRODUCTION_LIVENESS_RELEASE_CORRIDOR_LEG_COUNT = 88
 _PRODUCTION_LIVENESS_RELEASE_INVENTORY_SHA256 = (
-    "6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815"
+    "123fafed34cddd1f488af19ceccf1fb4e80c3cfba2f59e889e02c565a3b01892"
 )
 _PRODUCTION_LIVENESS_INVENTORY_GUARD_SHA256 = (
-    "172cdeba0914a253cb22c9158b5c09fb08469ca74c55617655d5261b13bae5b7"
+    "1a4bcc10366ed45a25b0b19d3f6a5de720e28d1f364dfd794769519f37592342"
 )
 _SUMERAGI_V2_PACKAGE_LAYOUT_GUARD_SHA256 = (
     "e99da2c824b86930b76c741d2f7aa47ab16092c2f84e43550fb6362a36133268"
@@ -2040,7 +2040,7 @@ _CLOSED_SIDECAR_PREFIX_HANDOFF_TEST_SHA256 = (
 _PRODUCTION_MULTILANE_FOCUS_TEST_COUNT = 531
 _PRODUCTION_MULTILANE_G_UNIT_TSV_LINE_COUNT = 532
 _PRODUCTION_MULTILANE_FOCUS_INVENTORY_SHA256 = (
-    "a2240e515a7a344da4bfcb6fddc2e1b1d0e5bb3430906efbf1671716a72ee13f"
+    "d0ba71cb8828597559263131a79c57a050ae2b2e2acf4b3f4d3059ce72e3aa5d"
 )
 _PRODUCTION_MULTILANE_FOCUS_CONTRACTS = (
     (
@@ -2753,7 +2753,7 @@ _PRODUCTION_LIVENESS_POSTCUT_REGRESSIONS = (
     "sumeragi::v2_worker::tests::applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically",
     "sumeragi::v2::tests::ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificate",
     "sumeragi::v2_runner::lifecycle_height_driver::tests::only_an_eligible_claim_can_preempt_an_ordinary_head_for_ready_proposal_sign",
-    "queue::tests::replica_disposition_observes_exact_fifo_beneath_global_selection_overlay",
+    "queue::tests::replica_disposition_observes_exact_fifo_without_ordinary_selection_overlay",
     "native_amx::participant_application_role_tests::participant_application_role_classifies_exact_routes_and_incarnations",
     "native_amx::participant_application_role_tests::participant_application_role_keeps_each_route_coordinate_distinct",
     "native_amx::participant_application_role_tests::participant_application_role_rejects_independent_prepare_and_commit_identity_drift",

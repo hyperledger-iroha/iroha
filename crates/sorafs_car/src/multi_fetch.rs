@@ -8,12 +8,17 @@
 use crate::{CarBuildPlan, CarPlanError, ChunkFetchSpec};
 use futures::{Future, FutureExt, StreamExt, stream::FuturesUnordered};
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     fmt,
     num::{NonZeroU32, NonZeroUsize},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
+mod runtime;
+use runtime::{ProviderRateWindow, classify_provider_error};
+
+/// Maximum retained payload for the eager convenience API. Larger objects require a sink.
+pub const MAX_EAGER_PAYLOAD_BYTES: u64 = 64 * 1024 * 1024;
 /// Identifier used to reference providers that can serve SoraFS chunks.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ProviderId(String);
@@ -104,6 +109,8 @@ pub struct ProviderMetadata {
     pub availability: Option<String>,
     pub stake_amount: Option<String>,
     pub max_streams: Option<u16>,
+    /// Signed per-token request quota; consumed before dispatch, including failed requests.
+    pub requests_per_minute: Option<u32>,
     pub refresh_deadline: Option<u64>,
     pub expires_at: Option<u64>,
     pub ttl_secs: Option<u64>,
@@ -127,6 +134,7 @@ impl ProviderMetadata {
             availability: None,
             stake_amount: None,
             max_streams: None,
+            requests_per_minute: None,
             refresh_deadline: None,
             expires_at: None,
             ttl_secs: None,
@@ -288,6 +296,12 @@ impl fmt::Display for CapabilityMismatch {
 /// Fetch-time configuration knobs for the orchestrator.
 #[derive(Clone)]
 pub struct FetchOptions {
+    /// Maximum complete object accepted before allocating or dispatching any payload request.
+    pub max_payload_bytes: u64,
+    /// Maximum reserved bytes across running requests and the ordered delivery window.
+    pub max_buffered_bytes: usize,
+    /// Absolute fetch deadline, including provider cooldowns and sink delivery.
+    pub session_timeout: Duration,
     /// Verify returned chunk length against the plan.
     pub verify_lengths: bool,
     /// Verify returned chunk digest against the plan (BLAKE3-256).
@@ -305,6 +319,9 @@ pub struct FetchOptions {
 impl Default for FetchOptions {
     fn default() -> Self {
         Self {
+            max_payload_bytes: 8 * 1024 * 1024 * 1024,
+            max_buffered_bytes: 16 * 1024 * 1024,
+            session_timeout: Duration::from_secs(15 * 60),
             verify_lengths: true,
             verify_digests: true,
             per_chunk_retry_limit: Some(3),
@@ -317,6 +334,9 @@ impl Default for FetchOptions {
 impl fmt::Debug for FetchOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("FetchOptions")
+            .field("max_payload_bytes", &self.max_payload_bytes)
+            .field("max_buffered_bytes", &self.max_buffered_bytes)
+            .field("session_timeout", &self.session_timeout)
             .field("verify_lengths", &self.verify_lengths)
             .field("verify_digests", &self.verify_digests)
             .field("per_chunk_retry_limit", &self.per_chunk_retry_limit)
@@ -432,6 +452,21 @@ pub struct FetchOutcome {
     pub chunk_receipts: Vec<ChunkReceipt>,
     /// Per-provider statistics from the session.
     pub provider_reports: Vec<ProviderReport>,
+}
+/// Completed consuming fetch. Payload bytes have been delivered to the sink and released.
+#[derive(Debug, Clone)]
+pub struct StreamFetchOutcome {
+    /// Receipts in plan order, including each verified chunk's length.
+    pub chunk_receipts: Vec<ChunkReceipt>,
+    /// Per-provider health statistics; throttling does not count as failure.
+    pub provider_reports: Vec<ProviderReport>,
+    /// Peak bytes reserved by running requests and completed chunks awaiting ordered delivery.
+    pub peak_buffered_bytes: usize,
+}
+
+struct InternalFetchOutcome {
+    retained: FetchOutcome,
+    peak_buffered_bytes: usize,
 }
 impl FetchOutcome {
     /// Concatenates chunks in plan order, returning the assembled payload.
@@ -563,6 +598,10 @@ pub(crate) fn provider_can_serve_chunk(
 /// Errors returned by the multi-source fetch orchestrator.
 #[derive(Debug)]
 pub enum MultiSourceError {
+    /// Configured complete-object or buffered-response resource limit was exceeded.
+    ResourceLimit(&'static str),
+    /// The absolute fetch deadline expired, including time spent in quota cooldowns.
+    DeadlineExceeded,
     /// The fetch plan was malformed or its bounded fetch specification inventory could not be
     /// allocated.
     InvalidPlan(CarPlanError),
@@ -605,6 +644,8 @@ pub enum MultiSourceError {
 impl fmt::Display for MultiSourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ResourceLimit(reason) => write!(f, "fetch resource limit exceeded: {reason}"),
+            Self::DeadlineExceeded => f.write_str("fetch session deadline exceeded"),
             Self::InvalidPlan(error) => write!(f, "invalid multi-source fetch plan: {error}"),
             Self::NoProviders => write!(f, "no providers available for multi-source fetch"),
             Self::NoHealthyProviders {
@@ -678,7 +719,9 @@ where
     Fut: Future<Output = Result<ChunkResponse, E>> + Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
 {
-    fetch_plan_parallel_internal(plan, providers, fetcher, options, None).await
+    fetch_plan_parallel_internal(plan, providers, fetcher, options, None)
+        .await
+        .map(|outcome| outcome.retained)
 }
 pub async fn fetch_plan_parallel_with_observer<F, Fut, E, O>(
     plan: &CarBuildPlan,
@@ -686,14 +729,21 @@ pub async fn fetch_plan_parallel_with_observer<F, Fut, E, O>(
     fetcher: F,
     options: FetchOptions,
     observer: O,
-) -> Result<FetchOutcome, MultiSourceError>
+) -> Result<StreamFetchOutcome, MultiSourceError>
 where
     F: Fn(FetchRequest) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<ChunkResponse, E>> + Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
     O: ChunkObserver + 'static,
 {
-    fetch_plan_parallel_internal(plan, providers, fetcher, options, Some(Box::new(observer))).await
+    let outcome =
+        fetch_plan_parallel_internal(plan, providers, fetcher, options, Some(Box::new(observer)))
+            .await?;
+    Ok(StreamFetchOutcome {
+        chunk_receipts: outcome.retained.chunk_receipts,
+        provider_reports: outcome.retained.provider_reports,
+        peak_buffered_bytes: outcome.peak_buffered_bytes,
+    })
 }
 #[derive(Clone)]
 struct ProviderState {
@@ -706,6 +756,7 @@ struct ProviderState {
     consecutive_failures: usize,
     successes: usize,
     disabled: bool,
+    rate_window: ProviderRateWindow,
 }
 impl std::fmt::Debug for ProviderState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -735,6 +786,7 @@ impl ProviderState {
                     .unwrap_or_else(|| budget.max_bytes_per_sec.max(1))
             });
         Self {
+            rate_window: ProviderRateWindow::new(&config),
             config: Arc::new(config),
             capacity,
             burst_limit,

@@ -36,6 +36,7 @@ pub mod private_settlement;
 pub mod query;
 pub mod ram_lfe;
 pub mod repo;
+pub mod retail_daily_limit;
 pub mod rwa;
 pub mod settlement;
 /// SNS-backed ownership query handlers.
@@ -275,6 +276,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferBlacklist>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetTransferControl>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetHoldingLimit>,
+    dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::ActivateRetailDailyLimitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::BindRetailIdentityV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<iroha_data_model::isi::repo::RepoInstructionBox>,
     dispatch_instruction::<iroha_data_model::isi::repo::RepoIsi>,
     dispatch_instruction::<iroha_data_model::isi::repo::ReverseRepoIsi>,

@@ -240,6 +240,59 @@ fn accept(
         .unwrap()
 }
 
+#[test]
+fn signed_app_certificate_phase_two_accepts_only_the_selected_challenge_and_authority() {
+    let f = Fixture::new();
+    let pending = f.begin();
+    let challenge = f.proof(pending.client_nonce).challenge;
+    let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
+    let canonical_challenge = challenge.canonical_bytes().unwrap();
+    let certificate = norito::encode_canonical(&f.app_certificate(&challenge)).unwrap();
+    let accepted = pending
+        .accept_challenge_with_certificate(
+            &canonical_challenge,
+            projection(&challenge, &command),
+            &certificate,
+            1_500,
+        )
+        .unwrap();
+    assert_eq!(
+        accepted.device_request_id().unwrap(),
+        challenge.device_request_id().unwrap()
+    );
+
+    let pending = f.begin();
+    let other_challenge = f.proof(pending.client_nonce).challenge;
+    let mut other_certificate = f.app_certificate(&other_challenge);
+    other_certificate.assertion.server_nonce[0] ^= 1;
+    let other_certificate = norito::encode_canonical(&other_certificate).unwrap();
+    assert_eq!(
+        pending
+            .accept_challenge_with_certificate(
+                &other_challenge.canonical_bytes().unwrap(),
+                projection(&other_challenge, &command),
+                &other_certificate,
+                1_500,
+            )
+            .err(),
+        Some(InitialEnrollmentErrorV1::Authority),
+    );
+
+    let pending = f.begin();
+    let other_challenge = f.proof(pending.client_nonce).challenge;
+    assert_eq!(
+        pending
+            .accept_challenge_with_certificate(
+                &other_challenge.canonical_bytes().unwrap(),
+                projection(&other_challenge, &command),
+                &norito::encode_canonical(&f.app_certificate(&other_challenge)).unwrap(),
+                2_000,
+            )
+            .err(),
+        Some(InitialEnrollmentErrorV1::Authority),
+    );
+}
+
 fn account_signature(proof: &KagemushaRetailEnrollmentPossessionProofV1) -> Vec<u8> {
     Signature::from(proof.account_signature.clone())
         .payload()

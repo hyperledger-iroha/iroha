@@ -27,7 +27,8 @@ state_test! { sync native_recorded_execution_retains_sources_results_aliases_and
             group.body().canonical_bytes().as_ptr(), group.body().source().canonical_control_bytes().as_ptr(),
             group.decisions().as_ptr(), group.contexts().as_ptr(),
         )).collect::<Vec<_>>();
-        let recorded = source.record_execution(carrier, applying).unwrap().expect("same original State");
+        drop(carrier);
+        let recorded = source.record_execution(applying).unwrap().expect("same original State");
         let prepared = recorded.prepared_for_test();
         let overlay = prepared.overlay();
         assert_eq!(recorded.carrier().hash(), original_hash);
@@ -97,7 +98,8 @@ state_test! { sync native_recorded_execution_nested_recorder_refuses_without_mut
     let guard = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
     crate::sumeragi::witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
     let witness_before = norito::encode_canonical(&crate::sumeragi::witness::snapshot_exec_witness()).unwrap();
-    let error = source.record_execution(carrier, applying).err().expect("nested capture must refuse rather than deadlock");
+    drop(carrier);
+    let error = source.record_execution(applying).err().expect("nested capture must refuse rather than deadlock");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionRecorderConflict(_)), "{error}");
     assert!(error.to_string().contains("already belongs"), "{error}");
     assert_eq!(norito::encode_canonical(&crate::sumeragi::witness::snapshot_exec_witness()).unwrap(), witness_before);
@@ -224,7 +226,8 @@ state_test! { sync native_recorded_execution_nested_owner_refuses_before_waiting
             drop(overlay);
         });
         held_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
-        let result = source.record_execution(carrier, applying);
+        drop(carrier);
+        let result = source.record_execution(applying);
         let refused_while_held = !released.load(Ordering::Acquire);
         let _ = release_tx.send(());
         holder.join().unwrap();

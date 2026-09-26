@@ -275,6 +275,18 @@ fn kagemusha_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
         MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH,
     )
 }
+/// Decode one capped bare Kura sidecar under the canonical Norito resource budget.
+///
+/// Sidecar readers check their exact hard byte cap before calling this helper.
+/// Keeping the budget tied to the admitted byte length also rejects a short
+/// corrupt record that advertises a large nested collection before allocation.
+/// The direct slice decoder preserves `DecodeAll`'s fixed bare layout and
+/// complete-consumption check without copying the entire sidecar first.
+fn decode_bounded_kura_sidecar<T: Decode>(bytes: &[u8]) -> std::result::Result<T, norito::Error> {
+    norito::with_decode_limits(norito::canonical_decode_limits(bytes.len()), || {
+        norito::codec::decode_adaptive(bytes)
+    })
+}
 include!("kura/startup_finality_support.rs");
 include!("kura/read_only_evidence.rs");
 /// Finality artifact returned by Kura's authenticated, cryptographically verified reader.
@@ -669,6 +681,9 @@ pub struct Kura {
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
     instance_identity: Arc<KuraInstanceIdentityMarker>,
+    /// One anti-equivocation signer journal owner for every State using this storage instance.
+    lane_drain_signing_guard:
+        once_cell::sync::OnceCell<Arc<crate::lane_drain::LaneDrainSigningGuard>>,
     /// Per-owner read-only observation of the authenticated pre-reconcile boundary.
     #[cfg(test)]
     snapshot_finalization_resource_probe: Mutex<SnapshotFinalizationResourceProbe>,
@@ -3116,6 +3131,7 @@ impl Kura {
             sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
+            lane_drain_signing_guard: once_cell::sync::OnceCell::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: ResidentMutex::new(
                 VecDeque::new(),
@@ -3541,6 +3557,7 @@ impl Kura {
             sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
+            lane_drain_signing_guard: once_cell::sync::OnceCell::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: ResidentMutex::new(
                 VecDeque::new(),
@@ -3827,6 +3844,24 @@ impl Kura {
     #[must_use]
     pub fn store_root(&self) -> PathBuf {
         self.store_root.clone()
+    }
+    /// Share the durable signing decision across every State backed by this exact Kura.
+    pub(crate) fn lane_drain_signing_guard(
+        &self,
+        active_incarnations: &BTreeSet<(LaneId, Hash)>,
+    ) -> std::result::Result<
+        Arc<crate::lane_drain::LaneDrainSigningGuard>,
+        crate::lane_drain::LaneDrainSigningGuardError,
+    > {
+        self.lane_drain_signing_guard
+            .get_or_try_init(|| {
+                crate::lane_drain::LaneDrainSigningGuard::open(
+                    &self.store_root,
+                    active_incarnations,
+                )
+                .map(Arc::new)
+            })
+            .map(Arc::clone)
     }
     /// Return cached total on-disk bytes used by Kura (active + retired segments).
     ///
@@ -15881,8 +15916,8 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let mut cursor = snapshot.bytes.as_slice();
-        let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        let record = decode_bounded_kura_sidecar::<KuraV2FinalityRecord>(&snapshot.bytes)
+            .map_err(Error::NoritoFrame)?;
         let canonical_len = {
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -43721,8 +43756,8 @@ impl BlockStore {
         else {
             return Err(Error::MissingV2FinalityArtifact { height });
         };
-        let mut cursor = bytes.as_slice();
-        let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        let record = decode_bounded_kura_sidecar::<KuraV2FinalityRecord>(&bytes)
+            .map_err(Error::NoritoFrame)?;
         if record.encode() != bytes {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -43768,8 +43803,8 @@ impl BlockStore {
                 reason: "evicted block is missing its complete v2 finality record".to_owned(),
             });
         };
-        let mut cursor = bytes.as_slice();
-        let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        let record = decode_bounded_kura_sidecar::<KuraV2FinalityRecord>(&bytes)
+            .map_err(Error::NoritoFrame)?;
         if record.encode() != bytes {
             return Err(Error::InvalidProvisionalSnapshotSuffix {
                 height,

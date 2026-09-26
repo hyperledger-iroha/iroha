@@ -259,11 +259,11 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
             'state::tests::native_candidate_handoff_rejects_foreign_original_state',
             'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
-            'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+            'sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot',
             'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
             'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
             'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
-            'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier',
+            'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_preempts_independent_ordinary_input',
             'state::tests::native_preparation_preserves_local_recorder_conflict',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
@@ -362,8 +362,8 @@ class BeaconGateTests(unittest.TestCase):
         required.update("sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::" + name
                         for name in dispatch_names)
         for path, pattern, regression in (
-            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_never_selects_ordinary_fallback\s*\(",
-             "sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback"),
+            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_allows_independent_ordinary_snapshot\s*\(",
+             "sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot"),
             ("state/native_lane_preparation_tests.rs", r"state_test!\s*\{\s*sync\s+native_preparation_preserves_local_recorder_conflict\b",
              "state::tests::native_preparation_preserves_local_recorder_conflict"),
         ):
@@ -638,10 +638,10 @@ class BeaconGateTests(unittest.TestCase):
     def test_exact_height_lifecycle_controls_are_unique_and_focused_in_both_scopes(self):
         required = {
             'core': (
-                'block::valid::tests::only_exact_height_lifecycle_control_exempts_lane_ownership_coverage',
+                'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
             ),
             'cli': (
-                'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+                'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
                 'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
                 'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
             ),
@@ -650,7 +650,7 @@ class BeaconGateTests(unittest.TestCase):
             ),
             'torii-unit': (
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
-                'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+                'tests_runtime_handlers::ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected',
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
             ),
@@ -2030,10 +2030,10 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                             completed_independent_checks=completed, update_independent_checks=checkpoint)
                     self.assertIs(caught.exception, failure)
                     self.test_metadata.assert_called_once()
-                    self.assertEqual(self.test_metadata.call_args.kwargs,
-                                     {"harnesses": ("config", "network"), "lock_fds": (77, 88)})
-                    compile.assert_called_once()
                     expected = gate.native_harness_plan(gate.qualification_stages(scope), shipping)[1]
+                    self.assertEqual(self.test_metadata.call_args.kwargs,
+                                     {"harnesses": expected, "lock_fds": (77, 88)})
+                    compile.assert_called_once()
                     self.assertEqual(compile.call_args.kwargs,
                                      {"harnesses": expected, "lock_fds": (77, 88)})
                     for action in downstream:
@@ -2060,8 +2060,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                     source_commit="a" * 40, lock_fds=(77, 88))
             self.assertEqual(order, ["codegen"])
             self.test_metadata.assert_called_once()
-            self.assertEqual(self.test_metadata.call_args.kwargs,
-                             {"harnesses": ("config", "network"), "lock_fds": (77, 88)})
+            self.assertEqual(self.test_metadata.call_args.kwargs, compile.call_args.kwargs)
             self.assertEqual({key: compile.call_args.args[1][key] for key in env}, env)
             self.assertEqual(compile.call_args.kwargs["lock_fds"], (77, 88))
             graphs.append(compile.call_args.kwargs["harnesses"])
@@ -2104,7 +2103,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             builds.append(compile.call_args.kwargs["harnesses"])
             self.test_metadata.assert_called_once()
             self.assertEqual(self.test_metadata.call_args.kwargs,
-                             {"harnesses": ("config", "network"), "lock_fds": ()})
+                             {"harnesses": builds[-1], "lock_fds": ()})
             selected = gate.qualification_stages(scope)
             expected = [(name, test) for name, stages in selected.items()
                         for _, tests in stages for test in tests]
@@ -2809,7 +2808,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
                 complete_graph = compile.call_args.kwargs["harnesses"]
                 self.metadata.assert_called_once()
                 self.assertEqual(self.metadata.call_args.kwargs,
-                                 {"harnesses": ("config", "network"), "lock_fds": (91,)})
+                                 {"harnesses": complete_graph, "lock_fds": (91,)})
                 self.metadata.reset_mock()
                 compile.reset_mock(); run.reset_mock(); network.reset_mock()
                 output.seek(0); output.truncate(0)
@@ -3694,10 +3693,11 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows), \
              contextlib.redirect_stdout(io.StringIO()):
             records = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"},
-                                                     (77,), message_control=True)
-        self.assertEqual(set(records), {"iroha3d-message-control"})
+                                                     (77,), beacon_custody=True)
+        self.assertEqual(set(records), {"iroha3d-beacon-custody"})
         command = spawn.call_args.args[0]
-        self.assertEqual(command[command.index("--features") + 1], "irohad/test-network-message-control")
+        self.assertEqual(command[command.index("--features") + 1],
+                         "irohad/test-network-production-beacon-custody")
         self.assertEqual(command.count("--bin"), 1)
         self.assertNotIn("iroha3d_taira", command)
         self.assertNotIn("--target-dir", command)
@@ -3705,7 +3705,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_message_control_rejects_focused_shipping_graph(self):
         with patch.object(gate.subprocess, "Popen") as spawn:
-            with self.assertRaisesRegex(gate.CheckError, "message-control codegen"):
+            with self.assertRaisesRegex(gate.CheckError, "feature-isolated daemon codegen"):
                 gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
                                               message_control=True, focused_fixture=True)
         spawn.assert_not_called()
@@ -3743,7 +3743,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_network_gate_forbids_fallback_builds_and_sandbox_skips(self):
         env = {"CARGO_TARGET_DIR": "/warm"}
-        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client", "taira-launcher": "/warm/taira", "kagami": "/warm/kagami", "iroha3d-message-control": "/warm/control"})) as binaries, \
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client", "taira-launcher": "/warm/taira", "kagami": "/warm/kagami", "iroha3d-beacon-custody": "/warm/beacon"})) as binaries, \
              patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")) as private, \
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/network")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
@@ -3761,15 +3761,15 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                          gate.BASIC_NETWORK_STAGES)
         self.assertTrue(all(call.args[4] == (77, 88) for call in run.call_args_list))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
-        self.assertEqual([call.kwargs for call in binaries.call_args_list], [{}, {"message_control": True}])
+        self.assertEqual([call.kwargs for call in binaries.call_args_list], [{}, {"beacon_custody": True}])
         private.assert_called_once_with()
         for call in run.call_args_list:
             beacon = call.args[3] == gate.BEACON_NETWORK_STAGES
             self.assertEqual("KAGAMI_BIN" in call.args[2], beacon)
-            self.assertEqual("TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL" in call.args[2], beacon)
+            self.assertEqual("TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY" in call.args[2], beacon)
             if beacon:
                 self.assertEqual(call.args[2]["KAGAMI_BIN"], "/warm/kagami")
-                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"], "/warm/control")
+                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY"], "/warm/beacon")
                 self.assertEqual(call.args[2]["TAIRA_TESTNET_BEACON_FIXTURE_DIR"], "/private/beacon")
 
     def test_beacon_fixture_missing_kagami_stops_without_build_fallback(self):
@@ -3818,7 +3818,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                   "test result: ok. 1 passed; 0 failed; 0 ignored;\n")
                     return subprocess.CompletedProcess(command, 0, output, "")
                 with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                        "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-message-control": "/control"})), \
+                        "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-beacon-custody": "/beacon"})), \
                      patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
                      patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
                      patch.object(gate.subprocess, "run", side_effect=native), \
@@ -3841,7 +3841,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0,
                 f"test {command[1]} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")
         with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-message-control": "/control"})), \
+                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-beacon-custody": "/beacon"})), \
              patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
              patch.object(gate.subprocess, "run", side_effect=native), \

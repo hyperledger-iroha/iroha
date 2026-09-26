@@ -854,6 +854,163 @@ mod tests {
     }
     #[cfg(feature = "transparent_api")]
     #[test]
+    fn finalized_retail_activation_authenticates_only_approved_historical_event() {
+        use crate::{
+            asset::{
+                AssetBalancePolicy, AssetDefinition, AssetDefinitionId, RetailDailyLimitPolicyV1,
+            },
+            block::retail_activation_proof::{
+                RetailActivationProofError, verify_finalized_retail_activation_v1,
+            },
+            isi::retail_daily_limit::ActivateRetailDailyLimitV1,
+        };
+        use iroha_model_base::topology::DataSpaceId;
+        use iroha_primitives::numeric::{NumericSpec, Quantity};
+        use std::collections::BTreeSet;
+
+        let owner_key = checked_random_keypair();
+        let owner = AccountId::new(owner_key.public_key().clone());
+        let reserve = AccountId::new(checked_random_keypair().public_key().clone());
+        let domain = DomainId::try_new("retail", "bpng").expect("fixture domain");
+        let definition_id = AssetDefinitionId::derive_from_components(
+            domain.clone(),
+            "kina".parse().expect("fixture asset name"),
+        );
+        let dataspace = DataSpaceId::new(7);
+        let policy = RetailDailyLimitPolicyV1 {
+            asset_definition_id: definition_id.clone(),
+            physical_dataspace: dataspace,
+            revision: 1,
+            daily_cap: Quantity::from(5_u32),
+            identity_issuer: owner.clone(),
+            identity_issuer_public_key: owner_key.public_key().clone(),
+            monetary_issuer_account: owner.clone(),
+            reserve_account: reserve,
+            institutional_exceptions: BTreeSet::new(),
+        };
+        let instruction = ActivateRetailDailyLimitV1 {
+            definition: AssetDefinition::new(
+                definition_id.clone(),
+                "Kina".to_owned(),
+                NumericSpec::fractional(2),
+                AssetBalancePolicy::DataspaceRestricted,
+                Some(domain.clone()),
+            ),
+            policy: policy.clone(),
+        };
+        // A test signer can make a self-consistent synthetic block. Production
+        // callers must independently pin the expected height context and owner.
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1000, 0);
+        let mut builder = crate::block::builder::BlockBuilder::new(header);
+        builder.push_transaction(
+            TransactionBuilder::new_genesis(
+                owner.clone(),
+                crate::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([instruction])
+            .try_sign(owner_key.private_key())
+            .expect("fixture signed activation"),
+        );
+        let mut block = builder.build_with_signature(0, owner_key.private_key());
+        let entry_hash = block
+            .network_input_hashes()
+            .next()
+            .expect("activation input");
+        super::super::output_test_support::install(&mut block, vec![sample_output(0)], 0)
+            .expect("fixture success output");
+        let wire = block.encode_wire().expect("fixture executed wire");
+        let commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"retail activation fixture parent"),
+            Hash::new(b"retail activation fixture post"),
+            Hash::new(b"retail activation fixture writes"),
+            wire.len() as u64,
+            Hash::new(&wire),
+        );
+        let artifact = finalized_artifact_for_block(&block, &commitment);
+        let trusted_context = artifact.context_id();
+        let verified = verify_finalized_retail_activation_v1(
+            &block,
+            &artifact,
+            trusted_context,
+            entry_hash,
+            &owner,
+            &policy,
+            &definition_id,
+            &domain,
+            dataspace,
+        )
+        .expect("test-finalized activation with independently selected fixture coordinates");
+        assert_eq!(verified.policy, policy);
+        assert_eq!(verified.activation.activated_at_ms, 1000);
+        assert_eq!(verified.activation.enforce_from_day_start_ms, 86_400_000);
+        assert_eq!(verified.block_hash, block.hash());
+        assert_eq!(verified.entry_hash, entry_hash);
+
+        let wrong_owner = AccountId::new(checked_random_keypair().public_key().clone());
+        assert_eq!(
+            verify_finalized_retail_activation_v1(
+                &block,
+                &artifact,
+                trusted_context,
+                entry_hash,
+                &wrong_owner,
+                &policy,
+                &definition_id,
+                &domain,
+                dataspace,
+            ),
+            Err(RetailActivationProofError::WrongOwner)
+        );
+        let wrong_domain = DomainId::try_new("elsewhere", "bpng").unwrap();
+        assert_eq!(
+            verify_finalized_retail_activation_v1(
+                &block,
+                &artifact,
+                trusted_context,
+                entry_hash,
+                &owner,
+                &policy,
+                &definition_id,
+                &wrong_domain,
+                dataspace,
+            ),
+            Err(RetailActivationProofError::WrongPolicy)
+        );
+        let mut wrong_policy = policy.clone();
+        wrong_policy.daily_cap = Quantity::from(6_u32);
+        assert_eq!(
+            verify_finalized_retail_activation_v1(
+                &block,
+                &artifact,
+                trusted_context,
+                entry_hash,
+                &owner,
+                &wrong_policy,
+                &definition_id,
+                &domain,
+                dataspace,
+            ),
+            Err(RetailActivationProofError::WrongPolicy)
+        );
+        let mut forged_artifact = artifact.clone();
+        forged_artifact.commit_qc.aggregate_signature[0] ^= 0x80;
+        assert!(matches!(
+            verify_finalized_retail_activation_v1(
+                &block,
+                &forged_artifact,
+                trusted_context,
+                entry_hash,
+                &owner,
+                &policy,
+                &definition_id,
+                &domain,
+                dataspace,
+            ),
+            Err(RetailActivationProofError::Finality(_))
+        ));
+    }
+    #[cfg(feature = "transparent_api")]
+    #[test]
     fn both_anchors_reject_a_valid_alternate_roster_before_cryptography() {
         let (block, trusted, entry_hash, output_index) = authenticated_block_with_internal_output();
         // Pin the deployment selected by the fixture owner before handling the alternate response.

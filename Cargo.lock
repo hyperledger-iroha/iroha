@@ -5150,6 +5150,7 @@ dependencies = [
  "p256",
  "regex",
  "rustc-hash 2.1.2",
+ "rustix 1.1.4",
  "sha2",
  "sorafs_manifest",
  "tempfile",

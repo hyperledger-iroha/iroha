@@ -152,13 +152,25 @@ class KagemushaCoreCoordinatorFrameV1Test {
         val begin = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
             listOf(KagemushaCoreCoordinatorFrameV1.u32(1), "i105example".toByteArray(Charsets.UTF_8)))
         val response = listOf(ticket, ByteArray(32) { 0x44 }, ByteArray(32) { 0x45 },
-            ByteArray(32) { 0x46 }, ByteArray(32) { 0x47 })
+            ByteArray(32) { 0x46 }, ByteArray(32) { 0x47 }, ByteArray(32) { 0x48 },
+            java.nio.ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN).putLong(120_007).array())
         val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, response)
         val decoded = KagemushaCoreCoordinatorFrameV1.decodeResponse(method, begin, responseFrame)
         decoded.zip(response).forEach { (left, right) -> assertContentEquals(right, left) }
+        val readSelection = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(7), "i105example".toByteArray(Charsets.UTF_8)))
+        val retained = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, readSelection, response)
+        KagemushaCoreCoordinatorFrameV1.decodeResponse(method, readSelection, retained)
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
                 listOf(ticket, response[1], response[2], response[3], byteArrayOf(0x45)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, response.take(5))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
+                response.dropLast(1) + listOf(ByteArray(8)))
         }
         val challenge = listOf(KagemushaCoreCoordinatorFrameV1.u32(2), ticket,
             ByteArray(273) { 0x51 }, byteArrayOf(0x52), byteArrayOf(0x53), byteArrayOf(0x54),
@@ -190,6 +202,16 @@ class KagemushaCoreCoordinatorFrameV1Test {
         val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
         val selection = domain + ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(403).array() +
             ByteArray(403) { 0x42 }
+        selection[57] = 1
+        selection[58] = 0
+        selection.fill(0, 283, 291)
+        selection[283] = 1
+        selection.fill(0, 323, 331)
+        selection[323] = 1
+        selection[331] = 2
+        selection.fill(0, 428, 460)
+        selection[428] = 4
+        selection[444] = 5
         val request = listOf(ByteArray(32) { 0x11 }, "app-attest-key".toByteArray(Charsets.UTF_8),
             selection, byteArrayOf(0xa2.toByte(), 1, 2), KagemushaCoreCoordinatorFrameV1.u32(4),
             ByteArray(32) { 0x33 }, ByteArray(32) { 0x44 })
@@ -200,6 +222,18 @@ class KagemushaCoreCoordinatorFrameV1Test {
             KagemushaCoreCoordinatorFrameV1.u32(5), request[5], request[6])
         val reply = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, response)
         KagemushaCoreCoordinatorFrameV1.decodeResponse(method, encoded, reply)
+        for (offset in listOf(57, 331, 428, 444)) {
+            val changed = request.map { it.copyOf() }.toMutableList()
+            changed[2][offset] = (changed[2][offset].toInt() xor 1).toByte()
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
+            }
+        }
+        val otherCounter = request.map { it.copyOf() }.toMutableList()
+        otherCounter[4] = KagemushaCoreCoordinatorFrameV1.u32(3)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, otherCounter)
+        }
         response.indices.forEach { index ->
             val changed = response.map { it.copyOf() }
             changed[index][0] = (changed[index][0].toInt() xor 1).toByte()

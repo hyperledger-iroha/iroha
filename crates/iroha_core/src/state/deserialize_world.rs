@@ -8422,6 +8422,12 @@ fn parse_world(
     }));
     validate_da_pin_persistence(&world)?;
     validate_asset_transfer_control_persistence_v1(&world)?;
+    super::retail_daily_limit_state::validate_persistence(&mut world).map_err(|message| {
+        json::Error::InvalidField {
+            field: "world.smart_contract_state.retail_day_v1".to_owned(),
+            message,
+        }
+    })?;
     world
         .rebuild_global_beacon_pulse_slots()
         .map_err(invalid_global_beacon_persistence)?;

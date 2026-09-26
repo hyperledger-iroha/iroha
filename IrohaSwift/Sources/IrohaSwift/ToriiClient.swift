@@ -27037,16 +27037,27 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     /// Submit one exact canonical full or partial KAGEMUSHA redemption request.
+    /// The original wallet owner must still be current when the POST resumes.
     public func submitKagemushaRedemption(
-        _ value: KagemushaRedemptionRequestV1
+        _ value: KagemushaRedemptionRequestV1,
+        withCurrentOwner: @escaping ToriiTopUpOwnershipV1
     ) async throws -> ToriiUnverifiedKagemushaOperationStatusV1 {
+        try await withCurrentOwner({})
         let body = try KagemushaNoritoV1.encodeRedemptionRequestShape(value)
-        return try await submitKagemushaOperation(
-            path: "/v1/kagemusha/redeem",
-            operationID: value.operationID,
-            expectedKind: .redemption,
-            body: body
-        )
+        do {
+            let result = try await submitKagemushaOperation(
+                path: "/v1/kagemusha/redeem",
+                operationID: value.operationID,
+                expectedKind: .redemption,
+                body: body,
+                withCurrentOwner: withCurrentOwner
+            )
+            try await withCurrentOwner({})
+            return result
+        } catch {
+            try await withCurrentOwner({})
+            throw error
+        }
     }
 
     /// Poll one KAGEMUSHA reserve operation while withholding unverified applied results.
@@ -27070,7 +27081,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
         guard response.statusCode == 200 else {
             throw ToriiClientError.httpStatus(
-                code: response.statusCode, message: nil, rejectCode: nil)
+                code: response.statusCode, message: nil,
+                rejectCode: rejectCode(from: response))
         }
         let status = try parseKagemushaOperationStatusResponse(data, response: response)
         guard status.operationID == operationID else {
@@ -27115,11 +27127,9 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         }
         switch (response.statusCode, status.state) {
         case (202, .pending):
-            guard let retryAfter = response.value(forHTTPHeaderField: "Retry-After"),
-                  let retrySeconds = UInt64(retryAfter), retrySeconds > 0
-            else {
+            guard response.value(forHTTPHeaderField: "Retry-After") == "1" else {
                 throw ToriiClientError.invalidPayload(
-                    "Pending KAGEMUSHA operation response requires a positive Retry-After"
+                    "Pending KAGEMUSHA operation response requires Retry-After: 1"
                 )
             }
         case (200, .applied), (200, .rejected):
@@ -27149,7 +27159,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         )
         guard acceptedStatuses.contains(response.statusCode) else {
             throw ToriiClientError.httpStatus(
-                code: response.statusCode, message: nil, rejectCode: nil)
+                code: response.statusCode, message: nil,
+                rejectCode: rejectCode(from: response))
         }
         return (try parseKagemushaOperationStatusResponse(data, response: response), response)
     }
