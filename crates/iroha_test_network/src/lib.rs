@@ -21,9 +21,9 @@ use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::data_model::block::consensus_v2::{
-    MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, QuorumCertificateRef, SumeragiV2Status,
-    is_valid_committee_size,
+    MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
 };
+use iroha::data_model::sumeragi::SumeragiStatus;
 use iroha::{blocking::Client, client::Client as AsyncClient, data_model::prelude::*};
 use iroha_config::base::{
     ParameterOrigin,
@@ -3950,7 +3950,7 @@ impl Network {
                     elapsed += GENESIS_BLOCK_LOG_INTERVAL;
                     let sumeragi_v2 = match tokio::time::timeout(
                         status_timeout,
-                        peer.sumeragi_v2_startup_snapshot(),
+                        peer.sumeragi_startup_snapshot(),
                     )
                     .await
                     {
@@ -3961,7 +3961,7 @@ impl Network {
                         ),
                         Err(_) => {
                             let error = format!("query timed out after {status_timeout:?}");
-                            NetworkPeer::record_probe_sumeragi_v2_error(
+                            NetworkPeer::record_probe_sumeragi_error(
                                 &peer.startup_probe,
                                 &error,
                             );
@@ -4584,11 +4584,11 @@ pub struct PeerStartupState {
     /// Unix timestamp in milliseconds when the status snapshot (success or error) was recorded.
     pub status_unix_timestamp_ms: Option<u128>,
     /// Most recent compact `/v1/sumeragi/status` snapshot, if the peer responded.
-    pub sumeragi_v2_snapshot: Option<PeerSumeragiV2Snapshot>,
+    pub sumeragi_snapshot: Option<PeerSumeragiSnapshot>,
     /// Most recent `/v1/sumeragi/status` error captured by the startup watchdog.
-    pub sumeragi_v2_error: Option<String>,
+    pub sumeragi_error: Option<String>,
     /// Unix timestamp in milliseconds when the Sumeragi v2 probe completed.
-    pub sumeragi_v2_unix_timestamp_ms: Option<u128>,
+    pub sumeragi_unix_timestamp_ms: Option<u128>,
     /// Snapshot of the peer's Kura storage layout.
     pub storage: PeerStorageSnapshot,
 }
@@ -4638,20 +4638,20 @@ impl fmt::Display for PeerStartupState {
         } else {
             write!(f, "; status=unavailable")?;
         }
-        let formatted_v2_ts = self
-            .sumeragi_v2_unix_timestamp_ms
+        let formatted_sumeragi_ts = self
+            .sumeragi_unix_timestamp_ms
             .map(|ms| format!("{ms}ms"))
             .unwrap_or_else(|| "unknown".to_string());
-        if let Some(snapshot) = &self.sumeragi_v2_snapshot {
-            write!(f, "; sumeragi_v2=ok({snapshot})@{formatted_v2_ts}")?;
-        } else if let Some(error) = &self.sumeragi_v2_error {
+        if let Some(snapshot) = &self.sumeragi_snapshot {
+            write!(f, "; sumeragi=ok({snapshot})@{formatted_sumeragi_ts}")?;
+        } else if let Some(error) = &self.sumeragi_error {
             write!(
                 f,
-                "; sumeragi_v2=error(\"{}\")@{formatted_v2_ts}",
+                "; sumeragi=error(\"{}\")@{formatted_sumeragi_ts}",
                 sanitize_preview_for_display(error)
             )?;
         } else {
-            write!(f, "; sumeragi_v2=unavailable")?;
+            write!(f, "; sumeragi=unavailable")?;
         }
         let stdout_log = self
             .logs
@@ -4699,223 +4699,69 @@ impl fmt::Display for PeerStartupState {
         )
     }
 }
-/// Compact progress-oriented projection of `/v1/sumeragi/status` used in startup diagnostics.
+/// Compact projection of `/v1/sumeragi/status` used in startup diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PeerSumeragiV2Snapshot {
-    /// Active consensus height.
+pub struct PeerSumeragiSnapshot {
+    /// Height of the current round.
     pub height: u64,
-    /// Active view within the height.
+    /// View of the current round.
     pub view: u64,
-    /// Reducer generation owning volatile consumer state.
-    pub generation: u64,
-    /// Current reducer phase.
-    pub phase: String,
-    /// Current local body lifecycle state.
-    pub body_state: String,
-    /// Expected leader index for the active view.
-    pub leader: u32,
-    /// Exact persisted PrepareQC lock, if any.
-    pub locked_prepare_qc: Option<String>,
-    /// Highest verified PrepareQC known locally, if any.
-    pub highest_prepare_qc: Option<String>,
-    /// Partial Prepare quorum summaries keyed by exact round and subject.
-    pub prepare_quorums: Vec<String>,
-    /// Partial Commit quorum summaries keyed by exact round and subject.
-    pub commit_quorums: Vec<String>,
-    /// Partial timeout quorum summaries keyed by exact round.
-    pub timeout_quorums: Vec<String>,
-    /// Durable outbound progress intents and their service stages.
-    pub outbound_intents: Vec<String>,
-    /// Candidate, recovery, store, validation, application, and successor work stages.
-    pub work: String,
-    /// Bounded queue occupancy, oldest age, and service debt.
-    pub queues: Vec<String>,
-    /// Most recent reducer progress transition, if any.
-    pub last_progress: Option<String>,
-    /// Local monotonic time without meaningful height progress.
-    pub no_progress_age_ms: u64,
-    /// Classified liveness blocker after the watchdog threshold, if any.
-    pub blocker: Option<String>,
-    /// Per-height ignore-reason counters.
-    pub ignore_counts: Vec<String>,
-    /// Whether consensus has fail-stopped and requires restart.
-    pub restart_required: bool,
-    /// WAL persistence operation currently blocking the reducer, if any.
-    pub pending_persistence_id: Option<u64>,
+    /// Routing stage of the round.
+    pub stage: u8,
+    /// View of the lock at the current height, if any.
+    pub high_qc_view: Option<u64>,
+    /// Pacemaker level of the current view.
+    pub level: u32,
+    /// Committed tip height.
+    pub committed_height: u64,
+    /// Highest applied height.
+    pub applied_height: u64,
+    /// Committed, waiting for the next height's configuration.
+    pub awaiting: bool,
+    /// The node signs at its current height.
+    pub signing: bool,
+    /// Some key of the node is unanchored (it signs nothing until anchored).
+    pub unanchored: bool,
+    /// Why the instance halted, if it did.
+    pub halted: Option<String>,
 }
-impl From<&SumeragiV2Status> for PeerSumeragiV2Snapshot {
-    fn from(status: &SumeragiV2Status) -> Self {
-        let liveness = &status.liveness;
+impl From<&SumeragiStatus> for PeerSumeragiSnapshot {
+    fn from(status: &SumeragiStatus) -> Self {
         Self {
             height: status.height,
             view: status.view,
-            generation: liveness.generation,
-            phase: format!("{:?}", status.phase),
-            body_state: format!("{:?}", status.body_state),
-            leader: status.leader,
-            locked_prepare_qc: status.locked_prepare_qc.map(format_v2_certificate_ref),
-            highest_prepare_qc: status.highest_prepare_qc.map(format_v2_certificate_ref),
-            prepare_quorums: liveness
-                .prepare_quorums
-                .iter()
-                .map(format_v2_vote_quorum)
-                .collect(),
-            commit_quorums: liveness
-                .commit_quorums
-                .iter()
-                .map(format_v2_vote_quorum)
-                .collect(),
-            timeout_quorums: liveness
-                .timeout_quorums
-                .iter()
-                .map(|quorum| {
-                    format!(
-                        "h{}/v{}:signers={}/{},power={}/{},tc={}",
-                        quorum.round.height,
-                        quorum.round.view,
-                        quorum.signer_count,
-                        quorum.min_signers,
-                        quorum.signed_power,
-                        quorum.total_power,
-                        quorum.certificate_formed,
-                    )
-                })
-                .collect(),
-            outbound_intents: liveness
-                .outbound_intents
-                .iter()
-                .map(|intent| {
-                    let subject = intent
-                        .subject
-                        .map(|subject| abbreviated_hash(subject.block_hash))
-                        .unwrap_or_else(|| "-".to_string());
-                    let execution = intent
-                        .execution_commitment
-                        .map(|commitment| abbreviated_hash(commitment.executed_block_wire_hash))
-                        .unwrap_or_else(|| "-".to_string());
-                    format!(
-                        "{:?}@h{}/v{}:{:?}:block={subject}:exec={execution}",
-                        intent.kind, intent.round.height, intent.round.view, intent.stage,
-                    )
-                })
-                .collect(),
-            work: format!(
-                "candidate={:?},recovery={:?},store={:?},validation={:?},application={:?},successor={:?}",
-                liveness.work.candidate,
-                liveness.work.body_recovery,
-                liveness.work.body_store,
-                liveness.work.validation,
-                liveness.work.application,
-                liveness.work.successor_height,
-            ),
-            queues: liveness
-                .queues
-                .iter()
-                .map(|queue| {
-                    let oldest = queue
-                        .oldest_age_ms
-                        .map(|age| format!("{age}ms"))
-                        .unwrap_or_else(|| "-".to_string());
-                    format!(
-                        "{:?}={}/{},oldest={oldest},debt={}",
-                        queue.queue, queue.depth, queue.capacity, queue.service_debt,
-                    )
-                })
-                .collect(),
-            last_progress: liveness.last_progress.map(|progress| {
-                format!(
-                    "{:?}@h{}/v{}/g{},age={}ms",
-                    progress.transition,
-                    progress.round.height,
-                    progress.round.view,
-                    progress.generation,
-                    progress.age_ms,
-                )
-            }),
-            no_progress_age_ms: liveness.no_progress_age_ms,
-            blocker: liveness.blocker.map(|blocker| format!("{blocker:?}")),
-            ignore_counts: liveness
-                .ignore_counts
-                .iter()
-                .map(|entry| format!("{:?}={}", entry.reason, entry.count))
-                .collect(),
-            restart_required: status.restart_required,
-            pending_persistence_id: status.pending_persistence_id,
+            stage: status.stage,
+            high_qc_view: status.high_qc_view,
+            level: status.level,
+            committed_height: status.committed_height,
+            applied_height: status.applied_height,
+            awaiting: status.awaiting,
+            signing: status.is_signing(),
+            unanchored: status.unanchored,
+            halted: status.halted.map(|reason| format!("{reason:?}")),
         }
     }
 }
-impl fmt::Display for PeerSumeragiV2Snapshot {
+impl fmt::Display for PeerSumeragiSnapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let lock = self.locked_prepare_qc.as_deref().unwrap_or("-");
-        let highest = self.highest_prepare_qc.as_deref().unwrap_or("-");
-        let progress = self.last_progress.as_deref().unwrap_or("-");
-        let blocker = self.blocker.as_deref().unwrap_or("-");
-        let persistence = self
-            .pending_persistence_id
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| "-".to_string());
+        let lock = self
+            .high_qc_view
+            .map_or_else(|| "-".to_string(), |view| view.to_string());
         write!(
             f,
-            "h{}/v{}/g{} phase={} body={} leader={} lock={} highest={} quorums=P[{}] C[{}] T[{}] intents=[{}] work=[{}] queues=[{}] progress={} no_progress={}ms blocker={} ignores=[{}] restart={} persist={}",
+            "h{}/v{}/s{} level={} lock={} committed={} applied={} awaiting={} signing={} unanchored={} halted={}",
             self.height,
             self.view,
-            self.generation,
-            self.phase,
-            self.body_state,
-            self.leader,
+            self.stage,
+            self.level,
             lock,
-            highest,
-            compact_v2_list(&self.prepare_quorums),
-            compact_v2_list(&self.commit_quorums),
-            compact_v2_list(&self.timeout_quorums),
-            compact_v2_list(&self.outbound_intents),
-            self.work,
-            compact_v2_list(&self.queues),
-            progress,
-            self.no_progress_age_ms,
-            blocker,
-            compact_v2_list(&self.ignore_counts),
-            self.restart_required,
-            persistence,
+            self.committed_height,
+            self.applied_height,
+            self.awaiting,
+            self.signing,
+            self.unanchored,
+            self.halted.as_deref().unwrap_or("-"),
         )
-    }
-}
-fn abbreviated_hash(hash: impl fmt::Display) -> String {
-    let rendered = hash.to_string();
-    rendered.get(..12).unwrap_or(&rendered).to_owned()
-}
-fn format_v2_certificate_ref(certificate: QuorumCertificateRef) -> String {
-    format!(
-        "h{}/v{}<-v{}/{:?}/block={}/exec={}",
-        certificate.round.height,
-        certificate.round.view,
-        certificate.proposal_round.view,
-        certificate.phase,
-        abbreviated_hash(certificate.subject.block_hash),
-        abbreviated_hash(certificate.execution_commitment.executed_block_wire_hash),
-    )
-}
-fn format_v2_vote_quorum(
-    quorum: &iroha::data_model::block::consensus_v2::SumeragiV2VoteQuorumStatus,
-) -> String {
-    format!(
-        "h{}/v{}<-v{}:signers={}/{},power={}/{},block={},exec={}",
-        quorum.round.height,
-        quorum.round.view,
-        quorum.proposal_round.view,
-        quorum.signer_count,
-        quorum.min_signers,
-        quorum.signed_power,
-        quorum.total_power,
-        abbreviated_hash(quorum.subject.block_hash),
-        abbreviated_hash(quorum.execution_commitment.executed_block_wire_hash),
-    )
-}
-fn compact_v2_list(entries: &[String]) -> String {
-    if entries.is_empty() {
-        "-".to_string()
-    } else {
-        entries.join("|")
     }
 }
 /// Snapshot of a peer's log state.
@@ -5015,9 +4861,9 @@ struct PeerStartupProbe {
     last_status: Option<PeerStatusSnapshot>,
     last_status_error: Option<String>,
     last_status_unix_ms: Option<u128>,
-    last_sumeragi_v2: Option<PeerSumeragiV2Snapshot>,
-    last_sumeragi_v2_error: Option<String>,
-    last_sumeragi_v2_unix_ms: Option<u128>,
+    last_sumeragi: Option<PeerSumeragiSnapshot>,
+    last_sumeragi_error: Option<String>,
+    last_sumeragi_unix_ms: Option<u128>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StatusSource {
@@ -9084,21 +8930,21 @@ impl NetworkPeer {
         probe.last_status_error = Some(snapshot_snippet(&format!("{error:?}")));
         probe.last_status_unix_ms = Some(unix_timestamp_ms_now());
     }
-    fn record_probe_sumeragi_v2_status(
+    fn record_probe_sumeragi_status(
         probe: &Arc<StdMutex<PeerStartupProbe>>,
-        status: &SumeragiV2Status,
-    ) -> PeerSumeragiV2Snapshot {
-        let snapshot = PeerSumeragiV2Snapshot::from(status);
+        status: &SumeragiStatus,
+    ) -> PeerSumeragiSnapshot {
+        let snapshot = PeerSumeragiSnapshot::from(status);
         let mut probe = probe.lock().expect("startup probe should not be poisoned");
-        probe.last_sumeragi_v2 = Some(snapshot.clone());
-        probe.last_sumeragi_v2_error = None;
-        probe.last_sumeragi_v2_unix_ms = Some(unix_timestamp_ms_now());
+        probe.last_sumeragi = Some(snapshot.clone());
+        probe.last_sumeragi_error = None;
+        probe.last_sumeragi_unix_ms = Some(unix_timestamp_ms_now());
         snapshot
     }
-    fn record_probe_sumeragi_v2_error(probe: &Arc<StdMutex<PeerStartupProbe>>, error: &str) {
+    fn record_probe_sumeragi_error(probe: &Arc<StdMutex<PeerStartupProbe>>, error: &str) {
         let mut probe = probe.lock().expect("startup probe should not be poisoned");
-        probe.last_sumeragi_v2_error = Some(snapshot_snippet(error));
-        probe.last_sumeragi_v2_unix_ms = Some(unix_timestamp_ms_now());
+        probe.last_sumeragi_error = Some(snapshot_snippet(error));
+        probe.last_sumeragi_unix_ms = Some(unix_timestamp_ms_now());
     }
     fn last_status_peers(probe: &Arc<StdMutex<PeerStartupProbe>>) -> Option<u64> {
         probe
@@ -9224,6 +9070,12 @@ impl NetworkPeer {
         let irohad =
             revalidate_release_prebuilt_binary(self.program.release_prebuilt_binary(), &irohad)?
                 .unwrap_or(irohad);
+        // The first boot of a peer's consensus key: no safety record exists yet, so the harness
+        // (which created the storage) asserts the key never signed (Sumeragi §7.4). Later
+        // restarts keep their records and must not assert it again.
+        let first_consensus_boot =
+            iroha_config::parameters::actual::Sumeragi::default_records_dir(&storage_dir)
+                .is_some_and(|records| !records.exists());
         let make_irohad_command = |binary: &Path| {
             let mut cmd = tokio::process::Command::new(binary);
             strip_config_env_overrides(&mut cmd);
@@ -9233,6 +9085,9 @@ impl NetworkPeer {
                 .arg("--config")
                 .arg(&config_path)
                 .arg("--terminal-colors=true");
+            if first_consensus_boot {
+                cmd.arg("--sumeragi-assert-fresh-key");
+            }
             cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
             cmd.env_remove(consensus_message_control::CONTROL_DIR_ENV);
             if let Some(control) = &self.consensus_message_control {
@@ -10215,16 +10070,16 @@ impl NetworkPeer {
         }
         result
     }
-    async fn sumeragi_v2_startup_snapshot(&self) -> Result<PeerSumeragiV2Snapshot> {
+    async fn sumeragi_startup_snapshot(&self) -> Result<PeerSumeragiSnapshot> {
         let client = self.client();
         let result = read_on_dedicated_thread(move || client.client().get_sumeragi_status()).await;
         match result {
-            Ok(status) => Ok(Self::record_probe_sumeragi_v2_status(
+            Ok(status) => Ok(Self::record_probe_sumeragi_status(
                 &self.startup_probe,
                 &status,
             )),
             Err(error) => {
-                Self::record_probe_sumeragi_v2_error(&self.startup_probe, &format!("{error:?}"));
+                Self::record_probe_sumeragi_error(&self.startup_probe, &format!("{error:?}"));
                 Err(error)
             }
         }
@@ -10351,9 +10206,9 @@ impl NetworkPeer {
             status_snapshot: probe.last_status,
             status_error: probe.last_status_error,
             status_unix_timestamp_ms: probe.last_status_unix_ms,
-            sumeragi_v2_snapshot: probe.last_sumeragi_v2,
-            sumeragi_v2_error: probe.last_sumeragi_v2_error,
-            sumeragi_v2_unix_timestamp_ms: probe.last_sumeragi_v2_unix_ms,
+            sumeragi_snapshot: probe.last_sumeragi,
+            sumeragi_error: probe.last_sumeragi_error,
+            sumeragi_unix_timestamp_ms: probe.last_sumeragi_unix_ms,
             storage: self.storage_snapshot(),
         }
     }
@@ -11646,31 +11501,20 @@ mod tests {
         );
     }
     #[test]
-    fn startup_snapshot_formats_compact_sumeragi_v2_progress_state() {
+    fn startup_snapshot_formats_compact_sumeragi_progress_state() {
         let dir = tempdir().expect("tempdir");
-        let v2 = PeerSumeragiV2Snapshot {
-            height: 1,
-            view: 13,
-            generation: 17,
-            phase: "Commit".to_string(),
-            body_state: "Validated".to_string(),
-            leader: 2,
-            locked_prepare_qc: Some("h1/v6/Prepare/block=799af30d96fa".to_string()),
-            highest_prepare_qc: Some("h1/v6/Prepare/block=799af30d96fa".to_string()),
-            prepare_quorums: vec!["h1/v6:signers=3/3,power=3/4".to_string()],
-            commit_quorums: vec!["h1/v6:signers=2/3,power=2/4".to_string()],
-            timeout_quorums: vec!["h1/v13:signers=2/3,power=2/4,tc=false".to_string()],
-            outbound_intents: vec!["CommitVote@h1/v6:Sent".to_string()],
-            work: "candidate=Complete,recovery=Idle,store=Complete,validation=Complete,application=Idle,successor=Idle".to_string(),
-            queues: vec!["DeferredProgress=1/64,oldest=50ms,debt=2".to_string()],
-            last_progress: Some(
-                "TimeoutCertificateInstalled@h1/v12/g16,age=10000ms".to_string(),
-            ),
-            no_progress_age_ms: 70_000,
-            blocker: Some("CommitQuorumMissing".to_string()),
-            ignore_counts: vec!["Duplicate=42".to_string()],
-            restart_required: false,
-            pending_persistence_id: None,
+        let snapshot = PeerSumeragiSnapshot {
+            height: 4,
+            view: 2,
+            stage: 1,
+            high_qc_view: Some(1),
+            level: 3,
+            committed_height: 3,
+            applied_height: 3,
+            awaiting: false,
+            signing: true,
+            unanchored: false,
+            halted: None,
         };
         let rendered = PeerStartupState {
             index: 3,
@@ -11684,24 +11528,15 @@ mod tests {
             status_snapshot: Some(PeerStatusSnapshot::default()),
             status_error: None,
             status_unix_timestamp_ms: Some(1),
-            sumeragi_v2_snapshot: Some(v2),
-            sumeragi_v2_error: None,
-            sumeragi_v2_unix_timestamp_ms: Some(2),
+            sumeragi_snapshot: Some(snapshot),
+            sumeragi_error: None,
+            sumeragi_unix_timestamp_ms: Some(2),
             storage: PeerStorageSnapshot::capture(dir.path().join("storage"), false),
         }
         .to_string();
         for expected in [
-            "sumeragi_v2=ok(h1/v13/g17",
-            "phase=Commit body=Validated leader=2",
-            "lock=h1/v6/Prepare/block=799af30d96fa",
-            "highest=h1/v6/Prepare/block=799af30d96fa",
-            "quorums=P[h1/v6:signers=3/3,power=3/4] C[h1/v6:signers=2/3,power=2/4] T[h1/v13:signers=2/3,power=2/4,tc=false]",
-            "intents=[CommitVote@h1/v6:Sent]",
-            "work=[candidate=Complete",
-            "queues=[DeferredProgress=1/64,oldest=50ms,debt=2]",
-            "progress=TimeoutCertificateInstalled@h1/v12/g16,age=10000ms",
-            "no_progress=70000ms blocker=CommitQuorumMissing",
-            "ignores=[Duplicate=42] restart=false persist=-)@2ms",
+            "sumeragi=ok(h4/v2/s1 level=3 lock=1 committed=3 applied=3",
+            "awaiting=false signing=true unanchored=false halted=-)@2ms",
         ] {
             assert!(
                 rendered.contains(expected),

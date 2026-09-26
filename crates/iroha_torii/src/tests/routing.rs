@@ -344,84 +344,58 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn sumeragi_status_fails_closed_before_v2_replay() {
-        let _guard = SUMERAGI_V2_STATUS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        v2_status::clear_v2_status();
-        let state = std::sync::Arc::new(CoreState::new_for_testing(
-            iroha_core::state::World::default(),
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        ));
-        let response = super::handle_v1_sumeragi_status(axum::extract::State(state), None, false)
+    async fn sumeragi_status_is_unavailable_before_the_instance_starts() {
+        let response = super::handle_v1_sumeragi_status(None, None)
             .await
             .expect("status handler");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
     #[tokio::test]
-    async fn sumeragi_status_json_is_exact_authoritative_v2_schema() {
-        let _guard = SUMERAGI_V2_STATUS_TEST_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let expected = SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"node"),
-            build_fingerprint: Hash::new(b"build"),
-            config_fingerprint: Hash::new(b"config"),
-            restart_required: false,
-            height_context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-                Hash::new(b"height-context"),
-            )),
+    async fn sumeragi_status_serves_the_instance_status_as_json() {
+        let key = iroha_crypto::KeyPair::from_seed(vec![9; 32], iroha_crypto::Algorithm::BlsNormal)
+            .public_key()
+            .clone();
+        let expected = iroha_data_model::sumeragi::SumeragiStatus {
+            instance: [1; 32],
             height: 42,
             view: 3,
-            phase: SumeragiV2StatusPhase::Prepare,
-            leader: 2,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Validated,
-            pending_persistence_id: Some(17),
-            last_committed_height: 41,
-            last_committed_subject: None,
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: 1,
-                epoch_end_height: 100,
-                mode: ConsensusMode::Permissioned,
-                epoch_seed: [0xA5; 32],
-                validator_count: 4,
-                quorum: DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
+            stage: 1,
+            leader: Some(key.clone()),
+            proxy_tail: Some(key.clone()),
+            high_qc_view: Some(2),
+            level: 1,
+            start_level: 0,
+            t_retx_ms: 250,
+            committed_height: 41,
+            applied_height: 41,
+            awaiting: false,
+            signer: Some(key),
+            unanchored: false,
+            abstaining: false,
+            halted: None,
+            footprint: iroha_data_model::sumeragi::SumeragiFootprint {
+                votes: 0,
+                timeouts: 0,
+                blocks: 1,
+                exec_entries: 1,
+                wants: 0,
+                pending_apply: 0,
+                sync_entries: 0,
+                sync_bytes: 0,
+                peers: 4,
+                recent_headers: 8,
+                configs: 3,
+                cert_cache: 0,
+                evidence_keys: 0,
+                probe: 0,
             },
-            last_commit_qc: None,
-            liveness: Default::default(),
         };
-        v2_status::set_v2_status(expected.clone());
-        let state = std::sync::Arc::new(CoreState::new_for_testing(
-            iroha_core::state::World::default(),
-            iroha_core::kura::Kura::blank_kura_for_testing(),
-            iroha_core::query::store::LiveQueryStore::start_test(),
-        ));
         let response = super::handle_v1_sumeragi_status(
-            axum::extract::State(std::sync::Arc::clone(&state)),
             Some(axum::http::HeaderValue::from_static("application/json")),
-            false,
+            Some(expected.clone()),
         )
         .await
         .expect("status handler");
-        // Simulate Kura/snapshot activating the shared process output guard
-        // after the reducer's last publication. Serving must monotonically
-        // overlay that state without waiting for another reducer event.
-        let restart_response = super::handle_v1_sumeragi_status(
-            axum::extract::State(state),
-            Some(axum::http::HeaderValue::from_static("application/json")),
-            true,
-        )
-        .await
-        .expect("restart-required status handler");
-        v2_status::clear_v2_status();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response
             .into_body()
@@ -429,50 +403,9 @@ mod tests {
             .await
             .expect("collect status body")
             .to_bytes();
-        let decoded: SumeragiV2Status =
-            norito::json::from_slice(&body).expect("decode authoritative v2 status");
-        let mut expected_at_first_read = expected.clone();
-        expected_at_first_read.liveness.no_progress_age_ms = decoded.liveness.no_progress_age_ms;
-        assert_eq!(decoded, expected_at_first_read);
-        let restart_body = restart_response
-            .into_body()
-            .collect()
-            .await
-            .expect("collect restart-required status body")
-            .to_bytes();
-        let restart_decoded: SumeragiV2Status = norito::json::from_slice(&restart_body)
-            .expect("decode restart-required authoritative status");
-        assert!(
-            restart_decoded.liveness.no_progress_age_ms >= decoded.liveness.no_progress_age_ms,
-            "read-time liveness age must be monotonic"
-        );
-        let mut expected_at_restart_read = expected;
-        expected_at_restart_read.restart_required = true;
-        expected_at_restart_read.liveness.no_progress_age_ms =
-            restart_decoded.liveness.no_progress_age_ms;
-        assert_eq!(restart_decoded, expected_at_restart_read);
-        assert_eq!(
-            v2_status::v2_status(),
-            None,
-            "test cleanup must clear the slot"
-        );
-        let json: norito::json::Value =
-            norito::json::from_slice(&body).expect("decode status JSON object");
-        for retired in [
-            "canonical",
-            "rbc_status",
-            "missing_qc_total",
-            "consensus_missing_qc_reacquire_attempt_total",
-            "lane_settlement_commitments",
-            "lane_relay_envelopes",
-            "native_amx_participant_applications",
-            "autonomous_lane_executions",
-        ] {
-            assert!(
-                json.get(retired).is_none(),
-                "retired field {retired} leaked"
-            );
-        }
+        let decoded: iroha_data_model::sumeragi::SumeragiStatus =
+            norito::json::from_slice(&body).expect("decode status");
+        assert_eq!(decoded, expected);
     }
     #[tokio::test]
     async fn permissioned_sumeragi_diagnostics_omit_npos_and_canonical_state() {

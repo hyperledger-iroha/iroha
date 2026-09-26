@@ -322,7 +322,7 @@ pub(super) fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Re
         context.config().account_chain_discriminant,
         |index, client| {
             let peer = &manifest.finality.peers[index];
-            let height = NonZeroU64::new(client.get_sumeragi_status()?.last_committed_height)
+            let height = NonZeroU64::new(client.get_sumeragi_status()?.committed_height)
                 .ok_or_else(|| eyre!("validator has no durable tip"))?;
             let attestation =
                 client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
@@ -831,7 +831,7 @@ fn complete<C: RunContext>(
     let tips = read_four_peers(&clients, discriminant, |index, client| {
         require_operation_budget(deadline, "reading validator finality tip")?;
         let peer = &trust.peers[index];
-        let height = NonZeroU64::new(client.get_sumeragi_status()?.last_committed_height)
+        let height = NonZeroU64::new(client.get_sumeragi_status()?.committed_height)
             .ok_or_else(|| eyre!("validator has no durable tip"))?;
         let before = match peer_attestation_progress(client.get_bridge_finality_attestation(
             height,

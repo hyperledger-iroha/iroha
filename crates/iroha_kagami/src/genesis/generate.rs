@@ -114,8 +114,8 @@ pub struct Args {
     /// If omitted, a sensible default (1,680,000) is applied.
     #[clap(long, value_name = "U64")]
     ivm_gas_limit_per_block: Option<u64>,
-    /// Select the consensus mode snapshot to seed in the genesis parameters
-    /// (public dataspace requires NPoS; other dataspaces may use permissioned or NPoS).
+    /// Select the consensus mode snapshot to seed in the genesis parameters (default:
+    /// permissioned; profiles that require NPoS select it themselves).
     #[clap(long, value_enum, value_name = "MODE")]
     consensus_mode: Option<ConsensusModeArg>,
     /// Override cryptography snapshot fields in the generated manifest.
@@ -592,7 +592,7 @@ impl<T: Write> RunArgs<T> for Args {
             .transpose()
             .wrap_err("invalid --vrf-seed-hex")?;
         let consensus_mode =
-            consensus_mode.map_or(SumeragiConsensusMode::Npos, SumeragiConsensusMode::from);
+            consensus_mode.map_or(SumeragiConsensusMode::Permissioned, SumeragiConsensusMode::from);
         let crypto = crypto.into_manifest_crypto()?;
         let resolved = resolve_profile_settings(
             profile,

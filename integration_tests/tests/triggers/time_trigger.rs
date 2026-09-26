@@ -115,8 +115,13 @@ async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &
     .and_then(Result::ok);
     let leader_index = sumeragi
         .as_ref()
-        .map(|status| status.leader)
-        .and_then(|idx| usize::try_from(idx).ok())
+        .and_then(|status| status.leader.as_ref())
+        .and_then(|leader| {
+            network
+                .peers()
+                .iter()
+                .position(|peer| peer.id().public_key() == leader)
+        })
         .filter(|&idx| idx < peer_count);
     let leader_is_connected = status
         .as_ref()

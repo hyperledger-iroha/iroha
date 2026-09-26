@@ -2540,7 +2540,7 @@ struct AppState {
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_ingest_compute_inflight: Arc<tokio::sync::Semaphore>,
     da_spooler: Option<Arc<da::DaSpooler>>,
-    sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
+    sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
@@ -14070,18 +14070,13 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         || app
             .sumeragi
             .as_ref()
-            .is_some_and(|sumeragi| !sumeragi.admission_ready())
+            .is_some_and(|sumeragi| !sumeragi.ready())
     {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Consensus admission is unavailable",
         )
             .into_response();
-    }
-    if let Some(sumeragi) = &app.sumeragi
-        && let Err(reason) = sumeragi.global_beacon_readiness(app.state.as_ref())
-    {
-        return (StatusCode::SERVICE_UNAVAILABLE, reason.to_string()).into_response();
     }
     let replay_archive_required = app
         .state
@@ -23110,14 +23105,10 @@ fn queue_plan_service_input_capacity(
     entrypoint: &TransactionEntrypoint,
     binding: &QueuePlanAdmissionBindingV1,
 ) -> Result<(), iroha_core::sumeragi::QueuePlanInputCapacityErrorV1> {
-    use iroha_core::sumeragi::{AdmissionCapacityUnavailableV1, QueuePlanInputCapacityErrorV1};
-    let handle = app
-        .sumeragi
-        .as_ref()
-        .ok_or(QueuePlanInputCapacityErrorV1::Unavailable(
-            AdmissionCapacityUnavailableV1::Pending,
-        ))?;
-    handle.check_queue_plan_input_capacity(app.state.network_id_ref(), entrypoint, binding)
+    // TODO(WP8a): QueuePlan admission is deleted with the lanes; Sumeragi admits its inputs
+    // as ordinary transactions and reserves no capacity for them.
+    let _ = (app, entrypoint, binding);
+    Ok(())
 }
 #[cfg(feature = "connect")]
 async fn queue_plan_service_input_capacity_error(
@@ -25188,7 +25179,10 @@ fn ingest_queue_plan_admission_publication(
     let sumeragi_notified = app
         .sumeragi
         .as_ref()
-        .is_some_and(iroha_core::sumeragi::SumeragiHandle::notify_pending_queue_plan_admission);
+        .is_some_and(|sumeragi| {
+            sumeragi.transactions_available();
+            true
+        });
     Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
         certificate_hash,
         sumeragi_notified,
@@ -25360,7 +25354,10 @@ async fn persist_queue_plan_admission_certificate(
     let notification_delivered = app
         .sumeragi
         .as_ref()
-        .map(iroha_core::sumeragi::SumeragiHandle::notify_pending_queue_plan_admission);
+        .map(|sumeragi| {
+            sumeragi.transactions_available();
+            true
+        });
     match notification_delivered {
         Some(true) => {}
         Some(false) => {
@@ -32009,11 +32006,11 @@ async fn handler_sumeragi_status(
         ));
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let restart_required = app
+    let status = app
         .sumeragi
         .as_ref()
-        .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-    routing::handle_v1_sumeragi_status(State(app.state.clone()), accept, restart_required)
+        .and_then(iroha_core::sumeragi::node::NodeHandle::status_dto);
+    routing::handle_v1_sumeragi_status(accept, status)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -32215,7 +32212,9 @@ async fn handler_bridge_finality_attestation_inner(
     let restart_required = app
         .sumeragi
         .as_ref()
-        .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
+        .is_some_and(iroha_core::sumeragi::node::NodeHandle::restart_required);
+    // TODO(WP8b): bridge finality attestations from Sumeragi commit certificates; the v2
+    // status is never published, so the endpoint reports consensus as uninitialized.
     let status = iroha_core::sumeragi::v2_status::v2_status_with_restart_required(restart_required);
     if let Some(reason) = bridge_attestation::startup_failure(restart_required, status.as_ref()) {
         return Ok(bridge_attestation::failure_response(
@@ -41729,7 +41728,7 @@ pub struct Torii {
     peer_telemetry_urls: Vec<telemetry::peers::ToriiUrl>,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_geo: telemetry::peers::GeoLookupConfig,
-    sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
+    sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
@@ -45651,7 +45650,7 @@ impl Torii {
         state: Arc<CoreState>,
         da_receipt_signer: KeyPair,
         online_peers: OnlinePeersProvider,
-        sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
+        sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
         runtime_deps: ToriiRuntimeDeps,
     ) -> Result<Self, ToriiBuildError> {
         if state.network_id != network_id {

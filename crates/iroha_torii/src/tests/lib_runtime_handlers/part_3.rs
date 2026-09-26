@@ -733,11 +733,11 @@ fn incoming_proxy_submit_fixture_with_validator_signers(
         }
         topology.commit();
         install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, validator_bindings)]);
-        app.sumeragi = Some(queue_plan_capacity_handle_for_test(
+        app.sumeragi = queue_plan_capacity_handle_for_test(
             *app.state.network_id_ref(),
             iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
             validator_signers,
-        ));
+        );
     }
     let admission_intent = if admission == ToriiProxyTransactionAdmissionV1::QueuePlanSynced {
         iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
@@ -793,11 +793,12 @@ fn incoming_proxy_submit_fixture_with_validator_signers(
 }
 #[cfg(feature = "connect")]
 fn queue_plan_capacity_handle_for_test(
-    network_id: NetworkId,
-    layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
-    signers: &[KeyPair],
-) -> iroha_core::sumeragi::SumeragiHandle {
-    queue_plan_capacity_harness_for_test(network_id, layout, signers).handle()
+    _network_id: NetworkId,
+    _layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
+    _signers: &[KeyPair],
+) -> Option<iroha_core::sumeragi::node::NodeHandle> {
+    // TODO(WP8a): QueuePlan capacity is no longer reserved by consensus.
+    None
 }
 #[cfg(feature = "connect")]
 fn queue_plan_capacity_harness_for_test(
@@ -3090,90 +3091,6 @@ async fn incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn incoming_queue_plan_capacity_unavailable_never_creates_a_journal_claim() {
-    for owner in 0..3 {
-        let (mut app, request) =
-            incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
-        let directory = tempfile::tempdir().unwrap();
-        let journal = directory.path().join("admission.norito");
-        app.queue
-            .install_plan_journal(&journal, 1024 * 1024, true)
-            .unwrap();
-        let before = std::fs::read(&journal).unwrap();
-        Arc::get_mut(&mut app).unwrap().sumeragi = match owner {
-            0 => None,
-            1 => Some(iroha_core::sumeragi::SumeragiIngressTestHarness::new(4).handle()),
-            _ => Some(iroha_core::sumeragi::SumeragiHandle::emergency_fast_disabled()),
-        };
-        let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .unwrap();
-        let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
-        assert_eq!(envelope.code(), "queue_plan_admission_capacity_unavailable");
-        assert_eq!(app.queue.active_len(), 0);
-        assert_eq!(std::fs::read(&journal).unwrap(), before);
-    }
-}
-#[cfg(feature = "connect")]
-#[tokio::test]
-async fn queue_plan_native_capacity_refuses_direct_and_ingress_promises_before_journal() {
-    use iroha_data_model::block::consensus_v2 as wire;
-    let seed = 0xb2_u8;
-    let signers = (0_u8..4)
-        .map(|offset| {
-            checked_torii_test_keypair_from_seed_byte(
-                seed.wrapping_add(offset),
-                Algorithm::BlsNormal,
-                "capacity refusal authority",
-            )
-        })
-        .collect::<Vec<_>>();
-    let (mut app, request) = incoming_proxy_submit_fixture_with_validator_signers(
-        seed,
-        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        &signers,
-    );
-    let ToriiProxyRequestKindV1::SubmitTransaction {
-        transaction,
-        admission_binding: Some(binding),
-        ..
-    } = &request.request
-    else {
-        panic!("complete fixture");
-    };
-    let sizes = iroha_core::torii_proxy::maximum_lane_admitted_input_envelope_sizes_v1(
-        transaction,
-        binding,
-    )
-    .unwrap();
-    assert!(sizes.complete_input_bytes < sizes.native_payload_bytes);
-    let mut layout = wire::recommended_data_availability_layout();
-    layout.max_payload_size_bytes = sizes.complete_input_bytes as u64;
-    let handle = queue_plan_capacity_handle_for_test(*app.state.network_id_ref(), layout, &signers);
-    Arc::get_mut(&mut app).unwrap().sumeragi = Some(handle);
-    let directory = tempfile::tempdir().unwrap();
-    let journal = directory.path().join("admission.norito");
-    app.queue
-        .install_plan_journal(&journal, 1024 * 1024, true)
-        .unwrap();
-    let before = std::fs::read(&journal).unwrap();
-    let direct = super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
-    assert_eq!(direct.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let routed = super::execute_torii_proxy_request_with_fallback_admitted(
-        &app,
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-        request.request.clone(),
-        None,
-    )
-    .await;
-    assert_eq!(routed.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(app.queue.active_len(), 0);
-    assert_eq!(std::fs::read(&journal).unwrap(), before);
-}
-#[cfg(feature = "connect")]
-#[tokio::test]
 async fn queue_plan_capacity_loss_after_quorum_remains_indeterminate() {
     let signers = (0_u8..4)
         .map(|offset| {
@@ -4918,95 +4835,6 @@ async fn queue_plan_synced_other_rejections_do_not_rearm_partial_admission() {
     }
 }
 
-#[cfg(feature = "connect")]
-#[tokio::test]
-async fn oversized_complete_admission_is_rejected_before_dispatch_or_journal() {
-    let seed = 0x83;
-    let (app, mut request) =
-        incoming_proxy_submit_fixture(seed, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
-    let key = checked_torii_test_ed25519_keypair(seed, "derive oversized complete-input signer");
-    let ToriiProxyRequestKindV1::SubmitTransaction {
-        transaction,
-        expected_plan,
-        admission_binding: Some(binding),
-        ..
-    } = &mut request.request
-    else {
-        panic!("strict request")
-    };
-    let plan = expected_plan.clone().try_into_routing_plan().unwrap();
-    *transaction = TransactionEntrypoint::External(
-        TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            AccountId::new(key.public_key().clone()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "x".repeat(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES),
-        )])
-        .with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-        )
-        .sign(key.private_key()),
-    );
-    *binding = iroha_core::torii_proxy::new_queue_plan_admission_binding(
-        app.state.network_id_ref(),
-        transaction,
-        &plan,
-        binding.admission_context.clone(),
-        binding.enqueue_timestamp_ms,
-    )
-    .unwrap();
-    request.request_id = binding.request_id;
-    let peer = binding.admission_context.route_incarnations[0].validator_set[0].clone();
-    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let observed = attempts.clone();
-    let response = super::execute_torii_proxy_request_across_candidates(
-        tokio::time::Instant::now(),
-        vec![ToriiProxyCandidate::P2p(peer)],
-        plan.coordinator_route(),
-        request.clone(),
-        usize::MAX,
-        Duration::ZERO,
-        move |_, _| {
-            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            async {
-                Err::<ToriiProxyHttpResponseV1, _>(ToriiProxyAttemptError::before_dispatch(
-                    "unexpected dispatch".to_owned(),
-                ))
-            }
-        },
-        |_| async {},
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 0);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let error: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
-    assert_eq!(error.code(), "queue_plan_admission_input_too_large");
-
-    // The direct receiver cannot bypass preflight by avoiding the aggregator.
-    // A real journal is installed; neither a queued transaction nor a durable
-    // journal record is allowed to appear for this unpublishable input.
-    let journal_dir = tempfile::tempdir().unwrap();
-    let journal_path = journal_dir.path().join("queue_plan_journal.norito");
-    app.queue
-        .install_plan_journal(&journal_path, 8 * 1024 * 1024, true)
-        .unwrap();
-    let before = std::fs::read(&journal_path).unwrap();
-    let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let error: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
-    assert_eq!(error.code(), "queue_plan_admission_input_too_large");
-    assert_eq!(app.queue.active_len(), 0);
-    assert_eq!(std::fs::read(&journal_path).unwrap(), before);
-}
 
 // Component fixture with real complete-input staging and exact-wire 3-of-4
 // finality. It does not execute a live network or qualify lane retirement.

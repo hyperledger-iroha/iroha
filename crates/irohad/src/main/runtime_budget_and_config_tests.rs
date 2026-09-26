@@ -30,6 +30,7 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             require_genesis_inrou_deployment_authority: None,
             trace_config: false,
             config_blake3: None,
+            sumeragi_assert_fresh_key: false,
         },
         terminal_colors: false,
         language: None,

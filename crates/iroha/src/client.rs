@@ -79,7 +79,8 @@ use iroha_data_model::{
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
     block::consensus::SumeragiDiagnosticsStatus,
-    block::consensus_v2::{SumeragiV2QcResponse, SumeragiV2Status},
+    sumeragi::SumeragiStatus,
+    block::consensus_v2::SumeragiV2QcResponse,
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
         types::{BlobDigest, ExtraMetadata},
@@ -9649,7 +9650,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_status(&self) -> Result<SumeragiV2Status> {
+    pub fn get_sumeragi_status(&self) -> Result<SumeragiStatus> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
         let resp = self.send_builder(
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
@@ -9662,19 +9663,16 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let status = if Self::is_norito_content_type(content_type) {
-            decode_from_bytes::<SumeragiV2Status>(resp.body())
+            decode_from_bytes::<SumeragiStatus>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?
         } else if Self::is_exact_json_content_type(content_type) {
-            norito::json::from_slice::<SumeragiV2Status>(resp.body())
+            norito::json::from_slice::<SumeragiStatus>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?
         } else {
             return Err(eyre!(
                 "Failed to decode sumeragi status: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
             ));
         };
-        status
-            .validate()
-            .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
         Ok(status)
     }
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -9698,13 +9696,10 @@ impl Client {
                 "Failed to decode sumeragi status JSON: invalid content-type `{content_type}` (expected {APPLICATION_JSON})"
             ));
         }
-        let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
+        let status = norito::json::from_slice::<SumeragiStatus>(resp.body())
             .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?;
-        status
-            .validate()
-            .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
         norito::json::to_value(&status)
-            .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"))
+            .map_err(|err| eyre!("Failed to render Sumeragi status JSON: {err}"))
     }
     /// GET `/v1/sumeragi/diagnostics` with typed decoding and evidence validation.
     ///
@@ -35082,8 +35077,45 @@ mod tests {
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.blocks, status.blocks);
     }
-    fn sample_sumeragi_status() -> SumeragiV2Status {
-        sample_sumeragi_v2_status(12, 5, 2)
+    fn sample_sumeragi_status() -> SumeragiStatus {
+        let key = KeyPair::from_seed(vec![7; 32], iroha_crypto::Algorithm::BlsNormal)
+            .public_key()
+            .clone();
+        SumeragiStatus {
+            instance: [3; 32],
+            height: 12,
+            view: 5,
+            stage: 1,
+            leader: Some(key.clone()),
+            proxy_tail: Some(key.clone()),
+            high_qc_view: Some(4),
+            level: 2,
+            start_level: 0,
+            t_retx_ms: 250,
+            committed_height: 11,
+            applied_height: 11,
+            awaiting: false,
+            signer: Some(key),
+            unanchored: false,
+            abstaining: false,
+            halted: None,
+            footprint: iroha_data_model::sumeragi::SumeragiFootprint {
+                votes: 1,
+                timeouts: 0,
+                blocks: 2,
+                exec_entries: 1,
+                wants: 0,
+                pending_apply: 0,
+                sync_entries: 0,
+                sync_bytes: 0,
+                peers: 4,
+                recent_headers: 8,
+                configs: 3,
+                cert_cache: 1,
+                evidence_keys: 0,
+                probe: 0,
+            },
+        }
     }
     #[test]
     fn get_sumeragi_status_prefers_norito_and_handles_json() {
@@ -35160,72 +35192,13 @@ mod tests {
     include!("client/sumeragi_api_separation_tests.rs");
 
     #[test]
-    fn get_sumeragi_status_rejects_structurally_impossible_norito_and_json() {
-        let client = client_with_base_url(base_url());
-        let mut wrong_protocol = sample_sumeragi_status();
-        wrong_protocol.protocol_version += 1;
-        let response = mk_response(
-            StatusCode::OK,
-            norito::to_bytes(&wrong_protocol).expect("serialize invalid status"),
-            Some(APPLICATION_NORITO),
-        );
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_status()
-            },
-        )
-        .expect_err("wrong protocol must be rejected after Norito decode");
-        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-        let mut impossible_phase = sample_sumeragi_status();
-        impossible_phase.phase = SumeragiV2StatusPhase::PendingApply;
-        impossible_phase.body_state = SumeragiV2BodyState::Applied;
-        let response = mk_response(
-            StatusCode::OK,
-            norito::json::to_vec(&impossible_phase).expect("serialize invalid status"),
-            Some(APPLICATION_JSON),
-        );
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_status()
-            },
-        )
-        .expect_err("inconsistent commit frontier must be rejected after JSON decode");
-        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-        let response = mk_response(
-            StatusCode::OK,
-            norito::json::to_vec(&wrong_protocol).expect("serialize invalid status"),
-            Some(APPLICATION_JSON),
-        );
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_status_json()
-            },
-        )
-        .expect_err("JSON projection helper must validate the typed snapshot");
-        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-    }
-    #[test]
     fn get_sumeragi_status_json_requires_exact_json_media_type() {
         let mut status = sample_sumeragi_status();
         status.height = 43;
         status.view = 7;
-        status.phase = SumeragiV2StatusPhase::Prepare;
-        status.body_state = SumeragiV2BodyState::Validated;
-        status.last_committed_height = 42;
+        status.committed_height = 42;
         let expected_json =
-            norito::json::to_value(&status).expect("serialize exact Sumeragi v2 status");
+            norito::json::to_value(&status).expect("serialize exact Sumeragi status");
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status endpoint JSON payload");

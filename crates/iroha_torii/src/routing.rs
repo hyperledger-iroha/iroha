@@ -48007,16 +48007,14 @@ fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
 /// though it described the live consensus protocol.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_status(
-    State(_state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
-    restart_required: bool,
+    status: Option<iroha_data_model::sumeragi::SumeragiStatus>,
 ) -> Result<Response> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let Some(status) = sumeragi::v2_status::v2_status_with_restart_required(restart_required)
-    else {
+    let Some(status) = status else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     Ok(crate::utils::respond_with_format(status, format))
@@ -48200,14 +48198,12 @@ pub async fn handle_v1_sumeragi_diagnostics(
         })?;
     Ok(crate::utils::respond_with_format(diagnostics, format))
 }
-/// SSE stream for `/v1/sumeragi/status/sse` using only authoritative v2 snapshots.
-///
-/// Before reducer replay completes the stream remains silent instead of
-/// emitting the archival v1/RBC status shape.
+/// SSE stream for `/v1/sumeragi/status/sse`: the instance's status every `poll_ms` (silent
+/// until the instance started).
 pub fn handle_v1_sumeragi_status_sse(
     _state: std::sync::Arc<CoreState>,
     poll_ms: u64,
-    sumeragi_handle: Option<iroha_core::sumeragi::SumeragiHandle>,
+    sumeragi_handle: Option<iroha_core::sumeragi::node::NodeHandle>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
     let ticker = tokio::time::interval(interval);
@@ -48216,11 +48212,9 @@ pub fn handle_v1_sumeragi_status_sse(
         |(mut ticker, sumeragi_handle)| async move {
             loop {
                 ticker.tick().await;
-                let restart_required = sumeragi_handle
+                if let Some(status) = sumeragi_handle
                     .as_ref()
-                    .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-                if let Some(status) =
-                    sumeragi::v2_status::v2_status_with_restart_required(restart_required)
+                    .and_then(iroha_core::sumeragi::node::NodeHandle::status_dto)
                 {
                     match norito::json::to_json(&status) {
                         Ok(body) => {
@@ -48230,7 +48224,7 @@ pub fn handle_v1_sumeragi_status_sse(
                         Err(error) => {
                             iroha_logger::error!(
                                 ?error,
-                                "failed to serialize authoritative Sumeragi v2 status"
+                                "failed to serialize the Sumeragi status"
                             );
                         }
                     }

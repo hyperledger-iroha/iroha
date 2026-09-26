@@ -2304,7 +2304,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             .validate()
             .map_err(|error| eyre!("invalid enacted Parliament peer status: {error}"))?;
         assert!(
-            !status.restart_required,
+            !status.halted.is_some(),
             "an enacted Parliament validator must not be live-but-fail-stopped",
         );
     }
@@ -2361,7 +2361,7 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         .validate()
         .map_err(|error| eyre!("invalid restarted Parliament peer status: {error}"))?;
     assert!(
-        !restarted_status.restart_required,
+        !restarted_status.halted.is_some(),
         "normal restart must restore a live non-fail-stopped consensus reducer",
     );
     no_result_paths::exercise_public_finding_no_result_retries_and_restore(
@@ -2640,10 +2640,10 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
             .validate()
             .map_err(|error| eyre!("invalid successor NPoS status: {error}"))?;
         assert!(
-            !status.restart_required,
+            !status.halted.is_some(),
             "a successful mandatory beacon transition must not fail-stop a validator",
         );
-        assert!(status.last_committed_height >= boundary_height + 1);
+        assert!(status.committed_height >= boundary_height + 1);
         assert_eq!(status.height_context.epoch, successor_epoch);
         assert_eq!(status.height_context.epoch_seed, successor_seed);
         assert_eq!(
@@ -2719,8 +2719,8 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
         status
             .validate()
             .map_err(|error| eyre!("invalid rotated-session NPoS status: {error}"))?;
-        assert!(!status.restart_required);
-        assert!(status.last_committed_height >= second_boundary_height + 1);
+        assert!(!status.halted.is_some());
+        assert!(status.committed_height >= second_boundary_height + 1);
         assert_eq!(status.height_context.epoch, second_successor_epoch);
         assert_eq!(status.height_context.epoch_seed, second_successor_seed);
         assert_eq!(
@@ -2870,10 +2870,10 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
             .validate()
             .map_err(|error| eyre!("invalid fail-closed NPoS status: {error}"))?;
         assert!(
-            !status.restart_required,
+            !status.halted.is_some(),
             "below-threshold beacon liveness must stall without fail-stopping consensus",
         );
-        assert_eq!(status.last_committed_height, predecessor_height);
+        assert_eq!(status.committed_height, predecessor_height);
         if status.height != predecessor_height {
             assert_eq!(status.height, pulse_height);
             return Ok(true);

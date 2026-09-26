@@ -677,6 +677,10 @@ const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 const LOCALNET_CLIENT_STATUS_TIMEOUT_MS: u64 = 300_000;
 /// Default Kura fsync mode for localnet (performance-oriented).
 const LOCALNET_KURA_FSYNC_MODE: &str = "batched";
+/// Directory of a localnet peer's Sumeragi safety records, under its state root.
+const LOCALNET_SUMERAGI_RECORDS_DIR: &str = "sumeragi-records";
+/// A localnet peer's Sumeragi key installation log, under its state root.
+const LOCALNET_SUMERAGI_INSTALLATION_LOG: &str = "sumeragi-installation.log";
 /// Aggregate Nexus storage cap for each disposable localnet peer (1 GiB).
 ///
 /// Production nodes derive a filesystem-aware budget with reserved headroom. A generated
@@ -2944,6 +2948,28 @@ fn render_peer_config(
         ),
     );
     sumeragi.insert("block".into(), Value::Table(block));
+    // Safety records and the key installation log live beside the peer's state, outside Kura:
+    // the start script asserts fresh keys exactly when the records directory does not exist.
+    sumeragi.insert(
+        "records_dir".into(),
+        Value::String(
+            storage_paths
+                .state
+                .join(LOCALNET_SUMERAGI_RECORDS_DIR)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    sumeragi.insert(
+        "installation_log".into(),
+        Value::String(
+            storage_paths
+                .state
+                .join(LOCALNET_SUMERAGI_INSTALLATION_LOG)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
     root.insert("sumeragi".into(), Value::Table(sumeragi));
     let mut pipeline = Table::new();
     if let Some(batch_max) = signature_batch_max_ed25519 {
@@ -5549,7 +5575,9 @@ def _validate_record(record, peer_index, config_path, executable_path=None):
         raise RuntimeError("Taira process record contains a malformed executable path")
     if executable_path is not None and executable != executable_path:
         raise RuntimeError("Taira process record names a substituted executable")
-    if record["argv"] != [executable, "--sora", "--config", config_path]:
+    if record["argv"] not in (
+            [executable, "--sora", "--config", config_path],
+            [executable, "--sora", "--config", config_path, "--sumeragi-assert-fresh-key"]):
         raise RuntimeError("Taira process record does not bind the exact daemon argv/config")
     return record
 
@@ -5678,9 +5706,9 @@ def preflight_taira_start(record_path, peer_index, expected_argv):
         try:
             observed = _bound_observation(descriptor, pid)
             argv = None if observed is None else observed["argv"]
-            if (type(argv) is list and len(argv) == 4
+            if (type(argv) is list and len(argv) in (4, 5)
                     and os.path.basename(argv[0]) == "iroha3d_taira"
-                    and argv[1:] == ["--sora", "--config", config_path]):
+                    and argv[1:4] == ["--sora", "--config", config_path]):
                 raise RuntimeError("unrecorded Taira process already owns the exact peer config")
         finally:
             os.close(descriptor)
@@ -5920,6 +5948,12 @@ fn write_start_script(
         start_file,
         "  SNAPSHOT_STORE_DIR=\"$DIR/state/peer${{i}}/snapshot\""
     )?;
+    // The first boot of a peer's consensus key: no safety record exists yet (Sumeragi §7.4).
+    writeln!(start_file, "  FRESH_KEY_ARG=\"\"")?;
+    writeln!(
+        start_file,
+        "  if [ ! -d \"$DIR/state/peer${{i}}/{LOCALNET_SUMERAGI_RECORDS_DIR}\" ]; then FRESH_KEY_ARG=\"--sumeragi-assert-fresh-key\"; fi"
+    )?;
     if taira {
         writeln!(
             start_file,
@@ -5949,7 +5983,7 @@ fn write_start_script(
     writeln!(start_file, "  if command -v python3 >/dev/null 2>&1; then")?;
     writeln!(
         start_file,
-        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_PEER_PROCESS_RECORD=\"${{PROCESS_RECORD:-}}\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" python3 - <<'PY'"
+        "    peer_pid=$(SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=\"${{LOG_LEVEL:-info}}\" LOG_FILTER=\"${{LOG_FILTER:-}}\" IROHAD_BIN=\"$IROHAD_BIN\" IROHA_NETWORK_DIR=\"$DIR\" IROHA_PEER_INDEX=\"$i\" IROHA_PEER_CONFIG=\"$DIR/peer${{i}}.toml\" IROHA_PEER_LOG=\"$DIR/peer${{i}}.log\" IROHA_PEER_PROCESS_RECORD=\"${{PROCESS_RECORD:-}}\" IROHA_SORA_MODE=\"{sora_mode_env}\" IROHA_TAIRA_MODE=\"{taira_mode_env}\" IROHA_PEER_FRESH_KEY=\"$FRESH_KEY_ARG\" python3 - <<'PY'"
     )?;
     writeln!(start_file, "import os")?;
     writeln!(start_file, "import stat")?;
@@ -5972,6 +6006,8 @@ fn write_start_script(
         start_file,
         "cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"
     )?;
+    writeln!(start_file, "if env.get(\"IROHA_PEER_FRESH_KEY\"):")?;
+    writeln!(start_file, "    cmd.append(env[\"IROHA_PEER_FRESH_KEY\"])")?;
     if taira {
         writeln!(
             start_file,
@@ -6017,7 +6053,7 @@ fn write_start_script(
     } else {
         writeln!(
             start_file,
-            "    nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=${{LOG_LEVEL:-info}} LOG_FILTER=${{LOG_FILTER:-}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
+            "    nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=${{LOG_LEVEL:-info}} LOG_FILTER=${{LOG_FILTER:-}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" $FRESH_KEY_ARG > \"$DIR/peer${{i}}.log\" 2>&1 &"
         )?;
         writeln!(start_file, "    peer_pid=$!")?;
         writeln!(start_file, "    disown \"$peer_pid\" 2>/dev/null || true")?;

@@ -409,7 +409,7 @@ async fn assert_private_retry_state_and_restore(
     status
         .validate()
         .map_err(|error| eyre!("invalid restored private retry status: {error}"))?;
-    assert!(!status.restart_required);
+    assert!(!status.halted.is_some());
     assert_governed_contract_absent(
         &peer.client(),
         address,

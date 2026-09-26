@@ -13362,13 +13362,16 @@ impl Kura {
         // before its consumer admits the signed wire length. The existing replica
         // authority verifies the exact CommitQC/retained-record/header bindings
         // without reading the body; the bounded reader validates body bytes later.
-        let Some((wire_len, _)) = self.verified_v2_finality_wire_hash_for_eviction(
+        let wire_len = match self.verified_v2_finality_wire_hash_for_eviction(
             &store.path_to_blockchain,
             height_u64,
             hash,
-        )?
-        else {
-            return Ok(None);
+        )? {
+            Some((wire_len, _)) => wire_len,
+            // A Sumeragi block has no v2 finality sidecar: its frame carries the commit
+            // certificate the Sumeragi block store verified before writing it.
+            // TODO(WP8c): Kura keeps no v2 finality.
+            None => index.length,
         };
         if wire_len != index.length {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });

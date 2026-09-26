@@ -130,6 +130,21 @@ impl AuthenticatedV2SnapshotStartup {
     }
 }
 impl V2StartupReplayPlan {
+    /// The boundary of a Kura whose every block Sumeragi replayed at startup
+    /// (`crate::sumeragi::node::prepare`): `durable_height` blocks, all applied, no pending tip.
+    // TODO(WP8c): the SoraFS archives read Sumeragi's startup boundary directly.
+    #[must_use]
+    pub fn sumeragi_replayed(durable_height: usize) -> Self {
+        Self {
+            durable_height,
+            durable_boundary_hash: Hash::prehashed([0; 32]),
+            storage_binding: None,
+            audited_bootstrap_prefix_height: durable_height,
+            complete_prefix_height: durable_height,
+            pending_tip_height: None,
+        }
+    }
+
     /// Replay the authenticated complete prefix and carry its exact geometry publication
     /// into subsequent active-height recovery. No identity is adopted after WSV installation.
     ///
