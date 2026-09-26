@@ -362,7 +362,8 @@ fn actual_root_effects_cannot_apply_after_owner_reuse_or_context_substitution() 
         witness::start_block();
         let mut block = state.block(source.header());
         let fragments = block.committed_fragment_count();
-        let mut transaction = block.transaction();
+        let mut transaction =
+            block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         bind_root(&mut transaction, signed);
         Executor::Initial
             .execute_transaction(

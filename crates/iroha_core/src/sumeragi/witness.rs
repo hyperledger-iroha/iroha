@@ -32,6 +32,48 @@ use std::{
 /// This token never enters witness bytes, hashes, logs or protocol identifiers.
 struct RecorderGeneration;
 
+/// Non-forgeable local identity of the original active block recorder.
+/// It cannot be serialized or reconstructed from a block hash or witness bytes.
+#[derive(Clone)]
+pub(crate) struct ExecWitnessCaptureIdentity(Arc<RecorderGeneration>);
+
+impl ExecWitnessCaptureIdentity {
+    /// Refuse a reset, foreign thread, suppressed scope, or retired recorder.
+    pub(crate) fn require_current(&self) -> Result<(), String> {
+        if !owns_exec_witness() || witness_recording_suppressed() {
+            return Err("execution prefix lost its original recording scope".into());
+        }
+        let current = lock_slot();
+        if !current.active
+            || !current
+                .generation
+                .as_ref()
+                .is_some_and(|generation| Arc::ptr_eq(generation, &self.0))
+        {
+            return Err("execution prefix recorder was reset or retired".into());
+        }
+        Ok(())
+    }
+}
+
+/// Capture only an already active, owned, unsuppressed recorder identity.
+/// Scratch execution has no recording authority and cannot invent it later.
+pub(crate) fn current_exec_witness_capture_identity() -> Option<ExecWitnessCaptureIdentity> {
+    if !owns_exec_witness() || witness_recording_suppressed() {
+        return None;
+    }
+    let current = lock_slot();
+    current
+        .active
+        .then(|| {
+            current
+                .generation
+                .as_ref()
+                .map(|generation| ExecWitnessCaptureIdentity(Arc::clone(generation)))
+        })
+        .flatten()
+}
+
 #[derive(Default)]
 struct BlockWitness {
     active: bool,
@@ -2346,6 +2388,33 @@ mod tests {
         assert!(captured.reads.is_empty());
         assert!(captured.writes.is_empty());
         drop(guard);
+    }
+
+    #[test]
+    fn capture_identity_requires_original_owned_unsuppressed_generation() {
+        assert!(current_exec_witness_capture_identity().is_none());
+        let guard = begin_exec_witness_capture().unwrap();
+        let identity = current_exec_witness_capture_identity().unwrap();
+        identity.require_current().unwrap();
+        let suppression = suppress_recording_for_current_thread();
+        assert!(current_exec_witness_capture_identity().is_none());
+        assert!(identity.require_current().is_err());
+        drop(suppression);
+        identity.require_current().unwrap();
+        start_block();
+        assert!(identity.require_current().is_err());
+        let replacement = current_exec_witness_capture_identity().unwrap();
+        replacement.require_current().unwrap();
+        drop(guard);
+        assert!(replacement.require_current().is_err());
+        assert!(current_exec_witness_capture_identity().is_none());
+        let _next = begin_exec_witness_capture().unwrap();
+        assert!(identity.require_current().is_err());
+        assert!(replacement.require_current().is_err());
+        current_exec_witness_capture_identity()
+            .unwrap()
+            .require_current()
+            .unwrap();
     }
 
     #[test]

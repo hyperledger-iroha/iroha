@@ -799,6 +799,18 @@ fn assert_genesis_source_template_parses_structured_instructions(relative_path: 
                 block.execution_output(),
                 iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap()
             );
+            let source = block.fastpq_source();
+            assert_eq!(
+                source,
+                iroha_data_model::parameter::FastpqSourcePolicyV1::bootstrap()
+            );
+            source
+                .validate(block.execution_output())
+                .expect("template must declare a complete finite source policy");
+            assert_eq!(
+                source.maximum_network_inputs(block.execution_output()),
+                Ok(iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS)
+            );
             block
                 .execution_output()
                 .validate_time_invocations(block.max_time_trigger_invocations().get())
@@ -964,4 +976,123 @@ fn parse_allows_null_executor_in_canonical_manifest() {
         norito::json::value::from_value(manifest).expect("canonical manifest parses");
     assert!(parsed.executor.is_none());
     assert_eq!(parsed.transactions.len(), 1);
+}
+
+#[test]
+fn supported_genesis_templates_fit_frozen_source_bootstrap() {
+    super::super::init_instruction_registry();
+    use iroha_data_model::parameter::{ExecutionOutputPolicyV1, FastpqSourcePolicyV1};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let capacity = FastpqSourcePolicyV1::bootstrap()
+        .maximum_network_inputs(ExecutionOutputPolicyV1::bootstrap())
+        .unwrap();
+    for (path, expected) in [
+        ("../../defaults/genesis.template.json", 6),
+        ("../../defaults/nexus/genesis.template.json", 5),
+        ("../../defaults/kagami/iroha3-dev/genesis.template.json", 7),
+        (
+            "../../defaults/kagami/iroha3-nexus/genesis.template.json",
+            5,
+        ),
+        ("../../configs/soranexus/nexus/genesis.template.json", 5),
+        ("../../configs/soranexus/taira/genesis.template.json", 5),
+    ] {
+        let manifest = super::super::GenesisSourceTemplate::from_path(root.join(path))
+            .unwrap()
+            .materialize(
+                super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            )
+            .unwrap();
+        let sources = manifest.parse().unwrap().len();
+        assert_eq!(sources, expected, "{path}");
+        assert!(sources <= capacity as usize, "{path}");
+    }
+}
+
+#[test]
+fn generated_genesis_group_shapes_have_finite_source_capacity() {
+    super::super::init_instruction_registry();
+    use iroha_data_model::{
+        block::consensus_v2::SumeragiV2GenesisContextParameters,
+        parameter::{
+            ExecutionOutputPolicyV1, FastpqSourcePolicyV1, custom::CustomParameter,
+            system::confidential_metadata,
+        },
+    };
+    use iroha_model_base::chain::ChainId;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let capacity = FastpqSourcePolicyV1::bootstrap()
+        .maximum_network_inputs(ExecutionOutputPolicyV1::bootstrap())
+        .unwrap();
+    // Match the canonical builder group owners: Kagami's optional synthetic/XOR
+    // groups, or four-validator NetworkBuilder base/topology/staking/Soracloud
+    // groups with the explicit registry parameter and optional committee group.
+    // Caller-added groups are intentionally not treated as a universal bound.
+    for (groups, registry, executor, expected) in [
+        (2, false, false, 5),
+        (4, false, true, 8),
+        (7, true, false, 9),
+        (8, true, false, 10),
+        (8, true, true, 11),
+        (9, true, true, 12),
+    ] {
+        let chain = ChainId::from("00000000-0000-0000-0000-000000000001");
+        let builder = if executor {
+            super::super::GenesisBuilder::new(
+                chain,
+                root.join("defaults/executor.to"),
+                root.join("defaults"),
+            )
+        } else {
+            super::super::GenesisBuilder::new_without_executor(chain, root.join("defaults"))
+        };
+        let mut builder = builder
+            .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
+            .with_kagemusha_mint_finality_genesis_parameters(
+                super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            );
+        for index in 0..groups {
+            if index != 0 {
+                builder = builder.next_transaction();
+            }
+            builder = builder
+                .append_instruction(Log::new(Level::INFO, format!("source count group {index}")));
+        }
+        if registry {
+            let mut payload = Map::new();
+            payload.insert("vk_set_hash".into(), Value::Null);
+            builder = builder.append_parameter(Parameter::Custom(CustomParameter::new(
+                confidential_metadata::registry_root_id(),
+                Json::new(Value::Object(payload)),
+            )));
+        }
+        let sources = builder.build_raw().unwrap().parse().unwrap().len();
+        assert_eq!(sources, expected);
+        assert_eq!(sources <= capacity as usize, expected <= 11);
+    }
+    assert_eq!(capacity, FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS);
+}
+
+#[test]
+fn unsigned_taira_fixture_declares_complete_finite_block_parameters() {
+    use iroha_data_model::parameter::{ExecutionOutputPolicyV1, FastpqSourcePolicyV1};
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../iroha_kagami/tests/fixtures/taira_nevo_v2/unsigned-genesis.template.json");
+    let value: Value = norito::json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let transaction = &value.as_object().unwrap()["transactions"]
+        .as_array()
+        .unwrap()[0];
+    let parameters = &transaction.as_object().unwrap()["parameters"];
+    let block: iroha_data_model::parameter::BlockParameters =
+        norito::json::value::from_value(parameters.as_object().unwrap()["block"].clone()).unwrap();
+    assert_eq!(block.max_time_trigger_invocations().get(), 512);
+    assert_eq!(
+        block.execution_output(),
+        ExecutionOutputPolicyV1::bootstrap()
+    );
+    assert_eq!(block.fastpq_source(), FastpqSourcePolicyV1::bootstrap());
+    block
+        .fastpq_source()
+        .validate(block.execution_output())
+        .unwrap();
 }

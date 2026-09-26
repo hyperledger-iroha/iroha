@@ -211,8 +211,7 @@ fn privacy_public_reserve_apply_rejects_stale_destination_balance() {
             &Quantity::one(),
         )
         .expect("reserve withdrawal has a valid transparent delta");
-    let (_, destination_value) =
-        Asset::new(destination_asset_id.clone(), 1_u32).into_key_value();
+    let (_, destination_value) = Asset::new(destination_asset_id.clone(), 1_u32).into_key_value();
     transaction.world.track_asset_holder(&destination_asset_id);
     transaction
         .world
@@ -332,9 +331,8 @@ fn aggregate_batch_preserves_one_ordered_occurrence_for_repeated_and_self_legs()
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"prepared aggregate occurrence");
-    tx.tx_call_hash = Some(hash);
+    let mut tx = block.transaction_for_fastpq_testing(hash);
     let batch = PreparedNumericAssetMovementBatch::prepare_user(
         &mut tx,
         &ALICE_ID,
@@ -381,7 +379,7 @@ fn native_batch_keeps_typed_purpose_and_finalizes_a_single_leg() {
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
-    let mut tx = block.transaction();
+    let mut tx = block.transaction_for_fastpq_protocol_testing();
     assert!(tx.tx_call_hash.is_none());
     let authorization = NumericAssetMovementAuthorization::bilateral(
         &ALICE_ID,
@@ -412,8 +410,7 @@ fn stale_aggregate_batch_rejects_before_balance_and_occurrence_writes() {
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(Hash::new(b"stale aggregate occurrence"));
+    let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"stale aggregate occurrence"));
     let batch = PreparedNumericAssetMovementBatch::prepare_user(
         &mut tx,
         &ALICE_ID,
@@ -484,9 +481,8 @@ fn native_fx_apply_boundary_keeps_pair_order_and_one_multi_delta_occurrence() {
     let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
     let (state, ids) = pair_state();
     let mut block = state.block(occurrence_header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"prepared FX pair application");
-    tx.tx_call_hash = Some(hash);
+    let mut tx = block.transaction_for_fastpq_testing(hash);
     let pair = prepared_pair(&mut tx, &ids);
     let expected = expected_occurrence(
         hash,
@@ -514,9 +510,8 @@ fn second_pair_apply_error_stages_nothing_and_parent_rollback_remains_required()
     let (state, ids) = pair_state();
     let mut block = state.block(occurrence_header());
     {
-        let mut tx = block.transaction();
         let hash = Hash::new(b"stale second FX pair leg");
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         let pair = prepared_pair(&mut tx, &ids);
         **tx.world.assets.get_mut(&ids[2]).unwrap() = Quantity::from(19_u32);
         let error = match pair.apply_with_transcript(&mut tx, &ALICE_ID, hash) {
@@ -590,14 +585,14 @@ fn sccp_apply_preserves_exact_singleton_and_liability_update_or_removal() {
         let (state, definition, source) = build_asset_transfer_control_test_state(10);
         let destination = AssetId::new(definition, BOB_ID.clone());
         let mut block = state.block(occurrence_header());
-        let mut tx = block.transaction();
         let hash = Hash::new(amount.to_le_bytes());
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         let prepared = prepared_sccp_release(&mut tx, &source, &destination, amount);
         let expected = expected_occurrence(hash, vec![prepared.delta.clone()]);
         let route = prepared.route_key.clone();
         let liability_after = prepared.liability_after;
-        apply_prepared_sccp_inbound_numeric_asset_release(&mut tx, &ALICE_ID, prepared).unwrap();
+        apply_prepared_sccp_inbound_numeric_asset_release(&mut tx, &ALICE_ID, prepared, None)
+            .unwrap();
         assert_eq!(
             tx.world.sccp_route_liabilities.get(&route),
             liability_after.as_ref()
@@ -627,8 +622,9 @@ fn sccp_missing_identity_rejects_before_release_balance_and_liability_writes() {
     let route = prepared.route_key.clone();
     let liability_before = prepared.liability_before;
     let events_before = tx.world.internal_event_buf.len();
-    let error = apply_prepared_sccp_inbound_numeric_asset_release(&mut tx, &ALICE_ID, prepared)
-        .unwrap_err();
+    let error =
+        apply_prepared_sccp_inbound_numeric_asset_release(&mut tx, &ALICE_ID, prepared, None)
+            .unwrap_err();
     assert!(error.to_string().contains("call_hash"));
     assert_eq!(
         tx.world.sccp_route_liabilities.get(&route),
@@ -647,12 +643,13 @@ fn sccp_callback_failure_stages_no_occurrence_and_drops_with_the_transaction() {
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(Hash::new(b"SCCP release callback error"));
+        let mut tx =
+            block.transaction_for_fastpq_testing(Hash::new(b"SCCP release callback error"));
         let mut prepared = prepared_sccp_release(&mut tx, &source, &destination, 3);
         prepared.expected_escrow_balance_after = Quantity::from(8_u32);
-        let error = apply_prepared_sccp_inbound_numeric_asset_release(&mut tx, &ALICE_ID, prepared)
-            .unwrap_err();
+        let error =
+            apply_prepared_sccp_inbound_numeric_asset_release(&mut tx, &ALICE_ID, prepared, None)
+                .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -678,11 +675,14 @@ fn optimized_detached_merges_keep_each_prepared_call_after_final_hash_clear() {
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
-    let mut tx = block.transaction();
     let hashes = [
         Hash::new(b"optimized prepared first"),
         Hash::new(b"optimized prepared second"),
     ];
+    for hash in hashes {
+        block.admit_fastpq_source_for_testing(hash);
+    }
+    let mut tx = block.transaction();
     let mut expected = Vec::new();
     for (hash, amount) in hashes.into_iter().zip([3_u32, 2]) {
         tx.tx_call_hash = Some(hash);

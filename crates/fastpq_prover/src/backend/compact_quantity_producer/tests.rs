@@ -501,6 +501,22 @@ fn malformed_private_paths_fail_before_physical_column_allocation() {
 #[test]
 #[ignore = "explicit fresh ordinary and AXT public producer proofs over two full-domain segments"]
 fn public_producer_generates_complete_ordinary_and_axt_artifacts() {
+    public_producer_with_execution(crate::DigestExecutionV1::Cpu);
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[test]
+#[ignore = "actual Metal ordinary and AXT public producers over two full-domain segments each; no CPU substitution"]
+fn actual_metal_public_producer_generates_complete_ordinary_and_axt_artifacts() {
+    let _lane = crate::backend::acquire_gpu_lane();
+    // Every segment inherits the required device selection; failed device work
+    // cannot be replaced with CPU commitments by the public producer.
+    public_producer_with_execution(crate::DigestExecutionV1::Device(
+        crate::Digest384GpuBackendV1::Metal,
+    ));
+}
+
+fn public_producer_with_execution(execution: crate::DigestExecutionV1) {
     // A single test keeps both requests sequential even when the harness uses
     // parallel test threads; the public producer intentionally rejects overlap.
     let f = fixture();
@@ -513,15 +529,24 @@ fn public_producer_generates_complete_ordinary_and_axt_artifacts() {
         mirrors,
         remote_spend_claims: f.axt.remote.as_deref(),
     };
+    let proving = ProvingLimits {
+        digest_execution: execution,
+        ..proving()
+    };
     for is_axt in [false, true] {
         let started = std::time::Instant::now();
         let bytes = if is_axt {
-            prove_quantity_axt_artifact(&statement, expected, context, proving(), policy())
+            prove_quantity_axt_artifact(&statement, expected, context, proving, policy())
         } else {
-            prove_quantity_ordinary_artifact(&statement, expected, proving(), policy())
+            prove_quantity_ordinary_artifact(&statement, expected, proving, policy())
         }
         .unwrap();
         let prove_elapsed = started.elapsed();
+        // Preserve the exact canonical public bytes before the independent
+        // verifier, including when a later assertion fails.
+        let label = if is_axt { "axt" } else { "ordinary" };
+        let sha = format!("{:x}", Sha256::digest(&bytes));
+        let path = retain_public_artifact(label, &bytes);
         let started = std::time::Instant::now();
         let verified = if is_axt {
             verify_quantity_axt_artifact(&bytes, expected, context, policy())
@@ -538,11 +563,8 @@ fn public_producer_generates_complete_ordinary_and_axt_artifacts() {
             verified.identity().artifact_bytes,
             u64::try_from(bytes.len()).unwrap()
         );
-        let label = if is_axt { "axt" } else { "ordinary" };
-        let sha = format!("{:x}", Sha256::digest(&bytes));
-        let path = retain_public_artifact(label, &bytes);
         eprintln!(
-            "quantity_public_producer={label}; bytes={}; sha256={sha}; proving_including_self_verification={prove_elapsed:?}; independent_verification={verify_elapsed:?}; work={:?}; retained={}",
+            "quantity_public_producer={label}; digest_executor={execution:?}; bytes={}; sha256={sha}; proving_including_self_verification={prove_elapsed:?}; independent_verification={verify_elapsed:?}; work={:?}; retained={}",
             bytes.len(),
             verified.work(),
             path.display()

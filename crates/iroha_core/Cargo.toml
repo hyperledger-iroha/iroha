@@ -271,6 +271,7 @@ rand_08 = { package = "rand", version = "=0.8.7" }
 [[bench]]
 name = "validation"
 harness = false
+required-features = ["bench"]
 
 [[bench]]
 name = "kura"

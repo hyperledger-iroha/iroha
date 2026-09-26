@@ -403,7 +403,13 @@ mod fastpq_source_inventory;
 mod output_capacity;
 mod output_publication;
 pub(crate) use output_capacity::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
+mod fastpq_governance_source;
+mod fastpq_rejection_tail;
+#[cfg(test)]
+mod fastpq_source_quota_tests;
+mod merge_execution_prefix;
 mod prepared_transfer_transcript;
+mod fastpq_quantity_capture;
 mod replay_outputs;
 use replay_outputs::{
     ensure_replayed_results_match_committed, log_replayed_signed_sources,
@@ -1627,6 +1633,7 @@ macro_rules! build_world_transaction_from_fields {
         let fields = $state.fields.as_mut().expect("original World block fields");
         Box::new(WorldTransaction {
             dataspace_catalog: fields.dataspace_catalog.clone(),
+            quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation::default(),
             axt_last_authorization_identities: authorization_identities,
             axt_authorization_transitioned: BTreeSet::new(),
             $($prefix: fields.$prefix.transaction(),)*
@@ -3351,6 +3358,25 @@ where
         })
     })
 }
+/// Maximum complete autonomous inputs allowed by the agreed source/output envelope.
+///
+/// Both policies are immutable after genesis. This is a packing ceiling, not
+/// execution authority; every whole certified source still needs authentication.
+/// Dynamic ordinary `MaxTransactions` does not redefine an existing source.
+///
+/// # Errors
+/// Rejects invalid source/output envelopes and counts outside the host index width.
+pub(crate) fn autonomous_source_input_capacity(
+    parameters: iroha_data_model::parameter::BlockParameters,
+) -> Result<usize, String> {
+    let maximum = parameters
+        .fastpq_source()
+        .maximum_network_inputs(parameters.execution_output())?;
+    usize::try_from(maximum)
+        .map(|maximum| maximum.min(MAX_MERGE_EXECUTION_ENTRYPOINTS))
+        .map_err(|_| "autonomous source capacity exceeds host index width".into())
+}
+
 /// Reserve a bounded prefix in oldest-origin order before deterministic execution.
 ///
 /// Origin height is authenticated by the immutable producer payload, so a newer source from a
@@ -3359,6 +3385,7 @@ where
 fn select_merge_execution_source_budget(
     mut sources: Vec<MergeExecutionSource>,
     gas_limit: u64,
+    source_input_limit: usize,
 ) -> Result<Vec<MergeExecutionSource>, MergeLedgerCommitError> {
     sources.sort_by_key(|source| {
         (
@@ -3376,7 +3403,7 @@ fn select_merge_execution_source_budget(
             break;
         };
         let gas = merge_execution_proposal_gas(&source.input.entrypoints)?;
-        if next_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS
+        if next_entrypoints > source_input_limit.min(MAX_MERGE_EXECUTION_ENTRYPOINTS)
             || !crate::gas::gas_components_fit_block_limit(gas_limit, [selected_gas, gas])
         {
             break;
@@ -7894,6 +7921,8 @@ impl WorldBlock<'_> {
 /// not copy every store's checkpoint onto each caller's stack. Dropping the box
 /// without applying it restores the original store and cell checkpoints.
 pub struct WorldTransaction<'block, 'world> {
+    /// Rollback-local observation for incomplete typed quantity capture.
+    pub(crate) quantity_mutation_observation: fastpq_quantity_capture::QuantityMutationObservation,
     /// Dataspace alias catalog used to qualify domain-backed aliases.
     pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Publish the transaction's derived catalog only when its World changes are applied.
@@ -9097,6 +9126,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         &mut self,
         definition_id: &AssetDefinitionId,
     ) -> Option<AssetDefinition> {
+        if self.asset_definitions.get(definition_id).is_some() {
+            self.quantity_mutation_observation.changed();
+        }
         let removed = self.asset_definitions.remove(definition_id.clone());
         if let Some(definition) = removed.as_ref() {
             self.axt_asset_incarnations.remove(definition_id.clone());
@@ -9324,6 +9356,9 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     }
     /// Remove an asset entry and any attached asset metadata.
     pub(crate) fn remove_asset_and_metadata(&mut self, asset_id: &AssetId) -> Option<AssetValue> {
+        if self.assets.get(asset_id).is_some() {
+            self.quantity_mutation_observation.changed();
+        }
         let removed = self.assets.remove(asset_id.clone());
         self.asset_metadata.remove(asset_id.clone());
         if removed.is_some() {
@@ -14404,12 +14439,24 @@ pub struct StateBlockFields<'state> {
     settlement_accumulator: crate::settlement::SettlementAccumulator,
     /// Transfer transcripts recorded for each transaction hash (for FASTPQ witness plumbing).
     fastpq_transcripts: BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
+    /// Bounded candidate facts and unsupported-owner poison; never proof authority.
+    fastpq_quantity_candidate: fastpq_quantity_capture::QuantityCandidateArchive,
     /// Cached transaction set hash for FASTPQ public inputs.
     fastpq_tx_set_hash: Option<[u8; 32]>,
     /// Dataspace assignments for FASTPQ entry hashes in this block.
     fastpq_entry_dataspaces: BTreeMap<Hash, DataSpaceId>,
     /// Source-height lane incarnations frozen before any block effects.
     fastpq_source_context: Option<Arc<crate::fastpq::FastpqBlockStartSourceContext>>,
+    /// Canonical source/output policies frozen before every block-start effect.
+    fastpq_source_policy_at_block_start: Option<(
+        iroha_data_model::parameter::FastpqSourcePolicyV1,
+        iroha_data_model::parameter::ExecutionOutputPolicyV1,
+    )>,
+    /// Authoritative ordinary and mandatory source pools for this block.
+    fastpq_source_quota:
+        Option<Result<crate::fastpq::source_reservation::admission::PreparedSourceQuota, String>>,
+    /// Original authenticated merge prefix and its remaining shared output budget.
+    merge_execution_prefix: Option<merge_execution_prefix::MergeExecutionPrefix>,
     /// Execution source contexts merged only with applied transfer transcripts.
     fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator,
     /// Sealed validator-owned inventory or its latched construction error.
@@ -14797,7 +14844,36 @@ impl<'state> StateBlock<'state> {
             self.fastpq_source_context.is_none(),
             "FASTPQ source-height context must be captured exactly once"
         );
+        let parameters = self.world.parameters.get().block();
+        let source_policy = parameters.fastpq_source();
+        let output_policy = parameters.execution_output();
+        self.fastpq_source_policy_at_block_start = Some((source_policy, output_policy));
         let height = self._curr_block.height().get();
+        let quota = (|| {
+            source_policy.validate(output_policy)?;
+            fastpq_governance_source::validate_retained(
+                source_policy,
+                self.world.governance_locks.iter(),
+                None,
+                None,
+            )?;
+            let scope = Hash::new(
+                norito::encode_canonical(&(self.network_id, height, self._curr_block.hash()))
+                    .map_err(|error| error.to_string())?,
+            );
+            crate::fastpq::source_reservation::admission::PreparedSourceQuota::new(
+                source_policy,
+                output_policy,
+                height,
+                scope,
+                source_policy.maximum_network_inputs(output_policy)?,
+            )
+        })();
+        if let Err(error) = &quota {
+            self.execution_output_plan = Some(output_capacity::ExecutionOutputPlanState::Poisoned);
+            self.fastpq_source_inventory = Some(Err(error.clone()));
+        }
+        self.fastpq_source_quota = Some(quota);
         let lane_incarnations = self
             .nexus
             .lane_catalog
@@ -14818,6 +14894,52 @@ impl<'state> StateBlock<'state> {
             lane_incarnations,
         }));
     }
+    /// Retain an actual authenticated invocation before its disposable business attempt.
+    fn retain_fastpq_source_invocation(&mut self, hash: Hash) -> Result<(), String> {
+        let result = (|| {
+            self.fastpq_source_quota
+                .as_mut()
+                .ok_or("source capacity was not frozen")?
+                .as_mut()
+                .map_err(|error| error.clone())?
+                .retain_ordinary_entry(hash)
+                .map(|_| ())
+        })();
+        if let Err(error) = &result {
+            self.execution_output_plan = Some(output_capacity::ExecutionOutputPlanState::Poisoned);
+            self.fastpq_source_inventory = Some(Err(error.clone()));
+        }
+        result
+    }
+
+    #[cfg(test)]
+    fn fastpq_source_usage_for_testing(
+        &self,
+    ) -> (
+        crate::fastpq::source_reservation::SourceUsage,
+        crate::fastpq::source_reservation::SourceUsage,
+    ) {
+        let quota = self
+            .fastpq_source_quota
+            .as_ref()
+            .expect("source capacity frozen")
+            .as_ref()
+            .expect("valid source capacity");
+        (quota.ordinary_usage(), quota.mandatory_usage())
+    }
+
+    /// Immutable source/output capacity observed before block-start effects.
+    #[must_use]
+    pub fn fastpq_source_policy_at_block_start(
+        &self,
+    ) -> (
+        iroha_data_model::parameter::FastpqSourcePolicyV1,
+        iroha_data_model::parameter::ExecutionOutputPolicyV1,
+    ) {
+        self.fastpq_source_policy_at_block_start
+            .expect("source capacity frozen before execution")
+    }
+
     /// Read execution contexts captured alongside this block's applied transcripts.
     ///
     /// These local records preserve full source-height incarnations and distinguish
@@ -16121,10 +16243,22 @@ pub struct StateTransaction<'block, 'state> {
     /// Block-level transfer transcript accumulator shared across transactions.
     fastpq_transcripts:
         &'block mut BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>>,
+    /// Applied candidate facts retained by the parent execution scope.
+    block_fastpq_quantity_candidate: &'block mut fastpq_quantity_capture::QuantityCandidateArchive,
+    /// Candidate facts and poison discarded together on rollback.
+    pending_fastpq_quantity_candidate: fastpq_quantity_capture::QuantityCandidateArchive,
     /// Transfer transcripts staged during the current transaction execution.
     pending_transfer_transcripts: Vec<iroha_data_model::fastpq::TransferTranscript>,
     /// Immutable source-height context shared with the parent block.
     fastpq_source_context: Arc<crate::fastpq::FastpqBlockStartSourceContext>,
+    /// Canonical source/output capacity frozen before this block's start effects.
+    fastpq_source_policy: (
+        iroha_data_model::parameter::FastpqSourcePolicyV1,
+        iroha_data_model::parameter::ExecutionOutputPolicyV1,
+    ),
+    /// Both source pool journals roll back with this original State overlay.
+    fastpq_source_quota:
+        crate::fastpq::source_reservation::admission::SourceQuotaTransaction<'block>,
     /// Parent accumulator changed only by this transaction's apply boundary.
     block_fastpq_source_captures: &'block mut crate::fastpq::FastpqSourceCaptureAccumulator,
     /// Captures and failures discarded together with a rolled-back transaction.
@@ -21504,6 +21638,15 @@ impl World {
         }
         let lock_expiries = {
             let locks = self.governance_locks.view();
+            let parameters = self.parameters.view();
+            let policy = parameters.get().block();
+            policy.fastpq_source().validate(policy.execution_output())?;
+            fastpq_governance_source::validate_retained(
+                policy.fastpq_source(),
+                locks.iter(),
+                None,
+                None,
+            )?;
             let referenda = self.governance_referenda.view();
             for (_, referendum) in referenda.iter() {
                 referendum.validate_context()?;
@@ -21545,6 +21688,17 @@ impl World {
         ) = {
             let reverted_citizens = self.citizens.block_and_revert();
             let reverted_locks = self.governance_locks.block_and_revert();
+            let reverted_parameters = self.parameters.block_and_revert();
+            let previous_policy = reverted_parameters.get().block();
+            previous_policy
+                .fastpq_source()
+                .validate(previous_policy.execution_output())?;
+            fastpq_governance_source::validate_retained(
+                previous_policy.fastpq_source(),
+                reverted_locks.iter(),
+                None,
+                None,
+            )?;
             let reverted_referenda = self.governance_referenda.block_and_revert();
             let reverted_proposals = self.governance_proposals.block_and_revert();
             let reverted_attempts = self.parliament_attempts.block_and_revert();
@@ -26715,6 +26869,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         // off its heap allocation before applying the individual fields.
         let Self {
             dataspace_catalog: _,
+            quantity_mutation_observation: _,
             dataspace_catalog_sink: _,
             parameters: _,
             peers: _,
@@ -27364,6 +27519,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .resolve_asset_id_for_current_scope(id)
             .unwrap_or_else(|_| id.clone());
         let _ = self.account(resolved_id.account())?;
+        if self.assets.get(&resolved_id).is_some() {
+            // This raw mutable lease is not a complete typed quantity owner.
+            self.quantity_mutation_observation.changed();
+        }
         self.assets
             .get_mut(&resolved_id)
             .ok_or_else(|| FindError::Asset(resolved_id.into()))
@@ -27488,6 +27647,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         if let Some(value) = self.assets.get(&resolved_id) {
             ensure_asset_quantity_value(value.as_ref(), spec)?;
         }
+        // Returning a mutable balance also observes callers that overwrite it directly.
+        self.quantity_mutation_observation.changed();
         if self.assets.get(&resolved_id).is_none() {
             let asset = Asset::new(resolved_id.clone(), default_asset_value);
             self.emit_asset_event(AssetEvent::Created(asset.clone()));
@@ -27545,9 +27706,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 .checked_add(increment)
                 .map_err(|_| MathError::Overflow)?;
             ensure_asset_quantity_value(&new_total, spec)?;
-            def.total_quantity = new_total.clone();
             new_total
         };
+        self.quantity_mutation_observation.changed();
+        self.asset_definitions
+            .get_mut(definition_id)
+            .expect("definition retained through total preparation")
+            .total_quantity = new_total.clone();
         debug!(
             target: "iroha::state::asset_totals",
             "increased total quantity for {} by {} -> {}",
@@ -27594,9 +27759,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                 .checked_sub(decrement)
                 .map_err(|_| MathError::NotEnoughQuantity)?;
             ensure_asset_quantity_value(&new_total, spec)?;
-            def.total_quantity = new_total.clone();
             new_total
         };
+        self.quantity_mutation_observation.changed();
+        self.asset_definitions
+            .get_mut(definition_id)
+            .expect("definition retained through total preparation")
+            .total_quantity = new_total.clone();
         debug!(
             target: "iroha::state::asset_totals",
             "decreased total quantity for {} by {} -> {}",
@@ -27925,6 +28094,7 @@ impl LaneConsensusLifecycleSnapshot {
 include!("state/passive_lane_diagnostic_methods.rs");
 include!("state/runtime_configuration.rs");
 mod canonical_runtime;
+mod recorded_carrier_scope;
 #[path = "state/state_block_construction.rs"]
 mod state_block_construction;
 mod uaid_dataspace_restore;
@@ -31256,6 +31426,10 @@ impl State {
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
         let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
+        if matches!(sb.fastpq_source_quota, Some(Err(_))) {
+            let result = after_start(&mut sb, continuation).map_err(StateBlockStartError::Stage)?;
+            return Ok((sb, result));
+        }
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(&mut sb)
                 .unwrap_or_else(|error| {
@@ -31705,6 +31879,7 @@ impl State {
     #[inline(never)]
     fn sweep_expired_governance_locks_at_block_start(sb: &mut StateBlock<'_>, now_h: u64) {
         let mut stx = sb.transaction();
+        stx.authorize_fastpq_governance_source_scope();
         let mut expired_by_referendum = BTreeMap::<String, Vec<AccountId>>::new();
         for (_expiry_height, bucket) in stx.world.governance_lock_expiry_index.range(..now_h) {
             for (referendum_id, owner) in bucket {
@@ -31973,6 +32148,9 @@ impl State {
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
         stage(&mut state_block).map_err(StateBlockStartError::Stage)?;
+        if matches!(state_block.fastpq_source_quota, Some(Err(_))) {
+            return Ok(state_block);
+        }
         let pinned_sortition_anchors =
             crate::smartcontracts::isi::sorafs_moderation::pin_due_sortition_anchors_v1(
                 &mut state_block,
@@ -35228,6 +35406,8 @@ impl State {
         application_block_header: BlockHeader,
         sources: Vec<MergeExecutionSource>,
     ) -> Result<(StateBlock<'state>, Vec<MergeLaneExecution>), MergeLedgerCommitError> {
+        let _witness_suppression =
+            crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut state_block = self.try_merge_preexecution_block(application_block_header)?;
         let executions = Self::preexecute_merge_execution_sources_into(&mut state_block, sources)?;
         Ok((state_block, executions))
@@ -35257,188 +35437,21 @@ impl State {
                 "autonomous sources exceed the shared block proposal gas budget".to_owned(),
             ));
         }
-        let _witness_suppression =
-            crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let mut seen_entrypoints = BTreeSet::new();
-        let mut seen_reservations = BTreeSet::new();
-        let mut pending_obligations = Vec::new();
         let mut authenticated_signed_replay_identities = BTreeSet::new();
         let mut executions = Vec::with_capacity(sources.len());
+        // Only the complete authenticated pass can create the original prefix owner.
+        // Every lane shares this same source journal and finite carrier envelope.
+        let mut prefix =
+            merge_execution_prefix::MergePrefixOwner::new(state_block, &sources, replay)?;
         for source in sources {
-            crate::kura::Kura::validate_certified_lane_block_artifact(&source.certified).map_err(
-                |message| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned()),
-            )?;
-            crate::kura::Kura::validate_lane_block_execution_input_artifact(&source.input)
-                .map_err(|message| {
-                    MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned())
-                })?;
-            let Some((source_network_id, source_epoch, source_payload_hash)) =
-                source.input.source.autonomous_binding()
-            else {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "autonomous merge source carries a global-block execution source".to_owned(),
-                ));
-            };
-            let authenticated_bundle = crate::kura::Kura::decode_autonomous_lane_merge_bundle(
-                &source.source_bundle,
-                source_network_id,
-                source_epoch,
-            )
-            .map_err(|message| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned()))?;
-            if authenticated_bundle.certified != source.certified
-                || authenticated_bundle.bundle_hash().ok() != Some(source.bundle_hash)
-            {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "merge source differs from its exact availability-certified bundle".to_owned(),
-                ));
-            }
-            let authenticated_payload = authenticated_bundle.executable_payload();
-            if source.origin_proposal != authenticated_payload.origin_proposal
-                || source_payload_hash != authenticated_payload.payload_hash
-                || source.input.entrypoint_hashes != authenticated_payload.entrypoint_hashes
-                || source.input.entrypoints != authenticated_payload.entrypoints
-                || source.input.reservation_keys != authenticated_payload.reservation_keys
-                || source.input.routing_plans != authenticated_payload.routing_plans
-                || source.input.native_amx_receipts != authenticated_payload.native_amx_receipts
-            {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "durable execution input differs from its producer-authenticated payload"
-                        .to_owned(),
-                ));
-            }
-            if source.certified.proposal != source.input.proposal {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "certified lane proposal differs from execution input".to_owned(),
-                ));
-            }
-            if source.input.reservation_keys.len() != source.input.entrypoints.len()
-                || source.input.routing_plans.len() != source.input.entrypoints.len()
-                || source.input.native_amx_receipts.len() != source.input.entrypoints.len()
-            {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "autonomous merge input does not bind one reservation and routing plan per entrypoint"
-                        .to_owned(),
-                ));
-            }
-            if source.input.entrypoints.iter().any(|entrypoint| {
-                entrypoint.admission_intent()
-                    != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
-            }) {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "autonomous merge entrypoint does not carry QueuePlanSynced admission intent"
-                        .to_owned(),
-                ));
-            }
-            for hash in &source.input.entrypoint_hashes {
-                if !seen_entrypoints.insert(*hash) {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "duplicate entrypoint across merge execution lanes".to_owned(),
-                    ));
-                }
-            }
             let descriptor = &source.input.proposal.descriptor;
-            let reservation_descriptor = &source.origin_proposal.descriptor;
-            for (((entrypoint, reservation), bound_plan), native_amx_receipt) in source
+            let (source_network_id, source_epoch, source_payload_hash) = source
                 .input
-                .entrypoints
-                .iter()
-                .zip(&source.input.reservation_keys)
-                .zip(&source.input.routing_plans)
-                .zip(&source.input.native_amx_receipts)
-            {
-                let descriptor = &source.input.proposal.descriptor;
-                let entrypoint_hash = Hash::from(entrypoint.hash());
-                let canonical_entrypoint_hash = entrypoint.hash();
-                if bound_plan.digest() != reservation.routing_plan_digest
-                    || bound_plan.coordinator_leg() != reservation.coordinator_leg
-                    || reservation.entrypoint_hash != canonical_entrypoint_hash
-                    || Hash::from(reservation.entrypoint_hash) != entrypoint_hash
-                    || !matches!(
-                        queue_plan_admission_registry_match(
-                            state_block,
-                            reservation.entrypoint_hash.clone(),
-                            reservation.queue_plan_admission_binding_hash,
-                        ),
-                        Ok(QueuePlanAdmissionRegistryMatch::Exact)
-                    )
-                    || reservation.lane_id != descriptor.lane_id
-                    || reservation.dataspace_id != descriptor.dataspace_id
-                    || reservation.lane_incarnation != reservation_descriptor.lane_incarnation
-                    || reservation.proposal_height != reservation_descriptor.proposal_height
-                    || reservation.lane_block_height != reservation_descriptor.lane_block_height
-                    || reservation.lane_block_view != reservation_descriptor.lane_block_view
-                    || !seen_reservations.insert(reservation.digest())
-                {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "autonomous merge reservation or routing-plan binding mismatch".to_owned(),
-                    ));
-                }
-                pending_obligations.push((
-                    reservation.entrypoint_hash.clone(),
-                    reservation.queue_plan_admission_binding_hash,
-                ));
-                if !crate::native_amx::receipt_shape_matches_coordinator_payload(
-                    native_amx_receipt.as_ref(),
-                    bound_plan,
-                    reservation.entrypoint_hash.as_ref(),
-                    entrypoint_hash,
-                    source_network_id,
-                    &source.origin_proposal,
-                ) {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "native-AMX receipt shape does not match its authenticated routing plan"
-                            .to_owned(),
-                    ));
-                }
-                if let Some(receipt) = native_amx_receipt {
-                    let mut source_id = [0u8; Hash::LENGTH];
-                    source_id.copy_from_slice(reservation.entrypoint_hash.as_ref());
-                    let expected_v2_context =
-                        crate::block::expected_native_amx_v2_context_from_receipt(
-                            receipt,
-                            source_epoch,
-                        )
-                        .map_err(|message| {
-                            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                                "invalid availability-certified native-AMX context: {message}"
-                            ))
-                        })?;
-                    let replay_authority = replay
-                        .map(|token| token.native_amx_authority(&*state_block))
-                        .transpose()
-                        .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
-                    let receipt_authority: &dyn crate::block::NativeAmxAuthorityContext =
-                        match replay_authority.as_ref() {
-                            Some(authority) => authority,
-                            None => &*state_block,
-                        };
-                    crate::block::validate_native_amx_receipt_against_plan(
-                        receipt,
-                        &source.origin_proposal,
-                        entrypoint.hash(),
-                        bound_plan,
-                        source_id,
-                        source_network_id,
-                        &state_block.nexus.dataspace_catalog,
-                        receipt_authority,
-                        Some(expected_v2_context),
-                    )
-                    .map_err(|message| {
-                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                            "invalid availability-certified native-AMX receipt: {message}"
-                        ))
-                    })?;
-                }
-            }
-            let raw_results = state_block
-                .validate_lane_block_execution_input_with_routing_context(
-                    &source.input,
-                    &mut ivm_cache,
-                )
-                .map_err(|message| {
-                    MergeLedgerCommitError::ExecutionDivergence(message.to_owned())
-                })?;
+                .source
+                .autonomous_binding()
+                .expect("authenticated autonomous source");
+            let raw_results = prefix.execute_lane(&source, &mut ivm_cache)?;
             let indices = raw_results
                 .iter()
                 .map(|(index, _, _)| *index)
@@ -35454,24 +35467,23 @@ impl State {
                     "executor returned a different entrypoint order".to_owned(),
                 ));
             }
-            let mut results = raw_results
+            let results = raw_results
                 .into_iter()
-                .map(|(_, _, result)| TransactionResult::new(result))
+                .map(|(_, _, result)| result)
                 .collect::<Vec<_>>();
-            state_block
-                .take_merge_lane_batch_transfer_outcomes(&source.input.entrypoints, &mut results)?;
             let result_hashes = results
                 .iter()
                 .map(|result| Hash::from(result.hash()))
                 .collect::<Vec<_>>();
-            let fastpq_transcripts =
-                state_block.take_merge_lane_fastpq_transcripts(&source.input.entrypoints)?;
+            let fastpq_transcripts = prefix
+                .state
+                .retain_native_lane_fastpq_outputs(&source.input.entrypoints)?;
             let authenticated_signed_replay_aliases = source
                 .input
                 .entrypoints
                 .iter()
                 .map(|entrypoint| {
-                    crate::tx::authenticated_signed_replay_alias(state_block, entrypoint)
+                    crate::tx::authenticated_signed_replay_alias(prefix.state, entrypoint)
                         .map(Hash::from)
                 })
                 .collect::<Vec<_>>();
@@ -35508,12 +35520,11 @@ impl State {
                 }
                 authenticated_signed_replay_identities.insert(signed_transaction_hash);
             }
-            state_block.stage_merge_carrier_entrypoints(
-                crate::tx::canonical_carrier_membership_hashes(
-                    state_block,
-                    &source.input.entrypoints,
-                ),
+            let membership = crate::tx::canonical_carrier_membership_hashes(
+                prefix.state,
+                &source.input.entrypoints,
             );
+            prefix.state.stage_merge_carrier_entrypoints(membership);
             let placeholder = LaneBlockCommitment {
                 block_height: descriptor.lane_block_height,
                 lane_id: descriptor.lane_id,
@@ -35580,16 +35591,18 @@ impl State {
                 settlement_commitment: placeholder,
                 fastpq_transcripts: fastpq_transcripts.into(),
             };
-            let commitment = state_block.drain_merge_lane_settlement_commitment(&execution)?;
+            let commitment = prefix
+                .state
+                .drain_merge_lane_settlement_commitment(&execution)?;
             execution.settlement_hash = canonical_merge_settlement_hash(&commitment)?;
             execution.settlement_commitment = commitment;
             executions.push(execution);
         }
-        state_block.resolve_required_queue_plan_pending_obligations(
-            pending_obligations,
-            authenticated_signed_replay_identities,
-        )?;
-        state_block.stage_merge_execution_nexus_fee_settlement(&executions)?;
+        prefix.resolve_pending(authenticated_signed_replay_identities)?;
+        prefix
+            .state
+            .stage_merge_execution_nexus_fee_settlement(&executions)?;
+        prefix.finish(&executions)?;
         Ok(executions)
     }
     /// Resolve one execution-capable autonomous source without conflating a
@@ -36240,6 +36253,13 @@ impl State {
             let sources = match select_merge_execution_source_budget(
                 sources,
                 gas_limit_from_parameters(world.parameters()),
+                match autonomous_source_input_capacity(world.parameters().block()) {
+                    Ok(limit) => limit,
+                    Err(error) => {
+                        warn!(error, "autonomous merge source capacity is invalid");
+                        return None;
+                    }
+                },
             ) {
                 Ok(sources) => sources,
                 Err(error) => {
@@ -36347,11 +36367,12 @@ impl State {
         mut sources: Vec<MergeExecutionSource>,
     ) -> Result<Option<MergeExecutionBatch>, StateAdmissionError> {
         let Some((sources, total_entrypoints, base_state_height, base_state_hash)) = (|| {
-            let total_entrypoints = sources
-                .iter()
-                .map(|source| source.input.entrypoints.len())
-                .sum::<usize>();
-            if sources.is_empty() || total_entrypoints > MAX_MERGE_EXECUTION_ENTRYPOINTS {
+            let total_entrypoints = sources.iter().try_fold(0_usize, |count, source| {
+                count.checked_add(source.input.entrypoints.len())
+            })?;
+            let source_input_limit =
+                autonomous_source_input_capacity(self.world.view().parameters().block()).ok()?;
+            if sources.is_empty() || total_entrypoints > source_input_limit {
                 return None;
             }
             // Selection uses age for fairness; execution and its certified wire representation
@@ -45048,6 +45069,14 @@ impl State {
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "execution count or reservation metadata exceeds a hard limit".to_owned(),
+            ));
+        }
+        let source_input_limit =
+            autonomous_source_input_capacity(self.world.view().parameters().block())
+                .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
+        if total_entrypoints > source_input_limit {
+            return Err(invalid_batch(
+                "autonomous sources exceed the agreed FASTPQ source capacity",
             ));
         }
         let canonical_batch_len = norito::to_bytes(batch)
@@ -54053,6 +54082,7 @@ impl<'state> StateBlock<'state> {
             let capture = exec_witness_capture::WitnessCaptureGuard::new(self);
             let result = (|| {
                 let state = &mut *capture.state;
+                state.require_merge_prefix_recording()?;
                 let mut witness =
                     match crate::sumeragi::witness::drain_exec_witness_checked(|transcripts| {
                         source_inventory.verify_finalized_transcript_map(transcripts)
@@ -54289,12 +54319,47 @@ impl<'state> StateBlock<'state> {
             self.execution_output_plan.is_none(),
             "component callback fixtures cannot replace an admitted block owner"
         );
-        let mut transaction = self.transaction();
-        transaction.tx_call_hash = Some(
-            transaction
-                .direct_execution_identity()
-                .expect("component callback root has a bounded direct execution slot"),
+        let hash = self
+            .transaction()
+            .direct_execution_identity()
+            .expect("component callback root has a bounded direct execution slot");
+        self.transaction_for_fastpq_testing(hash)
+    }
+    /// Explicit bounded E owner for direct component fixtures, before borrowing State.
+    /// This does not authenticate an actual Network input or grant publication authority.
+    #[cfg(test)]
+    pub(crate) fn admit_fastpq_source_for_testing(&mut self, hash: Hash) {
+        assert!(
+            self.execution_output_plan.is_none(),
+            "component source fixture cannot replace a carrier owner"
         );
+        self.retain_fastpq_source_invocation(hash)
+            .expect("fixture source fits its explicit frozen profile");
+    }
+    /// Explicit bounded invocation owner for direct source component fixtures.
+    /// Production execution must obtain its owner from the canonical producer.
+    #[cfg(test)]
+    pub(crate) fn transaction_for_fastpq_testing(
+        &mut self,
+        hash: Hash,
+    ) -> StateTransaction<'_, 'state> {
+        self.admit_fastpq_source_for_testing(hash);
+        let mut transaction = self.transaction();
+        transaction.tx_call_hash = Some(hash);
+        transaction
+    }
+    /// Component-only scope over the same finite mandatory pool used by the real sweep.
+    /// It grants no retained-custody, complete-inventory or carrier publication authority.
+    #[cfg(test)]
+    pub(crate) fn transaction_for_fastpq_protocol_testing(
+        &mut self,
+    ) -> StateTransaction<'_, 'state> {
+        assert!(
+            self.execution_output_plan.is_none(),
+            "component purpose fixture cannot replace a carrier owner"
+        );
+        let mut transaction = self.transaction();
+        transaction.authorize_fastpq_governance_source_scope();
         transaction
     }
     /// Create a finality-effects transaction that cannot publish speculative event telemetry.
@@ -54456,6 +54521,8 @@ impl<'state> StateBlock<'state> {
             lifecycle_transition_ordinal: 0,
             executor_fuel_remaining,
             fastpq_transcripts: &mut fields.fastpq_transcripts,
+            block_fastpq_quantity_candidate: &mut fields.fastpq_quantity_candidate,
+            pending_fastpq_quantity_candidate: fastpq_quantity_capture::QuantityCandidateArchive::default(),
             pending_transfer_transcripts: Vec::new(),
             fastpq_source_context: Arc::clone(
                 fields
@@ -54463,6 +54530,15 @@ impl<'state> StateBlock<'state> {
                     .as_ref()
                     .expect("StateBlock constructors must freeze FASTPQ source context before use"),
             ),
+            fastpq_source_policy: fields
+                .fastpq_source_policy_at_block_start
+                .expect("StateBlock constructors freeze FASTPQ source policy before use"),
+            fastpq_source_quota: match fields.fastpq_source_quota.as_mut() {
+                Some(Ok(quota)) => quota.transaction().unwrap_or_else(
+                    crate::fastpq::source_reservation::admission::SourceQuotaTransaction::unavailable),
+                Some(Err(error)) => crate::fastpq::source_reservation::admission::SourceQuotaTransaction::unavailable(error.clone()),
+                None => crate::fastpq::source_reservation::admission::SourceQuotaTransaction::unavailable("StateBlock has no frozen source capacity".into()),
+            },
             block_fastpq_source_captures: &mut fields.fastpq_source_captures,
             pending_fastpq_source_captures: crate::fastpq::FastpqSourceCaptureAccumulator::default(
             ),
@@ -55160,10 +55236,8 @@ impl<'state> StateBlock<'state> {
             || !self.verified_lane_relay_records.is_empty()
             || topology_metadata_invalid
             || !self.axt_envelopes.is_empty()
-            || !self.fastpq_transcripts.is_empty()
             || !self.batch_transfer_outcomes.is_empty()
             || !self.settlement_accumulator.is_empty()
-            || self.exec_witness.is_some()
             || finalized_event_surface_invalid
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
@@ -55171,6 +55245,8 @@ impl<'state> StateBlock<'state> {
                     .to_owned(),
             ));
         }
+        self.verify_merge_prefix_surface()
+            .map_err(MergeLedgerCommitError::ExecutionDivergence)?;
         self.validate_merge_runtime_catalog_effects()?;
         Ok(())
     }
@@ -55783,6 +55859,7 @@ impl<'state> StateBlock<'state> {
         }
         Ok((entrypoint_bindings, selected_call_hashes))
     }
+    #[cfg(test)]
     fn take_merge_lane_fastpq_transcripts(
         &mut self,
         entrypoints: &[TransactionEntrypoint],
@@ -65859,21 +65936,20 @@ impl StateTransaction<'_, '_> {
         }
         let batch_hash =
             self.require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
-        self.record_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas);
-        Ok(())
+        self.record_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas)
     }
     /// Stage a transfer transcript under an already resolved execution identity.
     ///
     /// Numeric movement preparation owns identity resolution so direct protocol execution can
-    /// bind its transcript to the exact typed purpose before any state mutation. Keeping this
-    /// method infallible ensures transcript staging cannot split an already prepared atomic move.
+    /// bind its transcript to the exact typed purpose before any state mutation. This
+    /// path reserves the whole entry and must be called before movement publication.
     pub(crate) fn record_transfer_transcripts_with_batch_hash(
         &mut self,
         authority: &AccountId,
         batch_hash: iroha_crypto::Hash,
         deltas: Vec<TransferDeltaTranscript>,
-    ) {
-        self.stage_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas);
+    ) -> Result<(), Error> {
+        self.stage_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas)
     }
     /// Exercise native transcript capture in state tests without exposing a
     /// second production route around typed numeric movement authorization.
@@ -65884,7 +65960,8 @@ impl StateTransaction<'_, '_> {
         batch_hash: iroha_crypto::Hash,
         deltas: Vec<TransferDeltaTranscript>,
     ) {
-        self.record_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas);
+        self.record_transfer_transcripts_with_batch_hash(authority, batch_hash, deltas)
+            .expect("test source must fit its explicit admitted owner");
     }
     /// Generate the next canonical RWA identifier for this transaction scope.
     ///
@@ -66187,7 +66264,9 @@ impl StateTransaction<'_, '_> {
     /// This path is intentionally narrower than [`Self::apply`]: NPoS effects
     /// may update only WSV and their block-commit observability buffer. They do
     /// not advance transaction identities, gas, settlement, FASTPQ, or any
-    /// other ordinary-execution accumulator.
+    /// other ordinary-execution accumulator. Unsupported quantity observations
+    /// still follow the World rollback journal and poison the nonexportable
+    /// diagnostic candidate; they grant no ordinary execution owner.
     pub(crate) fn apply_consensus_effects(self) {
         if matches!(
             self.block_execution_output_plan,
@@ -66201,6 +66280,8 @@ impl StateTransaction<'_, '_> {
         ) || !self.callback_journal.allows_apply()
             || !self.execution_effects_allow_apply()
             || self.canonical_runtime.touched_value().is_some()
+            || !self.fastpq_source_quota.allows_apply()
+            || !self.pending_transfer_transcripts.is_empty()
         {
             *self.block_execution_output_plan =
                 Some(output_capacity::ExecutionOutputPlanState::Poisoned);
@@ -66208,14 +66289,23 @@ impl StateTransaction<'_, '_> {
         }
         let Self {
             world,
+            block_fastpq_quantity_candidate,
+            mut pending_fastpq_quantity_candidate,
             block_pending_public_lane_slash_observability,
             mut pending_public_lane_slash_observability,
             ..
         } = self;
         block_pending_public_lane_slash_observability
             .append(&mut pending_public_lane_slash_observability);
+        pending_fastpq_quantity_candidate.observe(&world.quantity_mutation_observation);
         world.apply();
+        block_fastpq_quantity_candidate.apply(pending_fastpq_quantity_candidate);
     }
+    /// Authorize only the block-start sweep's pre-admitted retained obligations.
+    fn authorize_fastpq_governance_source_scope(&mut self) {
+        self.fastpq_source_quota.authorize_governance_purposes();
+    }
+
     /// Validate the final transaction boundary while rollback owners remain armed.
     /// A refusal poisons the enclosing carrier before any State field is applied.
     fn prepare_apply(&mut self) -> Result<(), &'static str> {
@@ -66232,6 +66322,8 @@ impl StateTransaction<'_, '_> {
             Some("transaction cannot apply in the current execution-output phase")
         } else if !self.callback_journal.allows_apply() {
             Some("transaction callback journal does not authorize application")
+        } else if !self.fastpq_source_quota.allows_apply() {
+            Some("transaction FASTPQ source preparation does not authorize application")
         } else if !self.execution_effects_allow_apply() {
             Some("transaction execution-effect owner does not authorize application")
         } else {
@@ -66306,6 +66398,9 @@ impl StateTransaction<'_, '_> {
             #[cfg(feature = "telemetry")]
             pending_block_fee_amount,
             fastpq_transcripts,
+            block_fastpq_quantity_candidate,
+            mut pending_fastpq_quantity_candidate,
+            fastpq_source_quota,
             mut pending_transfer_transcripts,
             block_fastpq_source_captures,
             mut pending_fastpq_source_captures,
@@ -66449,8 +66544,11 @@ impl StateTransaction<'_, '_> {
         prev_committed_topology.apply();
         committed_topology.apply();
         block_hashes.apply();
+        pending_fastpq_quantity_candidate.observe(&world.quantity_mutation_observation);
         world.apply();
+        block_fastpq_quantity_candidate.apply(pending_fastpq_quantity_candidate);
         public_lane_staking_status_overlay.commit();
+        fastpq_source_quota.commit();
     }
     /// Get and cache the `NumericSpec` for an asset definition within this transaction.
     /// Fetch the numeric specification for a given asset definition.

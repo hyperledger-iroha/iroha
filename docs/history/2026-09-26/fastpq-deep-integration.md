@@ -203,3 +203,199 @@ authority, privacy/security review, hardware/resource evidence and four-validato
 rollout remain open in the [readiness record](../../../specs/fastpq_production_readiness.md).
 The [current protocol contract](../../../specs/fastpq_deep_protocol_contract.md)
 states the implemented geometry and transcript independently of these results.
+
+## Applied source policy and raw proof checkpoint
+
+At 12:43 UTC, the combined 67-file source-policy, whole-entry reservation,
+mandatory governance reserve, proposal packing and transactional rejection
+candidate was applied on `optimizations`, patch SHA-256
+`fff7bdb39a9d724f7a285f5fbacb23b0702dae9672693e06406035af4721ec5a`.
+Twelve intervening source changes were merged without conflicts and retained.
+The final review restored the missing `BlockParameter::FastpqSource` installation
+and event mapping; a State regression checks the new value, exact old/new event,
+and unchanged current-carrier ceiling. Sponsored and SNS receiver preflight and
+actual PipelineGas-after-rejection tests are included. Core compilation and
+execution remain pending. The isolated model policy/schema/codec selection
+passes 24 tests. The retained parser sizing harness rejects three Nexus fixtures because their
+strict NPoS custom payloads omit the required `xor_asset_definition_id`. Current
+model source confirms this is a real template omission. Those templates register
+no canonical XOR asset/alias, so importing another network's asset ID would be
+incorrect. Materializing a complete Nexus genesis requires its own explicitly
+selected asset and alias; these failures remain separate prerequisites, not a
+passing whole-genesis test.
+
+The retained retry5 CPU proof completes at 485,490 bytes, SHA-256
+`d71d3f7198fe0c4e838d52078917890281471edfcf87b4a9e5359642b152b321`.
+Generation plus its positive/negative controls takes 13,039.80 seconds and peaks
+at 25,942,648 KiB RSS on the contended Linux guest. Separate captured-proof
+verification and tamper controls pass in 3.07 seconds at 18,564 KiB peak RSS.
+One successful verification reports one AIR evaluation, 433 leaf hashes, 4,281
+parent hashes, 320 fold checks and 128 terminal values. These are scoped local
+measurements, not release latency or zero-knowledge qualification.
+
+The complete retry7 unit run finishes with 1,116 passed, one failed and 23
+ignored in 14,478.87 seconds. The failure used a 31-byte refusal threshold for
+an eight-byte synthetic public statement; the test correction retains exact
+boundary and before-hashing assertions. It still requires a fresh run.
+The retry8 compiler exits zero but its source-drift gate fails, so it cannot
+qualify the final source. At 12:39 UTC Colima reports the Linux validation guest
+stopped; the in-progress ordinary/AXT producer and waiting normal-library
+capture are interrupted, with prior logs and receipts preserved.
+
+
+## Current source-bound build and Core corrections
+
+The next normal Linux build (`deep-public-retry9/build-result.json`) passes in
+881.04 seconds with 3,741 unchanged captured inputs (see the later scope correction). Its retained
+FASTPQ test executable SHA256 is
+`34b7fa62aa70193f3c92c5597cd5c611b3528e052ef93703a5a762b9d3a7388e`.
+All 32 focused groups pass: 285 tests, zero failures and 11 explicitly named
+diagnostic ignores. The repaired full-proof resource-boundary regression passes
+in 1,563.93 seconds. The earlier full-unit failure remains retained. The focused
+result receipt SHA256 is
+`3850f71dee69ef791ed5f982d6b30ccb0fe631e28c18733490f5b4c4d4fdced6`.
+
+The first combined native Core build terminates with seven compiler errors:
+two missing explicit paths for rejection-tail test modules, one missing
+`BTreeMap` import and four missing `Registrable` trait resolutions. It also
+reports five warnings. Its receipt records two concurrent source corrections;
+this failed build is not a source-frozen success. Applied follow-up patch
+`ed6da579119fac2402fc0dc3dc1c23ad83c549c0e7381c633b1b41fdb2889104`
+repairs the module/import errors, anticipates the same trait import in the
+newly loaded sponsor tests, uses named iterator bounds to remove single-use
+lifetime warnings without unstable lifetime elision, and removes one unused
+mutability annotation. It also adds actual transfer/mint/transfer and widest
+rejection-tail checks, and migrates four source-inventory fixtures to actual
+PipelineGas settlement, governance release and consuming output sealing.
+The fresh Core build uses the same native `kagemusha-v1` warm target.
+
+Test-only patch
+`1c410a982991adf4647aa4b83d3204f0c9464d1cf3228bd73c78414a3bebcca8`
+adds explicit full raw and ordinary/AXT Metal proof diagnostics. Required
+`Device(Metal)` selection cannot silently fall back to CPU hashing. The next
+native build queues in that same warm target; after focused lifecycle and
+actual-device gates pass, its controller will generate complete public
+artifacts and run independent normal-library verification on macOS and Linux.
+No complete Metal proof outcome is yet available.
+
+The source quota cutover exposed a live merge integration gap: the older merge
+pre-execution consumer does not retain the shared source/output attempt owner,
+removes transcript custody, and rejects extra capture state at later commit
+surfaces. A small grant of E would be insufficient. The in-progress fix must
+share actual Network execution, retain an authenticated prefix archive through
+final source inventory sealing, and preserve whole-carrier refusal. Separately,
+strict D7 publication still requires a complete ordered effect relation for
+transfers interleaved with mint or burn. Neither path is activated by the passing
+offline proof tests.
+
+
+## Merge, effect relation and native diagnostic checkpoint
+
+At 14:05 UTC the combined 50-file candidate was applied on `optimizations`,
+patch SHA-256 `e77f322b2682cb6ca866a51575c3a4462f38c6444d2a4bf7452265657debbab5`.
+It joins one Network attempt owner for merge execution, original authenticated
+prefix inventory/captures, recorder-generation custody, whole-source packing and
+consuming original merge-carrier custody. The original WSV authorization and
+certified entry move into the final carrier owner; no reconstructed entry grants
+publication authority. It also adds typed, scoped transfer/mint/burn statement
+preparation and shares the existing two-update SMT materializer without changing
+its algebra. This relation is not yet connected to complete execution effect
+capture, a production proof dispatcher or D7 publication.
+
+The previous retained Core executable passes 305 selected tests and fails 23
+fixtures. Those failures and their original receipt remain retained. Six inventory
+fixture repairs and four reservation/governance/fee/capacity corrections are part
+of the combined candidate; the current native Core build and focused Linux
+model/prover build are pending. Formatting and the retired-codec guard pass.
+
+The retained native prover executable
+`9f30f0e6b093c26bcfe0e8e818ccbaa5fc2dc04d426945475ff450dd320807f9`
+passes 68 focused tests, including six explicitly required Metal device tests.
+Receipt SHA-256 is
+`af23d08dc01eda0dd44e60896de4d88bf0f321fe409ef33dfde317cdfc9c0025`.
+The compiler's original conservative source-drift receipt remains failed; a
+separate derivation proves its changed DataModel test file is excluded from the
+normal dependency library. Complete ordinary/AXT Metal generation is running;
+there is no complete public artifact result yet.
+
+### Source-snapshot scope correction
+
+A subsequent compiler-artifact audit found that the 31-root prover snapshot
+omitted `vendor/num-bigint-0.4.6`. Core's all-crates snapshot omitted five local
+vendor roots: `concread`, `halo2-axiom`, `halo2-base`, `halo2curves-axiom` and
+`num-bigint-0.4.6`. Therefore prior wording about unchanged *dependency closure*
+is too broad: only the explicitly captured inputs were compared. The scoped
+immutable executable test results remain recorded, but these builds cannot
+qualify a fully frozen source closure. The current in-progress controllers have
+the same limitation. Preserve their original receipts; capture all local vendor
+inputs before the next qualifying build, never fabricate retrospective preimages.
+The exact audit is retained as `source-closure-scope-audit.json` under the local
+September 26 validation directory.
+
+
+The focused effect-model/shared-materializer Linux build completes in 598.90 seconds.
+All 62 selected tests pass, zero failures or ignored cases: three DataModel and
+59 prover preparation/materializer checks, including five complete-effect cases.
+The immutable model executable SHA-256 is
+`a1ec3db71f00e16c0e823cd817ac41341ab6c77dc885a271d72c74550403b231`;
+the prover executable is
+`c2c110b08be81ed0fefda94b31cb6742a53c0fc57504c5bf4c3e3e555df0ae3d`.
+The original build receipt has no changed captured files, with the vendor scope
+limitation above. The canonical schema owner is rebuilding separately.
+
+The first merged Core build fails the strict enum-size lint on its temporary
+merge owner. Patch `c6dc3a4bb024f81c6a1019018e8351d952523cbb899411a366d68056d433fece`
+boxes that private owner and adds a control-only merge-custody test constructed
+from a real committed managed-lane drain and three signed committee votes.
+The following build detects a missing explicit child-module path in that test;
+its original failure is retained. Neither build is recorded as a test success.
+
+
+The next combined 13-file candidate applies rollback-local typed effect capture,
+ordered parallel device-prefix preparation and the missing child-module path.
+Patch SHA-256 is `1a1de5d36e638f0995903c941b8ecedbf7e44b4f66f8eed1feff793121371299`.
+Independent review rejected the initial whole-block recount before application;
+the applied revision retains checked entry/delta/input/frame counters and only
+remeasures the bounded affected entry. Facts, refusal and accounting follow the
+same original World rollback scope. Unsupported mandatory fee owners, lifecycle
+removal/rekey and raw storage mutation coverage still prevent candidate export.
+The production verifier and accepted artifact formats remain unchanged.
+
+The DEEP device path now prepares its typed continuation prefixes with ordered
+parallel work, preserves the first indexed error, borrows the original guarded
+bodies and charges the additional result-descriptor allocation. The batch remains
+256. No speedup is claimed: the prior full Metal proof is still running, and a
+14:27 UTC host observation recorded approximately 68,115 MiB swap use and 50 GiB
+of compressor pages. Current native Core/prover compilation and schema regeneration
+are pending; formatting and the retired-codec guard pass. Future performance
+measurements must separate the serial-prefix change from host paging/contention.
+
+
+## Schema owner and signed sponsor capture follow-up
+
+The Linux schema library and exact retained test executable pass 23 tests.
+The original controller then failed its diagnostic generator link because its
+`-L dependency` path named `debug` instead of `debug/deps`; that receipt remains
+unchanged. The separate generator recovery passes and retains schema SHA256
+`d9c701485442bc3fcfc468774bea4870e48aa1b04b170f282c75a14a8fcbe1ba`.
+Applying it adds exactly the eleven complete-effect schema entries and changes
+no existing entry. This invokes the real schema owner and Norito serializer;
+it is not a Kagami CLI invocation.
+
+The schema compile's thirteen concurrent Core/prover source changes are excluded
+by its actual 36 local/vendor package roots, 3,875 unchanged captured package
+inputs and 41 supplementary exact-artifact depfiles. Separate derivation receipt
+SHA256 `18cb73d8ee293f7735a76fbec86d6fead3efad1b605d9ff8a66be8b570efd78e`
+qualifies only that retained library/test result, preserving the original failure.
+
+The five-file compile-repair and signed sponsor-burn candidate is applied under
+patch SHA256 `a3da90084592eb21bb65ea6224e53bc904c5eebb0a569e28eb4ef92caad57f74`.
+It retains the actual executor-checked signed transaction, sponsor revision and
+original invocation into a private consuming burn owner; a test-only business
+capability cannot establish source ownership. Aggregate Nexus fee ownership is
+still incomplete, and the candidate cannot export a source statement.
+Core retry2 failed on four unsupported storage `contains_key` calls and an
+ambiguous fixture constructor; those are repaired. Retry3 identifies the sponsor
+patch's missing `iroha_crypto::Hash` import; its fix is staged. No passing Core
+result is claimed for these retries. The focused required-Metal retry is queued
+in the same warm native lane, and the older full-proof attempt remains running.

@@ -408,8 +408,8 @@ pub(super) fn payload_charge(quotient_payload: usize) -> Result<usize> {
 }
 
 // Includes at most one batch of caller raw rows, fixed encoded bodies,
-// preparation result slots, retained records, borrowed jobs and executor pages.
-// The backend charge additionally includes returned digest slots and readiness.
+// frame/job preparation result slots, retained records and borrowed jobs.
+// The backend charge includes executor pages, returned digests and readiness.
 fn hash_batch_payload_charge() -> Result<usize> {
     let body_bytes = HASH_BATCH_FRAMES
         .checked_mul(MAX_PREPARED_HASH_FRAME_BYTES)
@@ -418,6 +418,7 @@ fn hash_batch_payload_charge() -> Result<usize> {
         .checked_mul(
             core::mem::size_of::<Result<PreparedHashFrame>>()
                 + core::mem::size_of::<PreparedHashFrame>()
+                + core::mem::size_of::<Result<Digest384LastFieldJob<'_>>>()
                 + core::mem::size_of::<Digest384LastFieldJob<'_>>()
                 + 128 * F::BYTES,
         )
@@ -447,12 +448,38 @@ fn execute_prepared_frames(
         bytes,
         execution,
         |index| frames[index].hash_cpu(),
-        || frames.iter().map(PreparedHashFrame::job).collect(),
+        || prepare_hash_jobs(frames.len(), |index| frames[index].job()),
     )?;
     if digests.len() != frames.len() {
         return Err(invalid("DEEP hash executor returned another digest count"));
     }
     Ok(digests)
+}
+
+// Domain-suffix absorption is CPU work even for a required-device batch. The
+// indexed parallel iterator preserves job positions; only the sequential pass
+// propagates errors, so the earliest failing input wins regardless of scheduling.
+// Reserve both descriptor arrays before work. Jobs borrow the fixed guarded
+// bodies, and the conservative batch charge includes both arrays' full extent.
+fn prepare_hash_jobs<'a>(
+    count: usize,
+    prepare: impl Fn(usize) -> Result<Digest384LastFieldJob<'a>> + Sync,
+) -> Result<Vec<Digest384LastFieldJob<'a>>> {
+    if count > HASH_BATCH_FRAMES {
+        return Err(invalid(
+            "DEEP hash preparation exceeds its fixed batch count",
+        ));
+    }
+    let mut results = super::polynomial_transform::reserved(count)?;
+    let mut jobs = super::polynomial_transform::reserved(count)?;
+    (0..count)
+        .into_par_iter()
+        .map(&prepare)
+        .collect_into_vec(&mut results);
+    for result in results {
+        jobs.push(result?);
+    }
+    Ok(jobs)
 }
 
 fn base_lde(geometry: &DeepGeometry, coefficients: &[u64]) -> Result<SecretPolynomial<u64>> {

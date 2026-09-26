@@ -76,7 +76,11 @@ fn missing_or_failed_inventory_refuses_capture_before_draining_active_witness() 
         let original_archive = block.fastpq_transcripts.clone();
         let capture_error = block.capture_exec_witness().unwrap_err();
         if let Some(expected) = construction_error {
-            assert_eq!(capture_error, expected);
+            assert_eq!(block.fastpq_source_inventory(), Err(expected.as_str()));
+            assert_eq!(
+                capture_error,
+                "FASTPQ witness capture refuses a poisoned carrier"
+            );
         } else {
             assert!(capture_error.contains("no finalized owned inventory"));
         }
@@ -208,7 +212,9 @@ fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
         let witness_overlay = crate::sumeragi::witness::begin_exec_witness_overlay();
         let mut tx = block.transaction();
         tx.tx_call_hash = Some(original_hash);
-        tx.current_lane_id = Some(LaneId::new(999));
+        // Reuse the actual frozen lane; this test exercises rollback of valid
+        // speculative capture, not malformed routing (which poisons immediately).
+        tx.current_lane_id = Some(LaneId::SINGLE);
         tx.record_test_transfer_transcripts(&ALICE_ID, original_hash, vec![delta()]);
         // Transaction rollback discards the unapplied source capture. The recorder
         // overlay separately discards its speculative raw transcript, preserving
@@ -348,8 +354,9 @@ fn applied_accumulator_seal_failure_publishes_no_owned_inventory_or_caches() {
         block
             .verified_fastpq_source_inventory_for_capture()
             .unwrap_err(),
-        error
+        "FASTPQ witness capture refuses a poisoned carrier"
     );
+    assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
 }
 
 #[test]

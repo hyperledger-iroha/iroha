@@ -18,12 +18,20 @@ The normal offline quantity facade now selects the bounded DEEP profile:
 of the complete 923-slot AIR. The applied candidate includes the real coefficient
 conversion, exact polynomial quotient and full producer, together with per-phase
 work limits, cumulative decode accounting and authenticated row-root results.
-The September 26 normal-library and test build passed with 3,720 unchanged
-dependency-closure inputs; its focused selection passed 238 tests with zero
-failures and seven explicitly deferred full-domain/artifact diagnostics. The real
-full-domain quotient and eight-million-point FFT/inverse checks also passed. Raw
-proof generation had started; complete ordinary/AXT producer verification
-remained pending in the [integration checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
+The retained September 26 normal-library and test build passed with 3,741 unchanged
+captured inputs. A subsequent scope audit found that its pre-build snapshot omitted
+`vendor/num-bigint-0.4.6`; this is not a complete dependency-closure qualification. Its focused selections pass 285 tests with zero
+failures and 11 explicit diagnostic ignores, including the repaired full-proof
+resource-boundary regression. The real
+full-domain quotient and eight-million-point FFT/inverse checks also passed on
+their retained source snapshot. A raw 485,490-byte proof passes bounded
+verification and context/tamper controls: generation plus controls took
+13,039.8 seconds with 25,942,648 KiB maximum RSS, and separate verification plus
+controls took 3.07 seconds. These contended local diagnostics are not release
+benchmarks. Complete ordinary/AXT generation was interrupted when the Linux guest
+stopped, so no complete public artifact is qualified by that attempt. Exact
+source and executable bindings remain in the
+[integration checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
 The September 22 verifier-only checkpoint passed 84 focused tests;
 its maximum-shaped codec fixture measured 506,351 bytes, which is not evidence
 of a valid generated proof. Earlier profile measurements below retain their
@@ -125,8 +133,24 @@ reviewed conditional ideal-field block/tuple reduction still requires the actual
 framing and AIR mapping and does not qualify the concrete six-lane construction.
 
 Production node verification still replays the complete witness; Core has no
-consumer of this offline facade. Execution-owned source quotas and atomic D7
-publication, finalized source authentication, AXT authorization, witness privacy,
+consumer of this offline facade. Execution-owned source quotas, frozen policy,
+mandatory reserves and rejection rollback are applied. The retained Core diagnostic
+passes 305 tests and fails 23 fixtures; their corrections are applied and await the
+new build. The shared merge attempt, authenticated prefix owner, recorder lifecycle,
+whole-source packing and original carrier custody are now applied and under validation.
+The typed transfer/mint/burn model and shared public preparation pass 62 focused
+Linux checks. The actual schema owner passes 23 tests; its regenerated reference
+adds the 11 effect types without changing existing entries. Rollback-local typed
+effect capture and original signed sponsor-fee burn capture are applied with
+bounded entry accounting. Core compilation remains incomplete: the latest retry
+identified a missing sponsor-capability hash import, with its repair staged.
+Capture remains nonexportable until mandatory aggregate fee owners, lifecycle/rekey
+and raw mutation coverage are complete. Proof dispatch remains unfinished.
+The native immutable executable passes 68 focused tests, including six explicitly
+required Metal device tests; complete public ordinary/AXT proving is still running.
+These are scoped executable diagnostics: source snapshots omitted local vendor
+inputs and cannot qualify a complete build closure. Atomic D7 publication, finalized
+source authentication, AXT authorization, witness privacy,
 independent cryptographic qualification, hardware/resource measurements and
 four-validator rollout/recovery remain unfinished. Production consumers, schemas,
 fixtures and SDKs must change together after those obligations are met. No
@@ -195,7 +219,7 @@ masked producer, privacy argument, or admission path.
 | --- | --- | --- |
 | G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Core still rejects unanchored spending; signed anchored-spend model amount preflight passes 2/2 focused tests but is not admitted; source/nonce and evidence gaps remain |
 | G2: Constrain the complete transfer statement | Reviewed AIR ledger or equivalent bounded public-input checks, with negative tests for every relation below | Complete 923-slot one-delta hash/SMT ledgers, bounded public checks and typed PublicIO/claim adapter pass; external authority/root authentication remains separate |
-| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | The bounded DEEP offline format, producer and ordinary/AXT verifier are implemented; exact-source complete proof/size evidence remains pending; authenticated Core admission is unwired and production still replays |
+| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | The bounded DEEP offline format, producer and ordinary/AXT verifier are implemented. One raw 485,490-byte full proof passes; complete public ordinary/AXT artifacts remain pending. Authenticated Core admission is unwired and production still replays |
 | G4: Qualify cryptography | Protocol-specific qROM argument, final multi-target digest analysis, independently reproduced constants and vectors, independent review bound to final artifacts | Unavailable |
 | G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | CPU remains the producer default; the M4 Max shader passes 5,454 digest comparisons over 954 dispatches, and the applied Rust lifecycle/tree path passes all six required actual-Metal checks. Full-proof performance, fleet and CUDA qualification remain incomplete; the native quotient fixture failure remains recorded in the September 26 checkpoint |
 | G6: Qualify integration and release | Same-source four-validator tests, restart/recovery and adversarial admission, signed immutable source and artifacts, rollout/rollback evidence | Incomplete |

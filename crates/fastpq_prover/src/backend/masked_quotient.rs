@@ -752,14 +752,19 @@ mod tests {
     #[test]
     fn parallel_scratch_is_charged_before_allocation_independently_of_pool_size() {
         use crate::gadgets::compact_smt_air::{PublicStatement, PublicUpdate};
+        let hash = iroha_crypto::Hash::new([0_u8; 33]);
+        let bytes: &[u8; 32] = hash.as_ref();
+        let digest = core::array::from_fn(|limb| {
+            u32::from_le_bytes(bytes[4 * limb..4 * limb + 4].try_into().unwrap())
+        });
         let statement = PublicStatement {
             updates: [PublicUpdate {
-                old_leaf: [0; 8],
-                new_leaf: [0; 8],
+                old_leaf: digest,
+                new_leaf: digest,
                 path: 1,
             }; 2],
-            old_root: [0; 8],
-            new_root: [0; 8],
+            old_root: digest,
+            new_root: digest,
         };
         let air = CompactTransferAir::new(&statement, None).unwrap();
         let coefficient = [F::ONE];

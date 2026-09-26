@@ -2302,6 +2302,11 @@
         "discriminant": 2,
         "tag": "ExecutionOutput",
         "type": "ExecutionOutputPolicyV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "FastpqSource",
+        "type": "FastpqSourcePolicyV1"
       }
     ]
   },
@@ -2318,6 +2323,10 @@
       {
         "name": "execution_output",
         "type": "ExecutionOutputPolicyV1"
+      },
+      {
+        "name": "fastpq_source",
+        "type": "FastpqSourcePolicyV1"
       }
     ]
   },
@@ -6400,6 +6409,203 @@
     ]
   },
   "FastpqCompactProfileIdV1": "Array<u8, 32>",
+  "FastpqExecutionAssetV1": {
+    "Struct": [
+      {
+        "name": "definition",
+        "type": "AssetDefinitionId"
+      },
+      {
+        "name": "incarnation",
+        "type": "Hash"
+      }
+    ]
+  },
+  "FastpqExecutionBalanceV1": {
+    "Struct": [
+      {
+        "name": "asset",
+        "type": "FastpqExecutionAssetV1"
+      },
+      {
+        "name": "account",
+        "type": "AccountId"
+      },
+      {
+        "name": "scope",
+        "type": "AssetBalanceScope"
+      }
+    ]
+  },
+  "FastpqExecutionEffectContextV1": {
+    "Struct": [
+      {
+        "name": "source",
+        "type": "FastpqSourceStatementContextV1"
+      },
+      {
+        "name": "entry",
+        "type": "FastpqSourceExecutionEntryV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectKindV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Transfer",
+        "type": "FastpqExecutionTransferV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Mint",
+        "type": "FastpqExecutionSupplyChangeV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "Burn",
+        "type": "FastpqExecutionSupplyChangeV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectStatementV1": {
+    "Struct": [
+      {
+        "name": "public_inputs",
+        "type": "FastpqPublicInputs"
+      },
+      {
+        "name": "ordering_hash",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "transitions",
+        "type": "Vec<FastpqStateTransition>"
+      },
+      {
+        "name": "effects",
+        "type": "FastpqExecutionEffectsV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectV1": {
+    "Struct": [
+      {
+        "name": "ordinal",
+        "type": "u32"
+      },
+      {
+        "name": "authority_digest",
+        "type": "Hash"
+      },
+      {
+        "name": "authorization_context",
+        "type": "Hash"
+      },
+      {
+        "name": "kind",
+        "type": "FastpqExecutionEffectKindV1"
+      }
+    ]
+  },
+  "FastpqExecutionEffectsV1": {
+    "Struct": [
+      {
+        "name": "context",
+        "type": "FastpqExecutionEffectContextV1"
+      },
+      {
+        "name": "effects",
+        "type": "Vec<FastpqExecutionEffectV1>"
+      }
+    ]
+  },
+  "FastpqExecutionQuantityKeyV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "Balance",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "Supply",
+        "type": "FastpqExecutionAssetV1"
+      }
+    ]
+  },
+  "FastpqExecutionSupplyChangeV1": {
+    "Struct": [
+      {
+        "name": "balance",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "name": "amount",
+        "type": "Quantity"
+      },
+      {
+        "name": "balance_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "balance_after",
+        "type": "Quantity"
+      },
+      {
+        "name": "supply_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "supply_after",
+        "type": "Quantity"
+      }
+    ]
+  },
+  "FastpqExecutionTransferV1": {
+    "Struct": [
+      {
+        "name": "source",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "name": "destination",
+        "type": "FastpqExecutionBalanceV1"
+      },
+      {
+        "name": "amount",
+        "type": "Quantity"
+      },
+      {
+        "name": "source_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "source_after",
+        "type": "Quantity"
+      },
+      {
+        "name": "destination_before",
+        "type": "Quantity"
+      },
+      {
+        "name": "destination_after",
+        "type": "Quantity"
+      }
+    ]
+  },
+  "FastpqMandatorySourcePolicyV1": {
+    "Struct": [
+      {
+        "name": "max_retained_obligations",
+        "type": "u32"
+      },
+      {
+        "name": "per_obligation",
+        "type": "FastpqSourceLimitsV1"
+      }
+    ]
+  },
   "FastpqOperationKind": {
     "Enum": [
       {
@@ -6739,6 +6945,50 @@
       {
         "name": "lane_incarnation",
         "type": "Hash"
+      }
+    ]
+  },
+  "FastpqSourceLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_executed_entries",
+        "type": "u32"
+      },
+      {
+        "name": "max_transcripts",
+        "type": "u32"
+      },
+      {
+        "name": "max_deltas",
+        "type": "u32"
+      },
+      {
+        "name": "max_input_transcript_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "max_statement_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "max_total_statement_bytes",
+        "type": "u64"
+      }
+    ]
+  },
+  "FastpqSourcePolicyV1": {
+    "Struct": [
+      {
+        "name": "intrinsic",
+        "type": "FastpqSourceLimitsV1"
+      },
+      {
+        "name": "block",
+        "type": "FastpqSourceLimitsV1"
+      },
+      {
+        "name": "mandatory",
+        "type": "FastpqMandatorySourcePolicyV1"
       }
     ]
   },
@@ -30973,6 +31223,9 @@
   },
   "Vec<ExternalExecutionRouteLeg>": {
     "Vec": "ExternalExecutionRouteLeg"
+  },
+  "Vec<FastpqExecutionEffectV1>": {
+    "Vec": "FastpqExecutionEffectV1"
   },
   "Vec<FastpqOrdinarySourceStatementLeafV1>": {
     "Vec": "FastpqOrdinarySourceStatementLeafV1"

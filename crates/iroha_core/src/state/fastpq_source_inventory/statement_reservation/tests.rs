@@ -31,9 +31,11 @@ fn limits() -> FastpqSourceStatementBuildLimits {
 
 fn seal(block: &mut StateBlock<'_>, sources: &[Hash], empty_entries: &[Hash]) -> Archive {
     cache_canonical_test_transaction_set(block, &[]);
+    for hash in empty_entries {
+        block.admit_fastpq_source_for_testing(*hash);
+    }
     for hash in sources {
-        let mut transaction = block.transaction();
-        transaction.tx_call_hash = Some(*hash);
+        let mut transaction = block.transaction_for_fastpq_testing(*hash);
         for before in [10_u32, 9] {
             let mut transfer = delta();
             transfer.from_balance_before = Quantity::from(before);
@@ -365,8 +367,7 @@ fn same_entry_discontinuity_is_rejected_without_splitting_or_private_work() {
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let hash = Hash::new(b"intervening nontransfer relation remains unavailable");
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(hash);
+    let mut tx = block.transaction_for_fastpq_testing(hash);
     // Both single occurrences are arithmetically valid. Together they require an
     // intervening balance change that the current transfer-only relation cannot prove.
     for _ in 0..2 {

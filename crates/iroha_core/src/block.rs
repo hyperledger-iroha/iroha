@@ -3816,6 +3816,7 @@ mod chained {
 }
 mod new {
     use super::*;
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     use crate::state::StateBlock;
     /// First stage in the life-cycle of a block.
     ///
@@ -3833,6 +3834,7 @@ mod new {
     }
     impl NewBlock {
         /// Transition to [`ValidBlock`]. Skips static checks and only applies state changes.
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
         pub fn validate_and_record_transactions(
             self,
             state_block: &mut StateBlock<'_>,
@@ -6673,6 +6675,24 @@ pub(crate) mod valid {
                 ),
             }
         }
+        /// Component fixtures can start a recorder only when they contain no
+        /// pre-staged consensus controls. Full prefix recording belongs to the
+        /// applying constructor and must be supplied through its consuming seam.
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        fn begin_component_fixture_recording(
+            state: &StateBlock<'_>,
+        ) -> Result<crate::sumeragi::witness::ExecWitnessGuard, BlockValidationError> {
+            if state.staged_merge_entry().is_some()
+                || !state.staged_queue_plan_admissions().is_empty()
+            {
+                return Err(Self::execution_context_error(
+                    "pre-staged controls require their original recorded constructor",
+                ));
+            }
+            crate::sumeragi::witness::begin_exec_witness_capture()
+                .map_err(Self::execution_context_error)
+        }
+
         /// Execute a strict Sumeragi-v2 test fixture through the current validation profile.
         ///
         /// This test-only entrypoint retains the production execution-context, routing, and
@@ -6681,11 +6701,35 @@ pub(crate) mod valid {
         #[cfg(any(test, feature = "iroha-core-tests"))]
         #[doc(hidden)]
         pub fn validate_sumeragi_v2_fixture(
+            block: SignedBlock,
+            topology: &Topology,
+            genesis_account: &AccountId,
+            time_source: &TimeSource,
+            state_block: &mut StateBlock<'_>,
+        ) -> WithEvents<Result<ValidBlock, Error>> {
+            let guard = match Self::begin_component_fixture_recording(state_block) {
+                Ok(guard) => guard,
+                Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
+            };
+            Self::validate_recorded_sumeragi_v2_fixture(
+                block,
+                topology,
+                genesis_account,
+                time_source,
+                state_block,
+                guard,
+            )
+        }
+
+        /// Validate a fixture over its original constructor-owned recorder.
+        #[cfg(any(test, feature = "iroha-core-tests"))]
+        pub(crate) fn validate_recorded_sumeragi_v2_fixture(
             mut block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state_block: &mut StateBlock<'_>,
+            exec_witness_guard: crate::sumeragi::witness::ExecWitnessGuard,
         ) -> WithEvents<Result<ValidBlock, Error>> {
             if let Err(error) = Self::validate_sumeragi_v2_fixture_static(
                 &block,
@@ -6709,7 +6753,6 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             if let Err(error) = Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,
@@ -6780,7 +6823,10 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = match Self::begin_component_fixture_recording(state_block) {
+                Ok(guard) => guard,
+                Err(error) => return WithEvents::new(Err((Box::new(block), Box::new(error)))),
+            };
             if let Err(error) = Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,
@@ -7144,7 +7190,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
         ) -> Result<Option<[u8; 32]>, BlockValidationError> {
             Self::validate_staged_execution_controls(&block, state_block)?;
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = Self::begin_component_fixture_recording(state_block)?;
             Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,
@@ -7305,7 +7351,15 @@ pub(crate) mod valid {
                 &iroha_data_model::block::consensus_v2::HeightContext,
             >,
             replay: Option<&VerifiedReplayProposal>,
-        ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
+        ) -> Result<
+            (
+                Box<StateBlock<'state>>,
+                crate::sumeragi::witness::ExecWitnessGuard,
+            ),
+            BlockValidationError,
+        > {
+            crate::sumeragi::witness::ensure_exec_witness_capture_available()
+                .map_err(Self::execution_context_error)?;
             Self::validate_npos_soft_fork_composition(block, soft_fork)?;
             let mut prepared_npos = Self::prepare_pristine_consensus_effects(
                 block,
@@ -7365,17 +7419,20 @@ pub(crate) mod valid {
                     ));
                 }
                 return state
-                    .block_with_pristine_carrier_stage(block, |state_block| {
-                        state_block
-                            .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
-                            .map_err(|error| {
-                                Self::execution_context_error(format!(
-                                    "QueuePlan admission controls could not be staged: {error}"
-                                ))
-                            })?;
-                        apply_npos(state_block)
-                    })
-                    .map(Box::new)
+                    .block_with_recorded_pristine_carrier_stage(
+                        block,
+                        |state_block| {
+                            state_block
+                                .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
+                                .map_err(|error| {
+                                    Self::execution_context_error(format!(
+                                        "QueuePlan admission controls could not be staged: {error}"
+                                    ))
+                                })?;
+                            apply_npos(state_block)
+                        },
+                        Self::execution_context_error,
+                    )
                     .map_err(BlockValidationError::from);
             }
             if let Some(reference) = merge_reference {
@@ -7390,41 +7447,75 @@ pub(crate) mod valid {
                     )
                 })?;
                 return state
-                    .block_with_pristine_carrier_stage(block, |state_block| {
-                        let stage = match replay {
-                            Some(authority) => state_block
-                                .stage_certified_merge_reference_for_verified_replay(
-                                    reference,
-                                    frozen_mode,
-                                    authority,
-                                ),
-                            None => {
-                                state_block.stage_certified_merge_reference(reference, frozen_mode)
+                    .block_with_recorded_pristine_carrier_stage(
+                        block,
+                        |state_block| {
+                            let stage = match replay {
+                                Some(authority) => state_block
+                                    .stage_certified_merge_reference_for_verified_replay(
+                                        reference,
+                                        frozen_mode,
+                                        authority,
+                                    ),
+                                None => state_block
+                                    .stage_certified_merge_reference(reference, frozen_mode),
+                            };
+                            stage
+                                .map_err(BlockValidationError::from_certified_merge_stage_error)?;
+                            if let Some(capability) = merge_beacon {
+                                state_block
+                                    .apply_verified_merge_beacon_pulse(capability)
+                                    .map_err(|error| {
+                                        Self::npos_effects_error(format!(
+                                            "certified merge beacon composition failed: {error}"
+                                        ))
+                                    })
+                            } else {
+                                apply_npos(state_block)
                             }
-                        };
-                        stage.map_err(BlockValidationError::from_certified_merge_stage_error)?;
-                        if let Some(capability) = merge_beacon {
-                            state_block
-                                .apply_verified_merge_beacon_pulse(capability)
-                                .map_err(|error| {
-                                    Self::npos_effects_error(format!(
-                                        "certified merge beacon composition failed: {error}"
-                                    ))
-                                })
-                        } else {
-                            apply_npos(state_block)
-                        }
-                    })
-                    .map(Box::new)
+                        },
+                        Self::execution_context_error,
+                    )
                     .map_err(BlockValidationError::from);
             }
             let state_block = if soft_fork {
-                state.block_and_revert_with_pristine_carrier_stage(block, apply_npos)
+                state.block_and_revert_with_recorded_pristine_carrier_stage(
+                    block,
+                    apply_npos,
+                    Self::execution_context_error,
+                )
             } else {
-                state.block_with_pristine_carrier_stage(block, apply_npos)
+                state.block_with_recorded_pristine_carrier_stage(
+                    block,
+                    apply_npos,
+                    Self::execution_context_error,
+                )
             }?;
-            Ok(Box::new(state_block))
+            Ok(state_block)
         }
+        /// Exercise the actual applying constructor with a persisted certified merge
+        /// sidecar; this fixture seam grants no finality or publication authority.
+        #[cfg(test)]
+        pub(crate) fn recorded_merge_state_block_for_testing<'state>(
+            block: &SignedBlock,
+            state: &'state State,
+        ) -> Result<
+            (
+                Box<StateBlock<'state>>,
+                crate::sumeragi::witness::ExecWitnessGuard,
+            ),
+            BlockValidationError,
+        > {
+            Self::state_block_for_execution(
+                block,
+                state,
+                false,
+                Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
+                None,
+                None,
+            )
+        }
+
         fn validate_staged_execution_controls(
             block: &SignedBlock,
             state_block: &StateBlock<'_>,
@@ -7778,9 +7869,7 @@ pub(crate) mod valid {
                 timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
             }
             let state_block_start = Instant::now();
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            crate::sumeragi::witness::start_block();
-            let mut state_block = match Self::state_block_for_execution(
+            let (mut state_block, exec_witness_guard) = match Self::state_block_for_execution(
                 &block,
                 state,
                 soft_fork,
@@ -11790,9 +11879,11 @@ pub(crate) mod valid {
                     advertised_transitions.as_ref(),
                 )
             };
-            // Ordinary source hashes must already be prepaid on this original
-            // overlay; a plain nonempty source is refused locally by the tail.
-            crate::sumeragi::witness::start_block();
+            // The applying constructor already owns the recorder over pristine
+            // controls and start effects. A late reset would erase that prefix.
+            state_block
+                .require_merge_prefix_recording()
+                .map_err(Self::execution_context_error)?;
             let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
@@ -11813,20 +11904,31 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        /// Execute a locally constructed block whose admission checks were completed upstream.
+        /// Execute an ordinary component fixture whose input admission is supplied by its test.
         ///
-        /// Useful for cases when the block is assumed to be valid:
-        ///
-        /// - When block is created by the node
-        /// - For Explorer, which is not interested in validation and only needs
-        ///   state changes
+        /// This late-capture adapter does not cover already-applied start effects and
+        /// cannot qualify a complete production block witness. Pre-staged consensus
+        /// controls require the recording-aware constructor and consuming adapter.
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
         pub fn validate_unchecked(
+            block: SignedBlock,
+            state_block: &mut StateBlock<'_>,
+        ) -> WithEvents<ValidBlock> {
+            let guard = Self::begin_component_fixture_recording(state_block)
+                .expect("component fixture cannot claim a pre-staged control or prefix witness");
+            Self::validate_recorded_unchecked(block, state_block, guard)
+        }
+
+        /// Execute a fixture with the original recorder already acquired by its
+        /// writer-first applying constructor. This consumes that same guard.
+        #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
+        pub(crate) fn validate_recorded_unchecked(
             mut block: SignedBlock,
             state_block: &mut StateBlock<'_>,
+            exec_witness_guard: crate::sumeragi::witness::ExecWitnessGuard,
         ) -> WithEvents<ValidBlock> {
             Self::validate_staged_execution_controls(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
             Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,

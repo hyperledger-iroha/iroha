@@ -4845,6 +4845,11 @@ pub mod isi {
                         || governance_lock_custody(&state_transaction.gov),
                         |record| record.custody.clone(),
                     );
+                    state_transaction
+                        .validate_fastpq_governance_lock(&rid, &owner, &custody)
+                        .map_err(|error| {
+                            InstructionExecutionError::InvariantViolation(error.into())
+                        })?;
                     let minimum_bond = state_transaction.gov.min_bond_amount.clone();
                     lock_voting_bond(
                         &amount,
@@ -5294,6 +5299,9 @@ pub mod isi {
             bond_escrow_account: policy.bond_escrow_account.clone(),
             slash_receiver_account: policy.slash_receiver_account.clone(),
         };
+        state_transaction
+            .validate_fastpq_governance_lock(&rid, authority, &custody)
+            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
         lock_voting_bond(
             &ballot.amount,
             locks.locks.get(authority).map(|rec| &rec.amount),
@@ -13281,10 +13289,26 @@ pub mod isi {
         }
         events
     }
+    /// Local evidence owned by the successful SCCP proof/replay admission path.
+    /// Private fields prevent another mutation caller from supplying a proof hash.
+    pub(in crate::smartcontracts::isi) struct VerifiedSccpQuantityProofBinding {
+        entry: Option<Hash>,
+        proof: iroha_data_model::proof::ProofId,
+        envelope: Hash,
+    }
+    impl VerifiedSccpQuantityProofBinding {
+        /// Consume the admitted proof binding in its original quantity mutation scope.
+        pub(in crate::smartcontracts::isi) fn into_parts(
+            self,
+        ) -> (Option<Hash>, iroha_data_model::proof::ProofId, Hash) {
+            (self.entry, self.proof, self.envelope)
+        }
+    }
     fn execute_sccp_inbound_settlement(
         settlement: SccpInboundSettlementV1,
         submitting_authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
+        binding: VerifiedSccpQuantityProofBinding,
     ) -> Result<(), Error> {
         match settlement {
             SccpInboundSettlementV1::Transfer(prepared) =>
@@ -13292,6 +13316,7 @@ pub mod isi {
                     state_transaction,
                     submitting_authority,
                     prepared,
+                    Some(binding),
                 ),
         }
     }
@@ -13610,7 +13635,17 @@ pub mod isi {
             }
             ensure_unique_proof(state_transaction, &pid)?;
             if let Some(native) = native_message {
-                execute_sccp_inbound_settlement(native.settlement, authority, state_transaction)?;
+                let binding = VerifiedSccpQuantityProofBinding {
+                    entry: state_transaction.tx_call_hash,
+                    proof: pid.clone(),
+                    envelope: Hash::new(&validated.encoded),
+                };
+                execute_sccp_inbound_settlement(
+                    native.settlement,
+                    authority,
+                    state_transaction,
+                    binding,
+                )?;
                 state_transaction.apply_sccp_replay_leaf(native.replay_mutation)?;
             }
             let height = current_height;
@@ -21369,6 +21404,7 @@ pub mod isi {
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
                 Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
                 Block(block.execution_output) => BlockParameter::ExecutionOutput,
+                Block(block.fastpq_source) => BlockParameter::FastpqSource,
                 Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
                 Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
                 Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,

@@ -235,7 +235,9 @@ impl StateBlock<'_> {
     /// Validate the retained linear owner immediately before journal publication.
     pub(in crate::state) fn verify_execution_output_publication(&self) -> Result<(), String> {
         match self.execution_output_plan.as_ref() {
-            None if self.native_lane_stage.is_none() => Ok(()),
+            None if self.native_lane_stage.is_none() && self.merge_execution_prefix.is_none() => {
+                Ok(())
+            }
             Some(ExecutionOutputPlanState::Finalized(finalized)) => {
                 if finalized.authorized.sealed.proposal != self._curr_block.hash() {
                     return Err("finalized execution belongs to another carrier".into());
@@ -307,6 +309,7 @@ impl StateBlock<'_> {
             {
                 return Err("output seal source differs from its actual execution".into());
             }
+            state.verify_merge_prefix_carrier(block)?;
             if retained.native {
                 state.validate_native_output_carrier(block)?;
             } else if state.native_lane_stage.is_some()
@@ -323,15 +326,21 @@ impl StateBlock<'_> {
                 || sources.proposal() != block.hash()
                 || sources.source_context().network_id != state.network_id
                 || sources.source_context().height != state._curr_block.height().get()
-                || sources.entries().len() != retained.rows.len()
-                || sources.network_routes().len() != block.network_entrypoint_count()
+                || sources.entries().len()
+                    != retained
+                        .rows
+                        .len()
+                        .checked_add(sources.prefix_count())
+                        .ok_or("complete source count overflow")?
+                || sources.carrier_network_routes().len() != block.network_entrypoint_count()
             {
                 return Err("output seal lost its complete actual source inventory".into());
             }
             if !state.batch_transfer_outcomes.is_empty() {
                 return Err("output seal retains unowned business receipts".into());
             }
-            let metadata = finalize(state, block, sources.network_routes())
+            state.verify_merge_owned_sources(&sources)?;
+            let metadata = finalize(state, block, sources.carrier_network_routes())
                 .map_err(ExecutionOutputSealError::Finalizer)?;
             if !matches!(
                 state.execution_output_plan,
@@ -348,11 +357,15 @@ impl StateBlock<'_> {
                 return Err("output finalizer did not account for every applied fragment".into());
             }
             let tx_set = iroha_data_model::nexus::axt_ordered_transaction_set_digest_v1(
-                (0..block.network_entrypoint_count()).map(|index| {
-                    block
-                        .network_entrypoint_at(index)
-                        .expect("immutable Network count and source positions agree")
-                }),
+                sources
+                    .merge_prefix()
+                    .into_iter()
+                    .flat_map(|prefix| prefix.inputs().iter())
+                    .chain((0..block.network_entrypoint_count()).map(|index| {
+                        block
+                            .network_entrypoint_at(index)
+                            .expect("immutable Network count and source positions agree")
+                    })),
             )
             .map_err(|error| error.to_string())?;
             state.set_fastpq_tx_set_hash(tx_set.into());

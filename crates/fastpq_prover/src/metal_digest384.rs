@@ -658,10 +658,10 @@ mod tests {
         use std::{hint::black_box, time::Instant};
 
         let _gpu_lane = crate::backend::acquire_gpu_lane();
-        // These are complete 256-column AIR-row payloads, with canonical field
+        // These are complete 301-column normal DEEP row payloads, with canonical field
         // elements and distinct typed row indices. Prefix preparation remains
         // CPU work and is measured separately for both execution routes.
-        const COLUMNS: usize = 256;
+        const COLUMNS: usize = 301;
         for job_count in [16, 64, 256] {
             let payloads: Vec<Vec<u8>> = (0..job_count)
                 .map(|row| {

@@ -236,6 +236,22 @@ fn actual_signed_sources_apply_once_in_original_output_positions() {
             Some(&Json::new(index as i32))
         );
     }
+    let (ordinary, mandatory) = block.fastpq_source_usage_for_testing();
+    assert_eq!(ordinary.executed_entries, 2);
+    assert_eq!(
+        (
+            ordinary.transcripts,
+            ordinary.deltas,
+            ordinary.input_transcript_bytes,
+            ordinary.max_statement_bytes,
+            ordinary.total_statement_bytes
+        ),
+        (0, 0, 0, 0, 0)
+    );
+    assert_eq!(
+        mandatory,
+        crate::fastpq::source_reservation::SourceUsage::ZERO
+    );
     assert!(block.gas_used_in_block > 0);
     assert!(execute(&mut block, &source).is_err());
     assert!(matches!(
@@ -453,6 +469,13 @@ fn stateless_rejection_does_not_execute_its_business_instructions() {
     );
     assert_eq!(block.committed_fragment_count(), fragments);
     assert_eq!(block.gas_used_in_block, 0);
+    let (ordinary, mandatory) = block.fastpq_source_usage_for_testing();
+    assert_eq!(ordinary.executed_entries, 1);
+    assert_eq!(ordinary.transcripts, 0);
+    assert_eq!(
+        mandatory,
+        crate::fastpq::source_reservation::SourceUsage::ZERO
+    );
 }
 
 #[test]
@@ -617,6 +640,9 @@ mod seal;
 #[path = "output_network_fee_tests.rs"]
 mod fees;
 
+#[path = "output_network_source_tail_tests.rs"]
+mod source_tail;
+
 #[path = "output_network_effect_tests.rs"]
 mod effects;
 
@@ -740,4 +766,96 @@ fn ordinary_signed_creation_time_must_precede_its_actual_carrier() {
             );
         }
     }
+}
+
+#[test]
+fn intrinsic_source_rejection_rolls_back_movements_and_witness_but_keeps_e_and_fee() {
+    use iroha_data_model::{
+        asset::{AssetDefinitionId, AssetId},
+        isi::Transfer,
+        parameter::FastpqSourcePolicyV1,
+        transaction::{FeeChargeKind, FeeChargeLimit},
+    };
+    use iroha_primitives::numeric::Quantity;
+    let _guard = witness::exec_witness_guard();
+    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
+        .lock()
+        .unwrap();
+    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    let asset = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("network-fee", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
+    let state = fixture_with_fee_asset(65_536, None, Some(asset.clone()));
+    let mut parameters = state.world.parameters.block();
+    let previous = parameters.get().block().fastpq_source();
+    let mut intrinsic = previous.intrinsic;
+    intrinsic.max_transcripts = 1;
+    intrinsic.max_deltas = 1;
+    let profile = FastpqSourcePolicyV1::from_sizing(
+        parameters.get().block().execution_output(),
+        intrinsic,
+        previous.mandatory,
+        1,
+    )
+    .unwrap();
+    parameters
+        .get_mut()
+        .set_parameter(Parameter::Block(BlockParameter::FastpqSource(profile)));
+    parameters.commit();
+    let alice = AssetId::of(asset.clone(), ALICE_ID.clone());
+    let bob = AssetId::of(asset.clone(), iroha_test_samples::BOB_ID.clone());
+    let source = carrier(vec![input(
+        &state,
+        vec![
+            Transfer::asset_quantity(alice.clone(), 1_u32, iroha_test_samples::BOB_ID.clone())
+                .into(),
+            Transfer::asset_quantity(alice.clone(), 1_u32, iroha_test_samples::BOB_ID.clone())
+                .into(),
+        ],
+        FeePaymentIntent::authority(
+            vec![FeeChargeLimit::new(
+                FeeChargeKind::Nexus,
+                asset,
+                Quantity::from(1_u32),
+            )],
+            None,
+        ),
+        true,
+    )]);
+    witness::start_block();
+    let mut block = state.block(source.header());
+    let before_fragments = block.committed_fragment_count();
+    let receiver_before = block.world.assets().get(&bob).cloned();
+    execute(&mut block, &source).unwrap();
+    assert!(matches!(network_row(&block, 0).result.as_ref(),
+        Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            iroha_data_model::ValidationFail::NotPermitted(reason)
+        )) if reason == crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION));
+    assert_eq!(
+        block.world.assets().get(&alice).unwrap().0,
+        Quantity::from(9_u32)
+    );
+    assert_eq!(block.world.assets().get(&bob).cloned(), receiver_before);
+    assert_eq!(block.committed_fragment_count(), before_fragments + 1);
+    assert!(block.fastpq_transcripts.is_empty());
+    assert!(
+        block
+            .captured_fastpq_transcript_sources()
+            .unwrap()
+            .is_empty()
+    );
+    let (ordinary, mandatory) = block.fastpq_source_usage_for_testing();
+    assert_eq!(
+        ordinary,
+        crate::fastpq::source_reservation::SourceUsage {
+            executed_entries: 1,
+            ..crate::fastpq::source_reservation::SourceUsage::ZERO
+        }
+    );
+    assert_eq!(
+        mandatory,
+        crate::fastpq::source_reservation::SourceUsage::ZERO
+    );
+    assert!(witness::drain_exec_witness().fastpq_transcripts.is_empty());
 }

@@ -39,7 +39,8 @@ use crate::{
     Error, OperationKind, ProofSemantics, PublicInputs, Result, StateTransition, VerifyLimits,
 };
 
-mod materialize;
+pub mod execution_effect;
+pub(in crate::gadgets) mod materialize;
 mod quantity;
 mod quantity_prefix;
 
@@ -145,7 +146,7 @@ impl Default for PublicTransferLimits {
 /// Complete canonical key hash and its unique collision-resolved path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicKeyAllocation {
-    /// Complete canonical `FastpqBalanceKeyV1` Norito frame.
+    /// Complete canonical typed quantity key frame; the preparing relation owns its schema.
     pub key: Vec<u8>,
     /// Marked BLAKE2b-256 of the complete key-domain message, including long keys.
     pub key_hash: [u8; 32],

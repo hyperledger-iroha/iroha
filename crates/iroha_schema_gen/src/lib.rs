@@ -52,12 +52,17 @@ macro_rules! schema_types {
             iroha_data_model::fastpq::FastpqTransitionBatch,
             iroha_data_model::fastpq::FastpqStateTransition,
             iroha_data_model::fastpq::FastpqBalanceKeyV1,
+            // Nominal execution-effect candidate roots; not proof-dispatch registrations.
+            iroha_data_model::fastpq::FastpqExecutionEffectStatementV1,
+            iroha_data_model::fastpq::FastpqExecutionQuantityKeyV1,
             iroha_data_model::fastpq::FastpqOrdinaryCompactArtifactV1,
             iroha_data_model::fastpq::FastpqAxtCompactArtifactV1,
             iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1,
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1,
             iroha_data_model::fastpq::FastpqOrdinarySourceStatementArchiveV1,
             iroha_data_model::fastpq::FastpqSourceExecutionEntryV1,
+            // Agreed source-capacity candidate; installation is owned by Core.
+            iroha_data_model::parameter::FastpqSourcePolicyV1,
             // Torii qualification is an opaque response owner and needs an explicit public root.
             iroha_data_model::privacy::PrivacyExact12QualificationRecordV1,
             // Frozen public conviction context and immutable closed result are query/snapshot values.
@@ -574,6 +579,10 @@ mod tests {
             schemas.contains_key::<iroha_data_model::fastpq::FastpqPublicTransferStatementV1>()
         );
         assert!(
+            schemas.contains_key::<iroha_data_model::fastpq::FastpqExecutionEffectStatementV1>()
+        );
+        assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqExecutionQuantityKeyV1>());
+        assert!(
             schemas
                 .contains_key::<iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1>()
         );
@@ -594,5 +603,10 @@ mod tests {
         assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceLaneV1>());
         assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionKindV1>());
         assert!(schemas.contains_key::<iroha_data_model::fastpq::FastpqSourceExecutionEntryV1>());
+        assert!(schemas.contains_key::<iroha_data_model::parameter::FastpqSourcePolicyV1>());
+        assert!(schemas.contains_key::<iroha_data_model::parameter::FastpqSourceLimitsV1>());
+        assert!(
+            schemas.contains_key::<iroha_data_model::parameter::FastpqMandatorySourcePolicyV1>()
+        );
     }
 }

@@ -5,10 +5,10 @@
 //! frames must never be summed for production entry accounting. The occurrence API
 //! remains a lower-level accounting test surface.
 //!
-//! This internal component supplies accounting and capability lifetime checks only.
-//! The State adapter must own logical entry creation, authenticated context/policy,
-//! exact measurement, execution ordering and proposal/mandatory-owner outcomes.
-//! TODO: Wire the real State savepoints and owner outcomes before enabling quotas.
+//! State supplies logical invocation ownership, authenticated frozen policy and
+//! exact before-movement measurement. Physical State transactions borrow both
+//! quota journals and publish or discard them with State and witness overlays;
+//! final source inventory reconciliation checks every retained entry and dimension.
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -807,3 +807,6 @@ mod tests;
 
 /// Exact complete-entry reservation adapter; occurrence accounting stays internal.
 pub(crate) mod entry_bundle;
+
+/// Frozen ordinary/mandatory source admission and physical transaction scopes.
+pub(crate) mod admission;

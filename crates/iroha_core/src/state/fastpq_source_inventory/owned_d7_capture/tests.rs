@@ -161,6 +161,9 @@ fn empty_and_nontransfer_inventories_keep_complete_entry_counts() {
         cache_canonical_test_transaction_set(&mut block, &[]);
         let times = nontransfer.then(|| Hash::new(b"D7 nontransfer time invocation"));
         let times = times.into_iter().collect::<Vec<_>>();
+        for hash in &times {
+            block.admit_fastpq_source_for_testing(*hash);
+        }
         block
             .finalize_fastpq_source_inventory(&[], &[], &times)
             .unwrap();
@@ -437,7 +440,24 @@ fn late_applied_occurrences_reject_even_when_their_archive_is_drained() {
         } else {
             Hash::new(b"D7 late source")
         };
-        apply_source(&mut block, late, false, None);
+        {
+            // A sealed fixture may reuse an existing owner, but must not mint one.
+            let mut transaction = block.transaction();
+            transaction.tx_call_hash = Some(late);
+            let prepared = transaction.record_transfer_transcript(&ALICE_ID, delta());
+            if same_key {
+                prepared.unwrap();
+                transaction.apply();
+            } else {
+                assert!(
+                    prepared
+                        .unwrap_err()
+                        .to_string()
+                        .contains("no retained producer invocation")
+                );
+                assert!(transaction.prepare_apply().is_err());
+            }
+        }
         block.drain_transfer_transcripts_with_pending(None);
         assert!(context.verify_current(&block).is_err());
         assert!(
@@ -625,8 +645,7 @@ fn full_domain_quantity_preparation_uses_the_strict_source_producer() {
     transfer.from_balance_after = transfer.amount.clone();
     transfer.to_balance_before = Quantity::zero();
     transfer.to_balance_after = transfer.amount.clone();
-    let mut transaction = block.transaction();
-    transaction.tx_call_hash = Some(source);
+    let mut transaction = block.transaction_for_fastpq_testing(source);
     transaction.record_test_transfer_transcripts(&ALICE_ID, source, vec![transfer]);
     transaction.apply();
     block

@@ -26,10 +26,14 @@ fn state_with_marker() -> State {
 }
 
 fn apply_marker(block: &mut StateBlock<'_>, value: u8, source: Option<Hash>) {
-    let mut tx = block.transaction();
+    // This direct component fixture must retain its bounded invocation before
+    // borrowing the transaction; assigning tx_call_hash alone grants no owner.
+    let mut tx = match source {
+        Some(hash) => block.transaction_for_fastpq_testing(hash),
+        None => block.transaction(),
+    };
     tx.world.smart_contract_state.insert(marker(), vec![value]);
     if let Some(hash) = source {
-        tx.tx_call_hash = Some(hash);
         tx.record_test_transfer_transcripts(&ALICE_ID, hash, vec![delta()]);
     }
     tx.apply();
@@ -175,13 +179,16 @@ fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
         );
         assert_eq!(
             block.verified_fastpq_source_inventory_for_capture(),
-            Err(error),
+            Err("FASTPQ witness capture refuses a poisoned carrier".into()),
         );
+        assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
         block.authenticated_replay_commit = replay;
         stage_membership(&mut block, Some(source));
+        // Inventory construction poisoned the carrier, so the earlier output
+        // publication guard refuses it before the inventory-specific commit gate.
         assert!(matches!(
             block.commit(),
-            Err(TransactionsBlockError::FastpqSourceInventory)
+            Err(TransactionsBlockError::ExecutionOutputCapacity)
         ));
         assert_unpublished(&state);
     }

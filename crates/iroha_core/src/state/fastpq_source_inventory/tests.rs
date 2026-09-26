@@ -86,8 +86,11 @@ pub(super) fn apply_source(
     native: bool,
     route: Option<RoutingDecision>,
 ) {
-    let mut tx = block.transaction();
-    tx.tx_call_hash = (!native).then_some(hash);
+    let mut tx = if native {
+        block.transaction_for_fastpq_protocol_testing()
+    } else {
+        block.transaction_for_fastpq_testing(hash)
+    };
     tx.current_lane_id = route.map(|route| route.lane_id);
     tx.current_dataspace_id = route.map(|route| route.dataspace_id);
     tx.record_test_transfer_transcripts(&ALICE_ID, hash, vec![delta()]);
@@ -106,8 +109,7 @@ fn limits() -> FastpqSourceStatementBuildLimits {
 }
 
 fn apply_ordered_source(block: &mut StateBlock<'_>, hash: Hash) {
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(hash);
+    let mut tx = block.transaction_for_fastpq_testing(hash);
     for before in [10_u32, 9] {
         let mut occurrence = delta();
         occurrence.from_balance_before = Quantity::from(before);
@@ -150,6 +152,9 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
     cache_canonical_test_transaction_set(&mut block, &external);
     crate::sumeragi::witness::start_block();
     assert!(block.fastpq_source_inventory().unwrap().is_none());
+    for hash in [calls[1], time_calls[1]] {
+        block.admit_fastpq_source_for_testing(hash);
+    }
     apply_source(&mut block, extras[0], true, None);
     apply_source(&mut block, calls[0], false, Some(routes[0]));
     apply_source(&mut block, time_calls[0], false, None);
@@ -443,24 +448,32 @@ fn additional_source_order_does_not_depend_on_fragment_order() {
 }
 
 #[test]
-fn rolled_back_capture_conflicts_do_not_enter_inventory() {
+fn invalid_source_capture_poison_survives_transaction_rollback() {
     let _guard = crate::sumeragi::witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let hash = Hash::new(b"rolled back");
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         tx.current_lane_id = Some(LaneId::new(999));
-        tx.record_test_transfer_transcripts(&ALICE_ID, hash, vec![delta()]);
+        tx.record_transfer_transcript(&ALICE_ID, delta())
+            .expect_err("an unknown lane cannot prepare a source occurrence");
     }
-    block
-        .finalize_fastpq_source_inventory(&[], &[], &[hash])
-        .unwrap();
-    let inventory = block.fastpq_source_inventory().unwrap().unwrap();
-    assert_eq!(inventory.entries().len(), 1);
-    assert!(inventory.transcript_entry_hashes().is_empty());
+    let (ordinary, mandatory) = block.fastpq_source_usage_for_testing();
+    assert_eq!(ordinary.executed_entries, 1);
+    assert_eq!(ordinary.transcripts, 0);
+    assert_eq!(
+        mandatory,
+        crate::fastpq::source_reservation::SourceUsage::ZERO
+    );
+    assert!(block.fastpq_transcripts.is_empty());
+    assert!(
+        block
+            .finalize_fastpq_source_inventory(&[], &[], &[hash])
+            .is_err()
+    );
+    assert!(block.fastpq_source_inventory().is_err());
 }
 
 #[test]
@@ -681,18 +694,24 @@ fn pending_entrypoint_and_synchronous_sealing_commit_finalized_digests() {
     for pending_entrypoint in [false, true] {
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
-        apply_ordered_source(&mut block, hash);
+        // Record both complete occurrences before publication so quota reconciliation
+        // sees the real three-delta source, rather than a forged later enlargement.
+        let mut transaction = block.transaction_for_fastpq_testing(hash);
+        transaction.record_test_transfer_transcripts(&ALICE_ID, hash, vec![delta()]);
+        let later = [9_u32, 8].map(|before| {
+            let mut transfer = delta();
+            transfer.from_balance_before = Quantity::from(before);
+            transfer.from_balance_after = Quantity::from(before - 1);
+            transfer.to_balance_before = Quantity::from(10 - before);
+            transfer.to_balance_after = Quantity::from(11 - before);
+            transfer
+        });
+        transaction.record_test_transfer_transcripts(&ALICE_ID, hash, later.into());
+        transaction.apply();
         let bundle = block.fastpq_transcripts.get_mut(&hash).unwrap();
         let expected_digest = bundle[0].poseidon_preimage_digest.unwrap();
         bundle[0].poseidon_preimage_digest = None;
-        // Preserve one original multi-delta operation with its required absent digest.
-        let mut third = bundle[1].deltas[0].clone();
-        third.from_balance_before = Quantity::from(8_u32);
-        third.from_balance_after = Quantity::from(7_u32);
-        third.to_balance_before = Quantity::from(2_u32);
-        third.to_balance_after = Quantity::from(3_u32);
-        bundle[1].deltas.push(third);
-        bundle[1].poseidon_preimage_digest = None;
+        assert!(bundle[1].poseidon_preimage_digest.is_none());
         if pending_entrypoint {
             // This small fixture exercises the optional pending-batch interface's
             // deterministic fallback; it does not qualify a GPU pending batch.
@@ -768,6 +787,9 @@ fn nontransfer_time_sources_change_entry_digest_without_replacing_wire_commitmen
     for time_calls in [vec![], vec![Hash::new(b"nontransfer time invocation")]] {
         let mut block = state.block(header());
         let wire_hash = cache_canonical_test_transaction_set(&mut block, &[]);
+        for hash in &time_calls {
+            block.admit_fastpq_source_for_testing(*hash);
+        }
         block
             .finalize_fastpq_source_inventory(&[], &[], &time_calls)
             .unwrap();

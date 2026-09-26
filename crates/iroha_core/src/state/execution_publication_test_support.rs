@@ -113,21 +113,26 @@ impl State {
         );
         // Keep the original signed carrier's prepaid membership source from
         // pristine block acquisition through validation and publication.
-        let mut staged = self
-            .block_with_pristine_carrier_stage(&source, |_| Ok::<(), String>(()))
+        let (mut staged, recorder) = self
+            .block_with_recorded_pristine_carrier_stage(
+                &source,
+                |_| Ok::<(), String>(()),
+                |error| error,
+            )
             .map_err(|error| error.to_string())?;
-        let valid = ValidBlock::validate_sumeragi_v2_fixture(
+        let valid = ValidBlock::validate_recorded_sumeragi_v2_fixture(
             source,
             &topology,
             &genesis_account,
             &time,
             &mut staged,
+            recorder,
         )
         .unpack(|_| {})
         .map_err(|(_, error)| error.to_string())?;
         let committed = valid.commit_unchecked().unpack(|_| {});
         let signed = committed.as_ref().clone();
-        self.commit_executed_block_for_testing(staged, committed)?;
+        self.commit_executed_block_for_testing(*staged, committed)?;
         Ok(signed)
     }
 

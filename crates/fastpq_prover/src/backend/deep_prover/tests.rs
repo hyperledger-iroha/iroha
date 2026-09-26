@@ -431,13 +431,34 @@ fn read_captured_proof() -> Vec<u8> {
 #[test]
 #[ignore = "actual 8M-domain DEEP proof: tens of GiB and costly hashes/FFTs; explicit local qualification only"]
 fn actual_smt_proof_roundtrips_through_bounded_verifier_and_rejects_context_and_tampering() {
+    actual_smt_proof_with_execution(DigestExecutionV1::Cpu);
+}
+
+#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+#[test]
+#[ignore = "actual Metal 8M-domain DEEP proof; requires FASTPQ_DEEP_PROOF_ARTIFACT and tens of GiB; no CPU substitution"]
+fn actual_metal_smt_proof_roundtrips_through_bounded_verifier_and_rejects_context_and_tampering() {
+    let _lane = crate::backend::acquire_gpu_lane();
+    assert!(
+        proof_artifact_path().is_some(),
+        "set FASTPQ_DEEP_PROOF_ARTIFACT to preserve the actual Metal proof"
+    );
+    // Device is a required executor: unavailable/quarantined hardware or any
+    // dispatch failure returns an error, rather than a successful CPU proof.
+    actual_smt_proof_with_execution(DigestExecutionV1::Device(
+        crate::Digest384GpuBackendV1::Metal,
+    ));
+}
+
+fn actual_smt_proof_with_execution(execution: DigestExecutionV1) {
+    let started = std::time::Instant::now();
     let (relation, coefficients) = actual_smt_fixture();
     let borrowed = coefficients.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let bytes = prove(
         &relation,
         &borrowed,
         ProverLimits {
-            digest_execution: DigestExecutionV1::Cpu,
+            digest_execution: execution,
             // Conservative array payload ceilings, not limits on process RSS.
             // These allow the ~30 GiB retained producer plus its 4N quotient.
             max_payload_bytes: usize::try_from(64_u64 << 30).unwrap(),
@@ -455,7 +476,14 @@ fn actual_smt_proof_roundtrips_through_bounded_verifier_and_rejects_context_and_
     drop(borrowed);
     drop(coefficients);
     preserve_proof_if_requested(&bytes);
+    let proving_elapsed = started.elapsed();
+    let started = std::time::Instant::now();
     assert_valid_and_tamper(&relation, &bytes);
+    eprintln!(
+        "deep_full_proof_executor={execution:?}; bytes={}; proving={proving_elapsed:?}; verification_and_tampering={:?}; production_security_qualified=false",
+        bytes.len(),
+        started.elapsed()
+    );
 }
 
 #[test]
@@ -670,6 +698,7 @@ fn fixed_hash_preparation_charge_includes_guarded_bodies_jobs_rows_and_backend_p
     let descriptors_and_rows = HASH_BATCH_FRAMES
         * (core::mem::size_of::<Result<PreparedHashFrame>>()
             + core::mem::size_of::<PreparedHashFrame>()
+            + core::mem::size_of::<Result<Digest384LastFieldJob<'_>>>()
             + core::mem::size_of::<Digest384LastFieldJob<'_>>()
             + 128 * F::BYTES);
     assert_eq!(
@@ -717,4 +746,109 @@ fn bounded_deep_tree_metal_matches_cpu_at_every_level_and_opening() {
     assert_eq!(metal.levels, cpu.levels);
     let plan = multiproof(count, &[0, 255, 256, count - 1]);
     assert_eq!(metal.frontier(&plan).unwrap(), cpu.frontier(&plan).unwrap());
+}
+
+#[test]
+fn parallel_prepared_jobs_preserve_canonical_hashes_across_worker_counts() {
+    let binding = Context::new(b"ordered parallel canonical device jobs").unwrap();
+    let oracles = [
+        Oracle::Row,
+        Oracle::QuotientPair,
+        Oracle::Fri(0),
+        Oracle::Fri(4),
+        Oracle::Terminal,
+    ];
+    let mut frames = Vec::with_capacity(HASH_BATCH_FRAMES);
+    let mut expected = Vec::with_capacity(HASH_BATCH_FRAMES);
+    for slot in 0..HASH_BATCH_FRAMES {
+        let oracle = oracles[slot % oracles.len()];
+        let (_, _, leaves, width) = oracle.shape().unwrap();
+        if slot % 2 == 0 || oracle == Oracle::Terminal {
+            let index = ((slot * 31) % leaves) as u32;
+            let payload = (0..width / 8)
+                .flat_map(|column| ((slot * width + column) as u64).to_le_bytes())
+                .collect::<Vec<_>>();
+            frames.push(binding.prepare_leaf(oracle, index, &payload).unwrap());
+            expected.push(binding.hash_leaf(oracle, index, &payload).unwrap());
+        } else {
+            let index = ((slot * 31) % (leaves / 2)) as u32;
+            let left = Digest::new([slot as u64 + 1; 6]).unwrap();
+            let right = Digest::new([slot as u64 + 2; 6]).unwrap();
+            frames.push(
+                binding
+                    .prepare_parent(oracle, 1, index, left, right)
+                    .unwrap(),
+            );
+            expected.push(binding.hash_parent(oracle, 1, index, left, right).unwrap());
+        }
+    }
+    for workers in [1, 2, 6] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        for count in [0, 1, 17, HASH_BATCH_FRAMES] {
+            let jobs = pool
+                .install(|| prepare_hash_jobs(count, |index| frames[index].job()))
+                .unwrap();
+            assert_eq!(jobs.len(), count);
+            for (index, job) in jobs.iter().enumerate() {
+                let sequential = frames[index].job().unwrap();
+                assert_eq!(job.prefix().received_len(), 0);
+                assert_eq!(job.prefix().expected_len(), frames[index].payload_len());
+                assert_eq!(job.final_field(), sequential.final_field());
+                assert_eq!(
+                    job.final_field().as_ptr(),
+                    sequential.final_field().as_ptr()
+                );
+            }
+            assert_eq!(
+                crate::digest384_batch::hash_last_fields_cpu(&jobs).unwrap(),
+                expected[..count],
+                "canonical hashes differ with {workers} workers and {count} jobs"
+            );
+        }
+    }
+}
+
+#[test]
+fn parallel_prepared_jobs_return_first_indexed_error_and_bound_work() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let binding = Context::new(b"ordered parallel job failures").unwrap();
+    let frame = binding
+        .prepare_leaf(Oracle::QuotientPair, 0, &[0; 2 * F::BYTES])
+        .unwrap();
+    for workers in [1, 2, 6] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let visited = AtomicUsize::new(0);
+        let result = pool.install(|| {
+            prepare_hash_jobs(16, |index| {
+                visited.fetch_or(1 << index, Ordering::Relaxed);
+                match index {
+                    1 => Err(invalid("first indexed device preparation error")),
+                    7 => Err(invalid("later indexed device preparation error")),
+                    _ => frame.job(),
+                }
+            })
+        });
+        assert!(matches!(result, Err(Error::InvalidTraceShape { details })
+            if details == "first indexed device preparation error"));
+        assert_eq!(visited.load(Ordering::Relaxed), (1 << 16) - 1);
+        assert!(
+            pool.install(|| prepare_hash_jobs(0, |_| panic!("empty batch performed work")))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            pool.install(|| prepare_hash_jobs(HASH_BATCH_FRAMES + 1, |_| {
+                panic!("oversized batch performed work")
+            })),
+            Err(Error::InvalidTraceShape { details })
+                if details == "DEEP hash preparation exceeds its fixed batch count"
+        ));
+    }
 }

@@ -1,6 +1,6 @@
 //! Built-in parameter definitions and validation logic.
 pub use self::model::*;
-use super::execution_output::ExecutionOutputPolicyV1;
+use super::{execution_output::ExecutionOutputPolicyV1, fastpq_source::FastpqSourcePolicyV1};
 
 use super::custom::json_helpers;
 use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
@@ -564,7 +564,9 @@ mod model {
         Encode,
         IntoSchema,
     )]
-    #[display("{max_transactions},{max_time_trigger_invocations},{execution_output}_BL")]
+    #[display(
+        "{max_transactions},{max_time_trigger_invocations},{execution_output},{fastpq_source}_BL"
+    )]
     #[getset(get_copy = "pub")]
     pub struct BlockParameters {
         /// Maximal number of transactions in a block.
@@ -577,6 +579,8 @@ mod model {
         pub max_time_trigger_invocations: NonZeroU32,
         /// Agreed immutable capacity envelope for output rows and trigger registries.
         pub execution_output: ExecutionOutputPolicyV1,
+        /// Agreed immutable FASTPQ execution-source profile, installed at genesis.
+        pub fastpq_source: FastpqSourcePolicyV1,
     }
     /// Single block parameter
     ///
@@ -596,6 +600,8 @@ mod model {
         MaxTimeTriggerInvocations(NonZeroU32),
         /// Install the whole output capacity envelope at genesis.
         ExecutionOutput(ExecutionOutputPolicyV1),
+        /// Install the whole FASTPQ execution-source profile at genesis.
+        FastpqSource(FastpqSourcePolicyV1),
     }
     /// Limits that a transaction must obey to be accepted.
     #[derive(norito::NoritoSchema)]
@@ -1428,6 +1434,7 @@ impl JsonSerialize for BlockParameters {
             &self.max_time_trigger_invocations,
         );
         json_support::write_field(out, &mut first, "execution_output", &self.execution_output);
+        json_support::write_field(out, &mut first, "fastpq_source", &self.fastpq_source);
         out.push('}');
     }
     fn json_serialize_to(
@@ -1445,6 +1452,7 @@ impl JsonSerialize for BlockParameters {
             &self.max_time_trigger_invocations,
         )?;
         json_support::write_field_to(out, &mut first, "execution_output", &self.execution_output)?;
+        json_support::write_field_to(out, &mut first, "fastpq_source", &self.fastpq_source)?;
         out.push('}')?;
         out.end_container();
         Ok(())
@@ -1468,11 +1476,16 @@ impl JsonDeserialize for BlockParameters {
             &map.remove("execution_output")
                 .ok_or_else(|| json::Error::Message("missing execution_output".into()))?,
         )?;
+        let fastpq_source = json_support::parse_value_as(
+            &map.remove("fastpq_source")
+                .ok_or_else(|| json::Error::Message("missing fastpq_source".into()))?,
+        )?;
         json_support::ensure_no_extra(map)?;
         Ok(Self {
             max_transactions,
             max_time_trigger_invocations,
             execution_output,
+            fastpq_source,
         })
     }
 }
@@ -1546,6 +1559,7 @@ impl Parameters {
             Block(block.max_transactions) => BlockParameter::MaxTransactions,
             Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
             Block(block.execution_output) => BlockParameter::ExecutionOutput,
+            Block(block.fastpq_source) => BlockParameter::FastpqSource,
             Transaction(transaction.max_signatures) => TransactionParameter::MaxSignatures,
             Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
             Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
@@ -1743,6 +1757,7 @@ impl BlockParameters {
             max_transactions,
             max_time_trigger_invocations: nonzero_ext::nonzero!(512_u32),
             execution_output: ExecutionOutputPolicyV1::bootstrap(),
+            fastpq_source: FastpqSourcePolicyV1::bootstrap(),
         }
     }
     /// Convert [`Self`] into iterator of individual parameters
@@ -1751,6 +1766,7 @@ impl BlockParameters {
             BlockParameter::MaxTransactions(self.max_transactions),
             BlockParameter::MaxTimeTriggerInvocations(self.max_time_trigger_invocations),
             BlockParameter::ExecutionOutput(self.execution_output),
+            BlockParameter::FastpqSource(self.fastpq_source),
         ]
         .into_iter()
     }
@@ -1775,6 +1791,11 @@ impl JsonSerialize for BlockParameter {
                 out.push(':');
                 value.json_serialize(out);
             }
+            BlockParameter::FastpqSource(value) => {
+                json::write_json_string("FastpqSource", out);
+                out.push(':');
+                value.json_serialize(out);
+            }
         }
         out.push('}');
     }
@@ -1794,6 +1815,10 @@ impl JsonSerialize for BlockParameter {
             }
             BlockParameter::ExecutionOutput(value) => {
                 out.push_str("{\"ExecutionOutput\":")?;
+                value.json_serialize_to(out)?;
+            }
+            BlockParameter::FastpqSource(value) => {
+                out.push_str("{\"FastpqSource\":")?;
                 value.json_serialize_to(out)?;
             }
         }
@@ -1826,6 +1851,7 @@ impl JsonDeserialize for BlockParameter {
             "ExecutionOutput" => Ok(Self::ExecutionOutput(json_support::parse_value_as(
                 &payload,
             )?)),
+            "FastpqSource" => Ok(Self::FastpqSource(json_support::parse_value_as(&payload)?)),
             other => Err(json::Error::UnknownField {
                 field: other.to_owned(),
             }),

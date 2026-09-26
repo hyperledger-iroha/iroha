@@ -1,7 +1,11 @@
 //! Parameter module split into system and custom parameters.
 pub mod custom;
 pub mod execution_output;
+pub mod fastpq_source;
 pub use execution_output::ExecutionOutputPolicyV1;
+pub use fastpq_source::{
+    FastpqMandatorySourcePolicyV1, FastpqSourceLimitsV1, FastpqSourcePolicyV1,
+};
 pub mod system;
 pub(crate) use custom::CustomParameters;
 pub use custom::{CustomParameter, CustomParameterId};

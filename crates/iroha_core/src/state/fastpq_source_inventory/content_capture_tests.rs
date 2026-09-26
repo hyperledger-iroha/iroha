@@ -609,7 +609,13 @@ fn interrupted_capture_restores_prior_lane_seal_and_latches_publication_failure(
         ));
         witness::start_block();
         witness::synchronize_fastpq_transcripts(&original);
-        assert_eq!(block.capture_exec_witness(), Err(error.clone()));
+        assert_eq!(
+            block.capture_exec_witness(),
+            Err("FASTPQ witness capture refuses a poisoned carrier".into())
+        );
+        // Carrier poisoning takes precedence at the capture boundary; the
+        // interrupted capture remains the retained first inventory failure.
+        assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
         assert_getters_refuse(&mut block, &error);
         witness::drain_exec_witness();
     }
