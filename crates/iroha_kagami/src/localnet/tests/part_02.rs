@@ -439,6 +439,7 @@ fn invalid_asset_requests_do_not_create_partial_output_directories() {
             id,
             name: "Preflight asset".to_owned(),
             alias: alias.map(str::to_owned),
+            owning_domain: Some(localnet_user_asset_domain()),
             owned_by: ALICE_ID.clone(),
             mint_to: ALICE_ID.clone(),
             quantity: 1,

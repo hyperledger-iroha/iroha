@@ -1,6 +1,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::BufWriter,
     path::{Path, PathBuf},
@@ -972,6 +973,7 @@ fn generated_configs_for_user_localnet_parse() {
             id: localnet_sample_asset_literal(),
             name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
             alias: None,
+            owning_domain: Some(localnet_user_asset_domain()),
             owned_by: ALICE_ID.clone(),
             mint_to: ALICE_ID.clone(),
             quantity: 100,
@@ -996,6 +998,7 @@ fn localnet_asset_defaults_are_selected_by_exact_taira_chain_context() {
     );
     assert_eq!(taira[0].name, "ds");
     assert_eq!(taira[0].quantity, 1_000_000_000);
+    assert_eq!(taira[0].owning_domain, None);
     assert_eq!(taira[0].owned_by, client);
     assert_eq!(taira[0].mint_to, client);
     let generic = effective_localnet_assets_for_client(&[], &client, false);
@@ -1007,6 +1010,7 @@ fn localnet_asset_defaults_are_selected_by_exact_taira_chain_context() {
     );
     assert_eq!(generic[0].name, LOCALNET_KAGEMUSHA_ASSET_NAME);
     assert_eq!(generic[0].quantity, 100);
+    assert_eq!(generic[0].owning_domain, Some(localnet_user_asset_domain()));
     assert_eq!(generic[0].owned_by, client);
     assert_eq!(generic[0].mint_to, client);
 }
@@ -1111,6 +1115,90 @@ fn generated_localnet_registers_requested_asset_definition_for_client_owner() {
     assert!(
         has_initial_mint,
         "requested asset definitions must mint an initial reserve to the generated client signer"
+    );
+}
+#[test]
+fn generated_localnet_user_assets_are_owned_by_a_registered_domain() {
+    let sample_asset_literal = localnet_sample_asset_literal();
+    let requested_asset_literal =
+        canonical_asset_definition_literal(LOCALNET_USER_ASSET_DOMAIN, "requested");
+    let temp = tempfile::tempdir().expect("tmp dir");
+    let opts = LocalnetOptions {
+        sora_profile: None,
+        perf_profile: None,
+        peers: NonZeroU16::new(4).expect("non-zero"),
+        seed: Some("user-asset-ownership".to_owned()),
+        bind_host: DEFAULT_BIND_HOST.to_owned(),
+        public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+        base_api_port: 29080,
+        base_p2p_port: 33337,
+        out_dir: temp.path().to_path_buf(),
+        extra_accounts: 0,
+        assets: vec![
+            requested_localnet_asset_spec(&requested_asset_literal).expect("asset spec"),
+            AssetSpec {
+                id: sample_asset_literal.clone(),
+                name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                alias: None,
+                owning_domain: Some(localnet_user_asset_domain()),
+                owned_by: localnet_client_account_id(),
+                mint_to: localnet_client_account_id(),
+                quantity: 100,
+            },
+        ],
+        block_cadence_ms: None,
+        consensus_mode: SumeragiConsensusMode::Permissioned,
+    };
+    generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+    let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
+        .expect("parse generated genesis");
+    let user_domain = localnet_user_asset_domain();
+    let user_assets = [
+        AssetDefinitionId::parse_address_literal(LOCALNET_KAGEMUSHA_ASSET_ID)
+            .expect("usd asset id"),
+        AssetDefinitionId::parse_address_literal(&requested_asset_literal)
+            .expect("requested asset id"),
+        AssetDefinitionId::parse_address_literal(&sample_asset_literal).expect("sample asset id"),
+    ];
+    let mut registered_domains = Vec::new();
+    let mut owners = BTreeMap::new();
+    for instruction in manifest.instructions() {
+        match instruction.as_any().downcast_ref::<RegisterBox>() {
+            Some(RegisterBox::Domain(register)) => {
+                registered_domains.push(register.object().id.clone());
+            }
+            Some(RegisterBox::AssetDefinition(register)) => {
+                let definition = register.object();
+                if let Some(owner) = definition.owning_domain.as_ref() {
+                    assert!(
+                        registered_domains.contains(owner),
+                        "domain {owner} must be registered before asset definition {}",
+                        definition.id
+                    );
+                }
+                owners.insert(definition.id.clone(), definition.owning_domain.clone());
+            }
+            _ => {}
+        }
+    }
+    for asset in &user_assets {
+        assert_eq!(
+            owners.get(asset),
+            Some(&Some(user_domain.clone())),
+            "user-facing localnet asset {asset} must be owned by {user_domain}"
+        );
+    }
+    assert_eq!(
+        owners.get(&localnet_xor_asset_definition_id()),
+        Some(&None),
+        "XOR must be registered and stay domainless"
+    );
+    assert!(
+        owners
+            .iter()
+            .filter(|(asset, _)| !user_assets.contains(asset))
+            .all(|(_, owner)| owner.is_none()),
+        "protocol asset definitions must stay domainless"
     );
 }
 #[test]
@@ -2339,6 +2427,7 @@ fn generated_genesis_handshake_meta_decodes() {
             id: localnet_sample_asset_literal(),
             name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
             alias: None,
+            owning_domain: Some(localnet_user_asset_domain()),
             owned_by: ALICE_ID.clone(),
             mint_to: ALICE_ID.clone(),
             quantity: 100,

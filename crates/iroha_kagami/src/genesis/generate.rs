@@ -941,6 +941,58 @@ mod consensus_manifest_tests {
         );
     }
     #[test]
+    fn synthetic_asset_definitions_are_owned_by_their_domain() {
+        let manifest = generate_synthetic(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("synthetic-ownership"),
+                PathBuf::from("."),
+            )
+            .complete_for_test(),
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key(),
+            None,
+            SumeragiConsensusMode::Permissioned,
+            2,
+            0,
+            2,
+            None,
+            None,
+        )
+        .expect("generate synthetic genesis");
+        let mut registered_domains = Vec::new();
+        let mut synthetic_definitions = 0;
+        for instruction in manifest.instructions() {
+            match instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::register::RegisterBox>()
+            {
+                Some(iroha_data_model::isi::register::RegisterBox::Domain(register)) => {
+                    registered_domains.push(register.object.id.clone());
+                }
+                Some(iroha_data_model::isi::register::RegisterBox::AssetDefinition(register))
+                    if register.object.name.starts_with("asset_") =>
+                {
+                    let owner = register
+                        .object
+                        .owning_domain
+                        .as_ref()
+                        .expect("synthetic asset definition must be domain-owned");
+                    let expected_id = AssetDefinitionId::derive_from_components(
+                        owner.clone(),
+                        register.object.name.parse().expect("synthetic asset name"),
+                    );
+                    assert_eq!(register.object.id, expected_id);
+                    assert!(
+                        registered_domains.contains(owner),
+                        "owning domain {owner} must be registered before its asset definition"
+                    );
+                    synthetic_definitions += 1;
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(synthetic_definitions, 4);
+    }
+    #[test]
     fn profile_cadence_and_seed_are_signed() {
         let defaults = profile_defaults(GenesisProfile::Iroha3Dev);
         let seed = [9; 32];
@@ -1264,7 +1316,7 @@ fn generate_synthetic(
                 asset_name_literal,
                 NumericSpec::default(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(domain_id.clone()),
             )));
         }
         for _ in 0..accounts_per_domain {
