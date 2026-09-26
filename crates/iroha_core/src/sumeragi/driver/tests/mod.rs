@@ -1,8 +1,11 @@
-//! Tests of the Sumeragi driver: the execution scheduler (O3, O4), the kernel (O1, O2, O5, O7),
-//! the §13.5 conformance runs of the production kernel inside the `iroha_sumeragi` simulator
-//! (F9, F13, F14, F27, F29, F32, F37 under O-AGR, O-SIGN, O-PBS, O-LIVE, O-MEM, plus the O2
-//! kill at every write completion and an O4 answer oracle), and threaded runs of the full
-//! driver over the fake backends (O9 with two instances in one process).
+//! Tests of the Sumeragi driver: the execution scheduler (O3, O4, apply sequencing against a
+//! single-overlay executor), the kernel (O1, O2, O5, O7, bounded serving and held effects under
+//! a failing disk), the §13.5 conformance runs of the production kernel inside the
+//! `iroha_sumeragi` simulator (F9, F13, F14, F27, F29, F32, F37 and a 20 s write failure under
+//! O-AGR, O-SIGN, O-PBS, O-LIVE, O-MEM with the driver's queues, plus the O2 kill at every write
+//! completion and an O4 answer oracle), and threaded runs of the full driver over the fake
+//! backends (O9 with two instances in one process, panicking backends, a stopped worker, a
+//! serving flood, O10 after a committed parameter change).
 
 pub(super) mod fakes;
 

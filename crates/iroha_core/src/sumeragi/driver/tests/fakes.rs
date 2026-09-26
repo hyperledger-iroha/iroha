@@ -1,7 +1,8 @@
-//! In-memory backends for the driver tests (§13.5): a transport that records frames, a record store with the store id and installation-log semantics of §7.4, a
-//! body store, a block store, a manual clock, and a deterministic executor
-//! `R = H(parent_R ‖ payload)` (the simulator's reference execution) with a post-state cache,
-//! execution counts, injectable failures and a gate that holds executions.
+//! In-memory backends for the driver tests (§13.5): a transport that records frames, a record
+//! store with the store id and installation-log semantics of §7.4, a body store, a block store
+//! (with injectable failures, panics and slow reads), a manual clock, and a deterministic
+//! executor `R = H(parent_R ‖ payload)` (the simulator's reference execution) with a post-state
+//! cache, execution counts, injectable failures and a gate that holds executions.
 
 use std::{
     collections::BTreeMap,
@@ -21,8 +22,9 @@ use iroha_sumeragi::{
 };
 use parking_lot::Mutex;
 
-use super::super::traits::{
-    BlockStore, BodyStore, Clock, Executor, Frame, LogEntry, Net, RecordStore,
+use super::super::{
+    FrameLimitExceeded, Worker,
+    traits::{BlockStore, BodyStore, Clock, Executor, Frame, LogEntry, Net, Observer, RecordStore},
 };
 
 /// A transport that records every frame.
@@ -58,6 +60,7 @@ struct Records {
     store_id: Option<u128>,
     log: Vec<LogEntry>,
     fail: u32,
+    panic: u32,
     writes: u64,
 }
 
@@ -100,6 +103,11 @@ impl FakeRecords {
         self.0.lock().fail = n;
     }
 
+    /// Panic in the next `n` record writes.
+    pub fn panic_next(&self, n: u32) {
+        self.0.lock().panic = n;
+    }
+
     /// The bytes of the record of `(instance, key)`.
     pub fn bytes(&self, instance: &Hash32, key: &PublicKey) -> Option<Vec<u8>> {
         self.0.lock().files.get(&(*instance, key.clone())).cloned()
@@ -120,6 +128,11 @@ impl RecordStore for FakeRecords {
 
     fn write(&self, instance: &Hash32, key: &PublicKey, bytes: &[u8]) -> io::Result<()> {
         let mut inner = self.0.lock();
+        if inner.panic > 0 {
+            inner.panic -= 1;
+            drop(inner);
+            panic!("injected record store panic");
+        }
         if inner.fail > 0 {
             inner.fail -= 1;
             return Err(io::Error::other("injected ENOSPC"));
@@ -190,11 +203,16 @@ impl BodyStore for FakeBodies {
     }
 }
 
-/// The committed chain above genesis height 0; the next appends can be made to fail.
+/// The committed chain above genesis height 0; the next appends can be made to fail or panic,
+/// the next reads to panic, and every read to take time.
 #[derive(Default)]
 pub struct FakeBlocks {
     entries: Mutex<Vec<SyncEntry>>,
     fail: Mutex<u32>,
+    panic_appends: Mutex<u32>,
+    panic_reads: Mutex<u32>,
+    read_delay_ms: AtomicU64,
+    reads: AtomicU64,
 }
 
 impl FakeBlocks {
@@ -202,6 +220,34 @@ impl FakeBlocks {
     pub fn fail_next(&self, n: u32) {
         *self.fail.lock() = n;
     }
+
+    /// Panic in the next `n` appends.
+    pub fn panic_appends(&self, n: u32) {
+        *self.panic_appends.lock() = n;
+    }
+
+    /// Panic in the next `n` reads (`entry`).
+    pub fn panic_reads(&self, n: u32) {
+        *self.panic_reads.lock() = n;
+    }
+
+    /// Make every read (`entry`) take `ms` milliseconds (a slow disk).
+    pub fn set_read_delay(&self, ms: u64) {
+        self.read_delay_ms.store(ms, Ordering::SeqCst);
+    }
+
+    /// Reads (`entry`) so far.
+    pub fn reads(&self) -> u64 {
+        self.reads.load(Ordering::SeqCst)
+    }
+}
+
+/// Take one of `counter`'s injected events, if any is left.
+fn take(counter: &Mutex<u32>) -> bool {
+    let mut left = counter.lock();
+    let hit = *left > 0;
+    *left = left.saturating_sub(1);
+    hit
 }
 
 impl BlockStore for FakeBlocks {
@@ -210,11 +256,21 @@ impl BlockStore for FakeBlocks {
     }
 
     fn entry(&self, height: u64) -> Option<SyncEntry> {
+        self.reads.fetch_add(1, Ordering::SeqCst);
+        let delay = self.read_delay_ms.load(Ordering::SeqCst);
+        if delay > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(delay));
+        }
+        assert!(!take(&self.panic_reads), "injected block store read panic");
         let index = usize::try_from(height.checked_sub(1)?).ok()?;
         self.entries.lock().get(index).cloned()
     }
 
     fn append(&self, block: &Block, commit_qc: &Qc) -> io::Result<()> {
+        assert!(
+            !take(&self.panic_appends),
+            "injected block store append panic"
+        );
         let mut fail = self.fail.lock();
         if *fail > 0 {
             *fail -= 1;
@@ -430,5 +486,24 @@ impl Executor for FakeExecutor {
 
     fn reject(&mut self, _height: u64, _view: u64, block_hash: &Hash32) {
         self.state.lock().rejected.push(*block_hash);
+    }
+}
+
+/// An observer that records the driver's own reports.
+#[derive(Default)]
+pub struct RecordingObserver {
+    /// Threads whose end stopped the instance.
+    pub stopped: Mutex<Vec<Worker>>,
+    /// Configurations that outgrew the transport.
+    pub frame_limits: Mutex<Vec<FrameLimitExceeded>>,
+}
+
+impl Observer for RecordingObserver {
+    fn stopped(&self, worker: Worker) {
+        self.stopped.lock().push(worker);
+    }
+
+    fn frame_limit(&self, exceeded: &FrameLimitExceeded) {
+        self.frame_limits.lock().push(*exceeded);
     }
 }

@@ -385,6 +385,10 @@ pub struct Executor {
     /// The statements of the `Valid` executions, shared with the node's execution-gated
     /// attestor (§3.7 A2: `R`'s preimage comes from the node's own execution).
     pub executed: Executed,
+    /// For a host that owns its scheduling (§13.5): the block whose post-state its last
+    /// `Prepare` made ready to commit. Any other executor operation drops it (the application
+    /// may hold one live overlay), and a `Commit` needs it.
+    pub prepared: Option<Hash32>,
     next_job: u64,
 }
 
@@ -439,6 +443,7 @@ impl Executor {
         self.running = None;
         self.cache.clear();
         self.executed.clear();
+        self.prepared = None;
     }
 
     /// Outstanding requests (queued, parked, running).

@@ -23,6 +23,8 @@
 //! the network and serving — and reports their completions ([`Done`]) back. `Init` assembly and
 //! serving stay with the world.
 
+use std::collections::BTreeMap;
+
 use super::driver::{Barrier, Lanes};
 use crate::{
     Core,
@@ -156,6 +158,106 @@ pub enum Done {
     },
 }
 
+/// The queues of a host that owns its scheduling, for the O-MEM oracle (§13.2, §13.5): they
+/// must stay within bounds that do not grow with time, however long a write keeps failing or
+/// the executor stays busy.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Backlog {
+    /// Effects held behind a pending record (O2).
+    pub held: usize,
+    /// Block payload bytes of the held effects.
+    pub held_bytes: u64,
+    /// Safety records queued and not yet handed to the write device.
+    pub records: usize,
+    /// Payload bytes of the block bodies queued and not yet handed to the write device, per
+    /// height.
+    pub bodies: BTreeMap<u64, u64>,
+    /// Executor operations queued other than `Execute`s (commits, discards, rejections, a
+    /// build).
+    pub exec_ops: usize,
+    /// Serving requests queued.
+    pub serve: usize,
+}
+
+/// The O-MEM bounds of a [`Backlog`]. None of them grows with time: held effects and
+/// executor operations are capped, records are at most one queued per key (a newer record
+/// supersedes a queued one), bodies are those of unapplied heights within the per-height
+/// payload bound of §8.4, and serving keeps at most two requests per peer and the node's
+/// own body fetches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BacklogBound {
+    /// Held effects.
+    pub held: usize,
+    /// Block payload bytes of the held effects.
+    pub held_bytes: u64,
+    /// Queued safety records.
+    pub records: usize,
+    /// Lowest height a queued body may have (lower heights are applied and pruned).
+    pub min_body_height: u64,
+    /// Payload bytes of the queued bodies of one height.
+    pub body_bytes_per_height: u64,
+    /// Queued executor operations other than `Execute`s.
+    pub exec_ops: usize,
+    /// Queued serving requests.
+    pub serve: usize,
+}
+
+impl BacklogBound {
+    /// Held effects of a host.
+    pub const HELD: usize = 4_096;
+    /// Block payload bytes of a host's held effects.
+    pub const HELD_BYTES: u64 = 64 << 20;
+    /// Queued executor operations of a host other than `Execute`s.
+    pub const EXEC_OPS: usize = 128;
+
+    /// The bounds of a replica with `keys` keys among `peers` peers, applied up to `applied`,
+    /// whose instance allows `per_height` payload bytes of bodies per height.
+    pub fn new(keys: usize, peers: usize, applied: u64, per_height: u64) -> Self {
+        Self {
+            held: Self::HELD,
+            held_bytes: Self::HELD_BYTES,
+            records: keys.max(1),
+            min_body_height: applied,
+            body_bytes_per_height: per_height,
+            exec_ops: Self::EXEC_OPS,
+            serve: peers.saturating_mul(2).saturating_add(8),
+        }
+    }
+}
+
+impl Backlog {
+    /// The first bound of `bound` this backlog exceeds, described (`None`: within them).
+    pub fn exceeds(&self, bound: &BacklogBound) -> Option<String> {
+        if self.held > bound.held || self.held_bytes > bound.held_bytes {
+            return Some(format!(
+                "{} held effects of {} payload bytes (bounds {}, {})",
+                self.held, self.held_bytes, bound.held, bound.held_bytes
+            ));
+        }
+        if self.records > bound.records {
+            return Some(format!(
+                "{} queued records for {} keys",
+                self.records, bound.records
+            ));
+        }
+        if let Some((height, bytes)) = self.bodies.iter().find(|(height, bytes)| {
+            **height < bound.min_body_height || **bytes > bound.body_bytes_per_height
+        }) {
+            return Some(format!(
+                "{bytes} queued body bytes at height {height} (applied {}, limit {})",
+                bound.min_body_height, bound.body_bytes_per_height
+            ));
+        }
+        if self.exec_ops > bound.exec_ops {
+            return Some(format!("{} queued executor operations", self.exec_ops));
+        }
+        if self.serve > bound.serve {
+            return Some(format!("{} queued serving requests", self.serve));
+        }
+        None
+    }
+}
+
 /// What the world hands a host that (re)starts: the core's configuration and startup input
 /// (§12.1), assembled by the world from the machine's durable stores, and the machine profile's
 /// ingress mode.
@@ -231,6 +333,11 @@ pub trait Host {
     }
     /// For a host that owns its scheduling: a device operation completed at local time `now`.
     fn complete(&mut self, _now: Millis, _done: Done) {}
+    /// For a host that owns its scheduling: its queues, bounded by the O-MEM oracle. Default:
+    /// `None` (not observed).
+    fn backlog(&self) -> Option<Backlog> {
+        None
+    }
 }
 
 /// Creates the host of a replica: `(machine, instance index)` → host.
@@ -339,6 +446,57 @@ mod tests {
         sim::{Scenario, World},
         types::Hash32,
     };
+
+    /// The O-MEM bounds of a host's queues: each bound is checked, bodies of applied heights
+    /// count as a violation, and the fake driver reports no backlog.
+    #[test]
+    fn backlog_bounds() {
+        let bound = BacklogBound::new(1, 4, 10, 1_000);
+        assert_eq!(bound.serve, 16);
+        let ok = Backlog {
+            held: 5,
+            held_bytes: 100,
+            records: 1,
+            bodies: BTreeMap::from([(10, 1_000), (11, 0)]),
+            exec_ops: 3,
+            serve: 16,
+        };
+        assert_eq!(ok.exceeds(&bound), None);
+        let over = [
+            Backlog {
+                held: BacklogBound::HELD + 1,
+                ..ok.clone()
+            },
+            Backlog {
+                held_bytes: BacklogBound::HELD_BYTES + 1,
+                ..ok.clone()
+            },
+            Backlog {
+                records: 2,
+                ..ok.clone()
+            },
+            Backlog {
+                bodies: BTreeMap::from([(9, 1)]),
+                ..ok.clone()
+            },
+            Backlog {
+                bodies: BTreeMap::from([(12, 1_001)]),
+                ..ok.clone()
+            },
+            Backlog {
+                exec_ops: BacklogBound::EXEC_OPS + 1,
+                ..ok.clone()
+            },
+            Backlog {
+                serve: 17,
+                ..ok.clone()
+            },
+        ];
+        for backlog in over {
+            assert!(backlog.exceeds(&bound).is_some(), "{backlog:?}");
+        }
+        assert_eq!(FakeHost::default().backlog(), None);
+    }
 
     /// The fake driver behind the seam: ingress priorities (a due `Tick` first, local events
     /// before messages), the O2 barrier and a crash that loses the core, the queues and the held
@@ -619,7 +777,7 @@ mod tests {
                 Op::Commit {
                     op: 8,
                     block: Box::new(b1.clone()),
-                    qc: Box::new(qc),
+                    qc: Box::new(qc.clone()),
                 },
                 Op::Build {
                     req: 9,
@@ -667,7 +825,7 @@ mod tests {
         world.machines[0].profile.write_max = 400;
         state.borrow_mut().ops = vec![Op::WriteBody {
             op: 11,
-            block: Box::new(b1),
+            block: Box::new(b1.clone()),
         }];
         world.run_until(2_100);
         world.crash(0);
@@ -691,6 +849,31 @@ mod tests {
             3_100,
         );
         assert!(world.stats.packets[0] > packets);
+        // The application may hold a single live overlay: an executor operation between a
+        // prepare and its commit drops the prepared post-state, and that commit fails the run.
+        step(
+            &mut world,
+            vec![
+                Op::Prepare {
+                    op: 12,
+                    block: Box::new(b1.clone()),
+                    qc: Box::new(qc.clone()),
+                },
+                Op::Execute {
+                    op: 13,
+                    block: Box::new(b1.clone()),
+                },
+            ],
+            3_500,
+        );
+        state.borrow_mut().ops = vec![Op::Commit {
+            op: 14,
+            block: Box::new(b1),
+            qc: Box::new(qc),
+        }];
+        world.run_until(4_000);
+        let failure = world.failure.clone().unwrap_or_default();
+        assert!(failure.contains("prepared post-state"), "{failure}");
     }
 
     /// A host that refuses its configuration reports the error.

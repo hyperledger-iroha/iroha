@@ -1820,6 +1820,7 @@ impl World {
                 self.schedule(when, Ev::IoDone { r, epoch, id });
             }
             Op::Execute { op, block } => {
+                self.replicas[r].exec.prepared = None;
                 let bh = block.hash(&self.hasher);
                 let Some(parent) = self.parent_result(r, &block) else {
                     let outcome = None;
@@ -1840,9 +1841,9 @@ impl World {
                 );
             }
             Op::Discard { op, height, keep } => {
-                self.replicas[r]
-                    .exec
-                    .cache
+                let exec = &mut self.replicas[r].exec;
+                exec.prepared = None;
+                exec.cache
                     .retain(|bh, (h, _)| *h != height || keep.contains(bh));
                 done(self, at, Done::Discarded { op });
             }
@@ -1875,11 +1876,17 @@ impl World {
                     };
                     (result, self.exec_latency(m, &block))
                 };
+                self.replicas[r].exec.prepared = result.map(|_| qc.block_hash);
                 done(self, at + latency, Done::Prepared { op, result });
             }
             Op::Commit { op, block, qc } => {
                 let inst = self.replicas[r].inst;
                 let height = block.header.height;
+                if self.replicas[r].exec.prepared.take() != Some(qc.block_hash) {
+                    return self.fail(format!(
+                        "O3: replica {r} commits {height} without its prepared post-state (another executor operation ran after its prepare)"
+                    ));
+                }
                 let rep = &mut self.replicas[r];
                 rep.applied = (height, qc.block_hash, qc.result);
                 rep.bodies.retain(|_, b| b.header.height > height);
@@ -1903,8 +1910,14 @@ impl World {
                 req,
                 max_bytes,
                 exec_budget_ms,
-            } => self.build_payload(r, req, max_bytes, exec_budget_ms, at),
-            Op::Reject { block_hash } => self.quarantine(r, &block_hash),
+            } => {
+                self.replicas[r].exec.prepared = None;
+                self.build_payload(r, req, max_bytes, exec_budget_ms, at);
+            }
+            Op::Reject { block_hash } => {
+                self.replicas[r].exec.prepared = None;
+                self.quarantine(r, &block_hash);
+            }
             Op::Effect(effect) => self.perform(r, *effect, at),
         }
     }

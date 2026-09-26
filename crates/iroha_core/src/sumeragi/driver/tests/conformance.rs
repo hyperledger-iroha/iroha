@@ -12,12 +12,12 @@
 
 use iroha_sumeragi::sim::{
     Scenario, World, run,
-    scenario::IoKill,
+    scenario::{Fault, IoKill},
     scenarios::{self, Builder},
     world::seeds,
 };
 
-use super::sim_host::{STARTS, driver_host};
+use super::sim_host::{PEAK_HELD, STARTS, driver_host};
 
 fn default_seeds() -> u64 {
     if cfg!(debug_assertions) { 3 } else { 8 }
@@ -134,5 +134,44 @@ fn o2_kill_at_each_write_completion() {
                 world.committed(0)
             );
         }
+    }
+}
+
+/// A replica's disk fails every write for 20 s while the others commit, then recovers. The
+/// core keeps running behind its unwritten record (timeouts, rebroadcasts, requests), yet the
+/// driver's queues stay within the O-MEM bounds after every event — held effects, one queued
+/// record per key, bodies of unapplied heights only, bounded executor and serving queues — and
+/// the replica catches up afterwards (O-AGR, O-LIVE).
+#[test]
+fn long_write_failure_keeps_queues_bounded() {
+    for seed in seeds(default_seeds()) {
+        let mut sc: Scenario = scenarios::smoke(seed, 4);
+        sc.host = driver_host;
+        let victim = usize::try_from(seed % 4).unwrap();
+        let fail = move |ppm: u32| -> Fault {
+            Fault::Custom(Box::new(move |world: &mut World| {
+                world.machines[victim].profile.write_fail_ppm = ppm;
+            }))
+        };
+        sc.script.push((5_000, fail(1_000_000)));
+        sc.script.push((25_000, fail(0)));
+        sc.heal_at = 25_000;
+        sc.duration = 45_000;
+        PEAK_HELD.with(|peak| peak.set(0));
+        let world = run(sc).unwrap_or_else(|e| panic!("seed {seed}: {e}"));
+        let peak = PEAK_HELD.with(std::cell::Cell::get);
+        assert!(
+            peak >= 20,
+            "seed {seed}: the victim held its effects ({peak})"
+        );
+        let lead = world.committed(if victim == 0 { 1 } else { 0 });
+        assert!(
+            world.committed(victim) + 3 >= lead,
+            "seed {seed}: the victim caught up ({} of {lead})",
+            world.committed(victim)
+        );
+        eprintln!(
+            "long write failure seed {seed}: victim {victim}, peak held {peak}, {lead} heights"
+        );
     }
 }

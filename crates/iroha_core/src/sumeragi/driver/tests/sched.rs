@@ -466,3 +466,196 @@ fn executor_panics_become_local_failures() {
         }
     );
 }
+
+/// An executor with a single live overlay (the shape of the node's State executor): any call
+/// other than `commit` after a `prepare` drops the prepared post-state, and `commit` fails
+/// without it; `fail_commits` commits fail after consuming it.
+struct Overlay {
+    inner: FakeExecutor,
+    prepared: Option<Hash32>,
+    fail_commits: u32,
+    calls: Vec<&'static str>,
+}
+
+impl Overlay {
+    fn new() -> Self {
+        Self {
+            inner: FakeExecutor::new(G, RG, config()),
+            prepared: None,
+            fail_commits: 0,
+            calls: Vec::new(),
+        }
+    }
+
+    fn other(&mut self, call: &'static str) {
+        self.prepared = None;
+        self.calls.push(call);
+    }
+}
+
+impl Executor for Overlay {
+    fn execute(&mut self, block: &Block, block_hash: &Hash32) -> Option<ExecOutcome> {
+        self.other("execute");
+        self.inner.execute(block, block_hash)
+    }
+    fn discard(&mut self, height: u64, keep: &[Hash32]) {
+        self.other("discard");
+        self.inner.discard(height, keep);
+    }
+    fn prepare(&mut self, block: &Block, commit_qc: &Qc) -> Result<Option<Hash32>, String> {
+        self.calls.push("prepare");
+        let result = self.inner.prepare(block, commit_qc);
+        self.prepared = matches!(result, Ok(Some(_))).then_some(commit_qc.block_hash);
+        result
+    }
+    fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<HeightConfig, String> {
+        self.calls.push("commit");
+        if self.prepared.take() != Some(commit_qc.block_hash) {
+            return Err("no prepared overlay".to_owned());
+        }
+        if self.fail_commits > 0 {
+            self.fail_commits -= 1;
+            return Err("injected".to_owned());
+        }
+        self.inner.commit(block, commit_qc)
+    }
+    fn build(&mut self, height: u64, view: u64, max_bytes: u32, budget: u32) -> (Vec<u8>, bool) {
+        self.other("build");
+        self.inner.build(height, view, max_bytes, budget)
+    }
+    fn reject(&mut self, height: u64, view: u64, block_hash: &Hash32) {
+        self.other("reject");
+        self.inner.reject(height, view, block_hash);
+    }
+}
+
+/// Run the scheduler's operations at `now` until it has none.
+fn drive(
+    sched: &mut ExecSched,
+    exec: &mut Overlay,
+    blocks: &FakeBlocks,
+    now: Millis,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    while let Some(op) = sched.next(now) {
+        let done = run_exec(exec, blocks, op);
+        sched.done(now, done);
+        events.extend(sched.take_events());
+    }
+    events
+}
+
+/// While an append backs off, nothing else runs on the executor (no execution, discard,
+/// rejection or build between a prepare and its commit), so a single-overlay executor commits
+/// once the append succeeds; the other work runs afterwards.
+#[test]
+fn apply_runs_alone_while_backing_off() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut exec = Overlay::new();
+    let blocks = FakeBlocks::default();
+    let (b1, bh1, r1) = child(1, (G, RG), 1);
+    let (b2, bh2, r2) = child(2, (bh1, r1), 2);
+    let (x2, bhx, _) = child(2, (bh1, r1), 99);
+    blocks.fail_next(1);
+    sched.commit(b1.clone(), commit_qc(&b1, r1));
+    sched.execute(1, bh2, b2);
+    sched.reject(1, 0, Hash32([9; 32]));
+    let first = drive(&mut sched, &mut exec, &blocks, 0);
+    assert!(first.is_empty(), "{first:?}");
+    assert_eq!(
+        exec.calls,
+        vec!["prepare"],
+        "the append failed; nothing else ran"
+    );
+    // Work arriving during the backoff waits too.
+    sched.execute(2, bhx, x2);
+    sched.discard(2, vec![bh2]);
+    sched.build(5, 2, 0, 1024, 100);
+    assert!(drive(&mut sched, &mut exec, &blocks, 9).is_empty());
+    assert_eq!(exec.calls, vec!["prepare"]);
+    assert_eq!(sched.wakeup(), 10);
+    let events = drive(&mut sched, &mut exec, &blocks, 10);
+    assert_eq!(&exec.calls[..2], &["prepare", "commit"]);
+    assert_eq!(sched.applied(), 1);
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::BlockApplied { height: 1, .. }))
+    );
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Executed { req: 1, outcome: ExecOutcome::Valid(r), .. } if *r == r2
+    )));
+    assert!(exec.calls.contains(&"build") && exec.calls.contains(&"reject"));
+}
+
+/// A commit that fails is retried after a fresh prepare — the prepared post-state may be gone
+/// — and without a second append (the block is durable already).
+#[test]
+fn failed_commit_prepares_again_without_a_second_append() {
+    let mut sched = ExecSched::new(0, Backoff::default());
+    let mut exec = Overlay::new();
+    exec.fail_commits = 1;
+    let blocks = FakeBlocks::default();
+    let (b1, bh1, r1) = child(1, (G, RG), 1);
+    sched.commit(b1.clone(), commit_qc(&b1, r1));
+    let (b2, _, _) = child(2, (bh1, r1), 2);
+    let events = drive(&mut sched, &mut exec, &blocks, 0);
+    assert!(events.is_empty());
+    assert_eq!(exec.calls, vec!["prepare", "commit"]);
+    assert_eq!(blocks.height(), 1, "appended once");
+    sched.execute(1, hash(&b2), b2);
+    assert!(
+        drive(&mut sched, &mut exec, &blocks, 5).is_empty(),
+        "backing off alone"
+    );
+    let events = drive(&mut sched, &mut exec, &blocks, 10);
+    assert_eq!(
+        &exec.calls[..4],
+        &["prepare", "commit", "prepare", "commit"]
+    );
+    assert_eq!(blocks.height(), 1, "no second append");
+    assert_eq!(sched.applied(), 1);
+    let applied = events
+        .iter()
+        .filter(|e| matches!(e, Event::BlockApplied { .. }))
+        .count();
+    assert_eq!(applied, 1);
+}
+
+/// Discards of one height merge while they wait (keeping what both keep), and rejections are
+/// deduplicated and capped: the queues other than the `Execute`s stay bounded.
+#[test]
+fn discards_merge_and_rejections_are_bounded() {
+    let mut rig = Rig::new();
+    let (b1, bh1, r1) = child(1, (G, RG), 1);
+    let (a, bha, _) = child(2, (bh1, r1), 2);
+    let (b, bhb, _) = child(2, (bh1, r1), 3);
+    rig.sched.execute(1, bh1, b1);
+    let running = rig.start().unwrap();
+    for _ in 0..100 {
+        rig.sched.discard(2, vec![bha, bhb]);
+    }
+    rig.sched.discard(2, vec![bha]);
+    for i in 0..200u8 {
+        rig.sched.reject(2, 0, Hash32([i; 32]));
+        rig.sched.reject(2, 0, Hash32([i; 32]));
+    }
+    assert_eq!(rig.sched.queued_ops(), 1 + 64, "one discard, 64 rejections");
+    rig.finish(running);
+    rig.sched.execute(2, bha, a);
+    rig.sched.execute(3, bhb, b);
+    let next = rig.start().unwrap();
+    assert_eq!(
+        next,
+        ExecOp::Discard {
+            height: 2,
+            keep: vec![bha]
+        }
+    );
+    rig.finish(next);
+    rig.drain();
+    let rejected = rig.exec.state.lock().rejected.clone();
+    assert_eq!(rejected.len(), 64);
+    assert_eq!(rejected[0], Hash32([136; 32]), "the oldest were dropped");
+}

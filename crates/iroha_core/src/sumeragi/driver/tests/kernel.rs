@@ -6,7 +6,7 @@ use std::sync::Arc;
 use iroha_sumeragi::{
     api::{Action, CommittedTip, Event, Init, LocalFault, LocalParams},
     crypto::Attestation,
-    message::{BlockRequest, TrafficClass, WireMessage},
+    message::{BlockRequest, Status, SyncRequest, TrafficClass, VoteKind, WireMessage},
     safety::{RecordState, SafetyRecord},
     testing::FakeValidators,
     types::{ChainParams, Hash32, HeightConfig, Millis},
@@ -15,12 +15,14 @@ use parking_lot::Mutex;
 
 use super::{
     super::{
-        Completion, Kernel, KernelStart, Op, Report,
+        Backlog, Completion, DriverConfig, Kernel, KernelStart, MAX_OPS_PER_POLL, Op, Report,
+        barrier::HeldLimits,
         exec::{ExecDone, ExecOp},
         ingress::{Ingress, IngressLimits},
-        persist::{Backoff, Write},
+        persist::Write,
+        serve::{ServeRequest, Served},
     },
-    block, commit_qc,
+    block, commit_qc, hash,
 };
 
 const INSTANCE: Hash32 = Hash32([5; 32]);
@@ -62,7 +64,7 @@ pub(super) fn start_kernel(now: Millis) -> (Kernel, FakeValidators) {
         attestation: Attestation::none(),
         now,
         ingress: Arc::new(Mutex::new(Ingress::new(IngressLimits::default()))),
-        backoff: Backoff::default(),
+        config: DriverConfig::default(),
     };
     let (kernel, _) = Kernel::start(start).unwrap();
     (kernel, vals)
@@ -129,6 +131,22 @@ fn record(height: u64, vals: &FakeValidators) -> Box<SafetyRecord> {
     Box::new(SafetyRecord::fresh(INSTANCE, vals.key(0), height, None))
 }
 
+/// Complete an executor operation the way an executor without post-states would (builds are
+/// `EMPTY`, executions lack their parent).
+fn complete_exec(kernel: &mut Kernel, now: Millis, op: &ExecOp) {
+    let done = match op {
+        ExecOp::Build { .. } => ExecDone::Built {
+            payload: Vec::new(),
+            attest: false,
+        },
+        ExecOp::Execute { .. } => ExecDone::Executed(None),
+        ExecOp::Discard { .. } => ExecDone::Discarded,
+        ExecOp::Reject { .. } => ExecDone::Rejected,
+        op => panic!("no commit here: {op:?}"),
+    };
+    kernel.complete(now, Completion::Exec(done));
+}
+
 /// Complete every start-up operation (writes durable, builds `EMPTY`) until none is left.
 fn settle(kernel: &mut Kernel) {
     loop {
@@ -147,27 +165,48 @@ fn settle(kernel: &mut Kernel) {
                         },
                     );
                 }
-                Op::Exec(ExecOp::Build { .. }) => kernel.complete(
-                    0,
-                    Completion::Exec(ExecDone::Built {
-                        payload: Vec::new(),
-                        attest: false,
-                    }),
-                ),
-                Op::Exec(ExecOp::Execute { .. }) => {
-                    kernel.complete(0, Completion::Exec(ExecDone::Executed(None)));
-                }
-                Op::Exec(ExecOp::Discard { .. }) => {
-                    kernel.complete(0, Completion::Exec(ExecDone::Discarded));
-                }
-                Op::Exec(ExecOp::Reject { .. }) => {
-                    kernel.complete(0, Completion::Exec(ExecDone::Rejected));
-                }
-                Op::Exec(op) => panic!("no commit at start-up: {op:?}"),
+                Op::Exec(op) => complete_exec(kernel, 0, &op),
                 Op::Send { .. } | Op::Serve(_) | Op::Report(_) => {}
             }
         }
     }
+}
+
+/// Run the kernel at `now` until it is idle: handle every input, make every write durable and
+/// complete executor operations; the other operations are returned (serving is not completed).
+fn run(kernel: &mut Kernel, now: Millis) -> Vec<Op> {
+    let mut out = Vec::new();
+    loop {
+        while let Some(event) = kernel.next_input(now) {
+            kernel.handle(now, event);
+        }
+        let ops = kernel.poll(now);
+        if ops.is_empty() {
+            return out;
+        }
+        for op in ops {
+            match op {
+                Op::Persist { seq, .. } => kernel.complete(
+                    now,
+                    Completion::Persisted {
+                        seq,
+                        result: Ok(()),
+                    },
+                ),
+                Op::Exec(op) => complete_exec(kernel, now, &op),
+                other => out.push(other),
+            }
+        }
+    }
+}
+
+fn sync_request(from_height: u64) -> WireMessage {
+    WireMessage::SyncRequest(SyncRequest {
+        instance: INSTANCE,
+        from_height,
+        max_count: u16::MAX,
+        max_bytes: u32::MAX,
+    })
 }
 
 /// O1/O2: after a `PersistSafety`, gated effects wait for its durability and leave in order;
@@ -278,7 +317,10 @@ fn served_bodies_become_local_events() {
     let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), Vec::new());
     kernel.complete(
         0,
-        Completion::Served(Event::BodyAvailable { block: b1.clone() }),
+        Completion::Served(Served {
+            event: Some(Event::BodyAvailable { block: b1.clone() }),
+            bytes: 0,
+        }),
     );
     kernel.transactions_available();
     let mut now = 0;
@@ -294,4 +336,174 @@ fn served_bodies_become_local_events() {
             }
         }
     }
+}
+
+/// §12.2 serving limits: a flood of `SyncRequest`s from three peers leaves one pending
+/// `ServeBlocks` per peer (one in flight), and the node's own `FetchBody` — a body it lacks
+/// for a `CommitQC` — waits at most for the request in flight.
+#[test]
+fn serving_is_bounded_and_the_nodes_fetch_goes_first() {
+    let (mut kernel, vals) = start_kernel(0);
+    settle(&mut kernel);
+    for i in 0..3_000u64 {
+        let peer = vals.key([1, 2, 3][usize::try_from(i % 3).unwrap()]);
+        kernel.receive(peer, sync_request(i), TrafficClass::Control);
+    }
+    let ops = run(&mut kernel, 0);
+    let serving = ops.iter().filter(|op| matches!(op, Op::Serve(_))).count();
+    assert_eq!(serving, 1, "one request in flight");
+    let backlog = kernel.backlog();
+    assert!(
+        backlog.serve <= 3,
+        "one pending request per peer: {backlog:?}"
+    );
+    assert!(backlog.serve_dropped >= 700, "{backlog:?}");
+    // A CommitQC of height 1 whose body the node lacks.
+    let b1 = block(1, Hash32([0xa0; 32]), Hash32([0xa1; 32]), vec![1, 2, 3]);
+    let qc = vals.qc(
+        VoteKind::Commit,
+        &INSTANCE,
+        1,
+        0,
+        &hash(&b1),
+        &Hash32([3; 32]),
+        &[1, 2, 3],
+    );
+    let status = Status {
+        instance: INSTANCE,
+        height: 2,
+        view: 0,
+        committed_qc: Some(qc),
+        high_pqc: None,
+        high_tc: None,
+        proposal_hash: None,
+        want_proposal: false,
+        probe: None,
+        echo: None,
+    };
+    kernel.receive(
+        vals.key(1),
+        WireMessage::Status(Box::new(status)),
+        TrafficClass::Control,
+    );
+    let ops = run(&mut kernel, 0);
+    assert!(
+        !ops.iter().any(|op| matches!(op, Op::Serve(_))),
+        "the serve thread is busy: {ops:?}"
+    );
+    kernel.complete(0, Completion::Served(Served::default()));
+    let ops = kernel.poll(0);
+    assert!(
+        matches!(
+            &ops[..],
+            [Op::Serve(ServeRequest::Fetch { block_hash, .. })] if *block_hash == hash(&b1)
+        ),
+        "{ops:?}"
+    );
+}
+
+/// A disk that keeps failing: the core keeps running (timeouts, rebroadcasts, serving requests
+/// behind its pending record), yet the queues stay bounded — one queued record per key, held
+/// effects within their limits. Once the disk recovers the held effects leave in batches of at
+/// most `MAX_OPS_PER_POLL`, with a due `Tick` handled between batches (O5).
+#[test]
+fn failing_disk_bounds_the_queues_and_releases_in_batches() {
+    let (mut kernel, vals) = start_kernel(0);
+    settle(&mut kernel);
+    let limits = HeldLimits::default();
+    let mut max = Backlog::default();
+    let mut now = 0;
+    for step in 0..6_000u64 {
+        now += 25;
+        if step < 2_000 {
+            for peer in 1..=3 {
+                kernel.receive(vals.key(peer), sync_request(step), TrafficClass::Control);
+            }
+        }
+        while let Some(event) = kernel.next_input(now) {
+            kernel.handle(now, event);
+        }
+        for op in kernel.poll(now) {
+            match op {
+                Op::Persist { seq, write } => kernel.complete(
+                    now,
+                    Completion::Persisted {
+                        seq,
+                        result: Err(write),
+                    },
+                ),
+                Op::Exec(op) => complete_exec(&mut kernel, now, &op),
+                Op::Serve(_) => kernel.complete(now, Completion::Served(Served::default())),
+                Op::Send { .. } | Op::Report(_) => {}
+            }
+        }
+        let backlog = kernel.backlog();
+        max.held = max.held.max(backlog.held);
+        max.records = max.records.max(backlog.records);
+        max.writes = max.writes.max(backlog.writes);
+        max.serve = max.serve.max(backlog.serve);
+        max.held_dropped = backlog.held_dropped;
+    }
+    assert!(max.held <= limits.effects, "{max:?}");
+    assert!(
+        max.held >= 100,
+        "the core kept emitting behind its record: {max:?}"
+    );
+    assert!(max.held_dropped > 0, "the bound was reached: {max:?}");
+    assert!(max.records <= 1, "one queued record per key: {max:?}");
+    assert!(max.writes <= 3, "{max:?}");
+    assert!(max.serve <= 3, "{max:?}");
+    // The disk recovers: the record becomes durable and the held effects are released.
+    let held = kernel
+        .held()
+        .iter()
+        .filter(|a| matches!(a, Action::Send { .. } | Action::Broadcast { .. }))
+        .count();
+    assert!(held > MAX_OPS_PER_POLL, "{held} held messages");
+    let mut batches = 0;
+    let mut released = 0;
+    let mut ticks_between = 0;
+    for round in 0.. {
+        assert!(round < 100_000, "the release never finished");
+        let ops = kernel.poll(now);
+        let idle = ops.is_empty();
+        let sends = ops
+            .iter()
+            .filter(|op| matches!(op, Op::Send { .. }))
+            .count();
+        assert!(sends <= MAX_OPS_PER_POLL, "{sends}");
+        released += sends;
+        batches += usize::from(sends > 0);
+        for op in ops {
+            match op {
+                Op::Persist { seq, .. } => kernel.complete(
+                    now,
+                    Completion::Persisted {
+                        seq,
+                        result: Ok(()),
+                    },
+                ),
+                Op::Exec(op) => complete_exec(&mut kernel, now, &op),
+                Op::Serve(_) => kernel.complete(now, Completion::Served(Served::default())),
+                Op::Send { .. } | Op::Report(_) => {}
+            }
+        }
+        if kernel.has_output() {
+            // A deadline that falls due between two batches is served first.
+            now = now.max(kernel.core().next_wakeup());
+            assert_eq!(kernel.next_input(now), Some(Event::Tick));
+            kernel.handle(now, Event::Tick);
+            ticks_between += 1;
+        } else if kernel.backlog().writes == 0 && kernel.backlog().held == 0 {
+            break;
+        } else if idle {
+            // The record's retry is due later.
+            now = now.max(kernel.next_wakeup());
+            while let Some(event) = kernel.next_input(now) {
+                kernel.handle(now, event);
+            }
+        }
+    }
+    assert!(released >= held, "released {released} of {held}");
+    assert!(batches > 1 && ticks_between > 0, "{batches} batches");
 }

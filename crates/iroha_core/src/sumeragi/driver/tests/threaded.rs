@@ -1,31 +1,37 @@
 //! The full driver on its threads over the fake backends: a single validator's chain commits
-//! with failing writes and apply steps retried; O9 — two instances in one process, one stalled
-//! (its executor never returns) and flooded, the other committing on time; O10 frame limits;
-//! raw-frame delivery; `Init` assembly from the block store.
+//! with failing and panicking writes and apply steps retried; a stopped worker stops the
+//! instance; O9 — two instances in one process, one stalled (its executor never returns) and
+//! flooded, the other committing on time; §12.2 serving under a `SyncRequest` flood with the
+//! node's own body fetch served on time; O10 frame limits at start and after a committed
+//! parameter change; raw-frame delivery; `Init` assembly from the block store.
 
 use std::{
-    sync::Arc,
+    sync::{Arc, mpsc},
     time::{Duration, Instant},
 };
 
 use iroha_sumeragi::{
-    api::LocalParams,
+    api::{ExecOutcome, HaltReason, LocalParams},
     crypto::{NoAttestation, Signer},
-    message::{BlockRequest, Status, WireMessage},
+    message::{BlockRequest, BlockResponse, Status, SyncRequest, VoteKind, WireMessage},
     safety::RecordState,
-    testing::{FakeCrypto, FakeSigner},
+    sim::driver::block_exec,
+    testing::{FakeCrypto, FakeSigner, FakeValidators},
     types::{ChainParams, Committee, Hash32, HeightConfig, PublicKey},
 };
 
 use super::{
     super::{
-        Driver, DriverConfig, DriverError, DriverHandle, DriverStart, RunningDriver, SharedCrypto,
-        assemble_init,
+        Driver, DriverConfig, DriverError, DriverHandle, DriverStart, ExitGuard, Input, Op,
+        RunningDriver, SharedCrypto, Worker, Workers, assemble_init,
+        exec::ExecOp,
         persist::install_records,
-        traits::{BlockStore, Clock, NoObserver, SystemClock},
+        traits::{BlockStore, Clock, NoObserver, Observer, SystemClock},
     },
     block, commit_qc,
-    fakes::{FakeBlocks, FakeBodies, FakeClock, FakeExecutor, FakeNet, FakeRecords},
+    fakes::{
+        FakeBlocks, FakeBodies, FakeClock, FakeExecutor, FakeNet, FakeRecords, RecordingObserver,
+    },
     hash,
 };
 
@@ -41,9 +47,11 @@ fn params() -> ChainParams {
 #[derive(Clone)]
 struct Fakes {
     exec: FakeExecutor,
+    net: Arc<FakeNet>,
     records: Arc<FakeRecords>,
     bodies: Arc<FakeBodies>,
     blocks: Arc<FakeBlocks>,
+    observer: Arc<RecordingObserver>,
 }
 
 /// One single-validator instance on its threads.
@@ -112,19 +120,22 @@ fn spawn_instance<C: Clock + 'static>(
     .unwrap();
     let fakes = Fakes {
         exec: FakeExecutor::new(genesis.0, genesis.1, config),
+        net: Arc::new(FakeNet::default()),
         records,
         bodies: Arc::new(FakeBodies::default()),
         blocks,
+        observer: Arc::new(RecordingObserver::default()),
     };
     prepare(&fakes);
+    let observer: Arc<dyn Observer> = fakes.observer.clone();
     let driver = Driver::new(
-        Arc::new(FakeNet::default()),
+        Arc::clone(&fakes.net),
         Arc::clone(&fakes.records),
         Arc::clone(&fakes.bodies),
         Arc::clone(&fakes.blocks),
         clock,
         fakes.exec.clone(),
-        Arc::new(NoObserver),
+        observer,
     );
     let running = driver
         .spawn(
@@ -207,6 +218,7 @@ fn stalled_and_flooded_instance_does_not_delay_another() {
         let instance = a.instance;
         std::thread::spawn(move || {
             let start = Instant::now();
+            let mut longest = 0;
             for i in 0..20_000u64 {
                 let peer = PublicKey::new(vec![u8::try_from(i % 50).unwrap(); 32]).unwrap();
                 let msg = if i % 2 == 0 {
@@ -230,8 +242,9 @@ fn stalled_and_flooded_instance_does_not_delay_another() {
                     }))
                 };
                 handle.deliver_message(peer, msg);
+                longest = longest.max(handle.shared.ingress.lock().len());
             }
-            start.elapsed()
+            (start.elapsed(), longest)
         })
     };
     let start = Instant::now();
@@ -239,13 +252,15 @@ fn stalled_and_flooded_instance_does_not_delay_another() {
         b.committed() >= 20
     });
     let b_time = start.elapsed();
-    let flood_time = flood.join().unwrap();
+    let (flood_time, longest) = flood.join().unwrap();
     assert!(
         flood_time < Duration::from_secs(10),
         "delivery never blocks: {flood_time:?}"
     );
     assert_eq!(a.committed(), 0, "A is stalled");
-    assert!(a.handle().ingress_drops() > 0, "A's ingress is bounded");
+    // Whether A's loop fell behind the flood is a matter of timing; its queues are bounded
+    // either way (256 control messages per peer; the drops themselves: `ingress` tests).
+    assert!(longest <= 50 * 256, "A's ingress is bounded: {longest}");
     assert!(b_time < Duration::from_secs(20));
     // A recovers once its executor returns.
     a.fakes.exec.set_open(true);
@@ -407,4 +422,269 @@ fn init_from_the_block_store() {
         (0, Hash32([1; 32]))
     );
     assert!(empty.recent_headers.is_empty());
+}
+
+/// §12.5: backends that panic — a record write, a block-store append and read — fail like I/O
+/// errors and are retried; the instance keeps committing, nothing stops and nothing is
+/// reported stopped.
+#[test]
+fn panicking_backends_are_retried() {
+    let node = spawn_instance(8, Arc::new(SystemClock::new()), |fakes| {
+        fakes.records.panic_next(2);
+        fakes.blocks.panic_appends(2);
+        fakes.blocks.panic_reads(1);
+    });
+    wait_until("10 heights", Duration::from_secs(20), || {
+        node.committed() >= 10
+    });
+    let handle = node.handle();
+    assert!(handle.ready(), "{:?}", handle.stopped());
+    assert_eq!(handle.stopped(), None);
+    assert!(node.fakes.observer.stopped.lock().is_empty());
+    assert!(node.fakes.blocks.height() >= 9);
+    node.running.shutdown();
+    assert!(!handle.ready(), "a shut-down instance is not ready");
+}
+
+/// A worker thread that ends stops the instance: the loop stops, the observer is told, the
+/// handle is no longer ready and reports the halt as a driver anomaly.
+#[test]
+fn a_stopped_worker_stops_the_instance() {
+    let node = spawn_instance(9, Arc::new(SystemClock::new()), |_| {});
+    let handle = node.handle();
+    wait_until("a height", Duration::from_secs(20), || {
+        node.committed() >= 1
+    });
+    assert!(handle.ready());
+    handle.inputs.send(Input::Exited(Worker::Exec)).unwrap();
+    wait_until("the stop", Duration::from_secs(5), || !handle.ready());
+    assert_eq!(handle.stopped(), Some(Worker::Exec));
+    assert_eq!(handle.halted(), Some(HaltReason::DriverAnomaly));
+    assert_eq!(*node.fakes.observer.stopped.lock(), vec![Worker::Exec]);
+    let height = node.committed();
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(node.committed(), height, "the instance no longer runs");
+    node.running.shutdown();
+}
+
+/// A worker thread that ends announces it (however it ends), and a worker that cannot be
+/// reached is reported by the dispatch rather than dropping the operation silently.
+#[test]
+fn worker_exits_and_unreachable_workers_are_detected() {
+    let (tx, rx) = mpsc::channel();
+    drop(ExitGuard {
+        worker: Worker::Persist,
+        tx,
+    });
+    assert!(matches!(rx.try_recv(), Ok(Input::Exited(Worker::Persist))));
+    let (persist, _) = mpsc::channel();
+    let (exec, exec_rx) = mpsc::channel();
+    let (serve, serve_rx) = mpsc::channel();
+    drop(serve_rx);
+    let workers = Workers {
+        net: Arc::new(FakeNet::default()),
+        observer: Arc::new(NoObserver),
+        persist,
+        exec,
+        serve,
+    };
+    let discard = || ExecOp::Discard {
+        height: 1,
+        keep: Vec::new(),
+    };
+    assert_eq!(workers.dispatch(vec![Op::Exec(discard())]), Ok(()));
+    drop(exec_rx);
+    assert_eq!(
+        workers.dispatch(vec![Op::Exec(discard())]),
+        Err(Worker::Exec)
+    );
+    let fetch = super::super::serve::ServeRequest::Fetch {
+        height: 1,
+        block_hash: Hash32::ZERO,
+        peers: Vec::new(),
+    };
+    assert_eq!(workers.dispatch(vec![Op::Serve(fetch)]), Err(Worker::Serve));
+}
+
+/// §12.2 serving limits on the real threads: member 0 of a four-member committee, on a slow
+/// disk (every block-store read takes 20 ms), is flooded with 10 000 `SyncRequest`s from 50
+/// peers. Its own `FetchBody` for a body it lacks under a `CommitQC` still asks the peer at
+/// once, it applies the block once the peer answers, and its serving queue stays bounded (a
+/// FIFO would have queued 200 s of reads ahead of the fetch).
+#[test]
+fn serving_flood_does_not_delay_the_nodes_fetch() {
+    let vals = FakeValidators::new(4, 11, None);
+    let key = vals.key(0);
+    let instance = Hash32([5; 32]);
+    let crypto: SharedCrypto = Arc::new(vals.crypto.clone());
+    let config = HeightConfig {
+        committee: vals.committee.clone(),
+        params: params(),
+    };
+    let records = Arc::new(FakeRecords::default());
+    records.install_key(&key, true, 1);
+    let mut next = 1u128;
+    let mut fresh = || {
+        next += 1;
+        next
+    };
+    let found = install_records(
+        &*records,
+        &*crypto,
+        &instance,
+        &[(key.clone(), false)],
+        0,
+        false,
+        &mut fresh,
+    )
+    .unwrap();
+    let blocks = Arc::new(FakeBlocks::default());
+    let genesis = (Hash32([0xa0; 32]), Hash32([0xa1; 32]));
+    let init = assemble_init(
+        &*blocks,
+        instance,
+        0,
+        genesis,
+        128,
+        found,
+        vec![(1, config.clone()), (2, config.clone())],
+        3,
+    )
+    .unwrap();
+    blocks.set_read_delay(20);
+    let net = Arc::new(FakeNet::default());
+    let exec = FakeExecutor::new(genesis.0, genesis.1, config);
+    let driver = Driver::new(
+        Arc::clone(&net),
+        records,
+        Arc::new(FakeBodies::default()),
+        Arc::clone(&blocks),
+        Arc::new(SystemClock::new()),
+        exec,
+        Arc::new(NoObserver),
+    );
+    let running = driver
+        .spawn(
+            DriverConfig::default(),
+            DriverStart {
+                local: LocalParams::default(),
+                init,
+                signers: vec![Box::new(vals.signer(0).clone())],
+                crypto,
+                attestor: Box::new(NoAttestation),
+                verifier: Box::new(NoAttestation),
+            },
+        )
+        .unwrap();
+    let handle = running.handle();
+    for round in 0..200u64 {
+        for peer in 0..50u8 {
+            let from = PublicKey::new(vec![peer; 32]).unwrap();
+            let request = WireMessage::SyncRequest(SyncRequest {
+                instance,
+                from_height: round,
+                max_count: u16::MAX,
+                max_bytes: u32::MAX,
+            });
+            handle.deliver_message(from, request);
+        }
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    let b1 = block(1, genesis.0, genesis.1, vec![4; 64]);
+    let ExecOutcome::Valid(r1) = block_exec(&genesis.1, &b1) else {
+        panic!("the block executes")
+    };
+    let qc = vals.qc(
+        VoteKind::Commit,
+        &instance,
+        1,
+        0,
+        &hash(&b1),
+        &r1,
+        &[1, 2, 3],
+    );
+    let status = Status {
+        instance,
+        height: 2,
+        view: 0,
+        committed_qc: Some(qc),
+        high_pqc: None,
+        high_tc: None,
+        proposal_hash: None,
+        want_proposal: false,
+        probe: None,
+        echo: None,
+    };
+    let asked = Instant::now();
+    handle.deliver_message(vals.key(1), WireMessage::Status(Box::new(status)));
+    wait_until("the body request", Duration::from_secs(3), || {
+        net.sent().iter().any(|(to, msg)| {
+            *to == vals.key(1)
+                && matches!(msg, WireMessage::BlockRequest(r) if r.block_hash == hash(&b1))
+        })
+    });
+    assert!(asked.elapsed() < Duration::from_secs(3));
+    let backlog = handle.backlog();
+    assert!(backlog.serve <= 2 * 50, "{backlog:?}");
+    handle.deliver_message(
+        vals.key(1),
+        WireMessage::BlockResponse(BlockResponse {
+            instance,
+            block: b1,
+        }),
+    );
+    wait_until("height 1 applied", Duration::from_secs(5), || {
+        handle.status().is_some_and(|s| s.applied_height >= 1)
+    });
+    assert!(blocks.reads() < 10_000, "most requests were never read");
+    let dropped = handle.backlog().serve_dropped;
+    assert!(dropped > 0, "the flood was dropped, not queued");
+    running.shutdown();
+}
+
+/// O10 at run time: every frame is decoded within the transport limit, so a committed rise of
+/// `max_block_bytes` (4 MiB to 8 MiB) is followed without a restart; a configuration above the
+/// transport limit is reported to the observer.
+#[test]
+fn frame_limit_follows_committed_configurations() {
+    let node = spawn_instance(10, Arc::new(SystemClock::new()), |_| {});
+    let handle = node.handle();
+    wait_until("a height", Duration::from_secs(20), || {
+        node.committed() >= 1
+    });
+    let raise = |bytes: u32| {
+        let mut state = node.fakes.exec.state.lock();
+        state.config.params.max_block_bytes = bytes;
+    };
+    raise(8 << 20);
+    let from = node.committed();
+    wait_until("the new size in force", Duration::from_secs(20), || {
+        node.committed() >= from + 3
+    });
+    let peer = PublicKey::new(vec![9; 32]).unwrap();
+    let response = |bytes: usize| {
+        WireMessage::BlockResponse(BlockResponse {
+            instance: node.instance,
+            block: block(1, Hash32::ZERO, Hash32::ZERO, vec![0; bytes]),
+        })
+        .encode()
+        .unwrap()
+    };
+    assert!(
+        handle.deliver(&peer, &response(6 << 20)),
+        "a 6 MiB body decodes under the committed 8 MiB limit"
+    );
+    assert!(
+        !handle.deliver(&peer, &response(17 << 20)),
+        "above the transport limit"
+    );
+    assert!(node.fakes.observer.frame_limits.lock().is_empty());
+    raise(32 << 20);
+    wait_until("the report", Duration::from_secs(20), || {
+        !node.fakes.observer.frame_limits.lock().is_empty()
+    });
+    let exceeded = node.fakes.observer.frame_limits.lock()[0];
+    assert_eq!(exceeded.needed, (32 << 20) + 64 * 1024);
+    assert_eq!(exceeded.limit, DriverConfig::default().frame_limit);
+    node.running.shutdown();
 }

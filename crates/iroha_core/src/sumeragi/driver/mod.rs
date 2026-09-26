@@ -3,20 +3,29 @@
 //! One driver runs per consensus instance. Its [`Kernel`] owns the sans-IO
 //! [`iroha_sumeragi::Core`] (constructed on the event-loop thread, since it is `!Send`), the
 //! bounded ingress ([`ingress`]), the persist-before-effect barrier ([`barrier`]), the ordered
-//! persistence queue ([`persist`]) and the execution, apply and build scheduler ([`exec`]). It
-//! performs no I/O: it turns the core's actions into operations ([`Op`]) for three worker
-//! threads — persistence, executor, serving ([`serve`]) — and the transport, and their
-//! completions back into core events. [`Driver::spawn`] runs the kernel on its own thread with
-//! the workers over the backends of [`traits`]; the §13.5 conformance runs the *same* kernel
-//! inside the `iroha_sumeragi` simulator, whose world performs the operations on fake devices.
+//! persistence queue ([`persist`]), the execution, apply and build scheduler ([`exec`]) and the
+//! serving scheduler ([`serve`]). It performs no I/O: it turns the core's actions into
+//! operations ([`Op`]) for three worker threads — persistence, executor, serving — and the
+//! transport, and their completions back into core events. [`Driver::spawn`] runs the kernel on
+//! its own thread with the workers over the backends of [`traits`]; the §13.5 conformance runs
+//! the *same* kernel inside the `iroha_sumeragi` simulator, whose world performs the operations
+//! on fake devices.
 //!
 //! Guarantees of §12.3: O1 (the core's actions take effect in order, exempt ones at once and
 //! gated ones through the barrier), O2 ([`barrier`], with the durable watermark of the ordered
 //! [`persist`] queue), O3/O4 ([`exec`]), O5 (a due `Tick` first, then local events, then
-//! messages by class; nothing on the loop thread blocks on I/O), O6/O8 ([`ingress`]), O7 (the
-//! node's own keys are never delivered to or addressed by it), O9 (every instance has its own
-//! threads, queues, barrier and backends), O10 (frame limits checked at start and used to
-//! decode).
+//! messages by class; nothing on the loop thread blocks on I/O, and released effects leave in
+//! batches of [`MAX_OPS_PER_POLL`] with a due `Tick` handled in between), O6/O8 ([`ingress`];
+//! held effects and serving are bounded too, [`barrier`], [`serve`]), O7 (the node's own keys
+//! are never delivered to or addressed by it), O9 (every instance has its own threads, queues,
+//! barrier and backends), O10 (the transport limit is checked at start against the chain
+//! parameters, every frame is decoded within it, and a committed configuration that outgrows it
+//! is reported, [`FrameLimitExceeded`]).
+//!
+//! Every backend call on a worker thread is guarded: a panic is a failed write, a failed apply
+//! step or a missing entry, retried like an I/O error (§12.5). A thread that stops anyway, or a
+//! worker that cannot be reached, stops the instance: the observer is told
+//! ([`Observer::stopped`]) and the handle reports it (`ready()` false, [`DriverHandle::stopped`]).
 //!
 //! TODO(WP5): production backends (P2P `Net`, file record and body stores, Kura block store,
 //! State executor and builder), `Init` from replay, and the node's instance router.
@@ -32,7 +41,7 @@ pub mod traits;
 mod tests;
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
@@ -50,26 +59,55 @@ use iroha_sumeragi::{
         LocalParams,
     },
     crypto::{Attestation, AttestationVerifier, Attestor, Crypto, Signer},
-    message::{Evidence, TrafficClass, WireMessage, traffic_class_of_frame},
-    pacemaker::{FRAME_OVERHEAD, validate_chain},
+    message::{Evidence, TrafficClass, WireMessage},
+    pacemaker::FRAME_OVERHEAD,
     safety::RecordState,
     types::{AggregateSignature, Hash32, HeightConfig, Millis, PublicKey, Signature},
 };
 use parking_lot::Mutex;
 
 use self::{
-    barrier::Barrier,
+    barrier::{Barrier, HeldLimits},
     exec::{ExecDone, ExecOp, ExecSched},
     ingress::{Ingress, IngressLimits},
     persist::{Backoff, PersistQueue, Write},
-    serve::ServeRequest,
+    serve::{ServeLimits, ServeRequest, ServeSched, Served},
     traits::{BlockStore, BodyStore, Clock, Executor, Net, Observer, RecordStore},
 };
 
 /// Longest idle wait of the event loop before it re-reads the clock.
 const MAX_IDLE_WAIT_MS: Millis = 1_000;
 
-/// A report of the core for the [`Observer`].
+/// Released effects handed out per [`Kernel::poll`]: a burst (a long-pending record finally
+/// durable) leaves in batches, and a due `Tick` is handled between them (O5).
+pub const MAX_OPS_PER_POLL: usize = 64;
+
+/// A thread of a driver instance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Worker {
+    /// The event loop (the core's thread).
+    Loop,
+    /// The persistence thread.
+    Persist,
+    /// The executor thread.
+    Exec,
+    /// The serve thread.
+    Serve,
+}
+
+/// O10 at run time: a committed configuration needs larger frames than the transport accepts,
+/// so its larger proposals and bodies will not arrive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FrameLimitExceeded {
+    /// Height the configuration applies from.
+    pub height: u64,
+    /// `max_block_bytes + 64 KiB`.
+    pub needed: u64,
+    /// The transport's frame limit.
+    pub limit: u64,
+}
+
+/// A report for the [`Observer`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Report {
     /// Signed misbehaviour (released by the O2 barrier).
@@ -78,6 +116,8 @@ pub enum Report {
     Fault(LocalFault),
     /// The instance halted (only serving continues).
     Halt(HaltReason),
+    /// A committed configuration outgrows the transport (O10).
+    FrameLimit(FrameLimitExceeded),
 }
 
 /// An operation of the kernel for a worker or the transport.
@@ -90,7 +130,7 @@ pub enum Op {
         /// The message.
         msg: WireMessage,
     },
-    /// A serving request for the serve thread.
+    /// The next serving request for the serve thread.
     Serve(ServeRequest),
     /// The next durable write for the persistence thread.
     Persist {
@@ -117,8 +157,39 @@ pub enum Completion {
     },
     /// The executor answered its operation.
     Exec(ExecDone),
-    /// A local event from serving (`BodyAvailable`).
-    Served(Event),
+    /// The serve thread finished its request.
+    Served(Served),
+}
+
+/// The queues of an instance: diagnostics, and what the §13.5 conformance bounds (O-MEM).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Backlog {
+    /// Effects held behind a pending record.
+    pub held: usize,
+    /// Block payload bytes of the held effects.
+    pub held_bytes: u64,
+    /// Held effects dropped by the bounds so far.
+    pub held_dropped: u64,
+    /// Released effects not handed out yet.
+    pub released: usize,
+    /// Writes queued or in flight.
+    pub writes: usize,
+    /// Safety records queued (not in flight).
+    pub records: usize,
+    /// Payload bytes of the queued bodies, per height.
+    pub bodies: BTreeMap<u64, u64>,
+    /// Executor operations queued other than `Execute`s.
+    pub exec_ops: usize,
+    /// `Execute` requests not answered yet.
+    pub executes: usize,
+    /// Serving requests pending.
+    pub serve: usize,
+    /// Serving requests dropped by the bounds so far.
+    pub serve_dropped: u64,
+    /// Messages queued in the ingress.
+    pub ingress: usize,
+    /// Messages dropped by the ingress bounds so far.
+    pub ingress_dropped: u64,
 }
 
 /// What the kernel of an instance starts from.
@@ -139,8 +210,8 @@ pub struct KernelStart {
     pub now: Millis,
     /// The ingress queues (shared with the handle that fills them).
     pub ingress: Arc<Mutex<Ingress>>,
-    /// Retry backoff of failed writes and apply steps.
-    pub backoff: Backoff,
+    /// Backoff, bounds and the transport limit (the ingress bounds are the queues').
+    pub config: DriverConfig,
 }
 
 /// Queue a network message into the ingress, unless it is the node's own (O7) or for another
@@ -160,6 +231,20 @@ pub fn admit_message(
     true
 }
 
+/// O10: whether the configuration of `height` needs larger frames than the transport accepts.
+pub fn frame_limit_exceeded(
+    frame_limit: u64,
+    height: u64,
+    config: &HeightConfig,
+) -> Option<FrameLimitExceeded> {
+    let needed = u64::from(config.params.max_block_bytes) + u64::from(FRAME_OVERHEAD);
+    (needed > frame_limit).then_some(FrameLimitExceeded {
+        height,
+        needed,
+        limit: frame_limit,
+    })
+}
+
 /// The single-threaded, I/O-free heart of a driver instance.
 pub struct Kernel {
     core: Core,
@@ -171,7 +256,11 @@ pub struct Kernel {
     barrier: Barrier,
     persist: PersistQueue,
     exec: ExecSched,
+    serve: ServeSched,
     out: VecDeque<Op>,
+    frame_limit: u64,
+    /// Local time of the latest call that told it.
+    now: Millis,
 }
 
 impl Kernel {
@@ -189,6 +278,7 @@ impl Kernel {
             .map(|(k, _, _)| k.clone())
             .collect();
         let applied = start.init.tip.height;
+        let config = start.config;
         let (core, actions) = Core::new(
             start.local,
             start.init,
@@ -204,10 +294,13 @@ impl Kernel {
             own,
             ingress: start.ingress,
             local: VecDeque::new(),
-            barrier: Barrier::default(),
-            persist: PersistQueue::new(start.backoff),
-            exec: ExecSched::new(applied, start.backoff),
+            barrier: Barrier::new(config.held),
+            persist: PersistQueue::new(config.backoff),
+            exec: ExecSched::new(applied, config.backoff),
+            serve: ServeSched::new(config.serve),
             out: VecDeque::new(),
+            frame_limit: config.frame_limit,
+            now: start.now,
         };
         kernel.route(actions.clone());
         Ok((kernel, actions))
@@ -247,6 +340,7 @@ impl Kernel {
     /// The next input at local time `now` (O5): the due `Tick`, then local events, then
     /// messages by class.
     pub fn next_input(&mut self, now: Millis) -> Option<Event> {
+        self.now = now;
         if self.core.next_wakeup() <= now {
             return Some(Event::Tick);
         }
@@ -259,6 +353,7 @@ impl Kernel {
 
     /// Hand one input to the core and route its actions (O1).
     pub fn handle(&mut self, now: Millis, event: Event) {
+        self.now = now;
         let actions = self.core.handle(now, event);
         self.route(actions);
     }
@@ -266,22 +361,30 @@ impl Kernel {
     /// [`Kernel::handle`] for hosts that also observe the core's actions (the simulator's
     /// oracles): returns a copy of them.
     pub fn handle_observed(&mut self, now: Millis, event: Event) -> Vec<Action> {
+        self.now = now;
         let actions = self.core.handle(now, event);
         self.route(actions.clone());
         actions
     }
 
     /// Route the core's actions in order: writes to the persistence queue (a record raises the
-    /// barrier), executor work to the scheduler, the rest through the barrier (O1, O2).
+    /// barrier; a newer record of a key supersedes its queued one), executor work to the
+    /// scheduler, the rest through the barrier (O1, O2).
     pub fn route(&mut self, actions: Vec<Action>) {
         for action in actions {
             match action {
                 Action::PersistSafety(record) => {
-                    let seq = self.persist.push(Write::Record(record));
+                    let (seq, superseded) = self.persist.push_record(record);
+                    if let Some(old) = superseded {
+                        self.barrier.superseded(old, seq);
+                    }
                     self.barrier.persisting(seq);
                 }
                 Action::StoreBody { block } => {
-                    self.persist.push(Write::Body(Box::new(block)));
+                    // An applied height lives in the block store.
+                    if block.header.height > self.exec.applied() {
+                        self.persist.push(Write::Body(Box::new(block)));
+                    }
                 }
                 Action::Execute { block, req } => {
                     let block_hash = block.hash(&*self.hasher);
@@ -324,7 +427,9 @@ impl Kernel {
             }
             Action::Halt(reason) => self.out.push_back(Op::Report(Report::Halt(reason))),
             other => match ServeRequest::from_action(other) {
-                Ok(request) => self.out.push_back(Op::Serve(request)),
+                Ok(request) => {
+                    self.serve.push(request, self.now);
+                }
                 Err(other) => iroha_logger::error!(?other, "sumeragi action not routable"),
             },
         }
@@ -337,12 +442,31 @@ impl Kernel {
         }
     }
 
+    /// Take the scheduler's answers for the core; a committed configuration that outgrows the
+    /// transport limit is reported (O10).
     fn collect(&mut self) {
-        self.local.extend(self.exec.take_events());
+        for event in self.exec.take_events() {
+            if let Event::BlockApplied {
+                height,
+                config_after_next,
+                ..
+            } = &event
+                && let Some(exceeded) = frame_limit_exceeded(
+                    self.frame_limit,
+                    height.saturating_add(2),
+                    config_after_next,
+                )
+            {
+                iroha_logger::error!(?exceeded, "sumeragi configuration outgrows the transport");
+                self.out.push_back(Op::Report(Report::FrameLimit(exceeded)));
+            }
+            self.local.push_back(event);
+        }
     }
 
     /// A worker's completion at local time `now`.
     pub fn complete(&mut self, now: Millis, completion: Completion) {
+        self.now = now;
         match completion {
             Completion::Persisted { seq, result } => match result {
                 Ok(()) => {
@@ -351,29 +475,49 @@ impl Kernel {
                         self.effect(effect);
                     }
                 }
-                Err(write) => self.persist.failed(seq, write, now),
+                Err(write) => {
+                    if let Some((old, newer)) = self.persist.failed(seq, write, now) {
+                        self.barrier.superseded(old, newer);
+                    }
+                }
             },
             Completion::Exec(done) => {
                 if let Some(height) = self.exec.done(now, done) {
                     self.persist.push(Write::Prune(height));
                 }
             }
-            Completion::Served(event) => self.local.push_back(event),
+            Completion::Served(served) => {
+                self.serve.done(now, served.bytes);
+                if let Some(event) = served.event {
+                    self.local.push_back(event);
+                }
+            }
         }
         self.collect();
     }
 
-    /// The operations to start now: pending sends, serving and reports, then at most one write
-    /// and one executor operation (each worker runs one at a time).
+    /// The operations to start now: at most [`MAX_OPS_PER_POLL`] pending sends and reports,
+    /// then at most one write, one executor operation and one serving request (each worker
+    /// runs one at a time).
     pub fn poll(&mut self, now: Millis) -> Vec<Op> {
-        let mut ops: Vec<Op> = self.out.drain(..).collect();
+        self.now = now;
+        let batch = self.out.len().min(MAX_OPS_PER_POLL);
+        let mut ops: Vec<Op> = self.out.drain(..batch).collect();
         if let Some((seq, write)) = self.persist.next(now) {
             ops.push(Op::Persist { seq, write });
         }
         if let Some(op) = self.exec.next(now) {
             ops.push(Op::Exec(op));
         }
+        if let Some(request) = self.serve.next(now) {
+            ops.push(Op::Serve(request));
+        }
         ops
+    }
+
+    /// Whether sends or reports wait for the next [`Kernel::poll`].
+    pub fn has_output(&self) -> bool {
+        !self.out.is_empty()
     }
 
     /// The next local time the kernel needs to run: the core's deadline or a retry.
@@ -392,6 +536,30 @@ impl Kernel {
     /// Messages dropped by the ingress bounds so far (O6).
     pub fn ingress_drops(&self) -> u64 {
         self.ingress.lock().dropped()
+    }
+
+    /// The queues of the instance.
+    pub fn backlog(&self) -> Backlog {
+        let (held, held_bytes) = self.barrier.size();
+        let (ingress, ingress_dropped) = {
+            let ingress = self.ingress.lock();
+            (ingress.len(), ingress.dropped())
+        };
+        Backlog {
+            held,
+            held_bytes,
+            held_dropped: self.barrier.dropped(),
+            released: self.out.len(),
+            writes: self.persist.len(),
+            records: self.persist.queued_records(),
+            bodies: self.persist.queued_bodies(),
+            exec_ops: self.exec.queued_ops(),
+            executes: self.exec.outstanding(),
+            serve: self.serve.len(),
+            serve_dropped: self.serve.dropped(),
+            ingress,
+            ingress_dropped,
+        }
     }
 }
 
@@ -481,7 +649,11 @@ pub struct DriverConfig {
     pub ingress: IngressLimits,
     /// Retry backoff of failed writes and apply steps.
     pub backoff: Backoff,
-    /// Largest frame the transport accepts (O10).
+    /// Bounds of the effects held behind a pending record (O6).
+    pub held: HeldLimits,
+    /// Per-peer serving limits (§12.2).
+    pub serve: ServeLimits,
+    /// Largest frame the transport accepts (O10); every frame is decoded within it.
     pub frame_limit: u64,
 }
 
@@ -490,6 +662,8 @@ impl Default for DriverConfig {
         Self {
             ingress: IngressLimits::default(),
             backoff: Backoff::default(),
+            held: HeldLimits::default(),
+            serve: ServeLimits::default(),
             frame_limit: 16 * 1024 * 1024 + u64::from(FRAME_OVERHEAD),
         }
     }
@@ -543,6 +717,8 @@ enum Input {
     Done(Completion),
     Wake,
     Transactions,
+    /// A worker thread ended.
+    Exited(Worker),
     Stop,
 }
 
@@ -551,10 +727,66 @@ struct Shared {
     instance: Hash32,
     own: Vec<PublicKey>,
     ingress: Arc<Mutex<Ingress>>,
-    /// Decode limit per class (O10).
-    frame_limits: [usize; 3],
+    /// Decode limit of every frame: the transport's (O10).
+    frame_limit: usize,
     status: Mutex<Option<CoreStatus>>,
+    backlog: Mutex<Backlog>,
     wake_pending: AtomicBool,
+    /// The event loop runs.
+    alive: AtomicBool,
+    /// The thread whose end stopped the instance, if one did.
+    stopped: Mutex<Option<Worker>>,
+}
+
+impl Shared {
+    fn publish(&self, kernel: &Kernel) {
+        *self.status.lock() = Some(kernel.core().status());
+        *self.backlog.lock() = kernel.backlog();
+    }
+}
+
+/// Run `f`, containing a panic (logged): an observer or transport call on the loop thread.
+fn contained(what: &str, f: impl FnOnce()) {
+    if catch_unwind(AssertUnwindSafe(f)).is_err() {
+        iroha_logger::error!(what, "sumeragi driver backend panicked");
+    }
+}
+
+/// Record that the end of `worker` stopped the instance and tell the observer.
+fn stop(shared: &Shared, observer: &dyn Observer, worker: Worker) {
+    iroha_logger::error!(
+        ?worker,
+        "sumeragi driver thread stopped; the instance stops"
+    );
+    shared.stopped.lock().get_or_insert(worker);
+    contained("observer", || observer.stopped(worker));
+}
+
+/// Tells the event loop that a worker thread ended, however it ended.
+struct ExitGuard {
+    worker: Worker,
+    tx: mpsc::Sender<Input>,
+}
+
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        let _ = self.tx.send(Input::Exited(self.worker));
+    }
+}
+
+/// Marks the event loop stopped when its thread ends; a panic stops the instance.
+struct LoopGuard {
+    shared: Arc<Shared>,
+    observer: Arc<dyn Observer>,
+}
+
+impl Drop for LoopGuard {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            stop(&self.shared, &*self.observer, Worker::Loop);
+        }
+        self.shared.alive.store(false, Ordering::Release);
+    }
 }
 
 /// A cheap, cloneable handle of a running driver instance.
@@ -572,14 +804,10 @@ impl DriverHandle {
     }
 
     /// Deliver an encoded frame from the authenticated peer `from` (never blocks; bounded,
-    /// O6). The driver alone decodes, within the frame limit of the frame's class (O10).
-    /// Returns whether the message was queued.
+    /// O6). The driver alone decodes, within the transport's frame limit (O10), which every
+    /// committed configuration is validated against. Returns whether the message was queued.
     pub fn deliver(&self, from: &PublicKey, frame: &[u8]) -> bool {
-        let Some(class) = traffic_class_of_frame(frame) else {
-            return false;
-        };
-        let limit = self.shared.frame_limits[ingress::lane(class)];
-        match WireMessage::decode(frame, limit) {
+        match WireMessage::decode(frame, self.shared.frame_limit) {
             Ok(msg) => self.deliver_message(from.clone(), msg),
             Err(_) => false,
         }
@@ -613,19 +841,34 @@ impl DriverHandle {
         self.shared.status.lock().clone()
     }
 
-    /// Why the instance halted, if it did.
+    /// Why the instance halted, if it did: the core's reason, or `DriverAnomaly` when a
+    /// stopped thread stopped the instance ([`DriverHandle::stopped`]).
     pub fn halted(&self) -> Option<HaltReason> {
-        self.status().and_then(|s| s.halted)
+        self.status()
+            .and_then(|s| s.halted)
+            .or_else(|| self.stopped().map(|_| HaltReason::DriverAnomaly))
     }
 
-    /// Whether the core started and has not halted.
+    /// The thread whose end stopped the instance, if one did.
+    pub fn stopped(&self) -> Option<Worker> {
+        *self.shared.stopped.lock()
+    }
+
+    /// Whether the core started and has not halted, and the instance runs.
     pub fn ready(&self) -> bool {
-        self.status().is_some_and(|s| s.halted.is_none())
+        self.shared.alive.load(Ordering::Acquire)
+            && self.stopped().is_none()
+            && self.status().is_some_and(|s| s.halted.is_none())
     }
 
     /// Messages dropped by the ingress bounds so far.
     pub fn ingress_drops(&self) -> u64 {
         self.shared.ingress.lock().dropped()
+    }
+
+    /// The instance's queues, as of the loop's latest step.
+    pub fn backlog(&self) -> Backlog {
+        self.shared.backlog.lock().clone()
     }
 }
 
@@ -700,18 +943,19 @@ where
         }
     }
 
-    /// Start the instance: checks the frame limits (O10), spawns the persistence, executor and
+    /// Start the instance: checks the frame limit (O10), spawns the persistence, executor and
     /// serve threads and the event loop, which constructs the core (§12.1).
     ///
     /// # Errors
     /// An invalid configuration, a frame limit below the parameters' needs, or a thread that
     /// could not be spawned.
+    #[allow(clippy::too_many_lines)] // one block per thread
     pub fn spawn(
         self,
         config: DriverConfig,
         start: DriverStart,
     ) -> Result<RunningDriver, DriverError> {
-        let frame_limits = frame_limits(&config, &start)?;
+        check_frame_limit(&config, &start)?;
         let instance = start.init.instance;
         let own: Vec<PublicKey> = start
             .init
@@ -724,9 +968,12 @@ where
             instance,
             own,
             ingress: Arc::clone(&ingress),
-            frame_limits,
+            frame_limit: usize::try_from(config.frame_limit).unwrap_or(usize::MAX),
             status: Mutex::new(None),
+            backlog: Mutex::new(Backlog::default()),
             wake_pending: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+            stopped: Mutex::new(None),
         });
         let (inputs, rx) = mpsc::channel();
         let mut threads = Vec::new();
@@ -740,6 +987,10 @@ where
             let tx = inputs.clone();
             threads.push(
                 super::sumeragi_thread_builder("sumeragi-persist").spawn(move || {
+                    let _exit = ExitGuard {
+                        worker: Worker::Persist,
+                        tx: tx.clone(),
+                    };
                     for (seq, write) in persist_rx {
                         let result = persist::perform(&*records, &*bodies, &*crypto, write);
                         if tx
@@ -758,6 +1009,10 @@ where
             let tx = inputs.clone();
             threads.push(
                 super::sumeragi_thread_builder("sumeragi-exec").spawn(move || {
+                    let _exit = ExitGuard {
+                        worker: Worker::Exec,
+                        tx: tx.clone(),
+                    };
                     for op in exec_rx {
                         let done = run_exec(&mut executor, &*blocks, op);
                         if tx.send(Input::Done(Completion::Exec(done))).is_err() {
@@ -773,11 +1028,19 @@ where
             let tx = inputs.clone();
             threads.push(
                 super::sumeragi_thread_builder("sumeragi-serve").spawn(move || {
+                    let _exit = ExitGuard {
+                        worker: Worker::Serve,
+                        tx: tx.clone(),
+                    };
                     for request in serve_rx {
-                        if let Some(event) =
+                        let served = catch_unwind(AssertUnwindSafe(|| {
                             serve::serve(request, instance, &*bodies, &*blocks, &*net)
-                            && tx.send(Input::Done(Completion::Served(event))).is_err()
-                        {
+                        }))
+                        .unwrap_or_else(|_| {
+                            iroha_logger::error!("sumeragi serving panicked");
+                            Served::default()
+                        });
+                        if tx.send(Input::Done(Completion::Served(served))).is_err() {
                             break;
                         }
                     }
@@ -788,9 +1051,12 @@ where
         {
             let (clock, net, observer) = (self.clock, self.net, self.observer);
             let shared = Arc::clone(&shared);
-            let backoff = config.backoff;
             threads.push(
                 super::sumeragi_thread_builder("sumeragi-loop").spawn(move || {
+                    let _guard = LoopGuard {
+                        shared: Arc::clone(&shared),
+                        observer: Arc::clone(&observer),
+                    };
                     let workers = Workers {
                         net,
                         observer,
@@ -811,13 +1077,15 @@ where
                         attestation: Attestation::new(start.attestor, start.verifier),
                         now: clock.now(),
                         ingress,
-                        backoff,
+                        config,
                     });
                     match kernel {
                         Ok((kernel, _)) => {
-                            *shared.status.lock() = Some(kernel.core().status());
+                            shared.publish(&kernel);
                             let _ = ready_tx.send(Ok(()));
-                            run_loop(kernel, &rx, &shared, &*clock, &workers);
+                            if let Err(worker) = run_loop(kernel, &rx, &shared, &*clock, &workers) {
+                                stop(&shared, &*workers.observer, worker);
+                            }
                         }
                         Err(error) => {
                             let _ = ready_tx.send(Err(error));
@@ -843,32 +1111,29 @@ where
     }
 }
 
-/// O10: the decode limit per class, after checking the transport limit against the chain
-/// parameters of every startup configuration and the sync byte cap.
-fn frame_limits(config: &DriverConfig, start: &DriverStart) -> Result<[usize; 3], DriverError> {
-    let overhead = u64::from(FRAME_OVERHEAD);
-    let mut block = 0u64;
-    for (_, height_config) in &start.init.configs {
-        validate_chain(&height_config.params, config.frame_limit).map_err(|_| {
-            DriverError::FrameLimit {
-                needed: u64::from(height_config.params.max_block_bytes) + overhead,
-                limit: config.frame_limit,
-            }
-        })?;
-        block = block.max(u64::from(height_config.params.max_block_bytes) + overhead);
+/// O10 at start: the transport limit covers the blocks of every startup configuration and the
+/// sync byte cap.
+fn check_frame_limit(config: &DriverConfig, start: &DriverStart) -> Result<(), DriverError> {
+    for (height, height_config) in &start.init.configs {
+        if let Some(exceeded) = frame_limit_exceeded(config.frame_limit, *height, height_config) {
+            return Err(DriverError::FrameLimit {
+                needed: exceeded.needed,
+                limit: exceeded.limit,
+            });
+        }
     }
-    let bulk = u64::from(start.local.sync_max_bytes) + overhead;
+    let bulk = u64::from(start.local.sync_max_bytes) + u64::from(FRAME_OVERHEAD);
     if bulk > config.frame_limit {
         return Err(DriverError::FrameLimit {
             needed: bulk,
             limit: config.frame_limit,
         });
     }
-    let size = |bytes: u64| usize::try_from(bytes).unwrap_or(usize::MAX);
-    Ok([size(block), size(block), size(bulk)])
+    Ok(())
 }
 
-/// Run one executor operation (the executor thread); a panic becomes a local failure.
+/// Run one executor operation (the executor thread); a panic of the executor or of the block
+/// store becomes a local failure, retried like one.
 fn run_exec<E: Executor, K: BlockStore + ?Sized>(
     executor: &mut E,
     blocks: &K,
@@ -893,7 +1158,11 @@ fn run_exec<E: Executor, K: BlockStore + ?Sized>(
             .unwrap_or_else(|_| Err(failed("prepare"))),
         ),
         ExecOp::Append(commit) => {
-            ExecDone::Appended(match blocks.append(&commit.block, &commit.qc) {
+            let appended = catch_unwind(AssertUnwindSafe(|| {
+                blocks.append(&commit.block, &commit.qc)
+            }))
+            .unwrap_or_else(|_| Err(std::io::Error::other("block store panicked")));
+            ExecDone::Appended(match appended {
                 Ok(()) => true,
                 Err(error) => {
                     iroha_logger::warn!(%error, "sumeragi block store append failed; retrying");
@@ -943,90 +1212,92 @@ struct Workers {
 }
 
 impl Workers {
-    fn dispatch(&self, ops: Vec<Op>) {
+    /// Start `ops`; a worker that cannot be reached stops the instance (returned).
+    fn dispatch(&self, ops: Vec<Op>) -> Result<(), Worker> {
         for op in ops {
-            let sent = match op {
-                Op::Send { to, msg } => {
+            match op {
+                Op::Send { to, msg } => contained("transport", || {
                     if let Some(frame) = serve::frame(&msg) {
                         for peer in &to {
                             self.net.send(peer, &frame);
                         }
                     }
-                    true
-                }
-                Op::Serve(request) => self.serve.send(request).is_ok(),
-                Op::Persist { seq, write } => self.persist.send((seq, write)).is_ok(),
-                Op::Exec(op) => self.exec.send(op).is_ok(),
-                Op::Report(Report::Evidence(evidence)) => {
-                    self.observer.evidence(&evidence);
-                    true
-                }
-                Op::Report(Report::Fault(fault)) => {
-                    self.observer.fault(&fault);
-                    true
-                }
-                Op::Report(Report::Halt(reason)) => {
-                    self.observer.halt(&reason);
-                    true
-                }
-            };
-            if !sent {
-                iroha_logger::error!("sumeragi driver worker stopped");
+                }),
+                Op::Serve(request) => self.serve.send(request).map_err(|_| Worker::Serve)?,
+                Op::Persist { seq, write } => self
+                    .persist
+                    .send((seq, write))
+                    .map_err(|_| Worker::Persist)?,
+                Op::Exec(op) => self.exec.send(op).map_err(|_| Worker::Exec)?,
+                Op::Report(report) => contained("observer", || match &report {
+                    Report::Evidence(evidence) => self.observer.evidence(evidence),
+                    Report::Fault(fault) => self.observer.fault(fault),
+                    Report::Halt(reason) => self.observer.halt(reason),
+                    Report::FrameLimit(exceeded) => self.observer.frame_limit(exceeded),
+                }),
             }
         }
+        Ok(())
     }
 }
 
 /// The event loop (O5): absorb completions, start operations, handle the next input by
-/// priority, publish the status, and otherwise wait for an input or the next deadline.
+/// priority (a due `Tick` also between batches of released effects), publish the status, and
+/// otherwise wait for an input or the next deadline. Returns on shutdown, or with the worker
+/// whose end stops the instance (it ended, or cannot be reached).
 fn run_loop(
     mut kernel: Kernel,
     rx: &mpsc::Receiver<Input>,
     shared: &Shared,
     clock: &dyn Clock,
     workers: &Workers,
-) {
-    let absorb = |kernel: &mut Kernel, input: Input| -> bool {
+) -> Result<(), Worker> {
+    let absorb = |kernel: &mut Kernel, input: Input| -> Result<bool, Worker> {
         match input {
             Input::Done(completion) => kernel.complete(clock.now(), completion),
             Input::Wake => shared.wake_pending.store(false, Ordering::Release),
             Input::Transactions => kernel.transactions_available(),
-            Input::Stop => return false,
+            Input::Exited(worker) => return Err(worker),
+            Input::Stop => return Ok(false),
         }
-        true
+        Ok(true)
     };
     loop {
         loop {
             match rx.try_recv() {
                 Ok(input) => {
-                    if !absorb(&mut kernel, input) {
-                        return;
+                    if !absorb(&mut kernel, input)? {
+                        return Ok(());
                     }
                 }
                 Err(mpsc::TryRecvError::Empty) => break,
-                Err(mpsc::TryRecvError::Disconnected) => return,
+                Err(mpsc::TryRecvError::Disconnected) => return Ok(()),
             }
         }
         let now = clock.now();
-        workers.dispatch(kernel.poll(now));
+        workers.dispatch(kernel.poll(now))?;
         if let Some(event) = kernel.next_input(now) {
             kernel.handle(now, event);
-            workers.dispatch(kernel.poll(clock.now()));
-            *shared.status.lock() = Some(kernel.core().status());
+            workers.dispatch(kernel.poll(clock.now()))?;
+            shared.publish(&kernel);
             continue;
         }
+        if kernel.has_output() {
+            continue;
+        }
+        shared.publish(&kernel);
         let wait = kernel
             .next_wakeup()
             .saturating_sub(clock.now())
             .min(MAX_IDLE_WAIT_MS);
         match rx.recv_timeout(Duration::from_millis(wait)) {
             Ok(input) => {
-                if !absorb(&mut kernel, input) {
-                    return;
+                if !absorb(&mut kernel, input)? {
+                    return Ok(());
                 }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
         }
     }
 }

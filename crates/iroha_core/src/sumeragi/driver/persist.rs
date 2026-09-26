@@ -1,10 +1,16 @@
 //! Ordered persistence (`specs/sumeragi.md` §12.3 O2, §7.4): safety records and block bodies
 //! are written one at a time in the order the core emitted them, a failed write is retried with
 //! backoff and never skipped (the instance is silent meanwhile), and the durable watermark
-//! releases the O2 barrier. Also the §7.4 record-provenance steps at start: the store-id check
-//! and the installation event of every `(instance, key)`.
+//! releases the O2 barrier. Records replace each other atomically, so a record still queued is
+//! superseded by a newer one of the same key (the queue holds at most one per key, whatever a
+//! failing disk does); a body still queued at an applied height is dropped with the pruning
+//! that would delete it. Also the §7.4 record-provenance steps at start: the store-id check and
+//! the installation event of every `(instance, key)`.
 
-use std::collections::VecDeque;
+use std::{
+    collections::{BTreeMap, VecDeque},
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 
 use iroha_sumeragi::{
     crypto::Crypto,
@@ -82,11 +88,29 @@ impl PersistQueue {
         }
     }
 
-    /// Queue a write; returns its sequence number.
+    /// Queue a write; returns its sequence number. A `Prune(h)` first drops the queued bodies
+    /// at heights `≤ h` (it would delete them).
     pub fn push(&mut self, write: Write) -> u64 {
+        if let Write::Prune(height) = &write {
+            self.queue
+                .retain(|(_, w)| !matches!(w, Write::Body(b) if b.header.height <= *height));
+        }
         self.last_seq += 1;
         self.queue.push_back((self.last_seq, write));
         self.last_seq
+    }
+
+    /// Queue a safety record; returns its sequence number and that of the queued (not yet
+    /// started) record of the same `(instance, key)` it supersedes, which is removed: what
+    /// waited for that one must now wait for this one ([`Barrier::superseded`]).
+    ///
+    /// [`Barrier::superseded`]: super::barrier::Barrier::superseded
+    pub fn push_record(&mut self, record: Box<SafetyRecord>) -> (u64, Option<u64>) {
+        let superseded = self.queued_record(&record);
+        if let Some(old) = superseded {
+            self.queue.retain(|(seq, _)| *seq != old);
+        }
+        (self.push(Write::Record(record)), superseded)
     }
 
     /// The oldest queued write, handed to the writer now: none while another is in flight or
@@ -111,14 +135,33 @@ impl PersistQueue {
         self.durable
     }
 
-    /// Write `seq` failed: it goes back to the head and is retried after the backoff.
-    pub fn failed(&mut self, seq: u64, write: Write, now: Millis) {
-        if self.in_flight == Some(seq) {
-            self.in_flight = None;
-            self.failures = self.failures.saturating_add(1);
-            self.retry_at = Some(now.saturating_add(self.backoff.delay(self.failures)));
-            self.queue.push_front((seq, write));
+    /// Write `seq` failed: it goes back to the head and is retried after the backoff — unless
+    /// it is a record that a newer queued record of the same key supersedes, which is dropped;
+    /// then `(seq, newer)` is returned ([`Barrier::superseded`]).
+    ///
+    /// [`Barrier::superseded`]: super::barrier::Barrier::superseded
+    pub fn failed(&mut self, seq: u64, write: Write, now: Millis) -> Option<(u64, u64)> {
+        if self.in_flight != Some(seq) {
+            return None;
         }
+        self.in_flight = None;
+        self.failures = self.failures.saturating_add(1);
+        self.retry_at = Some(now.saturating_add(self.backoff.delay(self.failures)));
+        if let Write::Record(record) = &write
+            && let Some(newer) = self.queued_record(record)
+        {
+            return Some((seq, newer));
+        }
+        self.queue.push_front((seq, write));
+        None
+    }
+
+    /// The sequence number of the queued record of `record`'s `(instance, key)`, if any.
+    fn queued_record(&self, record: &SafetyRecord) -> Option<u64> {
+        self.queue.iter().find_map(|(seq, w)| {
+            matches!(w, Write::Record(r) if r.instance == record.instance && r.key == record.key)
+                .then_some(*seq)
+        })
     }
 
     /// Everything up to this sequence number is durable.
@@ -143,9 +186,31 @@ impl PersistQueue {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    /// Safety records queued (not in flight).
+    pub fn queued_records(&self) -> usize {
+        self.queue
+            .iter()
+            .filter(|(_, w)| matches!(w, Write::Record(_)))
+            .count()
+    }
+
+    /// Payload bytes of the queued bodies, per height.
+    pub fn queued_bodies(&self) -> BTreeMap<u64, u64> {
+        let mut out: BTreeMap<u64, u64> = BTreeMap::new();
+        for (_, write) in &self.queue {
+            if let Write::Body(block) = write {
+                let bytes = u64::try_from(block.payload.len()).unwrap_or(u64::MAX);
+                let entry = out.entry(block.header.height).or_default();
+                *entry = entry.saturating_add(bytes);
+            }
+        }
+        out
+    }
 }
 
 /// Perform one write on the stores (the persistence thread); the write comes back on failure.
+/// A store that panics fails the write (it is retried like an I/O error, §12.5).
 ///
 /// # Errors
 /// The write, when it did not become durable.
@@ -159,14 +224,15 @@ where
     R: RecordStore + ?Sized,
     B: BodyStore + ?Sized,
 {
-    let result = match &write {
+    let result = catch_unwind(AssertUnwindSafe(|| match &write {
         Write::Record(record) => record
             .encode(crypto)
             .map_err(|e| std::io::Error::other(e.to_string()))
             .and_then(|bytes| records.write(&record.instance, &record.key, &bytes)),
         Write::Body(block) => bodies.put(&block.hash(crypto), block),
         Write::Prune(height) => bodies.prune_through(*height),
-    };
+    }))
+    .unwrap_or_else(|_| Err(std::io::Error::other("store panicked")));
     result.map_err(|error| {
         iroha_logger::warn!(%error, "sumeragi persistence failed; retrying");
         write
@@ -353,6 +419,93 @@ mod tests {
         assert_eq!(queue.wakeup(), Millis::MAX);
         assert_eq!(queue.next(130).map(|(s, _)| s), Some(2));
         assert_eq!(queue.len(), 1);
+    }
+
+    /// A queued record is superseded by a newer one of the same key (not one of another key,
+    /// nor the one in flight); a prune drops the queued bodies it would delete.
+    #[test]
+    fn records_supersede_and_prune_drops_bodies() {
+        let mut queue = PersistQueue::new(Backoff::default());
+        let other = Box::new(SafetyRecord::fresh(
+            Hash32::ZERO,
+            PublicKey::new(vec![2; 32]).unwrap(),
+            1,
+            None,
+        ));
+        let Write::Record(r1) = record(1) else {
+            unreachable!()
+        };
+        let body = |h: u64| {
+            Write::Body(Box::new(super::super::tests::block(
+                h,
+                Hash32::ZERO,
+                Hash32::ZERO,
+                vec![0; 10],
+            )))
+        };
+        assert_eq!(queue.push_record(r1.clone()), (1, None));
+        assert_eq!(queue.next(0).map(|(s, _)| s), Some(1), "in flight");
+        assert_eq!(
+            queue.push_record(r1.clone()),
+            (2, None),
+            "not the one in flight"
+        );
+        queue.push(body(3));
+        assert_eq!(queue.push_record(other), (4, None), "another key");
+        queue.push(body(4));
+        assert_eq!(queue.push_record(r1.clone()), (6, Some(2)));
+        assert_eq!(queue.push_record(r1), (7, Some(6)));
+        assert_eq!(queue.queued_records(), 2);
+        assert_eq!(queue.queued_bodies(), BTreeMap::from([(3, 10), (4, 10)]));
+        queue.push(Write::Prune(3));
+        assert_eq!(queue.queued_bodies(), BTreeMap::from([(4, 10)]));
+        assert_eq!(queue.done(1), 1);
+        let order: Vec<u64> = std::iter::from_fn(|| {
+            let (seq, _) = queue.next(0)?;
+            queue.done(seq);
+            Some(seq)
+        })
+        .collect();
+        assert_eq!(order, vec![4, 5, 7, 8]);
+    }
+
+    /// A record that fails while a newer one of its key waits is dropped, not retried: the
+    /// newer one supersedes it (the queue never holds two records of a key).
+    #[test]
+    fn failed_record_superseded_by_a_queued_one() {
+        let mut queue = PersistQueue::new(Backoff::default());
+        let Write::Record(r) = record(1) else {
+            unreachable!()
+        };
+        queue.push_record(r.clone());
+        let (seq, write) = queue.next(0).unwrap();
+        assert_eq!(queue.push_record(r.clone()), (2, None));
+        assert_eq!(queue.failed(seq, write, 0), Some((1, 2)));
+        assert_eq!(queue.queued_records(), 1);
+        assert!(
+            queue.next(5).is_none(),
+            "the newer record waits for the backoff"
+        );
+        let (seq, write) = queue.next(10).unwrap();
+        assert_eq!(seq, 2);
+        assert_eq!(queue.failed(seq, write, 10), None, "nothing newer: retried");
+        assert_eq!(queue.queued_records(), 1);
+        assert_eq!(queue.next(30).map(|(s, _)| s), Some(2));
+    }
+
+    /// A store that panics fails the write, which comes back to be retried.
+    #[test]
+    fn panicking_store_fails_the_write() {
+        let crypto = FakeCrypto::new();
+        let records = FakeRecords::default();
+        let bodies = super::super::tests::fakes::FakeBodies::default();
+        records.panic_next(1);
+        let write = record(4);
+        assert_eq!(
+            perform(&records, &bodies, &crypto, write.clone()),
+            Err(write.clone())
+        );
+        assert_eq!(perform(&records, &bodies, &crypto, write), Ok(()));
     }
 
     /// `perform` writes records and bodies to their stores and hands a failed write back.

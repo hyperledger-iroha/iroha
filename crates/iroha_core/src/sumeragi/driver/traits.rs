@@ -15,6 +15,8 @@ use iroha_sumeragi::{
     types::{Hash32, HeightConfig, Millis, PublicKey},
 };
 
+use super::{FrameLimitExceeded, Worker};
+
 /// An encoded wire message for the transport: the exact `WireMessage::encode()` bytes (encoded
 /// once and shared by every recipient), the instance they belong to and their O8 class.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,6 +178,12 @@ impl Clock for SystemClock {
 /// The application: speculative execution with a post-state cache keyed by block hash, apply,
 /// the payload builder and its quarantine (§12.2, O3, O4). The driver calls it from one thread,
 /// one call at a time, and schedules the calls (parking, most recent first, apply in order).
+///
+/// Apply sequencing: after a successful [`prepare`](Self::prepare) of a block, the driver's next
+/// executor call is [`commit`](Self::commit) of the same block (only the block-store append
+/// happens in between, retried as long as it fails), so the prepared post-state may be a single
+/// live overlay. If `commit` fails, the driver calls `prepare` of that block again before it
+/// retries `commit`; the block is then already in the block store.
 pub trait Executor: Send {
     /// Execute `block` (hash `block_hash`) on its parent's post-state: the applied state or a
     /// cached post-state. `None` if that post-state is not held (not an error: the driver parks
@@ -193,10 +201,11 @@ pub trait Executor: Send {
     /// A local failure (I/O, resources); the driver retries.
     fn prepare(&mut self, block: &Block, commit_qc: &Qc) -> Result<Option<Hash32>, String>;
     /// Make the prepared post-state of `block` the applied state (after the block store holds
-    /// it) and return the configuration of `height + 2` it schedules.
+    /// it) and return the configuration of `height + 2` it schedules. Called only right after
+    /// a successful `prepare` of `block` (see the trait documentation).
     ///
     /// # Errors
-    /// A local failure; the driver retries.
+    /// A local failure; the driver prepares again and retries.
     fn commit(&mut self, block: &Block, commit_qc: &Qc) -> Result<HeightConfig, String>;
     /// Build a payload of at most `max_bytes` for `(height, view)` by peeking at the queue
     /// (never removing transactions) and return it with its commit-attestation flag (§3.7 A1).
@@ -212,8 +221,8 @@ pub trait Executor: Send {
     fn reject(&mut self, height: u64, view: u64, block_hash: &Hash32);
 }
 
-/// Receives the core's reports: evidence of signed misbehaviour, local faults and a halt
-/// (telemetry and the evidence log in the node).
+/// Receives the core's reports — evidence of signed misbehaviour, local faults and a halt —
+/// and the driver's own (telemetry and the evidence log in the node).
 pub trait Observer: Send + Sync {
     /// Evidence the core reports (after its O2 barrier).
     fn evidence(&self, _evidence: &Evidence) {}
@@ -221,6 +230,11 @@ pub trait Observer: Send + Sync {
     fn fault(&self, _fault: &LocalFault) {}
     /// The instance halted.
     fn halt(&self, _reason: &HaltReason) {}
+    /// A thread of the instance stopped, or a worker could not be reached: the instance
+    /// stopped with it (a restart recovers).
+    fn stopped(&self, _worker: Worker) {}
+    /// A committed configuration outgrows the transport's frame limit (O10).
+    fn frame_limit(&self, _exceeded: &FrameLimitExceeded) {}
 }
 
 /// An observer that ignores every report.
@@ -263,5 +277,11 @@ mod tests {
         let observer = NoObserver;
         observer.fault(&LocalFault::RecordMissing);
         observer.halt(&HaltReason::DriverAnomaly);
+        observer.stopped(Worker::Exec);
+        observer.frame_limit(&FrameLimitExceeded {
+            height: 1,
+            needed: 2,
+            limit: 1,
+        });
     }
 }

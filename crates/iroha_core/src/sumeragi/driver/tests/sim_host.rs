@@ -14,17 +14,18 @@ use iroha_sumeragi::{
     message::{TrafficClass, WireMessage},
     sim::{
         crypto::SimCrypto,
-        host::{Done, Host, Op as SimOp, Start},
+        host::{Backlog, Done, Host, Op as SimOp, Start},
     },
     types::{Millis, PublicKey},
 };
 use parking_lot::Mutex;
 
 use super::super::{
-    Completion, Kernel, KernelStart, Op, Report,
+    Completion, DriverConfig, Kernel, KernelStart, Op, Report,
     exec::{ExecDone, ExecOp},
     ingress::{Ingress, IngressLimits},
-    persist::{Backoff, Write},
+    persist::Write,
+    serve::Served,
 };
 
 /// Operation ids of executor operations (write ids are the persistence sequence numbers).
@@ -33,6 +34,8 @@ const EXEC_OP: u64 = 1 << 62;
 std::thread_local! {
     /// Starts of driver hosts on this test thread.
     pub static STARTS: Cell<u64> = const { Cell::new(0) };
+    /// Most effects a driver host of this test thread held behind a pending record.
+    pub static PEAK_HELD: Cell<usize> = const { Cell::new(0) };
 }
 
 /// The kernel of one replica, hosted by the simulated world.
@@ -76,11 +79,15 @@ impl DriverHost {
             Op::Send { to, msg } => {
                 out.push(SimOp::Effect(Box::new(Action::Broadcast { to, msg })))
             }
-            Op::Serve(request) => out.push(SimOp::Effect(Box::new(request.into_action()))),
+            Op::Serve(request) => {
+                // The world serves at once (a local body arrives through `deliver`).
+                out.push(SimOp::Effect(Box::new(request.into_action())));
+                self.complete_kernel(Completion::Served(Served::default()));
+            }
             Op::Report(Report::Evidence(evidence)) => {
                 out.push(SimOp::Effect(Box::new(Action::ReportEvidence(evidence))));
             }
-            Op::Report(Report::Fault(_) | Report::Halt(_)) => {}
+            Op::Report(Report::Fault(_) | Report::Halt(_) | Report::FrameLimit(_)) => {}
             Op::Persist { seq, write } => match &write {
                 Write::Record(record) => {
                     out.push(SimOp::WriteRecord {
@@ -167,7 +174,7 @@ impl Host for DriverHost {
             attestation: start.attestation,
             now: start.now,
             ingress: Arc::new(Mutex::new(Ingress::new(IngressLimits::default()))),
-            backoff: Backoff::default(),
+            config: DriverConfig::default(),
         })?;
         self.kernel = Some(kernel);
         self.unanswered = requests(&actions);
@@ -256,6 +263,19 @@ impl Host for DriverHost {
 
     fn owns_io(&self) -> bool {
         true
+    }
+
+    fn backlog(&self) -> Option<Backlog> {
+        let backlog = self.kernel.as_ref()?.backlog();
+        PEAK_HELD.with(|peak| peak.set(peak.get().max(backlog.held)));
+        Some(Backlog {
+            held: backlog.held,
+            held_bytes: backlog.held_bytes,
+            records: backlog.records,
+            bodies: backlog.bodies,
+            exec_ops: backlog.exec_ops,
+            serve: backlog.serve,
+        })
     }
 
     fn poll(&mut self, now: Millis) -> Vec<SimOp> {

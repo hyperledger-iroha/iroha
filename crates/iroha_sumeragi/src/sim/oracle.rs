@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use super::{
     crypto::{SigSlot, SimSigner, aggregate, parse_preimage},
     driver::{block_exec, decode_txs, reference_exec},
+    host::BacklogBound,
     scenario::Perf,
     world::{Inst, World},
 };
@@ -427,6 +428,15 @@ impl World {
             return self.fail(format!(
                 "O-MEM: replica {r} body store holds {bytes} payload bytes at height {h} (applied {applied}, limit {limit})"
             ));
+        }
+        // O-MEM of the queues of a host that owns its scheduling (§13.5).
+        if let Some(backlog) = self.replicas[r].host.backlog() {
+            let rep = &self.replicas[r];
+            let keys = rep.keys.len().max(rep.records.len());
+            let bound = BacklogBound::new(keys, self.replicas.len(), applied, limit);
+            if let Some(excess) = backlog.exceeds(&bound) {
+                return self.fail(format!("O-MEM: replica {r} host queues: {excess}"));
+            }
         }
         let lock = core.lock().cloned();
         let tc = core.highest_tc().cloned();

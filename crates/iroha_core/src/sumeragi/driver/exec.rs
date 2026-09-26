@@ -12,8 +12,14 @@
 //!   block store, commit — and `BlockApplied` carries the applied header; a local commitment
 //!   that differs from the certified one is reported as `ApplyDiverged` and apply stops; local
 //!   failures are retried with backoff, never skipped;
+//! - once prepared, and while a failed step backs off, a commit runs alone: no other executor
+//!   call comes between its prepare and its commit (the executor may hold a single live
+//!   overlay); a failed commit is retried after a fresh prepare, without a second append;
 //! - `BuildPayload` for height `h` runs only after `h − 1` is applied (the builder filters the
-//!   applied transactions), and `PayloadReady{req}` follows at most once an `EMPTY` answer.
+//!   applied transactions), and `PayloadReady{req}` follows at most once an `EMPTY` answer;
+//! - the queues other than the `Execute`s are bounded: discards of one height merge (keeping
+//!   what both keep), and rejections are deduplicated and capped (the oldest go first: the
+//!   quarantine is best effort).
 
 use std::{collections::VecDeque, sync::Arc};
 
@@ -24,6 +30,9 @@ use iroha_sumeragi::{
 };
 
 use super::persist::Backoff;
+
+/// Rejections kept while the executor is busy (the oldest are dropped beyond).
+const MAX_REJECTS: usize = 64;
 
 /// A committed block waiting to be applied.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,6 +167,8 @@ pub struct ExecSched {
     running: Option<Running>,
     commits: VecDeque<Arc<Commit>>,
     stage: Stage,
+    /// The head commit is durable in the block store (a re-prepare skips the append).
+    appended: bool,
     build: Option<BuildRequest>,
     rejects: VecDeque<(u64, u64, Hash32)>,
     discards: VecDeque<(u64, Vec<Hash32>)>,
@@ -180,6 +191,7 @@ impl ExecSched {
             running: None,
             commits: VecDeque::new(),
             stage: Stage::Fresh,
+            appended: false,
             build: None,
             rejects: VecDeque::new(),
             discards: VecDeque::new(),
@@ -245,7 +257,11 @@ impl ExecSched {
         {
             job.cancelled = true;
         }
-        self.discards.push_back((height, keep));
+        // Discards run before any execution, so two of one height in a row keep what both keep.
+        match self.discards.iter_mut().find(|(h, _)| *h == height) {
+            Some((_, kept)) => kept.retain(|bh| keep.contains(bh)),
+            None => self.discards.push_back((height, keep)),
+        }
     }
 
     /// `CommitBlock` (after the O2 barrier; the core emits them in height order).
@@ -264,8 +280,14 @@ impl ExecSched {
         });
     }
 
-    /// `PayloadRejected`.
+    /// `PayloadRejected` (once per block; the oldest go beyond [`MAX_REJECTS`]).
     pub fn reject(&mut self, height: u64, view: u64, block_hash: Hash32) {
+        if self.rejects.iter().any(|(_, _, bh)| *bh == block_hash) {
+            return;
+        }
+        if self.rejects.len() >= MAX_REJECTS {
+            self.rejects.pop_front();
+        }
         self.rejects.push_back((height, view, block_hash));
     }
 
@@ -277,38 +299,27 @@ impl ExecSched {
         }
     }
 
-    /// The next operation for the executor, if it is idle: discards, then the apply of the
-    /// next committed block, then a build whose parent is applied, then rejections, then the
-    /// most recent `Execute`.
+    /// The next operation for the executor, if it is idle. A commit that is prepared or
+    /// appended, or whose failed step backs off, runs alone (its next step once due, nothing
+    /// else meanwhile). Otherwise: discards, then the apply of the next committed block, then a
+    /// build whose parent is applied, then rejections, then the most recent `Execute`.
     pub fn next(&mut self, now: Millis) -> Option<ExecOp> {
         if self.running.is_some() {
             return None;
+        }
+        let committing = !self.diverged
+            && !self.commits.is_empty()
+            && (self.stage != Stage::Fresh || self.retry_at.is_some());
+        if committing {
+            let due = self.retry_at.is_none_or(|at| at <= now);
+            return if due { self.commit_step() } else { None };
         }
         if let Some((height, keep)) = self.discards.pop_front() {
             self.running = Some(Running::Discard);
             return Some(ExecOp::Discard { height, keep });
         }
-        let due = self.retry_at.is_none_or(|at| at <= now);
-        if !self.diverged
-            && due
-            && let Some(commit) = self.commits.front().cloned()
-        {
-            let (running, op) = match self.stage {
-                Stage::Fresh => {
-                    let bh = commit.qc.block_hash;
-                    for list in [&mut self.jobs, &mut self.parked] {
-                        let (same, rest): (Vec<Job>, Vec<Job>) =
-                            list.drain(..).partition(|job| job.block_hash == bh);
-                        *list = rest;
-                        self.merged.extend(same);
-                    }
-                    (Running::Prepare, ExecOp::Prepare(commit))
-                }
-                Stage::Prepared => (Running::Append, ExecOp::Append(commit)),
-                Stage::Appended => (Running::Commit, ExecOp::Commit(commit)),
-            };
-            self.running = Some(running);
-            return Some(op);
+        if !self.diverged && !self.commits.is_empty() {
+            return self.commit_step();
         }
         if let Some(build) = self.build
             && build.height <= self.applied.saturating_add(1)
@@ -337,6 +348,27 @@ impl ExecSched {
             block_hash: job.block_hash,
         };
         self.running = Some(Running::Execute(job));
+        Some(op)
+    }
+
+    /// The next step of the head commit.
+    fn commit_step(&mut self) -> Option<ExecOp> {
+        let commit = self.commits.front().cloned()?;
+        let (running, op) = match self.stage {
+            Stage::Fresh => {
+                let bh = commit.qc.block_hash;
+                for list in [&mut self.jobs, &mut self.parked] {
+                    let (same, rest): (Vec<Job>, Vec<Job>) =
+                        list.drain(..).partition(|job| job.block_hash == bh);
+                    *list = rest;
+                    self.merged.extend(same);
+                }
+                (Running::Prepare, ExecOp::Prepare(commit))
+            }
+            Stage::Prepared => (Running::Append, ExecOp::Append(commit)),
+            Stage::Appended => (Running::Commit, ExecOp::Commit(commit)),
+        };
+        self.running = Some(running);
         Some(op)
     }
 
@@ -383,7 +415,11 @@ impl ExecSched {
                     Ok(Some(local)) if local == commit.qc.result => {
                         self.failures = 0;
                         self.retry_at = None;
-                        self.stage = Stage::Prepared;
+                        self.stage = if self.appended {
+                            Stage::Appended
+                        } else {
+                            Stage::Prepared
+                        };
                         for job in std::mem::take(&mut self.merged) {
                             self.answer(&job, ExecOutcome::Valid(local));
                         }
@@ -408,6 +444,7 @@ impl ExecSched {
                 if ok {
                     self.failures = 0;
                     self.retry_at = None;
+                    self.appended = true;
                     self.stage = Stage::Appended;
                 } else {
                     self.retry(now, "append", "block store write failed");
@@ -419,6 +456,7 @@ impl ExecSched {
                     self.failures = 0;
                     self.retry_at = None;
                     self.stage = Stage::Fresh;
+                    self.appended = false;
                     let height = commit.block.header.height;
                     self.applied = height;
                     self.events.push(Event::BlockApplied {
@@ -449,7 +487,11 @@ impl ExecSched {
                     self.unpark(&commit.qc.block_hash);
                     return Some(height);
                 }
-                Err(reason) => self.retry(now, "commit", &reason),
+                Err(reason) => {
+                    // The prepared state may be gone: prepare again (the append is kept).
+                    self.stage = Stage::Fresh;
+                    self.retry(now, "commit", &reason);
+                }
             },
             (Running::Build(req), ExecDone::Built { payload, attest }) => {
                 self.pending_ready = payload.is_empty().then_some(req);
@@ -493,5 +535,14 @@ impl ExecSched {
     /// Whether an operation is in flight.
     pub fn busy(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// Executor operations queued other than `Execute`s: commits, discards, rejections and a
+    /// build.
+    pub fn queued_ops(&self) -> usize {
+        self.commits.len()
+            + self.discards.len()
+            + self.rejects.len()
+            + usize::from(self.build.is_some())
     }
 }
