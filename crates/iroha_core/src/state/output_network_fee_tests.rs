@@ -55,10 +55,8 @@ fn failing_body() -> Vec<InstructionBox> {
 
 #[test]
 fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for batch in [false, true] {
         let (state, asset) = priced_fixture(None);
         let source = carrier(vec![input(
@@ -67,7 +65,7 @@ fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
             payment(&asset, 3),
             batch,
         )]);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -108,17 +106,15 @@ fn plain_and_batch_business_rejection_charge_the_same_actual_direct_basis() {
 
 #[test]
 fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit() {
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let body = failing_body();
     let gas = crate::gas::meter_instructions(&body);
     assert!(gas > 0);
     for exact in [false, true] {
         let (state, asset) = priced_fixture(None);
         let source = carrier(vec![input(&state, body.clone(), payment(&asset, 3), false)]);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         block.gas_limit_per_block = if exact { gas } else { gas - 1 };
         let fragments = block.committed_fragment_count();
@@ -147,10 +143,8 @@ fn fee_only_settlement_does_not_charge_completed_work_again_at_the_block_limit()
 
 #[test]
 fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let source = carrier(vec![input(
         &state,
@@ -158,7 +152,7 @@ fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
         payment(&asset, 2),
         false,
     )]);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -183,10 +177,8 @@ fn fee_admission_failure_has_no_business_fee_record_or_applied_fragment() {
 
 #[test]
 fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis() {
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let callback: TriggerId = "fee_data_callback".parse().unwrap();
     let mut setup = state.block(BlockHeader::new(NonZeroU64::MIN, None, None, 1, 0));
@@ -211,7 +203,7 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
     let body = vec![write("data_callback_event")];
     let direct_gas = crate::gas::meter_instructions(&body);
     let source = carrier(vec![input(&state, body, payment(&asset, 2), false)]);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -263,10 +255,8 @@ fn actual_data_callback_failure_rolls_back_business_but_preserves_root_fee_basis
 
 #[test]
 fn healthy_output_overflow_drops_both_business_and_its_staged_fee() {
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(Some(32_768));
     {
         let mut parameters = state.world.parameters.block();
@@ -283,7 +273,7 @@ fn healthy_output_overflow_drops_both_business_and_its_staged_fee() {
         payment(&asset, 2),
         false,
     )]);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -325,10 +315,8 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
         smartcontracts::ivm::cache::IvmCache, tx::AcceptedTransaction,
     };
     use iroha_model_base::topology::LaneId;
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     for mutation in 0..11 {
         let (state, asset) = priced_fixture(None);
         let entry = input(&state, failing_body(), payment(&asset, 3), false);
@@ -345,7 +333,7 @@ fn actual_failed_execution_fee_authority_is_once_only_and_bound_to_its_source_co
             unreachable!()
         };
         let source = carrier(vec![entry.clone()]);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         let parameters = block.world.parameters.get();
         let accepted = AcceptedTransaction::accept_borrowed_entrypoint_at_time(
@@ -451,10 +439,8 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
         ValidationFail,
         transaction::{IvmBytecode, error::TransactionRejectionReason},
     };
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
     let (state, asset) = priced_fixture(None);
     let mut program = ivm::ProgramMetadata {
         max_cycles: 1_000,
@@ -483,7 +469,7 @@ fn actual_raw_vm_rejection_retains_and_charges_consumed_work_once() {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
     let source = carrier(vec![TransactionEntrypoint::External(signed)]);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     block.gas_limit_per_block = gas_limit;
     let fragments = block.committed_fragment_count();

@@ -13,10 +13,10 @@ fn overlay_limit_rejection_is_fee_exempt_but_gas_accountable() {
 
 #[test]
 fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("rejected-live-batch-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -180,10 +180,10 @@ fn rejected_live_batch_business_execution_still_charges_nexus_fee() {
 }
 #[test]
 fn rejected_contract_only_batch_vm_error_still_charges_nexus_fee() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("rejected-contract-batch-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");

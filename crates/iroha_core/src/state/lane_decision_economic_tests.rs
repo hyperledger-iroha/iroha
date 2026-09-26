@@ -968,7 +968,7 @@ state_test! { sync native_economic_execution_retains_its_owner_across_manifest_c
     let (baseline, expected) = state.preexecute_lane_decision_groups(header, &groups).unwrap();
     drop(baseline);
     let generation = state.state_view_generation();
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (overlay, actual) = state.with_native_lane_execution(header, &groups, |overlay, executions| {
         state.install_lane_manifests(&overlay.lane_manifests);
         assert_ne!(state.state_view_generation(), generation,

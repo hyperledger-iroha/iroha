@@ -137,20 +137,20 @@ impl ProductionLifecycleRunnerActivationV1 {
         self.block_ingress.open().map_err(ingress_capacity_error)?;
         let publication = match self.status {
             ProductionLifecycleRunnerStatusAuthorityV1::CurrentHeight => {
-                super::super::status::set_v2_status(successor);
+                super::super::v2_status::set_v2_status(successor);
                 Ok(())
             }
             ProductionLifecycleRunnerStatusAuthorityV1::Applied {
                 expected_predecessor,
                 authority,
-            } => super::super::status::activate_v2_successor_height(
+            } => super::super::v2_status::activate_v2_successor_height(
                 expected_predecessor,
                 authority,
                 successor,
             )
             .map_err(V2RunnerError::from),
             ProductionLifecycleRunnerStatusAuthorityV1::SnapshotBootstrap { authority } => {
-                super::super::status::activate_snapshot_bootstrap_v2_height(authority, successor)
+                super::super::v2_status::activate_snapshot_bootstrap_v2_height(authority, successor)
                     .map_err(V2RunnerError::from)
             }
         };
@@ -242,7 +242,7 @@ impl ProductionLifecycleCompleteTipRunnerActivationV1 {
         }
         self.block_ingress.open().map_err(ingress_capacity_error)?;
         if let Err(error) =
-            super::super::status::activate_recovered_complete_tip_v2_height_with_decision(
+            super::super::v2_status::activate_recovered_complete_tip_v2_height_with_decision(
                 retirement, successor, decision,
             )
         {
@@ -319,7 +319,7 @@ impl ProductionLifecyclePendingKuraRunnerActivationV1 {
             return Err(V2RunnerError::LifecycleActivationIngressMismatch);
         }
         self.block_ingress.open().map_err(ingress_capacity_error)?;
-        super::super::status::set_v2_status(status);
+        super::super::v2_status::set_v2_status(status);
         self.ingress_ready.store(true, Ordering::Release);
         Ok(ProductionLifecycleActivatedRunnerAuthorityV1 {
             _seal: ProductionLifecycleActivatedRunnerAuthoritySealV1,

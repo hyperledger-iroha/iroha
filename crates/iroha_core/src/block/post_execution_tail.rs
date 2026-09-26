@@ -192,7 +192,7 @@ impl ValidBlock {
             .map(|account| authenticate_genesis_block_intents(block, account))
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        let _guard = crate::exec_witness::exec_witness_guard();
         Self::execute_and_record_canonical_outputs(
             block,
             state,
@@ -220,7 +220,7 @@ impl ValidBlock {
             .map(|account| authenticate_genesis_block_intents(block, account))
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        let _guard = crate::exec_witness::exec_witness_guard();
         Self::execute_and_record_canonical_outputs(
             block,
             state,

@@ -4,7 +4,7 @@ use super::{
     tests::{apply_source, cache_canonical_test_transaction_set, delta, header, state},
     *,
 };
-use crate::sumeragi::witness;
+use crate::exec_witness;
 use iroha_data_model::{asset::AssetId, block::consensus::ExecWitness};
 use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::Quantity;
@@ -17,7 +17,7 @@ fn run_unrelated_block(with_transfer: bool, in_overlay: bool) {
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
-    let overlay = in_overlay.then(witness::begin_exec_witness_overlay);
+    let overlay = in_overlay.then(exec_witness::begin_exec_witness_overlay);
     let source = Hash::new(b"unrelated recorder isolation source");
     let marker: StatePath = "fastpq/unrelated-recorder-isolation".parse().unwrap();
     let transfer = delta();
@@ -30,8 +30,8 @@ fn run_unrelated_block(with_transfer: bool, in_overlay: bool) {
         // Try both overwriting an owner write and adding unrelated read/write keys.
         for account in [&transfer.from_account, &transfer.to_account] {
             let asset = AssetId::of(transfer.asset_definition.clone(), account.clone());
-            witness::record_read_asset(&asset, Some(&Quantity::from(123_u32)));
-            witness::record_write_asset(&asset, &Quantity::from(456_u32));
+            exec_witness::record_read_asset(&asset, Some(&Quantity::from(123_u32)));
+            exec_witness::record_write_asset(&asset, &Quantity::from(456_u32));
         }
         if with_transfer {
             tx.record_test_transfer_transcripts(&ALICE_ID, source, vec![transfer]);
@@ -57,7 +57,7 @@ fn run_unrelated_block(with_transfer: bool, in_overlay: bool) {
 }
 
 fn capture_owner(unrelated: Option<(bool, bool)>) -> ExecWitness {
-    witness::start_block();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -65,8 +65,8 @@ fn capture_owner(unrelated: Option<(bool, bool)>) -> ExecWitness {
     apply_source(&mut block, source, false, None);
     let transfer = delta();
     let asset = AssetId::of(transfer.asset_definition, transfer.from_account);
-    witness::record_read_asset(&asset, Some(&transfer.from_balance_before));
-    witness::record_write_asset(&asset, &transfer.from_balance_after);
+    exec_witness::record_read_asset(&asset, Some(&transfer.from_balance_before));
+    exec_witness::record_write_asset(&asset, &transfer.from_balance_after);
     block
         .finalize_fastpq_source_inventory(&[], &[], &[])
         .unwrap();
@@ -114,7 +114,7 @@ fn capture_owner(unrelated: Option<(bool, bool)>) -> ExecWitness {
 }
 
 fn assert_unrelated_block_isolated(with_transfer: bool, in_overlay: bool) {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let expected = capture_owner(None);
     let actual = capture_owner(Some((with_transfer, in_overlay)));
     // Compare every byte, including owner reads/writes and synthetic block writes,

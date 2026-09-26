@@ -3,7 +3,7 @@
 //! The broadcaster de-duplicates envelopes by `(lane_id, dataspace_id, block_height,
 //! settlement_hash)`, validates each payload, persists it to the Sumeragi status snapshot,
 //! and emits a high-priority control-plane frame so peers can ingest the relay evidence.
-use crate::{IrohaNetwork, NetworkMessage, sumeragi::status};
+use crate::{IrohaNetwork, NetworkMessage, status};
 use iroha_data_model::{
     block::consensus::LaneBlockCommitment,
     nexus::{LaneRelayEnvelope, LaneRelayError, LaneRelayFastpqMaterialStatus},
@@ -508,9 +508,9 @@ mod tests {
     }
     #[test]
     fn broadcaster_deduplicates_verified_envelopes() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
+        let _guard = crate::status::lane_relay_test_guard();
         // Ensure a clean slate for the shared status snapshot.
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let mut envelope = sample_envelope(1, 3);
@@ -521,14 +521,14 @@ mod tests {
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].block_height, 1);
-        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        let snapshot = crate::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].lane_id, LaneId::new(3));
     }
     #[test]
     fn broadcaster_skips_invalid_envelopes() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let mut envelope = sample_envelope(2, 4);
@@ -539,12 +539,12 @@ mod tests {
             .broadcast(vec![envelope])
             .expect("invalid relays are terminally filtered before actor admission");
         assert!(network.sent().is_empty());
-        assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
+        assert!(crate::status::lane_relay_envelopes_snapshot().is_empty());
     }
     #[test]
     fn broadcaster_rejects_self_consistently_hashed_settlement_count_drift() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let mut envelope = sample_envelope(2, 4);
@@ -557,12 +557,12 @@ mod tests {
             .expect("invalid relays are terminally filtered before actor admission");
 
         assert!(network.sent().is_empty());
-        assert!(crate::sumeragi::status::lane_relay_envelopes_snapshot().is_empty());
+        assert!(crate::status::lane_relay_envelopes_snapshot().is_empty());
     }
     #[test]
     fn broadcaster_records_and_broadcasts_qcless_pending_relay() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let envelope = sample_envelope(3, 5);
@@ -575,15 +575,15 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert!(sent[0].fastpq_proof.is_none());
         assert!(sent[0].finality_authority.is_none());
-        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        let snapshot = crate::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_none());
         assert!(snapshot[0].finality_authority.is_none());
     }
     #[test]
     fn broadcaster_broadcasts_finality_backed_pending_then_upgrades_verified_relay() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let mut envelope = sample_envelope(3, 5);
@@ -598,7 +598,7 @@ mod tests {
         assert_eq!(sent[0].block_height, 3);
         assert!(sent[0].fastpq_proof.is_none());
         assert!(sent[0].finality_authority.is_some());
-        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        let snapshot = crate::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_none());
         assert!(snapshot[0].finality_authority.is_some());
@@ -608,7 +608,7 @@ mod tests {
         let sent = network.sent();
         assert_eq!(sent.len(), 2);
         assert!(sent[1].fastpq_proof.is_some());
-        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        let snapshot = crate::status::lane_relay_envelopes_snapshot();
         assert_eq!(
             snapshot.len(),
             1,
@@ -618,8 +618,8 @@ mod tests {
     }
     #[test]
     fn broadcaster_does_not_downgrade_verified_status_with_pending_duplicate() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = MockNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let verified = sample_envelope(4, 6);
@@ -628,7 +628,7 @@ mod tests {
         broadcaster
             .broadcast(vec![verified])
             .expect("mock actor accepts verified relay");
-        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        let snapshot = crate::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(snapshot[0].fastpq_proof.is_some());
         broadcaster
@@ -636,7 +636,7 @@ mod tests {
             .expect("pending downgrade is ignored before actor admission");
         let sent = network.sent();
         assert_eq!(sent.len(), 1);
-        let snapshot = crate::sumeragi::status::lane_relay_envelopes_snapshot();
+        let snapshot = crate::status::lane_relay_envelopes_snapshot();
         assert_eq!(snapshot.len(), 1);
         assert!(
             snapshot[0].fastpq_proof.is_some(),
@@ -645,8 +645,8 @@ mod tests {
     }
     #[test]
     fn actor_backpressure_retains_exact_relay_and_fifo_ticket() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = BackpressureOnceNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let envelope = sample_envelope(5, 7);
@@ -675,8 +675,8 @@ mod tests {
     }
     #[test]
     fn blocked_relay_does_not_starve_a_responsive_relay() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = FirstLaneBackpressuredNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         let blocked = sample_envelope(6, 0);
@@ -705,8 +705,8 @@ mod tests {
     }
     #[test]
     fn terminal_actor_failures_return_exact_relay_ownership() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         for terminal in [TerminalNetwork::Closed, TerminalNetwork::Rejected] {
             let mut broadcaster = LaneRelayBroadcaster::new(terminal);
             let envelope = sample_envelope(7, 8);
@@ -728,8 +728,8 @@ mod tests {
     }
     #[test]
     fn saturated_relay_owner_returns_sixty_fifth_without_actor_ticket() {
-        let _guard = crate::sumeragi::status::lane_relay_test_guard();
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        let _guard = crate::status::lane_relay_test_guard();
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let network = AlwaysBackpressuredNetwork::default();
         let mut broadcaster = LaneRelayBroadcaster::new(network.clone());
         for index in 0..RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY {

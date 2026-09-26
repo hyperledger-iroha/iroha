@@ -140,8 +140,8 @@ fn transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
     let state = State::new(World::default(), Arc::clone(&kura), query);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let mut tx = block.transaction();
     tx.record_transfer_transcript(&ALICE_ID, sample_delta(1))
         .expect_err("missing transcript identity must fail closed");
@@ -151,7 +151,7 @@ fn transfer_transcripts_reject_missing_call_hash_without_fastpq_work() {
     );
     tx.apply();
     assert!(block.drain_transfer_transcripts().is_empty());
-    let witness = crate::sumeragi::witness::drain_exec_witness();
+    let witness = crate::exec_witness::drain_exec_witness();
     assert!(witness.fastpq_transcripts.is_empty());
     assert!(witness.fastpq_batches.is_empty());
 }

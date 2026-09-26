@@ -2629,7 +2629,7 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
         ".log_body_progress(&validation_event, reducer::StepDisposition::Applied, 1)",
         "self.armed = false",
         "if self.adapter.status_publication_enabled",
-        "super::status::set_v2_status(committed_status)",
+        "super::v2_status::set_v2_status(committed_status)",
     ] {
         assert!(
             live_sign.contains(required),
@@ -2658,7 +2658,7 @@ fn ready_validate_adapter_bridge_is_sealed_and_live_sign_has_one_real_append() {
         .find("if self.adapter.status_publication_enabled")
         .expect("preactivation keeps direct Ready Validate publication closed");
     let status_publish = post_fsync
-        .find("super::status::set_v2_status(committed_status)")
+        .find("super::v2_status::set_v2_status(committed_status)")
         .expect("precomputed committed status is published last");
     assert!(
         registry_install < reducer_swap

@@ -14,7 +14,7 @@ fn fixture(
     FastpqSourceInventoryV1,
     BTreeMap<Hash, Vec<TransferTranscript>>,
 ) {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);

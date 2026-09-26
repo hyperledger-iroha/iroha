@@ -13,7 +13,7 @@ use crate::{
     state::{
         StateReadOnly, StateTransaction, WorldReadOnly, fee_sponsor_revision_safe_activation_height,
     },
-    sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
+    status::{self, NexusFeeEvent, NexusFeePayer},
 };
 use base64::Engine as _;
 use core::{
@@ -5137,7 +5137,7 @@ impl Executor {
             let reason =
                 "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
                     .to_owned();
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+            status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
             });
             warn!(target: "economics", "nexus fee rejected: {reason}");
@@ -5280,7 +5280,7 @@ impl Executor {
         state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
         fee_burn_result.map_err(|err| {
             let reason = format!("nexus fee burn failed to apply: {err}");
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
+            status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
                 payer_kind,
                 payer_id: payer_id.clone(),
                 amount: fee.clone(),
@@ -10333,7 +10333,7 @@ mod tests {
     ) -> Hash {
         use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
 
-        let key = crate::sumeragi::evidence::evidence_key(evidence);
+        let key = crate::sumeragi::v2_evidence::evidence_key(evidence);
         // These authorization unit tests exercise an already-admitted record
         // projection; durable evidence authentication has its own fixture suite.
         state_transaction.world.consensus_evidence.insert(

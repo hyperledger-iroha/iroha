@@ -88,7 +88,7 @@ fn expected_occurrence(
 
 #[test]
 fn aggregate_batch_preserves_one_ordered_occurrence_for_repeated_and_self_legs() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
@@ -137,7 +137,7 @@ fn aggregate_batch_preserves_one_ordered_occurrence_for_repeated_and_self_legs()
 
 #[test]
 fn native_batch_keeps_typed_purpose_and_finalizes_a_single_leg() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
@@ -168,7 +168,7 @@ fn native_batch_keeps_typed_purpose_and_finalizes_a_single_leg() {
 
 #[test]
 fn stale_aggregate_batch_rejects_before_balance_and_occurrence_writes() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
@@ -241,7 +241,7 @@ fn prepared_pair(
 
 #[test]
 fn native_fx_apply_boundary_keeps_pair_order_and_one_multi_delta_occurrence() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, ids) = pair_state();
     let mut block = state.block(occurrence_header());
     let mut tx = block.transaction();
@@ -270,7 +270,7 @@ fn native_fx_apply_boundary_keeps_pair_order_and_one_multi_delta_occurrence() {
 
 #[test]
 fn second_pair_apply_error_stages_nothing_and_parent_rollback_remains_required() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, ids) = pair_state();
     let mut block = state.block(occurrence_header());
     {
@@ -345,7 +345,7 @@ fn prepared_sccp_release(
 
 #[test]
 fn sccp_apply_preserves_exact_singleton_and_liability_update_or_removal() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     for amount in [3_u32, 10] {
         let (state, definition, source) = build_asset_transfer_control_test_state(10);
         let destination = AssetId::new(definition, BOB_ID.clone());
@@ -378,7 +378,7 @@ fn sccp_apply_preserves_exact_singleton_and_liability_update_or_removal() {
 
 #[test]
 fn sccp_missing_identity_rejects_before_release_balance_and_liability_writes() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
@@ -402,7 +402,7 @@ fn sccp_missing_identity_rejects_before_release_balance_and_liability_writes() {
 
 #[test]
 fn sccp_callback_failure_stages_no_occurrence_and_drops_with_the_transaction() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
@@ -434,7 +434,7 @@ fn sccp_callback_failure_stages_no_occurrence_and_drops_with_the_transaction() {
 
 #[test]
 fn optimized_detached_merges_keep_each_prepared_call_after_final_hash_clear() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());
@@ -478,7 +478,7 @@ fn optimized_detached_merges_keep_each_prepared_call_after_final_hash_clear() {
 
 #[test]
 fn optimized_detached_fallbacks_preserve_balances_events_and_occurrences() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition.clone(), BOB_ID.clone());
     let mut block = state.block(occurrence_header());
@@ -524,7 +524,7 @@ fn optimized_detached_fallbacks_preserve_balances_events_and_occurrences() {
 
 #[test]
 fn optimized_detached_missing_identity_rejects_before_balance_and_event_writes() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let mut block = state.block(occurrence_header());

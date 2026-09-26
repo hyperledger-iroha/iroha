@@ -5,6 +5,8 @@
 //! canonical JSON strings from `iroha_primitives::json::Json` for metadata maps.
 //!
 //! This module is internal and accessed from execution/merge paths and the actor.
+//! The sparse Merkle tree ([`smt`]) and the witness-to-root projections
+//! ([`roots`]) that turn a drained witness into state roots live alongside it.
 use crate::state::{StateBlock, WorldReadOnly};
 use core::str::FromStr as _;
 use iroha_crypto::Hash;
@@ -28,6 +30,10 @@ use std::{
     rc::Rc,
     sync::{Arc, Mutex, MutexGuard, OnceLock},
 };
+/// Witness-to-root projections (`parent_state_root`, `post_state_root`).
+pub(crate) mod roots;
+/// Deterministic sparse Merkle tree over witnessed key/value pairs.
+pub(crate) mod smt;
 /// One local capture identity; its strong references prevent reuse while an old overlay exists.
 /// This token never enters witness bytes, hashes, logs or protocol identifiers.
 struct RecorderGeneration;
@@ -1028,7 +1034,13 @@ mod checked_tests;
 mod generation_tests;
 #[cfg(test)]
 mod tests {
+    use super::smt::{KvPair, compute_post_state_root};
     use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
     use iroha_data_model::{
         Registrable,
         account::Account,
@@ -1044,13 +1056,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use std::{collections::BTreeMap, time::Duration};
-    // The SMT helpers live under the sumeragi module.
-    use crate::sumeragi::smt::{KvPair, compute_post_state_root};
-    use crate::{
-        kura::Kura,
-        query::store::LiveQueryStore,
-        state::{State, World},
-    };
     struct AccessKeyFixture {
         state: State,
         account: AccountId,

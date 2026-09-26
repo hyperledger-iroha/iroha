@@ -8920,7 +8920,7 @@ fn build_state(
         ))
     })?;
     if !emergency_fast {
-        crate::sumeragi::evidence::validate_persisted_v2_evidence_records(
+        crate::sumeragi::v2_evidence::validate_persisted_v2_evidence_records(
             &world.view(),
             kura.as_ref(),
             &network_id,

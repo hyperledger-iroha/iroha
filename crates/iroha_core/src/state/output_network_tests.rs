@@ -199,7 +199,7 @@ fn network_row<'a>(block: &'a StateBlock<'_>, index: usize) -> &'a NetworkExecut
 
 #[test]
 fn actual_signed_sources_apply_once_in_original_output_positions() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, None);
     let source = carrier(
         (0..2)
@@ -220,7 +220,7 @@ fn actual_signed_sources_apply_once_in_original_output_positions() {
             })
             .collect(),
     );
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -246,7 +246,7 @@ fn actual_signed_sources_apply_once_in_original_output_positions() {
 
 #[test]
 fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let mut exact = None;
     for case in 0..3 {
         let bytes = match case {
@@ -261,7 +261,7 @@ fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
             FeePaymentIntent::authority(vec![], None),
             false,
         )]);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -311,7 +311,7 @@ fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
                     .repeats,
                 Repeats::Exactly(1)
             );
-            assert!(witness::snapshot_exec_witness().writes.is_empty());
+            assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
         }
         assert!(block.gas_used_in_block > 0);
     }
@@ -319,7 +319,7 @@ fn actual_callback_fits_exactly_or_rolls_back_before_applying() {
 
 #[test]
 fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let missing = DomainId::try_new("missing-network-domain", "universal").unwrap();
     for bytes in [16_384, 65_536] {
         let state = fixture(bytes, Some(32_768));
@@ -332,7 +332,7 @@ fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() 
             FeePaymentIntent::authority(vec![], None),
             false,
         )]);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         let fragments = block.committed_fragment_count();
         execute(&mut block, &source).unwrap();
@@ -376,13 +376,13 @@ fn real_business_rejection_wins_after_oversized_callback_and_discards_capture() 
                 .repeats,
             Repeats::Exactly(1)
         );
-        assert!(witness::snapshot_exec_witness().writes.is_empty());
+        assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
     }
 }
 
 #[test]
 fn block_gas_admission_rejects_before_business_or_transaction_gas() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, Some(1024));
     let source = carrier(vec![input(
         &state,
@@ -390,7 +390,7 @@ fn block_gas_admission_rejects_before_business_or_transaction_gas() {
         FeePaymentIntent::authority(vec![], None),
         false,
     )]);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     // ExecuteTrigger is rejected by the real pre-body gas admission guard.
     // This does not exercise the owner's final post-success gas fallback.
@@ -418,7 +418,7 @@ fn block_gas_admission_rejects_before_business_or_transaction_gas() {
 
 #[test]
 fn stateless_rejection_does_not_execute_its_business_instructions() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = fixture(65_536, None);
     let mut tx = TransactionBuilder::new(
         state.network_id,
@@ -462,11 +462,9 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         transaction::{FeeChargeKind, FeeChargeLimit},
     };
     use iroha_primitives::numeric::Quantity;
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("network-fee", "universal").unwrap(),
         "xor".parse().unwrap(),
@@ -495,7 +493,7 @@ fn rejected_live_batch_rolls_back_business_and_applies_only_its_actual_fee_fragm
         fee,
         true,
     )]);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();
@@ -626,7 +624,7 @@ mod quarantine;
 #[test]
 fn frozen_fraud_admission_refuses_before_business_work_and_grace_preserves_execution() {
     for grace in [Duration::ZERO, Duration::from_secs(1)] {
-        let _guard = witness::exec_witness_guard();
+        let _guard = exec_witness::exec_witness_guard();
         let mut state = fixture(65_536, None);
         state.fraud_monitoring.enabled = true;
         state.fraud_monitoring.required_minimum_band =
@@ -647,7 +645,7 @@ fn frozen_fraud_admission_refuses_before_business_work_and_grace_preserves_execu
         )]);
         let mut block = state.block(source.header());
         let before = block.committed_fragment_count();
-        witness::start_block();
+        exec_witness::start_block();
         execute(&mut block, &source).unwrap();
         let result = network_row(&block, 0);
         if grace.is_zero() {
@@ -685,7 +683,7 @@ fn frozen_fraud_admission_refuses_before_business_work_and_grace_preserves_execu
 #[test]
 fn ordinary_signed_creation_time_must_precede_its_actual_carrier() {
     for created_at in [1_u64, 2, 3] {
-        let _guard = witness::exec_witness_guard();
+        let _guard = exec_witness::exec_witness_guard();
         let state = fixture(65_536, None);
         let mut builder = TransactionBuilder::new(
             state.network_id,
@@ -704,7 +702,7 @@ fn ordinary_signed_creation_time_must_precede_its_actual_carrier() {
         )]);
         let mut block = state.block(source.header());
         let fragments = block.committed_fragment_count();
-        witness::start_block();
+        exec_witness::start_block();
         execute(&mut block, &source).unwrap();
         let row = network_row(&block, 0);
         assert_eq!(row.input_index, 0);

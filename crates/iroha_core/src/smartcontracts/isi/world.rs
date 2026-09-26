@@ -284,7 +284,7 @@ pub mod isi {
             },
         },
         state::{derive_committee_key_id, derive_validator_key_id},
-        sumeragi::status::PeerKeyPolicyRejectReason,
+        status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
     };
     #[cfg(test)]
@@ -17076,8 +17076,8 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+        if !crate::crypto_util::is_bls_normal_public_key(peer_id.public_key()) {
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::DisallowedAlgorithm,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17116,7 +17116,7 @@ pub mod isi {
         };
         let activation_height = activation_at.unwrap_or(activation_expected);
         if activation_height < block_height {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::ActivationInPast,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17128,7 +17128,7 @@ pub mod isi {
         if activation_height != activation_expected
             && !(is_genesis && activation_height == block_height)
         {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::LeadTimeViolation,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17192,7 +17192,7 @@ pub mod isi {
             .into_iter()
             .find(|id| id != &candidate_id)
         {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::IdentifierCollision,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17204,7 +17204,7 @@ pub mod isi {
         if let Some(existing) = world.consensus_keys.get(&candidate_id)
             && existing.public_key != *peer_id.public_key()
         {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::IdentifierCollision,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17230,7 +17230,7 @@ pub mod isi {
             is_genesis,
         ) {
             if let Some(reason) = peer_key_policy_reason(&err) {
-                crate::sumeragi::status::record_peer_key_policy_reject(reason);
+                crate::status::record_peer_key_policy_reject(reason);
             }
             return Err(err);
         }
@@ -37941,7 +37941,7 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "signature_batch_max_bls", "unexpected error message: {msg}");
         });
         world_test!(register_peer_rejects_activation_before_lead_time {
-            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
+            let _guard = crate::status::peer_key_policy_test_guard();
             let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
@@ -37954,7 +37954,7 @@ seiyaku GovernanceLifecycle {
                 params.sumeragi.key_activation_lead_blocks = 2;
                 stx.apply();
             }
-            crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
+            crate::status::reset_peer_key_policy_counters_for_tests();
             let mut stx = state_block.transaction();
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
@@ -37968,12 +37968,12 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "lead-time policy", "unexpected error: {msg}");
             assert!(stx.world.peers().iter().all(|p| p != &peer_id));
             assert_eq!(
-                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
+                crate::status::peer_key_policy_reject_snapshot_for_tests(),
                 (1, Some("lead_time_violation"))
             );
         });
         world_test!(register_peer_rejects_identifier_collisions {
-            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
+            let _guard = crate::status::peer_key_policy_test_guard();
             let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
@@ -38004,7 +38004,7 @@ seiyaku GovernanceLifecycle {
                     .insert(peer_id.public_key().to_string(), vec![existing_id]);
                 stx.apply();
             }
-            crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
+            crate::status::reset_peer_key_policy_counters_for_tests();
             let mut stx = state_block.transaction();
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -38013,7 +38013,7 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_instruction_error_message(err);
             assert_contains!(msg, "collision", "unexpected error: {msg}");
             assert_eq!(
-                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
+                crate::status::peer_key_policy_reject_snapshot_for_tests(),
                 (1, Some("identifier_collision"))
             );
         });

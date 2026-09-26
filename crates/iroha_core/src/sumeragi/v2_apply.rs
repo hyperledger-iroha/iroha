@@ -4086,7 +4086,7 @@ impl V2ApplyService {
         // updated only here, after `validate_and_apply` has durably accepted the
         // block (or recovery has confirmed that the WSV already contains it).
         if !finalized_envelopes.is_empty() {
-            crate::sumeragi::status::set_lane_settlement_commitments(
+            crate::status::set_lane_settlement_commitments(
                 finalized_envelopes
                     .iter()
                     .map(|envelope| envelope.settlement_commitment.clone())

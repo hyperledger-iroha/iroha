@@ -1,7 +1,7 @@
 #[test]
 fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let directory = TempDir::new().expect("temporary directory");
     let context = context();
     let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
@@ -20,7 +20,7 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
     .expect("open replayed adapter without status publication");
     assert!(startup.is_empty());
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "successor replay must remain invisible while its remaining constructors are fallible"
     );
     let stale_tag = reducer::EventTag::new(
@@ -36,7 +36,7 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::StaleGeneration)
     );
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "recovery reducer turns must remain unpublished before activation"
     );
     let prepared = adapter
@@ -51,10 +51,10 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
         })
     ));
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "preparing a snapshot is not publication"
     );
-    crate::sumeragi::status::set_v2_status(prepared);
+    crate::sumeragi::v2_status::set_v2_status(prepared);
     let ignored = adapter
         .retransmit_elapsed(stale_tag)
         .expect("publish an ignored post-activation retransmission");
@@ -62,7 +62,7 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
         ignored.disposition(),
         reducer::StepDisposition::Ignored(reducer::IgnoreReason::StaleGeneration)
     );
-    let republished = crate::sumeragi::status::v2_status().expect("republished status");
+    let republished = crate::sumeragi::v2_status::v2_status().expect("republished status");
     assert!(matches!(
         republished.liveness.last_progress,
         Some(wire::SumeragiV2ProgressTransitionStatus {
@@ -70,7 +70,7 @@ fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
             ..
         })
     ));
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 #[test]
 fn executable_leader_rotation_matches_the_canonical_wire_context() {

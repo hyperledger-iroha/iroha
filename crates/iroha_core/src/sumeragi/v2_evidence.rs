@@ -2296,7 +2296,7 @@ mod tests {
             Err(EvidenceValidationError::V2ArtifactInvalid)
         );
     }
-    include!("evidence/missing_signer_pop_test.rs");
+    include!("v2_evidence/missing_signer_pop_test.rs");
     #[test]
     fn evidence_keys_are_fixed_width_and_pair_order_independent() {
         let fixture = V2EvidenceFixture::new();

@@ -1,10 +1,10 @@
 #[test]
 fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus status test lock");
-    crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
-    crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+    crate::status::set_lane_settlement_commitments(Vec::new());
+    crate::status::set_lane_relay_envelopes(Vec::new());
     let paynet = DataSpaceId::new(7);
     let cbuae = DataSpaceId::new(8);
     let chain_id = ChainId::from("native-amx-test-chain");
@@ -282,13 +282,13 @@ fn native_amx_receipt_survives_into_final_header_bound_lane_statement() {
         plan.coordinator_route().dataspace_id,
         "lane-finality statement must use the native AMX coordinator dataspace"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert!(
         snapshot.lane_settlement_commitments.is_empty() && snapshot.lane_relay_envelopes.is_empty(),
         "candidate validation must not publish process-global relay evidence before commit"
     );
-    crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
-    crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+    crate::status::set_lane_settlement_commitments(Vec::new());
+    crate::status::set_lane_relay_envelopes(Vec::new());
 }
 fn seed_domain_name_lease(world: &mut World, owner: &AccountId, domain_id: &DomainId) {
     let selector = crate::sns::selector_for_domain(domain_id).expect("selector");

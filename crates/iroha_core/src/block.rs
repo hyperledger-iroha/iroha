@@ -1342,7 +1342,7 @@ fn validate_native_amx_attestation_qc(
     }
     for (validator, pop) in qc.validators_with_pops() {
         if pop.len() != crate::native_amx::NATIVE_AMX_BLS_PROOF_BYTES
-            || !crate::sumeragi::is_bls_normal_public_key(validator.public_key())
+            || !crate::crypto_util::is_bls_normal_public_key(validator.public_key())
             || iroha_crypto::bls_normal_pop_verify(validator.public_key(), pop).is_err()
         {
             return Err(
@@ -1384,7 +1384,7 @@ fn validate_native_amx_attestation_qc(
                 ));
             };
             signer_count = signer_count.saturating_add(1);
-            if !crate::sumeragi::is_bls_normal_public_key(signer.public_key()) {
+            if !crate::crypto_util::is_bls_normal_public_key(signer.public_key()) {
                 return Err("native AMX attestation signer is not a BLS normal key".to_owned());
             }
             signer_keys.push(signer.public_key());
@@ -6308,7 +6308,7 @@ pub(crate) mod valid {
             Ok(())
         }
         fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
-            crate::sumeragi::is_bls_normal_public_key(public_key)
+            crate::crypto_util::is_bls_normal_public_key(public_key)
         }
         fn verify_leader_signature(
             block: &SignedBlock,
@@ -6730,7 +6730,7 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = crate::exec_witness::exec_witness_guard();
             if let Err(error) = Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,
@@ -6801,7 +6801,7 @@ pub(crate) mod valid {
             } else {
                 None
             };
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = crate::exec_witness::exec_witness_guard();
             if let Err(error) = Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,
@@ -7165,7 +7165,7 @@ pub(crate) mod valid {
             state_block: &mut StateBlock<'_>,
         ) -> Result<Option<[u8; 32]>, BlockValidationError> {
             Self::validate_staged_execution_controls(&block, state_block)?;
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = crate::exec_witness::exec_witness_guard();
             Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,
@@ -7173,7 +7173,7 @@ pub(crate) mod valid {
                 SccpRootValidation::Defer,
                 None,
             )?;
-            let _ = crate::sumeragi::witness::drain_exec_witness();
+            let _ = crate::exec_witness::drain_exec_witness();
             drop(exec_witness_guard);
             let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
             let root = crate::bridge::sccp_commitment_root_from_messages(&messages);
@@ -7208,11 +7208,12 @@ pub(crate) mod valid {
             let header = block.header();
             let height = header.height().get();
             Ok(Some(PreparedPristineConsensusEffects {
-                prune_keys: crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                    state,
-                    height,
-                    effects.v2_evidence_admissions.len(),
-                ),
+                prune_keys:
+                    crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
+                        state,
+                        height,
+                        effects.v2_evidence_admissions.len(),
+                    ),
                 expected_anchor: header.prev_block_hash().map(|block_hash| {
                     iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
                         height: height.saturating_sub(1),
@@ -7236,7 +7237,7 @@ pub(crate) mod valid {
             state: &'state State,
             context: crate::sumeragi::v2::VerifiedHeightContext,
         ) -> Result<PreparedNativeExecutionControls<'state>, BlockValidationError> {
-            crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+            crate::exec_witness::ensure_state_access_without_exec_witness()
                 .map_err(Self::execution_context_error)?;
             super::native_lane_batch_for_execution(block).map_err(Self::execution_context_error)?;
             block
@@ -7804,8 +7805,8 @@ pub(crate) mod valid {
                 timings.execution_da_indexes_ms = to_ms(da_indexes_start.elapsed());
             }
             let state_block_start = Instant::now();
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
-            crate::sumeragi::witness::start_block();
+            let exec_witness_guard = crate::exec_witness::exec_witness_guard();
+            crate::exec_witness::start_block();
             let mut state_block = match Self::state_block_for_execution(
                 &block,
                 state,
@@ -8474,7 +8475,7 @@ pub(crate) mod valid {
                 )?;
             }
             let admission_keys = if let Some(effects) = actual_effects {
-                crate::sumeragi::evidence::validate_v2_evidence_admissions(
+                crate::sumeragi::v2_evidence::validate_v2_evidence_admissions(
                     state,
                     block_height,
                     &effects.v2_evidence_admissions,
@@ -8496,7 +8497,7 @@ pub(crate) mod valid {
                         "NPoS penalty actions are not canonical",
                     ));
                 }
-                crate::sumeragi::evidence::validate_v2_admission_penalty_separation(
+                crate::sumeragi::v2_evidence::validate_v2_admission_penalty_separation(
                     &admission_keys,
                     &effects.penalty_actions,
                 )
@@ -8836,7 +8837,7 @@ pub(crate) mod valid {
             let mut unique_validators = BTreeSet::new();
             if qc.validator_set.iter().any(|validator| {
                 !unique_validators.insert(validator)
-                    || !crate::sumeragi::is_bls_normal_public_key(validator.public_key())
+                    || !crate::crypto_util::is_bls_normal_public_key(validator.public_key())
             }) {
                 return Err(Self::execution_context_error(
                     "certified merge reference committee is duplicated or contains a non-BLS key",
@@ -11812,7 +11813,7 @@ pub(crate) mod valid {
                 )
             };
             // Standalone ordinary callers may enter with a plain overlay.
-            crate::sumeragi::witness::start_block();
+            crate::exec_witness::start_block();
             let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
@@ -11846,7 +11847,7 @@ pub(crate) mod valid {
         ) -> WithEvents<ValidBlock> {
             Self::validate_staged_execution_controls(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
-            let exec_witness_guard = crate::sumeragi::witness::exec_witness_guard();
+            let exec_witness_guard = crate::exec_witness::exec_witness_guard();
             Self::execute_and_record_canonical_outputs(
                 &mut block,
                 state_block,
@@ -27969,11 +27970,11 @@ seiyaku DynamicTarget {
     }
     #[test]
     fn block_validation_sequential_entrypoints_execute_pipeline_triggers() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+        let _guard = crate::status::nexus_fee_test_lock()
             .lock()
             .expect("nexus status test lock");
-        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        crate::status::set_lane_settlement_commitments(Vec::new());
+        crate::status::set_lane_relay_envelopes(Vec::new());
         let chain_id = ChainId::from("sequential-pipeline-triggers");
         let network_id = deterministic_test_network_id(0x0D);
         let (authority, keypair) = gen_account_in("wonderland");
@@ -28192,14 +28193,14 @@ seiyaku DynamicTarget {
         assert_eq!(settlement.tx_count, 1);
         assert_eq!(settlement.receipts.len(), 1);
         assert_eq!(settlement.receipts[0].source_id, source_id);
-        let snapshot = crate::sumeragi::status::snapshot();
+        let snapshot = crate::status::snapshot();
         assert!(
             snapshot.lane_settlement_commitments.is_empty()
                 && snapshot.lane_relay_envelopes.is_empty(),
             "successful execution is still only a candidate and must not publish relay evidence"
         );
-        crate::sumeragi::status::set_lane_settlement_commitments(Vec::new());
-        crate::sumeragi::status::set_lane_relay_envelopes(Vec::new());
+        crate::status::set_lane_settlement_commitments(Vec::new());
+        crate::status::set_lane_relay_envelopes(Vec::new());
     }
     #[test]
     fn block_validation_sealed_only_entrypoint_executes_only_block_pipeline_trigger() {

@@ -1594,7 +1594,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_tokens_in_order(
         finalization_behavior,
         &[
-            "let _status_guard = crate::sumeragi::status::rbc_status_test_guard()",
+            "let _status_guard = crate::status::rbc_status_test_guard()",
             "Algorithm::Ed25519",
             "TransactionBuilder::new_genesis(",
             "block_builder.set_da_proof_policies(Some(proof_policy_bundle))",

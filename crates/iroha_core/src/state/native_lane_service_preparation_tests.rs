@@ -398,7 +398,7 @@ state_test! { sync native_service_preparation_recorder_conflict_releases_archive
     let source = fixture.source();
     let before = crate::snapshot::canonical_state_snapshot_hash(&fixture.state).unwrap();
     let files = exact_test_tree_fingerprint(&fixture.state.kura.store_root());
-    let recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+    let recorder = crate::exec_witness::begin_exec_witness_capture().unwrap();
     // The existing witness owner must refuse before either source State reads
     // or archive probing, even when a real archive reader would also refuse.
     let error = fixture.provider.with_index_reader_for_test(|| fixture.service.prepare_native_source(

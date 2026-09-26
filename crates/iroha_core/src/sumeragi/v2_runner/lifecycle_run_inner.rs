@@ -55,7 +55,8 @@ impl PendingSuccessorActivation {
                 authority.snapshot_anchor_height(),
             ),
         };
-        let published_height = super::super::status::v2_status().map_or(0, |status| status.height);
+        let published_height =
+            super::super::v2_status::v2_status().map_or(0, |status| status.height);
         let lifecycle = ProductionSuccessorStartupLifecycleProjection {
             transition_kind: transition,
             authority_kind,
@@ -137,19 +138,21 @@ impl PendingSuccessorActivation {
                 expected_predecessor,
                 authority,
             } => {
-                super::super::status::activate_v2_successor_height(
+                super::super::v2_status::activate_v2_successor_height(
                     expected_predecessor,
                     authority,
                     successor,
                 )?;
             }
             Self::RecoveredCompleteTip { authority } => {
-                super::super::status::activate_recovered_complete_tip_v2_height(
+                super::super::v2_status::activate_recovered_complete_tip_v2_height(
                     authority, successor,
                 )?;
             }
             Self::SnapshotBootstrap { authority } => {
-                super::super::status::activate_snapshot_bootstrap_v2_height(authority, successor)?;
+                super::super::v2_status::activate_snapshot_bootstrap_v2_height(
+                    authority, successor,
+                )?;
             }
         }
         Ok(())
@@ -817,7 +820,7 @@ fn run_lifecycle_active_height(
     shutdown_signal: &iroha_futures::supervisor::ShutdownSignal,
     output_guard: &Arc<ConsensusOutputGuard>,
     cleanup_supervisor: &mut V2CleanupSupervisor,
-    liveness_watchdog: &mut crate::sumeragi::status::V2LivenessWatchdog,
+    liveness_watchdog: &mut crate::sumeragi::v2_status::V2LivenessWatchdog,
     npos_beacon: &mut V2GlobalBeaconLifecycle,
     block_sync: &mut V2BlockSyncDiscovery,
     block_sync_server: &mut V2BlockSyncServer,
@@ -2202,7 +2205,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
     mut reservation_reconciliation_pending: bool,
     mut eager_block_sync: bool,
     mut cleanup_supervisor: V2CleanupSupervisor,
-    mut liveness_watchdog: crate::sumeragi::status::V2LivenessWatchdog,
+    mut liveness_watchdog: crate::sumeragi::v2_status::V2LivenessWatchdog,
     deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     mut block_sync_server: Option<V2BlockSyncServer>,
@@ -2232,7 +2235,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
                 context.da_layout,
             )
             .map_err(ingress_capacity_error)?;
-        super::super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
+        super::super::v2_status::set_v2_network_ingress(context.id(), context.height, &block_rx);
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(build_identity, &local_peer, &shared_config);
         let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;

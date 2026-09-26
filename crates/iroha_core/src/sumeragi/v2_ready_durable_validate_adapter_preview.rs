@@ -1060,7 +1060,7 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
         );
         self.armed = false;
         if self.adapter.status_publication_enabled {
-            super::status::set_v2_status(committed_status);
+            super::v2_status::set_v2_status(committed_status);
         }
     }
 }
@@ -1126,7 +1126,7 @@ impl PreparedReadyDurableValidatePersistedSign<'_> {
         );
         self.armed = false;
         if self.adapter.status_publication_enabled {
-            super::status::set_v2_status(committed_status);
+            super::v2_status::set_v2_status(committed_status);
         }
     }
 }

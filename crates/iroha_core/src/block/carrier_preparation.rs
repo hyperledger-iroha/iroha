@@ -160,7 +160,7 @@ impl ValidBlock {
         block_cadence: Duration,
     ) -> Result<Option<ValidatedCarrierPreparationInput<'state>>, NativeCandidatePreparationError> {
         use crate::state::MergeLedgerCommitError;
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         let Some((state, body, generation)) = source.preparation_input() else {
             return Ok(None);

@@ -730,7 +730,7 @@ impl V2EffectServices for ProductionV2Services {
                 "Sumeragi v2 equivocation context is not anchored to the active network".to_owned(),
             );
         }
-        let inserted = super::evidence::retain_sumeragi_v2_equivocation(
+        let inserted = super::v2_evidence::retain_sumeragi_v2_equivocation(
             self.state.as_ref(),
             &self.context,
             &self.validator_set_pops,
@@ -833,7 +833,7 @@ impl V2EffectServices for ProductionV2Services {
             }
         }
         self.last_status = Some(status.clone());
-        super::status::set_v2_effect_status(status);
+        super::v2_status::set_v2_effect_status(status);
         Ok(())
     }
     fn fail_closed(&mut self, reason: &str) {

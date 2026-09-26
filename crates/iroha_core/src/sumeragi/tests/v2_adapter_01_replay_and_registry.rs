@@ -1488,8 +1488,8 @@ fn locally_signed_timeout_without_quorum_broadcasts_only_the_vote() {
 }
 #[test]
 fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let directory = TempDir::new().expect("temporary directory");
     {
         let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
@@ -1516,7 +1516,7 @@ fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
             }]
         ));
     }
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let context = context();
     let leader = context.leader(0);
     let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
@@ -1537,7 +1537,7 @@ fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
         }]
     ));
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "nonempty startup work must not publish the prepared successor"
     );
     let prepared = adapter
@@ -1552,10 +1552,10 @@ fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
         })
     ));
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "snapshot construction must remain separate from publication"
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 #[test]
 fn replay_resigns_only_an_acknowledged_intent() {

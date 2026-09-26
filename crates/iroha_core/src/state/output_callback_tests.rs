@@ -160,9 +160,9 @@ fn assert_nested_output(actual: &ExecutionOutputV1, fixture: &NestedCallbackFixt
 
 #[test]
 fn nested_by_call_output_keeps_actual_preorder_steps_and_completions() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let fixture = nested_callback_fixture(65_536, 4);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = fixture.state.block(fixture.source.header());
     block
         .reserve_ordinary_execution_outputs(&fixture.source)
@@ -260,7 +260,7 @@ fn nested_by_call_output_keeps_actual_preorder_steps_and_completions() {
 
 #[test]
 fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let mut measured = None::<ExecutionOutputV1>;
     for case in 0..3 {
         let bytes = measured
@@ -272,14 +272,14 @@ fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
             _ => bytes.unwrap() - 1,
         };
         let fixture = nested_callback_fixture(limit, 4);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = fixture.state.block(fixture.source.header());
         block
             .reserve_ordinary_execution_outputs(&fixture.source)
             .unwrap();
         let fragments = block.committed_fragment_count();
         let events = block.world.external_event_buf.len();
-        let before_witness = witness::snapshot_exec_witness();
+        let before_witness = exec_witness::snapshot_exec_witness();
         block
             .produce_ordinary_execution_outputs(&fixture.source, |producer| {
                 assert_eq!(
@@ -345,7 +345,7 @@ fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
                     Repeats::Exactly(1)
                 );
             }
-            assert_eq!(witness::snapshot_exec_witness(), before_witness);
+            assert_eq!(exec_witness::snapshot_exec_witness(), before_witness);
         }
         assert!(block.batch_transfer_outcomes.is_empty());
         assert!(block.fastpq_transcripts.is_empty());
@@ -376,16 +376,16 @@ fn nested_callback_full_row_exact_fit_and_one_byte_less_roll_back_atomically() {
 
 #[test]
 fn early_nested_depth_failure_cannot_be_swallowed_or_drained_as_success() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let fixture = nested_callback_fixture(65_536, 1);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = fixture.state.block(fixture.source.header());
     block
         .reserve_ordinary_execution_outputs(&fixture.source)
         .unwrap();
     let fragments = block.committed_fragment_count();
     let events = block.world.external_event_buf.len();
-    let before_witness = witness::snapshot_exec_witness();
+    let before_witness = exec_witness::snapshot_exec_witness();
     assert!(
         block
             .produce_ordinary_execution_outputs(&fixture.source, |producer| {
@@ -440,7 +440,7 @@ fn early_nested_depth_failure_cannot_be_swallowed_or_drained_as_success() {
     }
     assert!(block.batch_transfer_outcomes.is_empty());
     assert!(block.fastpq_transcripts.is_empty());
-    assert_eq!(witness::snapshot_exec_witness(), before_witness);
+    assert_eq!(exec_witness::snapshot_exec_witness(), before_witness);
     assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity
@@ -449,10 +449,10 @@ fn early_nested_depth_failure_cannot_be_swallowed_or_drained_as_success() {
 
 #[test]
 fn successful_nested_callbacks_without_journal_transfer_cannot_apply() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for consensus_effects in [false, true] {
         let fixture = nested_callback_fixture(65_536, 4);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = fixture.state.block(fixture.source.header());
         block
             .reserve_ordinary_execution_outputs(&fixture.source)
@@ -552,7 +552,7 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
         transaction::error::{TransactionRejectionReason, TriggerExecutionFail},
     };
 
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let mut fixture = nested_callback_fixture(65_536, 4);
     let cascade: TriggerId = "output_data_cascade".parse().unwrap();
     let initial_key: Name = "output_data_initial".parse().unwrap();
@@ -594,14 +594,14 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
     let mut builder = BlockBuilder::new(header);
     builder.push_transaction(signed);
     fixture.source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = fixture.state.block(fixture.source.header());
     block
         .reserve_ordinary_execution_outputs(&fixture.source)
         .unwrap();
     let fragments = block.committed_fragment_count();
     let events = block.world.external_event_buf.len();
-    let before_witness = witness::snapshot_exec_witness();
+    let before_witness = exec_witness::snapshot_exec_witness();
     assert!(
         block
             .produce_ordinary_execution_outputs(&fixture.source, |producer| {
@@ -713,7 +713,7 @@ fn real_dfs_predispatch_failure_poison_preserves_no_earlier_callback_effects() {
     assert!(block.world.triggers.data_triggers().get(&cascade).is_none());
     assert!(block.batch_transfer_outcomes.is_empty());
     assert!(block.fastpq_transcripts.is_empty());
-    assert_eq!(witness::snapshot_exec_witness(), before_witness);
+    assert_eq!(exec_witness::snapshot_exec_witness(), before_witness);
     assert!(matches!(
         block.commit().unwrap_err(),
         TransactionsBlockError::ExecutionOutputCapacity

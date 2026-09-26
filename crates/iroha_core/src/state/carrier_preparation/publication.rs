@@ -473,19 +473,19 @@ impl RetainedCarrierEffects {
     fn publish_observability(&self, target: &State) {
         if !self.authenticated_replay_commit {
             for slash in &self.pending_public_lane_slash_observability {
-                crate::sumeragi::status::record_public_lane_bonded_delta(
+                crate::status::record_public_lane_bonded_delta(
                     slash.lane_id,
                     &slash.bonded_amount,
                     false,
                 );
                 if !slash.pending_unbond_amount.is_zero() {
-                    crate::sumeragi::status::record_public_lane_pending_unbond_delta(
+                    crate::status::record_public_lane_pending_unbond_delta(
                         slash.lane_id,
                         &slash.pending_unbond_amount,
                         false,
                     );
                 }
-                crate::sumeragi::status::record_public_lane_slash(slash.lane_id);
+                crate::status::record_public_lane_slash(slash.lane_id);
                 #[cfg(feature = "telemetry")]
                 {
                     target.telemetry.record_public_lane_validator_status(

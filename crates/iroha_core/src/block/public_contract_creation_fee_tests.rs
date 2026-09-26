@@ -4,7 +4,7 @@ mod public_contract_creation_fees {
 
     #[test]
     fn public_contract_artifact_stages_pay_fees_without_management_grants() {
-        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+        let _guard = crate::status::nexus_fee_test_lock()
             .lock()
             .expect("fee status lock");
         let (artifact, manifest) = ivm::KotodamaCompiler::new()

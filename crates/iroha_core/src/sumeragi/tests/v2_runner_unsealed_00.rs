@@ -198,8 +198,8 @@ fn pending_tip_recovery_gate_precedes_lane_work_construction() {
 }
 #[test]
 fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
-    let _status_guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let started_at = Instant::now();
     let round_timeout = Duration::from_secs(10);
     let deadline = PendingTipRecoveryDeadline::new(started_at, round_timeout)
@@ -227,7 +227,7 @@ fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
             stage: Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
         } if timeout == Duration::from_secs(30)
     ));
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 }
 #[test]
 fn bounded_sidecar_admission_turn_applies_only_its_budget() {
@@ -1523,7 +1523,7 @@ fn publish_applied_runner_status(context: &wire::HeightContext) {
         transition: wire::SumeragiV2ProgressTransition::Applied,
         age_ms: 0,
     });
-    super::super::status::set_v2_status(status);
+    super::super::v2_status::set_v2_status(status);
 }
 fn runner_sidecar_chunk(
     local: PeerId,

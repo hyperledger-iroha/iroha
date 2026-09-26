@@ -240,8 +240,8 @@ fn assert_native_economic_relay_effects(
 }
 
 fn assert_native_economic_relay_recorder_released() {
-    let guard = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
-    let empty = crate::sumeragi::witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
+    let guard = crate::exec_witness::begin_exec_witness_capture().unwrap();
+    let empty = crate::exec_witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
     assert!(
         empty.reads.is_empty() && empty.writes.is_empty() && empty.fastpq_transcripts.is_empty()
     );

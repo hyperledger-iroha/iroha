@@ -130,7 +130,7 @@ fn canonical_transcript_bytes(transcripts: &BTreeMap<Hash, Vec<TransferTranscrip
 
 #[test]
 fn inventory_covers_nontransfer_calls_and_every_applied_source() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let external = [
         external(&state, "transfer"),
@@ -148,7 +148,7 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
     let extras = [Hash::new(b"native purpose"), Hash::new(b"internal call")];
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &external);
-    crate::sumeragi::witness::start_block();
+    crate::exec_witness::start_block();
     assert!(block.fastpq_source_inventory().unwrap().is_none());
     apply_source(&mut block, extras[0], true, None);
     apply_source(&mut block, calls[0], false, Some(routes[0]));
@@ -226,7 +226,7 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
 
 #[test]
 fn owned_inventory_prevents_joint_entry_and_bundle_omission() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -298,7 +298,7 @@ fn empty_inventory_is_explicit_and_cannot_be_resealed() {
 
 #[test]
 fn missing_extra_empty_and_misidentified_transcripts_latch_failure() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for mutation in 0..5 {
         let mut block = state.block(header());
@@ -378,7 +378,7 @@ fn duplicate_external_time_and_cross_class_identities_are_rejected() {
 
 #[test]
 fn invalid_routes_and_capture_origin_conflicts_are_rejected() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let entry = external(&state, "route");
     let hash = Hash::from(entry.execution_call_hash());
@@ -424,7 +424,7 @@ fn invalid_routes_and_capture_origin_conflicts_are_rejected() {
 
 #[test]
 fn additional_source_order_does_not_depend_on_fragment_order() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let hashes = [Hash::new(b"source one"), Hash::new(b"source two")];
     let mut inventories = Vec::new();
@@ -444,7 +444,7 @@ fn additional_source_order_does_not_depend_on_fragment_order() {
 
 #[test]
 fn rolled_back_capture_conflicts_do_not_enter_inventory() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -465,7 +465,7 @@ fn rolled_back_capture_conflicts_do_not_enter_inventory() {
 
 #[test]
 fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -561,7 +561,7 @@ fn owned_public_seal_rejects_valid_archive_replacement_and_regrouping() {
 
 #[test]
 fn owned_public_seal_excludes_private_paths_but_preserves_input_caps() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -611,7 +611,7 @@ fn owned_public_seal_excludes_private_paths_but_preserves_input_caps() {
 
 #[test]
 fn owned_public_seal_preflights_resources_before_rejecting_substitution() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -674,7 +674,7 @@ fn owned_public_seal_preflights_resources_before_rejecting_substitution() {
 
 #[test]
 fn pending_entrypoint_and_synchronous_sealing_commit_finalized_digests() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let hash = Hash::new(b"finalized before public seal");
     let mut results = Vec::new();
@@ -728,7 +728,7 @@ fn pending_entrypoint_and_synchronous_sealing_commit_finalized_digests() {
 
 #[test]
 fn resealing_preserves_latched_result_before_any_digest_mutation() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let hash = Hash::new(b"one shot public seal");
     for initial_failure in [false, true] {

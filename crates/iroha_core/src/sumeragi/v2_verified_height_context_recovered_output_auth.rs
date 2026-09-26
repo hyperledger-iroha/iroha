@@ -29,7 +29,7 @@ impl VerifiedHeightContext {
         &self,
         persisted: &wire::SumeragiV2Equivocation,
     ) -> Result<AdapterEquivocationEvidence, AdapterError> {
-        if crate::sumeragi::evidence::canonicalize_v2_conflict(persisted) != *persisted {
+        if crate::sumeragi::v2_evidence::canonicalize_v2_conflict(persisted) != *persisted {
             return Err(AdapterError::EquivocationArtifactMismatch);
         }
         let evidence = match persisted {

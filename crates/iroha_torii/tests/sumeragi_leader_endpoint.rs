@@ -3,7 +3,7 @@
 #![cfg(feature = "telemetry")]
 use axum::{Router, body::Body, http::Request, routing::get};
 use http_body_util::BodyExt as _;
-use iroha_core::sumeragi::status;
+use iroha_core::sumeragi::v2_status;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2::{
     ConsensusMode, DualQuorum, HeightContext, HeightContextId, PROTOCOL_VERSION,
@@ -52,7 +52,7 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
         liveness: Default::default(),
     };
     published.validate().expect("valid leader status fixture");
-    status::set_v2_status(published);
+    v2_status::set_v2_status(published);
     let app = Router::new().route(
         "/v1/sumeragi/leader",
         get(|| async move {
@@ -71,7 +71,7 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
         )
         .await
         .expect("leader response");
-    status::clear_v2_status();
+    v2_status::clear_v2_status();
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     let body = response
         .into_body()

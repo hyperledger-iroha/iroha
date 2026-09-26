@@ -53,7 +53,7 @@ struct ValidatorLocator {
     share_keys: Vec<PublicLaneStakeShareKey>,
 }
 struct ParentPenaltySnapshot {
-    evidence: super::evidence::V2CommittedEvidenceSnapshot,
+    evidence: super::v2_evidence::V2CommittedEvidenceSnapshot,
     slashing_delay: u64,
     max_slash_bps: u16,
     validator_map: BTreeMap<PublicKey, Vec<ValidatorLocator>>,
@@ -82,7 +82,7 @@ impl<'a> PenaltyApplier<'a> {
     }
     fn parent_snapshot(
         view: &StateView<'_>,
-        evidence: super::evidence::V2CommittedEvidenceSnapshot,
+        evidence: super::v2_evidence::V2CommittedEvidenceSnapshot,
     ) -> Result<ParentPenaltySnapshot> {
         if evidence.record_capacity_exceeded {
             return Err(eyre!(
@@ -194,10 +194,10 @@ impl<'a> PenaltyApplier<'a> {
                 continue;
             }
             let view = self.state.view();
-            let evidence = super::evidence::v2_committed_evidence_snapshot(view.world());
+            let evidence = super::v2_evidence::v2_committed_evidence_snapshot(view.world());
             let result = Self::parent_snapshot(&view, evidence).and_then(|snapshot| {
                 let admissions = if include_admissions {
-                    super::evidence::pending_v2_evidence_admissions_from_snapshot(
+                    super::v2_evidence::pending_v2_evidence_admissions_from_snapshot(
                         self.state,
                         block_header.height().get(),
                         &snapshot.evidence,
@@ -246,8 +246,7 @@ impl<'a> PenaltyApplier<'a> {
             return Ok(Vec::new());
         }
         pending.sort_by(|left, right| left.0.cmp(&right.0));
-        let _witness_suppression =
-            crate::sumeragi::witness::suppress_recording_for_current_thread();
+        let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
         let mut scratch = self
             .state
             .consensus_effects_probe_block(block_header.clone())?;
@@ -443,7 +442,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     // These are finality effects, not transaction execution. Suppress the
     // process-global recorder in both commit and rollback-only validation so
     // concurrent in-process State instances cannot contaminate one another.
-    let _witness_suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let mut outcome = PenaltyOutcome::default();
     if let Some(pulse) = effects.finalized_global_beacon_pulse {
         if pulse.network_id != tx.network_id
@@ -511,7 +510,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                 "Sumeragi v2 parent evidence prune target is not terminal"
             ));
         }
-        if !super::evidence::v2_committed_evidence_record_is_prunable(
+        if !super::v2_evidence::v2_committed_evidence_record_is_prunable(
             &tx.world,
             record,
             current_height,
@@ -530,7 +529,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
         .iter()
         .count()
         .saturating_add(effects.v2_evidence_admissions.len())
-        > super::evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS
+        > super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS
     {
         return Err(eyre!(
             "bounded Sumeragi v2 evidence table has no reclaimable capacity"
@@ -538,34 +537,35 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     }
     let mut retained_evidence_bytes = 0_usize;
     for (_, record) in tx.world.consensus_evidence.iter() {
-        let encoded_len = super::evidence::v2_evidence_encoded_len(&record.evidence.equivocation);
-        if encoded_len > super::evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES {
+        let encoded_len =
+            super::v2_evidence::v2_evidence_encoded_len(&record.evidence.equivocation);
+        if encoded_len > super::v2_evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES {
             return Err(eyre!(
                 "committed Sumeragi v2 evidence contains an oversized individual proof"
             ));
         }
-        retained_evidence_bytes = super::evidence::checked_v2_evidence_byte_sum(
+        retained_evidence_bytes = super::v2_evidence::checked_v2_evidence_byte_sum(
             retained_evidence_bytes,
             [encoded_len],
-            super::evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+            super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
         )
         .ok_or_else(|| {
             eyre!("bounded Sumeragi v2 evidence table exceeds its proof-byte capacity")
         })?;
     }
-    let incoming_evidence_bytes = super::evidence::checked_v2_evidence_byte_sum(
+    let incoming_evidence_bytes = super::v2_evidence::checked_v2_evidence_byte_sum(
         0,
         effects
             .v2_evidence_admissions
             .iter()
-            .map(super::evidence::v2_evidence_encoded_len),
-        super::evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES,
+            .map(super::v2_evidence::v2_evidence_encoded_len),
+        super::v2_evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES,
     )
     .ok_or_else(|| eyre!("Sumeragi v2 evidence admission batch exceeds its byte capacity"))?;
-    if super::evidence::checked_v2_evidence_byte_sum(
+    if super::v2_evidence::checked_v2_evidence_byte_sum(
         retained_evidence_bytes,
         [incoming_evidence_bytes],
-        super::evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+        super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
     )
     .is_none()
     {
@@ -574,8 +574,8 @@ fn apply_npos_consensus_effects_to_transaction_inner(
         ));
     }
     for admission in &effects.v2_evidence_admissions {
-        let evidence = super::evidence::canonical_v2_evidence(admission);
-        let key = super::evidence::v2_evidence_admission_key(admission);
+        let evidence = super::v2_evidence::canonical_v2_evidence(admission);
+        let key = super::v2_evidence::v2_evidence_admission_key(admission);
         if tx.world.consensus_evidence.get(&key).is_some() {
             return Err(eyre::eyre!(
                 "Sumeragi v2 evidence was already admitted by a committed block"
@@ -936,7 +936,7 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::isi::staking::apply_slash_to_validator_without_observability,
         state::{State, StateBlock, World},
-        sumeragi::evidence::evidence_key,
+        sumeragi::v2_evidence::evidence_key,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -1405,7 +1405,7 @@ mod tests {
         let view = state.view();
         let snapshot = PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         )
         .expect("canonical multi-validator stake snapshot");
 
@@ -1486,7 +1486,7 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("a corrupt share row must fail the complete parent snapshot"),
             Err(error) => error,
@@ -1527,7 +1527,7 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("an orphan stake-share aggregate must fail the parent snapshot"),
             Err(error) => error,
@@ -1568,7 +1568,7 @@ mod tests {
         let view = share_capped_state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("stake-share cap overflow must fail the parent snapshot"),
             Err(error) => error,
@@ -1608,7 +1608,7 @@ mod tests {
         let view = pending_capped_state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("pending-unbond cap overflow must fail the parent snapshot"),
             Err(error) => error,
@@ -1635,7 +1635,7 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("validator-cap overflow must fail the parent snapshot"),
             Err(error) => error,
@@ -1672,7 +1672,7 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("a non-canonical pending unbond must fail the parent snapshot"),
             Err(error) => error,
@@ -1704,7 +1704,7 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("a foreign self-stake account must fail the parent snapshot"),
             Err(error) => error,
@@ -1730,7 +1730,7 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
         ) {
             Ok(_) => panic!("mismatched validator totals must fail the parent snapshot"),
             Err(error) => error,
@@ -1818,7 +1818,7 @@ mod tests {
             let view = state.view();
             let snapshot = PenaltyApplier::parent_snapshot(
                 &view,
-                crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+                crate::sumeragi::v2_evidence::v2_committed_evidence_snapshot(view.world()),
             )
             .expect("canonical penalty parent snapshot");
             let locators = snapshot
@@ -2129,7 +2129,7 @@ mod tests {
         )));
 
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
                 &state,
                 2,
                 effects.v2_evidence_admissions.len(),
@@ -2183,7 +2183,7 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
                 &state,
                 2,
                 effects.v2_evidence_admissions.len(),
@@ -2259,15 +2259,15 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
                 &state,
                 2,
                 effects.v2_evidence_admissions.len(),
             );
         let mut state_block = height_two_state_block(&state);
 
-        let witness_guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let witness_guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         validate_npos_consensus_effects_after_execution(
             &mut state_block,
             &effects,
@@ -2279,7 +2279,7 @@ mod tests {
             2_000,
         )
         .expect("valid penalty effects remain applicable in the rollback-only overlay");
-        let witness = crate::sumeragi::witness::drain_exec_witness();
+        let witness = crate::exec_witness::drain_exec_witness();
         drop(witness_guard);
 
         assert!(witness.reads.is_empty());
@@ -2310,15 +2310,15 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
                 &state,
                 2,
                 effects.v2_evidence_admissions.len(),
             );
         let mut state_block = height_two_state_block(&state);
 
-        let witness_guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let witness_guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         let mut transaction = state_block.consensus_effects_transaction();
         apply_npos_consensus_effects_to_transaction(
             &mut transaction,
@@ -2332,7 +2332,7 @@ mod tests {
         )
         .expect("valid committed penalty effects apply");
         transaction.apply_consensus_effects();
-        let witness = crate::sumeragi::witness::drain_exec_witness();
+        let witness = crate::exec_witness::drain_exec_witness();
         drop(witness_guard);
 
         assert!(witness.reads.is_empty());

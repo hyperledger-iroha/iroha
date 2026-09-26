@@ -71,11 +71,11 @@ fn assert_unpublished(state: &State) {
 
 #[test]
 fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
         for replay in [false, true] {
             let state = state_with_marker();
-            crate::sumeragi::witness::start_block();
+            crate::exec_witness::start_block();
             let mut block = state.block(header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             let source = with_transfer.then(|| Hash::new(b"committable finalized source"));
@@ -102,12 +102,12 @@ fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
 
 #[test]
 fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for same_key in [false, true] {
         for drain_late in [false, true] {
             for replay in [false, true] {
                 let state = state_with_marker();
-                crate::sumeragi::witness::start_block();
+                crate::exec_witness::start_block();
                 let mut block = state.block(header());
                 cache_canonical_test_transaction_set(&mut block, &[]);
                 let original = Hash::new(b"captured source before extraction");
@@ -149,10 +149,10 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
 
 #[test]
 fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for replay in [false, true] {
         let state = state_with_marker();
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let source = Hash::new(b"failed inventory construction");

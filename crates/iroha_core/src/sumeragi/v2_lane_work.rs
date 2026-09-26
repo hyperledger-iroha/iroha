@@ -196,8 +196,8 @@ fn classify_committed_lane_block_execution_status(
     matching_preflight_has_rejections: impl FnOnce() -> Option<bool>,
     matching_execution_input_is_available: impl FnOnce() -> bool,
     payload_is_recoverable: impl FnOnce() -> bool,
-) -> Option<super::status::CommittedLaneBlockExecutionStatus> {
-    use super::status::CommittedLaneBlockExecutionStatus as Status;
+) -> Option<crate::status::CommittedLaneBlockExecutionStatus> {
+    use crate::status::CommittedLaneBlockExecutionStatus as Status;
     if receipt_conflicts() {
         return Some(Status::ApplicationReceiptConflictsWithPreflight);
     }
@@ -5276,7 +5276,7 @@ impl V2LaneWorkAdapter {
     #[cfg(test)]
     pub(crate) fn committed_lane_block_status_snapshot(
         &self,
-    ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+    ) -> Vec<crate::status::CommittedLaneBlockSnapshot> {
         let mut latest_by_lane =
             BTreeMap::<(LaneId, DataSpaceId, Hash), (CommittedLaneBlockSession, bool)>::new();
         let durable_sessions = self
@@ -5419,7 +5419,7 @@ impl V2LaneWorkAdapter {
                     },
                     || self.kura.lane_block_payload_is_recoverable(proposal),
                 )?;
-                Some(super::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
+                Some(crate::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
                     &session,
                     execution_status,
                 ))
@@ -27432,7 +27432,7 @@ pub(super) mod tests {
         assert_eq!(pending_status[0].proposal, proposal);
         assert_eq!(
             pending_status[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor,
+            crate::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor,
             "recoverable payload must remain visible before canonical application"
         );
         let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
@@ -27456,7 +27456,7 @@ pub(super) mod tests {
         assert_eq!(committed_status[0].proposal, proposal);
         assert_eq!(
             committed_status[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+            crate::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
         );
         assert!(
             adapter
@@ -27482,7 +27482,7 @@ pub(super) mod tests {
     }
     #[test]
     fn committed_lane_status_classification_is_exhaustive_and_priority_ordered() {
-        use super::super::status::CommittedLaneBlockExecutionStatus as Status;
+        use crate::status::CommittedLaneBlockExecutionStatus as Status;
         let cases = [
             (
                 true,
@@ -27707,7 +27707,7 @@ pub(super) mod tests {
         assert_eq!(snapshot[0].commit_qc, latest.commit_qc);
         assert_eq!(
             snapshot[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+            crate::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
         );
         let mut malformed = latest.clone();
         malformed.proposal.proposal_hash = Hash::new(b"malformed status proposal");

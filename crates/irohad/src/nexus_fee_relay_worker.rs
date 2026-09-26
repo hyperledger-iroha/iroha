@@ -3,7 +3,7 @@
 //! The worker never mutates world state directly. It watches finalized lane
 //! relay envelopes published by core, builds FastPQ/AXT proofs, and submits the
 //! corresponding protocol ISIs through the normal transaction queue.
-//! The process-local Sumeragi status cache is only a bounded notification
+//! The process-local status cache (`iroha_core::status`) is only a bounded notification
 //! surface: a relay becomes proof-eligible only when the exact envelope is also
 //! present in State's finality-authenticated lane-relay store. The worker
 //! constructs proofs; normal ISI execution performs their authoritative
@@ -17,7 +17,8 @@ use iroha_config::parameters::actual::{
 use iroha_core::{
     queue::Queue,
     state::{LaneRelayStore, State, StateView, WorldReadOnly},
-    sumeragi::{self, SumeragiHandle},
+    status,
+    sumeragi::SumeragiHandle,
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Hash, KeyPair};
@@ -290,7 +291,7 @@ impl NexusFeeRelayWorker {
         )
     }
     fn enqueue_status_relays(&self) -> Result<()> {
-        let candidates = sumeragi::status::lane_relay_envelopes_snapshot();
+        let candidates = status::lane_relay_envelopes_snapshot();
         let envelopes = {
             let recorded_relays = self.state.lane_relays.read();
             candidates

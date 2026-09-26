@@ -160,9 +160,9 @@ fn execute(block: &mut StateBlock<'_>, source: &SignedBlock) {
 
 #[test]
 fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_order() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let (state, source, pipeline, time) = fixture();
-    crate::sumeragi::witness::start_block();
+    crate::exec_witness::start_block();
     let mut block = state.block(source.header());
     let height = source.header().height().get();
     let pipeline_call = PipelineInvocationV1 {
@@ -229,9 +229,9 @@ fn actual_three_phase_zero_transcript_inventory_retains_every_call_in_output_ord
 
 #[test]
 fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let (state, source, _, _) = fixture();
-    crate::sumeragi::witness::start_block();
+    crate::exec_witness::start_block();
     let mut block = state.block(source.header());
     execute(&mut block, &source);
     let protocol = Hash::new(b"owned inventory actual applied protocol test occurrence");
@@ -281,10 +281,10 @@ fn known_rejected_call_capture_and_typed_protocol_extra_remain_owned() {
 
 #[test]
 fn unknown_internal_capture_and_changed_known_capture_refuse_and_latch() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for mutation in 0..4 {
         let (state, source, _, _) = fixture();
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(source.header());
         execute(&mut block, &source);
         block
@@ -351,10 +351,10 @@ fn unknown_internal_capture_and_changed_known_capture_refuse_and_latch() {
 
 #[test]
 fn foreign_proposal_and_frozen_context_refuse_before_digest_mutation() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for mutation in 0..4 {
         let (state, source, _, _) = fixture();
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(source.header());
         execute(&mut block, &source);
         block
@@ -426,9 +426,9 @@ fn foreign_proposal_and_frozen_context_refuse_before_digest_mutation() {
 
 #[test]
 fn owned_seal_still_rejects_late_applied_capture_after_transcript_drain() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let (state, source, _, _) = fixture();
-    crate::sumeragi::witness::start_block();
+    crate::exec_witness::start_block();
     let mut block = state.block(source.header());
     execute(&mut block, &source);
     block

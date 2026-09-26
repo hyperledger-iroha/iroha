@@ -130,7 +130,7 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     ) -> Result<Option<RecordedNativeLaneBatchV1<'state>>, MergeLedgerCommitError> {
         // A recorder-owning caller must not wait for a State writer which may
         // itself be waiting for that recorder. This check acquires no locks.
-        crate::sumeragi::witness::ensure_exec_witness_capture_available()
+        crate::exec_witness::ensure_exec_witness_capture_available()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         if !self.is_current() {
             return Ok(None);
@@ -183,7 +183,7 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
     pub(crate) fn stage_with_start_hooks(
         self,
     ) -> Result<NativeLaneBatchReplayV1<'state>, MergeLedgerCommitError> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         let batch = crate::block::native_lane_batch_for_scratch(&self.input)
             .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
@@ -360,7 +360,7 @@ impl State {
         included: &FinalizedNativeLaneBatchV1,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
     ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         self.prepare_finalized_native_lane_batch_source(included, recovered)
             .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
@@ -379,7 +379,7 @@ impl State {
         carrier: &SignedBlock,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
     ) -> Result<NativeLaneBatchReplayV1<'_>, MergeLedgerCommitError> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         self.prepare_proposed_native_lane_batch_source(carrier, recovered)
             .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?
@@ -434,7 +434,7 @@ impl State {
         expected_network: NetworkId,
         recovered: &[(usize, VerifiedFirstLaneAdmittedInputV1)],
     ) -> Result<NativeLaneBatchSourcePreparationV1<'_>, String> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()?;
+        crate::exec_witness::ensure_state_access_without_exec_witness()?;
         let header = carrier.header();
         let generation = self.state_view_generation();
         if generation % 2 != 0 {

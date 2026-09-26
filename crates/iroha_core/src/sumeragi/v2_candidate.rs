@@ -3864,7 +3864,9 @@ pub(super) mod tests {
     fn retained_candidate_evidence(
         state: &State,
     ) -> Vec<iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence> {
-        use super::super::evidence::{retain_sumeragi_v2_equivocation, validate_v2_equivocation};
+        use super::super::v2_evidence::{
+            retain_sumeragi_v2_equivocation, validate_v2_equivocation,
+        };
         let (_, context, _, _) = snapshot_parent_fixture_with_world(1, World::new());
         let mut keys = (0xA7_u8..=0xAA)
             .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
@@ -3920,7 +3922,7 @@ pub(super) mod tests {
                     .unwrap()
             );
             evidence.push(
-                super::super::evidence::canonicalize_v2_equivocation_evidence(
+                super::super::v2_evidence::canonicalize_v2_equivocation_evidence(
                     &iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence {
                         context: context.clone(),
                         proofs_of_possession: proofs.clone(),
@@ -3929,7 +3931,7 @@ pub(super) mod tests {
                 ),
             );
         }
-        evidence.sort_by_key(super::super::evidence::v2_evidence_admission_key);
+        evidence.sort_by_key(super::super::v2_evidence::v2_evidence_admission_key);
         assert_eq!(evidence.len(), 4);
         for proof in &evidence {
             validate_v2_equivocation(proof).unwrap();
@@ -4063,7 +4065,7 @@ pub(super) mod tests {
                         .collect::<Vec<_>>(),
                     proofs
                         .iter()
-                        .map(super::super::evidence::v2_evidence_admission_key)
+                        .map(super::super::v2_evidence::v2_evidence_admission_key)
                         .collect::<Vec<_>>()
                 );
                 assert_eq!(

@@ -31935,7 +31935,7 @@ async fn handler_debug_witness(
             &app.telemetry,
         ));
     }
-    let witness = iroha_core::sumeragi::witness::snapshot_exec_witness();
+    let witness = iroha_core::exec_witness::snapshot_exec_witness();
     let format =
         crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)).map_err(|_| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -32216,7 +32216,7 @@ async fn handler_bridge_finality_attestation_inner(
         .sumeragi
         .as_ref()
         .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-    let status = iroha_core::sumeragi::status::v2_status_with_restart_required(restart_required);
+    let status = iroha_core::sumeragi::v2_status::v2_status_with_restart_required(restart_required);
     if let Some(reason) = bridge_attestation::startup_failure(restart_required, status.as_ref()) {
         return Ok(bridge_attestation::failure_response(
             reason, challenge, height, None, format,

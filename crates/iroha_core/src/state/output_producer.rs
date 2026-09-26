@@ -249,7 +249,7 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
 /// An interruption during apply invalidates the whole still-gated StateBlock.
 struct OutputTransaction<'block, 'state> {
     transaction: Option<StateTransaction<'block, 'state>>,
-    witness: Option<crate::sumeragi::witness::ExecWitnessOverlay>,
+    witness: Option<crate::exec_witness::ExecWitnessOverlay>,
     #[cfg(feature = "zk-preverify")]
     zk_checkpoint: Option<crate::zk::DedupCache>,
 }
@@ -258,7 +258,7 @@ impl<'block, 'state> OutputTransaction<'block, 'state> {
     fn new(state: &'block mut StateBlock<'state>) -> Self {
         #[cfg(feature = "zk-preverify")]
         let zk_checkpoint = Some(state.zk_dedup.clone());
-        let witness = Some(crate::sumeragi::witness::begin_exec_witness_overlay());
+        let witness = Some(crate::exec_witness::begin_exec_witness_overlay());
         Self {
             transaction: Some(state.transaction()),
             witness,

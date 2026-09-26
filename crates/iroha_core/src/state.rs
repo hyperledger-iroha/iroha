@@ -13148,7 +13148,7 @@ pub struct State {
     /// This cache is deliberately outside [`World`]: private gossip timing must
     /// never change consensus state or a snapshot/state-root projection.
     pub(crate) sumeragi_v2_pending_evidence:
-        parking_lot::Mutex<BTreeMap<Hash, crate::sumeragi::evidence::LocalV2EvidenceRecord>>,
+        parking_lot::Mutex<BTreeMap<Hash, crate::sumeragi::v2_evidence::LocalV2EvidenceRecord>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ReplayMergeCarrier {
@@ -15638,7 +15638,7 @@ pub struct StateTransaction<'block, 'state> {
     #[cfg(feature = "telemetry")]
     pub telemetry: &'state StateTelemetry,
     /// Transaction-local operator-status updates, published only by [`Self::apply`].
-    public_lane_staking_status_overlay: crate::sumeragi::status::PublicLaneStakingStatusOverlay,
+    public_lane_staking_status_overlay: crate::status::PublicLaneStakingStatusOverlay,
     pub(crate) _curr_block: BlockHeader,
     #[cfg(feature = "zk-preverify")]
     pub(crate) zk_dedup: &'block mut crate::zk::DedupCache,
@@ -15714,7 +15714,7 @@ pub struct StateTransaction<'block, 'state> {
     pending_nexus_fee_records:
         BTreeMap<HashOf<SignedTransaction>, crate::settlement::PendingNexusFeeReceipt>,
     /// Charged Nexus fee event staged until the transaction is committed.
-    pending_nexus_fee_event: Option<crate::sumeragi::status::NexusFeeEvent>,
+    pending_nexus_fee_event: Option<crate::status::NexusFeeEvent>,
     /// Parent block's slash-observability buffer.
     block_pending_public_lane_slash_observability:
         &'block mut Vec<PendingPublicLaneSlashObservability>,
@@ -15979,12 +15979,9 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         core::mem::take(&mut self.pending_nexus_fee_records)
     }
     /// Stage a Nexus fee event so it is recorded only after the transaction commits.
-    pub(crate) fn stage_nexus_fee_event(&mut self, event: crate::sumeragi::status::NexusFeeEvent) {
+    pub(crate) fn stage_nexus_fee_event(&mut self, event: crate::status::NexusFeeEvent) {
         debug_assert!(
-            matches!(
-                event,
-                crate::sumeragi::status::NexusFeeEvent::Charged { .. }
-            ),
+            matches!(event, crate::status::NexusFeeEvent::Charged { .. }),
             "only charged fee events should be staged"
         );
         debug_assert!(
@@ -29597,7 +29594,7 @@ impl State {
                 "persisted block height exceeds u64 during startup".to_owned(),
             )
         })?;
-        crate::sumeragi::evidence::validate_persisted_v2_evidence_records(
+        crate::sumeragi::v2_evidence::validate_persisted_v2_evidence_records(
             &world.view(),
             kura.as_ref(),
             &network_id,
@@ -33704,8 +33701,8 @@ impl State {
         #[cfg(feature = "telemetry")]
         self.telemetry
             .prune_da_receipt_lanes(lanes_to_reset.iter().map(|lane| lane.as_u32()));
-        crate::sumeragi::status::prune_lane_scoped_snapshots(lanes_to_reset);
-        crate::sumeragi::status::reset_public_lane_staking_lanes(lanes_to_reset);
+        crate::status::prune_lane_scoped_snapshots(lanes_to_reset);
+        crate::status::reset_public_lane_staking_lanes(lanes_to_reset);
     }
     fn prune_lane_relay_emergency_validators_for_reset_or_inactive_lanes(
         &self,
@@ -34734,7 +34731,7 @@ impl State {
         ) {
             // Retirement prunes both caches under this fence. Publishing status
             // after unlocking could resurrect an already retired incarnation.
-            crate::sumeragi::status::push_lane_relay_envelope(envelope.clone());
+            crate::status::push_lane_relay_envelope(envelope.clone());
         }
         drop(lifecycle_guard);
         #[cfg(feature = "telemetry")]
@@ -34890,8 +34887,7 @@ impl State {
                 "autonomous sources exceed the shared block proposal gas budget".to_owned(),
             ));
         }
-        let _witness_suppression =
-            crate::sumeragi::witness::suppress_recording_for_current_thread();
+        let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let mut seen_entrypoints = BTreeSet::new();
         let mut seen_reservations = BTreeSet::new();
@@ -39856,10 +39852,8 @@ impl State {
     /// bounded suffix of certified artifacts per route. It is independent of Sumeragi
     /// adapter caches, deterministically ordered, and therefore reconstructible after restart.
     #[must_use]
-    pub fn durable_lane_diagnostics(
-        &self,
-    ) -> crate::sumeragi::status::DurableLaneDiagnosticsSnapshot {
-        use crate::sumeragi::status::{
+    pub fn durable_lane_diagnostics(&self) -> crate::status::DurableLaneDiagnosticsSnapshot {
+        use crate::status::{
             COMMITTED_LANE_BLOCKS_CAP, CommittedLaneBlockSnapshot, DurableLaneDiagnosticsSnapshot,
             LANE_PAYLOAD_OWNERSHIPS_CAP,
         };
@@ -53569,7 +53563,7 @@ impl<'state> StateBlock<'state> {
             &mut self.fastpq_transcripts,
             pending,
         );
-        crate::sumeragi::witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
+        crate::exec_witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
     /// Drain the accumulated transfer transcripts recorded while executing this block.
@@ -53577,7 +53571,7 @@ impl<'state> StateBlock<'state> {
         &mut self,
     ) -> BTreeMap<Hash, Vec<iroha_data_model::fastpq::TransferTranscript>> {
         crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut self.fastpq_transcripts);
-        crate::sumeragi::witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
+        crate::exec_witness::synchronize_fastpq_transcripts(&self.fastpq_transcripts);
         mem::take(&mut self.fastpq_transcripts)
     }
     /// Cache the transaction set hash for FASTPQ public inputs.
@@ -53605,7 +53599,7 @@ impl<'state> StateBlock<'state> {
                     .map_err(|error| error.to_string())?,
             );
             self.clear_cached_exec_witness();
-            let _ = crate::sumeragi::witness::drain_exec_witness();
+            let _ = crate::exec_witness::drain_exec_witness();
             return Ok(());
         }
         let source_inventory = match self.verified_fastpq_source_inventory_for_capture() {
@@ -53616,13 +53610,12 @@ impl<'state> StateBlock<'state> {
             }
         };
         if self.exec_witness.is_none() {
-            let mut witness =
-                match crate::sumeragi::witness::drain_exec_witness_checked(|transcripts| {
-                    source_inventory.verify_finalized_transcript_map(transcripts)
-                }) {
-                    Ok(witness) => witness,
-                    Err(error) => return Err(self.reject_fastpq_witness_content(error)),
-                };
+            let mut witness = match crate::exec_witness::drain_exec_witness_checked(|transcripts| {
+                source_inventory.verify_finalized_transcript_map(transcripts)
+            }) {
+                Ok(witness) => witness,
+                Err(error) => return Err(self.reject_fastpq_witness_content(error)),
+            };
             let receiver_height = self._curr_block.height().get();
             // Commit the complete protected validation-fee registry selection
             // at every height. A finality proof for this fixed synthetic write
@@ -53712,10 +53705,10 @@ impl<'state> StateBlock<'state> {
             if let Err(error) = self.verify_cached_ordinary_witness_content(&source_inventory) {
                 // This capture call still owns the exclusive block recorder guard. Clear any
                 // rejected recorder state, preserving the earlier cached-content failure.
-                let _ = crate::sumeragi::witness::finish_cached_exec_witness_capture();
+                let _ = crate::exec_witness::finish_cached_exec_witness_capture();
                 return Err(self.reject_fastpq_witness_content(error));
             }
-            if let Err(error) = crate::sumeragi::witness::finish_cached_exec_witness_capture() {
+            if let Err(error) = crate::exec_witness::finish_cached_exec_witness_capture() {
                 return Err(self.reject_fastpq_witness_content(error));
             }
         }
@@ -53917,7 +53910,7 @@ impl<'state> StateBlock<'state> {
             #[cfg(feature = "telemetry")]
             telemetry: fields.telemetry,
             public_lane_staking_status_overlay:
-                crate::sumeragi::status::begin_public_lane_staking_status_overlay(),
+                crate::status::begin_public_lane_staking_status_overlay(),
             _curr_block: fields._curr_block,
             #[cfg(feature = "zk-preverify")]
             zk_dedup: &mut fields.zk_dedup,
@@ -56581,19 +56574,19 @@ impl<'state> StateBlock<'state> {
         drop(autoscale_lifecycle_guard);
         if !*replay_prevalidation && !*authenticated_replay_commit {
             for slash in pending_public_lane_slash_observability.iter() {
-                crate::sumeragi::status::record_public_lane_bonded_delta(
+                crate::status::record_public_lane_bonded_delta(
                     slash.lane_id,
                     &slash.bonded_amount,
                     false,
                 );
                 if !slash.pending_unbond_amount.is_zero() {
-                    crate::sumeragi::status::record_public_lane_pending_unbond_delta(
+                    crate::status::record_public_lane_pending_unbond_delta(
                         slash.lane_id,
                         &slash.pending_unbond_amount,
                         false,
                     );
                 }
-                crate::sumeragi::status::record_public_lane_slash(slash.lane_id);
+                crate::status::record_public_lane_slash(slash.lane_id);
                 #[cfg(feature = "telemetry")]
                 {
                     state_ref.telemetry.record_public_lane_validator_status(
@@ -58791,8 +58784,8 @@ mod public_lane_slash_observability_staging_tests {
 
     #[test]
     fn consensus_effects_apply_only_world_and_block_observability() {
-        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        let _status_guard = crate::status::rbc_status_test_guard();
+        crate::status::reset_nexus_economics_for_tests();
         let state = test_state();
         #[cfg(feature = "telemetry")]
         {
@@ -58804,7 +58797,7 @@ mod public_lane_slash_observability_staging_tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.consensus_effects_probe_block(header).unwrap();
         let lane_id = LaneId::new(73);
-        let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
+        let status_before = crate::status::lane_scoped_status_fingerprint_for_tests();
 
         {
             let mut transaction = block.consensus_effects_transaction();
@@ -58815,8 +58808,8 @@ mod public_lane_slash_observability_staging_tests {
                 .governance_last_unlock_sweep_height
                 .get_mut() = 9;
             transaction.last_tx_gas_used = 101;
-            transaction.stage_nexus_fee_event(crate::sumeragi::status::NexusFeeEvent::Charged {
-                payer_kind: crate::sumeragi::status::NexusFeePayer::Payer,
+            transaction.stage_nexus_fee_event(crate::status::NexusFeeEvent::Charged {
+                payer_kind: crate::status::NexusFeePayer::Payer,
                 payer_id: "scratch-payer".to_owned(),
                 amount: Quantity::from(1_u64),
                 asset_id: "scratch#fee".to_owned(),
@@ -58853,17 +58846,14 @@ mod public_lane_slash_observability_staging_tests {
         assert_eq!(observation.bonded_amount, Quantity::from(7_u64));
         assert_eq!(observation.pending_unbond_amount, Quantity::from(2_u64));
         assert!(
-            crate::sumeragi::status::nexus_staking_snapshot()
+            crate::status::nexus_staking_snapshot()
                 .lanes
                 .iter()
                 .all(|lane| lane.lane_id != lane_id)
         );
+        assert_eq!(crate::status::nexus_fee_snapshot().charged_total, 0);
         assert_eq!(
-            crate::sumeragi::status::nexus_fee_snapshot().charged_total,
-            0
-        );
-        assert_eq!(
-            crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
+            crate::status::lane_scoped_status_fingerprint_for_tests(),
             status_before,
             "consensus-effect probes must not publish process-global status"
         );
@@ -58885,7 +58875,7 @@ mod public_lane_slash_observability_staging_tests {
         drop(block);
         let live_world = state.world.view();
         assert_eq!(*live_world.governance_last_unlock_sweep_height, 0);
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::status::reset_nexus_economics_for_tests();
     }
 }
 #[cfg(all(test, feature = "telemetry"))]
@@ -62454,8 +62444,8 @@ mod fastpq_tx_set_hash_tests {
         let state = State::new(World::default(), kura, query);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let _guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -62530,8 +62520,8 @@ mod fastpq_tx_set_hash_tests {
         // A second capture with no block-owned commitment must not synthesize
         // one from the transcript's execution identity.
         state_block.fastpq_tx_set_hash = None;
-        crate::sumeragi::witness::start_block();
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        crate::exec_witness::start_block();
+        crate::exec_witness::record_fastpq_transcript(&transcript);
         assert!(state_block.capture_exec_witness().is_err());
         assert!(state_block.take_exec_witness().is_none());
         assert!(state_block.take_fastpq_witness_context().is_none());
@@ -62540,7 +62530,7 @@ mod fastpq_tx_set_hash_tests {
                 .take_parliament_timed_ovn_casting_bindings()
                 .is_none()
         );
-        let _ = crate::sumeragi::witness::drain_exec_witness();
+        let _ = crate::exec_witness::drain_exec_witness();
     }
     #[test]
     fn capture_exec_witness_skips_replay_blocks_and_clears_active_capture() {
@@ -62550,8 +62540,8 @@ mod fastpq_tx_set_hash_tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
         state_block.authenticated_replay_commit = true;
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let _guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
@@ -62577,11 +62567,11 @@ mod fastpq_tx_set_hash_tests {
                 &batch_hash,
             )),
         };
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        crate::exec_witness::record_fastpq_transcript(&transcript);
         state_block.capture_exec_witness().unwrap();
         assert!(state_block.take_exec_witness().is_none());
         assert!(state_block.take_fastpq_witness_context().is_none());
-        let witness = crate::sumeragi::witness::drain_exec_witness();
+        let witness = crate::exec_witness::drain_exec_witness();
         assert!(witness.reads.is_empty());
         assert!(witness.writes.is_empty());
         assert!(witness.fastpq_transcripts.is_empty());
@@ -62593,8 +62583,8 @@ mod fastpq_tx_set_hash_tests {
         let state = State::new(World::default(), kura, query);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let _guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -62672,8 +62662,8 @@ mod fastpq_tx_set_hash_tests {
         let state = State::new(world, kura, query);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut state_block = state.block(header);
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let _guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         // These fixtures contain only an internal execution call and no external wires.
         let entrypoints: [TransactionEntrypoint; 0] = [];
         let tx_set_hash: [u8; 32] =
@@ -63654,8 +63644,8 @@ fn publish_replay_receipt(
             drop(kura_publication_lease);
             for pending in &receipt.geometry {
                 let lanes = &pending.catalog_update.lanes_to_reset;
-                crate::sumeragi::status::prune_lane_scoped_snapshots(lanes);
-                crate::sumeragi::status::reset_public_lane_staking_lanes(lanes);
+                crate::status::prune_lane_scoped_snapshots(lanes);
+                crate::status::reset_public_lane_staking_lanes(lanes);
             }
             drop(state_commit_guard);
             drop(retired_state);
@@ -65833,15 +65823,15 @@ impl StateTransaction<'_, '_> {
         }
         if let Some(event) = pending_nexus_fee_event {
             match event {
-                crate::sumeragi::status::NexusFeeEvent::Charged {
+                crate::status::NexusFeeEvent::Charged {
                     payer_kind,
                     payer_id,
                     amount,
                     asset_id,
                 } => {
                     let payer_kind_label = match payer_kind {
-                        crate::sumeragi::status::NexusFeePayer::Payer => "payer",
-                        crate::sumeragi::status::NexusFeePayer::Sponsor => "sponsor",
+                        crate::status::NexusFeePayer::Payer => "payer",
+                        crate::status::NexusFeePayer::Sponsor => "sponsor",
                     };
                     debug!(
                         target: "economics",
@@ -65852,17 +65842,15 @@ impl StateTransaction<'_, '_> {
                         sink = %nexus.fees.fee_sink_account_id,
                         "nexus fee charged"
                     );
-                    crate::sumeragi::status::record_nexus_fee_event(
-                        crate::sumeragi::status::NexusFeeEvent::Charged {
-                            payer_kind,
-                            payer_id,
-                            amount,
-                            asset_id,
-                        },
-                    );
+                    crate::status::record_nexus_fee_event(crate::status::NexusFeeEvent::Charged {
+                        payer_kind,
+                        payer_id,
+                        amount,
+                        asset_id,
+                    });
                 }
                 other => {
-                    crate::sumeragi::status::record_nexus_fee_event(other);
+                    crate::status::record_nexus_fee_event(other);
                 }
             }
         }
@@ -67854,8 +67842,8 @@ pub(crate) fn run_empty_network_owner_fixture(
         0,
         "empty Network fixture source"
     );
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block.execute_ordinary_output_plan(&source, None).unwrap();
     block

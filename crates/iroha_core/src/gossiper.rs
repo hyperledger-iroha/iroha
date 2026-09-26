@@ -2028,18 +2028,18 @@ impl TransactionGossiper {
             let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_admitted_input().is_some();
             if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             if !batch_seen_hashes.insert(entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             if !has_queue_plan_certificate
                 && self
                     .is_transaction_known_locally_cached(entrypoint_hash, &committed_transactions)
             {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             let (entrypoint, payload, queue_plan_certificate) =
@@ -2810,11 +2810,11 @@ impl TransactionGossiper {
             let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_admitted_input().is_some();
             if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             if !batch_seen_hashes.insert(entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             // A certificate-bearing duplicate may be the first message that can promote an
@@ -2824,7 +2824,7 @@ impl TransactionGossiper {
                 && self
                     .is_transaction_known_locally_cached(entrypoint_hash, &committed_transactions)
             {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             let entrypoint = match tx.materialize_entrypoint() {

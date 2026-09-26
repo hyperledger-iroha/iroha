@@ -55,10 +55,10 @@ fn cache_transfer_capture(block: &mut StateBlock<'_>, hash: Hash) {
 
 #[test]
 fn missing_or_failed_inventory_refuses_capture_before_draining_active_witness() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for failed_inventory in [false, true] {
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let hash = Hash::new(b"capture requires owned inventory");
@@ -82,7 +82,7 @@ fn missing_or_failed_inventory_refuses_capture_before_draining_active_witness() 
         }
         assert_no_cached_capture(&mut block);
         assert_eq!(block.fastpq_transcripts, original_archive);
-        let active = crate::sumeragi::witness::drain_exec_witness();
+        let active = crate::exec_witness::drain_exec_witness();
         assert_eq!(active.fastpq_transcripts.len(), 1);
         assert_eq!(active.fastpq_transcripts[0].entry_hash, hash);
     }
@@ -90,10 +90,10 @@ fn missing_or_failed_inventory_refuses_capture_before_draining_active_witness() 
 
 #[test]
 fn sealed_empty_and_transferred_inventory_capture_without_reconstruction() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for with_transfer in [false, true] {
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         if with_transfer {
@@ -142,11 +142,11 @@ fn sealed_empty_and_transferred_inventory_capture_without_reconstruction() {
 
 #[test]
 fn same_or_new_key_late_apply_refuses_capture_even_after_late_data_is_drained() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for same_key in [false, true] {
         for drain_late in [false, true] {
-            crate::sumeragi::witness::start_block();
+            crate::exec_witness::start_block();
             let mut block = state.block(header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             let original_hash = Hash::new(b"original sealed source");
@@ -190,8 +190,8 @@ fn same_or_new_key_late_apply_refuses_capture_even_after_late_data_is_drained() 
 
 #[test]
 fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -205,7 +205,7 @@ fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
         .unwrap();
     block.drain_transfer_transcripts_with_pending(None);
     {
-        let witness_overlay = crate::sumeragi::witness::begin_exec_witness_overlay();
+        let witness_overlay = crate::exec_witness::begin_exec_witness_overlay();
         let mut tx = block.transaction();
         tx.tx_call_hash = Some(original_hash);
         tx.current_lane_id = Some(LaneId::new(999));
@@ -230,8 +230,8 @@ fn rolled_back_transfer_and_empty_apply_preserve_sealed_capture() {
 
 #[test]
 fn later_applied_transfer_invalidates_and_clears_previously_cached_capture() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -254,10 +254,10 @@ fn later_applied_transfer_invalidates_and_clears_previously_cached_capture() {
 
 #[test]
 fn capture_rejects_unsealed_replaced_contexts_and_changed_source_caches() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for mutation in 0..8 {
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let hash = Hash::new(b"capture consistency");
@@ -318,7 +318,7 @@ fn capture_rejects_unsealed_replaced_contexts_and_changed_source_caches() {
 
 #[test]
 fn applied_accumulator_seal_failure_publishes_no_owned_inventory_or_caches() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -354,10 +354,10 @@ fn applied_accumulator_seal_failure_publishes_no_owned_inventory_or_caches() {
 
 #[test]
 fn authenticated_replay_clears_active_witness_without_fabricating_inventory() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for failed_inventory in [false, true] {
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         apply_source(&mut block, Hash::new(b"replay active witness"), false, None);
@@ -369,7 +369,7 @@ fn authenticated_replay_clears_active_witness_without_fabricating_inventory() {
         block.capture_exec_witness().unwrap();
         assert_no_cached_capture(&mut block);
         assert_eq!(block.fastpq_source_inventory, original_inventory);
-        let active = crate::sumeragi::witness::drain_exec_witness();
+        let active = crate::exec_witness::drain_exec_witness();
         assert!(active.reads.is_empty());
         assert!(active.writes.is_empty());
         assert!(active.fastpq_transcripts.is_empty());
@@ -378,10 +378,10 @@ fn authenticated_replay_clears_active_witness_without_fabricating_inventory() {
 
 #[test]
 fn intact_capture_outputs_can_be_taken_in_every_order_without_recapture() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for order in CAPTURE_EXTRACTION_ORDERS {
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         cache_transfer_capture(&mut block, Hash::new(b"healthy capture extraction order"));
@@ -401,11 +401,11 @@ fn intact_capture_outputs_can_be_taken_in_every_order_without_recapture() {
 
 #[test]
 fn each_extraction_accessor_first_rejects_late_applies_without_recapture() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for same_key in [false, true] {
         for order in CAPTURE_EXTRACTION_ORDERS {
-            crate::sumeragi::witness::start_block();
+            crate::exec_witness::start_block();
             let mut block = state.block(header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             let original = Hash::new(b"captured before direct extraction");
@@ -441,10 +441,10 @@ fn each_extraction_accessor_first_rejects_late_applies_without_recapture() {
 
 #[test]
 fn authenticated_replay_capture_discards_all_previously_cached_outputs() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for order in CAPTURE_EXTRACTION_ORDERS {
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         cache_transfer_capture(&mut block, Hash::new(b"cached before replay transition"));
@@ -459,7 +459,7 @@ fn authenticated_replay_capture_discards_all_previously_cached_outputs() {
             assert_eq!(cached_output_presence(&block), [false; 3]);
         }
         assert_eq!(block.fastpq_source_inventory, original_inventory);
-        let active = crate::sumeragi::witness::drain_exec_witness();
+        let active = crate::exec_witness::drain_exec_witness();
         assert!(active.reads.is_empty());
         assert!(active.writes.is_empty());
         assert!(active.fastpq_transcripts.is_empty());

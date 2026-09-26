@@ -6239,7 +6239,7 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    let Some(status) = sumeragi::status::v2_status() else {
+    let Some(status) = sumeragi::v2_status::v2_status() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let payload = SumeragiV2QcResponse {
@@ -9776,7 +9776,7 @@ mod bls_key_response_bounds_tests {
 pub async fn handle_v1_sumeragi_leader(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let Some(status) = sumeragi::status::v2_status() else {
+    let Some(status) = sumeragi::v2_status::v2_status() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let payload = SumeragiLeaderResponse {
@@ -47798,7 +47798,7 @@ fn settlement_counts_to_value(
     norito::json::Value::Object(obj)
 }
 fn dvp_last_event_json(
-    event: &sumeragi::status::DvpSettlementEventSnapshot,
+    event: &iroha_core::status::DvpSettlementEventSnapshot,
 ) -> norito::json::Value {
     let settlement_id = event
         .settlement_id
@@ -47832,7 +47832,7 @@ fn dvp_last_event_json(
     ])
 }
 fn pvp_last_event_json(
-    event: &sumeragi::status::PvpSettlementEventSnapshot,
+    event: &iroha_core::status::PvpSettlementEventSnapshot,
 ) -> norito::json::Value {
     let settlement_id = event
         .settlement_id
@@ -47868,7 +47868,7 @@ fn pvp_last_event_json(
     ])
 }
 fn settlement_snapshot_value(
-    settlement: &sumeragi::status::SettlementStatusSnapshot,
+    settlement: &iroha_core::status::SettlementStatusSnapshot,
 ) -> norito::json::Value {
     let dvp_last = settlement
         .dvp
@@ -47941,7 +47941,7 @@ fn lane_block_qc_summary_json(qc: &iroha_data_model::block::consensus::LaneBlock
     ])
 }
 fn committed_lane_block_wire(
-    entry: &sumeragi::status::CommittedLaneBlockSnapshot,
+    entry: &iroha_core::status::CommittedLaneBlockSnapshot,
 ) -> SumeragiCommittedLaneBlock {
     SumeragiCommittedLaneBlock {
         lane_id: entry.lane_id,
@@ -47963,7 +47963,7 @@ fn committed_lane_block_wire(
         commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
     }
 }
-fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapshot) -> Value {
+fn committed_lane_block_json(entry: &iroha_core::status::CommittedLaneBlockSnapshot) -> Value {
     json_object(vec![
         json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
         json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
@@ -48015,13 +48015,14 @@ pub async fn handle_v1_sumeragi_status(
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let Some(status) = sumeragi::status::v2_status_with_restart_required(restart_required) else {
+    let Some(status) = sumeragi::v2_status::v2_status_with_restart_required(restart_required)
+    else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     Ok(crate::utils::respond_with_format(status, format))
 }
 fn sumeragi_pipeline_execution_status(
-    snapshot: sumeragi::status::PipelineExecutionSnapshot,
+    snapshot: iroha_core::status::PipelineExecutionSnapshot,
 ) -> SumeragiPipelineExecutionStatus {
     SumeragiPipelineExecutionStatus {
         tx_vertices_total: snapshot.tx_vertices_total,
@@ -48073,12 +48074,12 @@ pub async fn handle_v1_sumeragi_diagnostics(
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let snapshot = sumeragi::status_snapshot();
-    let queue = sumeragi::status::tx_queue_backpressure();
+    let snapshot = iroha_core::status::snapshot();
+    let queue = iroha_core::status::tx_queue_backpressure();
     let world = state.world_view();
     let npos = match world.sumeragi_npos_parameters() {
         Some(params) => {
-            let Some(reducer) = sumeragi::status::v2_status() else {
+            let Some(reducer) = sumeragi::v2_status::v2_status() else {
                 return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
             };
             Some(sumeragi_npos_diagnostics(&params, &reducer)?)
@@ -48219,7 +48220,7 @@ pub fn handle_v1_sumeragi_status_sse(
                     .as_ref()
                     .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
                 if let Some(status) =
-                    sumeragi::status::v2_status_with_restart_required(restart_required)
+                    sumeragi::v2_status::v2_status_with_restart_required(restart_required)
                 {
                     match norito::json::to_json(&status) {
                         Ok(body) => {
@@ -62539,7 +62540,7 @@ struct DataspaceSummaryAccumulator {
     portfolio_accounts: u64,
     portfolio_positions: u64,
     asset_definitions: BTreeSet<String>,
-    commitments: Vec<sumeragi::status::DataspaceCommitmentSnapshot>,
+    commitments: Vec<iroha_core::status::DataspaceCommitmentSnapshot>,
 }
 fn upsert_dataspace_summary<'a>(
     summaries: &'a mut BTreeMap<DataSpaceId, DataspaceSummaryAccumulator>,
@@ -62628,7 +62629,7 @@ fn manifest_summary_json(manifest: Option<&SpaceDirectoryManifestRecord>) -> Val
     Value::Object(map)
 }
 fn commitments_summary_json(
-    commitments: &[sumeragi::status::DataspaceCommitmentSnapshot],
+    commitments: &[iroha_core::status::DataspaceCommitmentSnapshot],
 ) -> Value {
     let mut map = Map::new();
     let mut lane_ids = BTreeSet::new();
@@ -62767,7 +62768,7 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
         let bindings = world.uaid_dataspaces().get(&uaid);
         let manifests = world.space_directory_manifests().get(&uaid);
         let portfolio = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
-        let status_snapshot = sumeragi::status_snapshot();
+        let status_snapshot = iroha_core::status::snapshot();
         let mut summaries: BTreeMap<DataSpaceId, DataspaceSummaryAccumulator> = BTreeMap::new();
         if let Some(binding_set) = bindings.as_ref() {
             for (dataspace_id, accounts) in binding_set.iter() {

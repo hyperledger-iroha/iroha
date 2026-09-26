@@ -24,7 +24,7 @@ fn real_timeout_body_recovery_fixture(case: u8) {
         AdapterEffect, AdapterFingerprints, DeferredAdmissionOrdinalSource, SumeragiV2Adapter,
     };
 
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _guard = crate::status::rbc_status_test_guard();
     let fixture = RecoveryFixture::new("timeout-body-retirement", 0x6a);
     let context = fixture.verified.context();
     let body_directory = TempDir::new().expect("timeout body directory");

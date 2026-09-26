@@ -26,7 +26,7 @@ struct TestLockState {
 }
 #[cfg(test)]
 #[derive(Default)]
-struct TestLock {
+pub(crate) struct TestLock {
     state: Mutex<TestLockState>,
     cvar: Condvar,
 }
@@ -55,9 +55,7 @@ impl Drop for TestLockGuard {
 #[cfg(test)]
 static STATUS_TEST_GLOBAL_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
-static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
-#[cfg(test)]
-static MODE_TAGS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
+pub(crate) static RBC_STATUS_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
 static PEER_KEY_POLICY_TEST_LOCK: OnceLock<TestLock> = OnceLock::new();
 #[cfg(test)]
@@ -69,7 +67,7 @@ fn canonical_test_lock(_: &'static OnceLock<TestLock>) -> &'static TestLock {
     STATUS_TEST_GLOBAL_LOCK.get_or_init(TestLock::default)
 }
 #[cfg(test)]
-fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
+pub(crate) fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
     let owner = TestLockOwner::current();
     let lock = canonical_test_lock(lock);
     let mut state = lock
@@ -98,7 +96,7 @@ fn reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> TestLockGuard {
     TestLockGuard { lock, owner }
 }
 #[cfg(test)]
-fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLockGuard> {
+pub(crate) fn try_reentrant_test_guard(lock: &'static OnceLock<TestLock>) -> Option<TestLockGuard> {
     let owner = TestLockOwner::current();
     let lock = canonical_test_lock(lock);
     let mut state = lock
@@ -143,11 +141,6 @@ impl NexusFeeTestLock {
 /// the original owner from releasing the lease.
 pub(crate) fn rbc_status_test_guard() -> TestLockGuard {
     reentrant_test_guard(&RBC_STATUS_TEST_LOCK)
-}
-#[cfg(test)]
-/// Serialize tests that mutate archival mode tags.
-pub(crate) fn mode_tags_test_guard() -> TestLockGuard {
-    reentrant_test_guard(&MODE_TAGS_TEST_LOCK)
 }
 #[cfg(test)]
 pub(crate) fn peer_key_policy_test_guard() -> TestLockGuard {

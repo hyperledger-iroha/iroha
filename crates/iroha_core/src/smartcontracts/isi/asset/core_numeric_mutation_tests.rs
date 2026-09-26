@@ -2760,7 +2760,7 @@ fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
 
 #[test]
 fn prepared_movement_records_exact_delta_under_current_apply_context() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
@@ -2824,7 +2824,7 @@ fn prepared_movement_records_exact_delta_under_current_apply_context() {
 
 #[test]
 fn prepared_movement_preserves_direct_typed_purpose_identity() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
@@ -2861,8 +2861,8 @@ fn prepared_movement_preserves_direct_typed_purpose_identity() {
 
 #[test]
 fn stale_prepared_movement_discards_its_prepared_occurrence() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
@@ -2892,7 +2892,7 @@ fn stale_prepared_movement_discards_its_prepared_occurrence() {
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );
@@ -2900,8 +2900,8 @@ fn stale_prepared_movement_discards_its_prepared_occurrence() {
 
 #[test]
 fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
@@ -2942,7 +2942,7 @@ fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );

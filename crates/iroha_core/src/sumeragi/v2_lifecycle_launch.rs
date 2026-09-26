@@ -1618,7 +1618,7 @@ fn settle_applied_lifecycle_decision_apply_completion(
         unreachable!("borrowed lifecycle Apply result cannot change before acknowledgement")
     };
     let published = applied.into_published();
-    super::super::status::set_v2_status(status);
+    super::super::v2_status::set_v2_status(status);
     Ok(ProductionLifecycleDecisionApplyCompletionV1::Applied(
         published,
     ))

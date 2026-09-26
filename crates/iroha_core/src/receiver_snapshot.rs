@@ -1,5 +1,5 @@
 //! Witness-side proof construction for consensus-authenticated synthetic writes.
-use crate::sumeragi::smt::KvPair;
+use crate::exec_witness::smt::KvPair;
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus::ExecWitness;
 use iroha_data_model::execution_witness::KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1;
@@ -163,7 +163,7 @@ impl<'leaves> PreparedFastpqOrdinarySourceArchive<'_, 'leaves> {
             .into_iter()
             .map(|(key, value)| KvPair::new(key, value))
             .collect::<Vec<_>>();
-        let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+        let ordinary_root = crate::exec_witness::smt::compute_post_state_root(&[], &ordinary);
         let target = KvPair::new(self.target.key.clone(), self.target.value.clone());
         let manifest_siblings = sparse_smt_siblings(&ordinary, &target)?;
         if !verify_fastpq_ordinary_source_statement_manifest_write_v1(
@@ -370,7 +370,7 @@ pub(crate) fn kagemusha_reserve_receipt_witnesses_v1(
     if targets.len() != tagged_write_count {
         return Err("execution witness contains duplicate Kagemusha V1 receipt writes".to_owned());
     }
-    let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+    let ordinary_root = crate::exec_witness::smt::compute_post_state_root(&[], &ordinary);
     let mut proofs = Vec::with_capacity(targets.len());
     for target in targets {
         let receipt: KagemushaReserveReceiptV1 = norito::decode_canonical(&target.value)
@@ -423,7 +423,7 @@ pub(crate) fn validation_fee_policy_witness_proof_v1(
         .into_iter()
         .map(|(key, value)| KvPair::new(key, value))
         .collect::<Vec<_>>();
-    let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+    let ordinary_root = crate::exec_witness::smt::compute_post_state_root(&[], &ordinary);
     let target = ordinary
         .iter()
         .find(|pair| pair.key.as_slice() == VALIDATION_FEE_POLICY_WITNESS_KEY_V1)
@@ -466,7 +466,7 @@ pub(crate) fn parliament_timed_ovn_casting_witness_proof_v1(
         .into_iter()
         .map(|(key, value)| KvPair::new(key, value))
         .collect::<Vec<_>>();
-    let ordinary_root = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+    let ordinary_root = crate::exec_witness::smt::compute_post_state_root(&[], &ordinary);
     let target = ordinary
         .iter()
         .find(|pair| pair.key.as_slice() == PARLIAMENT_TIMED_OVN_CASTING_WITNESS_KEY_V1)
@@ -762,10 +762,10 @@ mod tests {
     #[test]
     fn captured_block_synthetic_write_families_share_one_authenticated_root() {
         use crate::{
+            exec_witness as recorder,
             kura::Kura,
             query::store::LiveQueryStore,
             state::{State, World},
-            sumeragi::witness as recorder,
         };
         use iroha_data_model::{asset::AssetId, block::BlockHeader};
         use iroha_primitives::numeric::Quantity;

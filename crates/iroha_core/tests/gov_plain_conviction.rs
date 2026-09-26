@@ -193,7 +193,7 @@ fn numeric_balance(
 fn fractional_bonds_escrow_exact_deltas_and_reject_nonmonotonic_updates() {
     use iroha_core::state::WorldReadOnly;
     use mv::storage::StorageReadOnly;
-    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let mut state = funded_fractional_state();
     let id = "frozen-fractional";
     let asset = state.gov.voting_asset_id.clone();
@@ -284,7 +284,7 @@ fn closed_plain_result_survives_unlock_rollback_and_policy_changes() {
     use iroha_core::state::{GovernanceReferendumRecord, WorldReadOnly};
     use iroha_data_model::governance::conviction::PlainVotingResultV1;
     use mv::storage::StorageReadOnly;
-    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let mut state = funded_fractional_state();
     let id = "frozen-closed";
     let asset = state.gov.voting_asset_id.clone();

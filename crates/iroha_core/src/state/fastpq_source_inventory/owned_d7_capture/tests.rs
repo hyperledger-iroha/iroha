@@ -4,7 +4,7 @@ use super::super::tests::{
     apply_source, cache_canonical_test_transaction_set, delta, header, state,
 };
 use super::*;
-use crate::sumeragi::witness;
+use crate::exec_witness;
 use iroha_data_model::{
     NetworkId, Registrable,
     block::consensus::ExecWitness,
@@ -63,8 +63,8 @@ fn empty_witness() -> ExecWitness {
 
 #[test]
 fn checked_raw_drain_prepares_final_context_without_publishing_or_inserting_d7() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -88,7 +88,7 @@ fn checked_raw_drain_prepares_final_context_without_publishing_or_inserting_d7()
         .derive_manifest(23_000_000, perm_root, &archive, limits())
         .unwrap();
     let mut prepared = None;
-    let drained = witness::drain_exec_witness_checked(|raw| {
+    let drained = exec_witness::drain_exec_witness_checked(|raw| {
         assert_eq!(raw, &archive);
         prepared = Some(block.prepare_owned_fastpq_d7_capture(raw, limits())?);
         assert_eq!(raw, &archive);
@@ -153,10 +153,10 @@ fn checked_raw_drain_prepares_final_context_without_publishing_or_inserting_d7()
 
 #[test]
 fn empty_and_nontransfer_inventories_keep_complete_entry_counts() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for nontransfer in [false, true] {
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let times = nontransfer.then(|| Hash::new(b"D7 nontransfer time invocation"));
@@ -199,7 +199,7 @@ fn empty_and_nontransfer_inventories_keep_complete_entry_counts() {
 
 #[test]
 fn slot_boundaries_match_existing_template_and_retain_exact_milliseconds() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for timestamp in [
         0,
@@ -208,7 +208,7 @@ fn slot_boundaries_match_existing_template_and_retain_exact_milliseconds() {
         u64::MAX / 1_000_000 + 1,
         u64::MAX,
     ] {
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         block
@@ -248,8 +248,8 @@ fn slot_boundaries_match_existing_template_and_retain_exact_milliseconds() {
 
 #[test]
 fn empty_manifest_does_not_itself_commit_timestamp_or_permission_rows() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -279,8 +279,8 @@ fn empty_manifest_does_not_itself_commit_timestamp_or_permission_rows() {
 
 #[test]
 fn retained_context_rejects_equal_inventory_reallocated_under_another_owner() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -304,10 +304,10 @@ fn retained_context_rejects_equal_inventory_reallocated_under_another_owner() {
 
 #[test]
 fn context_and_preparation_reject_missing_failed_or_stale_owned_source() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for mutation in 0..8 {
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         block
@@ -350,10 +350,10 @@ fn context_and_preparation_reject_missing_failed_or_stale_owned_source() {
 
 #[test]
 fn permission_row_id_value_and_epoch_drift_invalidate_retained_context() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for mutation in 0..3 {
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let original = role("d7_role", "d7_permission", 4);
@@ -392,8 +392,8 @@ fn permission_row_id_value_and_epoch_drift_invalidate_retained_context() {
 
 #[test]
 fn unrelated_header_fields_and_later_replay_bookkeeping_do_not_rewrite_d7_inputs() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -420,10 +420,10 @@ fn unrelated_header_fields_and_later_replay_bookkeeping_do_not_rewrite_d7_inputs
 
 #[test]
 fn late_applied_occurrences_reject_even_when_their_archive_is_drained() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for same_key in [false, true] {
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let source = Hash::new(b"D7 original occurrence");
@@ -450,8 +450,8 @@ fn late_applied_occurrences_reject_even_when_their_archive_is_drained() {
 
 #[test]
 fn rolled_back_occurrence_and_empty_apply_preserve_prepared_context() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -462,7 +462,7 @@ fn rolled_back_occurrence_and_empty_apply_preserve_prepared_context() {
         .unwrap()
         .into_parts();
     {
-        let overlay = witness::begin_exec_witness_overlay();
+        let overlay = exec_witness::begin_exec_witness_overlay();
         let mut transaction = block.transaction();
         transaction.tx_call_hash = Some(source);
         transaction.record_test_transfer_transcripts(&ALICE_ID, source, vec![delta()]);
@@ -480,8 +480,8 @@ fn rolled_back_occurrence_and_empty_apply_preserve_prepared_context() {
 
 #[test]
 fn changed_raw_public_content_keys_and_occurrence_count_fail_without_latching() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -522,7 +522,7 @@ fn changed_raw_public_content_keys_and_occurrence_count_fail_without_latching() 
             .prepare_owned_fastpq_d7_capture(&original, limits())
             .is_ok()
     );
-    witness::drain_exec_witness_checked(|raw| {
+    exec_witness::drain_exec_witness_checked(|raw| {
         assert_eq!(
             raw, &original,
             "helper calls leave the active recorder unchanged"
@@ -534,8 +534,8 @@ fn changed_raw_public_content_keys_and_occurrence_count_fail_without_latching() 
 
 #[test]
 fn every_explicit_construction_cap_is_enforced_without_partial_publication() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -569,8 +569,8 @@ fn every_explicit_construction_cap_is_enforced_without_partial_publication() {
 
 #[test]
 fn changed_private_paths_are_bounded_but_do_not_change_prepared_public_leaves() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
@@ -613,8 +613,8 @@ fn changed_private_paths_are_bounded_but_do_not_change_prepared_public_leaves() 
 
 #[test]
 fn full_domain_quantity_preparation_uses_the_strict_source_producer() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);

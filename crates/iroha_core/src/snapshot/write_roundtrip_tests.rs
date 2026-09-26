@@ -246,7 +246,7 @@ async fn normal_snapshot_restore_rejects_overdue_pending_consensus_evidence() {
     }
     seed_snapshot_genesis_resolver_checkpoint(&state);
     let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
-    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
+    let evidence_key = crate::sumeragi::v2_evidence::evidence_key(&evidence);
     {
         let mut records = state.world.consensus_evidence.block();
         records.insert(

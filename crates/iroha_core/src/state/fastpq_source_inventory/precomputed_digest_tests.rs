@@ -39,9 +39,9 @@ fn precomputed_validation_preserves_values_and_canonical_layout_for_valid_inputs
 
 #[test]
 fn invalid_supplied_digest_is_preserved_and_failure_latches_before_publication() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
-    crate::sumeragi::witness::start_block();
+    crate::exec_witness::start_block();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let bad_hash = Hash::new(b"invalid supplied digest");
@@ -95,9 +95,9 @@ fn invalid_supplied_digest_is_preserved_and_failure_latches_before_publication()
 
 #[test]
 fn supplied_valid_and_missing_digests_seal_while_multi_delta_none_stays_unchanged() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
-    crate::sumeragi::witness::start_block();
+    crate::exec_witness::start_block();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let supplied_hash = Hash::new(b"valid supplied digest");
@@ -144,9 +144,9 @@ fn supplied_valid_and_missing_digests_seal_while_multi_delta_none_stays_unchange
 
 #[test]
 fn shape_failure_precedes_precomputed_digest_validation() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
-    crate::sumeragi::witness::start_block();
+    crate::exec_witness::start_block();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let hash = Hash::new(b"shape wins over invalid supplied digest");
@@ -165,11 +165,11 @@ fn shape_failure_precedes_precomputed_digest_validation() {
 
 #[test]
 fn missing_or_zero_wire_commitment_latches_before_any_digest_finalization() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let state = state();
     for invalid_commitment in [None, Some([0; 32])] {
         for pending_entrypoint in [false, true] {
-            crate::sumeragi::witness::start_block();
+            crate::exec_witness::start_block();
             let mut block = state.block(header());
             let hash = Hash::new(b"digest must remain absent without canonical wire authority");
             apply_source(&mut block, hash, false, None);
@@ -205,7 +205,7 @@ fn missing_or_zero_wire_commitment_latches_before_any_digest_finalization() {
             assert_eq!(block.fastpq_transcripts, before);
             assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
             assert_eq!(block.capture_exec_witness(), Err(error));
-            let _ = crate::sumeragi::witness::drain_exec_witness();
+            let _ = crate::exec_witness::drain_exec_witness();
         }
     }
 }

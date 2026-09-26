@@ -38,7 +38,7 @@ fn delta() -> TransferDeltaTranscript {
 
 #[test]
 fn preparation_finalizes_exact_transcript_without_staging_and_moves_its_storage() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -88,8 +88,8 @@ fn preparation_finalizes_exact_transcript_without_staging_and_moves_its_storage(
 
 #[test]
 fn successful_callback_stages_one_exact_occurrence_after_the_movement() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -112,7 +112,7 @@ fn successful_callback_stages_one_exact_occurrence_after_the_movement() {
     tx.apply();
     assert_eq!(block.fastpq_transcripts[&hash], vec![expected.clone()]);
     assert_eq!(block.captured_fastpq_transcript_sources().unwrap().len(), 1);
-    let witness = crate::sumeragi::witness::drain_exec_witness();
+    let witness = crate::exec_witness::drain_exec_witness();
     assert_eq!(witness.fastpq_transcripts.len(), 1);
     assert_eq!(witness.fastpq_transcripts[0].entry_hash, hash);
     assert_eq!(witness.fastpq_transcripts[0].transcripts, vec![expected]);
@@ -120,8 +120,8 @@ fn successful_callback_stages_one_exact_occurrence_after_the_movement() {
 
 #[test]
 fn failed_callback_drops_prepared_transcript_and_does_not_latch_capture_error() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -149,7 +149,7 @@ fn failed_callback_drops_prepared_transcript_and_does_not_latch_capture_error() 
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );
@@ -157,7 +157,7 @@ fn failed_callback_drops_prepared_transcript_and_does_not_latch_capture_error() 
 
 #[test]
 fn successful_callback_preserves_sticky_capture_error_and_transcript_recording() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -182,7 +182,7 @@ fn successful_callback_preserves_sticky_capture_error_and_transcript_recording()
 
 #[test]
 fn empty_occurrence_keeps_legacy_no_identity_no_op_and_runs_callback() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -210,7 +210,7 @@ fn empty_occurrence_keeps_legacy_no_identity_no_op_and_runs_callback() {
 
 #[test]
 fn immediate_multi_delta_recording_preserves_one_occurrence_and_absent_digest() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -240,7 +240,7 @@ fn immediate_multi_delta_recording_preserves_one_occurrence_and_absent_digest() 
 
 #[test]
 fn discarded_successful_movement_keeps_block_capture_and_transcripts_empty() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     {
@@ -262,7 +262,7 @@ fn discarded_successful_movement_keeps_block_capture_and_transcripts_empty() {
 
 #[test]
 fn incremental_singleton_matches_the_fixed_prepared_occurrence() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -294,7 +294,7 @@ fn incremental_singleton_matches_the_fixed_prepared_occurrence() {
 
 #[test]
 fn incremental_empty_discards_initial_capture_error_and_multi_preserves_one_group() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -334,8 +334,8 @@ fn incremental_empty_discards_initial_capture_error_and_multi_preserves_one_grou
 
 #[test]
 fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -373,7 +373,7 @@ fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );
@@ -381,7 +381,7 @@ fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
 
 #[test]
 fn incremental_preparation_limit_rejects_before_the_next_movement() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -413,7 +413,7 @@ fn incremental_preparation_limit_rejects_before_the_next_movement() {
 
 #[test]
 fn incremental_ignored_preparation_error_cannot_publish_a_partial_occurrence() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -447,7 +447,7 @@ fn incremental_preparation_failure_rolls_back_real_transfers_with_the_entry() {
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::isi::Transfer;
 
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
     let definition_id = delta().asset_definition;
     let source = AssetId::new(definition_id.clone(), ALICE_ID.clone());

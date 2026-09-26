@@ -16,12 +16,8 @@ use crate::{
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::{Queue, QueueLimits},
     state::{State, WorldReadOnly},
-    sumeragi::{
-        message::BlockMessage,
-        status::{
-            self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind,
-        },
-    },
+    status::{self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind},
+    sumeragi::message::BlockMessage,
 };
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
@@ -6579,8 +6575,8 @@ impl Actor {
             let world = self.state.world_view();
             !world.peers().iter().any(|peer| peer == &self.local_peer_id)
         };
-        if crate::sumeragi::status::local_peer_removed() != local_removed {
-            crate::sumeragi::status::set_local_removed_from_world(local_removed);
+        if crate::status::local_peer_removed() != local_removed {
+            crate::status::set_local_removed_from_world(local_removed);
         }
         let mut peer_count;
         let mut current_online;
@@ -7140,7 +7136,7 @@ pub fn start(
 /// Project the frozen reducer-owned mode, never a configuration candidate or
 /// the default of an unrelated metrics registry. No owner means unknown mode.
 fn refresh_sumeragi_mode(metrics: &Metrics) {
-    let mode_tag = crate::sumeragi::status::v2_status()
+    let mode_tag = crate::sumeragi::v2_status::v2_status()
         .map(|status| status.height_context.mode.tag())
         .unwrap_or_default();
     metrics.set_sumeragi_mode_tag(mode_tag);
@@ -9813,17 +9809,17 @@ mod tests {
     }
     #[test]
     fn public_mode_tracks_frozen_reducer_context_and_clears_without_owner() {
-        use crate::sumeragi::status;
+        use crate::{status, sumeragi::v2_status};
         use iroha_data_model::block::consensus_v2 as wire;
         let _guard = status::rbc_status_test_guard();
         struct ClearStatusOnDrop;
         impl Drop for ClearStatusOnDrop {
             fn drop(&mut self) {
-                status::clear_v2_status();
+                v2_status::clear_v2_status();
             }
         }
         let _cleanup = ClearStatusOnDrop;
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
         let metrics = Metrics::default();
         let exported_mode = || {
             metrics
@@ -9869,11 +9865,11 @@ mod tests {
         };
         for mode in [wire::ConsensusMode::Npos, wire::ConsensusMode::Permissioned] {
             snapshot.height_context.mode = mode;
-            status::set_v2_status(snapshot.clone());
+            v2_status::set_v2_status(snapshot.clone());
             refresh_sumeragi_mode(&metrics);
             assert_eq!(exported_mode(), mode.tag());
         }
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
         refresh_sumeragi_mode(&metrics);
         assert_eq!(
             exported_mode(),
@@ -11924,7 +11920,7 @@ mod tests {
     }
     #[test]
     fn settlement_finality_updates_metrics_and_status() {
-        crate::sumeragi::status::settlement_status_reset_for_tests();
+        crate::status::settlement_status_reset_for_tests();
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let dvp_id: SettlementId = "trade-1".parse().expect("settlement id");
@@ -11975,7 +11971,7 @@ mod tests {
                 .get_sample_count(),
             1
         );
-        let snapshot = crate::sumeragi::status::settlement_snapshot();
+        let snapshot = crate::status::settlement_snapshot();
         assert_eq!(snapshot.dvp.success_total, 1);
         let dvp_event = snapshot.dvp.last_event.expect("dvp last event");
         assert_eq!(dvp_event.final_state_label, "delivery_only");

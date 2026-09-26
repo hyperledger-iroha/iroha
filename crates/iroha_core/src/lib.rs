@@ -73,8 +73,12 @@ pub mod block;
 pub mod bridge;
 /// Lane compliance policy evaluation.
 pub mod compliance;
+/// Consensus-neutral key predicates shared by validation paths.
+pub(crate) mod crypto_util;
 /// Data availability orchestration and ingest helpers.
 pub mod da;
+/// Guard-owned execution witness recorder, its sparse Merkle tree and state-root projections.
+pub mod exec_witness;
 /// Native transparent execution proofs and bounded deterministic race relations.
 pub mod execution_proofs;
 /// Runtime executor integration and helpers.
@@ -165,6 +169,8 @@ pub mod sns;
 pub mod soracloud_runtime;
 /// In-memory state and view types.
 pub mod state;
+/// Process-local, non-consensus operator diagnostics (Nexus economics, settlement, lanes, queue).
+pub mod status;
 /// Norito Streaming handshake/state helpers.
 pub mod streaming;
 /// Consensus protocol (Sumeragi).

@@ -53,7 +53,7 @@ impl StateTransaction<'_, '_> {
             return;
         };
         self.pending_fastpq_source_captures.record(capture);
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        crate::exec_witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
     }
 

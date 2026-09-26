@@ -5,7 +5,7 @@ mod tests {
     use http::StatusCode;
     use http_body_util::BodyExt;
     use iroha_core::{
-        kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::status,
+        kura::Kura, query::store::LiveQueryStore, state::World, sumeragi::v2_status,
         telemetry::StateTelemetry,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf};
@@ -348,7 +348,7 @@ mod tests {
         let _guard = SUMERAGI_V2_STATUS_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
         let state = std::sync::Arc::new(CoreState::new_for_testing(
             iroha_core::state::World::default(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -398,7 +398,7 @@ mod tests {
             last_commit_qc: None,
             liveness: Default::default(),
         };
-        status::set_v2_status(expected.clone());
+        v2_status::set_v2_status(expected.clone());
         let state = std::sync::Arc::new(CoreState::new_for_testing(
             iroha_core::state::World::default(),
             iroha_core::kura::Kura::blank_kura_for_testing(),
@@ -421,7 +421,7 @@ mod tests {
         )
         .await
         .expect("restart-required status handler");
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
         assert_eq!(response.status(), StatusCode::OK);
         let body = response
             .into_body()
@@ -452,7 +452,7 @@ mod tests {
             restart_decoded.liveness.no_progress_age_ms;
         assert_eq!(restart_decoded, expected_at_restart_read);
         assert_eq!(
-            status::v2_status(),
+            v2_status::v2_status(),
             None,
             "test cleanup must clear the slot"
         );
@@ -841,7 +841,7 @@ mod tests {
             body::Body,
             http::{Request, StatusCode},
         };
-        use iroha_core::sumeragi::status;
+        use iroha_core::sumeragi::v2_status;
         use iroha_crypto::{Algorithm, Hash, KeyPair};
         use iroha_data_model::{
             block::consensus_v2::{
@@ -870,14 +870,14 @@ mod tests {
         impl StatusScope {
             fn new() -> Self {
                 let lock = SUMERAGI_V2_STATUS_TEST_LOCK.lock().unwrap();
-                status::clear_v2_status();
+                v2_status::clear_v2_status();
                 Self { _lock: lock }
             }
         }
 
         impl Drop for StatusScope {
             fn drop(&mut self) {
-                status::clear_v2_status();
+                v2_status::clear_v2_status();
             }
         }
 
@@ -1035,7 +1035,7 @@ mod tests {
             let (mut app, _, artifact) =
                 crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(true);
             let snapshot = configure_signer_and_status(&mut app, &artifact);
-            status::set_v2_status(snapshot.clone());
+            v2_status::set_v2_status(snapshot.clone());
             let challenge = [0x37; 32];
             let response = router(&app).oneshot(request(1, challenge)).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
@@ -1098,13 +1098,13 @@ mod tests {
             startup
                 .validate()
                 .expect("initialized pre-genesis reducer status");
-            status::set_v2_status(startup.clone());
+            v2_status::set_v2_status(startup.clone());
             assert_failure(&app, 1, [0x42; 32], Reason::GenesisUncommitted).await;
 
-            status::set_v2_status(committed);
+            v2_status::set_v2_status(committed);
             assert_failure(&app, 1, [0x43; 32], Reason::ConflictingState).await;
             startup.restart_required = true;
-            status::set_v2_status(startup);
+            v2_status::set_v2_status(startup);
             assert_failure(&app, 1, [0x44; 32], Reason::RestartRequired).await;
         }
 
@@ -1113,7 +1113,7 @@ mod tests {
             let _scope = StatusScope::new();
             let (mut app, _, artifact) =
                 crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(false);
-            status::set_v2_status(configure_signer_and_status(&mut app, &artifact));
+            v2_status::set_v2_status(configure_signer_and_status(&mut app, &artifact));
             let sidecar = app.kura.v2_finality_artifact_path_for_testing(1);
             assert!(!sidecar.exists());
             assert_failure(&app, 1, [0x51; 32], Reason::FinalityUnavailable).await;
