@@ -998,12 +998,15 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         ("../../configs/soranexus/taira/genesis.template.json", 5),
     ] {
         let manifest = super::super::GenesisSourceTemplate::from_path(root.join(path))
-            .unwrap()
+            .unwrap_or_else(|error| panic!("{path}: {error:?}"))
             .materialize(
                 super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
             )
-            .unwrap();
-        let sources = manifest.parse().unwrap().len();
+            .unwrap_or_else(|error| panic!("{path}: {error:?}"));
+        let sources = manifest
+            .parse()
+            .unwrap_or_else(|error| panic!("{path}: {error:?}"))
+            .len();
         assert_eq!(sources, expected, "{path}");
         assert!(sources <= capacity as usize, "{path}");
     }
@@ -1027,14 +1030,15 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
     // Match the canonical builder group owners: Kagami's optional synthetic/XOR
     // groups, or four-validator NetworkBuilder base/topology/staking/Soracloud
     // groups with the explicit registry parameter and optional committee group.
-    // Caller-added groups are intentionally not treated as a universal bound.
+    // More groups than the bootstrap capacity are packed into adjacent transactions.
     for (groups, registry, executor, expected) in [
         (2, false, false, 5),
         (4, false, true, 8),
         (7, true, false, 9),
         (8, true, false, 10),
         (8, true, true, 11),
-        (9, true, true, 12),
+        (9, true, true, 11),
+        (20, true, true, 11),
     ] {
         let chain = ChainId::from("00000000-0000-0000-0000-000000000001");
         let builder = if executor {
@@ -1068,7 +1072,7 @@ fn generated_genesis_group_shapes_have_finite_source_capacity() {
         }
         let sources = builder.build_raw().unwrap().parse().unwrap().len();
         assert_eq!(sources, expected);
-        assert_eq!(sources <= capacity as usize, expected <= 11);
+        assert!(sources <= capacity as usize);
     }
     assert_eq!(capacity, FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS);
 }

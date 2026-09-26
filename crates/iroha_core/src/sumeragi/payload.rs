@@ -163,16 +163,25 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
 }
 
 /// Select queued transactions for the block after `parent` (FIFO, peeked, never removed),
-/// within `max_bytes` of transaction bytes and the on-chain transaction cap. Transactions the
-/// router cannot place and `QueuePlanSynced` inputs are skipped.
+/// within `max_bytes` of transaction bytes, the on-chain transaction cap and the FASTPQ source
+/// policy's Network input cap. Transactions the router cannot place and `QueuePlanSynced`
+/// inputs are skipped.
 pub fn select(
     state: &State,
     queue: &std::sync::Arc<Queue>,
     max_bytes: usize,
 ) -> Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> {
     let view = state.view();
-    let max_transactions = usize::try_from(view.world().parameters().block().max_transactions().get())
-        .unwrap_or(usize::MAX);
+    let block_parameters = view.world().parameters().block();
+    // The next block executes under the FASTPQ source policy frozen at its start (the
+    // committed one): proposal packing honours its Network input cap, as validation does.
+    let fastpq_inputs = block_parameters
+        .fastpq_source()
+        .maximum_network_inputs(block_parameters.execution_output())
+        .map_or(0, |inputs| usize::try_from(inputs).unwrap_or(usize::MAX));
+    let max_transactions = usize::try_from(block_parameters.max_transactions().get())
+        .unwrap_or(usize::MAX)
+        .min(fastpq_inputs);
     let Some((pending, lease)) = queue.bounded_pending_snapshot(&view, MAX_QUEUE_SCAN) else {
         return Vec::new();
     };
