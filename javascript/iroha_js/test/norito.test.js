@@ -1873,6 +1873,25 @@ test("contract-call propose Norito encoder requires alias and object payload", (
   );
 });
 
+baseTest("contract-call approve Norito encoder requires the exact object payload", () => {
+  const request = {
+    multisig_account_alias: "treasury@north.test",
+    signer_account_id: MULTISIG_SIGNER_ID,
+    instructions_hash: "aa".repeat(32),
+    contract_alias: "apps_review::universal",
+    entrypoint: "execute",
+    payload: { probe: true },
+    fee_payment: authorityFeePayment(10_000),
+  };
+  assert.ok(noritoEncodeMultisigContractCallApproveRequest(request, 753).length > 0);
+  for (const payload of [null, [], "{}", 7]) {
+    assert.throws(
+      () => noritoEncodeMultisigContractCallApproveRequest({ ...request, payload }, 753),
+      /payload must be the exact contract object/,
+    );
+  }
+});
+
 test("native multisig proposal DTO rejects malformed validation-fee metadata", () => {
   const request = {
     multisig_account_alias: "cbdc@hbl.sbp",

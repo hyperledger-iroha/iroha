@@ -10,8 +10,8 @@ import org.hyperledger.iroha.android.model.instructions.RegisterZkAssetInstructi
 /** Thin JVM/JNI wrapper around {@code connect_norito_bridge} signing helpers. */
 public final class NativeSignerBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 23;
-  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 5;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 24;
+  public static final int REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION = 7;
   private static final int HASH_BYTES = 32;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
 
@@ -123,7 +123,6 @@ public final class NativeSignerBridge {
     final byte[] authorityBytes = textBytes(authority, "authority");
     final byte[] assetBytes = textBytes(instruction.asset(), "asset");
     final byte[] unshieldBytes = optionalTextBytes(instruction.unshieldVerifyingKey());
-    final byte[] shieldBytes = optionalTextBytes(instruction.shieldVerifyingKey());
     final byte[] feePaymentJson = feePaymentJson(feePayment);
     final long ttl = ttlValue(ttlMs);
     final boolean hasTtl = ttlMs != null;
@@ -140,8 +139,6 @@ public final class NativeSignerBridge {
             assetBytes,
             unshieldBytes,
             instruction.unshieldVerifyingKey() != null,
-            shieldBytes,
-            instruction.shieldVerifyingKey() != null,
             key,
             feePaymentJson),
         "encodeRegisterZkAssetSignedTransaction");
@@ -256,8 +253,6 @@ public final class NativeSignerBridge {
       byte[] asset,
       byte[] unshieldVerifyingKey,
       boolean unshieldVerifyingKeyPresent,
-      byte[] shieldVerifyingKey,
-      boolean shieldVerifyingKeyPresent,
       byte[] privateKey,
       byte[] feePaymentJson);
 

@@ -68,7 +68,10 @@ fn fixture(queries: &[usize]) -> DeepProof {
                     .iter()
                     .map(|&index| FriGroup {
                         index: index as u32,
-                        values: (0..ARITIES[round]).map(|slot| fp4(index + slot)).collect(),
+                        values: FriValues::new(
+                            (0..ARITIES[round]).map(|slot| fp4(index + slot)).collect(),
+                        )
+                        .unwrap(),
                     })
                     .collect(),
                 siblings: vec![digest; plan.work().siblings],
@@ -149,7 +152,7 @@ fn exact_linked_upper_frontier_encodes_below_512k_and_roundtrips() {
             .all(|indices| indices.len() == QUERY_COUNT)
     );
     let bytes = norito::encode_canonical(&proof).unwrap();
-    assert_eq!(bytes.len(), 506_351);
+    assert_eq!(bytes.len(), 500_783);
     assert_eq!(bytes.len(), MAX_FRAME_BYTES);
     assert_eq!(bytes.len(), maximum_frame_bytes());
     assert_eq!(
@@ -157,7 +160,7 @@ fn exact_linked_upper_frontier_encodes_below_512k_and_roundtrips() {
         bytes.len()
     );
     assert!(bytes.len() < PROOF_BYTE_TARGET);
-    assert_eq!(PROOF_BYTE_TARGET - bytes.len(), 17_937);
+    assert_eq!(PROOF_BYTE_TARGET - bytes.len(), 23_505);
     for offset in [0, 1, 7] {
         let mut storage = vec![0; offset];
         storage.extend(&bytes);
@@ -300,9 +303,7 @@ fn every_nested_sequence_count_bomb_is_rejected_with_valid_framing() {
     let groups = nested_field(&original, round.clone(), 0);
     sequences.push(groups.clone());
     sequences.push(nested_field(&original, round, 1));
-    let group = element(&original, groups, 0);
-    sequences.push(nested_field(&original, group, 1));
-    assert_eq!(sequences.len(), 13);
+    assert_eq!(sequences.len(), 12);
     for sequence in sequences {
         for count in [u64::MAX, MAX_SEQUENCE_ELEMENTS as u64 + 1] {
             let mut changed = original.clone();
@@ -373,7 +374,9 @@ fn fixed_dimensions_sorted_unique_positions_and_minimal_frontiers_are_mandatory(
                 1 => changed.rounds[round].groups.swap(0, 1),
                 2 => changed.rounds[round].groups[0].index = GROUP_LEAVES[round] as u32,
                 3 => {
-                    changed.rounds[round].groups[0].values.pop();
+                    let wrong_arity = if ARITIES[round] == 4 { 8 } else { 4 };
+                    changed.rounds[round].groups[0].values =
+                        FriValues::new(vec![Fp4::ZERO; wrong_arity]).unwrap();
                 }
                 4 => {
                     changed.rounds[round].siblings.pop();
@@ -413,7 +416,9 @@ fn each_scalar_family_and_digest_lane_rejects_noncanonical_wire_values() {
     scalars.push(element(&original, field(&original, 7), 0));
     let round = element(&original, field(&original, 8), 0);
     let group = element(&original, nested_field(&original, round.clone(), 0), 0);
-    scalars.push(element(&original, nested_field(&original, group, 1), 0));
+    let mut fiber = nested_field(&original, group, 1);
+    fiber.start += 1; // The fixed fiber's one-byte arity tag is not a field limb.
+    scalars.push(fiber);
     scalars.push(element(&original, nested_field(&original, round, 1), 0));
     scalars.push(element(&original, field(&original, 9), 0));
     for span in scalars {

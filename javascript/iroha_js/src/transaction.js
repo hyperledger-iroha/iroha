@@ -11,7 +11,11 @@ import {
   IVM_PROGRAM_HEADER_LENGTH,
 } from "./ivmArtifact.js";
 import { ToriiClient } from "./toriiClient.js";
-import { _createNoritoInstructionApi } from "./norito.js";
+import {
+  _createNoritoInstructionApi,
+  exactFinalizeElectionTallyJson,
+  exactPublicPlainBallotJson,
+} from "./norito.js";
 import { networkIdBytes } from "./networkId.js";
 import {
   defaultNativeRuntime,
@@ -57,6 +61,7 @@ import {
   buildProposeSccpRouteGovernanceInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
+  buildUpdatePlainConvictionInstruction,
   buildRegisterZkAssetInstruction,
   buildScheduleConfidentialPolicyTransitionInstruction,
   buildCancelConfidentialPolicyTransitionInstruction,
@@ -208,7 +213,9 @@ function serializeInstructionPayloads(instructions, context) {
       return instruction;
     }
     if (instruction && typeof instruction === "object") {
-      return JSON.stringify(instruction);
+      return exactFinalizeElectionTallyJson(instruction)
+        ?? exactPublicPlainBallotJson(instruction)
+        ?? JSON.stringify(instruction);
     }
     throw new TypeError(
       `${context ?? "instructions"}[${index}] must be an object or JSON string`,
@@ -258,7 +265,10 @@ function serializeExecutableBatchEntries(entries) {
           `entries[${index}].instruction must be an object or JSON string`,
         );
       }
-      return JSON.stringify({ kind: "instruction", instruction });
+      const instructionJson = typeof instruction === "string"
+        ? JSON.stringify(instruction)
+        : serializeInstructionPayloads([instruction], `entries[${index}].instruction`)[0];
+      return `{"kind":"instruction","instruction":${instructionJson}}`;
     }
     if (entry.kind !== "contractCall") {
       throw new TypeError(
@@ -4094,6 +4104,38 @@ export function buildCastPlainBallotTransaction(input) {
   });
 }
 
+/**
+ * Build a transaction containing one choice-free `UpdatePlainConviction` instruction.
+ */
+export function buildUpdatePlainConvictionTransaction(input) {
+  transactionNetworkIdBytes(input, "input");
+  const {
+    networkId,
+    authority,
+    feePayment,
+    update,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+    privateKey,
+    privateKeyAlgorithm,
+  } = input;
+  const instruction = buildUpdatePlainConvictionInstruction(update);
+  return buildTransaction.call(this, {
+    networkId,
+    authority,
+    feePayment,
+    instructions: [instruction],
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+    privateKey,
+    privateKeyAlgorithm,
+  });
+}
+
 export function buildRegisterZkAssetTransaction(input) {
   transactionNetworkIdBytes(input, "input");
   const {
@@ -4531,6 +4573,7 @@ export function _createTransactionApi(nativeRuntime) {
     ),
     buildCastZkBallotTransaction: bind(buildCastZkBallotTransaction),
     buildCastPlainBallotTransaction: bind(buildCastPlainBallotTransaction),
+    buildUpdatePlainConvictionTransaction: bind(buildUpdatePlainConvictionTransaction),
     buildRegisterZkAssetTransaction: bind(buildRegisterZkAssetTransaction),
     buildScheduleConfidentialPolicyTransitionTransaction: bind(
       buildScheduleConfidentialPolicyTransitionTransaction,

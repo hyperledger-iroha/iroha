@@ -5,7 +5,7 @@ use iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCompleted
 pub(super) fn prepare(
     instruction: &MutateSorafsFinalPromotionAuthority,
     authority: &AccountId,
-    tx: &StateTransaction<'_, '_>,
+    tx: &mut StateTransaction<'_, '_>,
     control: &NativeControl<ReceiptPurpose>,
     head: FinalPromotionOperationHeadV1,
     request_digest: [u8; 32],
@@ -27,6 +27,7 @@ pub(super) fn prepare(
     )?;
     match &instruction.action {
         Action::Reserve(request) => {
+            let origin = direct_operation_source(tx, authority, &instruction.deployment_id)?;
             if request.intent.action != SignerOperationActionV1::Sign
                 || request.intent.digest().is_err()
             {
@@ -53,6 +54,7 @@ pub(super) fn prepare(
                     && existing.index.head == head
                     && existing.record.request_digest == request_digest
                     && existing.record.reserved.authority == *authority
+                    && existing.record.reserved_origin == origin
                     && execution.recorded_at_unix_ms
                         < existing.record.reservation.expires_at_unix_ms
                 {
@@ -101,6 +103,7 @@ pub(super) fn prepare(
                 predecessor_digest: head.digest,
                 request_digest,
                 execution: execution.clone(),
+                execution_origin: Some(origin),
                 intent: request.intent,
                 custody: request.custody,
                 reservation: SignerOperationReservationV1 {
@@ -109,6 +112,7 @@ pub(super) fn prepare(
                     expires_at_unix_ms,
                 },
                 reserved: execution,
+                reserved_origin: origin,
                 outcome: FinalPromotionOperationOutcomeV1::Reserved,
             };
             stage_operation(
@@ -120,6 +124,7 @@ pub(super) fn prepare(
             )
         }
         Action::Complete(request) => {
+            let origin = direct_operation_source(tx, authority, &instruction.deployment_id)?;
             let active = read_operation_slot(
                 tx.world(),
                 &instruction.deployment_id,
@@ -133,6 +138,7 @@ pub(super) fn prepare(
                 FinalPromotionOperationOutcomeV1::Completed(_)
             ) && active.record.request_digest == request_digest
                 && active.record.reserved.authority == *authority
+                && active.record.execution_origin == Some(origin)
             {
                 return Ok(());
             }
@@ -158,6 +164,7 @@ pub(super) fn prepare(
             record.predecessor_digest = head.digest;
             record.request_digest = request_digest;
             record.execution = execution;
+            record.execution_origin = Some(origin);
             record.outcome =
                 FinalPromotionOperationOutcomeV1::Completed(FinalPromotionCompletedV1 {
                     commitment: request.commitment,
@@ -190,6 +197,7 @@ pub(super) fn prepare(
             record.predecessor_digest = head.digest;
             record.request_digest = request_digest;
             record.execution = execution;
+            record.execution_origin = None;
             record.outcome = FinalPromotionOperationOutcomeV1::Expired;
             stage_operation(tx, head, Some(&active.record), record, writes)
         }

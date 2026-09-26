@@ -15,7 +15,7 @@ from pathlib import Path
 import re
 import stat
 
-import check_native_sdk_abi23_artifact as native
+import check_native_sdk_artifact as native
 from sorafs_javascript_archive import ArchiveError, _require
 from sorafs_javascript_child_tools import CHILD_TOOL_SHA256
 from sorafs_javascript_dependencies import _json

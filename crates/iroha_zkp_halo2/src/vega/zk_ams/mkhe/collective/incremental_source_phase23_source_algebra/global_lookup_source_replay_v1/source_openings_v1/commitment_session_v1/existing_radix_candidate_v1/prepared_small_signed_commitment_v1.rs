@@ -75,6 +75,25 @@ pub(in super::super::super::super::super) struct RnsNativeStoredPlaneReplayV1<R>
 }
 
 impl<R: crate::vega::MaskedRelaxedRandomSourceV1> RnsNativeStoredPlaneReplayV1<R> {
+    /// Borrow only the original ledger retained under this source/inventory.
+    pub(in super::super::super::super::super) fn original_budget_mut_v1(
+        &mut self,
+    ) -> Result<
+        &mut crate::vega::zk_ams::mkhe::rns_native_resource_budget::RnsNativeProofResourceBudgetV1,
+        ZkAmsMkheErrorV1,
+    > {
+        Ok(&mut self
+            .live
+            .continuation
+            .difference
+            .top
+            .session
+            .live
+            .as_mut()
+            .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?
+            .proof_resources)
+    }
+
     pub(in super::super::super::super::super) fn admit_next_q_mask_s_block_v1(
         &mut self,
         table: &RnsNativeU15MsmTableV1,

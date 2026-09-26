@@ -83,8 +83,8 @@ impl VoteGetTallyRequest {
 pub struct VoteGetTallyResponse {
     /// Whether the election has been finalized.
     pub finalized: bool,
-    /// Candidate totals in canonical candidate order.
-    pub tally: Vec<u64>,
+    /// Exact smallest-unit conviction weights in canonical candidate order.
+    pub tally: Vec<u128>,
 }
 /// Single VRF verification request.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
@@ -153,7 +153,18 @@ pub struct VrfEpochSeedResponse {
 }
 #[cfg(test)]
 mod tests {
-    use super::VoteGetTallyRequest;
+    use super::{VoteGetTallyRequest, VoteGetTallyResponse};
+    #[test]
+    fn vote_tally_response_roundtrips_weight_above_u64_max() {
+        let response = VoteGetTallyResponse {
+            finalized: true,
+            tally: vec![u128::from(u64::MAX) + 1, 0],
+        };
+        let encoded = norito::encode_canonical(&response).expect("encode V1 response");
+        let decoded: VoteGetTallyResponse =
+            norito::decode_canonical(&encoded).expect("decode exact V1 response");
+        assert_eq!(decoded, response);
+    }
     #[test]
     fn vote_tally_request_uses_canonical_governance_selector_v1() {
         for election_id in ["election-1", "A9_selector~with.dots"] {

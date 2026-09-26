@@ -1697,3 +1697,96 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
     ));
     assert!(state.is_pristine());
 }
+#[test]
+fn candidate_history_wait_accepts_only_pre_signing_inner_refusal() {
+    let (context, _) = context();
+    let owner = proposal_owner(
+        &context,
+        EventTag::new(context.height, 3, Generation::new(17)),
+        None,
+        None,
+    );
+    let notification = concread::release::ReleaseNotification::default();
+    let post_signing = super::super::v2_candidate::CandidateError::BuiltWithoutProposalWork;
+    let pre_signing = super::super::v2_candidate::CandidateError::LocalStateAdmission(
+        crate::state::StateBlockStartError::History(
+            crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+        ),
+    );
+    let wake = std::task::Waker::noop();
+    let mut state = LocalProposalState::default();
+    assert!(!state.defer_pre_signing_candidate_history_admission(owner, &post_signing, wake));
+    assert!(state.is_pristine());
+    assert!(state.defer_pre_signing_candidate_history_admission(owner, &pre_signing, wake));
+    assert!(state.history_admission_pending(owner, wake));
+    assert!(state.attempted.is_none());
+    drop(notification.guard(()));
+    assert!(!state.history_admission_pending(owner, wake));
+    assert!(state.is_pristine());
+}
+#[test]
+fn penalty_preparation_failure_keeps_typed_local_candidate_refusal() {
+    let budget = mv::allocation::AllocationBudget::new(8);
+    let original_owner = budget.try_reserve_bytes(7).expect("original pool owner");
+    let refusal = match budget.try_reserve_bytes(2) {
+        Ok(_) => panic!("occupied pool must refuse the exact demand"),
+        Err(refusal) => refusal,
+    };
+    let mapped = classify_penalty_derivation_failure(eyre::Report::new(
+        crate::state::EvidencePreparationError::Admission(refusal),
+    ));
+    assert!(matches!(
+        mapped,
+        V2RunnerError::CandidateBuild(
+            super::super::v2_candidate::CandidateError::LocalEvidencePreparation(
+                crate::state::EvidencePreparationError::Admission(
+                    mv::allocation::AllocationRefusal::Capacity { .. }
+                )
+            )
+        )
+    ));
+    drop(original_owner);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+#[test]
+fn penalty_preparation_wait_retries_only_after_original_pool_release() {
+    let (context, _) = context();
+    let owner = proposal_owner(
+        &context,
+        EventTag::new(context.height, 3, Generation::new(19)),
+        None,
+        None,
+    );
+    let next = proposal_owner(
+        &context,
+        EventTag::new(context.height, 4, Generation::new(19)),
+        None,
+        None,
+    );
+    let budget = mv::allocation::AllocationBudget::new(8);
+    let original_owner = budget.try_reserve_bytes(7).expect("original pool owner");
+    let refusal = match budget.try_reserve_bytes(2) {
+        Ok(_) => panic!("occupied pool must refuse the exact demand"),
+        Err(refusal) => refusal,
+    };
+    let error = crate::state::EvidencePreparationError::Admission(refusal);
+    let wake = std::task::Waker::noop();
+    let mut state = LocalProposalState::default();
+    assert!(state.defer_evidence_preparation(owner, &error, wake));
+    assert!(state.history_admission_pending(owner, wake));
+    assert!(state.attempted.is_none());
+    drop(original_owner);
+    assert!(!state.history_admission_pending(owner, wake));
+    assert!(state.is_pristine());
+    assert!(state.defer_evidence_preparation(owner, &error, wake));
+    state.reconcile(next);
+    assert!(state.is_pristine());
+    assert!(!state.defer_evidence_preparation(
+        next,
+        &crate::state::EvidencePreparationError::Admission(
+            mv::allocation::AllocationRefusal::DemandOverflow,
+        ),
+        wake,
+    ));
+    assert!(state.is_pristine());
+}

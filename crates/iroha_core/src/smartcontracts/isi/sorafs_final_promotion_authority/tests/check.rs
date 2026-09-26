@@ -443,9 +443,12 @@ fn old_completed_checks_survive_new_audit_and_original_expiry_with_fresh_custody
     );
     transact(&mut f.state, 100_000, |tx| {
         let before = retained(tx);
-        instruction(tx, Action::Complete(completion(&first)))
-            .execute(&f.operator, tx)
-            .expect("historical Complete retry cannot authorize current signing eligibility");
+        assert!(
+            instruction(tx, Action::Complete(completion(&first)))
+                .execute(&f.operator, tx)
+                .is_err(),
+            "a different signed Complete envelope cannot claim historical success"
+        );
         assert_eq!(retained(tx), before);
         assert_no_writes(tx, &check, &f.observer, false);
     });

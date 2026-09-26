@@ -17,6 +17,9 @@ pub(super) struct PreparedControl {
     pub(super) attester_key: Option<[u8; 32]>,
 }
 
+type NewKeyDigests = (Option<[u8; 32]>, Option<[u8; 32]>);
+type EnrollmentResult = (SignerCustodyControlStateV1, Option<Vec<u8>>);
+
 pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
     model: &TopologyStateViewV1<'_, L>,
     transition: &TopologyTransitionV1,
@@ -25,9 +28,7 @@ pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
 ) -> Result<Option<PreparedControl>, TopologyPreparationErrorV1<L::Error>> {
     if !matches!(
         transition.action,
-        TopologyActionV1::Configure(_)
-            | TopologyActionV1::Enroll(_)
-            | TopologyActionV1::Revoke { .. }
+        TopologyActionV1::Configure(_) | TopologyActionV1::Enroll(_) | TopologyActionV1::Revoke(_)
     ) {
         return Ok(None);
     }
@@ -39,7 +40,7 @@ pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
         .ok_or(Error::Capacity)?;
     if revision > TOPOLOGY_CONTROL_LIMIT_V1
         || (revision > TOPOLOGY_CONTROL_NORMAL_LIMIT_V1
-            && !matches!(transition.action, TopologyActionV1::Revoke { .. }))
+            && !matches!(transition.action, TopologyActionV1::Revoke(_)))
     {
         return Err(Error::Capacity.into());
     }
@@ -60,9 +61,11 @@ pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
             (state, None)
         }
         TopologyActionV1::Enroll(bytes) => enroll(model, bytes, context)?,
-        TopologyActionV1::Revoke { signer, attester } => {
+        TopologyActionV1::Revoke(TopologyRevocationV1 { signer, attester }) => {
             let mut next = model.state.cloned().ok_or(Error::Conflict)?;
-            if !(*signer && !next.signer_revoked || *attester && !next.attester_revoked) {
+            let revokes_active_signer = *signer && !next.signer_revoked;
+            let revokes_active_attester = *attester && !next.attester_revoked;
+            if !revokes_active_signer && !revokes_active_attester {
                 return Err(Error::Conflict.into());
             }
             next.signer_revoked |= signer;
@@ -93,7 +96,7 @@ pub(super) fn prepare<L: TopologyIndexedReadV1 + ?Sized>(
 fn new_keys<L: TopologyIndexedReadV1 + ?Sized>(
     model: &TopologyStateViewV1<'_, L>,
     policy: &SignerCustodyPolicyV1,
-) -> Result<(Option<[u8; 32]>, Option<[u8; 32]>), TopologyPreparationErrorV1<L::Error>> {
+) -> Result<NewKeyDigests, TopologyPreparationErrorV1<L::Error>> {
     let current = model.state.map(|state| &state.policy);
     let mut result = [None, None];
     for (index, key, previous, count) in [
@@ -137,7 +140,7 @@ fn enroll<L: TopologyIndexedReadV1 + ?Sized>(
     model: &TopologyStateViewV1<'_, L>,
     bytes: &[u8],
     context: &TopologyContextClaimV1,
-) -> Result<(SignerCustodyControlStateV1, Option<Vec<u8>>), TopologyPreparationErrorV1<L::Error>> {
+) -> Result<EnrollmentResult, TopologyPreparationErrorV1<L::Error>> {
     let state = model.state.ok_or(Error::Custody)?;
     let anchor = model.anchor(context)?;
     let verified = verify_signer_custody_enrollment_v1(

@@ -115,6 +115,9 @@ mod deep_polynomial;
 mod deep_proof;
 #[path = "backend/deep_prover.rs"]
 mod deep_prover;
+#[cfg(test)]
+#[path = "backend/deep_prover_plan.rs"]
+mod deep_prover_plan;
 #[path = "backend/deep_quotient.rs"]
 mod deep_quotient;
 #[path = "backend/deep_relation.rs"]

@@ -358,9 +358,11 @@ impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsOrderbookPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::CancelSorafsOrderbookOrder);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenCustody);
+impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsStreamTokenAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsFinalPromotionAccountCustody);
 impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsReleaseManifestAuthority);
+impl_direct_instruction_box!(crate::isi::sorafs::MutateSorafsTopologyAuthority);
 impl_direct_instruction_box!(crate::isi::sorafs::MatchSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::MaintainSorafsOrderbook);
 impl_direct_instruction_box!(crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt);
@@ -523,6 +525,8 @@ impl_direct_instruction_box!(crate::isi::governance::SubmitParliamentLifecycleTr
 impl_direct_instruction_box!(crate::isi::governance::CastZkBallot);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::CastPlainBallot);
+#[cfg(feature = "governance")]
+impl_direct_instruction_box!(crate::isi::governance::UpdatePlainConviction);
 #[cfg(feature = "governance")]
 impl_direct_instruction_box!(crate::isi::governance::SlashGovernanceLock);
 #[cfg(feature = "governance")]
@@ -2783,7 +2787,8 @@ pub mod prelude {
             FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
             MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
-            MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenCustody,
+            MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
+            MutateSorafsStreamTokenCustody, MutateSorafsTopologyAuthority,
             PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
             RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,

@@ -878,7 +878,7 @@ mod block {
         /// local refusal changes neither the staged nor committed membership.
         pub(crate) fn try_stage_block(
             &mut self,
-            ordinary: &mut Vec<Key>,
+            ordinary: &mut [Key],
             merge: &HashSet<Key>,
             height: Value,
         ) -> Result<(), TipStageError> {
@@ -888,8 +888,12 @@ mod block {
             }
             if let Some(current) = &self.current_block {
                 ordinary.sort_unstable();
-                ordinary.dedup();
-                let expected_len = ordinary.len().checked_add(merge.len());
+                let unique_ordinary = usize::from(!ordinary.is_empty())
+                    + ordinary
+                        .windows(2)
+                        .filter(|pair| pair[0] != pair[1])
+                        .count();
+                let expected_len = unique_ordinary.checked_add(merge.len());
                 return if current.height == height
                     && expected_len == Some(current.transactions.len())
                     && ordinary

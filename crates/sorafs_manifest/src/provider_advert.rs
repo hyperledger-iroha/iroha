@@ -62,6 +62,8 @@ pub const PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1: usize = 4;
 pub struct ProviderAdvertV1 {
     /// Version identifier; must equal [`PROVIDER_ADVERT_VERSION_V1`].
     pub version: u8,
+    /// Exact genesis block-header hash identifying the network for this signed advert.
+    pub network_id: [u8; 32],
     /// Unix timestamp (seconds) when the advert was issued.
     pub issued_at: u64,
     /// Unix timestamp (seconds) when the advert expires.
@@ -83,6 +85,8 @@ pub struct ProviderAdvertV1 {
 pub struct ProviderAdvertSignaturePayloadV1 {
     /// Provider-advert schema version.
     pub version: u8,
+    /// Exact genesis block-header hash covered by the provider signature.
+    pub network_id: [u8; 32],
     /// Unix timestamp at which the advert was issued.
     pub issued_at: u64,
     /// Unix timestamp at which the advert expires.
@@ -136,6 +140,7 @@ mod borrowed_norito {
 #[derive(norito::derive::SerializePayload)]
 struct ProviderAdvertSignaturePayloadViewWireV1<'a> {
     version: u8,
+    network_id: [u8; 32],
     issued_at: u64,
     expires_at: u64,
     body: borrowed_norito::Value<'a, ProviderAdvertBodyV1>,
@@ -154,6 +159,7 @@ impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a>
     fn from(advert: &'a ProviderAdvertV1) -> Self {
         Self(ProviderAdvertSignaturePayloadViewWireV1 {
             version: advert.version,
+            network_id: advert.network_id,
             issued_at: advert.issued_at,
             expires_at: advert.expires_at,
             body: borrowed_norito::Value(&advert.body),
@@ -195,6 +201,9 @@ impl ProviderAdvertV1 {
         preflight_provider_advert_len(self, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
         if self.version != PROVIDER_ADVERT_VERSION_V1 {
             return Err(AdvertValidationError::UnsupportedVersion(self.version));
+        }
+        if self.network_id == [0; 32] {
+            return Err(AdvertValidationError::InvalidNetworkId);
         }
         if self.signature.algorithm != SignatureAlgorithm::Ed25519 {
             return Err(AdvertValidationError::UnsupportedSignatureAlgorithm {
@@ -819,6 +828,7 @@ impl norito::json::JsonDeserialize for SignatureAlgorithm {
 /// Builder for constructing provider advertisements.
 #[derive(Debug, Default)]
 pub struct ProviderAdvertBuilder {
+    network_id: Option<[u8; 32]>,
     profile_id: Option<String>,
     profile_aliases: Option<Vec<String>>,
     provider_id: Option<[u8; 32]>,
@@ -856,6 +866,12 @@ impl ProviderAdvertBuilder {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Bind the advert to the exact genesis block-header hash of its network.
+    #[must_use]
+    pub fn network_id(&mut self, network_id: [u8; 32]) -> &mut Self {
+        self.network_id = Some(network_id);
+        self
     }
     #[must_use]
     pub fn profile_id(&mut self, profile_id: impl Into<String>) -> &mut Self {
@@ -994,6 +1010,9 @@ impl ProviderAdvertBuilder {
     }
     /// Consumes the builder and returns a fully validated advert.
     pub fn build(self) -> Result<ProviderAdvertV1, ProviderAdvertBuildError> {
+        let network_id = self
+            .network_id
+            .ok_or(ProviderAdvertBuildError::MissingField("network_id"))?;
         let requested_profile = self
             .profile_id
             .ok_or(ProviderAdvertBuildError::MissingField("profile_id"))?;
@@ -1110,6 +1129,7 @@ impl ProviderAdvertBuilder {
             .map_err(ProviderAdvertBuildError::Validation)?;
         let advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id,
             issued_at,
             expires_at,
             body,
@@ -1143,6 +1163,8 @@ pub enum AdvertValidationError {
     AdvertTooLarge { found: usize, maximum: usize },
     #[error("unsupported provider advert version: {0}")]
     UnsupportedVersion(u8),
+    #[error("provider advert network id must be the nonzero genesis block-header hash")]
+    InvalidNetworkId,
     #[error("unsupported first-release provider advert signature algorithm: {algorithm:?}")]
     UnsupportedSignatureAlgorithm { algorithm: SignatureAlgorithm },
     #[error("provider advert public key has {found} bytes; expected {expected}")]
@@ -1558,6 +1580,7 @@ impl ProviderAdvertV1 {
     pub fn signature_payload(&self) -> ProviderAdvertSignaturePayloadV1 {
         ProviderAdvertSignaturePayloadV1 {
             version: self.version,
+            network_id: self.network_id,
             issued_at: self.issued_at,
             expires_at: self.expires_at,
             body: self.body.clone(),
@@ -1717,6 +1740,7 @@ mod tests {
         let expires_at = now + REFRESH_RECOMMENDATION_SECS * 2;
         ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at,
             expires_at,
             body: ProviderAdvertBodyV1 {
@@ -2390,6 +2414,7 @@ mod tests {
     fn builder_constructs_advert() {
         let mut builder = ProviderAdvertV1::builder();
         let _ = builder
+            .network_id([0xA1; 32])
             .profile_id("sorafs.sf1@1.0.0")
             .profile_aliases(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()])
             .provider_id([0u8; 32])

@@ -1,11 +1,14 @@
 //! Exact geometry and out-of-domain AIR linkage for the compact replacement.
 //!
-//! Constants describe one fixed unmasked relation. They are not proof-supplied
-//! parameters or a production registry entry. The 41 public columns reconstruct
-//! at the actual extension points before the unchanged 923-slot AIR is checked.
-//! The offline engine binds roots, transcript order and complete bounded openings.
-//! TODO: Authenticate ledger context and qualify the complete protocol before
-//! this private owner participates in node admission.
+//! Constants describe one fixed offline replacement profile. They are not
+//! proof-supplied parameters or a production registry entry. The 41 public
+//! columns reconstruct at the actual extension points before the unchanged
+//! 923-slot AIR is checked. The offline engine binds roots, transcript order
+//! and complete bounded openings. The doubled FRI bound accommodates the
+//! screened masking degrees; the integrated producer remains unmasked, and
+//! the bound itself supplies no hiding or soundness argument.
+//! TODO: Complete masked row/quotient and composition commitments, authenticate
+//! ledger context and qualify concrete protocol bounds before node admission.
 
 use fastpq_isi::{FASTPQ_FINAL_V1, StarkParameterSet};
 
@@ -37,8 +40,8 @@ pub(super) const QUERY_CANDIDATES: usize = 74;
 pub(super) const FRI_ARITIES: [usize; 5] = [16, 16, 8, 8, 4];
 /// Input and successive output domain lengths, including the complete terminal.
 pub(super) const FRI_LENGTHS: [usize; 6] = [8_388_608, 524_288, 32_768, 4_096, 512, 128];
-/// Exclusive degree bounds for the same six domains.
-pub(super) const FRI_DEGREES: [usize; 6] = [65_536, 4_096, 256, 32, 4, 1];
+/// Exclusive degree bounds for the screened masked profile on six domains.
+pub(super) const FRI_DEGREES: [usize; 6] = [131_072, 8_192, 512, 64, 8, 2];
 /// Exact order-2^23 root extending the unchanged execution subgroup orientation.
 pub(super) const LDE_ROOT: u64 = 0x35c4_528b_4aa6_2eb8;
 /// Fixed disjoint coset offset, shared with the canonical field parameter owner.
@@ -60,7 +63,7 @@ impl DeepGeometry {
             || trace_generator != FASTPQ_FINAL_V1.trace_root
             || field_pow(LDE_ROOT, 16) != FASTPQ_FINAL_V1.lde_root
             || FRI_LENGTHS[0] != LDE_ROWS
-            || FRI_DEGREES[0] != TRACE_ROWS
+            || FRI_DEGREES[0] != 2 * TRACE_ROWS
         {
             return Err(shape(
                 "DEEP geometry does not extend the exact execution subgroup",

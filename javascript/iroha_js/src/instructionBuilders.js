@@ -133,6 +133,7 @@ const V_CODE_INVALID_MULTIHASH = ValidationErrorCode.INVALID_MULTIHASH;
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
 const UINT64_MAX_BIGINT = 0xffff_ffff_ffff_ffffn;
+const UINT128_MAX_BIGINT = (1n << 128n) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 const GOVERNANCE_PRIVATE_KEY_FIELDS = new Set([
   "private_key",
@@ -875,6 +876,26 @@ function asNonNegativeInteger(value, name) {
   fail(V_CODE_INVALID_NUMERIC, `${name}${TEXT_MUST_BE_A}${TEXT_NON_NEGATIVE_INTEGER}`, name);
 }
 
+function asElectionTallyU128(value, name) {
+  let integer;
+  if (typeof value === "number") {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      fail(V_CODE_INVALID_NUMERIC, `${name} must be a lossless non-negative integer`, name);
+    }
+    integer = BigInt(value);
+  } else if (typeof value === "bigint") {
+    integer = value;
+  } else if (typeof value === "string" && /^(?:0|[1-9][0-9]*)$/u.test(value)) {
+    integer = BigInt(value);
+  } else {
+    fail(V_CODE_INVALID_NUMERIC, `${name} must be a canonical non-negative integer`, name);
+  }
+  if (integer < 0n || integer > UINT128_MAX_BIGINT) {
+    fail(V_CODE_VALUE_OUT_OF_RANGE, `${name} must fit in unsigned 128 bits`, name);
+  }
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
+}
+
 function asKaigiU64(value, name) {
   const canonical = normalizeCanonicalU64(value, name);
   const numeric = BigInt(canonical);
@@ -1192,6 +1213,11 @@ function normalizeGovernanceU64(value, name) {
     );
   }
   return integer;
+}
+
+function asGovernanceU64JsonValue(value, name) {
+  const integer = normalizeGovernanceU64(value, name);
+  return integer <= MAX_SAFE_INTEGER_BIGINT ? Number(integer) : integer;
 }
 
 function normalizeVerifyingKeyId(value, name) {
@@ -4750,19 +4776,53 @@ export function buildCastZkBallotInstruction(options) {
  */
 export function buildCastPlainBallotInstruction(options) {
   const source = assertPlainObject(options, "castPlainBallot");
+  const fields = ["referendumId", "owner", "amount", "durationBlocks", "direction"];
+  if (
+    Object.keys(source).length !== fields.length ||
+    fields.some((field) => !Object.prototype.hasOwnProperty.call(source, field))
+  ) {
+    fail(
+      V_CODE_INVALID_OBJECT,
+      `castPlainBallot must contain exactly ${fields.join(", ")}`,
+      "castPlainBallot",
+    );
+  }
   return {
     CastPlainBallot: {
-      referendum_id: normalizeGovernanceSelectorV1(
-        source.referendumId ?? source.referendum_id,
-        "referendumId",
-      ),
+      referendum_id: normalizeGovernanceSelectorV1(source.referendumId, "referendumId"),
       owner: normalizeAccountId(source.owner, "owner"),
       amount: asQuantity(source.amount, "amount"),
-      duration_blocks: asNonNegativeInteger(
-        source.durationBlocks ?? source.duration_blocks,
-        "durationBlocks",
-      ),
+      duration_blocks: asGovernanceU64JsonValue(source.durationBlocks, "durationBlocks"),
       direction: normalizeDirection(source.direction, "direction"),
+    },
+  };
+}
+
+/**
+ * Build the choice-free update for an existing public standalone ballot.
+ * A second cast is never an update, and the choice is read from the retained lock.
+ * @param {object} options
+ * @returns {{UpdatePlainConviction: object}}
+ */
+export function buildUpdatePlainConvictionInstruction(options) {
+  const source = assertPlainObject(options, "updatePlainConviction");
+  const fields = ["referendumId", "owner", "amount", "durationBlocks"];
+  if (
+    Object.keys(source).length !== fields.length ||
+    fields.some((field) => !Object.prototype.hasOwnProperty.call(source, field))
+  ) {
+    fail(
+      V_CODE_INVALID_OBJECT,
+      `updatePlainConviction must contain exactly ${fields.join(", ")}`,
+      "updatePlainConviction",
+    );
+  }
+  return {
+    UpdatePlainConviction: {
+      referendum_id: normalizeGovernanceSelectorV1(source.referendumId, "referendumId"),
+      owner: normalizeAccountId(source.owner, "owner"),
+      amount: asQuantity(source.amount, "amount"),
+      duration_blocks: asGovernanceU64JsonValue(source.durationBlocks, "durationBlocks"),
     },
   };
 }
@@ -5170,9 +5230,6 @@ export function buildRegisterZkAssetInstruction(options) {
       "unshieldVerifyingKey",
       "vkUnshield",
       "vk_unshield",
-      "shieldVerifyingKey",
-      "vkShield",
-      "vk_shield",
     ]),
     "registerZkAsset",
   );
@@ -5185,19 +5242,9 @@ export function buildRegisterZkAssetInstruction(options) {
     source.unshieldVerifyingKey ?? source.vkUnshield ?? source.vk_unshield,
     "registerZkAsset.vkUnshield",
   );
-  const vkShield = normalizeVerifyingKeyId(
-    source.shieldVerifyingKey ?? source.vkShield ?? source.vk_shield,
-    "registerZkAsset.vkShield",
-  );
-  if (vkShield !== null && vkUnshield === null) {
-    throw new TypeError(
-      "registerZkAsset.vkShield requires vkUnshield so shielded funds remain redeemable",
-    );
-  }
   const payload = {
     asset: assertString(asset, "registerZkAsset.asset"),
     vk_unshield: vkUnshield,
-    vk_shield: vkShield,
   };
   return {
     zk: {
@@ -5336,7 +5383,8 @@ export function buildSubmitBallotInstruction(options) {
 }
 
 /**
- * Build a `zk::FinalizeElection` instruction payload with 2–64 tally counters.
+ * Build a `zk::FinalizeElection` instruction payload with 2–64 exact u128 tally weights.
+ * Large weights remain bigint until the Norito encoder emits their exact JSON numeric tokens.
  * @param {object} options
  * @returns {{zk: {FinalizeElection: object}}}
  */
@@ -5350,14 +5398,18 @@ export function buildFinalizeElectionInstruction(options) {
       "finalizeElection.tally",
     );
   }
+  const tally = tallyInput.map((entry, index) =>
+    asElectionTallyU128(entry, `finalizeElection.tally[${index}]`),
+  );
+  if (tally.reduce((sum, weight) => sum + BigInt(weight), 0n) > UINT128_MAX_BIGINT) {
+    fail(V_CODE_VALUE_OUT_OF_RANGE, "finalizeElection.tally total must fit in unsigned 128 bits", "finalizeElection.tally");
+  }
   const payload = {
     election_id: normalizeGovernanceSelectorV1(
       source.electionId ?? source.election_id,
       "finalizeElection.electionId",
     ),
-    tally: tallyInput.map((entry, index) =>
-      asNonNegativeInteger(entry, `finalizeElection.tally[${index}]`),
-    ),
+    tally,
     tally_proof: normalizeProofAttachment(source.tallyProof ?? source.proof ?? source.tally_proof, "finalizeElection.tallyProof"),
   };
   return {

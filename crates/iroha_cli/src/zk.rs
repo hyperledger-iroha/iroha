@@ -1329,9 +1329,6 @@ pub struct ZkRegisterAssetArgs {
     /// Verifying key id for unshield proofs (format: `<backend>:<name>`)
     #[arg(long, value_name = "BACKEND:NAME")]
     vk_unshield: Option<String>,
-    /// Verifying key id for shield proofs (format: `<backend>:<name>`)
-    #[arg(long, value_name = "BACKEND:NAME")]
-    vk_shield: Option<String>,
 }
 fn parse_vk_id_pair(s: &str) -> eyre::Result<iroha::data_model::proof::VerifyingKeyId> {
     use iroha::data_model::proof::VerifyingKeyId;
@@ -1357,14 +1354,7 @@ impl Run for ZkRegisterAssetArgs {
             Some(s) => Some(parse_vk_id_pair(&s)?),
             None => None,
         };
-        let vk_shield = match self.vk_shield {
-            Some(s) => Some(parse_vk_id_pair(&s)?),
-            None => None,
-        };
-        let registration = RegisterZkAsset::new(asset, vk_unshield, vk_shield);
-        registration
-            .validate_verifier_roles()
-            .map_err(|message| eyre::eyre!(message))?;
+        let registration = RegisterZkAsset::new(asset, vk_unshield);
         let ib: InstructionBox = registration.into();
         context.finish(vec![ib])
     }

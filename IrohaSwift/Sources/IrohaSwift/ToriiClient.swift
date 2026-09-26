@@ -18151,16 +18151,8 @@ public enum ToriiJSONValue: Codable, Sendable, Equatable {
     }
 
     private static func exactNumberLexeme(from decoder: Decoder) -> String? {
-        if let lexemes = decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
-            as? [String: String],
-           let lexeme = lexemes[exactJSONNumberCodingPathKey(decoder.codingPath)] {
-            return lexeme
-        }
-        if let lexemes = decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
-            as? [String: String] {
-            return lexemes[legacyExactJSONIntegerCodingPathKey(decoder.codingPath)]
-        }
-        return nil
+        let lexemes = decoder.userInfo[exactJSONNumberLexemesUserInfoKey] as? [String: String]
+        return lexemes?[exactJSONNumberCodingPathKey(decoder.codingPath)]
     }
 }
 
@@ -18900,7 +18892,7 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
             payloadWire,
             codingPath: container.codingPath + [CodingKeys.payload],
             context: "governance proposal payload",
-            exactIntegerLexemes: decoder.userInfo[governanceExactIntegerLexemesUserInfoKey]
+            exactIntegerLexemes: decoder.userInfo[exactJSONNumberLexemesUserInfoKey]
                 as? [String: String]
         )
         switch tag {
@@ -25782,6 +25774,45 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                                            responseType: ToriiGovernanceTallyResponse.self)
     }
 
+    /// Query the exact, committed standalone-election tally using a signed V1 request.
+    public func getElectionTally(
+        id: String, canonicalAuth: ToriiCanonicalRequestAuth
+    ) async throws -> ToriiElectionTallyResponseV1? {
+        let electionId = try ToriiRequestValidation.governanceSelector(id, field: "electionId")
+        let body = try JSONEncoder().encode(ToriiElectionTallyRequestV1(electionId: electionId))
+        let request = try makeCanonicalAccountRequest(
+            path: "/v1/zk/vote/tally",
+            method: .post,
+            body: body,
+            headers: ["Accept": "application/json", "Content-Type": "application/json"],
+            canonicalAuth: canonicalAuth
+        )
+        let (data, response) = try await sendBoundedSccpResponse(
+            request,
+            context: "election tally",
+            maximumBytes: ToriiElectionTallyResponseV1.maximumResponseBytes
+        )
+        let encoding = response.value(forHTTPHeaderField: "Content-Encoding")?
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard encoding == nil || encoding == "" || encoding == "identity" else {
+            throw ToriiClientError.invalidPayload("election tally response must use identity encoding")
+        }
+        if response.statusCode == 404 {
+            guard data.isEmpty else {
+                throw ToriiClientError.invalidPayload("election tally 404 response must have no body")
+            }
+            return nil
+        }
+        try ensureStatus(response, equals: 200, responseBody: data)
+        try ensureResponseMediaType(response, equals: "application/json")
+        guard !data.isEmpty else { throw ToriiClientError.emptyBody }
+        do {
+            return try ToriiElectionTallyResponseV1.decodeExact(from: data)
+        } catch {
+            throw ToriiClientError.decoding(error)
+        }
+    }
+
     public func getGovernanceUnlockStats(height: UInt64? = nil,
                                          referendumId: String? = nil,
                                          canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiGovernanceUnlockStatsResponse {
@@ -28139,7 +28170,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     /// canonical Norito bytes selected by the server.
     ///
     /// This authority-bearing route is deliberately unavailable over HTTP,
-    /// JSON, redirects, mock catalogs, or without the loaded exact ABI23
+    /// JSON, redirects, mock catalogs, or without the loaded exact ABI24
     /// artifact. The returned model retains the response bytes and binds every
     /// compiled row to that artifact's natively validated local catalog and the
     /// expected network from `localSigningContext`.
@@ -28159,7 +28190,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
             )
         }
         // Fail before network I/O when the bridge is absent, stale, or missing
-        // any of the exact six privacy ABI23 symbols.
+        // any of the exact six privacy ABI24 symbols.
         _ = try PrivacyNativeBridge.compiledProfileCatalogV1()
         let request = try makePrivacyExact12CapabilityRequestV1(canonicalAuth: canonicalAuth)
         let (data, response) = try await sendBoundedSccpResponse(

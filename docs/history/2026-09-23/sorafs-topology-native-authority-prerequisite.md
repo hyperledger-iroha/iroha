@@ -14,6 +14,12 @@ The affected checker and regression are
 checker suite passed 193/193 tests on this checkout. This result tests
 fail-closed verification and cannot qualify topology deployment or promotion.
 
+A later full run of `python3 -m pytest -q
+scripts/tests/check_sorafs_production_promotion_bundle_test.py` on the moving
+`optimizations` checkout passed **200/200**. The checker still rejects final
+promotion until purpose-owned native completion and Check evidence is joined;
+this run is not a signed candidate or approval receipt.
+
 TODO: Implement role-16 native custody and immutable completion state, a
 permissioned Check and exact finalized input/result/output verifier, then join
 its actual result with the other three inner approvals. Authenticated software

@@ -10,7 +10,9 @@ use crate::{
         compact_transfer_air::CompactTransferAir,
         deep_composition::OodPair,
         deep_geometry::LDE_ROWS,
-        deep_proof::{FriGroup, FriRound, OodAnswers, QuotientOpening, RowOpening, RowValues},
+        deep_proof::{
+            FriGroup, FriRound, FriValues, OodAnswers, QuotientOpening, RowOpening, RowValues,
+        },
     },
     gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
 };
@@ -79,7 +81,7 @@ fn constant_fixture(queries: &[usize]) -> (DeepProof, OpeningPlans, DeepComposit
                     .iter()
                     .map(|&index| FriGroup {
                         index: index as u32,
-                        values: vec![F::ZERO; FRI_ARITIES[round]],
+                        values: FriValues::new(vec![F::ZERO; FRI_ARITIES[round]]).unwrap(),
                     })
                     .collect(),
                 siblings: vec![digest; plans.rounds[round].work().siblings],
@@ -439,6 +441,39 @@ fn every_terminal_value_is_checked_even_when_not_queried() {
     }
     proof.terminal.fill(F::ONE);
     assert!(check_chains(&geometry, &composition, F::ONE, &betas(), &queries, &proof).is_err());
+}
+
+#[test]
+fn full_terminal_accepts_a_linear_polynomial_on_the_folded_coset_only() {
+    let mut domain = DeepGeometry::new().unwrap().domain();
+    for arity in FRI_ARITIES {
+        domain = domain.folded(arity);
+    }
+    let intercept = F::new([17, 19, 23, 29]).unwrap();
+    let slope = F::new([31, 37, 41, 43]).unwrap();
+    let mut terminal: Vec<_> = (0..FRI_LENGTHS[5])
+        .map(|index| intercept.add(slope.mul_base(domain.point(index))))
+        .collect();
+    check_terminal_degree(domain, &terminal).unwrap();
+    terminal[0] = terminal[0].add(F::ONE);
+    assert!(check_terminal_degree(domain, &terminal).is_err());
+    terminal[0] = terminal[0].sub(F::ONE);
+    terminal[127] = terminal[127].add(F::ONE);
+    assert!(check_terminal_degree(domain, &terminal).is_err());
+    terminal[127] = terminal[127].sub(F::ONE);
+    // An index-affine vector is not a degree-one polynomial in the actual
+    // coset points. The inverse-folded domain, not vector position, governs it.
+    let index_linear: Vec<_> = (0..FRI_LENGTHS[5])
+        .map(|index| intercept.add(slope.mul_base(index as u64)))
+        .collect();
+    assert!(check_terminal_degree(domain, &index_linear).is_err());
+    let quadratic: Vec<_> = (0..FRI_LENGTHS[5])
+        .map(|index| {
+            let x = F::from_base(domain.point(index)).unwrap();
+            intercept.add(slope.mul(x.mul(x)))
+        })
+        .collect();
+    assert!(check_terminal_degree(domain, &quadratic).is_err());
 }
 
 // Independent sparse-tree reduction: fill the explicitly planned frontier into

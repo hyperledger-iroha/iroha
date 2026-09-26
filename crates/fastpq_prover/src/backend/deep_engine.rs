@@ -1,12 +1,16 @@
 //! Bounded verification of the exact DEEP compact replacement candidate.
 //!
 //! This owner joins the full statement, typed whole-message transcript, one OOD
-//! AIR identity, exact authenticated fibers and the complete constant terminal.
+//! AIR identity, exact authenticated fibers and the complete linear terminal.
 //! It constructs neither a witness nor a trace/FFT/LDE. Its inputs are the
 //! caller-prepared transfer relation and the canonical bounded proof frame.
-//! The same-profile producer is joined through the offline Quantity facade.
-//! TODO: Qualify complete generated artifacts, source/finality authentication,
-//! privacy and cryptographic/resource bounds before production admission.
+//! The offline Quantity facade joins an unmasked producer whose constant
+//! terminal satisfies this fixed profile's degree-below-two terminal bound.
+//! Checking the complete terminal enforces polynomial geometry; it cannot
+//! establish masking, source authority or FRI soundness.
+//! TODO: Complete the masked producer and qualify generated artifacts,
+//! source/finality authentication, privacy and cryptographic/resource bounds
+//! before production admission.
 
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
@@ -14,7 +18,9 @@ use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
 use super::{
     deep_binding::{BindingError, Context, Message, Oracle, Transcript},
     deep_composition::DeepComposition,
-    deep_geometry::{CONSTRAINTS, DeepGeometry, FRI_ARITIES, FRI_LENGTHS, QUERY_COUNT},
+    deep_geometry::{
+        CONSTRAINTS, DeepGeometry, FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, QUERY_COUNT,
+    },
     deep_proof::{self, DeepProof, OpeningPlans},
     deep_relation::DeepRelation,
     fri_fold::FriFoldPlan,
@@ -41,7 +47,7 @@ pub(super) struct VerificationWork {
     pub(super) g_blocks: usize,
     /// Checked initial-query fold edges, including repeated shared fibers.
     pub(super) fold_checks: usize,
-    /// Every terminal value checked against the degree-zero polynomial.
+    /// Every terminal value checked against one degree-below-two polynomial.
     pub(super) terminal_values: usize,
 }
 
@@ -352,14 +358,6 @@ fn check_chains(
     queries: &[usize],
     proof: &DeepProof,
 ) -> Result<usize> {
-    // The final exclusive degree is one: all 128 values, including unqueried
-    // positions, must be the same constant. Sampling this vector is insufficient.
-    let first = proof.terminal[0];
-    if proof.terminal.iter().any(|&value| value != first) {
-        return Err(shape(
-            "DEEP terminal does not represent a constant polynomial",
-        ));
-    }
     let mut domain = geometry.domain();
     let mut domains = Vec::with_capacity(FRI_ARITIES.len());
     let mut folds = Vec::with_capacity(FRI_ARITIES.len());
@@ -371,6 +369,10 @@ fn check_chains(
         )?);
         domain = domain.folded(arity);
     }
+    // Authenticate and check the entire terminal rather than only the sampled
+    // positions. The folded coset is essential: checking an index-linear vector
+    // would accept values that are not degree below two on this actual domain.
+    check_terminal_degree(domain, &proof.terminal)?;
     for (ordinal, &initial) in queries.iter().enumerate() {
         let pair = &proof.quotients[ordinal];
         let mut value = composition.base_value_at(
@@ -408,6 +410,16 @@ fn check_chains(
         }
     }
     Ok(queries.len() * FRI_ARITIES.len())
+}
+
+/// Require all authenticated values to lie on one polynomial over the folded coset.
+fn check_terminal_degree(domain: super::FriDomain, terminal: &[F]) -> Result<()> {
+    if !domain.evaluations_have_degree_below(terminal, FRI_DEGREES[5])? {
+        return Err(shape(
+            "DEEP terminal does not represent a degree-below-two polynomial",
+        ));
+    }
+    Ok(())
 }
 
 fn binding_error(error: BindingError) -> Error {

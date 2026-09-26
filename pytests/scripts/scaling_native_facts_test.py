@@ -159,6 +159,32 @@ def test_fixed_native_tip_and_facts_join_original_inputs_vectors_and_deadline(pi
     finally: value.close()
 
 
+@pytest.mark.parametrize('boundary', ['before_tip', 'before_facts'])
+def test_duplicate_account_projection_cannot_reach_native_facts(pipeline, boundary):
+    """A changed account cohort cannot replace the original native command input."""
+    p = pipeline
+    value = owner(p)
+    try:
+        if boundary == 'before_facts':
+            value.observe_tip()
+            complete(p.outputs, 'collection')
+        original = p.c.inputs.generation
+        duplicate = replace(original.accounts[1], account_id=original.accounts[0].account_id)
+        p.c.inputs._generation = replace(
+            original, accounts=(original.accounts[0], duplicate, *original.accounts[2:]),
+        )
+        with pytest.raises(native.NativeFactsError, match='native_facts_original_changed'):
+            if boundary == 'before_tip':
+                value.observe_tip()
+            else:
+                value.produce_facts()
+        assert len(p.c.commands.calls) == (0 if boundary == 'before_tip' else 1)
+        assert value._phase == 'failed'
+        assert value.cleanup(p.c.clock.end()) == ()
+    finally:
+        value.close()
+
+
 @pytest.mark.parametrize('field', [field.name for field in fields(inputs.FactsJournalPlan) if field.name != 'workload_seed'])
 def test_journal_numeric_fields_reject_boolean_before_any_child(pipeline, field):
     p = pipeline; p.plan = replace(p.plan, **{field: True})

@@ -6525,11 +6525,10 @@ impl PrivacyCommitmentKeyV1 {
         ) {
             return Err("public-reserve custody requires Orchard or private-IVM".to_owned());
         }
-        let encoded = norito::to_bytes(reserve_asset_id)
-            .map_err(|error| format!("cannot encode exact public-reserve asset ID: {error}"))?;
         let mut hasher = blake3::Hasher::new();
         hasher.update(PRIVACY_PUBLIC_RESERVE_ASSET_DIGEST_DOMAIN_V1);
-        hasher.update(&encoded);
+        norito::core::write_canonical_to_writer(reserve_asset_id, &mut hasher)
+            .map_err(|error| format!("cannot encode exact public-reserve asset ID: {error}"))?;
         Ok(Self::PublicReserveCustody {
             protocol_id,
             reserve_asset_digest: *hasher.finalize().as_bytes(),
@@ -9816,6 +9815,7 @@ mod tests {
         };
     }
     include!("privacy_state/test_fixtures.rs");
+    include!("privacy_state/public_reserve_digest_tests.rs");
     #[test]
     fn orchard_bootstrap_is_canonical_authoritative_and_restart_safe() {
         let mut fixture = orchard_persisted_fixture();

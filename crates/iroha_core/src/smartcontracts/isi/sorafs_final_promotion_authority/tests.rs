@@ -1,5 +1,5 @@
-//! Real native transaction/history regressions with simulated signed hardware enrollment.
-//! These tests exercise Core custody/operation authority, not deployment hardware or consensus QC.
+//! Real native transaction/history regressions with signed software custody enrollment.
+//! These tests exercise Core custody/operation authority, not deployment or consensus QC.
 use super::*;
 use crate::query::signer_custody_history::{
     ControlIndexV1, control_head_key, control_height_key, control_record_key, key_path,
@@ -9,20 +9,23 @@ use crate::{
     query::store::LiveQueryStore,
     state::{State, StateReadOnly, World},
 };
-use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     IntoKeyValue, Registrable,
     account::Account,
     block::{BlockHeader, builder::BlockBuilder},
+    isi::sorafs::MutateSorafsFinalPromotionAccountCustody,
     permission::{Permission, Permissions},
+    sorafs::final_promotion_account_custody::FinalPromotionAccountCustodyActionV1,
     sorafs::final_promotion_authority::{
         FinalPromotionCompleteV1, FinalPromotionExpireV1, FinalPromotionReserveV1,
         FinalPromotionRevocationV1,
     },
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::sorafs::{
-    CanCheckSorafsFinalPromotion, CanManageSorafsFinalPromotionCustody,
-    CanOperateSorafsFinalPromotion,
+    CanCheckSorafsFinalPromotion, CanManageSorafsFinalPromotionAccountCustody,
+    CanManageSorafsFinalPromotionCustody, CanOperateSorafsFinalPromotion,
 };
 use sorafs_manifest::signer::custody_control::SignerCustodyPolicyV1;
 use sorafs_manifest::signer::{
@@ -35,7 +38,7 @@ use sorafs_manifest::signer::{
         SignerOperationIntentV1, SignerPurposeBindingV1, SignerRoleV1,
     },
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 const DEPLOYMENT: &str = "promotion-primary";
 fn key(seed: u8) -> KeyPair {
@@ -48,6 +51,7 @@ struct Fixture {
     observer: AccountId,
     other: AccountId,
     policy: SignerCustodyPolicyV1,
+    account_policy: SignerCustodyPolicyV1,
     attester: KeyPair,
 }
 fn fixture() -> Fixture {
@@ -90,6 +94,13 @@ fn fixture() -> Fixture {
     ] {
         let mut permissions = Permissions::new();
         permissions.insert(permission);
+        if account == &manager {
+            permissions.insert(Permission::from(
+                CanManageSorafsFinalPromotionAccountCustody {
+                    deployment_id: DEPLOYMENT.into(),
+                },
+            ));
+        }
         world
             .account_permissions
             .insert(account.clone(), permissions);
@@ -104,8 +115,8 @@ fn fixture() -> Fixture {
         binding: SignerCustodyBindingV1 {
             chain_id: state.view().chain_id().to_string(),
             network_id: *state.view().network_id().as_bytes(),
-            runtime_handle: "hsm://promotion/primary".into(),
-            key_handle: "pkcs11:promotion/key-1".into(),
+            runtime_handle: "software://sorafs/final-promotion-provenance/primary".into(),
+            key_handle: "software://sorafs/final-promotion-provenance/key-1".into(),
             service_id: "promotion-service".into(),
             administrator_id: "promotion-admin".into(),
             role: SignerRoleV1::FinalPromotionProvenance,
@@ -131,6 +142,19 @@ fn fixture() -> Fixture {
         max_validity_ms: 120_000,
         max_anchor_age_ms: 60_000,
     };
+    let mut account_policy = policy.clone();
+    account_policy.binding.runtime_handle =
+        "software://sorafs/final-promotion-account-transaction/primary".into();
+    account_policy.binding.key_handle =
+        "software://sorafs/final-promotion-account-transaction/key-1".into();
+    account_policy.binding.role = SignerRoleV1::FinalPromotionAccountTransaction;
+    account_policy.binding.purpose = SignerPurposeBindingV1::FinalPromotionAccountTransaction {
+        deployment_id: DEPLOYMENT.into(),
+    };
+    account_policy.binding.public_key = key(2).public_key().clone();
+    account_policy.binding.policy_digest = [8; 32];
+    account_policy.attester_public_key = key(8).public_key().clone();
+    account_policy.attester_authority.policy_digest = [8; 32];
     Fixture {
         state,
         manager,
@@ -138,6 +162,7 @@ fn fixture() -> Fixture {
         observer,
         other,
         policy,
+        account_policy,
         attester,
     }
 }
@@ -170,24 +195,66 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
     state.update_latest_block_header_cache_for_tests(header);
 }
 fn instruction(
-    tx: &StateTransaction<'_, '_>,
+    tx: &mut StateTransaction<'_, '_>,
     action: Action,
 ) -> MutateSorafsFinalPromotionAuthority {
     let old = read_control::<ReceiptPurpose>(tx.world(), DEPLOYMENT).expect("coherent control");
-    MutateSorafsFinalPromotionAuthority {
+    let native = MutateSorafsFinalPromotionAuthority {
         deployment_id: DEPLOYMENT.into(),
         expected_control_revision: old.as_ref().map_or(0, |value| value.index.revision),
         expected_control_digest: old.as_ref().map_or([0; 32], |value| value.index.digest),
         action,
+    };
+    if matches!(&native.action, Action::Reserve(_) | Action::Complete(_)) {
+        // This low-level native fixture supplies a real signed direct envelope to the same
+        // executor source check. Its block builder does not retain entrypoints or finality, so
+        // these CAS tests never claim a finalized origin proof.
+        let mut builder = TransactionBuilder::new(
+            tx.network_id,
+            AccountId::new(key(2).public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(tx.block_unix_timestamp_ms()));
+        let signed = builder
+            .with_instructions([native.clone()])
+            .sign(key(2).private_key());
+        let outer = signed.hash_as_entrypoint();
+        tx.current_network_entrypoint_hash = Some(outer);
+        tx.tx_call_hash = Some(Hash::from(outer));
+        tx.current_tx_hash = Some(signed.hash());
+        tx.current_entrypoint_index = Some(0);
+        tx.current_direct_final_promotion_operation_origin =
+            crate::executor::Executor::direct_final_promotion_operation_origin(
+                tx,
+                &signed,
+                &native.clone().into(),
+                true,
+            );
     }
+    native
 }
 fn configure(f: &mut Fixture) {
     let bytes = encode(&f.policy).unwrap();
     transact(&mut f.state, 1_000, |tx| {
         instruction(tx, Action::Configure(bytes))
             .execute(&f.manager, tx)
-            .expect("configure")
+            .expect("configure");
+        configure_account_control(tx, &f.manager, &f.account_policy);
     });
+}
+fn configure_account_control(
+    tx: &mut StateTransaction<'_, '_>,
+    manager: &AccountId,
+    policy: &SignerCustodyPolicyV1,
+) {
+    MutateSorafsFinalPromotionAccountCustody {
+        deployment_id: DEPLOYMENT.into(),
+        expected_control_revision: 0,
+        expected_control_digest: [0; 32],
+        action: FinalPromotionAccountCustodyActionV1::Configure(encode(policy).unwrap()),
+    }
+    .execute(manager, tx)
+    .expect("configure role-15 account custody");
 }
 fn snapshot(f: &Fixture, operation: Option<[u8; 32]>) -> FinalPromotionAuthoritySnapshotV1 {
     read_final_promotion_authority_at_v1(
@@ -225,12 +292,54 @@ fn attest(f: &Fixture, now: u64, expires: u64) -> Vec<u8> {
     })
     .unwrap()
 }
+fn account_enrollment(
+    f: &Fixture,
+    expires_at_unix_ms: u64,
+) -> MutateSorafsFinalPromotionAccountCustody {
+    let account =
+        crate::query::final_promotion_account_custody::read_final_promotion_account_custody_at_v1(
+            &f.state.view(),
+            &f.account_policy.binding,
+            1,
+        )
+        .unwrap()
+        .unwrap();
+    let statement = SignerCustodyStatementV1 {
+        magic: SIGNER_CUSTODY_MAGIC_V1,
+        version: SIGNER_CUSTODY_VERSION_V1,
+        binding: f.account_policy.binding.clone(),
+        authority: f.account_policy.attester_authority.clone(),
+        anchor: account.custody_anchor,
+        sequence: account.control.next_sequence,
+        predecessor_digest: account.control.predecessor_digest,
+        issued_at_unix_ms: 1_500,
+        expires_at_unix_ms,
+        evidence_digest: [13; 32],
+        revoked: false,
+    };
+    let signature =
+        Signature::try_new(key(8).private_key(), &statement.signing_payload().unwrap()).unwrap();
+    let account_record = SignerCustodyRecordV1 {
+        statement,
+        attestation: signature.payload().try_into().unwrap(),
+    };
+    MutateSorafsFinalPromotionAccountCustody {
+        deployment_id: DEPLOYMENT.into(),
+        expected_control_revision: account.control_record.revision,
+        expected_control_digest: account.custody_anchor.state_digest,
+        action: FinalPromotionAccountCustodyActionV1::Enroll(encode(&account_record).unwrap()),
+    }
+}
 fn enroll(f: &mut Fixture) {
     let bytes = attest(f, 1_500, 100_000);
+    let account_enrollment = account_enrollment(f, 100_000);
     transact(&mut f.state, 1_500, |tx| {
         instruction(tx, Action::Enroll(bytes))
             .execute(&f.manager, tx)
-            .expect("enroll")
+            .expect("enroll");
+        account_enrollment
+            .execute(&f.manager, tx)
+            .expect("enroll role-15 account custody");
     });
 }
 fn reserve_request(f: &Fixture, id: u8) -> FinalPromotionReserveV1 {
@@ -301,6 +410,8 @@ fn exact_native_completion_preserves_custody_and_original_reservation() {
     let completed = snapshot(&f, Some([31; 32]));
     let row = completed.operation.unwrap();
     assert_eq!(row.reserved, reserved.reserved);
+    assert_eq!(row.reserved_origin, reserved.reserved_origin);
+    assert_ne!(row.execution_origin, Some(row.reserved_origin));
     assert_eq!(row.custody, reserved.custody);
     assert_eq!(row.reservation, reserved.reservation);
     assert_eq!(completed.operations.revision, 2);
@@ -319,12 +430,14 @@ fn exact_native_completion_preserves_custody_and_original_reservation() {
             .unwrap(),
         reserved
     );
-    // Already committed retries do not renew the reservation or rewrite the native completion.
+    // A newly signed envelope cannot claim idempotent success for the original completion.
     transact(&mut f.state, 70_000, |tx| {
         let before = retained(tx);
-        instruction(tx, Action::Complete(request))
-            .execute(&f.operator, tx)
-            .unwrap();
+        assert!(
+            instruction(tx, Action::Complete(request))
+                .execute(&f.operator, tx)
+                .is_err()
+        );
         assert_eq!(retained(tx), before);
     });
 }

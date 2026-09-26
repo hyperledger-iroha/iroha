@@ -68,8 +68,8 @@ impl KagemushaHardwareSelectionSigningLayoutV1 {
     /// Hardware-key epoch generation as an unsigned 64-bit little-endian integer.
     pub const HARDWARE_EPOCH_GENERATION: Range<usize> =
         Self::HARDWARE_EPOCH_ID.end..Self::HARDWARE_EPOCH_ID.end + 8;
-    /// One-byte stable operation tag: Bootstrap 0, MintFold 1, SendSplit 2,
-    /// ReceiveFold 3, RedeemSplit 4, Rotate 5.
+    /// One-byte stable operation tag: Bootstrap 0, `MintFold` 1, `SendSplit` 2,
+    /// `ReceiveFold` 3, `RedeemSplit` 4, Rotate 5.
     pub const OPERATION_TAG: Range<usize> =
         Self::HARDWARE_EPOCH_GENERATION.end..Self::HARDWARE_EPOCH_GENERATION.end + 1;
     /// Digest of Core's complete exact-next transition statement.
@@ -501,8 +501,14 @@ fn validate_subject_against(
         || subject.release_id != expected.release_id
         || subject.provider_policy_root != expected.provider_policy_root
         || subject.app_policy_digest != expected.app_policy_digest
-        || subject.app_policy_digest != credential.app_policy_binding_digest
-        || subject.operation_kind != expected.operation_kind
+    {
+        return Err(invalid("kagemusha.hardware_selection.binding"));
+    }
+    // The credential names this same policy commitment as its binding digest.
+    if subject.app_policy_digest != credential.app_policy_binding_digest {
+        return Err(invalid("kagemusha.hardware_selection.binding"));
+    }
+    if subject.operation_kind != expected.operation_kind
         || subject.transition_statement_digest != expected.transition_statement_digest
         || subject.candidate_envelope_digest != expected.candidate_envelope_digest
         || subject.terminal_body_commitment != expected.terminal_body_commitment

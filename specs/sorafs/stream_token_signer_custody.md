@@ -130,6 +130,12 @@ The signer client and broker return only bounded untrusted receipt bytes.
 `SignerOperationCoordinatorV1` and the StreamToken-purpose `SignerReceiptJournalV1`.
 Private files, exclusive reservation/CAS, staged receipt checks and pre/post-I/O
 state fencing precede release; the transport never creates a verified authority.
+The coordinator rejects a generic role-11 Sign reservation. Its stream-token
+entry point checks the exact canonical body against the borrowed domain-prefixed
+signing bytes and passes a sealed body, time-window and request-digest review to
+the source's purpose-specific Reserve. The source must independently rederive
+that review and perform the finalized CAS; the current test source exercises this
+boundary, but a production finalized operation source is still required.
 
 The token signature covers `sorafs.stream-token.signature.v1\0` followed by the
 canonical body frame. The token transport is canonical padded base64 over one

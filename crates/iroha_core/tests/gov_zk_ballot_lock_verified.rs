@@ -13,7 +13,7 @@ use iroha_core::{
     state::{
         GovernanceLockCustody, GovernanceLockRecord, GovernanceLocksForReferendum,
         GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
-        WorldReadOnly,
+        StandaloneBallotCorpusEntryV1, WorldReadOnly,
     },
 };
 use iroha_data_model::{
@@ -45,8 +45,12 @@ fn unqualified_ballots_cannot_create_extend_or_shrink_retained_locks() {
             let (id, record) = closed_registry::unqualified_key(circuit_id);
             let mut election = closed_registry::retained_election(&id, &record);
             if previous.is_some() {
-                election.ballot_nullifiers.insert([0x44; 32]);
-                election.ciphertexts.push(vec![0x55; 32]);
+                election
+                    .accepted_ballots
+                    .push(StandaloneBallotCorpusEntryV1 {
+                        nullifier: [0x44; 32],
+                        commitment: [0x55; 32],
+                    });
             }
             transaction
                 .world
@@ -125,7 +129,7 @@ fn unqualified_ballots_cannot_create_extend_or_shrink_retained_locks() {
                 norito::to_bytes(transaction.world.elections().get("ref-zk-lock").unwrap())
                     .unwrap(),
                 before_election,
-                "never consume or erase a retained nullifier/ciphertext on rejection"
+                "never consume or erase a retained ballot pair on rejection"
             );
             assert_eq!(
                 norito::to_bytes(
@@ -144,10 +148,9 @@ fn unqualified_ballots_cannot_create_extend_or_shrink_retained_locks() {
             );
             let after = transaction.world.elections().get("ref-zk-lock").unwrap();
             assert_eq!(
-                after.ballot_nullifiers.len(),
+                after.accepted_ballots.len(),
                 usize::from(previous.is_some())
             );
-            assert_eq!(after.ciphertexts.len(), usize::from(previous.is_some()));
             let events = transaction.world.take_external_events();
             assert_eq!(events.len(), 1);
             assert!(

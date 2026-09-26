@@ -1476,6 +1476,103 @@ v2_apply_test!(restart_recovers_manifest_after_pre_wsv_finality, {
     fixture.assert_complete();
 });
 v2_apply_test!(
+    post_apply_metadata_recovery_waits_for_exact_execution_evidence,
+    {
+        let fixture = ApplyFixture::new();
+        let mut initial_store = fixture.reopen_body_store();
+        fixture.kura.fail_next_commit_manifest_write_for_tests();
+        let error = fixture
+            .execute(&mut initial_store)
+            .expect_err("commit manifest fails after the original Apply owner commits State");
+        assert!(matches!(
+            &error,
+            V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                if *stage == "post-apply metadata"
+        ));
+        assert_eq!(fixture.state.committed_height(), 1);
+        assert!(fixture.kura.commit_manifest(1).unwrap().is_none());
+        let height = NonZeroUsize::new(1).expect("first committed height");
+        let executed = fixture
+            .kura
+            .get_block(height)
+            .expect("retain the exact result-bearing Kura image for remote recovery");
+        assert!(executed.has_results());
+        let finality = fixture
+            .kura
+            .v2_finality_artifact(1)
+            .expect("read original durable finality")
+            .expect("finality precedes State publication");
+        let state_hash = crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref())
+            .expect("snapshot the applied State");
+        let executions = fixture
+            .service
+            .test_failures
+            .candidate_executions
+            .load(std::sync::atomic::Ordering::Relaxed);
+        drop(initial_store);
+
+        fixture
+            .kura
+            .remove_block_body_for_recovery_test(height)
+            .expect("lose the canonical execution image while retaining finality");
+        assert!(fixture.kura.get_block(height).is_none());
+        assert_eq!(fixture.kura.v2_finality_artifact(1).unwrap(), Some(finality.clone()));
+        let mut recovered = fixture.reopen_body_store();
+        let error = fixture
+            .execute(&mut recovered)
+            .expect_err("applied State and finality cannot replace the missing execution image");
+        assert!(matches!(&error, V2ApplyError::StateAheadOfKura));
+        assert!(error.requires_restart_recovery());
+        assert!(fixture.kura.commit_manifest(1).unwrap().is_none());
+        assert_eq!(fixture.kura.v2_finality_artifact(1).unwrap(), Some(finality.clone()));
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),
+            state_hash,
+            "missing evidence must not change applied State"
+        );
+        assert_eq!(
+            fixture
+                .service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed),
+            executions,
+            "metadata recovery must not run a second execution"
+        );
+
+        fixture
+            .kura
+            .cache_block_body(&executed)
+            .expect("restore only the exact finality-authenticated execution image");
+        recovered
+            .revalidate_recovered_markers(|body| {
+                fixture
+                    .service
+                    .revalidate_recovered_candidate(&fixture.context, body)
+            })
+            .expect("authenticate recovered marker against restored Kura execution");
+        fixture
+            .execute(&mut recovered)
+            .expect("repair the missing manifest from the original applied owner");
+        assert_eq!(fixture.kura.v2_finality_artifact(1).unwrap(), Some(finality));
+        assert_eq!(
+            crate::snapshot::canonical_state_snapshot_hash(fixture.state.as_ref()).unwrap(),
+            state_hash,
+            "metadata repair preserves the one committed State transition"
+        );
+        assert_eq!(
+            fixture
+                .service
+                .test_failures
+                .candidate_executions
+                .load(std::sync::atomic::Ordering::Relaxed),
+            executions,
+            "restored execution evidence permits repair without re-execution"
+        );
+        fixture.assert_complete();
+    }
+);
+v2_apply_test!(
     applied_marker_recovery_without_finality_remains_quarantined,
     {
         let fixture = ApplyFixture::new();

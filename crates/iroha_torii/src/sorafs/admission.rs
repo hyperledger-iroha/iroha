@@ -27,22 +27,25 @@ pub const MAX_ADMISSION_ENVELOPE_BYTES: u64 = 1024 * 1024;
 /// Admission registry loaded from governance envelopes.
 #[derive(Debug, Clone)]
 pub struct AdmissionRegistry {
+    network_id: [u8; 32],
     policy: Option<Arc<ProviderAdmissionCouncilPolicy>>,
     by_provider: HashMap<[u8; 32], Arc<AdmissionRecord>>,
 }
 impl AdmissionRegistry {
     /// Construct an empty registry (used when admission is optional).
     #[must_use]
-    pub fn empty() -> Self {
+    pub fn empty(network_id: [u8; 32]) -> Self {
         Self {
+            network_id,
             policy: None,
             by_provider: HashMap::new(),
         }
     }
     /// Construct an empty registry capable of accepting records under `policy`.
     #[must_use]
-    pub fn with_policy(policy: ProviderAdmissionCouncilPolicy) -> Self {
+    pub fn with_policy(network_id: [u8; 32], policy: ProviderAdmissionCouncilPolicy) -> Self {
         Self {
+            network_id,
             policy: Some(Arc::new(policy)),
             by_provider: HashMap::new(),
         }
@@ -55,6 +58,11 @@ impl AdmissionRegistry {
     pub fn council_policy(&self) -> Option<&ProviderAdmissionCouncilPolicy> {
         self.policy.as_deref()
     }
+    /// Return the exact genesis network identity enforced for every admitted envelope.
+    #[must_use]
+    pub fn network_id(&self) -> &[u8; 32] {
+        &self.network_id
+    }
     /// Construct a registry from an iterator of admission envelopes.
     ///
     /// # Errors
@@ -62,6 +70,7 @@ impl AdmissionRegistry {
     /// Returns a [`SingleEnvelopeError`] when any envelope is invalid or when
     /// multiple envelopes declare the same provider identifier.
     pub fn from_envelopes<I>(
+        network_id: [u8; 32],
         policy: ProviderAdmissionCouncilPolicy,
         envelopes: I,
     ) -> Result<Self, SingleEnvelopeError>
@@ -70,12 +79,13 @@ impl AdmissionRegistry {
     {
         let mut by_provider = HashMap::new();
         for envelope in envelopes {
-            let (provider_id, record) = prepare_entry(envelope, &policy)?;
+            let (provider_id, record) = prepare_entry(envelope, &network_id, &policy)?;
             if by_provider.insert(provider_id, Arc::new(record)).is_some() {
                 return Err(SingleEnvelopeError::DuplicateProvider { provider_id });
             }
         }
         Ok(Self {
+            network_id,
             policy: Some(Arc::new(policy)),
             by_provider,
         })
@@ -88,6 +98,7 @@ impl AdmissionRegistry {
     /// to decode, or multiple envelopes declare the same provider identifier.
     pub fn load_from_dir(
         dir: &Path,
+        network_id: [u8; 32],
         policy: ProviderAdmissionCouncilPolicy,
     ) -> Result<Self, AdmissionRegistryError> {
         let mut by_provider = HashMap::new();
@@ -133,7 +144,7 @@ impl AdmissionRegistry {
                 });
             }
             envelope_count += 1;
-            match load_single_envelope(&path, &policy) {
+            match load_single_envelope(&path, &network_id, &policy) {
                 Ok((provider_id, record)) => {
                     trace!(?path, "loaded provider admission envelope");
                     if by_provider.insert(provider_id, Arc::new(record)).is_some() {
@@ -155,6 +166,7 @@ impl AdmissionRegistry {
             );
         }
         Ok(Self {
+            network_id,
             policy: Some(Arc::new(policy)),
             by_provider,
         })
@@ -174,7 +186,7 @@ impl AdmissionRegistry {
         dir: &Path,
         policy: ProviderAdmissionCouncilPolicy,
     ) -> Result<(), AdmissionRegistryError> {
-        let replacement = Self::load_from_dir(dir, policy)?;
+        let replacement = Self::load_from_dir(dir, self.network_id, policy)?;
         *self = replacement;
         Ok(())
     }
@@ -192,8 +204,8 @@ impl AdmissionRegistry {
             .policy
             .as_deref()
             .ok_or(AdmissionRegistryUpdateError::PolicyUnavailable)?;
-        let (provider_id, record) =
-            prepare_entry(envelope, policy).map_err(AdmissionRegistryUpdateError::Envelope)?;
+        let (provider_id, record) = prepare_entry(envelope, &self.network_id, policy)
+            .map_err(AdmissionRegistryUpdateError::Envelope)?;
         if self.by_provider.contains_key(&provider_id) {
             return Err(AdmissionRegistryUpdateError::DuplicateProvider { provider_id });
         }
@@ -269,6 +281,7 @@ impl AdmissionRegistry {
 }
 fn load_single_envelope(
     path: &Path,
+    network_id: &[u8; 32],
     policy: &ProviderAdmissionCouncilPolicy,
 ) -> Result<([u8; 32], AdmissionRecord), SingleEnvelopeError> {
     let bytes = read_bounded_envelope(path)?;
@@ -278,7 +291,7 @@ fn load_single_envelope(
     if canonical != bytes {
         return Err(SingleEnvelopeError::NonCanonicalEncoding);
     }
-    prepare_entry(envelope, policy)
+    prepare_entry(envelope, network_id, policy)
 }
 fn validate_registry_entry(path: &Path) -> Result<bool, AdmissionRegistryError> {
     let metadata = fs::symlink_metadata(path).map_err(|err| AdmissionRegistryError::Metadata {
@@ -369,8 +382,15 @@ fn read_bounded_envelope(path: &Path) -> Result<Vec<u8>, SingleEnvelopeError> {
 }
 fn prepare_entry(
     envelope: ProviderAdmissionEnvelopeV1,
+    network_id: &[u8; 32],
     policy: &ProviderAdmissionCouncilPolicy,
 ) -> Result<([u8; 32], AdmissionRecord), SingleEnvelopeError> {
+    if envelope.network_id != *network_id {
+        return Err(SingleEnvelopeError::NetworkMismatch {
+            expected: *network_id,
+            provided: envelope.network_id,
+        });
+    }
     let record = AdmissionRecord::new(envelope, policy).map_err(SingleEnvelopeError::Verify)?;
     let provider_id = *record.provider_id();
     Ok((provider_id, record))
@@ -556,6 +576,16 @@ pub enum SingleEnvelopeError {
     /// Input bytes had trailing, alternate, or otherwise non-canonical encoding.
     #[error("provider admission envelope is not canonically encoded")]
     NonCanonicalEncoding,
+    /// A signed envelope belongs to a different genesis network.
+    #[error(
+        "provider admission envelope network {provided:02x?} differs from local network {expected:02x?}"
+    )]
+    NetworkMismatch {
+        /// Network configured by the authoritative local state.
+        expected: [u8; 32],
+        /// Network committed in the council-signed envelope.
+        provided: [u8; 32],
+    },
     /// Envelope verification failed.
     #[error("envelope verification failed: {0}")]
     Verify(ProviderAdmissionEnvelopeError),
@@ -607,8 +637,12 @@ mod tests {
     }
     #[test]
     fn registry_exposes_only_explicit_council_policy() {
-        assert!(AdmissionRegistry::empty().council_policy().is_none());
-        let registry = AdmissionRegistry::with_policy(fixture_policy());
+        assert!(
+            AdmissionRegistry::empty([0xA1; 32])
+                .council_policy()
+                .is_none()
+        );
+        let registry = AdmissionRegistry::with_policy([0xA1; 32], fixture_policy());
         let policy = registry
             .council_policy()
             .expect("explicit registry policy must remain available");
@@ -621,10 +655,45 @@ mod tests {
         let envelope = fixture_envelope();
         let policy = fixture_policy();
         write_fixture(temp.path(), "provider.to");
-        let registry =
-            AdmissionRegistry::load_from_dir(temp.path(), policy).expect("load registry");
+        let registry = AdmissionRegistry::load_from_dir(temp.path(), [0xA1; 32], policy)
+            .expect("load registry");
         assert_eq!(registry.len(), 1);
         assert!(registry.entry(&envelope.proposal.provider_id).is_some());
+    }
+    #[test]
+    fn registry_rejects_fully_signed_foreign_network_at_every_entry_point() {
+        let envelope = fixture_envelope();
+        let policy = fixture_policy();
+        assert!(
+            AdmissionRecord::new(envelope.clone(), &policy).is_ok(),
+            "foreign envelope must otherwise carry valid council signatures"
+        );
+        let local_network = [0xB3; 32];
+        assert!(matches!(
+            AdmissionRegistry::from_envelopes(local_network, policy.clone(), [envelope.clone()]),
+            Err(SingleEnvelopeError::NetworkMismatch { expected, provided })
+                if expected == local_network && provided == envelope.network_id
+        ));
+        let temp = TempDir::new().expect("temp directory");
+        write_fixture(temp.path(), "provider.to");
+        assert!(matches!(
+            AdmissionRegistry::load_from_dir(temp.path(), local_network, policy.clone()),
+            Err(AdmissionRegistryError::LoadEnvelope {
+                source: SingleEnvelopeError::NetworkMismatch { expected, provided },
+                ..
+            }) if expected == local_network && provided == envelope.network_id
+        ));
+        let mut registry = AdmissionRegistry::with_policy(local_network, policy);
+        assert!(matches!(
+            registry.register(envelope.clone()),
+            Err(AdmissionRegistryUpdateError::Envelope(
+                SingleEnvelopeError::NetworkMismatch { expected, provided }
+            )) if expected == local_network && provided == envelope.network_id
+        ));
+        assert!(
+            registry.is_empty(),
+            "foreign registration must not mutate the registry"
+        );
     }
     #[test]
     fn registry_rejects_duplicate_and_corrupt_entries_fail_closed() {
@@ -633,14 +702,14 @@ mod tests {
         write_fixture(duplicates.path(), "a.to");
         write_fixture(duplicates.path(), "b.to");
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(duplicates.path(), policy.clone()),
+            AdmissionRegistry::load_from_dir(duplicates.path(), [0xA1; 32], policy.clone()),
             Err(AdmissionRegistryError::DuplicateProvider { .. })
         ));
         let corrupt = TempDir::new().expect("temp directory");
         write_fixture(corrupt.path(), "a.to");
         fs::write(corrupt.path().join("b.to"), b"not-norito").expect("write corrupt entry");
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(corrupt.path(), policy),
+            AdmissionRegistry::load_from_dir(corrupt.path(), [0xA1; 32], policy),
             Err(AdmissionRegistryError::LoadEnvelope { .. })
         ));
     }
@@ -654,13 +723,13 @@ mod tests {
         )
         .expect("write unknown entry");
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(unknown.path(), policy.clone()),
+            AdmissionRegistry::load_from_dir(unknown.path(), [0xA1; 32], policy.clone()),
             Err(AdmissionRegistryError::UnexpectedEntry { .. })
         ));
         let nonregular = TempDir::new().expect("temp directory");
         fs::create_dir(nonregular.path().join("nested.to")).expect("create nested directory");
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(nonregular.path(), policy.clone()),
+            AdmissionRegistry::load_from_dir(nonregular.path(), [0xA1; 32], policy.clone()),
             Err(AdmissionRegistryError::NonRegularEntry { .. })
         ));
         let oversized = TempDir::new().expect("temp directory");
@@ -668,7 +737,7 @@ mod tests {
         file.set_len(MAX_ADMISSION_ENVELOPE_BYTES + 1)
             .expect("extend envelope");
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(oversized.path(), policy),
+            AdmissionRegistry::load_from_dir(oversized.path(), [0xA1; 32], policy),
             Err(AdmissionRegistryError::LoadEnvelope {
                 source: SingleEnvelopeError::TooLarge { .. },
                 ..
@@ -698,7 +767,7 @@ mod tests {
         fs::write(&target, fixture_bytes("envelope_v1.to")).expect("write target");
         symlink(&target, temp.path().join("provider.to")).expect("create symlink");
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(temp.path(), policy),
+            AdmissionRegistry::load_from_dir(temp.path(), [0xA1; 32], policy),
             Err(AdmissionRegistryError::SymlinkEntry { .. })
         ));
         let root_parent = TempDir::new().expect("root parent");
@@ -708,7 +777,7 @@ mod tests {
         symlink(&registry_target, &registry_link).expect("create directory symlink");
         let policy = fixture_policy();
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(&registry_link, policy),
+            AdmissionRegistry::load_from_dir(&registry_link, [0xA1; 32], policy),
             Err(AdmissionRegistryError::SymlinkDirectory { .. })
         ));
     }
@@ -720,7 +789,7 @@ mod tests {
             File::create(temp.path().join(format!("{index:04}.to"))).expect("create entry");
         }
         assert!(matches!(
-            AdmissionRegistry::load_from_dir(temp.path(), policy),
+            AdmissionRegistry::load_from_dir(temp.path(), [0xA1; 32], policy),
             Err(AdmissionRegistryError::TooManyEntries { .. })
         ));
     }
@@ -728,7 +797,7 @@ mod tests {
     fn registry_mutations_require_policy_and_verify_renewal_and_revocation() {
         let envelope = fixture_envelope();
         let policy = fixture_policy();
-        let mut deny_all = AdmissionRegistry::empty();
+        let mut deny_all = AdmissionRegistry::empty([0xA1; 32]);
         assert!(matches!(
             deny_all.register(envelope.clone()),
             Err(AdmissionRegistryUpdateError::PolicyUnavailable)
@@ -736,7 +805,7 @@ mod tests {
         let renewal: ProviderAdmissionRenewalV1 =
             norito::decode_from_bytes(&fixture_bytes("renewal_v1.to")).expect("decode renewal");
         let mut renewal_registry =
-            AdmissionRegistry::from_envelopes(policy.clone(), [envelope.clone()])
+            AdmissionRegistry::from_envelopes([0xA1; 32], policy.clone(), [envelope.clone()])
                 .expect("build registry");
         renewal_registry
             .apply_renewal(&renewal)
@@ -752,7 +821,8 @@ mod tests {
             norito::decode_from_bytes(&fixture_bytes("revocation_v1.to"))
                 .expect("decode revocation");
         let mut revocation_registry =
-            AdmissionRegistry::from_envelopes(policy, [envelope.clone()]).expect("build registry");
+            AdmissionRegistry::from_envelopes([0xA1; 32], policy, [envelope.clone()])
+                .expect("build registry");
         revocation_registry
             .revoke(&revocation)
             .expect("apply trusted revocation");
@@ -762,8 +832,9 @@ mod tests {
     fn registry_reload_is_atomic_and_supports_explicit_council_rotation() {
         let envelope = fixture_envelope();
         let provider_id = envelope.proposal.provider_id;
-        let mut registry = AdmissionRegistry::from_envelopes(fixture_policy(), [envelope.clone()])
-            .expect("build initial registry");
+        let mut registry =
+            AdmissionRegistry::from_envelopes([0xA1; 32], fixture_policy(), [envelope.clone()])
+                .expect("build initial registry");
         let initial_digest = *registry
             .entry(&provider_id)
             .expect("initial entry")

@@ -2715,6 +2715,20 @@ fn current_prepare_body_replay_requires_exact_current_durable_authority() {
 }
 
 #[test]
+fn active_validate_retry_owners_fit_default_stack() {
+    // Pin the ordinary libtest stack budget even when the caller raises
+    // RUST_MIN_STACK. Exercise both bound owners and the fresh protected-body
+    // admission through the complete effect consumer and canonical replay decode.
+    std::thread::Builder::new()
+        .name("validate-retry-default-stack".to_owned())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(active_validate_retry_owners_preserve_single_admission)
+        .expect("spawn validation retry regression")
+        .join()
+        .expect("validation retry fits the default stack");
+}
+
+#[test]
 fn active_validate_retry_owners_preserve_single_admission() {
     let fixture = Fixture::new();
     for kind in [

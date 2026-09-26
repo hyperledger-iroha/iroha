@@ -850,6 +850,7 @@ impl FairV2IngressSource {
         }
     }
 }
+mod fair_v2_ingress_exact_message_bytes;
 mod fair_v2_ingress_native;
 
 struct FairV2IngressState {
@@ -2344,19 +2345,15 @@ impl FairV2IngressOwnershipEvidence {
     /// Whether this carrier was derived from the exact normalized message now
     /// crossing a downstream ownership seam.
     pub(crate) fn matches_message(&self, message: &BlockMessage) -> bool {
-        let encoded = match message {
-            BlockMessage::V2(message) => message.encode(),
-            message
-                if message.is_lane_local()
-                    || message.is_native_lane()
-                    || message.is_live_auxiliary() =>
-            {
-                message.encode()
-            }
-            _ => return false,
-        };
-        self.first.encoded_bytes.as_ref() == encoded.as_slice()
+        (matches!(message, BlockMessage::V2(_))
+            || message.is_lane_local()
+            || message.is_native_lane()
+            || message.is_live_auxiliary())
             && Some(self.first.message_kind) == FairV2IngressMessageKind::classify(message)
+            && fair_v2_ingress_exact_message_bytes::matches(
+                message,
+                self.first.encoded_bytes.as_ref(),
+            )
     }
     /// Whether the carrier's semantic request origin is the independently
     /// retained inbound sender.
@@ -3211,17 +3208,70 @@ fn fair_v2_ingress_merge_attempt_cursors(
     Some(merged.into_values().collect())
 }
 fn fair_v2_ingress_attempt_cursor_hash(attempts: &[FairV2IngressReplyAttempt]) -> CryptoHash {
-    let mut projection = Vec::with_capacity(24usize.saturating_mul(attempts.len()));
-    projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-cursors:v2");
     let count = u64::try_from(attempts.len())
         .expect("bounded fair-ingress route count is representable as u64");
-    projection.extend_from_slice(&count.to_le_bytes());
-    for attempt in attempts {
-        projection.extend_from_slice(attempt.route.process_local_identity_hash().as_ref());
-        projection.extend_from_slice(&attempt.message_cursor.to_le_bytes());
-        projection.extend_from_slice(&attempt.chunk_cursor.to_le_bytes());
+    CryptoHash::new_from_writer(|writer| {
+        writer.write_all(b"iroha:sumeragi:v2:fair-ingress-cursors:v2")?;
+        writer.write_all(&count.to_le_bytes())?;
+        for attempt in attempts {
+            writer.write_all(attempt.route.process_local_identity_hash().as_ref())?;
+            writer.write_all(&attempt.message_cursor.to_le_bytes())?;
+            writer.write_all(&attempt.chunk_cursor.to_le_bytes())?;
+        }
+        Ok(())
+    })
+    .expect("writing to the fair-ingress hash state cannot fail")
+}
+
+#[cfg(test)]
+mod fair_v2_ingress_attempt_cursor_hash_tests {
+    use super::*;
+    use iroha_crypto::KeyPair;
+    use iroha_p2p::network::NetworkReplyRouteTestFixture;
+
+    fn old_projection_hash(attempts: &[FairV2IngressReplyAttempt]) -> CryptoHash {
+        let mut projection = Vec::with_capacity(24usize.saturating_mul(attempts.len()));
+        projection.extend_from_slice(b"iroha:sumeragi:v2:fair-ingress-cursors:v2");
+        let count = u64::try_from(attempts.len()).expect("test route count fits u64");
+        projection.extend_from_slice(&count.to_le_bytes());
+        for attempt in attempts {
+            projection.extend_from_slice(attempt.route.process_local_identity_hash().as_ref());
+            projection.extend_from_slice(&attempt.message_cursor.to_le_bytes());
+            projection.extend_from_slice(&attempt.chunk_cursor.to_le_bytes());
+        }
+        CryptoHash::new(projection)
     }
-    CryptoHash::new(projection)
+
+    #[test]
+    fn streamed_hash_matches_old_byte_projection_for_empty_and_bounded_routes() {
+        let first = PeerId::new(KeyPair::random().public_key().clone());
+        let second = PeerId::new(KeyPair::random().public_key().clone());
+        let mut routes = NetworkReplyRouteTestFixture::with_source_capacity(first.clone(), 2);
+        let attempts = [
+            FairV2IngressReplyAttempt {
+                route: routes.mint(first),
+                message_cursor: 0,
+                chunk_cursor: u64::MAX,
+            },
+            FairV2IngressReplyAttempt {
+                route: routes.mint(second),
+                message_cursor: u64::MAX,
+                chunk_cursor: 7,
+            },
+        ];
+        for count in 0..=attempts.len() {
+            let prefix = &attempts[..count];
+            assert_eq!(
+                fair_v2_ingress_attempt_cursor_hash(prefix),
+                old_projection_hash(prefix)
+            );
+        }
+        let reversed = [attempts[1].clone(), attempts[0].clone()];
+        assert_eq!(
+            fair_v2_ingress_attempt_cursor_hash(&reversed),
+            old_projection_hash(&reversed)
+        );
+    }
 }
 fn fair_v2_ingress_carrier_attempts_match_routes(
     attempts: &[FairV2IngressReplyAttempt],

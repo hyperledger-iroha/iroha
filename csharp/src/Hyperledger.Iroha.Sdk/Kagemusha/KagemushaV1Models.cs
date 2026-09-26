@@ -213,7 +213,8 @@ public sealed record KagemushaHardwareCredentialV1(
     ReadOnlyMemory<byte> LaneCommitment, ReadOnlyMemory<byte> HardwareEpochId,
     ulong HardwareEpochGeneration, KagemushaDevicePublicKeyV1 DevicePublicKey,
     ReadOnlyMemory<byte> DeviceKeyReference, ulong IssuedAtMilliseconds,
-    ulong ExpiresAtMilliseconds, KagemushaDeviceSignatureV1 GovernanceSignature);
+    ulong ExpiresAtMilliseconds, ReadOnlyMemory<byte> AppPolicyBindingDigest,
+    KagemushaDeviceSignatureV1 GovernanceSignature);
 
 /// <summary>Exact peer-transfer context authenticated by encrypted-credit AAD.</summary>
 public sealed record KagemushaPeerCreditContextV1(

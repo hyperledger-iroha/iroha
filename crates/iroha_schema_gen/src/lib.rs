@@ -109,6 +109,11 @@ macro_rules! schema_types {
             iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody,
             // Native deployment authority and commitment-only retained histories.
             iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority,
+            // Registered for canonical V1 decoding; Core admission remains closed.
+            iroha_data_model::isi::sorafs::MutateSorafsTopologyAuthority,
+            iroha_executor_data_model::permission::sorafs::CanManageSorafsTopologyCustody,
+            iroha_executor_data_model::permission::sorafs::CanOperateSorafsTopologyApproval,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsTopologyApproval,
             iroha_data_model::sorafs::final_promotion_authority::FinalPromotionCustodyRecordV1,
             iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationRecordV1,
             iroha_executor_data_model::permission::sorafs::CanManageSorafsFinalPromotionCustody,
@@ -212,6 +217,7 @@ mod tests {
     mod final_promotion_account_custody;
     mod privacy_qualification;
     mod stream_token_custody;
+    mod topology_authority;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {
         let mut map = BTreeMap::new();
         macro_rules! insert_into_test_map {

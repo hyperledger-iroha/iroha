@@ -187,6 +187,7 @@ impl State {
                 world,
                 merge_ledger: &self.merge_ledger,
                 transactions: storage_transactions::TransactionsBlockField::new(transactions),
+                ordinary_carrier_membership_source: None,
                 commit_topology: block_field::BlockField::new(commit_topology),
                 prev_commit_topology: block_field::BlockField::new(prev_commit_topology),
                 lane_consensus_contexts: block_field::BlockField::new(lane_consensus_contexts),

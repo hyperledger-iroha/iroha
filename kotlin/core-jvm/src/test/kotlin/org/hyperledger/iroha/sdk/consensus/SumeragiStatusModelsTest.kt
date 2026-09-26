@@ -72,6 +72,31 @@ class SumeragiStatusModelsTest {
     }
 
     @Test
+    fun `execution commitment requires and validates transaction tree options`() {
+        val inputField = "\"transaction_input_commitment\": null"
+        val outputField = "\"transaction_output_commitment\": null"
+        val inputTree = "\"transaction_input_commitment\": {\"root\": \"${hash(0x39)}\", \"leaf_count\": 2}"
+        val outputTree = "\"transaction_output_commitment\": {\"root\": \"${hash(0x3a)}\", \"leaf_count\": 3}"
+        val payload = statusJson()
+        val withTrees = payload.replace(inputField, inputTree).replace(outputField, outputTree)
+        val commitment = SumeragiV2Status.parseJson(withTrees)
+            .lastCommitQc?.certificate?.executionCommitment
+        assertEquals(hash(0x39), commitment?.transactionInputCommitment?.root)
+        assertEquals(BigInteger.valueOf(2), commitment?.transactionInputCommitment?.leafCount)
+        assertEquals(hash(0x3a), commitment?.transactionOutputCommitment?.root)
+        assertEquals(BigInteger.valueOf(3), commitment?.transactionOutputCommitment?.leafCount)
+
+        assertFails { SumeragiV2Status.parseJson(payload.replace("$inputField,", "")) }
+        assertFails { SumeragiV2Status.parseJson(withTrees.replace(outputTree, outputField)) }
+        assertFails {
+            SumeragiV2Status.parseJson(withTrees.replace("\"leaf_count\": 3", "\"leaf_count\": 1"))
+        }
+        assertFails {
+            SumeragiV2Status.parseJson(withTrees.replace("\"leaf_count\": 2", "\"leaf_count\": 0"))
+        }
+    }
+
+    @Test
     fun `authoritative parser rejects unknown missing duplicate and noncanonical scalar fields`() {
         val payload = statusJson()
         assertFails {
@@ -380,7 +405,9 @@ class SumeragiStatusModelsTest {
           "lane_finality_manifest": null,
           "merge_carrier": null,
           "executed_block_wire_len": $executedWireLen,
-          "executed_block_wire_hash": "${hash(0x37)}"
+          "executed_block_wire_hash": "${hash(0x37)}",
+          "transaction_input_commitment": null,
+          "transaction_output_commitment": null
         }
     """.trimIndent()
 

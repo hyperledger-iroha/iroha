@@ -691,7 +691,7 @@ pub struct CoreHostImpl<QS> {
     zk_verified_tally: Arc<VecDeque<[u8; 32]>>,
     // Snapshots for state-read syscalls
     zk_roots: BTreeMap<AssetDefinitionId, ZkRootsSnapshot>,
-    zk_elections: BTreeMap<String, (u32, bool, Vec<u64>)>,
+    zk_elections: BTreeMap<String, (u32, bool, Vec<u128>)>,
     vrf_epoch_seeds: BTreeMap<u64, [u8; 32]>,
     // Registry snapshot of verifying keys.
     verifying_keys: BTreeMap<VerifyingKeyId, Arc<VerifyingKeyRecord>>,
@@ -4443,8 +4443,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     ) -> Result<(), ivm::VMError> {
         let mut elections = BTreeMap::new();
         for (id, st) in world.elections().iter() {
-            iroha_data_model::isi::zk::validate_election_tally_v1(st.options, st.tally.len())
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            Self::validate_zk_election_tally(st.options, &st.tally)?;
             elections.insert(id.clone(), (st.options, st.finalized, st.tally.clone()));
         }
         // Validate selector syntax as well as tally shape before replacing any
@@ -4911,22 +4910,30 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// length.
     pub fn set_zk_elections_snapshot(
         &mut self,
-        map: BTreeMap<String, (u32, bool, Vec<u64>)>,
+        map: BTreeMap<String, (u32, bool, Vec<u128>)>,
     ) -> Result<(), ivm::VMError> {
         Self::validate_zk_elections_snapshot(&map)?;
         self.zk_elections = map;
         Ok(())
     }
     fn validate_zk_elections_snapshot(
-        map: &BTreeMap<String, (u32, bool, Vec<u64>)>,
+        map: &BTreeMap<String, (u32, bool, Vec<u128>)>,
     ) -> Result<(), ivm::VMError> {
         for (election_id, (options, _, tally)) in map {
             if !iroha_data_model::governance::is_valid_governance_selector_v1(election_id) {
                 return Err(ivm::VMError::NoritoInvalid);
             }
-            iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
-                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            Self::validate_zk_election_tally(*options, tally)?;
         }
+        Ok(())
+    }
+    fn validate_zk_election_tally(options: u32, tally: &[u128]) -> Result<(), ivm::VMError> {
+        iroha_data_model::isi::zk::validate_election_tally_v1(options, tally.len())
+            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        tally
+            .iter()
+            .try_fold(0_u128, |total, weight| total.checked_add(*weight))
+            .ok_or(ivm::VMError::NoritoInvalid)?;
         Ok(())
     }
     /// Configure the non-zero retained-root bound returned by `ZK_ROOTS_GET`.
@@ -5626,8 +5633,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 tally: Vec::new(),
             });
         };
-        iroha_data_model::isi::zk::validate_election_tally_v1(*options, tally.len())
-            .map_err(|_| ivm::VMError::NoritoInvalid)?;
+        Self::validate_zk_election_tally(*options, tally)?;
         Ok(ivm::zk_verify::VoteGetTallyResponse {
             finalized: *finalized,
             tally: tally.clone(),
@@ -26441,9 +26447,10 @@ seiyaku DurableOwner {
     fn zk_vote_tally_syscall_reads_world_snapshot() {
         let mut world = World::new();
         let mut election = ElectionState::default();
+        let large_weight = u128::from(u64::MAX) + 1;
         election.options = 3;
         election.finalized = true;
-        election.tally = vec![2, 1, 0];
+        election.tally = vec![large_weight, 1, 0];
         world.elections.insert("election-1".to_string(), election);
         let backend = "halo2/ipa";
         let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
@@ -26496,7 +26503,7 @@ seiyaku DurableOwner {
         let resp: ivm::zk_verify::VoteGetTallyResponse =
             norito::decode_from_bytes(tlv.payload).expect("decode response");
         assert!(resp.finalized);
-        assert_eq!(resp.tally, vec![2, 1, 0]);
+        assert_eq!(resp.tally, vec![large_weight, 1, 0]);
     }
     #[test]
     fn zk_vote_tally_syscall_rejects_noncanonical_selector_without_publishing_response() {
@@ -26541,6 +26548,7 @@ seiyaku DurableOwner {
             ("zero-tally", 64, Vec::new()),
             ("long-tally", 64, vec![0; 65]),
             ("oversized", 65, vec![0; 65]),
+            ("overflow", 2, vec![u128::MAX, 1]),
         ] {
             let mut invalid = BTreeMap::new();
             invalid.insert(id.to_string(), (options, false, tally));
@@ -26577,6 +26585,7 @@ seiyaku DurableOwner {
             ("response-zero-tally", 64, Vec::new()),
             ("response-long-tally", 64, vec![0; 65]),
             ("response-oversized", 65, vec![0; 65]),
+            ("response-overflow", 2, vec![u128::MAX, 1]),
         ] {
             let tally_len = tally.len();
             host.zk_elections
@@ -26655,15 +26664,11 @@ seiyaku DurableOwner {
                 ..ElectionState::default()
             },
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let view = state.view();
-
+        // A hostile WorldReadOnly view still exercises the host's atomic replacement
+        // boundary. A durable State must refuse this world before hydration starts.
+        let zk_cfg = crate::state::default_zk_config();
         assert_eq!(
-            host.set_zk_snapshots_from_world(view.world(), &view.zk),
+            host.set_zk_snapshots_from_world(&world.view(), &zk_cfg),
             Err(ivm::VMError::NoritoInvalid)
         );
         assert_eq!(host.zk_roots, roots_before);
@@ -26671,6 +26676,22 @@ seiyaku DurableOwner {
         assert_eq!(host.verifying_keys, verifying_keys_before);
         assert_eq!(host.prepared_verifying_keys, prepared_verifying_keys_before);
         assert_eq!(host.zk_tree_roots_history_len, roots_history_len_before);
+
+        let startup_error = State::try_new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .err()
+        .expect("a noncanonical election selector must refuse State startup");
+        assert!(
+            startup_error
+                .to_string()
+                .contains("elections: current election `invalid/election`"),
+            "startup must identify the invalid election: {startup_error}"
+        );
     }
     #[test]
     fn zk_snapshot_hydration_enforces_v1_election_boundaries() {
@@ -26693,28 +26714,49 @@ seiyaku DurableOwner {
             world.elections.insert("candidate".to_string(), election);
             let kura = Kura::blank_kura_for_testing();
             let query = LiveQueryStore::start_test();
-            let state = State::new_for_testing(world, kura, query);
-            let view = state.view();
             let mut host = CoreHost::new(fixture_account("alice"));
             let mut prior = BTreeMap::new();
             prior.insert("prior".to_string(), (2, true, vec![9, 0]));
             host.set_zk_elections_snapshot(prior)
                 .expect("seed prior snapshot");
-            let result = host.set_zk_snapshots_from_world(view.world(), &view.zk);
             if valid {
-                result.expect("valid option and tally widths hydrate");
+                let state = State::new_for_testing(world, kura, query);
+                let view = state.view();
+                host.set_zk_snapshots_from_world(view.world(), &view.zk)
+                    .expect("valid option and tally widths hydrate from State");
                 assert_eq!(
                     host.zk_elections.get("candidate").cloned(),
                     Some((options, false, vec![0; tally_len]))
                 );
                 assert!(!host.zk_elections.contains_key("prior"));
             } else {
-                assert_eq!(result, Err(ivm::VMError::NoritoInvalid));
+                assert_eq!(
+                    host.set_zk_snapshots_from_world(
+                        &world.view(),
+                        &crate::state::default_zk_config(),
+                    ),
+                    Err(ivm::VMError::NoritoInvalid)
+                );
                 assert_eq!(
                     host.zk_elections.get("prior").cloned(),
                     Some((2, true, vec![9, 0]))
                 );
                 assert!(!host.zk_elections.contains_key("candidate"));
+                let startup_error = State::try_new(
+                    world,
+                    kura,
+                    query,
+                    #[cfg(feature = "telemetry")]
+                    <_>::default(),
+                )
+                .err()
+                .expect("invalid election shape must refuse State startup");
+                assert!(
+                    startup_error
+                        .to_string()
+                        .contains("elections: current election `candidate`"),
+                    "startup must identify the invalid election: {startup_error}"
+                );
             }
         }
         let mut world = World::new();
@@ -26726,19 +26768,13 @@ seiyaku DurableOwner {
                 ..ElectionState::default()
             },
         );
-        let state = State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let view = state.view();
         let mut host = CoreHost::new(fixture_account("alice"));
         let mut prior = BTreeMap::new();
         prior.insert("prior".to_owned(), (2, true, vec![9, 0]));
         host.set_zk_elections_snapshot(prior)
             .expect("seed prior snapshot");
         assert_eq!(
-            host.set_zk_snapshots_from_world(view.world(), &view.zk),
+            host.set_zk_snapshots_from_world(&world.view(), &crate::state::default_zk_config(),),
             Err(ivm::VMError::NoritoInvalid)
         );
         assert_eq!(
@@ -26747,6 +26783,21 @@ seiyaku DurableOwner {
             "failed hydration must preserve the prior snapshot"
         );
         assert!(!host.zk_elections.contains_key("candidate/alias"));
+        let startup_error = State::try_new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .err()
+        .expect("a noncanonical election selector must refuse State startup");
+        assert!(
+            startup_error
+                .to_string()
+                .contains("elections: current election `candidate/alias`"),
+            "startup must identify the invalid election: {startup_error}"
+        );
     }
     #[test]
     fn from_state_hydrates_zk_snapshots() {

@@ -111,7 +111,11 @@ impl State {
                 .into_iter()
                 .map(|key| PeerId::new(key.public_key().clone())),
         );
-        let mut staged = self.block(source.header());
+        // Keep the original signed carrier's prepaid membership source from
+        // pristine block acquisition through validation and publication.
+        let mut staged = self
+            .block_with_pristine_carrier_stage(&source, |_| Ok::<(), String>(()))
+            .map_err(|error| error.to_string())?;
         let valid = ValidBlock::validate_sumeragi_v2_fixture(
             source,
             &topology,

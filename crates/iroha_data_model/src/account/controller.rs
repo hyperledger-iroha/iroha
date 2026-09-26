@@ -9,7 +9,7 @@ use core::fmt;
 use iroha_crypto::{Algorithm, PublicKey, zeroize_value_for_confidential_discard};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-use std::vec::Vec;
+use std::{alloc::Layout, vec::Vec};
 use thiserror::Error;
 
 mod canonical_decode;
@@ -70,6 +70,38 @@ impl AccountController {
             Self::Multisig(policy) => Some(policy),
         }
     }
+    /// Visit the exact nested allocation layouts made by an admitted clone.
+    ///
+    /// The caller can sum these borrowed layouts before asking its original
+    /// allocation owner for capacity; this method itself does not allocate.
+    ///
+    /// # Errors
+    /// Rejects a malformed stored key or a layout that cannot be represented.
+    pub fn for_each_admission_clone_layout(
+        &self,
+        mut visit: impl FnMut(Layout),
+    ) -> Result<(), norito::core::Error> {
+        match self {
+            Self::Single(key) => visit(key_admission_clone_layout(key)?),
+            Self::Multisig(policy) => {
+                visit(multisig_members_layout(policy.members.len())?);
+                for member in &policy.members {
+                    visit(key_admission_clone_layout(&member.public_key)?);
+                }
+            }
+        }
+        Ok(())
+    }
+    /// Fallibly clone the controller through its exact compact-key allocations.
+    ///
+    /// # Errors
+    /// Rejects an allocator or active admission limit refusal, or malformed stored material.
+    pub fn try_clone_for_admission(&self) -> Result<Self, norito::core::Error> {
+        match self {
+            Self::Single(key) => key.try_clone_for_admission().map(Self::Single),
+            Self::Multisig(policy) => policy.try_clone_for_admission().map(Self::Multisig),
+        }
+    }
     /// Wipe controller material before discarding a confidential account copy.
     ///
     /// The controller intentionally becomes invalid and must not be used after
@@ -81,6 +113,21 @@ impl AccountController {
             Self::Multisig(policy) => policy.zeroize_for_confidential_discard(),
         }
     }
+}
+fn key_admission_clone_layout(key: &PublicKey) -> Result<Layout, norito::core::Error> {
+    let (_, payload) = key
+        .try_to_bytes()
+        .map_err(|_| norito::core::Error::Message("invalid stored public key".to_owned()))?;
+    let bytes = payload
+        .len()
+        .checked_add(1)
+        .ok_or(norito::core::Error::AllocationFailed { bytes: u64::MAX })?;
+    Layout::array::<u8>(bytes)
+        .map_err(|_| norito::core::Error::AllocationFailed { bytes: u64::MAX })
+}
+fn multisig_members_layout(count: usize) -> Result<Layout, norito::core::Error> {
+    Layout::array::<MultisigMember>(count)
+        .map_err(|_| norito::core::Error::AllocationFailed { bytes: u64::MAX })
 }
 impl fmt::Display for AccountController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -256,6 +303,50 @@ impl MultisigPolicy {
     #[must_use]
     pub fn members(&self) -> &[MultisigMember] {
         &self.members
+    }
+    /// Clone the canonical member vector with one exact, fallible allocation.
+    ///
+    /// Member compact keys are then cloned fallibly into the prepaid backing.
+    /// This does not acquire a consensus pool charge; the caller must retain
+    /// each matching original charge until the cloned policy is dropped.
+    ///
+    /// # Errors
+    /// Rejects malformed stored policy material or an allocation refusal.
+    #[allow(unsafe_code)]
+    pub fn try_clone_for_admission(&self) -> Result<Self, norito::core::Error> {
+        if self.members.is_empty() {
+            return Err(norito::core::Error::Message(
+                "invalid empty multisig policy".to_owned(),
+            ));
+        }
+        let layout = multisig_members_layout(self.members.len())?;
+        // SAFETY: a valid nonempty policy has a nonzero checked layout. The
+        // allocator receives exactly that layout; length zero exposes no
+        // uninitialized members. Vec drops every initialized member on error.
+        let pointer = unsafe { std::alloc::alloc(layout) };
+        if pointer.is_null() {
+            return Err(norito::core::Error::AllocationFailed {
+                bytes: u64::try_from(layout.size()).unwrap_or(u64::MAX),
+            });
+        }
+        // SAFETY: pointer owns exactly Layout::array::<MultisigMember>(count),
+        // and each push initializes one slot without exceeding that capacity.
+        let member_pointer = core::ptr::NonNull::new(pointer)
+            .expect("the allocation pointer was checked non-null")
+            .cast::<MultisigMember>()
+            .as_ptr();
+        let mut members = unsafe { Vec::from_raw_parts(member_pointer, 0, self.members.len()) };
+        for member in &self.members {
+            members.push(MultisigMember {
+                public_key: member.public_key.try_clone_for_admission()?,
+                weight: member.weight,
+            });
+        }
+        Ok(Self {
+            version: self.version,
+            threshold: self.threshold,
+            members,
+        })
     }
     /// Compute the aggregate weight across all members.
     #[must_use]
@@ -537,6 +628,46 @@ mod tests {
     }
     fn checked_random_public_key() -> PublicKey {
         checked_random_keypair().public_key().clone()
+    }
+    #[test]
+    fn admitted_controller_clone_matches_exact_single_and_multisig_layouts() {
+        let first = checked_random_keypair_with_algorithm(Algorithm::Ed25519)
+            .public_key()
+            .clone();
+        let second = checked_random_keypair_with_algorithm(Algorithm::Ed25519)
+            .public_key()
+            .clone();
+        let single = AccountController::single(first.clone());
+        let mut layouts = Vec::new();
+        single
+            .for_each_admission_clone_layout(|layout| layouts.push(layout))
+            .unwrap();
+        assert_eq!(layouts.len(), 1);
+        assert_eq!(layouts[0].size(), 33);
+        assert_eq!(single.try_clone_for_admission().unwrap(), single);
+
+        let multisig = AccountController::multisig(
+            MultisigPolicy::new(
+                2,
+                vec![
+                    MultisigMember::new(first, 1).unwrap(),
+                    MultisigMember::new(second, 1).unwrap(),
+                ],
+            )
+            .unwrap(),
+        );
+        layouts.clear();
+        multisig
+            .for_each_admission_clone_layout(|layout| layouts.push(layout))
+            .unwrap();
+        assert_eq!(layouts.len(), 3);
+        assert_eq!(
+            layouts[0],
+            std::alloc::Layout::array::<MultisigMember>(2).unwrap()
+        );
+        assert_eq!(layouts[1].size(), 33);
+        assert_eq!(layouts[2].size(), 33);
+        assert_eq!(multisig.try_clone_for_admission().unwrap(), multisig);
     }
     #[test]
     fn multisig_members_require_positive_weight() {

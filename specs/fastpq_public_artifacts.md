@@ -85,7 +85,7 @@ the six-word commitments; none substitutes for the complete logical hash context
 
 Old SHAKE/prototype carrier schemas are rejected. Production ingress still rejects
 compact artifacts, and no compact persistence/admission path uses the offline
-success result. The fixed DEEP child DTO has a 506,351-byte shape ceiling;
+success result. The fixed DEEP child DTO has a 500,783-byte shape ceiling;
 actual carrier, statement and artifact overhead still need their independent
 caps. This is not evidence of complete same-profile proof generation or resource
 qualification; explicit diagnostic budgets do not widen production policy.

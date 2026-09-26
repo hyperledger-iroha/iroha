@@ -143,7 +143,7 @@ fn zk_roots_get_respects_cap_and_max() {
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy
-        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None).into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
     ] {
         stx.world
             .executor()

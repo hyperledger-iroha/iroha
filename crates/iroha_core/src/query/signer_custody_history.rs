@@ -1,4 +1,4 @@
-//! Shared bounded custody history for the two native final-promotion purposes.
+//! Shared bounded custody history for native release-manifest and final-promotion purposes.
 //!
 //! This crate-private owner authenticates retained control rows, not consensus finality or
 //! present hardware use. Purpose adapters retain distinct namespaces, records and domains.
@@ -19,7 +19,7 @@ mod read;
 #[cfg(test)]
 pub(crate) mod staging_fixture;
 mod transition;
-pub(crate) use purpose::{AccountPurpose, ReceiptPurpose};
+pub(crate) use purpose::{AccountPurpose, ManifestPurpose, ReceiptPurpose};
 #[cfg(test)]
 pub(crate) use read::read_control_record;
 pub(crate) use read::{control_digest, read_control, read_control_at};
@@ -59,7 +59,7 @@ pub(crate) struct ExecutionView<'a> {
     pub(crate) recorded_at_unix_ms: u64,
     pub(crate) authority: &'a AccountId,
 }
-/// The existing distinct execution DTOs share only their deterministic coordinate rules.
+/// Distinct purpose-owned execution DTOs share only deterministic coordinate rules.
 pub(crate) trait CustodyExecution: sealed::Execution {
     fn view(&self) -> ExecutionView<'_>;
     fn build(value: ExecutionView<'_>) -> Self;

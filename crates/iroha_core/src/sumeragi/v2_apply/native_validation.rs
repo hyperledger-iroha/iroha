@@ -86,7 +86,7 @@ enum CurrentCarrierSourceClass {
 struct AwaitingNativeSource {
     class: CurrentCarrierSourceClass,
     context: VerifiedHeightContext,
-    proposal: SignedBlock,
+    proposal_hash: iroha_crypto::Hash,
     recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>,
     pending: Option<PendingNativeSource>,
     // Payloads retire before the original shell reservation is refunded.
@@ -128,7 +128,9 @@ impl RetainedValidationOwner for NativeValidationCandidate {
             .expect("original Native validation phase")
         {
             NativeValidationPhase::AwaitingSource(source) => {
-                source.context.context() == context && source.proposal == *body
+                // The retaining service compares the complete signed body before
+                // retrying this phase, so no second deep hash/encode is needed.
+                source.context.context() == context
             }
             NativeValidationPhase::Stopped {
                 context_id,
@@ -149,6 +151,16 @@ impl RetainedValidationOwner for NativeValidationCandidate {
                         == body.canonical_proposal_wire_hash().ok()
             }
         }
+    }
+
+    fn needs_decoded_body(&self) -> bool {
+        matches!(
+            self.phase
+                .as_ref()
+                .as_ref()
+                .expect("original Native validation phase"),
+            NativeValidationPhase::AwaitingSource(_)
+        )
     }
 
     fn ready_commitment(&self) -> Option<wire::ExecutionCommitment> {
@@ -647,6 +659,7 @@ impl OwnedNativeCarrierValidator {
     fn execute_source(
         &self,
         mut waiting: AwaitingNativeSource,
+        proposal: &SignedBlock,
     ) -> Result<NativeValidationPhase, V2ApplyError> {
         if matches!(
             waiting.class,
@@ -659,7 +672,7 @@ impl OwnedNativeCarrierValidator {
                 .into());
             }
             let prepared = self.service.prepare_current_control_source_admitted(
-                &waiting.proposal,
+                proposal,
                 &waiting.context,
                 waiting
                     .shell_admission
@@ -671,7 +684,7 @@ impl OwnedNativeCarrierValidator {
         let prepared = self
             .service
             .state
-            .prepare_proposed_native_lane_batch_source(&waiting.proposal, &waiting.recovered)
+            .prepare_proposed_native_lane_batch_source(proposal, &waiting.recovered)
             .map_err(|reason| LocalValidationRefusal::RecoveryRequired(reason))?;
         let source = match prepared {
             NativeLaneBatchSourcePreparationV1::Ready(source) => source,
@@ -693,7 +706,7 @@ impl OwnedNativeCarrierValidator {
             }
         };
         let prepared = self.service.prepare_native_source_admitted(
-            &waiting.proposal,
+            proposal,
             source,
             waiting.context.clone(),
             &mut waiting.shell_admission,
@@ -806,14 +819,17 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
         let proposal_hash = body
             .canonical_proposal_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-        let result = self.execute_source(AwaitingNativeSource {
-            class,
-            context: self.context.clone(),
-            proposal: body.clone(),
-            recovered: Vec::new(),
-            pending: None,
-            shell_admission: Some(shell_admission),
-        });
+        let result = self.execute_source(
+            AwaitingNativeSource {
+                class,
+                context: self.context.clone(),
+                proposal_hash,
+                recovered: Vec::new(),
+                pending: None,
+                shell_admission: Some(shell_admission),
+            },
+            body,
+        );
         let phase = match result {
             Ok(phase) => phase,
             // Before execution, original archive or shell occupancy can retry normally.
@@ -854,6 +870,7 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
     fn resume(
         &mut self,
         mut owner: Self::Owner,
+        proposal: &SignedBlock,
     ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
         let phase = owner
             .phase
@@ -872,15 +889,8 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 }
                 // All completed original responses stay attached before the one execution.
                 let context_id = waiting.context.context().id();
-                let proposal_hash = match waiting.proposal.canonical_proposal_wire_hash() {
-                    Ok(hash) => hash,
-                    Err(error) => {
-                        let refusal = LocalValidationRefusal::RecoveryRequired(error.to_string());
-                        *owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));
-                        return Err((owner, refusal));
-                    }
-                };
-                match self.execute_source(waiting) {
+                let proposal_hash = waiting.proposal_hash;
+                match self.execute_source(waiting, proposal) {
                     Ok(phase) => phase,
                     Err(error)
                         if matches!(

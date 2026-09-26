@@ -233,10 +233,10 @@ fn custody_changes_atomically_invalidate_active_operations_and_survive_restart()
     let previous_control = f.model.control_head();
     let delta = f
         .apply(
-            TopologyActionV1::Revoke {
+            TopologyActionV1::Revoke(TopologyRevocationV1 {
                 signer: true,
                 attester: false,
-            },
+            }),
             4,
             125_000,
             31,
@@ -260,10 +260,10 @@ fn custody_changes_atomically_invalidate_active_operations_and_survive_restart()
     );
     assert!(
         f.apply(
-            TopologyActionV1::Revoke {
+            TopologyActionV1::Revoke(TopologyRevocationV1 {
                 signer: true,
                 attester: false
-            },
+            }),
             5,
             130_000,
             31
@@ -271,10 +271,10 @@ fn custody_changes_atomically_invalidate_active_operations_and_survive_restart()
         .is_err()
     );
     f.apply(
-        TopologyActionV1::Revoke {
+        TopologyActionV1::Revoke(TopologyRevocationV1 {
             signer: false,
             attester: true,
-        },
+        }),
         5,
         130_000,
         31,
@@ -538,20 +538,20 @@ fn finite_limits_preserve_emergency_revocation_and_terminal_capacity() {
         Err(Error::Capacity)
     );
     f.apply(
-        TopologyActionV1::Revoke {
+        TopologyActionV1::Revoke(TopologyRevocationV1 {
             signer: true,
             attester: false,
-        },
+        }),
         3,
         120_000,
         31,
     )
     .unwrap();
     f.apply(
-        TopologyActionV1::Revoke {
+        TopologyActionV1::Revoke(TopologyRevocationV1 {
             signer: false,
             attester: true,
-        },
+        }),
         4,
         125_000,
         31,
@@ -560,10 +560,10 @@ fn finite_limits_preserve_emergency_revocation_and_terminal_capacity() {
     assert_eq!(f.model.control_head().revision, TOPOLOGY_CONTROL_LIMIT_V1);
     assert_eq!(
         f.apply(
-            TopologyActionV1::Revoke {
+            TopologyActionV1::Revoke(TopologyRevocationV1 {
                 signer: true,
                 attester: true
-            },
+            }),
             5,
             130_000,
             31
@@ -588,10 +588,10 @@ fn finite_limits_preserve_emergency_revocation_and_terminal_capacity() {
     let mut f = Fixture::new();
     f.model.root.history_head.revision = TOPOLOGY_HISTORY_LIMIT_V1;
     let before = f.model.control_head();
-    let transition = f.transition(TopologyActionV1::Revoke {
+    let transition = f.transition(TopologyActionV1::Revoke(TopologyRevocationV1 {
         signer: true,
         attester: false,
-    });
+    }));
     let context = f.context(3, 120_000, 31);
     // Public preparation rejects this inconsistent synthetic summary before using any row.
     assert_eq!(
@@ -619,10 +619,10 @@ fn failed_control_invalidation_does_not_partially_revoke_or_advance_any_head() {
     let history = f.model.history_head();
     assert!(
         f.apply(
-            TopologyActionV1::Revoke {
+            TopologyActionV1::Revoke(TopologyRevocationV1 {
                 signer: true,
                 attester: false
-            },
+            }),
             4,
             125_000,
             31
@@ -654,10 +654,10 @@ fn every_action_has_one_canonical_frame_and_oversized_inputs_fail_before_publica
     for action in [
         TopologyActionV1::Configure(norito::encode_canonical(&f.policy).unwrap()),
         enrolled.transition.action,
-        TopologyActionV1::Revoke {
+        TopologyActionV1::Revoke(TopologyRevocationV1 {
             signer: true,
             attester: false,
-        },
+        }),
         TopologyActionV1::Reserve(Box::new(row.reviewed.clone())),
         TopologyActionV1::Complete(Box::new(f.completion(&row))),
         TopologyActionV1::Expire(TopologyExpireV1 {

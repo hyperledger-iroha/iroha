@@ -168,13 +168,12 @@ impl<N: Copy> MerkleMapRoot<N> {
                     (prefix, *bit)
                 }
             };
-            if let Some((bit, prefix, right)) = parent {
-                if depth <= bit
+            if let Some((bit, prefix, right)) = parent
+                && (depth <= bit
                     || common_prefix(first, &prefix) < bit
-                    || raw_bit(first, bit) != right
-                {
-                    return Err(MerkleMapReadError::InvalidPath);
-                }
+                    || raw_bit(first, bit) != right)
+            {
+                return Err(MerkleMapReadError::InvalidPath);
             }
             match node {
                 MerkleMapNode::Leaf { key: found, value } => {

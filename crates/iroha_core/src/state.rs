@@ -385,6 +385,7 @@ mod carrier_geometry_preparation;
 mod carrier_lifecycle_effects;
 mod carrier_metadata_preparation;
 mod carrier_preparation;
+mod carrier_source_admission;
 pub(crate) use carrier_preparation::{
     CarrierArchivePreparationError, CarrierJournalPreparationError, PreparedCarrier,
     PublishedCarrier, PublishedNativeApply, RetainedCarrier,
@@ -4590,9 +4591,93 @@ impl MergeAdmissionState {
             .retain(|(lane_id, _, _), _| !lanes.contains(lane_id));
     }
 }
+/// Node-local refusal while funding evidence and consensus penalty preparation.
+#[derive(Clone, Debug, PartialEq, Eq, ThisError)]
+pub enum EvidencePreparationError {
+    /// The original finite pool refused a complete preparation backing layout.
+    #[error("consensus penalty preparation capacity: {0}")]
+    Admission(mv::allocation::AllocationRefusal),
+    /// The allocator refused a layout already admitted by the original pool.
+    #[error("allocator refused {requested_bytes} consensus penalty preparation bytes")]
+    Allocator {
+        /// Exact backing allocation requested by the charged buffer.
+        requested_bytes: usize,
+    },
+    /// The active Norito decode scope refused cumulative allocation accounting.
+    #[error(
+        "consensus penalty preparation decode scope attempted {attempted_bytes} bytes above {limit_bytes} bytes"
+    )]
+    DecodeScope {
+        /// Cumulative allocation bytes after the attempted clone.
+        attempted_bytes: u64,
+        /// Maximum cumulative bytes permitted by the active decode scope.
+        limit_bytes: u64,
+    },
+    /// A bounded append violated the count proved by the borrowed scan.
+    #[error("consensus penalty preparation plan exceeded its fixed capacity")]
+    Invariant,
+}
+impl From<mv::allocation::ChargedBufferError> for EvidencePreparationError {
+    fn from(error: mv::allocation::ChargedBufferError) -> Self {
+        match error {
+            mv::allocation::ChargedBufferError::Admission(refusal) => Self::Admission(refusal),
+            mv::allocation::ChargedBufferError::Allocator { requested_bytes } => {
+                Self::Allocator { requested_bytes }
+            }
+        }
+    }
+}
+impl EvidencePreparationError {
+    /// Original pool release observation, available only for temporary contention.
+    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+        match self {
+            Self::Admission(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {
+                Some(release)
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Errors surfaced when applying lane lifecycle updates.
 #[derive(Debug, ThisError)]
 pub enum LaneLifecycleError {
+    /// Process-local evidence preparation cannot fund one complete prune and penalty plan.
+    #[error(
+        "consensus evidence preparation pool {configured_bytes} bytes is below the required {minimum_bytes} bytes"
+    )]
+    EvidencePreparationBudgetTooSmall {
+        /// Attempted process-local pool limit.
+        configured_bytes: usize,
+        /// Exact combined backing size of one maximum-shape prune and pending plan.
+        minimum_bytes: usize,
+    },
+    /// A changed process-local evidence pool cannot replace live original charges.
+    #[error(
+        "consensus evidence preparation pool cannot change while {reserved_bytes} bytes remain reserved"
+    )]
+    EvidencePreparationBudgetBusy {
+        /// Credits retained by original preparation owners.
+        reserved_bytes: usize,
+    },
+    /// Process-local stake-index pool cannot fund one share-key backing element.
+    #[error(
+        "consensus stake-index pool {configured_bytes} bytes is below the required {minimum_bytes} bytes"
+    )]
+    StakeIndexBudgetTooSmall {
+        /// Attempted process-local pool limit.
+        configured_bytes: usize,
+        /// Minimum backing for one share key.
+        minimum_bytes: usize,
+    },
+    /// A changed stake-index pool cannot replace live original charges.
+    #[error(
+        "consensus stake-index pool cannot change while {reserved_bytes} bytes remain reserved"
+    )]
+    StakeIndexBudgetBusy {
+        /// Credits retained by original index owners.
+        reserved_bytes: usize,
+    },
     /// A committed runtime catalog request or retained payload failed validation.
     #[error("invalid committed Nexus runtime catalog: {0}")]
     RuntimeCatalog(String),
@@ -11190,7 +11275,6 @@ impl json::JsonDeserialize for ZkAssetState {
         let mut root_history = None;
         let mut nullifiers = None;
         let mut vk_unshield = None;
-        let mut vk_shield = None;
         let mut frontier_checkpoints = None;
         while let Some(key) = visitor.next_key()? {
             match key.as_str() {
@@ -11211,7 +11295,6 @@ impl json::JsonDeserialize for ZkAssetState {
                 "root_history" => root_history = Some(visitor.parse_value()?),
                 "nullifiers" => nullifiers = Some(visitor.parse_value()?),
                 "vk_unshield" => vk_unshield = Some(visitor.parse_value()?),
-                "vk_shield" => vk_shield = Some(visitor.parse_value()?),
                 "frontier_checkpoints" => frontier_checkpoints = Some(visitor.parse_value()?),
                 other => return Err(json::Error::unknown_field(other)),
             }
@@ -11231,19 +11314,47 @@ impl json::JsonDeserialize for ZkAssetState {
                 .ok_or_else(|| json::MapVisitor::missing_field("root_history"))?,
             nullifiers: nullifiers.ok_or_else(|| json::MapVisitor::missing_field("nullifiers"))?,
             vk_unshield: vk_unshield.unwrap_or(None),
-            vk_shield: vk_shield.unwrap_or(None),
             frontier_checkpoints: frontier_checkpoints.unwrap_or_default(),
         };
         state.validate_tree_integrity().map_err(json::Error::from)?;
         Ok(state)
     }
 }
+/// Maximum accepted ballots in one first-release standalone election.
+pub(crate) const MAX_STANDALONE_ELECTION_BALLOTS_V1: usize = 1_000;
+
+/// One accepted standalone ballot operation in canonical execution order.
+///
+/// This pairs retained public bytes only. The production proof gate remains closed until
+/// a credential and confidential-bond relation authenticates their semantics.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::StandaloneBallotCorpusEntryV1")]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct StandaloneBallotCorpusEntryV1 {
+    /// Nullifier presented by the accepted operation; credential linkage is not inferred here.
+    pub nullifier: [u8; 32],
+    /// Exact commitment presented by that same accepted operation.
+    pub commitment: [u8; 32],
+}
+
 /// Election state for anonymous voting.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::ElectionState")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct ElectionState {
     /// Number of options (K).
     pub options: u32,
@@ -11255,12 +11366,11 @@ pub struct ElectionState {
     pub end_ts: u64,
     /// Whether the election has been finalized.
     pub finalized: bool,
-    /// Public tally per option.
-    pub tally: Vec<u64>,
-    /// Set of consumed ballot nullifiers to prevent double voting.
-    pub ballot_nullifiers: std::collections::BTreeSet<[u8; 32]>,
-    /// Recent ciphertexts (bounded by config) for observability.
-    pub ciphertexts: Vec<Vec<u8>>,
+    /// Exact public conviction weight per option in the frozen asset's smallest units.
+    pub tally: Vec<u128>,
+    /// Complete accepted nullifier/commitment pairs in canonical admission order.
+    #[norito(json = "election_accepted_ballots_json_v1")]
+    pub accepted_ballots: Vec<StandaloneBallotCorpusEntryV1>,
     /// Verifying key identifiers (optional) for ballot and tally proofs.
     pub vk_ballot: Option<iroha_data_model::proof::VerifyingKeyId>,
     /// Commitment of the ballot verifying key bytes at election creation.
@@ -11271,6 +11381,161 @@ pub struct ElectionState {
     pub vk_tally_commitment: Option<[u8; 32]>,
     /// Domain‑separation tag for ballot nullifier derivation.
     pub domain_tag: String,
+}
+mod election_accepted_ballots_json_v1 {
+    use super::{MAX_STANDALONE_ELECTION_BALLOTS_V1, StandaloneBallotCorpusEntryV1};
+    use norito::json::{self, BoundedJsonError, JsonSerialize, JsonWriteSink, Parser, SeqVisitor};
+    use std::{string::String, vec::Vec};
+
+    #[allow(
+        clippy::ptr_arg,
+        reason = "Norito's field helper receives the declared Vec type"
+    )]
+    pub fn serialize(value: &Vec<StandaloneBallotCorpusEntryV1>, out: &mut String) {
+        value.json_serialize(out);
+    }
+
+    #[allow(
+        clippy::ptr_arg,
+        reason = "Norito's field helper receives the declared Vec type"
+    )]
+    pub fn serialize_bounded(
+        value: &Vec<StandaloneBallotCorpusEntryV1>,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        value.json_serialize_to(out)
+    }
+
+    pub fn deserialize(
+        parser: &mut Parser<'_>,
+    ) -> Result<Vec<StandaloneBallotCorpusEntryV1>, json::Error> {
+        // Count the borrowed array before Norito reserves its entries. Decode
+        // each fixed-size pair during preflight, without retaining the corpus.
+        let raw = parser.raw_value_slice()?;
+        let mut scan = Parser::new(raw);
+        if scan.preflight_array_entries()? > MAX_STANDALONE_ELECTION_BALLOTS_V1 {
+            return Err(json::Error::Message(
+                "ballot corpus exceeds the V1 maximum".into(),
+            ));
+        }
+        let mut entries = SeqVisitor::new(&mut scan)?;
+        while entries
+            .next_element::<StandaloneBallotCorpusEntryV1>()?
+            .is_some()
+        {}
+        entries.finish()?;
+        json::from_str(raw)
+    }
+}
+#[cfg(test)]
+mod election_ballot_json_v1_tests {
+    use super::{ElectionState, MAX_STANDALONE_ELECTION_BALLOTS_V1, StandaloneBallotCorpusEntryV1};
+    use norito::json;
+
+    #[test]
+    fn election_ballot_json_rejects_oversized_corpus_before_typed_decode() {
+        let entries = (0..MAX_STANDALONE_ELECTION_BALLOTS_V1)
+            .map(|index| {
+                let mut nullifier = [0_u8; 32];
+                nullifier[..8].copy_from_slice(
+                    &u64::try_from(index)
+                        .expect("test index fits u64")
+                        .to_le_bytes(),
+                );
+                StandaloneBallotCorpusEntryV1 {
+                    nullifier,
+                    commitment: [7_u8; 32],
+                }
+            })
+            .collect::<Vec<_>>();
+        let exact = ElectionState {
+            accepted_ballots: entries,
+            ..ElectionState::default()
+        };
+        let encoded = json::to_json(&exact).expect("encode canonical election corpus");
+        let decoded: ElectionState = json::from_str(&encoded).expect("decode exact ballot cap");
+        assert_eq!(decoded.accepted_ballots, exact.accepted_ballots);
+        assert_eq!(json::to_json(&decoded).expect("re-encode"), encoded);
+        for retired_field in ["ballot_nullifiers", "ciphertexts"] {
+            let retired = encoded.replacen(
+                "\"accepted_ballots\":",
+                &format!("\"{retired_field}\":[],\"accepted_ballots\":"),
+                1,
+            );
+            assert_ne!(retired, encoded);
+            assert!(
+                json::from_str::<ElectionState>(&retired).is_err(),
+                "retired `{retired_field}` layout must not decode"
+            );
+        }
+
+        let mut too_many_entries = exact.clone();
+        too_many_entries
+            .accepted_ballots
+            .push(StandaloneBallotCorpusEntryV1 {
+                nullifier: [255_u8; 32],
+                commitment: [7_u8; 32],
+            });
+        let encoded = json::to_json(&too_many_entries).expect("encode oversized corpus");
+        let error = json::from_str::<ElectionState>(&encoded)
+            .expect_err("oversized corpus must be refused before Vec reservation");
+        assert!(
+            error
+                .to_string()
+                .contains("ballot corpus exceeds the V1 maximum")
+        );
+
+        let encoded = json::to_json(&exact).expect("encode exact corpus");
+        let wrong_commitment_size = encoded.replacen(&"07".repeat(32), &"07".repeat(33), 1);
+        assert_ne!(wrong_commitment_size, encoded);
+        let error = json::from_str::<ElectionState>(&encoded)
+            .expect("original fixed-size commitment is canonical");
+        assert_eq!(error.accepted_ballots, exact.accepted_ballots);
+        assert!(json::from_str::<ElectionState>(&wrong_commitment_size).is_err());
+    }
+}
+const ELECTION_RESTORE_ERROR_PREFIX_V1: &str = "elections: ";
+
+fn validate_election_state_for_restore_v1(
+    election_id: &str,
+    election: &ElectionState,
+    view: &str,
+) -> Result<(), String> {
+    let invalid = |reason: String| {
+        format!("{ELECTION_RESTORE_ERROR_PREFIX_V1}{view} election `{election_id}`: {reason}")
+    };
+    if !iroha_data_model::governance::is_valid_governance_selector_v1(election_id) {
+        return Err(invalid("invalid V1 election selector".into()));
+    }
+    iroha_data_model::isi::zk::validate_election_tally_v1(election.options, election.tally.len())
+        .map_err(|error| invalid(error.to_string()))?;
+    if election.end_ts < election.start_ts {
+        return Err(invalid("end_ts precedes start_ts".into()));
+    }
+    if election.accepted_ballots.len() > MAX_STANDALONE_ELECTION_BALLOTS_V1 {
+        return Err(invalid("ballot corpus exceeds the V1 maximum".into()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if election
+        .accepted_ballots
+        .iter()
+        .any(|entry| !seen.insert(entry.nullifier))
+    {
+        return Err(invalid(
+            "duplicate ballot nullifier in accepted corpus".into(),
+        ));
+    }
+    election
+        .tally
+        .iter()
+        .try_fold(0_u128, |total, weight| total.checked_add(*weight))
+        .ok_or_else(|| invalid("tally total exceeds u128".into()))?;
+    if !election.finalized && election.tally.iter().any(|weight| *weight != 0) {
+        return Err(invalid("unfinalized tally is nonzero".into()));
+    }
+    // TODO: Validate credential-bound bonds and the closed accepted ballot corpus once the
+    // reviewed standalone-election relation exists. Production ballot/finalization is closed.
+    Ok(())
 }
 /// Canonical first-release projection of one typed governance proposal.
 #[derive(norito::NoritoSchema)]
@@ -13082,6 +13347,11 @@ pub struct State {
     nexus_runtime_restored_from_snapshot: bool,
     /// Last block height where Nexus storage budget enforcement ran.
     nexus_storage_budget_last_check_height: AtomicU64,
+    /// Process-lived finite owner for committed-evidence preparation allocations.
+    /// Funded slices cover fixed prune keys and pending penalty metadata only.
+    evidence_preparation_budget: mv::allocation::AllocationBudget,
+    /// Original process-local owner for flat consensus stake-index key backing.
+    stake_index_budget: mv::allocation::AllocationBudget,
     /// Tiered state backend coordinating hot/cold snapshots.
     pub(crate) tiered_backend: Arc<PublicationMutex<TieredStateBackend>>,
     /// Background worker for tiered snapshot processing.
@@ -14064,6 +14334,9 @@ pub struct StateBlockFields<'state> {
     pub merge_ledger: &'state MergeLedgerStore,
     /// Hashes of transactions mapped onto block height where they stored
     pub transactions: storage_transactions::TransactionsBlockField<'state>,
+    /// Originally funded ordinary source hashes, bound before block-start effects.
+    ordinary_carrier_membership_source:
+        Option<carrier_source_admission::PrepaidOrdinaryCarrierMembership>,
     /// Topology used to commit latest block
     pub commit_topology: block_field::CellField<'state, Vec<PeerId>>,
     /// Topology used to commit previous block
@@ -14450,7 +14723,7 @@ impl<'state> StateBlock<'state> {
         // as the pulse. Empty admission/action vectors cannot add generic NPoS work.
         self.apply_pristine_npos_consensus_effects(
             &effects,
-            &prune_keys,
+            prune_keys.as_slice(),
             expected_anchor,
             &roster,
             header.height().get(),
@@ -15551,10 +15824,10 @@ pub(crate) struct DeferredGovernanceBallotPenaltyV1 {
 
 /// Return the exact standalone direct governance ballot carried by an executable.
 ///
-/// A ballot may be represented by either the legacy instruction-list envelope or
-/// a one-item mixed batch, but it must be the sole direct entrypoint. Contracts,
-/// IVM programs, and triggers receive no binding and therefore cannot synthesize
-/// either ballot instruction during signed execution.
+/// A ballot cast or conviction update may be represented by an instruction-list
+/// envelope or a one-item mixed batch, but it must be the sole direct entrypoint.
+/// Contracts, IVM programs, and triggers receive no binding and therefore cannot
+/// synthesize a ballot mutation during signed execution.
 pub(crate) fn standalone_governance_ballot_instruction_v1(
     executable: &iroha_data_model::transaction::Executable,
 ) -> core::result::Result<Option<iroha_data_model::isi::InstructionBox>, &'static str> {
@@ -15565,6 +15838,10 @@ pub(crate) fn standalone_governance_ballot_instruction_v1(
             .as_any()
             .downcast_ref::<iroha_data_model::isi::governance::CastPlainBallot>()
             .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::governance::UpdatePlainConviction>()
+                .is_some()
             || instruction
                 .as_any()
                 .downcast_ref::<iroha_data_model::isi::governance::CastZkBallot>()
@@ -15604,6 +15881,8 @@ pub(crate) fn standalone_governance_ballot_instruction_v1(
 }
 /// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
+    /// Borrowed original State pool for final-application stake indexes.
+    pub(crate) stake_index_budget: &'state mv::allocation::AllocationBudget,
     /// Actual MV runtime scope; projected fields never replace its undo authority.
     pub(crate) canonical_runtime: CellTransaction<'block, 'state, SnapshotNexusRuntime>,
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
@@ -15810,6 +16089,8 @@ pub struct StateTransaction<'block, 'state> {
     pub confidential_gas_used_in_block_so_far: u64,
     /// Current transaction entrypoint hash; unset for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Actual outer Network entry identity; sealed reveals retain a distinct inner call hash.
+    pub(crate) current_network_entrypoint_hash: Option<HashOf<TransactionEntrypoint>>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
@@ -15822,6 +16103,12 @@ pub struct StateTransaction<'block, 'state> {
     pub(crate) private_settlement_carrier_binding: Option<PrivateSettlementCarrierBindingV1>,
     /// Original block entrypoint index for the current transaction, when known.
     pub(crate) current_entrypoint_index: Option<u64>,
+    /// One-use ordinal of a directly signed role-11 instruction, absent for nested effects.
+    pub(crate) current_direct_stream_token_instruction_index: Option<u32>,
+    /// One-use source of a sole directly signed role-15 Reserve/Complete instruction.
+    pub(crate) current_direct_final_promotion_operation_origin: Option<
+        iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationOriginV1,
+    >,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Deterministic per-execution ordinal shared by authority-lifecycle transitions.
@@ -21199,6 +21486,15 @@ impl World {
         Ok(())
     }
     fn rebuild_governance_read_indexes(&mut self) -> Result<(), String> {
+        for (election_id, election) in self.elections.view().iter() {
+            validate_election_state_for_restore_v1(election_id, election, "current")?;
+        }
+        {
+            let previous_elections = self.elections.block_and_revert();
+            for (election_id, election) in previous_elections.iter() {
+                validate_election_state_for_restore_v1(election_id, election, "previous")?;
+            }
+        }
         let maximum_citizens = usize::try_from(MAX_PARLIAMENT_CITIZENS_V1)
             .expect("the V1 Parliament citizen cap fits usize");
         if self.citizens.view().len() > maximum_citizens {
@@ -29813,6 +30109,12 @@ impl State {
             nexus: parking_lot::RwLock::new(nexus),
             nexus_runtime_restored_from_snapshot: false,
             nexus_storage_budget_last_check_height: AtomicU64::new(0),
+            evidence_preparation_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
+            ),
+            stake_index_budget: mv::allocation::AllocationBudget::new(
+                iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
+            ),
             tiered_backend: Arc::clone(&tiered_backend),
             tiered_snapshot_worker,
             fraud_monitoring: default_fraud_monitoring_cfg(),
@@ -30891,6 +31193,22 @@ impl State {
             .map(|(block, ())| *block)
     }
 
+    /// Reserve this exact signed carrier's ordinary replay identities before
+    /// its pristine stage or any shared block-start effects can run.
+    pub(crate) fn block_with_pristine_carrier_stage<E: std::fmt::Debug>(
+        &self,
+        carrier: &SignedBlock,
+        stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
+    ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
+        self.block_with_owned_start_stages_with_carrier(
+            carrier.header(),
+            Some(carrier),
+            stage,
+            |_, ()| Ok(()),
+        )
+        .map(|(block, ())| *block)
+    }
+
     /// Own one overlay across pre-State authentication, all shared start effects,
     /// and a one-use after-start continuation. The continuation's value can only
     /// come from the before-start closure on this SAME overlay. Native callers
@@ -30902,8 +31220,28 @@ impl State {
         before_start: impl FnOnce(&mut StateBlock<'state>) -> Result<T, E>,
         after_start: impl FnOnce(&mut StateBlock<'state>, T) -> Result<R, E>,
     ) -> Result<(Box<StateBlock<'state>>, R), StateBlockStartError<E>> {
+        self.block_with_owned_start_stages_with_carrier(curr_block, None, before_start, after_start)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn block_with_owned_start_stages_with_carrier<'state, E: std::fmt::Debug, T, R>(
+        &'state self,
+        curr_block: BlockHeader,
+        carrier: Option<&SignedBlock>,
+        before_start: impl FnOnce(&mut StateBlock<'state>) -> Result<T, E>,
+        after_start: impl FnOnce(&mut StateBlock<'state>, T) -> Result<R, E>,
+    ) -> Result<(Box<StateBlock<'state>>, R), StateBlockStartError<E>> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
+        let mut ordinary_source = carrier
+            .map(|source| {
+                carrier_source_admission::PrepaidOrdinaryCarrierMembership::reserve(
+                    source,
+                    &self.kura.transaction_history_budget(),
+                )
+            })
+            .transpose()
+            .map_err(StateBlockStartError::Membership)?;
         #[cfg(feature = "telemetry")]
         {
             self.telemetry.set_block_gas_used(0);
@@ -30911,6 +31249,10 @@ impl State {
         }
         let acquired = self.acquire_canonical_runtime_block(false)?;
         let mut sb = self.construct_acquired_block(acquired, curr_block, Box::new);
+        if let (Some(source), Some(prepaid)) = (carrier, ordinary_source.as_mut()) {
+            prepaid.fill_from_preblock(&sb, source);
+        }
+        sb.ordinary_carrier_membership_source = ordinary_source;
         sb.freeze_fastpq_source_context();
         sb.freeze_axt_block_start();
         let continuation = before_start(&mut sb).map_err(StateBlockStartError::Stage)?;
@@ -31575,11 +31917,43 @@ impl State {
         .expect("infallible replacement-block pristine stage")
     }
     /// Create a replacement block with one pre-lifecycle deterministic stage.
+    #[cfg(any(test, feature = "iroha-core-tests", feature = "bench"))]
     pub(crate) fn block_and_revert_with_pristine_stage<E: std::fmt::Debug>(
         &self,
         curr_block: BlockHeader,
         stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
     ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
+        self.block_and_revert_with_pristine_carrier_stage_inner(curr_block, None, stage)
+    }
+
+    /// Fund replacement carrier membership before rewinding its DA projection.
+    pub(crate) fn block_and_revert_with_pristine_carrier_stage<E: std::fmt::Debug>(
+        &self,
+        carrier: &SignedBlock,
+        stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
+    ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
+        self.block_and_revert_with_pristine_carrier_stage_inner(
+            carrier.header(),
+            Some(carrier),
+            stage,
+        )
+    }
+
+    fn block_and_revert_with_pristine_carrier_stage_inner<E: std::fmt::Debug>(
+        &self,
+        curr_block: BlockHeader,
+        carrier: Option<&SignedBlock>,
+        stage: impl FnOnce(&mut StateBlock<'_>) -> Result<(), E>,
+    ) -> Result<StateBlock<'_>, StateBlockStartError<E>> {
+        let mut ordinary_source = carrier
+            .map(|source| {
+                carrier_source_admission::PrepaidOrdinaryCarrierMembership::reserve(
+                    source,
+                    &self.kura.transaction_history_budget(),
+                )
+            })
+            .transpose()
+            .map_err(StateBlockStartError::Membership)?;
         let mut acquired = self.acquire_canonical_runtime_block(true)?;
         // Keep the prepaid original successor through the rewind. A local
         // capacity refusal must happen before changing any live DA projection.
@@ -31592,6 +31966,10 @@ impl State {
         }
         let mut state_block =
             self.construct_acquired_block(acquired, curr_block, core::convert::identity);
+        if let (Some(source), Some(prepaid)) = (carrier, ordinary_source.as_mut()) {
+            prepaid.fill_from_preblock(&state_block, source);
+        }
+        state_block.ordinary_carrier_membership_source = ordinary_source;
         state_block.freeze_fastpq_source_context();
         state_block.freeze_axt_block_start();
         stage(&mut state_block).map_err(StateBlockStartError::Stage)?;
@@ -40746,7 +41124,8 @@ impl State {
     /// Fixed single-slot memory envelope for a cold canonical complete-input read.
     ///
     /// Includes the enforced cumulative Norito decoder graph budget, maximum
-    /// historical carrier wire, proposal clone and counted authentication buffers.
+    /// historical carrier wire and counted authentication buffers. Proposal hashing
+    /// borrows the original carrier payload without cloning its owned graph.
     /// The caller must retain this charge until the synchronous read and returned
     /// input/certificate have physically finished, including cancellation.
     /// Returns `None` when the target cannot represent the protocol envelope.
@@ -46338,6 +46717,38 @@ impl State {
         &mut self,
         mut nexus: iroha_config::parameters::actual::Nexus,
     ) -> Result<(), LaneLifecycleError> {
+        let evidence_preparation_bytes = nexus.storage.consensus_evidence_preparation_bytes;
+        let stake_index_bytes = nexus.storage.consensus_stake_index_bytes;
+        let minimum_evidence_preparation_bytes =
+            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES;
+        if evidence_preparation_bytes < minimum_evidence_preparation_bytes {
+            return Err(LaneLifecycleError::EvidencePreparationBudgetTooSmall {
+                configured_bytes: evidence_preparation_bytes,
+                minimum_bytes: minimum_evidence_preparation_bytes,
+            });
+        }
+        if evidence_preparation_bytes != self.evidence_preparation_budget.limit_bytes()
+            && self.evidence_preparation_budget.reserved_bytes() != 0
+        {
+            return Err(LaneLifecycleError::EvidencePreparationBudgetBusy {
+                reserved_bytes: self.evidence_preparation_budget.reserved_bytes(),
+            });
+        }
+        let minimum_stake_index_bytes =
+            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES;
+        if stake_index_bytes < minimum_stake_index_bytes {
+            return Err(LaneLifecycleError::StakeIndexBudgetTooSmall {
+                configured_bytes: stake_index_bytes,
+                minimum_bytes: minimum_stake_index_bytes,
+            });
+        }
+        if stake_index_bytes != self.stake_index_budget.limit_bytes()
+            && self.stake_index_budget.reserved_bytes() != 0
+        {
+            return Err(LaneLifecycleError::StakeIndexBudgetBusy {
+                reserved_bytes: self.stake_index_budget.reserved_bytes(),
+            });
+        }
         nexus = self.nexus_with_committed_catalog(nexus)?;
         iroha_data_model::merge::validate_merge_lane_authority_geometry(
             &nexus.lane_catalog,
@@ -46357,7 +46768,19 @@ impl State {
             )?;
             nexus.lane_config =
                 iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+            let replacement_evidence_preparation_budget = (evidence_preparation_bytes
+                != self.evidence_preparation_budget.limit_bytes())
+            .then(|| mv::allocation::AllocationBudget::new(evidence_preparation_bytes));
+            let replacement_stake_index_budget = (stake_index_bytes
+                != self.stake_index_budget.limit_bytes())
+            .then(|| mv::allocation::AllocationBudget::new(stake_index_bytes));
             *self.nexus.get_mut() = nexus;
+            if let Some(budget) = replacement_evidence_preparation_budget {
+                self.evidence_preparation_budget = budget;
+            }
+            if let Some(budget) = replacement_stake_index_budget {
+                self.stake_index_budget = budget;
+            }
             warn!(
                 "emergency Fast startup installed restored Nexus configuration without full world-state reconciliation"
             );
@@ -46431,6 +46854,14 @@ impl State {
                 LaneLifecycleError::Storage(format!("merge side-effect replay: {err}"))
             })
         }
+    }
+    /// Borrow the original process-local evidence preparation pool.
+    pub(crate) fn evidence_preparation_budget(&self) -> &mv::allocation::AllocationBudget {
+        &self.evidence_preparation_budget
+    }
+    /// Borrow the original process-local stake-index backing pool.
+    pub(crate) fn stake_index_budget(&self) -> &mv::allocation::AllocationBudget {
+        &self.stake_index_budget
     }
     fn ensure_config_catalog_mutation_is_pre_genesis(
         &self,
@@ -46507,6 +46938,14 @@ impl State {
         configured_lane_catalog: LaneCatalog,
         configured_baseline: Option<Hash>,
     ) -> Result<(), LaneLifecycleError> {
+        let evidence_preparation_bytes = nexus.storage.consensus_evidence_preparation_bytes;
+        let stake_index_bytes = nexus.storage.consensus_stake_index_bytes;
+        let replacement_evidence_preparation_budget = (evidence_preparation_bytes
+            != self.evidence_preparation_budget.limit_bytes())
+        .then(|| mv::allocation::AllocationBudget::new(evidence_preparation_bytes));
+        let replacement_stake_index_budget = (stake_index_bytes
+            != self.stake_index_budget.limit_bytes())
+        .then(|| mv::allocation::AllocationBudget::new(stake_index_bytes));
         let mut releases = LaneLifecycleReleases::new(self);
         iroha_data_model::merge::validate_merge_lane_authority_geometry(
             &nexus.lane_catalog,
@@ -46841,6 +47280,12 @@ impl State {
         self.reset_lane_scoped_runtime_state(&lanes_to_reset, true, &mut releases);
         self.record_da_lane_reset_watermarks(&active_reset_lanes, reset_height, &mut releases);
         drop(releases);
+        if let Some(budget) = replacement_evidence_preparation_budget {
+            self.evidence_preparation_budget = budget;
+        }
+        if let Some(budget) = replacement_stake_index_budget {
+            self.stake_index_budget = budget;
+        }
         self.prune_da_pin_intent_world_indexes_for_lanes(&lanes_to_reset);
         self.prune_public_lane_economic_state_for_lanes(&lanes_to_reset);
         self.prune_verified_lane_relay_contract_state_for_lanes(&lanes_to_reset);
@@ -53899,6 +54344,7 @@ impl<'state> StateBlock<'state> {
         );
         let axt_next_handle_counters_after_block = fields.axt_next_handle_counters.clone();
         StateTransaction {
+            stake_index_budget: fields.state_ref.stake_index_budget(),
             canonical_runtime: fields.canonical_runtime.transaction(),
             committed_fragments: &mut fields.committed_fragments,
             touched_lanes: &mut fields.touched_lanes,
@@ -53997,12 +54443,15 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: fields.confidential_gas_used_in_block,
             tx_call_hash: None,
+            current_network_entrypoint_hash: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
             deferred_governance_ballot_penalties: Vec::new(),
             privacy_transaction_intent_binding: None,
             private_settlement_carrier_binding: None,
             current_entrypoint_index: None,
+            current_direct_stream_token_instruction_index: None,
+            current_direct_final_promotion_operation_origin: None,
             rwa_generated_id_ordinal: 0,
             lifecycle_transition_ordinal: 0,
             executor_fuel_remaining,
@@ -54096,12 +54545,19 @@ impl<'state> StateBlock<'state> {
         mut ordinary_entrypoints: Vec<HashOf<TransactionEntrypoint>>,
         block_height: NonZeroUsize,
     ) -> Result<(), MergeLedgerCommitError> {
+        self.stage_canonical_carrier_membership_from_slice(&mut ordinary_entrypoints, block_height)
+    }
+    fn stage_canonical_carrier_membership_from_slice(
+        &mut self,
+        ordinary_entrypoints: &mut [HashOf<TransactionEntrypoint>],
+        block_height: NonZeroUsize,
+    ) -> Result<(), MergeLedgerCommitError> {
         self.validate_merge_carrier_entrypoint_binding()?;
         let fields = self.fields.as_mut().expect("original executing State");
         fields
             .transactions
             .try_stage_block(
-                &mut ordinary_entrypoints,
+                ordinary_entrypoints,
                 &fields.merge_carrier_entrypoints,
                 block_height,
             )
@@ -59233,6 +59689,47 @@ mod committed_transaction_context_tests {
             Err(GovernanceBallotEntrypointConsumptionErrorV1::AlreadyConsumed)
         );
     }
+    #[test]
+    fn signed_conviction_update_cannot_be_substituted_with_a_second_cast() {
+        use iroha_data_model::isi::governance::{CastPlainBallot, UpdatePlainConviction};
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let mut state_block = state.block(header);
+        let mut transaction = state_block.transaction();
+        let update = InstructionBox::from(UpdatePlainConviction {
+            referendum_id: "committed-plain".to_owned(),
+            owner: ALICE_ID.clone(),
+            amount: 2_u64.into(),
+            duration_blocks: 200,
+        });
+        let cast = InstructionBox::from(CastPlainBallot {
+            referendum_id: "committed-plain".to_owned(),
+            owner: ALICE_ID.clone(),
+            amount: 2_u64.into(),
+            duration_blocks: 200,
+            direction: 0,
+        });
+        let signed = TransactionBuilder::new(
+            state.network_id,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([update.clone()])
+        .sign(ALICE_KEYPAIR.private_key());
+        let entrypoint = TransactionEntrypoint::External(signed);
+        crate::state::seed_committed_transaction_context(&mut transaction, &entrypoint, 3);
+        assert_eq!(
+            transaction.consume_governance_ballot_entrypoint_v1(&cast),
+            Err(GovernanceBallotEntrypointConsumptionErrorV1::InstructionMismatch)
+        );
+        transaction
+            .consume_governance_ballot_entrypoint_v1(&update)
+            .expect("the exact signed conviction update is the sole direct entrypoint");
+    }
 }
 #[cfg(test)]
 mod tiered_snapshot_diff_tests {
@@ -63198,6 +63695,10 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
     isolated.settlement_engine = state.settlement_engine.clone();
     *isolated.crypto.write() = state.crypto();
     *isolated.nexus.write() = state.nexus.read().clone();
+    // The replay probe and the State later installed from it share the exact
+    // original process pool; a newly deserialized default must not reset credits.
+    isolated.evidence_preparation_budget = state.evidence_preparation_budget.clone();
+    isolated.stake_index_budget = state.stake_index_budget.clone();
     isolated.fraud_monitoring = state.fraud_monitoring.clone();
     isolated.zk = state.zk.clone();
     isolated.gov = state.gov.clone();

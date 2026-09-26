@@ -20,7 +20,8 @@ FEE_PAYMENT = {
 }
 CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
-SETTLEMENT_ACCOUNT_ID = AccountAddress.from_account(public_key=bytes([0xA5]) * 32).to_i105()
+SETTLEMENT_PUBLIC_KEY = Ed25519KeyPair.from_private_key(bytes([0xA5]) * 32).public_key
+SETTLEMENT_ACCOUNT_ID = AccountAddress.from_account(public_key=SETTLEMENT_PUBLIC_KEY).to_i105()
 SETTLEMENT_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 
 

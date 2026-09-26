@@ -185,15 +185,16 @@ struct PastaSha256BoundedJobV1<F: ScalarField> {
     final_block_selectors: Vec<AssignedValue<F>>,
 }
 
-/// Circuit-owned inputs for inspecting an ordinary ordered hash claim.
+/// Exact ordinary SHA message cells used by the terminal semantic planner.
 ///
-/// Every dynamic byte is the exact Base cell consumed by [`PastaSha256JobsV1`]. Test helpers also
-/// inspect the assigned terminal words; the production claim bridge obtains those cells from
-/// [`PastaSha256JobsV1::typed_claim_jobs`].
+/// Every dynamic byte is the exact Base cell consumed by [`PastaSha256JobsV1`]. Tests retain
+/// the terminal words to inspect the same assigned job. The production recursive claim obtains
+/// [`PastaSha256TypedClaimJobV1`] from [`PastaSha256JobsV1::typed_claim_jobs`] to bind those
+/// words in-circuit.
 pub(super) struct PastaSha256ClaimJobV1<'a, F: ScalarField> {
     /// Exact, unpadded SHA message cells.
     pub(super) message: &'a [PastaSha256ByteV1<F>],
-    /// Exact eight terminal digest-word cells inspected by test helpers.
+    /// Exact eight terminal digest-word cells inspected by the test inventory.
     #[cfg(test)]
     pub(super) output_words: &'a [AssignedValue<F>; DIGEST_SIZE],
 }
@@ -463,12 +464,33 @@ where
         block_outputs
             .try_reserve_exact(max_blocks)
             .map_err(|_| "Paired Pasta bounded SHA-256 snapshot allocation failed".to_owned())?;
-        for block in native_padded.chunks_exact(BLOCK_BYTE_SIZE) {
+        #[cfg(test)]
+        let job_index = self.jobs.len();
+        for (block_index, block) in native_padded.chunks_exact(BLOCK_BYTE_SIZE).enumerate() {
+            #[cfg(not(test))]
+            let _ = block_index;
             compress256(
                 &mut state,
                 core::slice::from_ref(GenericArray::from_slice(block)),
             );
-            block_outputs.push(state.map(|word| ctx.load_witness(F::from(u64::from(word)))));
+            block_outputs.push(std::array::from_fn(|word_index| {
+                let word = state[word_index];
+                #[cfg(test)]
+                let word = if let Some((target_job, target_word, xor)) = self.output_word_xor {
+                    if target_job == job_index
+                        && target_word == word_index
+                        && u64::try_from(block_index + 1).expect("bounded SHA block count")
+                            == native_blocks
+                    {
+                        word ^ xor
+                    } else {
+                        word
+                    }
+                } else {
+                    word
+                };
+                ctx.load_witness(F::from(u64::from(word)))
+            }));
         }
         let output_words = std::array::from_fn(|word| {
             gate.inner_product(
@@ -671,7 +693,7 @@ where
             .collect()
     }
 
-    /// Borrow the exact ordinary SHA jobs for recursive claim consumption.
+    /// Borrow exact ordinary SHA jobs for semantic planning and test inventory.
     ///
     /// Bounded jobs expose intermediate selected states and therefore need a distinct typed-plan
     /// relation. Reject them here instead of silently treating their capacity padding as an
@@ -1294,6 +1316,72 @@ mod tests {
     #[test]
     fn digest_output_copy_tamper_is_rejected() {
         assert!(verify(Mutation::Output).is_err());
+    }
+    #[test]
+    fn ordinary_digest_output_only_tamper_passes_base_but_fails_table8_copy() {
+        fn run<F: BigPrimeField + PrimeField + From<u64>>() {
+            fn circuit<F: BigPrimeField + PrimeField + From<u64>>(
+                changed_output: bool,
+            ) -> QueueCircuit<F> {
+                let mut builder = BaseCircuitBuilder::<F>::new(false)
+                    .use_k(TEST_K as usize)
+                    .use_lookup_bits(16);
+                let range = builder.range_chip();
+                let mut jobs = PastaSha256JobsV1::default();
+                if changed_output {
+                    jobs = jobs.with_output_word_xor(0, 0, 1);
+                }
+                let assigned = builder
+                    .main(0)
+                    .assign_witnesses(b"abc".map(|byte| F::from(u64::from(byte))));
+                jobs.digest(builder.main(0), &range, &assigned)
+                    .expect("ordinary SHA queue");
+                builder.calculate_params(Some(TEST_UNUSABLE_ROWS));
+                QueueCircuit { builder, jobs }
+            }
+
+            let original = circuit::<F>(false);
+            let altered = circuit::<F>(true);
+            assert_eq!(
+                original.jobs.canonical_plan_messages().unwrap(),
+                altered.jobs.canonical_plan_messages().unwrap(),
+                "the exact SHA preimage and geometry must remain unchanged"
+            );
+            for word in 0..DIGEST_SIZE {
+                let original_word = original.jobs.jobs[0].output_words[word].value();
+                let altered_word = altered.jobs.jobs[0].output_words[word].value();
+                assert_eq!(
+                    *altered_word,
+                    if word == 0 {
+                        F::from(u64::from(
+                            u32::try_from(fe_to_biguint(original_word)).unwrap() ^ 1,
+                        ))
+                    } else {
+                        *original_word
+                    },
+                    "only the first committed output word changes"
+                );
+            }
+            MockProver::run(TEST_K, &altered.builder, vec![])
+                .expect("Base-only ordinary output witness")
+                .assert_satisfied();
+            MockProver::run(TEST_K, &original, vec![])
+                .expect("combined ordinary baseline")
+                .assert_satisfied();
+            let failures = MockProver::run(TEST_K, &altered, vec![])
+                .expect("combined ordinary output witness")
+                .verify()
+                .expect_err("Table8-to-Base output equality must reject the changed word");
+            assert!(
+                failures.iter().all(|failure| matches!(
+                    failure,
+                    halo2_proofs::dev::VerifyFailure::Permutation { .. }
+                )),
+                "only Table8/Base copy equality should fail: {failures:?}"
+            );
+        }
+        run::<Fp>();
+        run::<halo2_proofs::halo2curves::pasta::Fq>();
     }
     #[test]
     fn block_endian_tamper_is_rejected() {

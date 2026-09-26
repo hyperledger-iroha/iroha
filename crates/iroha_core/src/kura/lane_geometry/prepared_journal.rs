@@ -18,6 +18,46 @@ const PHASES: [LaneGeometryPhase; 4] = [
     LaneGeometryPhase::RolledBack,
 ];
 
+/// Count the canonical bare journal before reserving one hard-capped output.
+/// A changed second serialization cannot grow beyond the counted slice.
+/// Keep the Vec so conversion to a boxed slice cannot allocate a second buffer.
+pub(super) fn encode_bounded_geometry_journal(
+    root: &Path,
+    journal: &LaneGeometryJournal,
+    max_bytes: u64,
+) -> Result<Vec<u8>> {
+    let encoded_len = journal.encoded_len();
+    if u64::try_from(encoded_len).map_or(true, |len| len > max_bytes) {
+        return Err(lane_geometry_journal_structure_error(
+            root,
+            ErrorKind::InvalidInput,
+            "prepared lane geometry journal exceeds its aggregate retained byte limit",
+        ));
+    }
+    let mut encoded = Vec::new();
+    encoded.try_reserve_exact(encoded_len).map_err(|_| {
+        lane_geometry_journal_structure_error(
+            root,
+            ErrorKind::OutOfMemory,
+            "prepared lane geometry journal output allocation failed",
+        )
+    })?;
+    encoded.resize(encoded_len, 0);
+    let written = norito::codec::encode_adaptive_into(
+        journal,
+        &mut std::io::Cursor::new(encoded.as_mut_slice()),
+    )
+    .map_err(Error::NoritoFrame)?;
+    if written != encoded_len {
+        return Err(lane_geometry_journal_structure_error(
+            root,
+            ErrorKind::InvalidData,
+            "prepared lane geometry journal changed length after admission",
+        ));
+    }
+    Ok(encoded)
+}
+
 struct PhaseByteChange {
     offset: usize,
     before: u8,
@@ -28,7 +68,7 @@ struct PhaseByteChange {
 /// File operations and retries reuse the same admitted operations and buffer.
 pub(super) struct PreparedGeometryJournalTransition {
     operations: Box<[LaneGeometryOperation]>,
-    encoded: Box<[u8]>,
+    encoded: Vec<u8>,
     encoded_phase: LaneGeometryPhase,
     changes: [Box<[PhaseByteChange]>; 4],
     writer: Option<Box<RetainedGeometryJournal>>,
@@ -46,7 +86,7 @@ impl PreparedGeometryJournalTransition {
         kura.validate_lane_geometry_journal(&journal)?;
         let mut writer = Some(RetainedGeometryJournal::capture(
             kura,
-            journal.encode().len(),
+            journal.encoded_len(),
         )?);
         Self::prepare_with_retained_writer(kura, journal, record_index, &mut writer)
     }
@@ -64,7 +104,7 @@ impl PreparedGeometryJournalTransition {
                 "prepared geometry transition lost its retained descriptor",
             )
         })?;
-        writer.prepare_next_write(journal.encode().len())?;
+        writer.prepare_next_write(journal.encoded_len())?;
         let predecessor = match writer.predecessor() {
             Some(bytes) => {
                 decode_exact::<LaneGeometryJournal>(bytes).map_err(Error::NoritoFrame)?
@@ -118,7 +158,6 @@ impl PreparedGeometryJournalTransition {
         })?;
         record.phase = LaneGeometryPhase::Intent;
         validate_lane_geometry_journal_structure(root, &journal)?;
-        let encoded = journal.encode().into_boxed_slice();
         let capacity_error = || {
             lane_geometry_journal_structure_error(
                 root,
@@ -126,16 +165,14 @@ impl PreparedGeometryJournalTransition {
                 "prepared lane geometry journal exceeds its aggregate retained byte limit",
             )
         };
-        if u64::try_from(encoded.len()).unwrap_or(u64::MAX) > max_bytes {
-            return Err(capacity_error());
-        }
+        let encoded = encode_bounded_geometry_journal(root, &journal, max_bytes)?;
         let mut changes = std::array::from_fn(|_| Box::<[PhaseByteChange]>::default());
         for (phase_index, phase) in PHASES.iter().enumerate().skip(1) {
             journal.records[record_index].phase = *phase;
             validate_lane_geometry_journal_structure(root, &journal)?;
-            // At most one comparison encoding exists temporarily. Drop it at
-            // each iteration; persistence never allocates a full-size copy.
-            let phase_bytes = journal.encode();
+            // At most one fallibly reserved comparison encoding exists
+            // temporarily. Drop it before preparing the next phase.
+            let phase_bytes = encode_bounded_geometry_journal(root, &journal, max_bytes)?;
             if phase_bytes.len() != encoded.len() {
                 return Err(lane_geometry_journal_structure_error(
                     root,
@@ -184,7 +221,7 @@ impl PreparedGeometryJournalTransition {
 
     /// Account for every allocation this owner retains, including operation paths.
     pub(super) fn retained_allocation_bytes(&self) -> Option<u64> {
-        let mut bytes = std::mem::size_of::<Self>().checked_add(self.encoded.len())?;
+        let mut bytes = std::mem::size_of::<Self>().checked_add(self.encoded.capacity())?;
         bytes = bytes.checked_add(
             self.operations
                 .len()

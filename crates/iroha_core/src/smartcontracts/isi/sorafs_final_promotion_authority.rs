@@ -6,7 +6,9 @@ use super::Execute;
 use crate::{
     query::{
         final_promotion_authority::*,
-        signer_custody_history::{self, NativeControl, ReceiptPurpose, read_control},
+        signer_custody_history::{
+            self, AccountPurpose, NativeControl, ReceiptPurpose, read_control,
+        },
     },
     state::{StateTransaction, WorldReadOnly},
 };
@@ -19,7 +21,8 @@ use iroha_data_model::{
     sorafs::final_promotion_authority::{
         FINAL_PROMOTION_MAX_OPERATIONS_V1, FINAL_PROMOTION_RESERVATION_MS_V1,
         FinalPromotionAuthorityActionV1 as Action, FinalPromotionExecutionV1,
-        FinalPromotionOperationOutcomeV1, FinalPromotionOperationRecordV1,
+        FinalPromotionOperationOriginV1, FinalPromotionOperationOutcomeV1,
+        FinalPromotionOperationRecordV1,
     },
 };
 use iroha_model_base::state_path::StatePath;
@@ -30,7 +33,10 @@ use sorafs_manifest::signer::{
         SignerCustodyAnchorV1, SignerCustodyUseContextV1, VerifiedSignerCustodyV1,
         verify_signer_custody_use_v1,
     },
-    protocol::{SignerOperationActionV1, SignerOperationCustodyV1, SignerOperationReservationV1},
+    protocol::{
+        SignerKeyAlgorithmV1, SignerOperationActionV1, SignerOperationCustodyV1,
+        SignerOperationReservationV1, SignerPurposeBindingV1, SignerRoleV1,
+    },
 };
 
 mod control;
@@ -102,6 +108,65 @@ fn use_current(
         },
     )
     .map_err(|_| Error::Custody)
+}
+/// Consume the executor's one-use direct signed source and current role-15 custody.
+///
+/// A transaction or Check result alone cannot populate a native origin. The executor supplies
+/// this token only for the sole direct instruction in the exact signed outer Network entry.
+fn direct_operation_source(
+    tx: &mut StateTransaction<'_, '_>,
+    authority: &AccountId,
+    deployment: &str,
+) -> Result<FinalPromotionOperationOriginV1, Error> {
+    let origin = tx
+        .current_direct_final_promotion_operation_origin
+        .take()
+        .ok_or(Error::Source)?;
+    let outer = tx.current_network_entrypoint_hash.ok_or(Error::Source)?;
+    if origin.entry_hash == [0; 32]
+        || *outer.as_ref() != origin.entry_hash
+        || tx
+            .current_entrypoint_index
+            .and_then(|index| u32::try_from(index).ok())
+            != Some(origin.entry_index)
+        || tx.tx_call_hash != Some(iroha_crypto::Hash::from(outer))
+        || tx.current_tx_hash.is_none()
+    {
+        return Err(Error::Source);
+    }
+    let account = read_control::<AccountPurpose>(tx.world(), deployment)?.ok_or(Error::Custody)?;
+    let binding = &account.state.policy.binding;
+    let SignerPurposeBindingV1::FinalPromotionAccountTransaction { deployment_id } =
+        &binding.purpose
+    else {
+        return Err(Error::Custody);
+    };
+    if deployment_id != deployment
+        || binding.role != SignerRoleV1::FinalPromotionAccountTransaction
+        || binding.algorithm != SignerKeyAlgorithmV1::Ed25519
+        || AccountId::new(binding.public_key.clone()) != *authority
+    {
+        return Err(Error::Custody);
+    }
+    let anchor = signer_custody_history::committed_control::<AccountPurpose>(tx, &account)?;
+    let now = tx.block_unix_timestamp_ms();
+    // The committed parent State is observed at this transaction's logical block time. This
+    // does not renew the signed enrollment: its expiry and active-head anchor remain unchanged.
+    verify_signer_custody_use_v1(
+        account.record.enrollment.as_deref().ok_or(Error::Custody)?,
+        binding,
+        &account.state.policy.custody_trust(),
+        &SignerCustodyUseContextV1 {
+            now_unix_ms: now,
+            anchor_observed_at_unix_ms: now,
+            current_anchor: anchor,
+            active_head: account.state.active_head.ok_or(Error::Custody)?,
+            signer_revoked: account.state.signer_revoked,
+            attester_revoked: account.state.attester_revoked,
+        },
+    )
+    .map_err(|_| Error::Custody)?;
+    Ok(origin)
 }
 fn stage_operation(
     tx: &StateTransaction<'_, '_>,

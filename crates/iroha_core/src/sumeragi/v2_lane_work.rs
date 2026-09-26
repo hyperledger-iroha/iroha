@@ -26644,7 +26644,11 @@ pub(super) mod tests {
         context: &wire::HeightContext,
     ) {
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
-        let mut state_block = state.block(block.as_ref().header());
+        let mut state_block = state
+            .block_with_pristine_carrier_stage(block.as_ref(), |_| {
+                Ok::<(), core::convert::Infallible>(())
+            })
+            .expect("fund signed fixture carrier membership before State start");
         let _events = state_block.apply_without_execution(block, topology.as_ref().to_owned());
         state_block.commit().expect("commit synthetic state block");
     }
@@ -31378,6 +31382,7 @@ pub(super) mod tests {
         (successor, keys, request)
     }
     include!("v2_lane_work/strict_historical_read_tests.rs");
+    include!("v2_lane_work/canonical_executed_body_worker_source_tests.rs");
     include!("v2_lane_work/strict_volatile_owner_tests.rs");
     include!("v2_lane_work/strict_receipt_gate_tests.rs");
     fn canonical_executed_block_recovery_fixture() -> (

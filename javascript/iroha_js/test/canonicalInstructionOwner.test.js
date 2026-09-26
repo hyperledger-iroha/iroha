@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { AccountAddress } from "../src/address.js";
 import { _createNoritoInstructionApi } from "../src/norito.js";
 import { createNativeRuntime } from "../src/nativeRuntime.js";
 
@@ -141,4 +142,142 @@ test("parsed owner output rejects rounded integers while preserving fractional J
   }));
   assert.deepEqual(api.noritoDecodeInstruction(Buffer.of(1), 753), JSON.parse(exact));
   assert.deepEqual(api.noritoDecodeInstructionBoxArchive(Buffer.of(1), 753), JSON.parse(exact));
+});
+
+function exactInstructionOwner(exactJson) {
+  const frame = Buffer.of(0xa1, 0x01);
+  const archive = Buffer.of(0xb2, 0x02);
+  const encoded = [];
+  const api = _createNoritoInstructionApi(createNativeRuntime({
+    noritoEncodeInstruction(value, networkPrefix) {
+      assert.equal(networkPrefix, 753);
+      assert.equal(value, exactJson);
+      encoded.push("frame");
+      return frame;
+    },
+    noritoDecodeInstruction(value, networkPrefix) {
+      assert.equal(networkPrefix, 753);
+      assert.deepEqual(Buffer.from(value), frame);
+      return exactJson;
+    },
+    noritoEncodeInstructionBoxArchive(value, networkPrefix) {
+      assert.equal(networkPrefix, 753);
+      assert.equal(value, exactJson);
+      encoded.push("archive");
+      return archive;
+    },
+    noritoDecodeInstructionBoxArchive(value, networkPrefix) {
+      assert.equal(networkPrefix, 753);
+      assert.deepEqual(Buffer.from(value), archive);
+      return exactJson;
+    },
+  }));
+  return { api, frame, archive, encoded };
+}
+
+test("public ballot durations stay exact through frame and archive owners alongside retail dispatch", (context) => {
+  const account = "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
+  // Address validation has its own native owner. Isolate that dependency so
+  // this test exercises instruction JSON dispatch without loading an addon.
+  context.mock.method(AccountAddress, "parseEncoded", (value) => {
+    assert.equal(value, account);
+    return { address: { toI105: () => account }, chainDiscriminant: 753 };
+  });
+  for (const variant of ["CastPlainBallot", "UpdatePlainConviction"]) {
+    for (const duration of [0, Number.MAX_SAFE_INTEGER, 9007199254740993n, 18446744073709551615n, "18446744073709551615"]) {
+      const payload = {
+        referendum_id: "exact-duration",
+        owner: account,
+        amount: "1.25",
+        duration_blocks: duration,
+        ...(variant === "CastPlainBallot" ? { direction: 1 } : {}),
+      };
+      const exact = `{"${variant}":{"referendum_id":"exact-duration","owner":"${account}","amount":"1.25","duration_blocks":${duration}${variant === "CastPlainBallot" ? ',"direction":1' : ""}}}`;
+      const { api, frame, archive, encoded } = exactInstructionOwner(exact);
+      const source = { [variant]: payload };
+      const expected = {
+        [variant]: {
+          ...payload,
+          duration_blocks: typeof duration === "string" ? BigInt(duration) : duration,
+        },
+      };
+      assert.deepEqual(api.noritoEncodeInstruction(source, 753), frame);
+      assert.deepEqual(api.noritoEncodeInstructionBoxArchive(source, 753), archive);
+      assert.deepEqual(structuredClone(api.noritoDecodeInstruction(frame, 753)), expected);
+      assert.deepEqual(structuredClone(api.noritoDecodeInstructionBoxArchive(archive, 753)), expected);
+      assert.equal(api.noritoDecodeInstruction(frame, 753, { parseJson: false }), exact);
+      assert.deepEqual(encoded, ["frame", "frame", "archive"]);
+      assert.equal(source[variant].duration_blocks, duration, "encoding must not mutate the input");
+    }
+  }
+});
+
+test("all retail instruction variants retain exact JSON across frame and archive owners", () => {
+  const fixtures = [
+    {
+      value: { ActivateRetailDailyLimitV1: { policy: { physical_dataspace: 8648377547929788715n, revision: 1 } } },
+      exact: '{"ActivateRetailDailyLimitV1":{"policy":{"physical_dataspace":8648377547929788715,"revision":1}}}',
+    },
+    {
+      value: { BindRetailIdentityV1: { attestation: { body: { physical_dataspace: 18446744073709551615n, policy_revision: 1 } } } },
+      exact: '{"BindRetailIdentityV1":{"attestation":{"body":{"physical_dataspace":18446744073709551615,"policy_revision":1}}}}',
+    },
+    {
+      value: { RetailMonetaryMovementV1: { purpose: "mint_to_reserve", amount: "9007199254740993.25", operation_digest: Array(32).fill(3) } },
+      exact: `{"RetailMonetaryMovementV1":{"purpose":"mint_to_reserve","amount":"9007199254740993.25","operation_digest":[${Array(32).fill(3).join(",")}]}}`,
+    },
+  ];
+  for (const { value, exact } of fixtures) {
+    const { api, frame, archive, encoded } = exactInstructionOwner(exact);
+    assert.deepEqual(api.noritoEncodeInstruction(value, 753), frame);
+    assert.deepEqual(api.noritoEncodeInstructionBoxArchive(value, 753), archive);
+    assert.deepEqual(structuredClone(api.noritoDecodeInstruction(frame, 753)), value);
+    assert.deepEqual(structuredClone(api.noritoDecodeInstructionBoxArchive(archive, 753)), value);
+    assert.equal(api.noritoDecodeInstruction(frame, 753, { parseJson: false }), exact);
+    assert.deepEqual(encoded, ["frame", "frame", "archive"]);
+  }
+});
+
+test("retail exact-integer dispatch rejects lossy object numbers before either encoder", () => {
+  const fail = () => assert.fail("invalid integer must not reach the native owner");
+  const api = _createNoritoInstructionApi(createNativeRuntime({
+    noritoEncodeInstruction: fail,
+    noritoEncodeInstructionBoxArchive: fail,
+  }));
+  for (const physical_dataspace of [Number.MAX_SAFE_INTEGER + 1, 1.5, NaN, Infinity, -0]) {
+    const source = { ActivateRetailDailyLimitV1: { policy: { physical_dataspace } } };
+    assert.throws(() => api.noritoEncodeInstruction(source, 753), /canonical safe integers/u);
+    assert.throws(() => api.noritoEncodeInstructionBoxArchive(source, 753), /canonical safe integers/u);
+  }
+});
+
+test("retail and public-ballot decoders keep strict duplicate-key rejection", () => {
+  for (const exact of [
+    '{"ActivateRetailDailyLimitV1":{"policy":{"physical_dataspace":9007199254740993,"physical_dataspace":1}}}',
+    '{"CastPlainBallot":{"duration_blocks":18446744073709551615,"duration_blocks":1}}',
+    '{"UpdatePlainConviction":{"duration_blocks":18446744073709551615,"duration_blocks":1}}',
+  ]) {
+    const { api, frame, archive } = exactInstructionOwner(exact);
+    assert.throws(() => api.noritoDecodeInstruction(frame, 753), /duplicate object key/u);
+    assert.throws(() => api.noritoDecodeInstructionBoxArchive(archive, 753), /duplicate object key/u);
+  }
+});
+
+test("u128 election tallies reach both encoders exactly and never decode as rounded numbers", () => {
+  const tallyProof = {
+    backend: "halo2/ipa",
+    proof: { backend: "halo2/ipa", bytes: [1] },
+    vk_ref: { backend: "halo2/ipa", name: "vk_tally" },
+  };
+  const maximum = (1n << 128n) - 1n;
+  const source = { zk: { FinalizeElection: { election_id: "exact-tally", tally: [maximum, 0], tally_proof: tallyProof } } };
+  const exact = `{"zk":{"FinalizeElection":{"election_id":"exact-tally","tally":[${maximum},0],"tally_proof":${JSON.stringify(tallyProof)}}}}`;
+  const { api, frame, archive, encoded } = exactInstructionOwner(exact);
+  assert.deepEqual(api.noritoEncodeInstruction(source, 753), frame);
+  assert.deepEqual(api.noritoEncodeInstructionBoxArchive(source, 753), archive);
+  assert.equal(api.noritoDecodeInstruction(frame, 753, { parseJson: false }), exact);
+  assert.throws(() => api.noritoDecodeInstruction(frame, 753), /exact JSON text/u);
+  assert.throws(() => api.noritoDecodeInstructionBoxArchive(archive, 753), /exact JSON text/u);
+  assert.deepEqual(encoded, ["frame", "frame", "archive"]);
+  assert.deepEqual(source.zk.FinalizeElection.tally, [maximum, 0]);
 });

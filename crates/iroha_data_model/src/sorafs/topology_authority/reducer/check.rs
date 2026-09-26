@@ -59,7 +59,7 @@ pub(super) fn evaluate<L: TopologyIndexedReadV1 + ?Sized>(
         if now >= row.reservation.expires_at_unix_ms {
             return Err(Error::Time.into());
         }
-    } else if !matches!(row.outcome, TopologyOutcomeV1::Completed { .. }) {
+    } else if !matches!(row.outcome, TopologyOutcomeV1::Completed(_)) {
         return Err(Error::Conflict.into());
     }
     Ok(())

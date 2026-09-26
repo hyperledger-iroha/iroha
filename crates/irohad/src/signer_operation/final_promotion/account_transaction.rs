@@ -46,11 +46,13 @@ use super::super::journal::{
 };
 
 mod signing;
+mod software_key;
 pub use signing::{
     AuthorizedFinalPromotionAccountTransactionV1, FinalPromotionAccountKeyRequestV1,
     PendingFinalPromotionAccountReleaseV1, PendingFinalPromotionAccountSignatureV1,
     SignedFinalPromotionAccountTransactionV1,
 };
+pub use software_key::SoftwareFinalPromotionAccountKeyV1;
 
 const PAYLOAD_DOMAIN: &[u8] = b"iroha.sorafs.final-promotion-account.transaction-payload.v1\0";
 

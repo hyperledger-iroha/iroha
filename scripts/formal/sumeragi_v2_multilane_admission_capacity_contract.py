@@ -61,11 +61,13 @@ BINDINGS = (
         "if first_admission_size.is_none() && evidence_count > 0",
         'reason: CandidateWorkDeferral::EvidenceEnvelope',
         "CandidateAssemblyOutcome::WorkDeferred", "begin_fail_stop_operation()",
-        "deterministic_start_work_pending(&builder.carrier_context_header())",
+        "let prepared_header = builder.carrier_context_header()",
+        "deterministic_start_work_pending(&prepared_header)",
         "let _state_publication = request.state.consensus_publication_lease()",
         "selection_lease.retain_only(&selected_hashes)",
         "candidate_block_has_independent_proposal_work(",
         "if canonical_wire.len() != encoded_bytes",
+        "if block.header() != prepared_header",
     )),
     (CAPACITY, "fn", "publish_authenticated_capacity", (
         "verified: &VerifiedHeightContext", "config: &SumeragiV2Config",
@@ -392,7 +394,7 @@ def validate_owners(root, models, errors, rust_binding_item):
             "native.retain_candidate_source(source)",
             "let assembly = match outcome {",
             "if !output_guard.restart_required()",
-            "&& proposal_state.defer_history_admission(",
+            "&& proposal_state.defer_pre_signing_candidate_history_admission(",
             "Err(error) => return Err(error.into())",
         ),
     }
@@ -423,7 +425,7 @@ def validate_owners(root, models, errors, rust_binding_item):
             "native.retain_candidate_source(source)",
             "let assembly = match outcome {",
             "if !output_guard.restart_required()",
-            "&& proposal_state.defer_history_admission(",
+            "&& proposal_state.defer_pre_signing_candidate_history_admission(",
             "Err(error) => return Err(error.into())",
             "let candidate = match assembly")
     ordered("NativeRunnerProcess::assemble_candidate", "self.poll_candidate()?", "if completed.owner == owner",
@@ -444,10 +446,12 @@ def validate_owners(root, models, errors, rust_binding_item):
             ".map_err(V2RunnerError::Service)?", "beacon_readiness.begin_height(")
     ordered("candidate_limits", "require_local_payload_capacity(", "CandidateLimits::new(")
     ordered("V2CandidateAssembler::assemble_at_generation",
-            "deterministic_start_work_pending(&builder.carrier_context_header())",
+            "let prepared_header = builder.carrier_context_header()",
+            "deterministic_start_work_pending(&prepared_header)",
             "let _state_publication = request.state.consensus_publication_lease()",
             "selection_lease.retain_only(&selected_hashes)",
             "begin_fail_stop_operation()",
+            "if block.header() != prepared_header",
             "candidate_block_has_independent_proposal_work(")
     candidate = items.get("V2CandidateAssembler::assemble_at_generation", "")
     lease = _code("let _state_publication = request.state.consensus_publication_lease()")

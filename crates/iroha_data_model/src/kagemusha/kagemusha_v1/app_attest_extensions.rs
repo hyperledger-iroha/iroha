@@ -9,7 +9,7 @@ const RELEASE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-attest-release\0";
 
 /// A malformed assertion extension or invalid release identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum AppAttestExtensionError {
+pub enum AppAttestExtensionError {
     /// The signed authenticator data has the wrong shape or a disallowed value.
     Malformed,
     /// The asserted release differs from the release selected by authenticated policy.
@@ -18,7 +18,7 @@ pub(crate) enum AppAttestExtensionError {
 
 /// The two signed App Attest assertion release extensions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct AppAttestAssertionExtensions<'a> {
+pub struct AppAttestAssertionExtensions<'a> {
     /// Apple validation category, decoded from its four-byte little-endian CBOR byte string.
     pub(crate) validation_category: u32,
     /// Exact app bundle version in the signed authenticator data.
@@ -30,7 +30,7 @@ pub(crate) struct AppAttestAssertionExtensions<'a> {
 /// Keeping the original CBOR alongside the signed authenticator bytes prevents an SDK from
 /// substituting a locally reconstructed object for the evidence that the platform returned.
 /// Only canonical definite-length CBOR with the two first-release keys is accepted.
-pub(crate) fn parse_app_attest_assertion(
+pub fn parse_app_attest_assertion(
     raw_assertion: &[u8],
 ) -> Result<(&[u8], &[u8]), AppAttestExtensionError> {
     if raw_assertion.is_empty() || raw_assertion.len() > MAX_RAW_ASSERTION_BYTES {
@@ -87,7 +87,7 @@ impl AppAttestAssertionExtensions<'_> {
 /// signed extension bytes, bounds all CBOR lengths, rejects
 /// indefinite forms, duplicate/missing/unknown keys and trailing bytes. The caller handles the
 /// exact 37-byte assertion form separately; an empty suffix is not an extension map.
-pub(crate) fn parse_app_attest_assertion_extensions(
+pub fn parse_app_attest_assertion_extensions(
     authenticator_data: &[u8],
 ) -> Result<AppAttestAssertionExtensions<'_>, AppAttestExtensionError> {
     if !(38..=MAX_AUTHENTICATOR_DATA_BYTES).contains(&authenticator_data.len()) {
@@ -137,7 +137,7 @@ pub(crate) fn parse_app_attest_assertion_extensions(
 ///
 /// This digest binds assertion extension values to `app_release_digest` in authenticated
 /// release policy. It must be computed from release metadata independently of the assertion.
-pub(crate) fn app_attest_release_extensions_digest(
+pub fn app_attest_release_extensions_digest(
     validation_category: u32,
     bundle_version: &str,
 ) -> Result<[u8; 32], AppAttestExtensionError> {
@@ -208,7 +208,7 @@ impl<'a> CborReader<'a> {
                     .try_into()
                     .map_err(|_| AppAttestExtensionError::Malformed)?;
                 let value = usize::from(u16::from_be_bytes(bytes));
-                if value <= u8::MAX as usize {
+                if u8::try_from(value).is_ok() {
                     return Err(AppAttestExtensionError::Malformed);
                 }
                 value
@@ -220,7 +220,7 @@ impl<'a> CborReader<'a> {
                     .map_err(|_| AppAttestExtensionError::Malformed)?;
                 let value = usize::try_from(u32::from_be_bytes(bytes))
                     .map_err(|_| AppAttestExtensionError::Malformed)?;
-                if value <= u16::MAX as usize {
+                if u16::try_from(value).is_ok() {
                     return Err(AppAttestExtensionError::Malformed);
                 }
                 value

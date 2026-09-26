@@ -10,15 +10,15 @@ import org.hyperledger.iroha.sdk.core.model.instructions.RegisterZkAssetInstruct
 class NativeSignerBridge private constructor() {
     companion object {
         private const val LIBRARY_NAME = "connect_norito_bridge"
-        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 23
-        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 6
+        const val REQUIRED_BRIDGE_ABI_VERSION: Int = 24
+        const val REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION: Int = 7
         private const val HASH_BYTES = 32
         private val nativeAvailable: Boolean = loadLibrary()
 
         @JvmStatic
         fun isNativeAvailable(): Boolean = nativeAvailable
 
-        /** Admit a complete canonical account controller through the ABI-23 Rust owner. */
+        /** Admit a complete canonical account controller through the ABI-24 Rust owner. */
         @JvmStatic
         internal fun validateAccountAddressCanonical(canonical: ByteArray) {
             require(canonical.size in 1..64 * 1024 * 1024) { "canonical account address exceeds the JNI input bound" }
@@ -153,7 +153,6 @@ class NativeSignerBridge private constructor() {
             val authorityBytes = textBytes(authority, "authority")
             val assetBytes = textBytes(selected.asset, "asset")
             val unshieldBytes = optionalTextBytes(selected.unshieldVerifyingKey)
-            val shieldBytes = optionalTextBytes(selected.shieldVerifyingKey)
             val ttl = ttlValue(ttlMs)
             val hasTtl = ttlPresent(ttlMs)
             check(nativeAvailable) { "$LIBRARY_NAME is not available in this runtime" }
@@ -169,8 +168,6 @@ class NativeSignerBridge private constructor() {
                     assetBytes,
                     unshieldBytes,
                     selected.unshieldVerifyingKey != null,
-                    shieldBytes,
-                    selected.shieldVerifyingKey != null,
                     key,
                     feePaymentJson,
                 ),
@@ -297,8 +294,6 @@ class NativeSignerBridge private constructor() {
             asset: ByteArray,
             unshieldVerifyingKey: ByteArray,
             unshieldVerifyingKeyPresent: Boolean,
-            shieldVerifyingKey: ByteArray,
-            shieldVerifyingKeyPresent: Boolean,
             privateKey: ByteArray,
             feePaymentJson: ByteArray,
         ): Array<ByteArray?>?

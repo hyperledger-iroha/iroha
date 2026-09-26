@@ -185,10 +185,10 @@ impl LaneInputPayloadV1 {
         let mut routes = BTreeMap::new();
         for bound in &binding.admission_context.route_incarnations {
             let key = (bound.leg.route.lane_id, bound.leg.route.dataspace_id);
-            if let Some(previous) = routes.insert(key, bound.lane_incarnation) {
-                if previous != bound.lane_incarnation {
-                    return Err("one admitted route claims different incarnations".to_owned());
-                }
+            if let Some(previous) = routes.insert(key, bound.lane_incarnation)
+                && previous != bound.lane_incarnation
+            {
+                return Err("one admitted route claims different incarnations".to_owned());
             }
         }
         if routes.len() != self.descriptor.slots.len()

@@ -1375,6 +1375,7 @@ mod tests {
         };
         let advert = ProviderAdvertV1 {
             version: sorafs_manifest::PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at: NOW.saturating_sub(10),
             expires_at: NOW.saturating_add(600),
             body,
@@ -1840,7 +1841,7 @@ mod tests {
     fn empty_cache_is_deny_all_for_authorized_provider_ids() {
         let cache = ProviderAdvertCache::new(
             [CapabilityType::ToriiGateway],
-            Arc::new(crate::sorafs::AdmissionRegistry::empty()),
+            Arc::new(crate::sorafs::AdmissionRegistry::empty([0xA1; 32])),
         );
         assert!(
             resolve_authorized_peers(

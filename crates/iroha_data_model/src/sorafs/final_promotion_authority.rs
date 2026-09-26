@@ -147,6 +147,10 @@ pub struct FinalPromotionExpireV1 {
 }
 
 /// Sole native mutation surface; custody management and operation rights are separate.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "role-15 Check and Complete stay inline in the signed canonical V1 action; boxing changes Norito and schema"
+)]
 #[derive(
     Clone,
     Debug,
@@ -422,6 +426,38 @@ pub enum FinalPromotionOperationOutcomeV1 {
     Invalidated,
 }
 
+/// Direct signed Network entry that caused one native role-14 operation revision.
+///
+/// The hash names the entrypoint payload. The index distinguishes the exact entry inside its
+/// finalized block; consumers must also authenticate the complete signed External bytes and
+/// aligned successful result. This is never derived from a caller-supplied operation claim.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationOriginV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct FinalPromotionOperationOriginV1 {
+    /// Hash of the exact outer signed Network entrypoint payload.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub entry_hash: [u8; 32],
+    /// Zero-based position of that entrypoint in its canonical block.
+    pub entry_index: u32,
+}
+
 /// Immutable operation transition under a deployment-wide history and never-reset fence.
 #[derive(
     Clone,
@@ -454,6 +490,10 @@ pub struct FinalPromotionOperationRecordV1 {
     pub request_digest: [u8; 32],
     /// Native execution of this immutable transition.
     pub execution: FinalPromotionExecutionV1,
+    /// Direct signed source of this transition for Reserve/Complete; terminal control actions
+    /// without a protected account signature carry no source claim.
+    #[norito(required)]
+    pub execution_origin: Option<FinalPromotionOperationOriginV1>,
     /// Exact original request/action/audit predecessor.
     pub intent: SignerOperationIntentV1,
     /// Exact original custody/control identity.
@@ -462,6 +502,8 @@ pub struct FinalPromotionOperationRecordV1 {
     pub reservation: SignerOperationReservationV1,
     /// Original reservation execution and authority; custody managers cannot replace its owner.
     pub reserved: FinalPromotionExecutionV1,
+    /// Direct signed source that allocated the original reservation, retained across all endings.
+    pub reserved_origin: FinalPromotionOperationOriginV1,
     /// Current outcome committed by this transition.
     pub outcome: FinalPromotionOperationOutcomeV1,
 }

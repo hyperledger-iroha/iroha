@@ -1206,10 +1206,10 @@ def _check_cargo_workflow(
     # complete job digests above. They do not open a general Cargo-policy lane.
     canonical_graph_steps = {
         "privacy_javascript_sdk_tests": ("Authenticate canonical privacy graph snapshot",),
-        "privacy_csharp_sdk_tests": ("Authenticate exact ABI23 C# privacy input",),
+        "privacy_csharp_sdk_tests": ("Authenticate exact ABI24 C# privacy input",),
         "privacy_swift_sdk_parse": (
             "Authenticate canonical privacy graph snapshot",
-            "Revalidate frozen Swift inputs and ABI23 artifacts",
+            "Revalidate frozen Swift inputs and ABI24 artifacts",
         ),
     }
     for job_name, step_names in canonical_graph_steps.items():
@@ -1717,45 +1717,45 @@ def check(overrides: dict[str, str] | None = None) -> None:
 
     require(
         re.search(
-            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*23\s*;",
+            r"PRIVACY_REQUIRED_BRIDGE_ABI_VERSION\s*=\s*24\s*;",
             js_crypto,
         )
         is not None
         and "abiVersion === PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in js_crypto
         and "abiVersion >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in js_crypto,
-        "JavaScript privacy bridge must require exact first-release ABI 23",
+        "JavaScript privacy bridge must require exact first-release ABI 24",
         errors,
     )
     require(
-        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 23
+        literal_assignment(py_crypto, "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION") == 24
         and "version == PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" in py_crypto
         and "version >= PRIVACY_REQUIRED_BRIDGE_ABI_VERSION" not in py_crypto,
-        "Python privacy bridge must require exact first-release ABI 23",
+        "Python privacy bridge must require exact first-release ABI 24",
         errors,
     )
     require(
         "fn privacy_bridge_abi_version_py() -> u32" in py_native
         and "PRIVACY_BRIDGE_ABI_VERSION_V1" in py_native,
-        "Python native privacy bridge must report first-release bridge ABI 23",
+        "Python native privacy bridge must report first-release bridge ABI 24",
         errors,
     )
     for relative, marker in (
         (
             "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt",
-            "REQUIRED_BRIDGE_ABI_VERSION: Int = 23",
+            "REQUIRED_BRIDGE_ABI_VERSION: Int = 24",
         ),
         (
             "IrohaSwift/Sources/IrohaSwift/PrivacyNativeBridge.swift",
-            "requiredBridgeABIVersion: UInt32 = 23",
+            "requiredBridgeABIVersion: UInt32 = 24",
         ),
         (
             "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs",
-            "RequiredBridgeAbiVersion = 23",
+            "RequiredBridgeAbiVersion = 24",
         ),
     ):
         require(
             marker in read(relative, overrides),
-            f"{relative} must require exact first-release bridge ABI 23",
+            f"{relative} must require exact first-release bridge ABI 24",
             errors,
         )
 
@@ -2051,7 +2051,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
     require(
         "loadedBridgeAbiVersion == PrivacyNativeBridge.requiredBridgeABIVersion"
         in swift_native_bridge,
-        "Swift privacy availability must require exact first-release ABI 23",
+        "Swift privacy availability must require exact first-release ABI 24",
         errors,
     )
 
@@ -2268,7 +2268,7 @@ def check(overrides: dict[str, str] | None = None) -> None:
         "ci/check_privacy_js_sdk.sh",
         "ci/check_privacy_jvm_sdk.sh",
         "ci/check_privacy_swift_sdk.sh",
-        "scripts/check_native_sdk_abi23_artifact.py",
+        "scripts/check_native_sdk_artifact.py",
         "scripts/check_privacy_python_witness_boundary.py",
         "scripts/check_privacy_retired_witness_boundary.py",
         "scripts/tests/check_privacy_retired_witness_boundary_test.py",
@@ -2813,14 +2813,14 @@ if mode:
     elif mode == "--negative-control-js-privacy-abi-drift":
         path = "javascript/iroha_js/src/crypto.js"
         overrides[path] = read(path, {}).replace(
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 23",
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 24",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION = 22",
             1,
         )
     elif mode == "--negative-control-python-privacy-abi-drift":
         path = "python/iroha_python/src/iroha_python/crypto.py"
         overrides[path] = read(path, {}).replace(
-            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 23",
+            "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 24",
             "PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: Final[int] = 22",
             1,
         )

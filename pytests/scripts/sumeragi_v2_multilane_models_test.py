@@ -3663,8 +3663,8 @@ def test_native_prepublication_formatted_call_sites_match_raw_ledger():
 
 
 @pytest.mark.parametrize("symbol,old,new", [
-    pytest.param("State::block_and_revert_with_pristine_stage", "acquired\n                .rewind_da_indexes_to_height(target_height)", "self.rewind_da_indexes_to_height(target_height)", id="rewind-original-acquired-receiver"),
-    pytest.param("State::block_and_revert_with_pristine_stage", ".rewind_da_indexes_to_height(target_height)", ".rewind_da_indexes_to_height(current_height)", id="rewind-original-target-height"),
+    pytest.param("State::block_and_revert_with_pristine_carrier_stage_inner", "acquired\n                .rewind_da_indexes_to_height(target_height)", "self.rewind_da_indexes_to_height(target_height)", id="rewind-original-acquired-receiver"),
+    pytest.param("State::block_and_revert_with_pristine_carrier_stage_inner", ".rewind_da_indexes_to_height(target_height)", ".rewind_da_indexes_to_height(current_height)", id="rewind-original-target-height"),
     pytest.param("State::install_lane_manifests", "            manifests,", "            other_manifests,", id="manifest-original-registry"),
     pytest.param("State::install_lane_manifests", "            privacy,", "            other_privacy,", id="manifest-original-privacy"),
     pytest.param("State::install_lane_manifests", "            &publication,", "            &other_publication,", id="manifest-original-generation"),

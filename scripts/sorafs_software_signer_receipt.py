@@ -262,7 +262,8 @@ def validate_receipt_validation(
         "response_attestation_valid": True,
     }
     for field, expected in exact.items():
-        if value.get(field) != expected:
+        observed = value.get(field)
+        if type(observed) is not type(expected) or observed != expected:
             errors.append(
                 f"software signer receipt validation {field} does not match the reviewed promotion binding"
             )

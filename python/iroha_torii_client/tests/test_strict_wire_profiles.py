@@ -22,6 +22,7 @@ from iroha_torii_client import (  # noqa: E402
 from iroha_torii_client.client import (  # noqa: E402
     _decode_canonical_i105_string,
     _decode_i105_string,
+    _parse_i105_sentinel_and_payload,
 )
 from iroha_torii_client.identifier_receipts import _identifier_byte_vec  # noqa: E402
 
@@ -57,11 +58,13 @@ def test_i105_decoder_rejects_out_of_range_numeric_discriminants() -> None:
         inspect_i105_network_prefix(CANONICAL_OWNER, expected_chain_discriminant=0x0171)
     for literal in (f"n65536{payload}", f"n70000{payload}"):
         with pytest.raises(ValueError, match="unsigned 16-bit"):
+            _parse_i105_sentinel_and_payload(literal)
+        with pytest.raises(ValueError, match="invalid account address"):
             _decode_i105_string(literal)
 
 
 def test_canonical_i105_decoder_rejects_checksum_valid_malformed_controller() -> None:
-    with pytest.raises(ValueError, match="invalid public-key material"):
+    with pytest.raises(ValueError, match="invalid public key payload for declared curve"):
         _decode_canonical_i105_string(CHECKSUM_VALID_ZERO_KEY_OWNER)
 
 

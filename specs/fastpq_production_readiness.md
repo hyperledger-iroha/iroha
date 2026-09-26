@@ -18,16 +18,22 @@ The normal offline quantity facade now selects the bounded DEEP profile:
 of the complete 923-slot AIR. The applied candidate includes the real coefficient
 conversion, exact polynomial quotient and full producer, together with per-phase
 work limits, cumulative decode accounting and authenticated row-root results.
-The September 26 normal-library and test build passes with 3,720 unchanged
-dependency-closure inputs; its focused selection passes 238 tests with zero
+The September 26 normal-library and test build passed with 3,720 unchanged
+dependency-closure inputs; its focused selection passed 238 tests with zero
 failures and seven explicitly deferred full-domain/artifact diagnostics. The real
-full-domain quotient and eight-million-point FFT/inverse checks also pass. Raw
-proof generation is running; complete ordinary/AXT producer verification
-remains pending in the [integration checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
+full-domain quotient and eight-million-point FFT/inverse checks also passed. Raw
+proof generation had started; complete ordinary/AXT producer verification
+remained pending in the [integration checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
 The September 22 verifier-only checkpoint passed 84 focused tests;
 its maximum-shaped codec fixture measured 506,351 bytes, which is not evidence
 of a valid generated proof. Earlier profile measurements below retain their
 original source and do not qualify this replacement or change Core admission.
+The merged fixed-fiber codec has a 500,783-byte maximum frame. Its sole profile
+binds the doubled FRI degree sequence `[131072,8192,512,64,8,2]` and checks the
+complete terminal against a degree-`<2` polynomial on the folded coset. The
+integrated producer remains unmasked and constructs degree-`<N` trace columns;
+the larger verifier degree envelope does not provide witness hiding. The
+earlier executable evidence does not qualify this merged profile.
 
 ## Predecessor offline implementation and evidence
 
@@ -155,6 +161,33 @@ arithmetic and radix-2/4/8/16 folding passed 21 new real-crate tests, alongside
 test-registered components. The September 26 integration above now includes the
 complete offline format and producer; full generated-proof evidence and Core
 admission remain separate requirements.
+
+The September 24 [source-projection record](../docs/history/2026-09-24/fastpq-f07-source-projection-and-prover-blocker.md)
+recorded a borrowed exact 342-to-301 physical-source bridge with focused Cargo
+validation passing 1/1. Its then-current 506,351-byte DEEP DTO lacked a genuine
+producer. The original degree-`<N` base-field row layout could not consume any
+nonzero subgroup-vanishing mask; opening 64 complete masked Fp4 rows would also
+exceed 512 KiB. The [original DEEP preflight](../docs/history/2026-09-24/fastpq-f07-deep-preflight-and-resource-floor.md)
+established that obstruction with six focused tests against its then-current
+geometry. A reviewed hiding/opening redesign remains a prerequisite for private
+proofs; the integrated unmasked producer does not satisfy that obligation.
+The then-inactive [doubled-degree terminal boundary](../docs/history/2026-09-24/fastpq-f07-doubled-degree-terminal-boundary.md)
+bound the screened `<2N` FRI progression into its transcript and checked all
+128 terminal values at degree `<2` on the folded coset. Its private-producer
+preflight still refuses every private mask: degree fit alone does not provide
+the missing base-field hiding, quotient blinding, committed composition mask, or security
+argument. That 506,351-byte DTO had not gained the proposed `R(x)` opening or a
+genuine producer, and did not change Core admission. The selected test-only DEEP
+suite passed 53/53; this does not qualify a private proof or its concrete
+soundness and resource bounds.
+The subsequent [fixed FRI fiber wire cut](../docs/history/2026-09-24/fastpq-f07-fixed-fri-fibers.md)
+removed sequence counts and per-element framing from the then-inactive DEEP
+DTO's fixed-arity `[16,16,8,8,4]` fibers. Its profile identity binds the new layout;
+the exact maximal frame is 500,783 bytes, 5,568 fewer than the preceding
+candidate; 55 focused DEEP tests passed against that frame and bounded decoder.
+The codec is retained in the integrated profile. This wire reduction does not
+shrink the recorded ~8 MB predecessor proofs or supply the missing `R(x)`,
+masked producer, privacy argument, or admission path.
 
 ## Completion goals
 

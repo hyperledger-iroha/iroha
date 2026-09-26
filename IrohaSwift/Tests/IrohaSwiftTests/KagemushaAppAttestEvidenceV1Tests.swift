@@ -267,11 +267,15 @@ final class KagemushaAppAttestEvidenceV1Tests: XCTestCase {
       attestedKeyID: Data(repeating: 5, count: 32),
       laneID: Data(repeating: 6, count: 32))
     XCTAssertNotEqual(enrollment.clientDataHash, selected.clientDataHash)
-    XCTAssertEqual(enrollment.canonicalClientData,
-      Data("iroha:kagemusha:v1:app-device-attestation-challenge\0".utf8)
-        + Data(repeating: 1, count: 32) + Data(repeating: 2, count: 32)
-        + Data(repeating: 3, count: 32) + Data(repeating: 4, count: 32)
-        + Data(repeating: 5, count: 32) + Data(repeating: 6, count: 32))
+    var expectedEnrollmentClientData = Data(
+      "iroha:kagemusha:v1:app-device-attestation-challenge\0".utf8)
+    expectedEnrollmentClientData.append(Data(repeating: 1, count: 32))
+    expectedEnrollmentClientData.append(Data(repeating: 2, count: 32))
+    expectedEnrollmentClientData.append(Data(repeating: 3, count: 32))
+    expectedEnrollmentClientData.append(Data(repeating: 4, count: 32))
+    expectedEnrollmentClientData.append(Data(repeating: 5, count: 32))
+    expectedEnrollmentClientData.append(Data(repeating: 6, count: 32))
+    XCTAssertEqual(enrollment.canonicalClientData, expectedEnrollmentClientData)
     for changedField in 0..<6 {
       var fields = (1...6).map { Data(repeating: UInt8($0), count: 32) }
       fields[changedField][0] ^= 1

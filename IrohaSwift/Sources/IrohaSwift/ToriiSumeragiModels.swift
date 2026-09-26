@@ -161,6 +161,40 @@ public struct ToriiSumeragiV2LaneFinalityManifestCommitment:
     }
 }
 
+/// Exact root and non-zero leaf count of a transaction input or output tree.
+public struct ToriiSumeragiV2TransactionTreeCommitment: Decodable, Sendable, Equatable {
+    public let root: String
+    public let leafCount: UInt64
+
+    private enum CodingKeys: String, CodingKey {
+        case root
+        case leafCount = "leaf_count"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: ["root", "leaf_count"],
+            context: "Sumeragi v2 transaction tree commitment"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        root = try ToriiNativeAmxWire.canonicalHash(
+            container.decode(String.self, forKey: .root),
+            key: .root,
+            container: container,
+            field: "Sumeragi v2 transaction tree root"
+        )
+        leafCount = try container.decode(UInt64.self, forKey: .leafCount)
+        guard leafCount > 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .leafCount,
+                in: container,
+                debugDescription: "Sumeragi v2 transaction tree leaf_count must be non-zero"
+            )
+        }
+    }
+}
+
 /// Exact merge-ledger entry identity authenticated by Sumeragi v2 finality.
 public struct ToriiSumeragiV2MergeCarrierCommitment: Decodable, Sendable, Equatable {
     public static let canonicalVersion: UInt16 = 1
@@ -201,6 +235,7 @@ public struct ToriiSumeragiV2MergeCarrierCommitment: Decodable, Sendable, Equata
 public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable {
     public static let canonicalNativeAmxApplicationManifestVersion: UInt16 = 1
     public static let maximumNativeAmxApplicationManifestLeafCount: UInt32 = 1024
+    public static let maximumExecutedBlockWireBytes: UInt64 = 256 * 1024 * 1024
     public static let nativeAmxApplicationManifestEmptyRoot =
         "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
 
@@ -216,6 +251,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
     public let mergeCarrier: ToriiSumeragiV2MergeCarrierCommitment?
     public let executedBlockWireLen: UInt64
     public let executedBlockWireHash: String
+    public let transactionInputCommitment: ToriiSumeragiV2TransactionTreeCommitment?
+    public let transactionOutputCommitment: ToriiSumeragiV2TransactionTreeCommitment?
 
     private enum CodingKeys: String, CodingKey {
         case parentStateRoot = "parent_state_root"
@@ -231,6 +268,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
         case mergeCarrier = "merge_carrier"
         case executedBlockWireLen = "executed_block_wire_len"
         case executedBlockWireHash = "executed_block_wire_hash"
+        case transactionInputCommitment = "transaction_input_commitment"
+        case transactionOutputCommitment = "transaction_output_commitment"
     }
 
     public init(from decoder: Decoder) throws {
@@ -246,6 +285,8 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
                 "merge_carrier",
                 "executed_block_wire_len",
                 "executed_block_wire_hash",
+                "transaction_input_commitment",
+                "transaction_output_commitment",
             ],
             context: "Sumeragi v2 execution commitment"
         )
@@ -268,6 +309,15 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             container: container,
             field: "Sumeragi v2 ordinary_writes_root"
         )
+        guard container.contains(.kagemushaTopUpRoot) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.kagemushaTopUpRoot,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "Sumeragi v2 kagemusha_top_up_root is mandatory on the wire"
+                )
+            )
+        }
         if let raw = try container.decodeIfPresent(String.self, forKey: .kagemushaTopUpRoot) {
             kagemushaTopUpRoot = try ToriiNativeAmxWire.canonicalHash(
                 raw,
@@ -353,11 +403,13 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             UInt64.self,
             forKey: .executedBlockWireLen
         )
-        guard executedBlockWireLen != 0 else {
+        guard executedBlockWireLen > 0,
+              executedBlockWireLen <= Self.maximumExecutedBlockWireBytes else {
             throw DecodingError.dataCorruptedError(
                 forKey: .executedBlockWireLen,
                 in: container,
-                debugDescription: "Sumeragi v2 executed block wire length must be non-zero"
+                debugDescription:
+                    "Sumeragi v2 executed block wire length is outside the production bound"
             )
         }
         executedBlockWireHash = try ToriiNativeAmxWire.canonicalHash(
@@ -366,6 +418,45 @@ public struct ToriiSumeragiV2ExecutionCommitment: Decodable, Sendable, Equatable
             container: container,
             field: "Sumeragi v2 executed_block_wire_hash"
         )
+        guard container.contains(.transactionInputCommitment) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.transactionInputCommitment,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription:
+                        "Sumeragi v2 transaction_input_commitment is mandatory on the wire"
+                )
+            )
+        }
+        transactionInputCommitment = try container.decodeIfPresent(
+            ToriiSumeragiV2TransactionTreeCommitment.self,
+            forKey: .transactionInputCommitment
+        )
+        guard container.contains(.transactionOutputCommitment) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.transactionOutputCommitment,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription:
+                        "Sumeragi v2 transaction_output_commitment is mandatory on the wire"
+                )
+            )
+        }
+        transactionOutputCommitment = try container.decodeIfPresent(
+            ToriiSumeragiV2TransactionTreeCommitment.self,
+            forKey: .transactionOutputCommitment
+        )
+        if let transactionInputCommitment {
+            guard let transactionOutputCommitment,
+                  transactionOutputCommitment.leafCount >= transactionInputCommitment.leafCount else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .transactionOutputCommitment,
+                    in: container,
+                    debugDescription:
+                        "Sumeragi v2 transaction outputs must cover every committed input"
+                )
+            }
+        }
     }
 }
 

@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-#define CONNECT_NORITO_BRIDGE_ABI_VERSION 23
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 24
 
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
@@ -1703,7 +1703,6 @@ int32_t connect_norito_encode_register_zk_asset_signed_transaction(
     uint8_t ttl_present,
     const char* asset_definition, unsigned long asset_definition_len,
     const char* vk_unshield, unsigned long vk_unshield_len, uint8_t vk_unshield_present,
-    const char* vk_shield, unsigned long vk_shield_len, uint8_t vk_shield_present,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t** out_signed_ptr, unsigned long* out_signed_len,
@@ -1717,7 +1716,6 @@ int32_t connect_norito_encode_register_zk_asset_signed_transaction_alg(
     uint8_t ttl_present,
     const char* asset_definition, unsigned long asset_definition_len,
     const char* vk_unshield, unsigned long vk_unshield_len, uint8_t vk_unshield_present,
-    const char* vk_shield, unsigned long vk_shield_len, uint8_t vk_shield_present,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,
@@ -1906,6 +1904,22 @@ int32_t connect_norito_encode_governance_cast_plain_ballot_signed_transaction_al
     const char* amount, unsigned long amount_len,
     uint64_t duration_blocks,
     uint8_t direction,
+    const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
+    const uint8_t* private_key, unsigned long private_key_len,
+    uint8_t algorithm,
+    uint8_t** out_signed_ptr, unsigned long* out_signed_len,
+    uint8_t* out_hash_ptr, unsigned long out_hash_len);
+
+int32_t connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg(
+    const char* network_id, unsigned long network_id_len,
+    const char* authority, unsigned long authority_len,
+    uint64_t creation_time_ms,
+    uint64_t ttl_ms,
+    uint8_t ttl_present,
+    const char* referendum_id, unsigned long referendum_id_len,
+    const char* owner, unsigned long owner_len,
+    const char* amount, unsigned long amount_len,
+    uint64_t duration_blocks,
     const uint8_t* fee_payment_json, unsigned long fee_payment_json_len,
     const uint8_t* private_key, unsigned long private_key_len,
     uint8_t algorithm,

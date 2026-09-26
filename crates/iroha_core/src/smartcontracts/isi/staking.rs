@@ -4,7 +4,7 @@ use crate::sumeragi::evidence::evidence_key;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
-        ConsensusKeyGate, WorldReadOnly, consensus_key_role_for_lane,
+        ConsensusKeyGate, EvidencePreparationError, WorldReadOnly, consensus_key_role_for_lane,
         peer_consensus_key_gate_for_lane, public_lane_reward_record_matches_key,
         public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
     },
@@ -38,7 +38,8 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
-use std::{collections::BTreeMap, time::Duration};
+use mv::allocation::{AllocationBudget, AllocationCharge, AllocationReservation, ChargedBuffer};
+use std::{alloc::Layout, collections::BTreeMap, ops::Range, time::Duration};
 #[path = "staking_effects.rs"]
 mod effects;
 pub(in crate::smartcontracts::isi) use effects::VerifiedStakingRewardPayouts;
@@ -53,34 +54,254 @@ pub(crate) use custody::{
 /// Canonical storage key for one public-lane stake share.
 pub(crate) type PublicLaneStakeShareKey = (LaneId, AccountId, AccountId);
 
-struct IndexedValidatorStake {
-    share_keys: Vec<PublicLaneStakeShareKey>,
-    bonded: Quantity,
-    self_bonded: Quantity,
-    pending_unbonds: Quantity,
+/// Borrowed, allocation-free preflight for the stake-index retained backings.
+///
+/// These counts admit the nested account copies, but not aggregate quantities
+/// or arithmetic scratch. They make the source shape available before the
+/// index starts allocating from the same world.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PublicLaneStakeIndexDemand {
+    share_rows: usize,
+    validator_groups: usize,
+    account_clone_bytes: usize,
+    account_clone_charges: usize,
 }
 
-impl Default for IndexedValidatorStake {
-    fn default() -> Self {
-        Self {
-            share_keys: Vec::new(),
-            bonded: Quantity::zero(),
-            self_bonded: Quantity::zero(),
-            pending_unbonds: Quantity::zero(),
+impl PublicLaneStakeIndexDemand {
+    #[cfg(test)]
+    fn from_rows<'a>(
+        rows: impl Iterator<Item = (&'a PublicLaneStakeShareKey, &'a PublicLaneStakeShare)>,
+        max_shares: usize,
+        max_pending: usize,
+    ) -> Result<Self, Error> {
+        Self::from_rows_with_group_validator(rows, max_shares, max_pending, |_| Ok(()))
+    }
+
+    fn from_rows_with_group_validator<'a>(
+        rows: impl Iterator<Item = (&'a PublicLaneStakeShareKey, &'a PublicLaneStakeShare)>,
+        max_shares: usize,
+        max_pending: usize,
+        mut validate_group: impl FnMut(&PublicLaneStakeShareKey) -> Result<(), Error>,
+    ) -> Result<Self, Error> {
+        let mut demand = Self {
+            share_rows: 0,
+            validator_groups: 0,
+            account_clone_bytes: 0,
+            account_clone_charges: 0,
+        };
+        let mut previous_key: Option<&PublicLaneStakeShareKey> = None;
+        let mut shares_in_group = 0_usize;
+        for (key, share) in rows {
+            if !public_lane_stake_share_matches_key(key, share) {
+                return Err(Error::InvariantViolation(
+                    "public-lane stake share does not match its storage key".into(),
+                ));
+            }
+            if share.pending_unbonds.len() > max_pending {
+                return Err(Error::InvariantViolation(
+                    "public-lane stake share exceeds pending-unbond capacity".into(),
+                ));
+            }
+            if let Some(previous) = previous_key {
+                if previous >= key {
+                    return Err(Error::InvariantViolation(
+                        "public-lane stake shares are not in canonical key order".into(),
+                    ));
+                }
+            }
+            if previous_key.is_none_or(|previous| previous.0 != key.0 || previous.1 != key.1) {
+                validate_group(key)?;
+                demand.validator_groups =
+                    demand.validator_groups.checked_add(1).ok_or_else(|| {
+                        Error::InvariantViolation(
+                            "public-lane stake-index group count overflows".into(),
+                        )
+                    })?;
+                shares_in_group = 0;
+                demand.add_account_clone(&key.1)?;
+            }
+            shares_in_group = shares_in_group.checked_add(1).ok_or_else(|| {
+                Error::InvariantViolation("public-lane stake-index group size overflows".into())
+            })?;
+            if shares_in_group > max_shares {
+                return Err(Error::InvariantViolation(
+                    "public-lane validator exceeds stake-share capacity".into(),
+                ));
+            }
+            demand.share_rows = demand.share_rows.checked_add(1).ok_or_else(|| {
+                Error::InvariantViolation("public-lane stake-index row count overflows".into())
+            })?;
+            demand.add_account_clone(&key.1)?;
+            demand.add_account_clone(&key.2)?;
+            previous_key = Some(key);
         }
+        Ok(demand)
+    }
+
+    fn add_account_clone(&mut self, account: &AccountId) -> Result<(), Error> {
+        let mut overflow = false;
+        account
+            .for_each_admission_clone_layout(|layout| {
+                if let (Some(bytes), Some(charges)) = (
+                    self.account_clone_bytes.checked_add(layout.size()),
+                    self.account_clone_charges.checked_add(1),
+                ) {
+                    self.account_clone_bytes = bytes;
+                    self.account_clone_charges = charges;
+                } else {
+                    overflow = true;
+                }
+            })
+            .map_err(|_| {
+                Error::InvariantViolation("public-lane stake-index account key is malformed".into())
+            })?;
+        if overflow {
+            return Err(Error::InvariantViolation(
+                "public-lane stake-index account clone demand overflows".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn checked_fixed_layouts(self) -> Result<(Layout, Layout), Error> {
+        let shares = Layout::array::<PublicLaneStakeShareKey>(self.share_rows).map_err(|_| {
+            Error::InvariantViolation("public-lane stake-index share backing overflows".into())
+        })?;
+        let groups =
+            Layout::array::<IndexedValidatorStake>(self.validator_groups).map_err(|_| {
+                Error::InvariantViolation("public-lane stake-index group backing overflows".into())
+            })?;
+        Ok((shares, groups))
+    }
+
+    fn checked_retained_layouts(self) -> Result<(Layout, Layout, Layout, usize), Error> {
+        let (shares, groups) = self.checked_fixed_layouts()?;
+        let charges =
+            Layout::array::<AllocationCharge>(self.account_clone_charges).map_err(|_| {
+                Error::InvariantViolation("public-lane stake-index charge backing overflows".into())
+            })?;
+        let bytes = shares
+            .size()
+            .checked_add(groups.size())
+            .and_then(|sum| sum.checked_add(charges.size()))
+            .and_then(|sum| sum.checked_add(self.account_clone_bytes))
+            .ok_or_else(|| {
+                Error::InvariantViolation(
+                    "public-lane stake-index retained demand overflows".into(),
+                )
+            })?;
+        Ok((shares, groups, charges, bytes))
+    }
+
+    fn validate_materialized(
+        self,
+        groups: &[IndexedValidatorStake],
+        flat_keys: &[PublicLaneStakeShareKey],
+    ) -> Result<(), Error> {
+        if groups.len() != self.validator_groups {
+            return Err(Error::InvariantViolation(
+                "public-lane stake-index group count changed during construction".into(),
+            ));
+        }
+        if flat_keys.len() != self.share_rows {
+            return Err(Error::InvariantViolation(
+                "public-lane stake-index row count changed during construction".into(),
+            ));
+        }
+        if !groups.windows(2).all(|pair| pair[0].key() < pair[1].key()) {
+            return Err(Error::InvariantViolation(
+                "public-lane stake-index groups are not in canonical order".into(),
+            ));
+        }
+        let mut next = 0_usize;
+        for group in groups {
+            let range = group.share_range();
+            if range.start != next || range.start >= range.end || range.end > flat_keys.len() {
+                return Err(Error::InvariantViolation(
+                    "public-lane stake-index ranges do not partition the flat backing".into(),
+                ));
+            }
+            let first = &flat_keys[range.start];
+            let last = &flat_keys[range.end - 1];
+            if first.0 != group.lane_id()
+                || &first.1 != group.validator()
+                || last.0 != group.lane_id()
+                || &last.1 != group.validator()
+            {
+                return Err(Error::InvariantViolation(
+                    "public-lane stake-index range differs from its validator group".into(),
+                ));
+            }
+            next = range.end;
+        }
+        if next != flat_keys.len() {
+            return Err(Error::InvariantViolation(
+                "public-lane stake-index ranges do not cover the flat backing".into(),
+            ));
+        }
+        Ok(())
     }
 }
 
-/// One-pass, bounded-work index over the complete public-lane stake-share table.
+// The transparent tuple makes the exact group allocation layout available to
+// iroha_config without making that lower layer depend on this Core module.
+// Quantity's nested storage remains a separate demand.
+#[repr(transparent)]
+struct IndexedValidatorStake(
+    (
+        LaneId,
+        AccountId,
+        Range<usize>,
+        Quantity,
+        Quantity,
+        Quantity,
+    ),
+);
+
+impl IndexedValidatorStake {
+    fn new(lane_id: LaneId, validator: AccountId, start: usize) -> Self {
+        Self((
+            lane_id,
+            validator,
+            start..start,
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
+        ))
+    }
+
+    fn lane_id(&self) -> LaneId {
+        self.0.0
+    }
+
+    fn validator(&self) -> &AccountId {
+        &self.0.1
+    }
+
+    fn key(&self) -> (LaneId, &AccountId) {
+        (self.lane_id(), self.validator())
+    }
+
+    fn share_range(&self) -> &Range<usize> {
+        &self.0.2
+    }
+}
+
+/// Two-pass, bounded-work index over the complete public-lane stake-share table.
 ///
-/// The index proves that every share belongs to exactly one canonical validator
-/// and that the configured per-validator/per-share bounds hold. Consensus uses
-/// the resulting key slices for point reads instead of rescanning the global
-/// share table once per penalty.
+/// The borrowed demand pass checks the source geometry before allocation; the
+/// second pass materializes and validates the current index. Consensus uses the
+/// resulting key slices for point reads instead of rescanning the global share
+/// table once per penalty.
 pub(crate) struct PublicLaneStakeIndex {
-    by_validator: BTreeMap<(LaneId, AccountId), IndexedValidatorStake>,
+    /// Original charged backing, including nested account clones below.
+    share_keys: ChargedBuffer<PublicLaneStakeShareKey>,
+    /// Original charged group backing; its Quantity owners remain unfunded.
+    groups: ChargedBuffer<IndexedValidatorStake>,
+    /// Every original nested account charge drops after its physical key owner.
+    _nested_account_charges: ChargedBuffer<AllocationCharge>,
     #[cfg(test)]
-    rows_scanned: usize,
+    row_visits: usize,
 }
 
 impl PublicLaneStakeIndex {
@@ -89,61 +310,177 @@ impl PublicLaneStakeIndex {
         world: &impl WorldReadOnly,
         max_stake_shares_per_validator: u32,
         max_pending_unbonds_per_share: u32,
-    ) -> Result<Self, Error> {
+        budget: &AllocationBudget,
+    ) -> eyre::Result<Self> {
         let max_shares = usize::try_from(max_stake_shares_per_validator)
             .expect("u32 stake-share cap fits usize on supported targets");
         let max_pending = usize::try_from(max_pending_unbonds_per_share)
             .expect("u32 pending-unbond cap fits usize on supported targets");
-        let mut by_validator = BTreeMap::<_, IndexedValidatorStake>::new();
+        // The validator cursor advances in the same borrowed demand pass. An
+        // orphan or malformed group is refused before a pool charge or clone.
+        let mut validators = world.public_lane_validators().iter();
+        let mut current_validator = validators.next();
+        let demand = PublicLaneStakeIndexDemand::from_rows_with_group_validator(
+            world.public_lane_stake_shares().iter(),
+            max_shares,
+            max_pending,
+            |share_key| {
+                let group = (share_key.0, &share_key.1);
+                while current_validator
+                    .as_ref()
+                    .is_some_and(|(validator_key, _)| (validator_key.0, &validator_key.1) < group)
+                {
+                    current_validator = validators.next();
+                }
+                let Some((validator_key, record)) = current_validator else {
+                    return Err(Error::InvariantViolation(
+                        "public-lane stake-share aggregate has no validator record".into(),
+                    ));
+                };
+                if (validator_key.0, &validator_key.1) != group {
+                    return Err(Error::InvariantViolation(
+                        "public-lane stake-share aggregate has no validator record".into(),
+                    ));
+                }
+                ensure_public_lane_validator_record_matches_key(validator_key, record)?;
+                current_validator = validators.next();
+                Ok(())
+            },
+        )?;
+        // Reserve the complete fixed and nested-account layouts atomically
+        // before any retained key allocation. The charge buffer is declared
+        // before keys/groups so local error paths drop physical keys first.
+        let (share_layout, group_layout, charges_layout, retained_bytes) =
+            demand.checked_retained_layouts()?;
+        let mut reservation = budget
+            .try_reserve_bytes(retained_bytes)
+            .map_err(EvidencePreparationError::Admission)?;
+        let charges_charge = reservation
+            .try_split(charges_layout)
+            .expect("complete nested charge backing was reserved");
+        let mut nested_account_charges: ChargedBuffer<AllocationCharge> =
+            ChargedBuffer::try_from_charge(demand.account_clone_charges, charges_charge).map_err(
+                |(_, error)| match error {
+                    mv::allocation::ChargedBufferFromChargeError::Allocator { layout } => {
+                        EvidencePreparationError::Allocator {
+                            requested_bytes: layout.size(),
+                        }
+                    }
+                    _ => EvidencePreparationError::Invariant,
+                },
+            )?;
+        let share_charge = reservation
+            .try_split(share_layout)
+            .expect("complete fixed stake-index demand was reserved");
+        let group_charge = reservation
+            .try_split(group_layout)
+            .expect("complete fixed stake-index demand was reserved");
+        let mut share_keys = ChargedBuffer::try_from_charge(demand.share_rows, share_charge)
+            .map_err(|(_, error)| match error {
+                mv::allocation::ChargedBufferFromChargeError::Allocator { layout } => {
+                    EvidencePreparationError::Allocator {
+                        requested_bytes: layout.size(),
+                    }
+                }
+                _ => EvidencePreparationError::Invariant,
+            })?;
+        let mut groups: ChargedBuffer<IndexedValidatorStake> =
+            ChargedBuffer::try_from_charge(demand.validator_groups, group_charge).map_err(
+                |(_, error)| match error {
+                    mv::allocation::ChargedBufferFromChargeError::Allocator { layout } => {
+                        EvidencePreparationError::Allocator {
+                            requested_bytes: layout.size(),
+                        }
+                    }
+                    _ => EvidencePreparationError::Invariant,
+                },
+            )?;
+        // TODO: Admit aggregate Quantity limbs, arithmetic scratch and the
+        // source/world lookup owners separately.
         #[cfg(test)]
-        let mut rows_scanned = 0_usize;
+        let mut row_visits = demand.share_rows;
 
         for (key, share) in world.public_lane_stake_shares().iter() {
             #[cfg(test)]
             {
-                rows_scanned = rows_scanned.saturating_add(1);
+                row_visits = row_visits
+                    .checked_add(1)
+                    .expect("checked stake-index backing bounds two source passes");
             }
             if !public_lane_stake_share_matches_key(key, share) {
                 return Err(Error::InvariantViolation(
                     "public-lane stake share does not match its storage key".into(),
-                ));
-            }
-            let validator_key = (key.0, key.1.clone());
-            let record = world
-                .public_lane_validators()
-                .get(&validator_key)
-                .ok_or_else(|| {
-                    Error::InvariantViolation(
-                        "public-lane stake-share aggregate has no validator record".into(),
-                    )
-                })?;
-            ensure_public_lane_validator_record_matches_key(&validator_key, record)?;
-            if record.stake_account != record.validator {
-                return Err(Error::InvariantViolation(
-                    "public-lane validator stake account must match the validator account".into(),
-                ));
+                )
+                .into());
             }
             if share.pending_unbonds.len() > max_pending {
                 return Err(Error::InvariantViolation(
                     "public-lane stake share exceeds pending-unbond capacity".into(),
-                ));
+                )
+                .into());
             }
-            let indexed = by_validator.entry(validator_key).or_default();
-            if indexed.share_keys.len() >= max_shares {
+            let next = share_keys.as_slice().len();
+            if groups
+                .as_slice()
+                .last()
+                .is_none_or(|group| group.lane_id() != key.0 || group.validator() != &key.1)
+            {
+                let validator_key = (
+                    key.0,
+                    clone_index_account(&key.1, &mut reservation, &mut nested_account_charges)?,
+                );
+                let record = world
+                    .public_lane_validators()
+                    .get(&validator_key)
+                    .ok_or_else(|| {
+                        Error::InvariantViolation(
+                            "public-lane stake-share aggregate has no validator record".into(),
+                        )
+                    })?;
+                ensure_public_lane_validator_record_matches_key(&validator_key, record)?;
+                if record.stake_account != record.validator {
+                    return Err(Error::InvariantViolation(
+                        "public-lane validator stake account must match the validator account"
+                            .into(),
+                    )
+                    .into());
+                }
+                groups
+                    .try_push(IndexedValidatorStake::new(key.0, validator_key.1, next))
+                    .map_err(|_| EvidencePreparationError::Invariant)?;
+            }
+            let indexed = groups
+                .as_mut_slice()
+                .last_mut()
+                .expect("each source share has a materialized group");
+            if indexed.0.2.end != next {
+                return Err(Error::InvariantViolation(
+                    "public-lane stake-index group is not contiguous".into(),
+                )
+                .into());
+            }
+            if indexed.0.2.len() >= max_shares {
                 return Err(Error::InvariantViolation(
                     "public-lane validator exceeds stake-share capacity".into(),
-                ));
+                )
+                .into());
             }
-            indexed.share_keys.push(key.clone());
-            indexed.bonded = quantity_add(indexed.bonded.clone(), share.bonded.clone())?;
-            if key.2 == record.stake_account {
-                indexed.self_bonded =
-                    quantity_add(indexed.self_bonded.clone(), share.bonded.clone())?;
+            let copied_key = (
+                key.0,
+                clone_index_account(&key.1, &mut reservation, &mut nested_account_charges)?,
+                clone_index_account(&key.2, &mut reservation, &mut nested_account_charges)?,
+            );
+            share_keys
+                .try_push(copied_key)
+                .map_err(|_| EvidencePreparationError::Invariant)?;
+            indexed.0.2.end = share_keys.as_slice().len();
+            indexed.0.3 = quantity_add(indexed.0.3.clone(), share.bonded.clone())?;
+            if key.2 == key.1 {
+                indexed.0.4 = quantity_add(indexed.0.4.clone(), share.bonded.clone())?;
             }
             for (request_id, pending) in &share.pending_unbonds {
                 ensure_canonical_pending_unbond(request_id, pending)?;
-                indexed.pending_unbonds =
-                    quantity_add(indexed.pending_unbonds.clone(), pending.amount.clone())?;
+                indexed.0.5 = quantity_add(indexed.0.5.clone(), pending.amount.clone())?;
             }
         }
 
@@ -152,23 +489,31 @@ impl PublicLaneStakeIndex {
             if record.stake_account != record.validator {
                 return Err(Error::InvariantViolation(
                     "public-lane validator stake account must match the validator account".into(),
-                ));
+                )
+                .into());
             }
-            let indexed = by_validator.get(key);
-            let bonded = indexed.map_or_else(Quantity::zero, |entry| entry.bonded.clone());
-            let self_bonded =
-                indexed.map_or_else(Quantity::zero, |entry| entry.self_bonded.clone());
-            if bonded != record.total_stake || self_bonded != record.self_stake {
+            let indexed = Self::find_group(groups.as_slice(), key.0, &key.1);
+            if !indexed_validator_totals_match(indexed, &record.total_stake, &record.self_stake) {
                 return Err(Error::InvariantViolation(
                     "public-lane validator totals do not match canonical stake shares".into(),
-                ));
+                )
+                .into());
             }
         }
 
+        demand.validate_materialized(groups.as_slice(), share_keys.as_slice())?;
+        if nested_account_charges.as_slice().len() != demand.account_clone_charges
+            || reservation.remaining_bytes() != 0
+        {
+            return Err(EvidencePreparationError::Invariant.into());
+        }
+
         Ok(Self {
-            by_validator,
+            share_keys,
+            groups,
+            _nested_account_charges: nested_account_charges,
             #[cfg(test)]
-            rows_scanned,
+            row_visits,
         })
     }
 
@@ -178,9 +523,9 @@ impl PublicLaneStakeIndex {
         lane_id: LaneId,
         validator: &AccountId,
     ) -> &[PublicLaneStakeShareKey] {
-        self.by_validator
-            .get(&(lane_id, validator.clone()))
-            .map_or(&[], |entry| entry.share_keys.as_slice())
+        Self::find_group(self.groups.as_slice(), lane_id, validator).map_or(&[], |entry| {
+            &self.share_keys.as_slice()[entry.share_range().clone()]
+        })
     }
 
     /// Return total bonded and pending-unbond custody for one validator.
@@ -189,16 +534,91 @@ impl PublicLaneStakeIndex {
         lane_id: LaneId,
         validator: &AccountId,
     ) -> Result<Quantity, Error> {
-        let Some(indexed) = self.by_validator.get(&(lane_id, validator.clone())) else {
+        let Some(indexed) = Self::find_group(self.groups.as_slice(), lane_id, validator) else {
             return Ok(Quantity::zero());
         };
-        quantity_add(indexed.bonded.clone(), indexed.pending_unbonds.clone())
+        quantity_add(indexed.0.3.clone(), indexed.0.5.clone())
+    }
+
+    fn find_group<'a>(
+        groups: &'a [IndexedValidatorStake],
+        lane_id: LaneId,
+        validator: &AccountId,
+    ) -> Option<&'a IndexedValidatorStake> {
+        groups
+            .binary_search_by(|group| {
+                group
+                    .lane_id()
+                    .cmp(&lane_id)
+                    .then_with(|| group.validator().cmp(validator))
+            })
+            .ok()
+            .map(|index| &groups[index])
     }
 
     #[cfg(test)]
-    pub(crate) fn rows_scanned(&self) -> usize {
-        self.rows_scanned
+    pub(crate) fn row_visits(&self) -> usize {
+        self.row_visits
     }
+}
+
+/// Compare aggregate custody without cloning its unfunded Quantity limbs.
+fn indexed_validator_totals_match(
+    indexed: Option<&IndexedValidatorStake>,
+    total_stake: &Quantity,
+    self_stake: &Quantity,
+) -> bool {
+    match indexed {
+        Some(entry) => &entry.0.3 == total_stake && &entry.0.4 == self_stake,
+        None => {
+            let zero = Quantity::zero();
+            total_stake == &zero && self_stake == &zero
+        }
+    }
+}
+
+/// Copy one retained account only after every nested layout is split from the
+/// original State reservation and retained beyond the physical key owner.
+fn clone_index_account(
+    source: &AccountId,
+    reservation: &mut AllocationReservation,
+    charges: &mut ChargedBuffer<AllocationCharge>,
+) -> Result<AccountId, EvidencePreparationError> {
+    let mut mismatch = false;
+    source
+        .for_each_admission_clone_layout(|layout| {
+            if mismatch {
+                return;
+            }
+            match reservation.try_split(layout) {
+                Ok(charge) => {
+                    if charges.try_push(charge).is_err() {
+                        mismatch = true;
+                    }
+                }
+                Err(_) => mismatch = true,
+            }
+        })
+        .map_err(|_| EvidencePreparationError::Invariant)?;
+    if mismatch {
+        return Err(EvidencePreparationError::Invariant);
+    }
+    source
+        .try_clone_for_admission()
+        .map_err(|error| match error {
+            norito::core::Error::AllocationFailed { bytes } => {
+                EvidencePreparationError::Allocator {
+                    requested_bytes: usize::try_from(bytes).unwrap_or(usize::MAX),
+                }
+            }
+            norito::core::Error::TotalAllocationExceeded { attempted, limit } => {
+                EvidencePreparationError::DecodeScope {
+                    attempted_bytes: attempted,
+                    limit_bytes: limit,
+                }
+            }
+            _ => EvidencePreparationError::Invariant,
+        })
 }
 
 /// One-shot retained-state proof for an exact public-lane staking slash.
@@ -2438,8 +2858,32 @@ pub(crate) fn indexed_slashable_validator_exposure(
     offence_height: u64,
     share_keys: &[PublicLaneStakeShareKey],
 ) -> Result<Quantity, Error> {
-    let shares = validator_share_updates(world, lane_id, validator, Some(share_keys))?;
-    slashable_exposure_from_shares(record, &shares, Some(offence_height))
+    if !share_keys.windows(2).all(|pair| pair[0] < pair[1]) {
+        return Err(Error::InvariantViolation(
+            "indexed public-lane stake-share keys are not canonical".into(),
+        ));
+    }
+    // This read-only calculation borrows the owned ordered scratch overlay.
+    // An earlier slash in that same bundle may have removed a fully consumed
+    // indexed row. Such a missing row is valid only with the exact current
+    // validator totals checked by slashable_exposure_from_shares below; no
+    // external source or unordered replay may supply this overlay.
+    // Neither path funds Quantity arithmetic or retained key copies here.
+    let shares = share_keys.iter().filter_map(|key| {
+        if key.0 != lane_id || &key.1 != validator {
+            return Some(Err(Error::InvariantViolation(
+                "indexed public-lane stake-share key belongs to another validator".into(),
+            )));
+        }
+        let share = world.public_lane_stake_shares().get(key)?;
+        if !public_lane_stake_share_matches_key(key, share) {
+            return Some(Err(Error::InvariantViolation(
+                "public-lane stake share does not match its storage key".into(),
+            )));
+        }
+        Some(Ok((key, share)))
+    });
+    slashable_exposure_from_shares(record, shares, Some(offence_height))
 }
 
 fn validator_share_updates(
@@ -2497,9 +2941,11 @@ fn pending_unbond_is_slashable_at(
     offence_height.is_none_or(|height| height <= pending.slashable_through_height)
 }
 
-fn slashable_exposure_from_shares(
+fn slashable_exposure_from_shares<'a>(
     record: &PublicLaneValidatorRecord,
-    shares: &[(PublicLaneStakeShareKey, PublicLaneStakeShare)],
+    shares: impl IntoIterator<
+        Item = Result<(&'a PublicLaneStakeShareKey, &'a PublicLaneStakeShare), Error>,
+    >,
     offence_height: Option<u64>,
 ) -> Result<Quantity, Error> {
     if record.stake_account != record.validator {
@@ -2510,7 +2956,8 @@ fn slashable_exposure_from_shares(
     let mut bonded = Quantity::zero();
     let mut self_bonded = Quantity::zero();
     let mut pending_unbonds = Quantity::zero();
-    for (key, share) in shares {
+    for share in shares {
+        let (key, share) = share?;
         bonded = quantity_add(bonded, share.bonded.clone())?;
         if key.2 == record.stake_account {
             self_bonded = quantity_add(self_bonded, share.bonded.clone())?;
@@ -3053,8 +3500,11 @@ fn apply_slash_to_validator_inner(
         ));
     }
     let mut share_updates = validator_share_updates(world, lane_id, validator, indexed_share_keys)?;
-    let slashable_exposure =
-        slashable_exposure_from_shares(&validator_snapshot, &share_updates, offence_height)?;
+    let slashable_exposure = slashable_exposure_from_shares(
+        &validator_snapshot,
+        share_updates.iter().map(|(key, share)| Ok((key, share))),
+        offence_height,
+    )?;
     let allowed = slash_within_limit(amount, &slashable_exposure, staking_cfg.max_slash_bps)?;
     if !allowed {
         return Err(Error::InvariantViolation(
@@ -3397,9 +3847,11 @@ mod tests {
     }
     include!("staking_monetary_fixture_tests.rs");
     include!("staking_core_tests.rs");
+    include!("staking_borrowed_exposure_tests.rs");
     include!("staking_admission_tests.rs");
     include!("staking_reward_tests.rs");
     include!("staking_custody_tests.rs");
+    include!("staking_index_demand_tests.rs");
     #[test]
     fn stake_context_accepts_i105_account_literals() {
         let state = setup_state();

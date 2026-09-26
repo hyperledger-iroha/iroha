@@ -6312,6 +6312,7 @@ fn potr_receipt_validation_code(error: &PotrReceiptValidationError) -> &'static 
 }
 fn provider_admission_envelope_code(error: &ProviderAdmissionEnvelopeError) -> &'static str {
     match error {
+        ProviderAdmissionEnvelopeError::NonInitialEvent { .. } => "SFS-VAL-007",
         ProviderAdmissionEnvelopeError::Validation(error) => {
             provider_admission_validation_code(error)
         }
@@ -6325,6 +6326,10 @@ fn provider_admission_renewal_code(error: &ProviderAdmissionRenewalError) -> &'s
         ProviderAdmissionRenewalError::Envelope(error) => provider_admission_envelope_code(error),
         ProviderAdmissionRenewalError::EnvelopeDigestMismatch { .. }
         | ProviderAdmissionRenewalError::PreviousDigestMismatch { .. }
+        | ProviderAdmissionRenewalError::SignedPredecessorMismatch
+        | ProviderAdmissionRenewalError::AdmissionRevisionMismatch
+        | ProviderAdmissionRenewalError::PolicyLineageMismatch
+        | ProviderAdmissionRenewalError::NetworkMismatch { .. }
         | ProviderAdmissionRenewalError::ProviderMismatch { .. } => "SFS-VAL-007",
         ProviderAdmissionRenewalError::RetentionNotExtended { .. }
         | ProviderAdmissionRenewalError::IssuedAtRegression { .. } => "SFS-POL-004",
@@ -6340,8 +6345,15 @@ fn provider_admission_revocation_code(error: &ProviderAdmissionRevocationError) 
     match error {
         ProviderAdmissionRevocationError::UnsupportedVersion { .. } => "SFS-VAL-002",
         ProviderAdmissionRevocationError::ProviderMismatch { .. }
+        | ProviderAdmissionRevocationError::NetworkMismatch { .. }
+        | ProviderAdmissionRevocationError::SignedPredecessorMismatch
+        | ProviderAdmissionRevocationError::AdmissionRevisionMismatch
+        | ProviderAdmissionRevocationError::PolicyLineageMismatch
         | ProviderAdmissionRevocationError::EnvelopeDigestMismatch { .. } => "SFS-VAL-007",
-        ProviderAdmissionRevocationError::ReasonEmpty => "SFS-VAL-006",
+        ProviderAdmissionRevocationError::InvalidNetworkId
+        | ProviderAdmissionRevocationError::InvalidPolicyBinding
+        | ProviderAdmissionRevocationError::InvalidEventLineage
+        | ProviderAdmissionRevocationError::ReasonEmpty => "SFS-VAL-006",
         ProviderAdmissionRevocationError::MissingSignatures
         | ProviderAdmissionRevocationError::Signature(_) => "SFS-SIG-002",
         ProviderAdmissionRevocationError::Serialization(_) => "SFS-INT-001",
@@ -6507,6 +6519,7 @@ fn potr_receipt_validation_category(error: &PotrReceiptValidationError) -> &'sta
 }
 fn provider_admission_envelope_category(error: &ProviderAdmissionEnvelopeError) -> &'static str {
     match error {
+        ProviderAdmissionEnvelopeError::NonInitialEvent { .. } => CATEGORY_VALIDATION,
         ProviderAdmissionEnvelopeError::Validation(error) => {
             provider_admission_validation_category(error)
         }
@@ -7379,6 +7392,7 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
         let mut advert = ProviderAdvertV1 {
             version: crate::PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at: now,
             expires_at: now + REFRESH_RECOMMENDATION_SECS,
             body,

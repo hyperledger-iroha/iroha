@@ -4354,7 +4354,6 @@ fn append_localnet_npos_bootstrap(
         builder = builder.append_instruction(iroha_data_model::isi::zk::RegisterZkAsset::new(
             fee_asset_id.clone(),
             Some(fee_vk_unshield_id),
-            None,
         ));
         registrations.zk_assets.insert(fee_asset_id.clone());
     }

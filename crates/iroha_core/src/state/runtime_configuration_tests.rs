@@ -30,6 +30,160 @@ fn additional_dataspace() -> RuntimeDataSpaceAdditionV1 {
 }
 
 #[test]
+fn configured_evidence_preparation_pool_preserves_identity_and_refuses_live_replacement() {
+    run_runtime_configuration_test(|| {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let one_plan =
+            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES;
+        let mut one_plan_config = state.nexus_snapshot();
+        one_plan_config.storage.consensus_evidence_preparation_bytes = one_plan;
+        state
+            .set_nexus_from_config(one_plan_config.clone())
+            .expect("one complete plan is a valid configured pool");
+        assert_eq!(state.evidence_preparation_budget().limit_bytes(), one_plan);
+        let charge = state
+            .evidence_preparation_budget()
+            .try_reserve_bytes(one_plan)
+            .expect("hold the original configured pool");
+        state
+            .set_nexus_from_config(one_plan_config.clone())
+            .expect("unchanged configuration retains the original occupied pool");
+        assert_eq!(
+            state.evidence_preparation_budget().reserved_bytes(),
+            one_plan
+        );
+
+        let mut changed = one_plan_config.clone();
+        changed.storage.consensus_evidence_preparation_bytes = 8 * one_plan;
+        assert!(matches!(
+            state.set_nexus_from_config(changed.clone()),
+            Err(LaneLifecycleError::EvidencePreparationBudgetBusy { reserved_bytes })
+                if reserved_bytes == one_plan
+        ));
+        assert_eq!(
+            state
+                .nexus_snapshot()
+                .storage
+                .consensus_evidence_preparation_bytes,
+            one_plan
+        );
+        drop(charge);
+        state
+            .set_nexus_from_config(changed.clone())
+            .expect("released original pool permits a configured replacement");
+        assert_eq!(
+            state.evidence_preparation_budget().limit_bytes(),
+            8 * one_plan
+        );
+        let mut runtime_update = state.nexus_snapshot();
+        runtime_update.storage.consensus_evidence_preparation_bytes = one_plan;
+        state
+            .set_nexus(runtime_update)
+            .expect("runtime catalogs retain process-local evidence custody");
+        assert_eq!(
+            state.evidence_preparation_budget().limit_bytes(),
+            8 * one_plan
+        );
+
+        changed.storage.consensus_evidence_preparation_bytes = one_plan - 1;
+        assert!(matches!(
+            state.set_nexus_from_config(changed),
+            Err(LaneLifecycleError::EvidencePreparationBudgetTooSmall { .. })
+        ));
+        assert_eq!(
+            state.evidence_preparation_budget().limit_bytes(),
+            8 * one_plan
+        );
+    });
+}
+
+#[test]
+fn configured_stake_index_pool_keeps_original_charge_through_reconfiguration() {
+    run_runtime_configuration_test(|| {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let minimum =
+            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES;
+        let mut configured = state.nexus_snapshot();
+        configured.storage.consensus_stake_index_bytes = minimum;
+        state
+            .set_nexus_from_config(configured.clone())
+            .expect("one exact flat key is a finite pool");
+        let charge = state
+            .stake_index_budget()
+            .try_reserve_bytes(minimum)
+            .expect("hold the original configured pool");
+        let mut changed = configured.clone();
+        changed.storage.consensus_stake_index_bytes = minimum * 2;
+        assert!(matches!(
+            state.set_nexus_from_config(changed.clone()),
+            Err(LaneLifecycleError::StakeIndexBudgetBusy { reserved_bytes })
+                if reserved_bytes == minimum
+        ));
+        assert_eq!(state.stake_index_budget().reserved_bytes(), minimum);
+        drop(charge);
+        state
+            .set_nexus_from_config(changed)
+            .expect("released original permits replacement");
+        assert_eq!(state.stake_index_budget().limit_bytes(), minimum * 2);
+        let mut invalid = configured;
+        invalid.storage.consensus_stake_index_bytes = minimum - 1;
+        assert!(matches!(
+            state.set_nexus_from_config(invalid),
+            Err(LaneLifecycleError::StakeIndexBudgetTooSmall { .. })
+        ));
+    });
+}
+
+#[test]
+fn replay_prevalidation_retains_original_evidence_preparation_pool() {
+    run_runtime_configuration_test(|| {
+        let mut state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let one_plan =
+            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES;
+        let charge = state
+            .evidence_preparation_budget()
+            .try_reserve_bytes(one_plan)
+            .expect("hold one original evidence plan");
+        let key_bytes =
+            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES;
+        let stake_charge = state
+            .stake_index_budget()
+            .try_reserve_bytes(key_bytes)
+            .expect("hold one original stake-index key backing");
+        let isolated = isolated_state_for_replay_prevalidation(&state, &state.kura)
+            .expect("construct a replay image with the original process policy");
+        assert_eq!(
+            isolated.evidence_preparation_budget().reserved_bytes(),
+            one_plan
+        );
+        assert_eq!(isolated.stake_index_budget().reserved_bytes(), key_bytes);
+        let retired = install_prevalidated_replay_state(&mut state, isolated);
+        assert_eq!(
+            state.evidence_preparation_budget().reserved_bytes(),
+            one_plan
+        );
+        assert_eq!(state.stake_index_budget().reserved_bytes(), key_bytes);
+        drop(retired);
+        drop(charge);
+        drop(stake_charge);
+        assert_eq!(state.evidence_preparation_budget().reserved_bytes(), 0);
+        assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
+    });
+}
+
+#[test]
 fn runtime_nexus_setter_preserves_configured_dataspaces_and_rejects_post_genesis_drift() {
     run_runtime_configuration_test(|| {
         let mut state = State::new_for_testing(

@@ -179,17 +179,10 @@ public final class ZkAssetInstructionsTest {
         RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
             .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
-            .setShieldVerifyingKey("halo2/ipa:shield-v3")
             .build();
     assert instruction.kind() == InstructionKind.REGISTER;
     assert "halo2/ipa:unshield-v3".equals(instruction.toArguments().get("vk_unshield"));
-    assert "halo2/ipa:shield-v3".equals(instruction.toArguments().get("vk_shield"));
-    expectThrows(
-        () ->
-            RegisterZkAssetInstruction.builder()
-                .setAsset("rose#wonderland")
-                .setShieldVerifyingKey("halo2/ipa:shield-v3")
-                .build());
+    assert !instruction.toArguments().containsKey("vk_shield");
 
     final LinkedHashMap<String, String> retiredArguments =
         new LinkedHashMap<>(instruction.toArguments());
@@ -200,6 +193,9 @@ public final class ZkAssetInstructionsTest {
     expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
     retiredArguments.remove("vk_transfer");
     retiredArguments.put("allow_shield", "true");
+    expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
+    retiredArguments.remove("allow_shield");
+    retiredArguments.put("vk_shield", "halo2/ipa:shield-v3");
     expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
   }
 
@@ -258,11 +254,11 @@ public final class ZkAssetInstructionsTest {
 
   private static void nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable()
       throws Exception {
-    assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 23;
-    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 5;
+    assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 24;
+    assert NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION == 7;
     if (!NativeSignerBridge.isNativeAvailable()) {
       throw new AssertionError(
-          "connect_norito_bridge ABI 23 native-signer contract revision 5 is required");
+          "connect_norito_bridge ABI 24 native-signer contract revision 7 is required");
     }
 
     final byte[] seed = new byte[32];

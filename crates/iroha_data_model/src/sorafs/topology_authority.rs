@@ -3,8 +3,9 @@
 //! Core must supply actual execution coordinates, enforce permissions and authenticate parent
 //! state/floor hashes before atomically publishing the returned canonical history and deltas.
 //! Neither this model nor successful replay grants signing, execution or finality authority.
-//! TODO: integrate this reducer into a topology-owned native ISI, persisted indices, snapshot
-//! reader and exact ordered input/result/output Check proof consumer before production admission.
+//! The typed V1 ISI is registered but Core admission is closed. TODO: integrate this reducer into
+//! persisted indices, snapshot reader and exact ordered input/result/output Check proof consumer
+//! before production admission.
 
 use crate::account::AccountId;
 use norito::codec::{Decode, Encode};
@@ -37,7 +38,19 @@ pub const TOPOLOGY_HISTORY_LIMIT_V1: u64 =
 pub const TOPOLOGY_AUTHORITY_NAMESPACE_V1: &str = "sorafs_topology_authority_v1";
 
 /// Public commitment to a complete prefix; zero revision and zero digest occur together.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyHeadV1")]
 pub struct TopologyHeadV1 {
     /// Retained one-based revision, or zero before the first entry.
@@ -105,10 +118,21 @@ impl TopologyRetainedStateV1 {
 }
 
 /// Wire provenance claims. Decoding these fields never proves native execution.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyExecutionClaimV1")]
 pub struct TopologyExecutionClaimV1 {
-    /// Claimed executing block height; Core must derive it from the actual StateTransaction.
+    /// Claimed executing block height; Core must derive it from the actual `StateTransaction`.
     pub height: u64,
     /// Zero-based topology mutation ordinal in that block, excluding no-write Checks.
     pub ordinal: u32,
@@ -130,7 +154,19 @@ pub struct TopologyContextClaimV1 {
     pub floor: Option<TopologyFloorClaimV1>,
 }
 /// A requested finalized prefix claim; a matching digest is not a finality proof.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyFloorClaimV1")]
 pub struct TopologyFloorClaimV1 {
     /// Positive finalized floor height preceding Check execution.
@@ -140,7 +176,18 @@ pub struct TopologyFloorClaimV1 {
 }
 
 /// Exact separately reviewed topology candidate and original signer intent.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyReserveV1")]
 pub struct TopologyReserveV1 {
     /// Full candidate-bound configuration subject; cannot change after admission.
@@ -151,7 +198,19 @@ pub struct TopologyReserveV1 {
     pub intent: SignerOperationIntentV1,
 }
 /// Immutable completion input; signatures remain private until genuinely finalized release.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyCompleteV1")]
 pub struct TopologyCompleteV1 {
     /// Original exact request; renewal or candidate substitution is forbidden.
@@ -166,7 +225,19 @@ pub struct TopologyCompleteV1 {
     pub signatures_digest: [u8; 32],
 }
 /// Exact terminalization request; no erased identity or replacement fence.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyExpireV1")]
 pub struct TopologyExpireV1 {
     /// Original admitted operation identity.
@@ -176,7 +247,18 @@ pub struct TopologyExpireV1 {
 }
 
 /// Closed operation phases; every phase requires a separately retained fresh native challenge.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyCheckPhaseV1")]
 pub enum TopologyCheckPhaseV1 {
     /// Current custody plus exact audit; grants no reservation.
@@ -199,7 +281,18 @@ pub enum TopologyCheckPhaseV1 {
     BeforeRelease(Box<TopologyOperationRecordV1>),
 }
 /// Challenged no-write input. The native consumer must bind the exact executed transaction/result.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyCheckV1")]
 pub struct TopologyCheckV1 {
     /// Nonzero consumer challenge; replay resistance requires the private Core round owner.
@@ -216,8 +309,41 @@ pub struct TopologyCheckV1 {
     pub phase: TopologyCheckPhaseV1,
 }
 
+/// Exact emergency revocation selection; each generation may be revoked once.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyRevocationV1")]
+pub struct TopologyRevocationV1 {
+    /// Revoke current signer generation.
+    pub signer: bool,
+    /// Revoke current attester generation.
+    pub attester: bool,
+}
+
 /// Topology-only operations; native permissions and actual execution are deliberately external.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyActionV1")]
 pub enum TopologyActionV1 {
     /// Canonical role16 custody policy; configuration invalidates any active operation.
@@ -228,12 +354,7 @@ pub enum TopologyActionV1 {
     Enroll(Vec<u8>),
     /// Monotonic emergency signer/attester revocation, invalidating any active operation.
     #[codec(index = 2)]
-    Revoke {
-        /// Revoke current signer generation.
-        signer: bool,
-        /// Revoke current attester generation.
-        attester: bool,
-    },
+    Revoke(TopologyRevocationV1),
     /// Reserve exactly one candidate/request/intent before key I/O.
     #[codec(index = 3)]
     Reserve(Box<TopologyReserveV1>),
@@ -247,8 +368,19 @@ pub enum TopologyActionV1 {
     #[codec(index = 6)]
     Check(Box<TopologyCheckV1>),
 }
-/// CAS input; not an InstructionBox variant until the actual native owner is integrated.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+/// CAS input wrapped by the registered, explicitly closed V1 topology instruction.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyTransitionV1")]
 pub struct TopologyTransitionV1 {
     /// Exact deployment scope.
@@ -280,8 +412,42 @@ pub struct TopologyControlRecordV1 {
     /// Exact current enrolled statement; absent after configuration.
     pub enrollment: Option<Vec<u8>>,
 }
+
+/// Timely immutable completion commitments, before signature release.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyCompletionV1")]
+pub struct TopologyCompletionV1 {
+    /// Exactly one next audit and response commitment.
+    pub commitment: SignerOperationCommitmentV1,
+    /// Exact ordered staged signatures commitment.
+    pub signatures_digest: [u8; 32],
+}
 /// Terminal state never resets to Reserved.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyOutcomeV1")]
 pub enum TopologyOutcomeV1 {
     /// Active exclusive reservation.
@@ -289,12 +455,7 @@ pub enum TopologyOutcomeV1 {
     Reserved,
     /// Timely immutable commitments; no signatures published by this action.
     #[codec(index = 1)]
-    Completed {
-        /// Exactly one next audit and response commitment.
-        commitment: SignerOperationCommitmentV1,
-        /// Exact ordered staged signatures commitment.
-        signatures_digest: [u8; 32],
-    },
+    Completed(TopologyCompletionV1),
     /// Explicit expiration, retaining its original operation identity.
     #[codec(index = 2)]
     Expired,
@@ -303,7 +464,18 @@ pub enum TopologyOutcomeV1 {
     Invalidated,
 }
 /// Immutable operation row preserving original candidate, owner, custody, intent and reservation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::sorafs::topology_authority::TopologyOperationRecordV1")]
 pub struct TopologyOperationRecordV1 {
     /// Exact deployment identity.

@@ -51,6 +51,40 @@ fn norito_rpc_fixtures_accepts_only_the_canonical_output_root_option() {
     }
 }
 #[test]
+fn norito_rpc_fixtures_selects_one_explicit_local_integration_mode() {
+    let output_root = workspace_root().join("target/norito-rpc-local/fixture-parser-test");
+    let output_text = output_root.to_string_lossy().into_owned();
+    let args = [
+        "xtask",
+        "norito-rpc-fixtures",
+        "--local-integration",
+        "--output-root",
+        output_text.as_str(),
+    ];
+    let CommandKind::NoritoRpcFixtures { options } =
+        parse_command(args.into_iter().map(String::from)).expect("local mode parses")
+    else {
+        panic!("expected fixture command");
+    };
+    assert_eq!(
+        options,
+        NoritoRpcFixtureOptions::local_integration(output_root)
+    );
+    for invalid in [
+        vec!["xtask", "norito-rpc-fixtures", "--local-integration"],
+        vec![
+            "xtask",
+            "norito-rpc-fixtures",
+            "--local-integration",
+            "--local-integration",
+            "--output-root",
+            output_text.as_str(),
+        ],
+    ] {
+        assert!(parse_command(invalid.into_iter().map(String::from)).is_err());
+    }
+}
+#[test]
 fn norito_rpc_fixtures_rejects_ambiguous_output_roots() {
     for invalid in [
         "",

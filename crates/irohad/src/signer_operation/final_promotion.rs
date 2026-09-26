@@ -39,6 +39,8 @@ pub enum SignerFinalPromotionErrorV1 {
     Operation(SignerOperationErrorV1),
     /// Private journal identity, ownership, bounds or immutable staging failed.
     Journal,
+    /// Finite local inventory resources are busy; reconcile the original operation.
+    LocalCapacity,
 }
 impl fmt::Display for SignerFinalPromotionErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -47,6 +49,7 @@ impl fmt::Display for SignerFinalPromotionErrorV1 {
             Self::Poisoned => "final promotion lifecycle unavailable",
             Self::Receipt(_) => "final promotion receipt rejected",
             Self::Operation(_) => "final promotion signer operation rejected",
+            Self::LocalCapacity => "local signer-journal inventory capacity unavailable",
             Self::Journal => "final promotion private journal unavailable",
         })
     }
@@ -68,8 +71,12 @@ impl From<SignerOperationErrorV1> for SignerFinalPromotionErrorV1 {
     }
 }
 impl From<SignerReceiptJournalErrorV1> for SignerFinalPromotionErrorV1 {
-    fn from(_: SignerReceiptJournalErrorV1) -> Self {
-        Self::Journal
+    fn from(error: SignerReceiptJournalErrorV1) -> Self {
+        if error.is_local_capacity() {
+            Self::LocalCapacity
+        } else {
+            Self::Journal
+        }
     }
 }
 
@@ -89,7 +96,11 @@ pub mod account_transaction;
 pub mod current_observation;
 /// Exact observer Check signing with retained native challenges and independent fee approval.
 pub mod observer_transaction;
+/// Purpose-specific immutable pending-Reserve records, without recovery submission authority.
+pub mod pending_reserve_journal;
 mod receipt_core;
+/// BeforeProvider source owner retaining the original signed Reserve and independent floor.
+pub mod reserved_observation;
 
 /// Receipt-only recovery capability sharing the exact journal lease and lifecycle gate.
 /// It exposes no signing method or protected provider. Native standalone recovery assembly
@@ -165,6 +176,11 @@ impl SignerFinalPromotionServiceV1 {
         let message = self.core.statement.as_ref();
         let prepared = prepare_final_promotion_statement_v1(message, &self.coordinator.binding)
             .map_err(|_| SignerFinalPromotionReceiptErrorV1::InvalidStatement)?;
+        // The native source owns permanent admission tombstones. A staged private receipt
+        // locally refuses this ID before another potentially expensive source observation.
+        self.core
+            .journal
+            .ensure_unstaged(self.core.expected.operation_id)?;
         let snapshot = self
             .coordinator
             .source

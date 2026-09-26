@@ -7,13 +7,13 @@ publication, including slices restored from CI. Its host macOS consumer also
 checks SHA3-256/SHAKE256 known answers, ML-DSA signing/verification and tamper
 rejection, and ML-KEM encapsulation/decapsulation.
 
-Current source ABI: 23. ABI 14 added
+Current source ABI: 24. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
 instruction boxes; later additive revisions include the bounded KAGEMUSHA V1
 wire validators and SoraFS Governance DAG block/head-chain reference
-validators consumed by the C# SDK. The ABI-23 Kotlin/JVM and Java/Android
+validators consumed by the C# SDK. The ABI-24 Kotlin/JVM and Java/Android
 `NativeSignerBridge` surface additionally requires native-signer JNI contract
-revision 5. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
+revision 7. Revision 4 sealed the removal of generic `Shield`, `ZkTransfer`, and
 `Unshield` transaction encoders plus native anonymous-escrow and authority-free
 Kaigi helpers from the C and JNI surfaces. The bridge retains specialized
 KAGEMUSHA raw/text validators for the sole ordered IPM1 lifecycle—request (`1`),
@@ -40,10 +40,9 @@ the stock capabilities and valid execution results remain unavailable, and no
 test engine, host flag, or shape-valid reply grants monetary authority.
 `RegisterZkAsset`
 now carries exactly
-`asset`, `vk_unshield`, and `vk_shield`; optional key presence enables each
-settlement role, with no mode, boolean enablement, or asset-bound transfer-key
-field. The JNI contract revision is checked separately so an artifact that is
-not exact ABI 23 fails closed instead of exposing a retired transaction surface.
+`asset` and optional `vk_unshield`; the retired shield verifier is absent from
+both native signatures and the encoded instruction. Bridge ABI 24 and native
+signer contract revision 7 reject older packages with incompatible signatures.
 Revision 5 hard-cuts native transaction signing from human chain labels to the
 exact genesis-derived `NetworkId`: JNI accepts exactly 32 marked hash bytes,
 while the C and Swift surface accepts only canonical checksummed `NetworkId`
@@ -67,7 +66,7 @@ attempt trust anchors. They verify finality, the fixed witness, membership,
 archive replay, and exact compact binding before borrowing a wallet seed.
 
 The archive checksums below are historical and do not establish a current
-ABI-23/revision-5 artifact. Regenerate, verify, and republish the bridge
+ABI-24/revision-7 artifact. Regenerate, verify, and republish the bridge
 artifacts before cutting an SDK release that depends on the current source
 surface.
 

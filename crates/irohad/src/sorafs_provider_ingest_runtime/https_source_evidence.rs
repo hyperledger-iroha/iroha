@@ -217,7 +217,9 @@ pub fn validate_provider_ingest_https_evidence_v1(
         || origin.fragment().is_some()
         || origin.path() != "/"
         || origin.host_str().is_none()
-        || origin.port() == Some(0)
+        // The gateway transport accepts only HTTPS on its canonical port. Evidence must not
+        // approve an origin that its own fetcher will reject after grant resolution.
+        || origin.port_or_known_default() != Some(443)
     {
         return Err(rejected);
     }

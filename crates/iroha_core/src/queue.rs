@@ -15360,7 +15360,15 @@ impl Queue {
         if scan_start >= age_ring.len() {
             scan_start = 0;
         }
-        let mut seen = HashSet::with_capacity(remaining_scan);
+        // The scan limit bounds work, but only the remaining FIFO suffix can
+        // contribute distinct hashes, and only still-queued hashes enter the
+        // set. A large configured scan limit or stale age-ring suffix must not
+        // allocate beyond the existing queued owner count. The age-ring lock
+        // keeps that count stable through this selection.
+        let scan_capacity = remaining_scan
+            .min(age_ring.len().saturating_sub(scan_start))
+            .min(self.queued_count.load(Ordering::Relaxed));
+        let mut seen = HashSet::with_capacity(scan_capacity);
         let mut pending_status_fault = None;
         let pending = age_ring
             .iter()
@@ -31865,6 +31873,41 @@ pub mod tests {
         assert!(queue.contains_entrypoint_hash(first_hash));
         assert!(queue.contains_entrypoint_hash(second_hash));
         assert_eq!(queue.active_len(), 2);
+    }
+    #[test]
+    fn bounded_pending_snapshot_accepts_maximal_scan_limit_without_oversized_allocation() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let max_scan = NonZeroUsize::new(usize::MAX).expect("non-zero bound");
+        let (empty, _empty_lease) = queue
+            .bounded_pending_snapshot(&state.view(), max_scan)
+            .expect("an empty queue must not allocate for the configured scan limit");
+        assert!(empty.is_empty());
+
+        let first = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &first);
+        let first_hash = first.hash_as_entrypoint();
+        let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
+        let second_hash = second.hash_as_entrypoint();
+        queue.push(first, state.view()).expect("push first");
+        queue.push(second, state.view()).expect("push second");
+        let (first_snapshot, _first_lease) = queue
+            .bounded_pending_snapshot(&state.view(), nonzero!(1_usize))
+            .expect("select the first transaction");
+        assert_eq!(first_snapshot.len(), 1);
+        assert_eq!(first_snapshot[0].hash_as_entrypoint(), first_hash);
+
+        let (second_snapshot, _second_lease) = queue
+            .bounded_pending_snapshot(&state.view(), max_scan)
+            .expect("allocation must follow the remaining queue suffix");
+        assert_eq!(second_snapshot.len(), 1);
+        assert_eq!(second_snapshot[0].hash_as_entrypoint(), second_hash);
+        assert_eq!(queue.active_len(), 2);
+        assert_eq!(queue.global_selection_owners.lock().len(), 2);
     }
     #[test]
     fn durability_transition_defers_reads_without_reordering_fifo_or_latching_fault() {

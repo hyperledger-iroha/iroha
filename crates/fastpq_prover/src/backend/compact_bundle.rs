@@ -112,7 +112,7 @@ pub(super) struct BundleVerificationWork {
     pub(super) parent_hashes: usize,
     /// Complete out-of-domain AIR identity evaluations.
     pub(super) air_evaluations: usize,
-    /// Complete constant-terminal checks.
+    /// Complete terminal degree checks on the final folded coset.
     pub(super) terminal_degree_checks: usize,
 }
 

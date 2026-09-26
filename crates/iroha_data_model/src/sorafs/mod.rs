@@ -36,6 +36,8 @@ pub mod pop_registry;
 pub mod pricing;
 /// Finalized chain-authoritative PDP and PoTR outcome projections.
 pub mod proof_ledger;
+/// Canonical council-policy claims for native provider admission.
+pub mod provider_admission;
 /// Chain-authoritative PoR, provider-dispute, and stream-token reputation journal.
 pub mod reputation;
 /// Reserve + rent policy and lifecycle quoting.
@@ -247,6 +249,8 @@ pub mod prelude {
     };
 }
 
+/// Bounded role-11 stream-token operation claims; native operation admission remains closed.
+pub mod stream_token_authority;
 /// Canonical bounded native StreamToken custody control records.
 pub mod stream_token_custody;
 

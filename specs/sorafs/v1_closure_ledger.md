@@ -22,6 +22,11 @@ eligibility. The user's September 13 correction applies repository-wide and
 supersedes every hardware-custody requirement in the original plan and older
 checkpoints below. Those checkpoints retain historical test scope, not current
 hardware prerequisites. See [server signing policy](../server_signing_policy_v1.md).
+The [2026-09-23 no-HSM gate audit](../../docs/history/2026-09-23/sorafs-no-hsm-gate-audit.md)
+also corrects the older custody-test wording below: a verifier of public signer
+binding and finalized operation state cannot prove key non-exportability. SoraFS
+release evidence must authenticate software custody under the same purpose,
+revocation, finality and replay rules as any optional hardware adapter.
 
 Repository conformance and production readiness are deliberately separate. A
 row marked `local-complete` has a reviewed implementation and local validation
@@ -56,6 +61,36 @@ purpose dispatch remain absent, and independently authenticated admission
 lineage, current revocation, advert, transport pins, bounded token grants and
 distributed provider-ingest qualification remain open. G02, G06 and all
 promotion gates remain open. No HSM prerequisite or compatibility path applies.
+The [role-11 native stream-token cut](../../docs/history/2026-09-23/sorafs-stream-token-native-operation-claim-gap.md)
+now retains provider-scoped Reserve/Complete/Expire rows, binds an exact signed
+Check request, and rejects buried terminal-row substitutions. The no-write
+native Check predicate now joins current custody, scoped authority, indexed
+phase and a signed State/Kura/QC floor; its final source passes 4/4 focused and
+6/6 adjacent Core handler tests. A successful Check alone cannot release a
+token.
+The [bounded historical readback](../../docs/history/2026-09-23/sorafs-stream-token-native-operation-claim-gap.md#bounded-historical-signed-execution-readback)
+now joins retained Reserve/current rows to signed transaction entries, aligned
+successful outputs and a pinned Kura/QC floor in one borrowed State view;
+four focused and four adjacent history tests pass. Its 64 MiB frame count is not
+yet physical I/O admission. A purpose-owned observer still must authenticate
+the finalized Check and historical operation in one applied cut, bind the
+private receipt and production daemon source, and pass restart and resource
+qualification before release opens.
+The [read-only current source-assignment service](../../docs/history/2026-09-23/sorafs-provider-ingest-g06-current-source-assignment-service.md)
+now exposes the exact committed head, revision, canonical source request and
+inventory for a separately administered resolver, with a complete-observation
+recheck. It does not close the independent admission/advert/revocation and grant
+authority gap.
+The [G06 finalized grant-authority seam](../../docs/history/2026-09-23/sorafs-provider-ingest-g06-grant-authority-seam.md)
+records the missing consensus-owned admission/advert/revocation producer and
+transport-pin lineage. Directory admission and the signed advert cache cannot
+be joined to a committed assignment as finalized grant authority; no production
+grant resolver is installed, so issuance stays fail-closed.
+The [bounded provider-ingest status page](../../docs/history/2026-09-24/sorafs-provider-ingest-bounded-status-page.md)
+now selects at most `limit + 1` job identities and materializes only returned
+rows, including retained Musubi receipts. Two focused tests and four adjacent
+checkpoint/status selectors pass. Finalized grant issuance, revocation, and
+distributed provider qualification remain open.
 The role-14 Current Check adapter now consumes Core's original applied and
 finalized State/Kura observation, checks the exact custody/audit context,
 advances a separate retained floor and rechecks qualified UTC. Five focused
@@ -72,6 +107,9 @@ promotion/evidence/cosign selection passes 396 tests.
 It still rejects final promotion because purpose-owned native completion and
 finalized-state verification for the inner approvals is absent; the outer
 role-14 receipt cannot replace those proofs.
+The [September 24 local retest](../../docs/history/2026-09-24/sorafs-software-signer-promotion-checker-retest.md)
+passes 18 software-signer launcher and 200 promotion-checker tests on the
+current checkout; it supplies no signed operation or deployment evidence.
 The [topology claim boundary](../../docs/history/2026-09-23/sorafs-topology-inner-approval-claim-boundary.md)
 additionally rejects foreign signer tuples and widened detached bindings;
 196 focused checker tests pass, but the role-16 native receipt and finalized
@@ -91,10 +129,14 @@ custody and completion remain absent.
 ## 2026-09-23 release-manifest and runtime-input checkpoint
 
 The [role-13 native-operation boundary](../../docs/history/2026-09-23/sorafs-release-manifest-native-operation-gap.md)
-now has a bounded internal Norito action and Check claim contract. The existing
-four-signature private service still lacks native custody, completed-operation
-state, finalized source and purpose-aware daemon dispatch; release signing and
-promotion remain blocked without an HSM prerequisite.
+now has a bounded canonical Norito/strict JSON instruction, separate deployment
+Manage/Operate/Check grants and a Core handler that rejects all seven actions
+until finalized operation storage and Check verification exist. Focused Manifest,
+DataModel, permission and Core selectors passed 1/1, 6/6, 2/2 and 3/3,
+respectively. The existing four-signature private service still lacks native
+custody, completed-operation state, finalized source and purpose-aware daemon
+dispatch; these missing authorities still block release signing and promotion.
+HSM access is not a prerequisite.
 
 The [integrated packet record](../../docs/history/2026-09-23/integrated-packet-validation.md)
 captures 20 passing release-manifest signer tests after the reviewed audit-head
@@ -1041,10 +1083,10 @@ The separate native release-publication deadline verifier was stopped by an
 automated security filter and remains unfinished; it is not resumed or qualified
 by any packet or test above. Release acceptance and its genuine device, state and
 observer prerequisites remain open.
-Genuine hardware, native custody-control/operation authority, current signer
-revocation in range admission, sustainable private-receipt retention, and the
-coherent hardware promotion-profile replacement remain open. Software signer
-labels and simulated provider receipts do not close G02. The four-voter,
+Native custody-control/operation authority, current signer revocation in range
+admission, sustainable private-receipt retention, and a coherent software-custody
+promotion profile remain open. Software signer labels and simulated provider
+receipts do not close G02. The four-voter,
 multi-provider, independently administered regional gateways, 24-hour soak,
 security review and all 17 production lanes remain unqualified by these tests.
 
@@ -1238,8 +1280,11 @@ Replay fixtures prove stale-replica fencing before reopening. The subsequent
 Node security selection exercises these corrections; full-suite execution of
 the final candidate remains required. The three detailed follow-up records
 are `node-replay-failure-triage.md`, `node-provider-failure-triage.md` and
-`node-other-failure-triage.md` under the durable evidence directory. Three
-reserve restart tests pass on the unchanged captured binary with a canonical
+`node-other-failure-triage.md` under the durable evidence directory.
+The [PoTR acknowledgement identity record](../../docs/history/2026-09-23/sorafs-potr-checkpoint-acknowledgement.md)
+adds exact persisted proof/repair ID validation and a passing 15-case local
+suite; distributed handoff and SF-2c remain open.
+Three reserve restart tests pass on the unchanged captured binary with a canonical
 temporary directory; this scopes their original failures to test path setup
 without relaxing production symlink rejection.
 The exact reputation checkpoint tampering test also passes in isolation on the
@@ -1566,10 +1611,11 @@ signer module, with the daemon duplicate removed. It requires an independently
 pinned attestation authority, exact signer
 and network bindings, current finalized state, explicit time, revocation checks
 and predecessor/sequence matching. The private verified result cannot be decoded
-or constructed by a caller. All **23 native custody tests** pass, covering
-canonical bounded decoding, independent attestation, non-exportability, exact
-bindings, enrollment replay, use after enrollment, revocation, freshness and
-state changes across provider operations. The public receipt verifier adds exact
+or constructed by a caller. At that checkpoint, **23 native custody tests**
+passed, covering canonical bounded decoding, signer bindings, enrollment replay,
+use after enrollment, revocation, freshness and state changes across provider
+operations. They did not establish key non-exportability or hardware origin. The
+public receipt verifier adds exact
 four-signature purpose/order, reviewed-manifest, original-custody and finalized
 completion binding. The opaque operation coordinator also
 passes **34 native tests** after migration to the shared public record owner,
@@ -1583,7 +1629,7 @@ rechecks journal identity and current custody before release. Its exclusive
 directory lease prevents concurrent journal instances or processes from racing
 the aggregate storage bound. Production authoritative-state
 and provider adapters and the atomic consumer/profile replacement remain
-unfinished. The existing software service is not hardware-qualified by these
+unfinished. The existing software service was not release-qualified by these
 interfaces or their simulated providers.
 The shared bounded supervisor-credential reader now has a neutral daemon owner.
 Consensus threshold custody keeps its existing behavior while dropping its

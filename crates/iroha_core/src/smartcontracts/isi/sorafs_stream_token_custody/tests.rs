@@ -12,6 +12,7 @@ use iroha_data_model::{
     block::{BlockHeader, builder::BlockBuilder},
     permission::Permissions,
 };
+use iroha_sccp::{SCCP_TAIRA_CHAIN_ID_V1, sccp_taira_finality_network_id_v1};
 use sorafs_manifest::signer::{
     custody::{
         SIGNER_CUSTODY_MAGIC_V1, SIGNER_CUSTODY_VERSION_V1, SignerCustodyAuthorityV1,
@@ -50,18 +51,20 @@ fn fixture() -> Fixture {
         .account_permissions
         .insert(authority.clone(), permissions);
     world.provider_owners.insert(provider, authority.clone());
-    let state = State::new_for_testing(
+    let state = State::new_with_chain_and_network_id_for_testing(
         world,
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
+        SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
+        sccp_taira_finality_network_id_v1(),
     );
     let attester = key(7);
     let policy = SignerCustodyPolicyV1 {
         binding: SignerCustodyBindingV1 {
             chain_id: state.view().chain_id().to_string(),
             network_id: *state.view().network_id().as_bytes(),
-            runtime_handle: "hsm://stream/primary".into(),
-            key_handle: "pkcs11:stream/key-1".into(),
+            runtime_handle: "software://sorafs/stream-token/primary".into(),
+            key_handle: "software://sorafs/stream-token/key-1".into(),
             service_id: "stream-service".into(),
             administrator_id: "stream-admin".into(),
             role: SignerRoleV1::StreamToken,
@@ -112,9 +115,21 @@ fn transact(state: &mut State, now: u64, call: impl FnOnce(&mut StateTransaction
     block
         .commit_world_overlay_for_testing()
         .expect("commit fixture world");
-    let signed = BlockBuilder::new(header)
+    let mut signed = BlockBuilder::new(header)
         .try_build_with_signature(0, key(0xFE).private_key())
         .expect("executed fixture block");
+    signed
+        .set_execution_outputs(
+            Vec::new(),
+            0,
+            Default::default(),
+            Vec::new(),
+            Default::default(),
+            Default::default(),
+            Vec::new(),
+            &iroha_data_model::parameter::ExecutionOutputPolicyV1::bootstrap().limits(),
+        )
+        .expect("complete fixture block outputs");
     let hash = signed.hash();
     let header = signed.header().clone();
     state

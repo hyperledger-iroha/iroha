@@ -379,7 +379,6 @@ class ProofAttachment(
 class RegisterZkAssetInstruction private constructor(
     @JvmField val asset: String,
     @JvmField val unshieldVerifyingKey: String?,
-    @JvmField val shieldVerifyingKey: String?,
     override val arguments: Map<String, String>,
 ) : InstructionTemplate {
     override val kind: InstructionKind get() = InstructionKind.REGISTER
@@ -387,7 +386,6 @@ class RegisterZkAssetInstruction private constructor(
     class Builder internal constructor() {
         private var asset: String? = null
         private var unshieldVerifyingKey: String? = null
-        private var shieldVerifyingKey: String? = null
 
         fun setAsset(asset: String?) = apply {
             this.asset = requireText(asset, "asset")
@@ -397,24 +395,15 @@ class RegisterZkAssetInstruction private constructor(
             this.unshieldVerifyingKey = optionalVerifyingKeyId(verifyingKey, "unshieldVerifyingKey")
         }
 
-        fun setShieldVerifyingKey(verifyingKey: String?) = apply {
-            this.shieldVerifyingKey = optionalVerifyingKeyId(verifyingKey, "shieldVerifyingKey")
-        }
-
         fun build(): RegisterZkAssetInstruction {
             val selectedAsset = checkNotNull(asset) { "asset must be provided" }
-            require(shieldVerifyingKey == null || unshieldVerifyingKey != null) {
-                "shieldVerifyingKey requires unshieldVerifyingKey so shielded funds remain redeemable"
-            }
             return RegisterZkAssetInstruction(
                 selectedAsset,
                 unshieldVerifyingKey,
-                shieldVerifyingKey,
                 linkedMapOf(
                     "action" to "RegisterZkAsset",
                     "asset" to selectedAsset,
                     "vk_unshield" to (unshieldVerifyingKey ?: ""),
-                    "vk_shield" to (shieldVerifyingKey ?: ""),
                 ),
             )
         }
@@ -430,7 +419,6 @@ class RegisterZkAssetInstruction private constructor(
                 "action",
                 "asset",
                 "vk_unshield",
-                "vk_shield",
             )
             val unknownArguments = arguments.keys - allowedArguments
             require(unknownArguments.isEmpty()) {
@@ -439,7 +427,6 @@ class RegisterZkAssetInstruction private constructor(
             val builder = builder()
                 .setAsset(requireArgument(arguments, "asset"))
             optionalArgument(arguments, "vk_unshield")?.let { builder.setUnshieldVerifyingKey(it) }
-            optionalArgument(arguments, "vk_shield")?.let { builder.setShieldVerifyingKey(it) }
             return builder.build()
         }
 

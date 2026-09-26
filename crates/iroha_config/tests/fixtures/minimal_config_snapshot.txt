@@ -817,6 +817,8 @@ Root {
                 8589934592,
             ),
             retained_carrier_shell_bytes: 268435456,
+            consensus_evidence_preparation_bytes: 8311968,
+            consensus_stake_index_bytes: 67108864,
             disk_budget_weights: NexusStorageWeights {
                 kura_blocks_bps: 3500,
                 wsv_snapshots_bps: 2000,
@@ -1923,6 +1925,7 @@ Root {
         kagemusha: Kagemusha {
             reserve_accounts: {},
             proof_release: None,
+            allow_testnet_experimental_release: false,
         },
         router: Router {
             twap_window: 60s,

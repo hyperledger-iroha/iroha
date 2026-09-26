@@ -36,10 +36,6 @@ fn fixed_path(value: String) -> StatePath {
         .expect("fixed-size native retail DAY state path must be valid")
 }
 
-pub(crate) fn policy_definition_prefix(definition: &AssetDefinitionId) -> String {
-    format!("{POLICY_ROOT}{}/", definition_digest(definition))
-}
-
 pub(crate) fn policy_key(definition: &AssetDefinitionId, dataspace: DataSpaceId) -> StatePath {
     retail_policy_state_path_v1(definition, dataspace)
 }

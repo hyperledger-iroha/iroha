@@ -1,8 +1,14 @@
 {
+  "admission_revision": 2,
   "advert_body_digest_hex": "d31ef8606de79cfada5e9a4a2c26f924f24c0216c9b2bf86b5457fcf3c61b92f",
-  "authorization_digest_hex": "011f595a069017baa7158ecf58304e7f78f4221ed221aa4a90b28b4a4e1fc182",
+  "authorization_digest_hex": "85b9eca0a62613355dfedea535612897eb9d65bafb6778e9c8dda335c8807180",
   "council_signature_count": 1,
-  "envelope_digest_hex": "294b8940c05ba5508c9810333307578fbbbcec45df907a6d71b1538fdc9c2cde",
+  "envelope_digest_hex": "beef94ab215a87cafe92743cd7b8a37afbe24fcfcd50476a93cc64ac77b080a6",
+  "expected_current_event_digest_hex": "6583a44c4ca5fec411ea83207f8bec48b97de9d835a595d98f655e823b9e54a2",
+  "network_id_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "policy_digest_hex": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+  "policy_id_hex": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+  "policy_revision": 1,
   "proposal_digest_hex": "943dfd8af9f8bd89aeed038a5beb251d4f71ab533c612a0f8eca44fb6eb95fab",
   "signature_threshold": 1,
   "trusted_council_keys_hex": [

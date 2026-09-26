@@ -54,6 +54,10 @@ pub enum MembershipAdmissionError {
         /// Actual requested layout size.
         requested_bytes: usize,
     },
+    /// An ordinary signed carrier reached membership staging without its
+    /// original pre-effect source allocation.
+    #[error("ordinary carrier membership source was not prepaid")]
+    SourceNotFunded,
 }
 impl MembershipAdmissionError {
     /// Borrow only the original resource release that can permit a retry.

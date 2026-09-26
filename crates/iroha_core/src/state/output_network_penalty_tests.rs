@@ -127,7 +127,7 @@ fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
     assert!(
         matches!(rejected.result.as_ref(), Err(TransactionRejectionReason::Validation(
             ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(reason))
-        )) if reason.as_ref() == "re-vote cannot change direction"),
+        )) if reason.as_ref() == "second plain ballot cannot change direction"),
         "the actual ballot error must survive penalty and fee settlement: {:?}",
         rejected.result
     );

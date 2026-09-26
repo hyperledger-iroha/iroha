@@ -112,7 +112,7 @@ public final class ValidationFeeHijiriQuoteTests {
         throw new AssertionError("missing JNI method must fail closed: " + method);
       } catch (final IllegalStateException failure) {
         final String expected =
-            "native Hijiri validation-fee quote bridge is unavailable: required ABI-23 method "
+            "native Hijiri validation-fee quote bridge is unavailable: required ABI-24 method "
                 + method
                 + " is missing";
         assert expected.equals(failure.getMessage()) : "unstable missing-JNI capability error";

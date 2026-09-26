@@ -150,7 +150,8 @@ isi! {
         pub status: KaigiRelayHealthStatus,
         /// Timestamp (milliseconds since epoch) for when the observation occurred.
         ///
-        /// It must not exceed the current block time or precede the stored relay feedback.
+        /// It must not precede the call's creation time or stored relay feedback,
+        /// and it must not exceed the current block time.
         pub reported_at_ms: u64,
         /// Optional free-form notes capturing failure context.
         pub notes: Option<String>,

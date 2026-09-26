@@ -65,7 +65,7 @@ maps = [
     "crossbeam-utils",
     "smallvec",
 ]
-simd_support = []
+simd = []
 skinny = []
 tcache = []
 

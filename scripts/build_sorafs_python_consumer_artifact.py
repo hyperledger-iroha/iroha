@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Execute the fixed SoraFS Python consumer against original offline wheels.
 
-Requires a clean matching source candidate, native ABI-23 manifest, independently
+Requires a clean matching source candidate, native ABI-24 manifest, independently
 pinned CPython3.12/runtime and offline dependency manifests, and prebuilt native
 and SDK wheels. Outputs are fresh below the source's target/ directory. This
 unsigned POSIX host artifact does not grant SDK parity or release promotion.
@@ -18,7 +18,7 @@ import sys
 # Support an isolated parent invocation while resolving only this source's tools.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import check_native_sdk_abi23_artifact as native
+import check_native_sdk_artifact as native
 from sorafs_evidence_json import decode_evidence_json
 from sorafs_python_consumer_artifact import (
     ArtifactError, canonical_json, consume_runtime_output,
@@ -55,7 +55,7 @@ TOOLS = ("build_sorafs_python_consumer_artifact.py", "sorafs_python_consumer_art
          "sorafs_python_report_origins.py",
          "sorafs_evidence_json.py",
          "sorafs_evidence_paths.py", "sorafs_evidence_sensitivity.py", "sorafs_path_identity.py",
-         "sorafs_sdk_artifact_index.py", "check_native_sdk_abi23_artifact.py",
+         "sorafs_sdk_artifact_index.py", "check_native_sdk_artifact.py",
          "compute_workspace_source_manifest.py", "release_manifest_signing.py")
 
 
@@ -92,7 +92,7 @@ def _produce(args: argparse.Namespace, originals: OriginalInputs, copied: Origin
         originals.read(Path(shared.path), verifier.MAX_MEMBER_BYTES, hold=True)
     dependency_raw = copy_input(args.dependency_manifest, "inputs/dependencies.json", 128 * 1024)
     dependencies = parse_dependency_manifest(dependency_raw, expected_sha256=args.dependency_manifest_sha256)
-    manifest_raw = copy_input(args.native_manifest, "inputs/native-abi23.json", native.MAX_MANIFEST_BYTES)
+    manifest_raw = copy_input(args.native_manifest, "inputs/native-abi24.json", native.MAX_MANIFEST_BYTES)
     manifest = native.validate_manifest(decode_evidence_json(manifest_raw))
     if (native.canonical_manifest_bytes(manifest) != manifest_raw or manifest["sdk"] != "python"
             or manifest["source_commit"] != commit
@@ -259,7 +259,7 @@ def _produce(args: argparse.Namespace, originals: OriginalInputs, copied: Origin
                                                 expected_size=runtime_bundle.size)
     if parse_runtime_bundle(bundle_raw, expected_manifest_sha256=runtime.sha256).manifest != runtime:
         raise ArtifactError("retained runtime bundle differs from original runtime manifest")
-    for name in ("runtime.json", "dependencies.json", "native-abi23.json", "requirements.txt", "child.json"):
+    for name in ("runtime.json", "dependencies.json", "native-abi24.json", "requirements.txt", "child.json"):
         retained["inputs/" + name] = copied.read(work / "inputs" / name, MAX_MANIFEST_BYTES)
     record = {"schema": SCHEMA, "consumer": "python", "scope": "posix-host-native",
               "source_commit": commit, "source_manifest_sha256": args.source_manifest_sha256,

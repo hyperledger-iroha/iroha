@@ -5,12 +5,13 @@ use crate::state::StateBlock;
 use crate::telemetry::StateTelemetry;
 use crate::{
     smartcontracts::isi::staking::{
-        PublicLaneStakeIndex, PublicLaneStakeShareKey, apply_indexed_consensus_slash_to_validator,
+        PublicLaneStakeIndex, apply_indexed_consensus_slash_to_validator,
         apply_indexed_slash_to_validator_without_observability,
         indexed_slashable_validator_exposure, max_slash_amount, validator_tenure_contains_height,
     },
     state::{
-        State, StateTransaction, StateView, WorldReadOnly, public_lane_validator_record_matches_key,
+        EvidencePreparationError, State, StateTransaction, StateView, WorldReadOnly,
+        public_lane_validator_record_matches_key,
     },
 };
 use eyre::{Result, WrapErr, eyre};
@@ -30,8 +31,11 @@ use iroha_data_model::{
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::LaneId;
 use iroha_primitives::numeric::Quantity;
+use mv::allocation::{AllocationBudget, AllocationRefusal, ChargedBuffer};
 use mv::storage::StorageReadOnly;
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::{alloc::Layout, collections::BTreeMap};
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PenaltyOutcome {
     pub applied: u64,
@@ -43,23 +47,25 @@ enum EffectsApplicationMode {
     #[cfg(test)]
     ValidateOnly,
 }
-#[derive(Clone)]
 struct ValidatorLocator {
     lane_id: LaneId,
     validator: AccountId,
     slashable_exposure: Quantity,
     activation_height: u64,
     deactivation_height: Option<u64>,
-    share_keys: Vec<PublicLaneStakeShareKey>,
 }
 struct ParentPenaltySnapshot {
-    evidence: super::evidence::V2CommittedEvidenceSnapshot,
-    slashing_delay: u64,
+    pending: ChargedBuffer<PendingPenaltyEvidence>,
     max_slash_bps: u16,
     validator_map: BTreeMap<PublicKey, Vec<ValidatorLocator>>,
+    stake_index: PublicLaneStakeIndex,
     #[cfg(test)]
-    stake_share_rows_scanned: usize,
+    stake_share_row_visits: usize,
 }
+type PendingPenaltyEntry =
+    iroha_config::parameters::defaults::nexus::storage::ConsensusPenaltyPendingEntry;
+#[repr(transparent)]
+struct PendingPenaltyEvidence(PendingPenaltyEntry);
 fn consensus_penalty_is_due(
     recorded_at_height: u64,
     slashing_delay: u64,
@@ -69,6 +75,24 @@ fn consensus_penalty_is_due(
         .checked_add(slashing_delay)
         .is_some_and(|eligible_height| eligible_height <= current_height)
 }
+/// Exact allocation made when a compact public key is cloned into pending
+/// penalty metadata. `PublicKeyCompact` stores one algorithm tag and the
+/// borrowed payload in a `ConstVec<u8>` backed by `Box<[u8]>`.
+fn pending_peer_key_layout(peer: &PeerId) -> Result<Layout, EvidencePreparationError> {
+    let (_, payload) = peer
+        .public_key()
+        .try_to_bytes()
+        .map_err(|_| EvidencePreparationError::Invariant)?;
+    let bytes = payload
+        .len()
+        .checked_add(1)
+        .ok_or(EvidencePreparationError::Admission(
+            AllocationRefusal::DemandOverflow,
+        ))?;
+    Layout::array::<u8>(bytes)
+        .map_err(|_| EvidencePreparationError::Admission(AllocationRefusal::DemandOverflow))
+}
+
 pub struct PenaltyApplier<'a> {
     state: &'a State,
 }
@@ -82,14 +106,17 @@ impl<'a> PenaltyApplier<'a> {
     }
     fn parent_snapshot(
         view: &StateView<'_>,
-        evidence: super::evidence::V2CommittedEvidenceSnapshot,
+        current_height: u64,
+        budget: &AllocationBudget,
+        stake_budget: &AllocationBudget,
     ) -> Result<ParentPenaltySnapshot> {
-        if evidence.record_capacity_exceeded {
+        let evidence_capacity = super::evidence::v2_committed_evidence_capacity(view.world());
+        if evidence_capacity.record_capacity_exceeded {
             return Err(eyre!(
                 "committed Sumeragi v2 evidence exceeds the record capacity"
             ));
         }
-        if evidence.byte_capacity_exceeded {
+        if evidence_capacity.byte_capacity_exceeded {
             return Err(eyre!(
                 "committed Sumeragi v2 evidence exceeds the proof-byte capacity"
             ));
@@ -97,10 +124,52 @@ impl<'a> PenaltyApplier<'a> {
         let world = view.world();
         let slashing_delay = crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(world)
             .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
+        let due = |record: &EvidenceRecord| {
+            !record.penalty_status.is_terminal()
+                && record.recorded_at_height < current_height
+                && consensus_penalty_is_due(
+                    record.recorded_at_height,
+                    slashing_delay,
+                    current_height,
+                )
+        };
+        // This borrowed count and the fill below read the same StateView.
+        // Fund the exact original backing before constructing the stake index.
+        let mut due_count = 0_usize;
+        let mut peer_key_bytes = 0_usize;
+        for (_, record) in world.consensus_evidence().iter() {
+            if !due(record) {
+                continue;
+            }
+            due_count = due_count
+                .checked_add(1)
+                .ok_or(EvidencePreparationError::Admission(
+                    AllocationRefusal::DemandOverflow,
+                ))?;
+            let context = &record.evidence.equivocation.context;
+            if let Some((_, peer)) =
+                offender_peer(&record.evidence, record.recorded_at_height, context)
+            {
+                peer_key_bytes = peer_key_bytes
+                    .checked_add(pending_peer_key_layout(peer)?.size())
+                    .ok_or(EvidencePreparationError::Admission(
+                        AllocationRefusal::DemandOverflow,
+                    ))?;
+            }
+        }
+        let mut pending =
+            ChargedBuffer::new(due_count, budget).map_err(EvidencePreparationError::from)?;
+        // Prepay every nested compact key before stake-index construction or
+        // any clone. Each split charge stays in the same pending entry as its
+        // key and refunds only after that entry's PeerId has been dropped.
+        let mut peer_key_reservation = budget
+            .try_reserve_bytes(peer_key_bytes)
+            .map_err(EvidencePreparationError::Admission)?;
         let exposure_index = PublicLaneStakeIndex::from_world(
             world,
             view.nexus.staking.max_stake_shares_per_validator.get(),
             view.nexus.staking.max_pending_unbonds_per_share.get(),
+            stake_budget,
         )
         .wrap_err("failed to index slashable public-lane stake exposure")?;
         let mut candidates_map: BTreeMap<PublicKey, Vec<ValidatorLocator>> = BTreeMap::new();
@@ -140,7 +209,6 @@ impl<'a> PenaltyApplier<'a> {
                         })?,
                     activation_height,
                     deactivation_height: record.deactivation_height,
-                    share_keys: exposure_index.share_keys(*lane_id, validator_id).to_vec(),
                 });
         }
         for locators in candidates_map.values_mut() {
@@ -150,13 +218,38 @@ impl<'a> PenaltyApplier<'a> {
                     .then_with(|| lhs.validator.cmp(&rhs.validator))
             });
         }
+        for (key, record) in world.consensus_evidence().iter() {
+            if !due(record) {
+                continue;
+            }
+            let context = &record.evidence.equivocation.context;
+            let signer = if let Some((index, peer)) =
+                offender_peer(&record.evidence, record.recorded_at_height, context)
+            {
+                let layout = pending_peer_key_layout(peer)?;
+                let charge = peer_key_reservation
+                    .try_split(layout)
+                    .map_err(|_| EvidencePreparationError::Invariant)?;
+                Some((index, peer.clone(), charge))
+            } else {
+                None
+            };
+            pending
+                .try_push(PendingPenaltyEvidence((*key, context.height, signer)))
+                .map_err(|_| EvidencePreparationError::Invariant)?;
+        }
+        if peer_key_reservation.remaining_bytes() != 0 {
+            return Err(EvidencePreparationError::Invariant.into());
+        }
+        #[cfg(test)]
+        let stake_share_row_visits = exposure_index.row_visits();
         Ok(ParentPenaltySnapshot {
-            evidence,
-            slashing_delay,
+            pending,
             max_slash_bps: view.nexus.staking.max_slash_bps,
             validator_map: candidates_map,
+            stake_index: exposure_index,
             #[cfg(test)]
-            stake_share_rows_scanned: exposure_index.rows_scanned(),
+            stake_share_row_visits,
         })
     }
     pub(crate) fn derive_npos_consensus_effects(
@@ -194,13 +287,18 @@ impl<'a> PenaltyApplier<'a> {
                 continue;
             }
             let view = self.state.view();
-            let evidence = super::evidence::v2_committed_evidence_snapshot(view.world());
-            let result = Self::parent_snapshot(&view, evidence).and_then(|snapshot| {
+            let result = Self::parent_snapshot(
+                &view,
+                block_header.height().get(),
+                self.state.evidence_preparation_budget(),
+                self.state.stake_index_budget(),
+            )
+            .and_then(|snapshot| {
                 let admissions = if include_admissions {
-                    super::evidence::pending_v2_evidence_admissions_from_snapshot(
+                    super::evidence::pending_v2_evidence_admissions_from_world(
                         self.state,
                         block_header.height().get(),
-                        &snapshot.evidence,
+                        view.world(),
                     )
                 } else {
                     Vec::new()
@@ -223,126 +321,103 @@ impl<'a> PenaltyApplier<'a> {
         snapshot: ParentPenaltySnapshot,
     ) -> Result<Vec<NposPenaltyAction>> {
         let current_height = block_header.height().get();
-        let mut pending: Vec<(Hash, EvidenceRecord)> = Vec::new();
-        for (key, record) in snapshot.evidence.records {
-            if record.penalty_status.is_terminal() {
-                continue;
-            }
-            if record.recorded_at_height >= current_height {
-                // Evidence admitted by the block currently under construction
-                // can never drive its own deterministic penalty attachment.
-                continue;
-            }
-            if !consensus_penalty_is_due(
-                record.recorded_at_height,
-                snapshot.slashing_delay,
-                current_height,
-            ) {
-                continue;
-            }
-            pending.push((key, record));
-        }
-        if pending.is_empty() {
+        let mut pending = snapshot.pending;
+        if pending.as_slice().is_empty() {
             return Ok(Vec::new());
         }
-        pending.sort_by(|left, right| left.0.cmp(&right.0));
+        pending
+            .as_mut_slice()
+            .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
         let _witness_suppression =
             crate::sumeragi::witness::suppress_recording_for_current_thread();
         let mut scratch = self
             .state
             .consensus_effects_probe_block(block_header.clone())?;
         let mut actions = Vec::new();
-        for (key, record) in pending {
+        for record in pending.as_slice() {
+            let (key, offence_height, signer) = &record.0;
+            let key = *key;
             // Admission already validated and anchored this immutable context.
             // Re-reading mutable local Kura files here would make block
             // construction depend on node-local I/O after consensus admission.
-            let context = &record.evidence.equivocation.context;
-            let roster = context
-                .roster
-                .iter()
-                .map(|validator| validator.validator.clone())
-                .collect::<Vec<_>>();
-            let offenders = offender_indices(&record.evidence, record.recorded_at_height, context);
             let slash_id = key;
-            for signer in offenders {
-                let Some((peer_id, locators)) = self.locate_validator_in_roster_cached(
-                    signer,
-                    &roster,
-                    &snapshot.validator_map,
-                ) else {
-                    continue;
-                };
-                for locator in locators {
-                    if context.height < locator.activation_height
-                        || locator
-                            .deactivation_height
-                            .is_some_and(|height| context.height >= height)
-                    {
-                        continue;
-                    }
-                    let validator_key = (locator.lane_id, locator.validator.clone());
-                    let current_record = scratch
-                        .world
-                        .public_lane_validators
-                        .get(&validator_key)
-                        .ok_or_else(|| {
-                        eyre!(
-                            "penalty planning lost retained validator {} on lane {}",
-                            locator.validator,
-                            locator.lane_id
+            if let Some((signer, peer_id, _peer_key_charge)) = signer.as_ref() {
+                if let Some(locators) = snapshot.validator_map.get(peer_id.public_key()) {
+                    for locator in locators {
+                        if *offence_height < locator.activation_height
+                            || locator
+                                .deactivation_height
+                                .is_some_and(|height| *offence_height >= height)
+                        {
+                            continue;
+                        }
+                        let validator_key = (locator.lane_id, locator.validator.clone());
+                        let current_record = scratch
+                            .world
+                            .public_lane_validators
+                            .get(&validator_key)
+                            .ok_or_else(|| {
+                                eyre!(
+                                    "penalty planning lost retained validator {} on lane {}",
+                                    locator.validator,
+                                    locator.lane_id
+                                )
+                            })?;
+                        let share_keys = snapshot
+                            .stake_index
+                            .share_keys(locator.lane_id, &locator.validator);
+                        let current_exposure = indexed_slashable_validator_exposure(
+                            &scratch.world,
+                            locator.lane_id,
+                            &locator.validator,
+                            current_record,
+                            *offence_height,
+                            share_keys,
                         )
-                    })?;
-                    let current_exposure = indexed_slashable_validator_exposure(
-                        &scratch.world,
-                        locator.lane_id,
-                        &locator.validator,
-                        current_record,
-                        context.height,
-                        &locator.share_keys,
-                    )
-                    .wrap_err_with(|| {
-                        format!(
-                            "failed to recompute slashable exposure for {} on lane {}",
-                            locator.validator, locator.lane_id
+                        .wrap_err_with(|| {
+                            format!(
+                                "failed to recompute slashable exposure for {} on lane {}",
+                                locator.validator, locator.lane_id
+                            )
+                        })?;
+                        if current_exposure > locator.slashable_exposure {
+                            return Err(eyre!(
+                                "slashable exposure increased while planning one penalty bundle"
+                            ));
+                        }
+                        let amount = max_slash_amount(&current_exposure, snapshot.max_slash_bps)?;
+                        if amount.is_zero() {
+                            continue;
+                        }
+                        let slash = NposConsensusSlashAction {
+                            evidence_key: key,
+                            signer: *signer,
+                            peer_id: peer_id.clone(),
+                            lane_id: locator.lane_id,
+                            validator: locator.validator.clone(),
+                            slash_id,
+                            amount,
+                        };
+                        let mut transaction = scratch.consensus_effects_transaction();
+                        apply_indexed_slash_to_validator_without_observability(
+                            &mut transaction,
+                            slash.lane_id,
+                            &slash.validator,
+                            slash.slash_id,
+                            &slash.amount,
+                            block_header.creation_time_ms,
+                            *offence_height,
+                            share_keys,
                         )
-                    })?;
-                    if current_exposure > locator.slashable_exposure {
-                        return Err(eyre!(
-                            "slashable exposure increased while planning one penalty bundle"
-                        ));
+                        .wrap_err_with(|| {
+                            format!(
+                                "failed to plan consensus slash for {} on lane {}",
+                                slash.validator, slash.lane_id
+                            )
+                        })?;
+                        transaction.apply_consensus_effects();
+                        actions.push(NposPenaltyAction::ConsensusSlash(slash));
                     }
-                    let amount = max_slash_amount(&current_exposure, snapshot.max_slash_bps)?;
-                    if amount.is_zero() {
-                        continue;
-                    }
-                    let slash = NposConsensusSlashAction {
-                        evidence_key: key,
-                        signer,
-                        peer_id: peer_id.clone(),
-                        lane_id: locator.lane_id,
-                        validator: locator.validator.clone(),
-                        slash_id,
-                        amount,
-                    };
-                    let mut transaction = scratch.consensus_effects_transaction();
-                    apply_indexed_slash_to_validator_without_observability(
-                        &mut transaction,
-                        slash.lane_id,
-                        &slash.validator,
-                        slash.slash_id,
-                        &slash.amount,
-                        block_header.creation_time_ms,
-                        context.height,
-                        &locator.share_keys,
-                    )
-                    .wrap_err_with(|| {
-                        format!(
-                            "failed to plan consensus slash for {} on lane {}",
-                            slash.validator, slash.lane_id
-                        )
-                    })?;
-                    transaction.apply_consensus_effects();
-                    actions.push(NposPenaltyAction::ConsensusSlash(slash));
                 }
             }
             // A removed, inactive, or zero-stake offender is still terminal:
@@ -358,19 +433,6 @@ impl<'a> PenaltyApplier<'a> {
         actions.sort();
         actions.dedup();
         Ok(actions)
-    }
-    #[allow(clippy::unused_self)]
-    fn locate_validator_in_roster_cached(
-        &self,
-        signer: ValidatorIndex,
-        roster: &[PeerId],
-        map: &BTreeMap<PublicKey, Vec<ValidatorLocator>>,
-    ) -> Option<(PeerId, Vec<ValidatorLocator>)> {
-        let signer_idx = usize::try_from(signer).ok()?;
-        let peer = roster.get(signer_idx)?;
-        map.get(peer.public_key())
-            .cloned()
-            .map(|locator| (peer.clone(), locator))
     }
 }
 #[allow(clippy::too_many_arguments)]
@@ -601,6 +663,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                 &tx.world,
                 tx.nexus.staking.max_stake_shares_per_validator.get(),
                 tx.nexus.staking.max_pending_unbonds_per_share.get(),
+                tx.stake_index_budget,
             )
         })
         .transpose()
@@ -703,27 +766,17 @@ fn ensure_evidence_penalty_is_unresolved(
     }
     Ok(())
 }
-fn canonical_indices(
-    indices: impl IntoIterator<Item = ValidatorIndex>,
-    roster_len: usize,
-) -> Vec<ValidatorIndex> {
-    indices
-        .into_iter()
-        .filter(|index| usize::try_from(*index).is_ok_and(|index| index < roster_len))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
-}
 fn evidence_context_height(evidence: &Evidence, _recorded_at_height: u64) -> u64 {
     evidence.equivocation.context.height
 }
-fn offender_indices(
+/// Borrow the one canonical signer without allocating a temporary index set.
+fn offender_peer<'a>(
     evidence: &Evidence,
     recorded_at_height: u64,
-    context: &HeightContext,
-) -> Vec<ValidatorIndex> {
+    context: &'a HeightContext,
+) -> Option<(ValidatorIndex, &'a PeerId)> {
     if evidence_context_height(evidence, recorded_at_height) != context.height {
-        return Vec::new();
+        return None;
     }
     let signer = match &evidence.equivocation.conflict {
         iroha_data_model::block::consensus_v2::SumeragiV2Equivocation::Proposal {
@@ -737,7 +790,9 @@ fn offender_indices(
             ..
         } => first.signer,
     };
-    canonical_indices([signer], context.roster.len())
+    let position = usize::try_from(signer).ok()?;
+    let entry = context.roster.get(position)?;
+    Some((signer, &entry.validator))
 }
 
 #[cfg(test)]
@@ -1349,7 +1404,7 @@ mod tests {
         assert!(!consensus_penalty_is_due(u64::MAX - 1, 2, u64::MAX));
     }
     #[test]
-    fn parent_snapshot_indexes_every_stake_share_exactly_once() {
+    fn parent_snapshot_two_pass_stake_index_retains_exact_exposure() {
         let state = fresh_state();
         install_one_block_delay_npos(&state);
         let peers = roster();
@@ -1361,6 +1416,16 @@ mod tests {
                 .public_key()
                 .clone(),
         );
+        let nested_key_bytes = |account: &AccountId| {
+            let mut bytes = 0_usize;
+            account
+                .for_each_admission_clone_layout(|layout| bytes += layout.size())
+                .expect("fixture account has canonical key material");
+            bytes
+        };
+        let expected_nested_key_bytes = 4 * nested_key_bytes(&first)
+            + 3 * nested_key_bytes(&second)
+            + nested_key_bytes(&delegator);
         let pending_id = Hash::new(b"indexed pending unbond");
         {
             let key = (LaneId::SINGLE, first.clone(), first.clone());
@@ -1405,11 +1470,13 @@ mod tests {
         let view = state.view();
         let snapshot = PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
         )
         .expect("canonical multi-validator stake snapshot");
 
-        assert_eq!(snapshot.stake_share_rows_scanned, 3);
+        assert_eq!(snapshot.stake_share_row_visits, 6);
         let (asset_definition, escrow, _) = penalty_staking_ids();
         let escrow_asset = AssetId::new(asset_definition, escrow);
         assert_eq!(
@@ -1454,6 +1521,104 @@ mod tests {
             second_locator.slashable_exposure,
             Quantity::from(10_000_u64)
         );
+        assert_eq!(
+            state.stake_index_budget().reserved_bytes(),
+            3 * std::mem::size_of::<crate::smartcontracts::isi::staking::PublicLaneStakeShareKey>()
+                + 2 * std::mem::size_of::<(
+                    LaneId,
+                    AccountId,
+                    std::ops::Range<usize>,
+                    Quantity,
+                    Quantity,
+                    Quantity,
+                )>()
+                + expected_nested_key_bytes
+                + 8 * std::mem::size_of::<mv::allocation::AllocationCharge>()
+        );
+        drop(snapshot);
+        assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
+    }
+    #[test]
+    fn parent_stake_index_backing_refusal_preserves_source_and_retries_after_release() {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let peers = roster();
+        let validator = add_validator_record(&state, &peers[0]);
+        let share_key = (LaneId::SINGLE, validator.clone(), validator.clone());
+        let original = state
+            .world
+            .public_lane_stake_shares
+            .view()
+            .get(&share_key)
+            .cloned()
+            .expect("accepted source share");
+        let budget = state.stake_index_budget();
+        let mut validator_key_bytes = 0_usize;
+        validator
+            .for_each_admission_clone_layout(|layout| validator_key_bytes += layout.size())
+            .expect("fixture validator has canonical key material");
+        let backing = std::mem::size_of::<
+            crate::smartcontracts::isi::staking::PublicLaneStakeShareKey,
+        >() + std::mem::size_of::<(
+            LaneId,
+            AccountId,
+            std::ops::Range<usize>,
+            Quantity,
+            Quantity,
+            Quantity,
+        )>() + 3
+            * (validator_key_bytes + std::mem::size_of::<mv::allocation::AllocationCharge>());
+        let exact_held = budget
+            .try_reserve_bytes(budget.limit_bytes() - backing)
+            .expect("leave exact combined backing in original pool");
+        let view = state.view();
+        let exact =
+            PenaltyApplier::parent_snapshot(&view, 2, state.evidence_preparation_budget(), budget)
+                .expect("exact remaining combined backing admits one validator");
+        assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
+        drop(exact);
+        drop(exact_held);
+        assert_eq!(budget.reserved_bytes(), 0);
+        let held_bytes = budget.limit_bytes() - backing + 1;
+        let held = budget
+            .try_reserve_bytes(held_bytes)
+            .expect("hold original index pool capacity");
+        let error = match PenaltyApplier::parent_snapshot(
+            &view,
+            2,
+            state.evidence_preparation_budget(),
+            budget,
+        ) {
+            Ok(_) => panic!("one byte below the combined backings must refuse locally"),
+            Err(error) => error,
+        };
+        let local = error
+            .downcast_ref::<EvidencePreparationError>()
+            .expect("typed local stake-index capacity refusal");
+        assert!(matches!(
+            local,
+            EvidencePreparationError::Admission(AllocationRefusal::Capacity {
+                requested_bytes,
+                ..
+            }) if *requested_bytes == backing
+        ));
+        assert!(local.release_wait().is_some());
+        assert_eq!(budget.reserved_bytes(), held_bytes);
+        assert_eq!(
+            view.world.public_lane_stake_shares().get(&share_key),
+            Some(&original)
+        );
+        drop(held);
+        let snapshot =
+            PenaltyApplier::parent_snapshot(&view, 2, state.evidence_preparation_budget(), budget)
+                .expect("same-State retry after original owner releases capacity");
+        assert_eq!(budget.reserved_bytes(), backing);
+        assert_eq!(
+            snapshot.stake_index.share_keys(LaneId::SINGLE, &validator),
+            &[share_key]
+        );
+        drop(snapshot);
+        assert_eq!(budget.reserved_bytes(), 0);
     }
     #[test]
     fn parent_snapshot_rejects_corrupt_stake_share_outside_candidate_set() {
@@ -1486,7 +1651,9 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
         ) {
             Ok(_) => panic!("a corrupt share row must fail the complete parent snapshot"),
             Err(error) => error,
@@ -1520,14 +1687,32 @@ mod tests {
             pending_unbonds: BTreeMap::new(),
             metadata: Metadata::default(),
         };
+        let key = (LaneId::SINGLE, validator.clone(), validator);
         let mut block = state.world.public_lane_stake_shares.block();
-        block.insert((LaneId::SINGLE, validator.clone(), validator), share);
+        block.insert(key.clone(), share.clone());
         block.commit();
 
         let view = state.view();
+        let empty_budget = AllocationBudget::new(0);
+        let preflight_error = match PublicLaneStakeIndex::from_world(
+            view.world(),
+            view.nexus.staking.max_stake_shares_per_validator.get(),
+            view.nexus.staking.max_pending_unbonds_per_share.get(),
+            &empty_budget,
+        ) {
+            Ok(_) => panic!("an orphan stake-share group must fail before allocation"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{preflight_error:#}").contains("has no validator record"),
+            "unexpected pre-allocation rejection: {preflight_error:#}"
+        );
+        assert_eq!(empty_budget.reserved_bytes(), 0);
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
         ) {
             Ok(_) => panic!("an orphan stake-share aggregate must fail the parent snapshot"),
             Err(error) => error,
@@ -1535,6 +1720,11 @@ mod tests {
         assert!(
             format!("{error:#}").contains("has no validator record"),
             "unexpected rejection: {error:#}"
+        );
+        assert_eq!(state.stake_index_budget().reserved_bytes(), 0);
+        assert_eq!(
+            view.world.public_lane_stake_shares().get(&key),
+            Some(&share)
         );
     }
     #[test]
@@ -1568,7 +1758,9 @@ mod tests {
         let view = share_capped_state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            share_capped_state.evidence_preparation_budget(),
+            share_capped_state.stake_index_budget(),
         ) {
             Ok(_) => panic!("stake-share cap overflow must fail the parent snapshot"),
             Err(error) => error,
@@ -1608,7 +1800,9 @@ mod tests {
         let view = pending_capped_state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            pending_capped_state.evidence_preparation_budget(),
+            pending_capped_state.stake_index_budget(),
         ) {
             Ok(_) => panic!("pending-unbond cap overflow must fail the parent snapshot"),
             Err(error) => error,
@@ -1635,7 +1829,9 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
         ) {
             Ok(_) => panic!("validator-cap overflow must fail the parent snapshot"),
             Err(error) => error,
@@ -1672,7 +1868,9 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
         ) {
             Ok(_) => panic!("a non-canonical pending unbond must fail the parent snapshot"),
             Err(error) => error,
@@ -1702,9 +1900,27 @@ mod tests {
         block.commit();
 
         let view = state.view();
+        let empty_budget = AllocationBudget::new(0);
+        let preflight_error = match PublicLaneStakeIndex::from_world(
+            view.world(),
+            view.nexus.staking.max_stake_shares_per_validator.get(),
+            view.nexus.staking.max_pending_unbonds_per_share.get(),
+            &empty_budget,
+        ) {
+            Ok(_) => panic!("a foreign stake account must fail before allocation"),
+            Err(error) => error,
+        };
+        assert!(
+            format!("{preflight_error:#}")
+                .contains("stake account must match the validator account"),
+            "unexpected pre-allocation rejection: {preflight_error:#}"
+        );
+        assert_eq!(empty_budget.reserved_bytes(), 0);
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
         ) {
             Ok(_) => panic!("a foreign self-stake account must fail the parent snapshot"),
             Err(error) => error,
@@ -1730,7 +1946,9 @@ mod tests {
         let view = state.view();
         let error = match PenaltyApplier::parent_snapshot(
             &view,
-            crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
         ) {
             Ok(_) => panic!("mismatched validator totals must fail the parent snapshot"),
             Err(error) => error,
@@ -1771,14 +1989,238 @@ mod tests {
         )));
     }
     #[test]
+    fn parent_penalty_plan_retains_only_due_evidence_metadata() {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let frozen_roster = roster();
+        let context = height_one_context(
+            *state.network_id_ref(),
+            &frozen_roster,
+            test_block_hash(0x82),
+        );
+        let due = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let terminal = insert_evidence(&state, phase_vote_evidence(&context, 2, 1), 1);
+        let future = insert_evidence(&state, phase_vote_evidence(&context, 0, 2), 2);
+        let mut rows = state.world.consensus_evidence.block();
+        let mut terminal_record = rows.get(&terminal).cloned().expect("terminal row exists");
+        terminal_record.penalty_status = EvidencePenaltyStatus::Applied { height: 1 };
+        rows.insert(terminal, terminal_record);
+        rows.commit();
+
+        let view = state.view();
+        let snapshot = PenaltyApplier::parent_snapshot(
+            &view,
+            2,
+            state.evidence_preparation_budget(),
+            state.stake_index_budget(),
+        )
+        .expect("bounded parent penalty metadata is valid");
+        assert_eq!(snapshot.pending.as_slice().len(), 1);
+        assert_eq!(snapshot.pending.as_slice()[0].0.0, due);
+        assert_eq!(snapshot.pending.as_slice()[0].0.1, 1);
+        assert_eq!(
+            snapshot.pending.as_slice()[0]
+                .0
+                .2
+                .as_ref()
+                .map(|(index, _, _)| *index),
+            Some(1)
+        );
+        let signer_key_layout = pending_peer_key_layout(&context.roster[1].validator)
+            .expect("canonical retained peer key layout");
+        assert_eq!(signer_key_layout.align(), 1);
+        assert_eq!(
+            signer_key_layout.size(),
+            context.roster[1].validator.public_key().to_bytes().1.len() + 1
+        );
+        assert_eq!(
+            state.evidence_preparation_budget().reserved_bytes(),
+            std::mem::size_of::<PendingPenaltyEvidence>() + signer_key_layout.size(),
+            "the exact due backing and nested peer key retain original charges"
+        );
+        drop(view);
+        drop(snapshot);
+        assert_eq!(state.evidence_preparation_budget().reserved_bytes(), 0);
+
+        let actions = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        )
+        .derive_npos_penalty_actions(&penalty_header(2))
+        .expect("only due parent evidence receives a penalty marker");
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(
+            &actions[0],
+            NposPenaltyAction::MarkConsensusEvidenceApplied(mark)
+                if mark.evidence_key == due && mark.height == 2
+        ));
+        assert!(!actions.iter().any(|action| match action {
+            NposPenaltyAction::ConsensusSlash(slash) =>
+                slash.evidence_key == terminal || slash.evidence_key == future,
+            NposPenaltyAction::MarkConsensusEvidenceApplied(mark) =>
+                mark.evidence_key == terminal || mark.evidence_key == future,
+        }));
+    }
+    #[test]
+    fn pending_penalty_backing_refusal_preserves_source_and_retries_after_original_release() {
+        use mv::allocation::AllocationRefusal;
+
+        let max_rows = super::super::evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS;
+        let max_layout = std::alloc::Layout::array::<PendingPenaltyEvidence>(max_rows)
+            .expect("bounded penalty metadata layout");
+        assert_eq!(
+            max_layout.size(),
+            iroha_config::parameters::defaults::nexus::storage::CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES
+        );
+        assert_eq!(
+            max_layout.align(),
+            std::mem::align_of::<PendingPenaltyEntry>()
+        );
+
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let context = height_one_context(*state.network_id_ref(), &roster(), test_block_hash(0x83));
+        let due = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let original = state
+            .world
+            .consensus_evidence
+            .view()
+            .get(&due)
+            .cloned()
+            .expect("original evidence row");
+        let budget = state.evidence_preparation_budget();
+        let one_due_layout =
+            std::alloc::Layout::array::<PendingPenaltyEvidence>(1).expect("one due entry layout");
+        let occupied_bytes = budget.limit_bytes() - one_due_layout.size() + 1;
+        let original_owner = budget
+            .try_reserve_bytes(occupied_bytes)
+            .expect("retain the original pool before penalty derivation");
+        let applier = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let error = applier
+            .derive_npos_penalty_actions(&penalty_header(2))
+            .expect_err("one byte below the exact due backing must refuse locally");
+        let refusal = error
+            .downcast_ref::<EvidencePreparationError>()
+            .expect("typed local preparation refusal");
+        assert!(matches!(
+            refusal,
+            EvidencePreparationError::Admission(AllocationRefusal::Capacity {
+                requested_bytes,
+                ..
+            }) if *requested_bytes == one_due_layout.size()
+        ));
+        assert!(refusal.release_wait().is_some());
+        assert_eq!(budget.reserved_bytes(), occupied_bytes);
+        assert_eq!(
+            state.world.consensus_evidence.view().get(&due),
+            Some(&original),
+            "a local refusal cannot consume or terminalize accepted evidence"
+        );
+        drop(original_owner);
+        let actions = applier
+            .derive_npos_penalty_actions(&penalty_header(2))
+            .expect("the same State retries after the original owner releases capacity");
+        assert!(matches!(
+            actions.as_slice(),
+            [NposPenaltyAction::MarkConsensusEvidenceApplied(mark)]
+                if mark.evidence_key == due && mark.height == 2
+        ));
+        assert_eq!(
+            state.world.consensus_evidence.view().get(&due),
+            Some(&original)
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+    #[test]
+    fn pending_penalty_peer_key_refusal_preserves_source_and_retries_after_original_release() {
+        use mv::allocation::AllocationRefusal;
+
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let context = height_one_context(*state.network_id_ref(), &roster(), test_block_hash(0x84));
+        let due = insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let original = state
+            .world
+            .consensus_evidence
+            .view()
+            .get(&due)
+            .cloned()
+            .expect("original evidence row");
+        let budget = state.evidence_preparation_budget();
+        let backing = std::mem::size_of::<PendingPenaltyEvidence>();
+        let peer_key_bytes = pending_peer_key_layout(&context.roster[1].validator)
+            .expect("canonical peer key layout")
+            .size();
+        let occupied_bytes = budget.limit_bytes() - backing - peer_key_bytes + 1;
+        let original_owner = budget
+            .try_reserve_bytes(occupied_bytes)
+            .expect("retain the original pool before penalty derivation");
+        let applier = PenaltyApplier::new(
+            &state,
+            #[cfg(feature = "telemetry")]
+            None,
+            #[cfg(not(feature = "telemetry"))]
+            None,
+        );
+        let error = applier
+            .derive_npos_penalty_actions(&penalty_header(2))
+            .expect_err("one byte below the exact nested key must refuse locally");
+        let refusal = error
+            .downcast_ref::<EvidencePreparationError>()
+            .expect("typed local preparation refusal");
+        assert!(matches!(
+            refusal,
+            EvidencePreparationError::Admission(AllocationRefusal::Capacity {
+                requested_bytes,
+                ..
+            }) if *requested_bytes == peer_key_bytes
+        ));
+        assert!(refusal.release_wait().is_some());
+        assert_eq!(budget.reserved_bytes(), occupied_bytes);
+        assert_eq!(
+            state.world.consensus_evidence.view().get(&due),
+            Some(&original),
+            "nested-key capacity refusal cannot consume accepted evidence"
+        );
+        drop(original_owner);
+        let actions = applier
+            .derive_npos_penalty_actions(&penalty_header(2))
+            .expect("the same State retries after original pool release");
+        assert!(matches!(
+            actions.as_slice(),
+            [NposPenaltyAction::MarkConsensusEvidenceApplied(mark)]
+                if mark.evidence_key == due && mark.height == 2
+        ));
+        assert_eq!(
+            state.world.consensus_evidence.view().get(&due),
+            Some(&original)
+        );
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+    #[test]
     fn signer_indices_are_canonical_and_do_not_rotate_with_view() {
         let state = fresh_state();
         let frozen_roster = roster();
         let context = install_height_one_artifact(&state, &frozen_roster);
         let view_zero = phase_vote_evidence(&context, 2, 0);
         let late_view = phase_vote_evidence(&context, 2, u64::MAX);
-        assert_eq!(offender_indices(&view_zero, 1, &context), vec![2]);
-        assert_eq!(offender_indices(&late_view, 1, &context), vec![2]);
+        assert_eq!(
+            offender_peer(&view_zero, 1, &context).map(|(index, _)| index),
+            Some(2)
+        );
+        assert_eq!(
+            offender_peer(&late_view, 1, &context).map(|(index, _)| index),
+            Some(2)
+        );
     }
     #[test]
     fn npos_mode_does_not_remap_equal_vote_evidence_signer_indices() {
@@ -1792,12 +2234,27 @@ mod tests {
         context.mode = V2ConsensusMode::Npos;
         context.validate().expect("valid equal-vote NPoS context");
         let evidence = phase_vote_evidence(&context, 1, 47);
-        assert_eq!(offender_indices(&evidence, 1, &context), vec![1]);
+        assert_eq!(
+            offender_peer(&evidence, 1, &context).map(|(index, _)| index),
+            Some(1)
+        );
     }
     #[test]
-    fn canonical_indices_filter_duplicates_and_out_of_range_signers() {
-        assert_eq!(canonical_indices([3, 1, 3, 7, u32::MAX], 4), vec![1, 3]);
-        assert!(canonical_indices([0], 0).is_empty());
+    fn offender_peer_requires_matching_height_and_in_range_roster() {
+        let state = fresh_state();
+        let frozen_roster = roster();
+        let context = install_height_one_artifact(&state, &frozen_roster);
+        let evidence = phase_vote_evidence(&context, 1, 0);
+        assert_eq!(
+            offender_peer(&evidence, 1, &context).map(|(index, _)| index),
+            Some(1)
+        );
+        let mut wrong_height = context.clone();
+        wrong_height.height += 1;
+        assert!(offender_peer(&evidence, 1, &wrong_height).is_none());
+        let mut missing_signer = context.clone();
+        missing_signer.roster.truncate(1);
+        assert!(offender_peer(&evidence, 1, &missing_signer).is_none());
     }
     #[test]
     fn derived_slash_targets_frozen_roster_even_when_live_topology_diverges() {
@@ -1812,13 +2269,18 @@ mod tests {
         let offender = frozen_roster[1].clone();
         let validator = add_validator_record(&state, &offender);
         let evidence = phase_vote_evidence(&context, 1, 37);
-        assert_eq!(offender_indices(&evidence, 1, &context), vec![1]);
+        assert_eq!(
+            offender_peer(&evidence, 1, &context).map(|(index, _)| index),
+            Some(1)
+        );
         let key = insert_evidence(&state, evidence, 1);
         {
             let view = state.view();
             let snapshot = PenaltyApplier::parent_snapshot(
                 &view,
-                crate::sumeragi::evidence::v2_committed_evidence_snapshot(view.world()),
+                2,
+                state.evidence_preparation_budget(),
+                state.stake_index_budget(),
             )
             .expect("canonical penalty parent snapshot");
             let locators = snapshot
@@ -2129,17 +2591,14 @@ mod tests {
         )));
 
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                &state,
-                2,
-                effects.v2_evidence_admissions.len(),
-            );
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+                .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
         retire_primary_lane_in_candidate(&mut state_block);
         let error = validate_npos_consensus_effects_after_execution(
             &mut state_block,
             &effects,
-            &evidence_prune_keys,
+            evidence_prune_keys.as_slice(),
             None,
             &frozen_roster,
             2,
@@ -2183,11 +2642,8 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                &state,
-                2,
-                effects.v2_evidence_admissions.len(),
-            );
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+                .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
         {
             let mut transaction = state_block.transaction();
@@ -2208,7 +2664,7 @@ mod tests {
         let error = validate_npos_consensus_effects_after_execution(
             &mut state_block,
             &effects,
-            &evidence_prune_keys,
+            evidence_prune_keys.as_slice(),
             None,
             &frozen_roster,
             2,
@@ -2259,11 +2715,8 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                &state,
-                2,
-                effects.v2_evidence_admissions.len(),
-            );
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+                .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
 
         let witness_guard = crate::sumeragi::witness::exec_witness_guard();
@@ -2271,7 +2724,7 @@ mod tests {
         validate_npos_consensus_effects_after_execution(
             &mut state_block,
             &effects,
-            &evidence_prune_keys,
+            evidence_prune_keys.as_slice(),
             None,
             &frozen_roster,
             2,
@@ -2310,11 +2763,8 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
-                &state,
-                2,
-                effects.v2_evidence_admissions.len(),
-            );
+            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+                .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
 
         let witness_guard = crate::sumeragi::witness::exec_witness_guard();
@@ -2323,7 +2773,7 @@ mod tests {
         apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
-            &evidence_prune_keys,
+            evidence_prune_keys.as_slice(),
             None,
             &frozen_roster,
             2,

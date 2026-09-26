@@ -29,7 +29,7 @@ fn policy_allows_when_envelope_not_required() {
 #[test]
 fn policy_denies_when_manifest_required() {
     let config = GatewayPolicyConfig::default();
-    let admission = Some(Arc::new(AdmissionRegistry::empty()));
+    let admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
     let policy = GatewayPolicy::new(config, admission, GatewayRateLimiter::new_default());
     let provider = [0xAA; 32];
     let fingerprint = sample_fingerprint();

@@ -30,8 +30,8 @@ public final class NativeSignerBridgeJavaConsumerTest {
 
   @Test
   void exposesNominalNetworkAndContractConstants() {
-    assertEquals(23, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION);
-    assertEquals(6, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION);
+    assertEquals(24, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION);
+    assertEquals(7, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION);
     final NetworkId network = TestNetworkIds.INSTANCE.canonical();
     assertEquals(NetworkId.BYTE_LENGTH, network.bytes().length);
     assertEquals(32, NetworkId.BYTE_LENGTH);
@@ -175,7 +175,7 @@ public final class NativeSignerBridgeJavaConsumerTest {
 
   private static void requireNative() {
     assertTrue(NativeSignerBridge.isNativeAvailable(),
-        "same-source connect_norito_bridge ABI 23 / signer contract 5 is required");
+        "same-source connect_norito_bridge ABI 24 / signer contract 7 is required");
   }
 
   private static FeePaymentIntent noFeePayment() {

@@ -713,8 +713,11 @@ impl HeightContext {
             || authorization.network_id != self.network_id
             || authorization.epoch != self.epoch
             || authorization.first_height > self.height
-            || authorization.last_height != self.epoch_end_height
         {
+            return Err(ValidationError::InvalidKagemushaMintFinalityAuthorization);
+        }
+        // Current height lies inside the interval ending at this epoch boundary.
+        if authorization.last_height != self.epoch_end_height {
             return Err(ValidationError::InvalidKagemushaMintFinalityAuthorization);
         }
         if authority.validators.len() != self.roster.len()
@@ -1277,6 +1280,11 @@ impl ExecutionCommitment {
     /// Bind the mandatory selective commitments from the same full native wire
     /// whose identity the execution witness already commits. Only validator-side
     /// execution may call this before constructing/signing a Commit vote.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the canonical wire cannot be encoded, the block results or
+    /// output cache are invalid, the wire identity differs, or commitment validation fails.
     pub fn with_transaction_commitments_from_block(
         mut self,
         block: &crate::block::SignedBlock,

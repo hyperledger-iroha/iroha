@@ -201,9 +201,9 @@ class KagemushaReleaseCliHardCutTests(unittest.TestCase):
 
     def test_native_manifest_and_report_contracts_are_exact_first_release(self) -> None:
         source = COMMAND.read_text(encoding="utf-8").split("#[cfg(test)]", 1)[0]
-        self.assertIn('"iroha.native-sdk-abi23-artifact.v1"', source)
+        self.assertIn('"iroha.native-sdk-abi24-artifact.v1"', source)
         self.assertIn('manifest.sdk != "c-jni"', source)
-        self.assertIn("manifest.bridge_abi_version != 23", source)
+        self.assertIn("manifest.bridge_abi_version != 24", source)
         self.assertIn("REQUIRED_C_JNI_SYMBOLS_V1", source)
         self.assertIn("REQUIRED_PRIVACY_C_EXPORTS_V1", source)
         self.assertIn('"native_bridge_probe_performed", &false', source)

@@ -1,4 +1,4 @@
-//! Plain ballot re-vote monotonicity and authority-bound ownership tests.
+//! Immutable plain casts and explicit authority-bound conviction updates.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 use iroha_core::{
     kura::Kura,
@@ -10,7 +10,7 @@ use iroha_data_model::{
     Registrable,
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
-    isi::governance::CastPlainBallot,
+    isi::governance::{CastPlainBallot, UpdatePlainConviction},
     permission::Permission,
     prelude::{Account, Domain, Grant},
 };
@@ -20,7 +20,7 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 #[test]
-fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
+fn plain_ballot_is_immutable_and_conviction_updates_extend_only() {
     // Minimal state
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
@@ -58,7 +58,7 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
         rid.clone(),
         iroha_core::state::GovernanceReferendumRecord {
             h_start: 1,
-            // Keep the shortest re-vote valid for the inclusive referendum
+            // Keep the shortest update valid for the inclusive referendum
             // window so the monotonic-lock check is the rejecting contract.
             h_end: 11,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
@@ -67,6 +67,20 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
             plain_result: iroha_data_model::governance::conviction::PlainVotingResultV1::Pending,
         },
     );
+    let update_without_cast = UpdatePlainConviction {
+        referendum_id: rid.clone(),
+        owner: ALICE_ID.clone(),
+        amount: 100_u64.into(),
+        duration_blocks: 200,
+    }
+    .execute(&ALICE_ID, &mut stx)
+    .expect_err("conviction cannot create an initial ballot");
+    assert!(
+        update_without_cast
+            .to_string()
+            .contains("requires an existing plain ballot")
+    );
+    assert!(stx.world.governance_locks().get(&rid).is_none());
     // First vote by ALICE
     let first = CastPlainBallot {
         referendum_id: rid.clone(),
@@ -83,37 +97,53 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::LockCreated(_)))
     )));
-    // Re-vote with shorter duration should be rejected
-    let shorter = CastPlainBallot {
+    // A second cast cannot silently update the original position.
+    let second_cast = CastPlainBallot {
         referendum_id: rid.clone(),
         direction: 0,
+        owner: ALICE_ID.clone(),
+        amount: 120_u64.into(),
+        duration_blocks: 400,
+    };
+    let duplicate_error = second_cast.execute(&ALICE_ID, &mut stx).unwrap_err();
+    assert!(
+        duplicate_error
+            .to_string()
+            .contains("plain ballot already cast")
+    );
+    assert_eq!(
+        stx.world.governance_locks().get(&rid).unwrap().locks[&*ALICE_ID].amount,
+        100_u64.into()
+    );
+    stx.world.take_external_events();
+    // A conviction update with shorter duration should be rejected.
+    let shorter = UpdatePlainConviction {
+        referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
         amount: 100_u64.into(),
         duration_blocks: 10,
     };
     let err = shorter.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s = format!("{err}");
-    assert!(s.contains("re-vote cannot reduce"));
+    assert!(s.contains("conviction update cannot reduce"));
     let evs_rej = stx.world.take_external_events();
     assert!(evs_rej.iter().any(|event| matches!(
         event.as_data_event(),
         Some(DataEvent::Governance(GovernanceEvent::BallotRejected(_)))
     )));
-    // Re-vote with smaller amount should be rejected
-    let smaller = CastPlainBallot {
+    // A conviction update with smaller amount should be rejected.
+    let smaller = UpdatePlainConviction {
         referendum_id: rid.clone(),
-        direction: 0,
         owner: ALICE_ID.clone(),
         amount: 50_u64.into(),
         duration_blocks: 200,
     };
     let err2 = smaller.execute(&ALICE_ID, &mut stx).unwrap_err();
     let s2 = format!("{err2}");
-    assert!(s2.contains("re-vote cannot reduce"));
-    // Re-vote with longer duration (extend) should work and emit LockExtended
-    let extend = CastPlainBallot {
+    assert!(s2.contains("conviction update cannot reduce"));
+    // Extending the lock changes conviction but retains the choice.
+    let extend = UpdatePlainConviction {
         referendum_id: rid.clone(),
-        direction: 0,
         owner: ALICE_ID.clone(),
         amount: 120_u64.into(),
         duration_blocks: 400,
@@ -133,12 +163,12 @@ fn plain_ballot_revotes_extend_only_and_bind_owner_to_authority() {
         .and_then(|locks| locks.locks.get(&ALICE_ID))
         .expect("authority-bound lock retained");
     assert_eq!(retained.owner, *ALICE_ID);
+    assert_eq!(retained.direction, 0);
     assert_eq!(retained.amount, 120_u64.into());
     assert_eq!(retained.expiry_height, 401);
-    let mismatched_owner = CastPlainBallot {
+    let mismatched_owner = UpdatePlainConviction {
         referendum_id: rid.clone(),
         owner: BOB_ID.clone(),
-        direction: 0,
         amount: 120_u64.into(),
         duration_blocks: 400,
     }

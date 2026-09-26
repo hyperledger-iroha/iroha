@@ -1,7 +1,7 @@
 //! Canonical bounded wire owner for the inactive DEEP compact candidate.
 //!
 //! This DTO fixes 301 retained columns, 64 initial queries, a paired quotient,
-//! five folds [16,16,8,8,4], and all 128 terminal values. Minimal frontiers derive
+//! five folds [16,16,8,8,4], fixed raw FRI fibers, and all 128 terminal values. Minimal frontiers derive
 //! from sorted unique positions; a distinct frame admits no legacy fallback.
 //! Decoding checks bytes and cumulative resource budgets before shape preflight.
 //!
@@ -27,6 +27,9 @@ use crate::{Error, GoldilocksFp4V1 as Fp4, Result};
 #[path = "deep_proof/row_values.rs"]
 mod row_values;
 pub(super) use row_values::RowValues;
+#[path = "deep_proof/fri_values.rs"]
+mod fri_values;
+pub(super) use fri_values::FriValues;
 
 pub(super) use super::deep_geometry::{FRI_ARITIES as ARITIES, LDE_ROWS, QUERY_COUNT};
 /// Merkle leaf counts for the five grouped FRI commitments.
@@ -40,14 +43,14 @@ pub(super) const GROUP_LEAVES: [usize; 5] = [
 /// Full terminal vector, checked by the eventual verifier rather than sampled.
 pub(super) const TERMINAL_VALUES: usize = FRI_LENGTHS[5];
 /// Exact serialized upper envelope for the fixed canonical DTO.
-pub(super) const MAX_FRAME_BYTES: usize = 506_351;
+pub(super) const MAX_FRAME_BYTES: usize = 500_783;
 /// Existing production-sized single-proof byte target; this is not admission.
 #[cfg(test)]
 pub(super) const PROOF_BYTE_TARGET: usize = 512 * 1024;
 /// Fixed maximum cumulative Norito allocation charges for one proof decode.
 pub(super) const MAX_ALLOCATION_CHARGES: usize = 8 * 1024 * 1024;
 const MAX_SEQUENCE_ELEMENTS: usize = 1088;
-const MAX_TOTAL_ELEMENTS: usize = 8743;
+const MAX_TOTAL_ELEMENTS: usize = 5415;
 const MAX_DECODE_DEPTH: usize = 16;
 
 /// Sole canonical frame for the proposed DEEP proof layout.
@@ -103,7 +106,7 @@ pub(super) struct FriRound {
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(super) struct FriGroup {
     pub(super) index: u32,
-    pub(super) values: Vec<Fp4>,
+    pub(super) values: FriValues,
 }
 
 /// Fixed-profile plans, derived from caller-owned transcript query positions.
@@ -334,7 +337,7 @@ pub(super) fn maximum_frame_bytes() -> usize {
         .iter()
         .enumerate()
         .map(|(round, &arity)| {
-            let group = field(4) + field(vector(arity, Fp4::BYTES));
+            let group = field(4) + field(FriValues::encoded_bytes(arity));
             field(
                 field(vector(QUERY_COUNT, group))
                     + field(vector(

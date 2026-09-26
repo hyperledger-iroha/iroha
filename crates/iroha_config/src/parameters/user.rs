@@ -9725,6 +9725,14 @@ pub struct NexusStorage {
     /// Zero is a closed pool, never an unlimited setting.
     #[config(default = "defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES")]
     pub retained_carrier_shell_bytes: usize,
+    /// Finite process-local pool for committed-evidence preparation. At least one
+    /// maximum prune-key and pending-penalty backing plan must fit.
+    #[config(default = "defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES")]
+    pub consensus_evidence_preparation_bytes: usize,
+    /// Finite process-local pool for flat consensus stake-index share keys.
+    /// A capacity refusal remains a local retry, not an invalid block.
+    #[config(default = "defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES")]
+    pub consensus_stake_index_bytes: usize,
     /// Budget weights for dividing the disk cap across subsystems.
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
@@ -9734,6 +9742,9 @@ impl_default!(NexusStorage {
     budget_enforce_interval_blocks: defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
     max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
     retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
+    consensus_evidence_preparation_bytes:
+        defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
+    consensus_stake_index_bytes: defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
     disk_budget_weights: NexusStorageWeights::default(),
 });
 impl NexusStorage {
@@ -9746,6 +9757,24 @@ impl NexusStorage {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                 "nexus.storage.local_budget_bytes must be greater than zero when configured",
             ));
+            return None;
+        }
+        if self.consensus_evidence_preparation_bytes
+            < defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.consensus_evidence_preparation_bytes must be at least {} bytes",
+                defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES
+            )));
+            return None;
+        }
+        if self.consensus_stake_index_bytes
+            < defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.consensus_stake_index_bytes must be at least {} bytes",
+                defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES
+            )));
             return None;
         }
         if let Some(local_budget_bytes) = self.local_budget_bytes {
@@ -9779,6 +9808,8 @@ impl NexusStorage {
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             retained_carrier_shell_bytes: self.retained_carrier_shell_bytes,
+            consensus_evidence_preparation_bytes: self.consensus_evidence_preparation_bytes,
+            consensus_stake_index_bytes: self.consensus_stake_index_bytes,
             disk_budget_weights: weights,
             configured_component_caps: None,
         })
@@ -27675,6 +27706,103 @@ impl SorafsPorReplayArchiveConfig {
         })
     }
 }
+/// Shared signer-journal inventory resource admission for every purpose.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsSignerJournalInventory {
+    /// Aggregate resident requested allocation ceiling in bytes.
+    #[config(default = "defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES")]
+    pub resident_bytes: Bytes,
+    /// Aggregate logical directory/metadata probe ceiling, not physical disk bytes.
+    #[config(default = "defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_METADATA_PROBES")]
+    pub metadata_probes: u64,
+    /// Aggregate retained path, scan and receipt descriptor ceiling.
+    #[config(default = "defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES")]
+    pub open_handles: u32,
+}
+impl Default for SorafsSignerJournalInventory {
+    fn default() -> Self {
+        Self {
+            resident_bytes: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES,
+            metadata_probes: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_METADATA_PROBES,
+            open_handles: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES,
+        }
+    }
+}
+impl SorafsSignerJournalInventory {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsSignerJournalInventory {
+        // A complete maximum receipt scan must fit a single operation. Lower settings would
+        // permanently refuse a valid full journal, regardless of concurrency.
+        const MIN_RESIDENT_BYTES: u64 = 1024 * 1024;
+        const MIN_METADATA_PROBES: u64 = 65_537 + 4 * 65 + 4 + 4 * 65 + 1;
+        const MIN_OPEN_HANDLES: u32 = 67;
+        if self.resident_bytes.0 < MIN_RESIDENT_BYTES
+            || self.metadata_probes < MIN_METADATA_PROBES
+            || self.open_handles < MIN_OPEN_HANDLES
+        {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.signer_journal_inventory cannot fund one maximum inventory scan and pinned path",
+            ));
+        }
+        actual::SorafsSignerJournalInventory {
+            resident_bytes: self.resident_bytes,
+            metadata_probes: self.metadata_probes,
+            open_handles: self.open_handles,
+        }
+    }
+}
+#[cfg(test)]
+mod sorafs_signer_journal_inventory_tests {
+    use super::*;
+
+    #[test]
+    fn default_and_exact_minimum_are_configurable() {
+        let mut emitter = Emitter::new();
+        let default = SorafsSignerJournalInventory::default().parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("default signer inventory policy");
+        let expected = actual::SorafsSignerJournalInventory::default();
+        assert_eq!(default.resident_bytes.0, expected.resident_bytes.0);
+        assert_eq!(default.metadata_probes, expected.metadata_probes);
+        assert_eq!(default.open_handles, expected.open_handles);
+        let mut emitter = Emitter::new();
+        let exact = SorafsSignerJournalInventory {
+            resident_bytes: Bytes(1024 * 1024),
+            metadata_probes: 65_537 + 4 * 65 + 4 + 4 * 65 + 1,
+            open_handles: 67,
+        }
+        .parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("inclusive signer inventory minimum");
+        assert_eq!(exact.open_handles, 67);
+    }
+
+    #[test]
+    fn one_below_any_resource_is_rejected() {
+        for policy in [
+            SorafsSignerJournalInventory {
+                resident_bytes: Bytes(1024 * 1024 - 1),
+                ..SorafsSignerJournalInventory::default()
+            },
+            SorafsSignerJournalInventory {
+                metadata_probes: 65_537 + 4 * 65 + 4 + 4 * 65,
+                ..SorafsSignerJournalInventory::default()
+            },
+            SorafsSignerJournalInventory {
+                open_handles: 66,
+                ..SorafsSignerJournalInventory::default()
+            },
+        ] {
+            let mut emitter = Emitter::new();
+            let _ = policy.parse(&mut emitter);
+            emitter
+                .into_result()
+                .expect_err("unfunded signer scan policy");
+        }
+    }
+}
 /// User-level configuration container for the embedded SoraFS storage worker.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStorage {
@@ -27695,6 +27823,9 @@ pub struct SorafsStorage {
     /// Maximum number of manifests pinned before back-pressure engages.
     #[config(default = "defaults::sorafs::storage::MAX_PINS")]
     pub max_pins: usize,
+    /// Shared finite signer-journal inventory admission policy.
+    #[config(nested)]
+    pub signer_journal_inventory: SorafsSignerJournalInventory,
     /// Interval between Proof-of-Retrievability sampling rounds (seconds).
     #[config(default = "defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS")]
     pub por_sample_interval_secs: u64,
@@ -27807,6 +27938,7 @@ impl Default for SorafsStorage {
             max_capacity_bytes: defaults::sorafs::storage::MAX_CAPACITY_BYTES,
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
             max_pins: defaults::sorafs::storage::MAX_PINS,
+            signer_journal_inventory: SorafsSignerJournalInventory::default(),
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
             pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
             pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
@@ -28317,6 +28449,7 @@ impl SorafsStorage {
             max_capacity_bytes: self.max_capacity_bytes,
             max_parallel_fetches: self.max_parallel_fetches,
             max_pins: self.max_pins,
+            signer_journal_inventory: self.signer_journal_inventory.parse(emitter),
             por_sample_interval_secs: self.por_sample_interval_secs,
             pdp_sample_window: self.pdp_sample_window,
             pdp_tree_memory_limit_bytes: self.pdp_tree_memory_limit_bytes,

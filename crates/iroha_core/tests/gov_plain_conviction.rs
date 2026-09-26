@@ -10,7 +10,7 @@ use iroha_data_model::{
     Registrable,
     block::BlockHeader,
     events::data::{DataEvent, governance::GovernanceEvent},
-    isi::governance::CastPlainBallot,
+    isi::governance::{CastPlainBallot, UpdatePlainConviction},
     permission::Permission,
     prelude::{Account, Domain, Grant},
 };
@@ -172,6 +172,14 @@ fn fractional_ballot(id: &str, amount: &str, duration_blocks: u64) -> CastPlainB
         duration_blocks,
     }
 }
+fn fractional_update(id: &str, amount: &str, duration_blocks: u64) -> UpdatePlainConviction {
+    UpdatePlainConviction {
+        referendum_id: id.into(),
+        owner: ALICE_ID.clone(),
+        amount: amount.parse().unwrap(),
+        duration_blocks,
+    }
+}
 fn numeric_balance(
     tx: &iroha_core::state::StateTransaction<'_, '_>,
     account: &iroha_data_model::account::AccountId,
@@ -214,12 +222,12 @@ fn fractional_bonds_escrow_exact_deltas_and_reject_nonmonotonic_updates() {
             "1.25".parse().unwrap()
         );
         assert!(
-            fractional_ballot(id, "1.25", 200)
+            fractional_update(id, "1.25", 200)
                 .execute(&ALICE_ID, &mut tx)
                 .is_err()
         );
         assert!(
-            fractional_ballot(id, "1.251", 200)
+            fractional_update(id, "1.251", 200)
                 .execute(&ALICE_ID, &mut tx)
                 .is_err()
         );
@@ -227,7 +235,15 @@ fn fractional_bonds_escrow_exact_deltas_and_reject_nonmonotonic_updates() {
             numeric_balance(&tx, &escrow, &asset),
             "1.25".parse().unwrap()
         );
-        fractional_ballot(id, "2.25", 200)
+        let second_cast = fractional_ballot(id, "2.25", 200)
+            .execute(&ALICE_ID, &mut tx)
+            .expect_err("a second cast must not act as an update");
+        assert!(
+            second_cast
+                .to_string()
+                .contains("plain ballot already cast")
+        );
+        fractional_update(id, "2.25", 200)
             .execute(&ALICE_ID, &mut tx)
             .unwrap();
         assert_eq!(
@@ -253,13 +269,13 @@ fn fractional_bonds_escrow_exact_deltas_and_reject_nonmonotonic_updates() {
     let mut tx = block.transaction();
     for (amount, duration) in [("2.25", 100), ("3.25", 100)] {
         assert!(
-            fractional_ballot(id, amount, duration)
+            fractional_update(id, amount, duration)
                 .execute(&ALICE_ID, &mut tx)
                 .is_err(),
             "same absolute expiry with shorter remaining duration cannot lower conviction"
         );
     }
-    fractional_ballot(id, "2.25", 200)
+    fractional_update(id, "2.25", 200)
         .execute(&ALICE_ID, &mut tx)
         .unwrap();
     let referendum = tx.world.governance_referenda().get(id).unwrap();

@@ -12,7 +12,7 @@
 # authenticated selection, never aliases or fallback inputs.
 
 readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\
-"35dc49337b2a2a5b72fe3cd50108e106cc5941908b4c71e600217c865f9ee005"
+"785deb1fc20de9a089891b3e6d19e54717029ce52ea1edfbe089c6153db2352d"
 
 privacy_sdk_resolve_cargo_lockfile() {
   local repository_root="$1"

@@ -34,14 +34,17 @@ preimages. Every segment binds its ordinal, complete batch and ordered root chai
 | Trace generator `omega` | `g^128 = FASTPQ_FINAL_V1.trace_root` |
 | Ordered FRI arities | `[16,16,8,8,4]` |
 | FRI domain lengths | `[8388608,524288,32768,4096,512,128]` |
-| Exclusive degree bounds | `[65536,4096,256,32,4,1]` |
+| Exclusive FRI degree bounds | `[131072,8192,512,64,8,2]` |
 | Initial queries / sampled candidates | 64 distinct positions / 74 candidates |
 
 The [public-column owner](../crates/fastpq_prover/src/backend/compact_public_columns.rs)
 fixes the 342-to-301 projection and evaluates known polynomials at the actual
-extension points. A trace column has degree `<N`; the combined AIR quotient has
-degree `<2N` and is split by coefficients as `Q(X)=Q0(X)+X^N Q1(X)`, with both
-halves degree `<N`. This does not split evaluation arrays into adjacent halves.
+extension points. The unmasked producer constructs trace columns of degree
+`<N`; its combined AIR quotient has degree `<2N` and is split by coefficients as
+`Q(X)=Q0(X)+X^N Q1(X)`, with both halves degree `<N`. This does not split
+evaluation arrays into adjacent halves. The verifier's fixed FRI envelope is
+the larger `<2N` bound above. That bound permits no inference of witness hiding;
+the private-producer preflight still refuses every proposed mask.
 
 ## Commitment and challenge order
 
@@ -109,22 +112,26 @@ The sole child frame is `fastpq_prover::deep_compact::ProofV1` in
 paired-quotient roots, six FRI/terminal roots, complete OOD answers, queried rows
 and quotient pairs, minimal sibling frontiers, five sets of complete strided FRI
 fibers and the complete 128-value terminal. Row cells are fixed canonical u64
-fields. Every table index and frontier is derived from transcript queries.
+fields. Each FRI fiber has one arity byte followed by exactly that many raw
+canonical Fp4 values; no vector count or per-value framing is accepted. Every
+table index and frontier is derived from transcript queries.
 
 [`deep_engine::verify_committed`](../crates/fastpq_prover/src/backend/deep_engine.rs)
 performs one bounded canonical decode, the OOD identity, authenticated opening
 checks and 320 fold checks (five per original query). Fiber `j` at length `M`
 and arity `r` contains positions `j+k*(M/r)`, not adjacent positions. Domains
-advance by the `r`th-power map. The entire authenticated terminal must be
-constant. A singleton terminal tree has its required duplicate-child parent.
+advance by the `r`th-power map. The entire authenticated terminal must represent
+one polynomial of degree `<2` on the folded coset. The narrower unmasked
+producer emits a constant terminal. A singleton terminal tree has its required
+duplicate-child parent.
 The verifier constructs no private witness, trace, FFT or full LDE.
 
-The fixed DTO upper envelope is 506,351 bytes, below the 512 KiB child target;
+The fixed DTO upper envelope is 500,783 bytes, below the 512 KiB child target;
 this shape bound is not an end-to-end proof-generation measurement. Decoding
 intersects the caller's allocation allowance with 8 MiB and retains stricter
 outer scopes. The enclosing ordinary/AXT carrier accumulates bytes, statement
 bytes, 64 queries per segment and all decode charges. It publishes ordered row
-roots only after every child verifies. Two maximal children use 1,012,702 bytes;
+roots only after every child verifies. Two maximal children use 1,001,566 bytes;
 actual context and framing must still fit the independently enforced bundle and
 artifact limits. No arbitrary-size batch is promised to fit 1 MiB.
 
@@ -132,7 +139,8 @@ The metadata ID is SHA-256 of the canonical
 `fastpq_prover::deep_compact::QuantityArtifactProfileV1` descriptor in
 [`compact_artifact`](../crates/fastpq_prover/src/backend/compact_artifact.rs).
 It binds the exact geometry, ten tapes, field/hash parameters, child-frame schema,
-quantity schemas and both ordinary/AXT relation identities. The previous profile
-ID and child layout are not accepted alternatives. Their remaining engines and
-constructors exist only in predecessor test diagnostics; their conditional
+quantity schemas and both ordinary/AXT relation identities. The profile identity
+also binds `fri-degree2n:terminal-degree2-128` and `fixed-fri-fiber-wire:v1`.
+The previous profile ID and child layout are not accepted alternatives. Their
+remaining engines and constructors exist only in predecessor test diagnostics; their conditional
 [375-query analysis](fastpq_compact_typed_profile.md) does not qualify this profile.

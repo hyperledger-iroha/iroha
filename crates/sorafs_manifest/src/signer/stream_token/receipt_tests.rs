@@ -7,12 +7,42 @@ use crate::signer::{
     receipt::{SignerCompletedOperationV1, SignerOperationProvenanceV1},
 };
 use iroha_crypto::Signature;
+use iroha_schema::{IntoSchema, Metadata};
 
 use super::receipt_test_support::*;
 
 type Error = SignerStreamTokenReceiptErrorV1;
 type BodyMutation = (&'static str, fn(&mut StreamTokenBodyV1));
 type BindingMutation = (&'static str, fn(&mut SignerCustodyBindingV1));
+
+#[test]
+fn stream_token_request_has_one_strict_json_schema_and_canonical_norito_shape() {
+    let request = fixture().receipt.request;
+    assert!(matches!(
+        SignerStreamTokenRequestV1::schema().get::<SignerStreamTokenRequestV1>(),
+        Some(Metadata::Struct(_))
+    ));
+    let frame = norito::encode_canonical(&request).expect("one request frame");
+    assert_eq!(
+        norito::decode_canonical::<SignerStreamTokenRequestV1>(&frame).unwrap(),
+        request
+    );
+    let json = norito::json::to_json(&request).expect("request JSON");
+    assert_eq!(
+        norito::json::from_str::<SignerStreamTokenRequestV1>(&json).unwrap(),
+        request
+    );
+    let unknown = json.replacen("\"operation_id\":", "\"unknown\":1,\"operation_id\":", 1);
+    assert_ne!(unknown, json);
+    assert!(norito::json::from_str::<SignerStreamTokenRequestV1>(&unknown).is_err());
+    let duplicate = json.replacen(
+        "\"operation_id\":",
+        "\"operation_id\":[0],\"operation_id\":",
+        1,
+    );
+    assert_ne!(duplicate, json);
+    assert!(norito::json::from_str::<SignerStreamTokenRequestV1>(&duplicate).is_err());
+}
 
 #[test]
 fn signed_receipt_roundtrips_and_recovers_after_original_reservation_expiry() {

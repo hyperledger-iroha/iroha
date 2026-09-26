@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the fail-closed ABI-23 Kotlin privacy owner and Java consumers."""
+"""Freeze the fail-closed ABI-24 Kotlin privacy owner and Java consumers."""
 
 from __future__ import annotations
 
@@ -56,12 +56,12 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
         )
         for method, native_call, message in (
             (
-                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
+                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi24()",
                 "PrivacyNativeBridge.compiledProfileCatalogV1()",
                 "compiled-profile catalog JNI exports is required",
             ),
             (
-                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
+                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi24()",
                 "PrivacyNativeBridge.exact12FixtureBundleV1()",
                 "exact-12 fixture JNI exports is required",
             ),
@@ -91,12 +91,12 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
         )
         for method, native_call, message in (
             (
-                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
+                "compiledProfileCatalogRoundTripsAndRejectsAdversarialBytesThroughNativeAbi24()",
                 "PrivacyNativeBridge.compiledProfileCatalogV1()",
                 "compiled-profile catalog JNI exports is required",
             ),
             (
-                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi23()",
+                "exact12FixtureBundleRoundTripsAndRejectsAdversarialBytesThroughNativeAbi24()",
                 "PrivacyNativeBridge.exact12FixtureBundleV1()",
                 "exact-12 fixture JNI exports is required",
             ),
@@ -141,8 +141,8 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
     def test_jvm_runner_authenticates_the_only_loadable_bridge(self) -> None:
         source = read("ci/check_privacy_jvm_sdk.sh")
         for marker in (
-            'ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"',
-            '"${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" verify',
+            'ABI24_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_artifact.py"',
+            '"${PYTHON_BIN}" -I -S "${ABI24_CHECKER}" verify',
             'export IROHA_NATIVE_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"',
             'export LD_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"',
             '-Djava.library.path="${NATIVE_LIBRARY_DIR}"',
@@ -160,10 +160,10 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
         )
         for marker in (
             "PRIVACY_JVM_SDK_PYTHON_BIN: ${{ steps.privacy-jvm-python.outputs.python-path }}",
-            "PRIVACY_JVM_NATIVE_EXPORT_DIR: ${{ runner.temp }}/privacy-jvm-native-abi23",
+            "PRIVACY_JVM_NATIVE_EXPORT_DIR: ${{ runner.temp }}/privacy-jvm-native-abi24",
             "run: ci/check_privacy_jvm_sdk.sh",
-            "Upload source-bound privacy JVM native ABI23 input",
-            "privacy-jvm-native-abi23-${{ github.sha }}",
+            "Upload source-bound privacy JVM native ABI24 input",
+            "privacy-jvm-native-abi24-${{ github.sha }}",
         ):
             self.assertIn(marker, job)
         self.assertNotIn("IROHA_REQUIRE_PRIVACY_EXACT12_NATIVE", job)

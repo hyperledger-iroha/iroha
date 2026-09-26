@@ -42,6 +42,7 @@ fn run() -> Result<(), String> {
                     .split_once('=')
                     .ok_or_else(|| format!("expected key=value option, got: {arg}"))?;
                 match key {
+                    "--network-id" => opts.network_id = Some(parse_hex_fixed::<32>(value)?),
                     "--chunker-profile" => {
                         if opts.profile_handle.is_some() {
                             return Err("--chunker-profile may only be specified once".into());
@@ -132,6 +133,7 @@ fn run() -> Result<(), String> {
                     .split_once('=')
                     .ok_or_else(|| format!("expected key=value option, got: {arg}"))?;
                 match key {
+                    "--network-id" => opts.network_id = Some(parse_hex_fixed::<32>(value)?),
                     "--advert" => opts.advert_path = Some(PathBuf::from(value)),
                     "--json-out" => opts.json_out = Some(PathBuf::from(value)),
                     "--now" => opts.now = Some(parse_u64(value)?),
@@ -320,6 +322,9 @@ fn handle_emit(opts: EmitOptions) -> Result<(), String> {
     write_report(&report, opts.json_out.as_deref())
 }
 fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
+    let network_id = opts
+        .network_id
+        .ok_or_else(|| "--verify requires --network-id=<genesis-block-hash-hex32>".to_string())?;
     let advert_path = opts
         .advert_path
         .ok_or_else(|| "missing required option: --advert=<path>".to_string())?;
@@ -342,6 +347,9 @@ fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
         None,
     )?;
     let advert = decode_provider_advert_v1(&bytes).map_err(|err| err.to_string())?;
+    if advert.network_id != network_id {
+        return Err("provider advert network id differs from --network-id".into());
+    }
     if advert.signature.algorithm != SignatureAlgorithm::Ed25519 {
         return Err("provider advert must use Ed25519 in V1".into());
     }
@@ -360,6 +368,7 @@ fn handle_verify(opts: VerifyOptions) -> Result<(), String> {
 fn usage() -> &'static str {
     "usage: sorafs_provider_advert <--prepare|--emit|--verify> \
      --prepare|--emit \
+     --network-id=genesis_block_hash_hex32 \
      --chunker-profile=namespace.name@semver \
      --provider-id=hex32 \
      --stake-pool-id=hex32 \
@@ -388,6 +397,7 @@ fn usage() -> &'static str {
      [--endpoint-meta=key:value] \
      [--json-out=path] \
      --verify \
+     --network-id=genesis_block_hash_hex32 \
      --advert=path \
      --public-key-file=path \
      --public-key-fingerprint-sha256=lowercase_hex32 \
@@ -436,6 +446,9 @@ fn build_advert(
     let provider_id = opts
         .provider_id
         .ok_or_else(|| "missing required option: --provider-id".to_string())?;
+    let network_id = opts
+        .network_id
+        .ok_or_else(|| "missing required option: --network-id".to_string())?;
     let stake_pool_id = opts
         .stake_pool_id
         .ok_or_else(|| "missing required option: --stake-pool-id".to_string())?;
@@ -486,6 +499,7 @@ fn build_advert(
     }
     let mut builder = ProviderAdvertV1::builder();
     let _ = builder
+        .network_id(network_id)
         .profile_id(profile_handle.clone())
         .profile_aliases(profile_aliases)
         .provider_id(provider_id)
@@ -567,6 +581,10 @@ fn build_report(
 ) -> Value {
     let mut advert_obj = Map::new();
     advert_obj.insert("version".into(), Value::from(advert.version));
+    advert_obj.insert(
+        "network_id_hex".into(),
+        Value::from(hex(&advert.network_id)),
+    );
     advert_obj.insert("issued_at".into(), Value::from(advert.issued_at));
     advert_obj.insert("expires_at".into(), Value::from(advert.expires_at));
     advert_obj.insert("ttl_secs".into(), Value::from(advert.ttl()));
@@ -816,6 +834,10 @@ fn build_signing_request_report(
     );
     report.insert("signature_algorithm".into(), Value::from("ed25519"));
     report.insert(
+        "network_id_hex".into(),
+        Value::from(hex(&advert.network_id)),
+    );
+    report.insert(
         "public_key_hex".into(),
         Value::from(hex(&advert.signature.public_key)),
     );
@@ -861,6 +883,7 @@ enum Command {
 }
 #[derive(Default)]
 struct EmitOptions {
+    network_id: Option<[u8; 32]>,
     profile_handle: Option<String>,
     provider_id: Option<[u8; 32]>,
     stake_pool_id: Option<[u8; 32]>,
@@ -892,6 +915,7 @@ struct EmitOptions {
 }
 #[derive(Default)]
 struct VerifyOptions {
+    network_id: Option<[u8; 32]>,
     advert_path: Option<PathBuf>,
     public_key_file: Option<PathBuf>,
     public_key_fingerprint_sha256: Option<[u8; 32]>,
@@ -2249,6 +2273,7 @@ mod tests {
     #[test]
     fn verify_advert_signature_rejects_all_zero_signature_material() {
         let opts = EmitOptions {
+            network_id: Some([0xA1; 32]),
             profile_handle: Some("sorafs.sf1@1.0.0".into()),
             provider_id: Some([0x11; 32]),
             stake_pool_id: Some([0x22; 32]),
@@ -2294,6 +2319,7 @@ mod tests {
             0xff, 0xff, 0xff, 0x7f,
         ];
         let opts = EmitOptions {
+            network_id: Some([0xA1; 32]),
             profile_handle: Some("sorafs.sf1@1.0.0".into()),
             provider_id: Some([0x11; 32]),
             stake_pool_id: Some([0x22; 32]),

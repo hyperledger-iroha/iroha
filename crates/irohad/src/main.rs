@@ -363,6 +363,7 @@ impl std::error::Error for SharedSoraFsProviderCacheError {
 }
 fn build_shared_sorafs_provider_cache(
     config: &Config,
+    network_id: &NetworkId,
 ) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
     let discovery = &config.torii.sorafs_discovery;
     if !discovery.discovery_enabled {
@@ -419,8 +420,12 @@ fn build_shared_sorafs_provider_cache(
         return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
     }
     let admission = Arc::new(
-        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-            .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
+        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(
+            &admission_cfg.envelopes_dir,
+            *network_id.as_bytes(),
+            policy,
+        )
+        .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
     );
     let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
         discovery.replay_checkpoint_path.clone()
@@ -10224,7 +10229,7 @@ impl Iroha {
         let shared_sorafs_cache = if emergency_fast {
             None
         } else {
-            build_shared_sorafs_provider_cache(&config)
+            build_shared_sorafs_provider_cache(&config, state.network_id_ref())
                 .map_err(Report::new)
                 .change_context(StartError::StartTorii)?
         };

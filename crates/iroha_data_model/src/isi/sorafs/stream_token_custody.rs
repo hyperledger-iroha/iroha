@@ -1,7 +1,7 @@
 // Native StreamToken custody instruction, included in the existing sorafs ISI module.
 use crate::sorafs::stream_token_custody::SorafsStreamTokenCustodyActionV1;
 isi! {
-    /// Mutate one provider's governed StreamToken role control using exact predecessor CAS.
+    /// Mutate one provider's governed `StreamToken` role control using exact predecessor CAS.
     #[norito_schema(name = "iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody")]
     pub struct MutateSorafsStreamTokenCustody {
         /// Registered provider governed by this mutation.

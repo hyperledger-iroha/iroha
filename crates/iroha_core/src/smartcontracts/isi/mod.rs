@@ -65,8 +65,12 @@ pub mod sorafs_release_manifest_authority;
 pub mod sorafs_reputation;
 /// Authoritative `SoraFS` reserve/rent instruction handlers.
 pub mod sorafs_reserve;
+/// Provider-scoped stream-token operation journal; challenged Check remains closed.
+pub mod sorafs_stream_token_authority;
 /// Native stream-token custody policy and hardware enrollment transitions.
 pub mod sorafs_stream_token_custody;
+/// Closed role-16 topology authority instruction; no native mutation or signer capability yet.
+pub mod sorafs_topology_authority;
 pub mod space_directory;
 /// Public lane staking instruction handlers.
 pub mod staking;
@@ -329,9 +333,11 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsOrderbookOrder> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CancelSorafsOrderbookOrder> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAccountCustody> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority> => Closed,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsTopologyAuthority> => Closed,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MatchSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::MaintainSorafsOrderbook> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> => CoreAuthorized,
@@ -606,6 +612,7 @@ define_instruction_handlers! {
     >,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastPlainBallot>,
+    dispatch_instruction::<iroha_data_model::isi::governance::UpdatePlainConviction>,
     dispatch_instruction::<
         iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1
     >,
@@ -835,6 +842,8 @@ mod registry_dispatch_tests {
                 core::any::type_name::<
                     iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority,
                 >(),
+                core::any::type_name::<iroha_data_model::isi::sorafs::MutateSorafsTopologyAuthority>(
+                ),
             ]),
         );
     }
@@ -866,6 +875,7 @@ mod registry_dispatch_tests {
         assert_native_registration::<governance::SubmitParliamentLifecycleTransitionV1>();
         assert_native_registration::<governance::CastZkBallot>();
         assert_native_registration::<governance::CastPlainBallot>();
+        assert_native_registration::<governance::UpdatePlainConviction>();
     }
     #[test]
     fn every_canonical_privacy_instruction_has_a_native_dispatch_impl() {

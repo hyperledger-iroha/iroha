@@ -74,7 +74,7 @@ fn register_zk_asset_writes_policy_metadata() {
             .unwrap();
     }
     // Register zk policy
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
     let ib: InstructionBox = reg.into();
     stx.world
         .executor()
@@ -150,7 +150,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -182,6 +182,8 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
     let policy_key = Name::from_str("zk.policy").unwrap();
     let val = def.metadata().get(&policy_key).unwrap();
     let policy_json: norito::json::Value = val.try_into_any_norito().expect("json decode");
+    assert!(policy_json.get("vk_shield").is_none());
+    assert!(policy_json.get("vk_shield_commitment").is_none());
     let digest_hex = policy_json
         .get("features_digest")
         .and_then(|v| v.as_str())
@@ -192,7 +194,7 @@ fn register_zk_asset_without_shielding_sets_transparent_policy() {
     );
 }
 #[test]
-fn register_zk_asset_rejects_noncanonical_shield_verifier() {
+fn register_zk_asset_rejects_noncanonical_unshield_verifier() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::new(), kura, query);
@@ -202,10 +204,10 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
     let domain_id = DomainId::try_new("zkd", "universal").expect("domain id");
     let asset_def_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
-        "wrong_shield_vk".parse().expect("asset name"),
+        "wrong_unshield_vk".parse().expect("asset name"),
     );
     let (owner, _owner_key) = gen_account_in("zkd");
-    let wrong_vk_name = "transfer_key_misbound_as_shield";
+    let wrong_vk_name = "transfer_key_misbound_as_unshield";
     let wrong_vk_id = VerifyingKeyId::new(HALO2_IPA_BACKEND, wrong_vk_name);
     let wrong_vk_record = confidential_v2::confidential_transfer_v2_vk_record(wrong_vk_name, 1)
         .expect("canonical transfer verifier");
@@ -219,7 +221,7 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
         .into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
-            "wrong_shield_vk".to_owned(),
+            "wrong_unshield_vk".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         ))
@@ -236,19 +238,16 @@ fn register_zk_asset_rejects_noncanonical_shield_verifier() {
             .execute_instruction(&mut stx, &owner, instruction)
             .expect("set up verifier-binding fixture");
     }
-    let registration = iroha_data_model::isi::zk::RegisterZkAsset::new(
-        asset_def_id.clone(),
-        None,
-        Some(wrong_vk_id),
-    );
+    let registration =
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), Some(wrong_vk_id));
     let error = stx
         .world
         .executor()
         .clone()
         .execute_instruction(&mut stx, &owner, registration.into())
-        .expect_err("a transfer circuit cannot define shield tree semantics");
+        .expect_err("a transfer circuit cannot define unshield tree semantics");
     assert!(
-        error.to_string().contains("vk_shield"),
+        error.to_string().contains("vk_unshield"),
         "unexpected verifier-binding error: {error}"
     );
     assert!(
@@ -290,7 +289,7 @@ fn schedule_confidential_policy_transition_records_pending() {
             .unwrap();
     }
     // Register asset with convertible policy (allow shield/unshield).
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -383,7 +382,7 @@ fn stale_confidential_downgrade_is_discarded_and_metadata_remains_coherent() {
             None,
         ))
         .into(),
-        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None).into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
     ] {
         stx.world
             .executor()
@@ -488,7 +487,7 @@ fn confidential_policy_transition_applies_at_effective_height() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -601,7 +600,7 @@ fn cancel_confidential_policy_transition_clears_pending() {
             .execute_instruction(&mut stx, &owner, instr)
             .unwrap();
     }
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -782,7 +781,7 @@ fn zk_roots_are_bounded_in_world_state() {
         .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
         // Register zk policy (Hybrid; allow shield)
-        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None).into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
     ] {
         stx.world
             .executor()
@@ -926,8 +925,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
             .into(),
             Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone()))
                 .into(),
-            iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None)
-                .into(),
+            iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
         ] {
             stx.world
                 .executor()

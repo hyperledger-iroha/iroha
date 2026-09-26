@@ -206,8 +206,7 @@ seiyaku VendorBridgeGate {
             end_ts: 0,
             finalized: false,
             tally: vec![0, 0],
-            ballot_nullifiers: std::collections::BTreeSet::new(),
-            ciphertexts: Vec::new(),
+            accepted_ballots: Vec::new(),
             vk_ballot: Some(vk_id.clone()),
             vk_ballot_commitment: Some(vk_commitment),
             vk_tally: Some(vk_id.clone()),
@@ -297,7 +296,6 @@ seiyaku VendorBridgeGate {
         "unexpected direct ballot relation rejection: {error:?}"
     );
     let election = stx.world.elections().get("election1").unwrap();
-    assert!(election.ballot_nullifiers.is_empty());
-    assert!(election.ciphertexts.is_empty());
+    assert!(election.accepted_ballots.is_empty());
     assert!(stx.world.governance_locks().get("election1").is_none());
 }

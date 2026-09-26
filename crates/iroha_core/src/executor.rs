@@ -5412,6 +5412,111 @@ impl Executor {
         state_transaction.pipeline.gas.units_per_gas = units_per_gas;
         Ok(())
     }
+    /// Identify a role-11 instruction in the exact outer signed Network entry.
+    ///
+    /// Sealed reveals use an inner execution call hash, while their output proof names the
+    /// distinct outer entry. Contract-emitted instructions have no direct signed ordinal.
+    fn direct_stream_token_instruction_index(
+        state_transaction: &StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+        instruction: &InstructionBox,
+        index: usize,
+        direct_body: bool,
+    ) -> Result<Option<u32>, ValidationFail> {
+        use iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority;
+        if !direct_body {
+            return Ok(None);
+        }
+        let submitted = match transaction.instructions() {
+            Executable::Instructions(instructions) => instructions.get(index),
+            Executable::Batch(items) => items.get(index).and_then(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => Some(instruction),
+                ExecutableBatchItem::ContractCall(_) => None,
+            }),
+            Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => None,
+        };
+        let expected = submitted.and_then(|item| {
+            item.as_any()
+                .downcast_ref::<MutateSorafsStreamTokenAuthority>()
+        });
+        let actual = instruction
+            .as_any()
+            .downcast_ref::<MutateSorafsStreamTokenAuthority>();
+        if expected.is_none() || expected != actual {
+            return Ok(None);
+        }
+        let signed_entry_hash = transaction.hash_as_entrypoint();
+        if state_transaction.current_network_entrypoint_hash != Some(signed_entry_hash)
+            || state_transaction.tx_call_hash != Some(iroha_crypto::Hash::from(signed_entry_hash))
+            || state_transaction.current_tx_hash != Some(transaction.hash())
+            || state_transaction
+                .current_entrypoint_index
+                .and_then(|value| u32::try_from(value).ok())
+                .is_none()
+        {
+            return Ok(None);
+        }
+        u32::try_from(index).map(Some).map_err(|_| {
+            ValidationFail::NotPermitted("signed stream-token instruction index exceeds u32".into())
+        })
+    }
+    /// Bind one role-15 operation to its sole direct signed External Network entry.
+    ///
+    /// Contract, IVM, sealed-reveal and mixed-batch effects cannot acquire this token.
+    pub(crate) fn direct_final_promotion_operation_origin(
+        state_transaction: &StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+        instruction: &InstructionBox,
+        direct_body: bool,
+    ) -> Option<iroha_data_model::sorafs::final_promotion_authority::FinalPromotionOperationOriginV1>
+    {
+        use iroha_data_model::{
+            isi::sorafs::MutateSorafsFinalPromotionAuthority,
+            sorafs::final_promotion_authority::{
+                FinalPromotionAuthorityActionV1, FinalPromotionOperationOriginV1,
+            },
+            transaction::TransactionEntrypoint,
+        };
+        if !direct_body {
+            return None;
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return None;
+        };
+        if instructions.len() != 1 || instructions.first() != Some(instruction) {
+            return None;
+        }
+        let native = instruction
+            .as_any()
+            .downcast_ref::<MutateSorafsFinalPromotionAuthority>()?;
+        if !matches!(
+            &native.action,
+            FinalPromotionAuthorityActionV1::Reserve(_)
+                | FinalPromotionAuthorityActionV1::Complete(_)
+        ) {
+            return None;
+        }
+        let outer = transaction.hash_as_entrypoint();
+        if state_transaction.current_network_entrypoint_hash != Some(outer)
+            || state_transaction.tx_call_hash != Some(iroha_crypto::Hash::from(outer))
+            || state_transaction.current_tx_hash != Some(transaction.hash())
+            || transaction.network_id() != Some(&state_transaction.network_id)
+            // TODO: F02 must reserve the bounded signed-entry clone and canonical frame before
+            // this verification allocates; the 64 KiB envelope bound alone is not admission.
+            || crate::query::signer_check::native_signed_entry_frame_v1(
+                &TransactionEntrypoint::External(transaction.clone()),
+            )
+            .is_err()
+        {
+            return None;
+        }
+        Some(FinalPromotionOperationOriginV1 {
+            entry_hash: *outer.as_ref(),
+            entry_index: state_transaction
+                .current_entrypoint_index
+                .and_then(|index| u32::try_from(index).ok())?,
+        })
+    }
     #[allow(clippy::too_many_lines)]
     fn execute_metered_instructions(
         &self,
@@ -5654,17 +5759,36 @@ impl Executor {
                     }
                 }
             } else {
-                for isi in instructions {
+                for (index, isi) in instructions.into_iter().enumerate() {
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
                             .validate_for_authority(&state_transaction.world, authority)?;
                     }
-                    self.execute_instruction_with_contract_runtime_context(
+                    let direct_index = Self::direct_stream_token_instruction_index(
+                        state_transaction,
+                        transaction,
+                        &isi,
+                        index,
+                        contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
+                    )?;
+                    state_transaction.current_direct_stream_token_instruction_index = direct_index;
+                    state_transaction.current_direct_final_promotion_operation_origin =
+                        Self::direct_final_promotion_operation_origin(
+                            state_transaction,
+                            transaction,
+                            &isi,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        );
+                    let result = self.execute_instruction_with_contract_runtime_context(
                         state_transaction,
                         authority,
                         isi,
                         contract_runtime_context,
-                    )?;
+                    );
+                    state_transaction.current_direct_stream_token_instruction_index = None;
+                    state_transaction.current_direct_final_promotion_operation_origin = None;
+                    result?;
                     if let Some(authorization) = entrypoint_authorization {
                         authorization
                             .validate_for_authority(&state_transaction.world, authority)?;
@@ -6659,14 +6783,33 @@ impl Executor {
                 if confidential_delta > 0 {
                     state_transaction.record_confidential_gas_delta(confidential_delta);
                 }
-                for item in items {
+                for (index, item) in items.into_iter().enumerate() {
                     match item {
                         ExecutableBatchItem::Instruction(instruction) => {
                             // Mixed batches intentionally do not inherit the pure-ISI
                             // deployment self-bootstrap exception.
-                            self.execute_instruction(state_transaction, authority, instruction)?;
+                            let direct_index = Self::direct_stream_token_instruction_index(
+                                state_transaction,
+                                &transaction_for_fee,
+                                &instruction,
+                                index,
+                                true,
+                            )?;
+                            state_transaction.current_direct_stream_token_instruction_index =
+                                direct_index;
+                            state_transaction.current_direct_final_promotion_operation_origin =
+                                None;
+                            let result =
+                                self.execute_instruction(state_transaction, authority, instruction);
+                            state_transaction.current_direct_stream_token_instruction_index = None;
+                            state_transaction.current_direct_final_promotion_operation_origin =
+                                None;
+                            result?;
                         }
                         ExecutableBatchItem::ContractCall(call) => {
+                            state_transaction.current_direct_stream_token_instruction_index = None;
+                            state_transaction.current_direct_final_promotion_operation_origin =
+                                None;
                             let remaining = live_batch_contract_execution_limit(
                                 gas_limit,
                                 gas_used,
@@ -9503,6 +9646,7 @@ mod tests {
     include!("executor_effect_budget_tests.rs");
     include!("executor_sorafs_repair_tests.rs");
     include!("executor_stream_token_custody_permission_tests.rs");
+    include!("executor_stream_token_direct_source_tests.rs");
     include!("executor_sorafs_market_tests.rs");
     include!("executor_sorafs_provider_governance_tests.rs");
     include!("executor_sorafs_pop_registry_tests.rs");
@@ -10687,7 +10831,9 @@ mod tests {
     }
     #[test]
     fn initial_executor_keeps_explicitly_standalone_referendum_ballots() {
-        use iroha_data_model::isi::governance::{CastPlainBallot, CastZkBallot};
+        use iroha_data_model::isi::governance::{
+            CastPlainBallot, CastZkBallot, UpdatePlainConviction,
+        };
 
         let ballots = [
             InstructionBox::from(CastPlainBallot {
@@ -10696,6 +10842,12 @@ mod tests {
                 amount: 1_u64.into(),
                 duration_blocks: 1,
                 direction: 0,
+            }),
+            InstructionBox::from(UpdatePlainConviction {
+                referendum_id: "standalone-plain".to_owned(),
+                owner: checked_account_id(),
+                amount: 2_u64.into(),
+                duration_blocks: 2,
             }),
             InstructionBox::from(CastZkBallot {
                 election_id: "standalone-zk".to_owned(),

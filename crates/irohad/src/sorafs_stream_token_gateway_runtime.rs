@@ -212,7 +212,7 @@ mod tests {
     fn token_config() -> SorafsTokenConfig {
         SorafsTokenConfig {
             enabled: true,
-            // This fixture exercises admission; Torii validates hardware custody separately.
+            // This fixture exercises admission; Torii validates signer custody separately.
             admission_provider_handle: Some(HANDLE.to_owned()),
             admission_provider_revision: Some(7),
             admission_provider_policy_digest: Some([0x42; 32]),

@@ -125,16 +125,27 @@ pub(crate) fn canonical_carrier_membership_hashes(
     entrypoints: &[TransactionEntrypoint],
 ) -> Vec<HashOf<TransactionEntrypoint>> {
     let mut hashes = Vec::with_capacity(entrypoints.len().saturating_mul(2));
+    for_each_canonical_carrier_membership_hash(state_block, entrypoints, |hash| hashes.push(hash));
+    hashes
+}
+/// Visit the exact canonical carrier identities without allocating an intermediate collection.
+///
+/// The caller owns any storage needed to retain these hashes. This keeps the
+/// ordinary carrier's pre-effect source buffer on its original charged owner.
+pub(crate) fn for_each_canonical_carrier_membership_hash(
+    state_block: &StateBlock<'_>,
+    entrypoints: &[TransactionEntrypoint],
+    mut visit: impl FnMut(HashOf<TransactionEntrypoint>),
+) {
     for entrypoint in entrypoints {
         let carrier_hash = entrypoint.hash();
-        hashes.push(carrier_hash);
+        visit(carrier_hash);
         if let Some(execution_hash) = authenticated_signed_replay_alias(state_block, entrypoint) {
             if execution_hash != carrier_hash {
-                hashes.push(execution_hash);
+                visit(execution_hash);
             }
         }
     }
-    hashes
 }
 /// Return the signed replay alias authenticated by the pre-block state, if any.
 #[must_use]
@@ -1244,6 +1255,7 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeValidationFeePayoutLifecycle,
         iroha_data_model::isi::governance::CastZkBallot,
         iroha_data_model::isi::governance::CastPlainBallot,
+        iroha_data_model::isi::governance::UpdatePlainConviction,
         iroha_data_model::isi::governance::CreateParliamentGovernanceAttemptV1,
         iroha_data_model::isi::governance::SubmitParliamentLifecycleTransitionV1,
         iroha_data_model::isi::ministry::SubmitAgendaProposal,
@@ -3331,6 +3343,7 @@ impl StateBlock<'_> {
             state_transaction.world.current_dataspace_id = Some(routing.dataspace_id);
         }
         let hash = tx.hash_as_entrypoint();
+        state_transaction.current_network_entrypoint_hash = Some(hash);
         let mut result = Self::execute_accepted_transaction_in_overlay(
             tx,
             &mut state_transaction,
@@ -12961,7 +12974,31 @@ pub mod tests {
         assert_eq!(wrong_identities, vec![wrong.hash()]);
         let exact_identities =
             canonical_carrier_membership_hashes(&open_block, core::slice::from_ref(&exact));
+        let mut visited = Vec::new();
+        for_each_canonical_carrier_membership_hash(
+            &open_block,
+            core::slice::from_ref(&exact),
+            |hash| visited.push(hash),
+        );
+        assert_eq!(visited, exact_identities);
         assert_eq!(exact_identities.len(), 2);
+        let alias_bytes = std::alloc::Layout::array::<HashOf<TransactionEntrypoint>>(2)
+            .unwrap()
+            .size();
+        let alias_budget = mv::allocation::AllocationBudget::new(alias_bytes);
+        let mut paid_aliases = mv::allocation::ChargedBuffer::new(2, &alias_budget)
+            .expect("exact two-identity backing admits at its capacity boundary");
+        for_each_canonical_carrier_membership_hash(
+            &open_block,
+            core::slice::from_ref(&exact),
+            |hash| {
+                paid_aliases.append(std::slice::from_ref(&hash)).unwrap();
+            },
+        );
+        assert_eq!(paid_aliases.as_slice(), exact_identities);
+        assert_eq!(alias_budget.reserved_bytes(), alias_bytes);
+        drop(paid_aliases);
+        assert_eq!(alias_budget.reserved_bytes(), 0);
         assert!(exact_identities.contains(&exact.hash()));
         assert!(exact_identities.contains(&signed.hash_as_entrypoint()));
         drop(open_block);

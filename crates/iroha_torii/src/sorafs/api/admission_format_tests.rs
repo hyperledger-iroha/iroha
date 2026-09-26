@@ -5,6 +5,16 @@ fn formats_admission_error_reasons() {
         admission_error_reason(&AdvertError::AdmissionMissing { provider_id }),
         "admission_missing"
     );
+    assert_eq!(
+        admission_error_reason(&AdvertError::AdmissionFailed {
+            provider_id,
+            error: crate::sorafs::AdmissionCheckError::NetworkMismatch {
+                expected: [0xA1; 32],
+                provided: [0xB2; 32],
+            },
+        }),
+        "network_mismatch"
+    );
     let expired = AdvertError::Validation(AdvertValidationError::Expired {
         now: 11,
         expires_at: 10,

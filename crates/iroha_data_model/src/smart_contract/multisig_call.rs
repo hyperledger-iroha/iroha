@@ -23,7 +23,7 @@ use std::str::FromStr;
 
 /// Native call material to be incorporated into the caller's complete signed transaction.
 pub struct CanonicalMultisigContractCall {
-    /// Exactly RegisterTrigger followed by ExecuteTrigger.
+    /// Exactly `RegisterTrigger` followed by `ExecuteTrigger`.
     pub instructions: Vec<InstructionBox>,
     /// Hash of the exact native instruction vector, including target, code and arguments.
     pub instructions_hash: HashOf<Vec<InstructionBox>>,
@@ -63,6 +63,10 @@ pub fn contract_call_metadata(
 
 /// Derive the sole current trigger identifier from typed, canonical native material.
 /// Delimiter-separated text and serialization-error placeholders are not accepted.
+///
+/// # Errors
+/// Returns an error if the typed material cannot be canonically encoded or the
+/// derived trigger name is invalid.
 pub fn derive_multisig_contract_call_trigger_id(
     authority: &AccountId,
     address: &ContractAddress,
@@ -86,6 +90,10 @@ pub fn derive_multisig_contract_call_trigger_id(
 
 /// Construct the exact current proposal from independently reviewed typed inputs.
 /// No ledger I/O, signature, alias resolution, or application authority inference occurs.
+///
+/// # Errors
+/// Rejects an empty, overlong, or whitespace-padded entrypoint, a payload that is
+/// not a JSON object, or a failure to derive the trigger ID or construct its action.
 pub fn build_multisig_contract_call(
     authority: &AccountId,
     address: &ContractAddress,

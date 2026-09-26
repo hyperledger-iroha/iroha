@@ -28,7 +28,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_inventory.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "2300daec6d637bdf58c06555d69edd2e4ebc0ad7883cf343a15b25983f763288"
+    "370aaa53c79d72234afd40ef3539d31ef69ce5995afd6c6fb327401528f9489d"
 )
 REVIEWED_RUST_TEXT_HELPER_RELATIVE = Path("scripts/formal/sumeragi_v2_rust_text.py")
 _RUST_TEXT_MODULE_NAME = "_iroha_sumeragi_v2_rust_text"
@@ -324,6 +324,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         (
             "# kind\tname\thex\texpectation",
             "message\tquorum_certificate_merge_carrier\t",
+            "message\tquorum_certificate_transaction_commitments\t",
             "negative_message\texecution_commitment_merge_carrier_wrong_version\t",
             "negative_message\texecution_commitment_missing_merge_carrier_field\t",
         ),
@@ -333,6 +334,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
         (
             'const WIRE_FIXTURE_BASENAME: &str = "wire_v2.tsv";',
             'name: "quorum_certificate_merge_carrier",',
+            'name: "quorum_certificate_transaction_commitments",',
             '"execution_commitment_merge_carrier_wrong_version",',
             '"execution_commitment_missing_merge_carrier_field",',
             "&options.output_dir.join(WIRE_FIXTURE_BASENAME),",
@@ -345,6 +347,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings()",
             "fn shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation()",
             '"quorum_certificate_merge_carrier",',
+            '"quorum_certificate_transaction_commitments",',
             '"execution_commitment_merge_carrier_wrong_version",',
             '"execution_commitment_missing_merge_carrier_field",',
         ),

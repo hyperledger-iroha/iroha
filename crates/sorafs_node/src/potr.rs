@@ -4,7 +4,8 @@
 //! configured gateway key and a council-verified provider admission. The exact final signed receipt
 //! is committed before any repair callback. Terminal callbacks use the signed receipt digest as
 //! their exactly-once source identity and must return the canonical proof-outcome operation or
-//! repair-task identity. A substituted acknowledgement is never checkpointed, so a crash or
+//! repair-task identity. The retained identities are rederived when checkpoints reopen. A
+//! substituted acknowledgement is never checkpointed or accepted on restart, so a crash or
 //! rejected acknowledgement remains safe to replay.
 use crate::durable_transaction_forwarder::{CheckpointStoreError, CheckpointWriterGuard};
 use crate::proof_outcome_forwarder::{ProofOutcomeOutboxError, potr_proof_outcome_operation_id_v1};
@@ -870,6 +871,31 @@ fn validate_record(record: &StoredPotrReceiptV1) -> Result<(), PotrTrackerError>
     {
         return Err(PotrTrackerError::InvalidCheckpoint(
             "persisted PoTR receipt binding is inconsistent".to_owned(),
+        ));
+    }
+    if let Some(recorded) = record.proof_outcome_receipt_digest {
+        let expected = potr_proof_outcome_operation_id_v1(
+            &record.receipt,
+            record.admission_policy.admission_envelope_digest,
+        )
+        .map_err(|error| {
+            PotrTrackerError::InvalidCheckpoint(format!(
+                "persisted PoTR proof-outcome identity cannot be derived: {error}"
+            ))
+        })?;
+        if recorded != expected {
+            return Err(PotrTrackerError::InvalidCheckpoint(
+                "persisted PoTR proof-outcome acknowledgement is not the exact operation"
+                    .to_owned(),
+            ));
+        }
+    }
+    if record
+        .repair_receipt_digest
+        .is_some_and(|recorded| recorded != sorafs_repair_task_id_v1(record.receipt_digest))
+    {
+        return Err(PotrTrackerError::InvalidCheckpoint(
+            "persisted PoTR repair acknowledgement is not the exact repair task".to_owned(),
         ));
     }
     if let Some(report) = record.repair_report.as_ref() {
@@ -2045,6 +2071,12 @@ mod tests {
         };
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal_digest: compute_proposal_digest(&proposal).expect("proposal digest"),
             advert_body_digest: compute_advert_body_digest(&advert_body)
                 .expect("advert body digest"),
@@ -2188,6 +2220,101 @@ mod tests {
             vec![receipt]
         );
         assert_eq!(repair.count(), 0);
+    }
+    #[test]
+    fn restart_rejects_substituted_terminal_acknowledgements_in_canonical_checkpoint() {
+        let (admission, gateway_key, provider_key) = governed_fixture();
+        let policy_binding = admission_policy_binding(&admission, 1);
+        let gateway_public = gateway_public_key(&gateway_key);
+        let receipt = signed_receipt(
+            &gateway_key,
+            &provider_key,
+            [0x47; 16],
+            PotrStatus::MissedDeadline,
+            0,
+        );
+        let directory = TempDir::new().expect("state dir");
+        let checkpoint_path = directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1);
+        let handoff = RecordingRepair::default();
+        let tracker = PotrTracker::open(
+            directory.path(),
+            8,
+            POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1,
+        )
+        .expect("open tracker");
+        tracker
+            .record_receipt(
+                receipt,
+                &gateway_public,
+                &admission,
+                &policy_binding,
+                &handoff,
+            )
+            .expect("persist both exact terminal acknowledgements");
+        drop(tracker);
+
+        let original = fs::read(&checkpoint_path).expect("read canonical checkpoint");
+        let checkpoint: PotrTrackerCheckpointV1 =
+            norito::decode_from_bytes(&original).expect("decode checkpoint");
+        let stored = &checkpoint.records[0];
+        assert!(stored.proof_outcome_receipt_digest.is_some());
+        assert!(stored.repair_receipt_digest.is_some());
+
+        let mut substituted_proof = checkpoint.clone();
+        let exact_proof = substituted_proof.records[0]
+            .proof_outcome_receipt_digest
+            .expect("proof-outcome acknowledgement");
+        substituted_proof.records[0].proof_outcome_receipt_digest =
+            Some(SubstitutingAcknowledgementHandoff::substitute(exact_proof));
+        fs::write(
+            &checkpoint_path,
+            norito::to_bytes(&substituted_proof).expect("canonical substituted checkpoint"),
+        )
+        .expect("write substituted checkpoint");
+        assert!(matches!(
+            PotrTracker::open(
+                directory.path(),
+                8,
+                POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1,
+            ),
+            Err(PotrTrackerError::InvalidCheckpoint(message))
+                if message.contains("proof-outcome acknowledgement")
+        ));
+
+        let mut substituted_repair = checkpoint;
+        let exact_repair = substituted_repair.records[0]
+            .repair_receipt_digest
+            .expect("repair acknowledgement");
+        substituted_repair.records[0].repair_receipt_digest =
+            Some(SubstitutingAcknowledgementHandoff::substitute(exact_repair));
+        fs::write(
+            &checkpoint_path,
+            norito::to_bytes(&substituted_repair).expect("canonical substituted checkpoint"),
+        )
+        .expect("write substituted checkpoint");
+        assert!(matches!(
+            PotrTracker::open(
+                directory.path(),
+                8,
+                POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1,
+            ),
+            Err(PotrTrackerError::InvalidCheckpoint(message))
+                if message.contains("repair acknowledgement")
+        ));
+
+        fs::write(&checkpoint_path, original).expect("restore exact checkpoint");
+        let restored = PotrTracker::open(
+            directory.path(),
+            8,
+            POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1,
+        )
+        .expect("restore exact completed handoffs");
+        assert_eq!(
+            restored
+                .resume_terminal_handoffs(&RecordingRepair::default())
+                .expect("no pending handoffs"),
+            0
+        );
     }
     #[test]
     fn wrong_signer_and_overlapping_request_scope_fail_closed() {

@@ -9,7 +9,7 @@ import Glibc
 
 let packageDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
 let bridgeRelativePath = "../dist/NoritoBridge.xcframework"
-let requiredBridgeAbiVersion = 23
+let requiredBridgeAbiVersion = 24
 let repositoryDirectory = packageDirectory.deletingLastPathComponent().standardizedFileURL
 let localIntegrationArtifactDirectory = repositoryDirectory
     .appendingPathComponent("target/norito-bridge-local/artifacts", isDirectory: true).path

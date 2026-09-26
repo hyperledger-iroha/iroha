@@ -49,42 +49,22 @@ isi! {
     /// Register a ZK-capable asset definition with policy and verifying keys.
     #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::zk::RegisterZkAsset")]
+    #[norito(deny_unknown_fields)]
     pub struct RegisterZkAsset {
         /// Asset definition id.
         pub asset: AssetDefinitionId,
         /// Verifying key for confidential redemption proofs.
         pub vk_unshield: Option<crate::proof::VerifyingKeyId>,
-        /// Canonical confidential shielding verifying key.
-        pub vk_shield: Option<crate::proof::VerifyingKeyId>,
     }
 }
 impl crate::seal::Instruction for RegisterZkAsset {}
 impl RegisterZkAsset {
-    /// Validate the first-release verifier-role relationship.
-    ///
-    /// A shield verifier admits new confidential commitments. It is therefore
-    /// invalid without an unshield verifier that can redeem those commitments.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if `vk_shield` is set while `vk_unshield` is absent.
-    pub fn validate_verifier_roles(&self) -> Result<(), &'static str> {
-        if self.vk_shield.is_some() && self.vk_unshield.is_none() {
-            return Err("vk_shield requires vk_unshield so shielded funds remain redeemable");
-        }
-        Ok(())
-    }
     /// Construct a new `RegisterZkAsset` instruction.
     pub fn new(
         asset: AssetDefinitionId,
         vk_unshield: Option<crate::proof::VerifyingKeyId>,
-        vk_shield: Option<crate::proof::VerifyingKeyId>,
     ) -> Self {
-        Self {
-            asset,
-            vk_unshield,
-            vk_shield,
-        }
+        Self { asset, vk_unshield }
     }
 }
 isi! {
@@ -272,8 +252,8 @@ isi! {
     pub struct FinalizeElection {
         /// Canonical V1 election selector.
         pub election_id: String,
-        /// Public tally per option.
-        pub tally: Vec<u64>,
+        /// Exact public conviction weight per option in the frozen asset's smallest units.
+        pub tally: Vec<u128>,
         /// ZK proof that `tally` is consistent with submitted ballots.
         pub tally_proof: crate::proof::ProofAttachment,
     }
@@ -330,7 +310,6 @@ impl_zk_decode_from_slice!(PruneProofs {
 impl_zk_decode_from_slice!(RegisterZkAsset {
     asset: AssetDefinitionId,
     vk_unshield: Option<crate::proof::VerifyingKeyId>,
-    vk_shield: Option<crate::proof::VerifyingKeyId>,
 });
 impl_zk_decode_from_slice!(ScheduleConfidentialPolicyTransition {
     asset: AssetDefinitionId,
@@ -361,7 +340,7 @@ impl_zk_decode_from_slice!(SubmitBallot {
 });
 impl_zk_decode_from_slice!(FinalizeElection {
     election_id: String,
-    tally: Vec<u64>,
+    tally: Vec<u128>,
     tally_proof: crate::proof::ProofAttachment,
 });
 #[cfg(test)]
@@ -468,7 +447,6 @@ mod tests {
         assert_slice_roundtrip(RegisterZkAsset::new(
             asset.clone(),
             Some(verifying_key("unshield")),
-            Some(verifying_key("shield")),
         ));
         assert_slice_roundtrip(ScheduleConfidentialPolicyTransition::new(
             asset.clone(),
@@ -499,7 +477,7 @@ mod tests {
         });
         assert_slice_roundtrip(FinalizeElection {
             election_id: "election-1".to_owned(),
-            tally: vec![1, 2, 3],
+            tally: vec![1, u128::from(u64::MAX) + 1, 3],
             tally_proof: proof,
         });
     }
@@ -520,7 +498,7 @@ mod tests {
         assert_registry_decodes(
             &registry,
             "iroha.instruction.v1::zk::RegisterZkAsset",
-            RegisterZkAsset::new(asset.clone(), None, None),
+            RegisterZkAsset::new(asset.clone(), None),
         );
         assert_registry_decodes(
             &registry,
@@ -543,24 +521,25 @@ mod tests {
         );
     }
     #[test]
-    fn shield_verifier_requires_an_unshield_verifier() {
-        let asset = asset_definition_id();
-        let shield = Some(verifying_key("shield"));
-        let unshield = Some(verifying_key("unshield"));
+    fn register_zk_asset_rejects_retired_third_wire_field() {
+        use norito::{codec::Encode as _, core::DecodeFromSlice as _};
+        let registration =
+            RegisterZkAsset::new(asset_definition_id(), Some(verifying_key("unshield")));
+        let mut retired_payload = registration.encode();
+        retired_payload.push(0);
         assert!(
-            RegisterZkAsset::new(asset.clone(), None, shield.clone())
-                .validate_verifier_roles()
-                .is_err()
+            RegisterZkAsset::decode_from_slice(&retired_payload).is_err(),
+            "the retired optional shield field must not be accepted as trailing bytes"
         );
+        let mut retired_json =
+            norito::json::to_value(&registration).expect("encode registration JSON");
+        retired_json
+            .as_object_mut()
+            .expect("registration JSON object")
+            .insert("vk_shield".to_owned(), norito::json::Value::Null);
         assert!(
-            RegisterZkAsset::new(asset.clone(), unshield.clone(), shield)
-                .validate_verifier_roles()
-                .is_ok()
-        );
-        assert!(
-            RegisterZkAsset::new(asset, unshield, None)
-                .validate_verifier_roles()
-                .is_ok()
+            norito::json::from_value::<RegisterZkAsset>(retired_json).is_err(),
+            "the retired shield role must not be accepted as a JSON field"
         );
     }
 }

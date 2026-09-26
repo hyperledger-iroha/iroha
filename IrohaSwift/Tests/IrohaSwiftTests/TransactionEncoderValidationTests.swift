@@ -376,6 +376,93 @@ final class TransactionEncoderValidationTests: XCTestCase {
         }
     }
 
+    func testUpdatePlainConvictionRejectsOwnerSelectorAndQuantityBeforeNativeDispatch() throws {
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let otherOwner = try canonicalOwnerLiteral()
+        let feePayment = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
+
+        func request(owner: String, referendumId: String, amount: String) -> UpdatePlainConvictionRequest {
+            UpdatePlainConvictionRequest(
+                networkId: TestNetworkIds.canonical,
+                authority: authority,
+                referendumId: referendumId,
+                owner: owner,
+                amount: amount,
+                durationBlocks: 42,
+                feePayment: feePayment,
+                ttlMs: nil
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeUpdatePlainConviction(
+                request: request(owner: otherOwner, referendumId: "referendum-1", amount: "1"),
+                signingKey: signingKey,
+                creationTimeMs: 1
+            )
+        ) { error in
+            XCTAssertEqual(error as? TransactionInputError, .governanceOwnerMustEqualAuthority)
+        }
+
+        XCTAssertThrowsError(
+            try SwiftTransactionEncoder.encodeUpdatePlainConviction(
+                request: request(owner: authority, referendumId: "bad/referendum", amount: "1"),
+                signingKey: signingKey,
+                creationTimeMs: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? TransactionInputError,
+                .invalidGovernanceSelector(field: "referendum_id", value: "bad/referendum")
+            )
+        }
+
+        for amount in ["", "+1", "01", "1.0", "1.2300", " 1", "1 ", "-1"] {
+            XCTAssertThrowsError(
+                try SwiftTransactionEncoder.encodeUpdatePlainConviction(
+                    request: request(owner: authority, referendumId: "referendum-1", amount: amount),
+                    signingKey: signingKey,
+                    creationTimeMs: 1
+                )
+            ) { error in
+                XCTAssertTrue(error is KotodamaNumericV1Error, "\(amount): \(error)")
+            }
+        }
+    }
+
+    func testUpdatePlainConvictionBuildsOneSignedNativeInstruction() throws {
+        try requireNativeTestCapability(
+            NoritoNativeBridge.shared.isAvailable,
+            "NoritoBridge native encoder not linked"
+        )
+        let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
+        let authority = try canonicalAuthorityLiteral(from: signingKey)
+        let request = UpdatePlainConvictionRequest(
+            networkId: TestNetworkIds.canonical,
+            authority: authority,
+            referendumId: "referendum-1",
+            owner: authority,
+            amount: "100.25",
+            durationBlocks: 42,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            ttlMs: nil
+        )
+        let encoderEnvelope = try SwiftTransactionEncoder.encodeUpdatePlainConviction(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: 1
+        )
+        let sdk = IrohaSDK(
+            baseURL: URL(string: "https://localhost.invalid")!,
+            creationTimeProvider: { 1 }
+        )
+        let builderEnvelope = try sdk.buildUpdatePlainConviction(request: request, signingKey: signingKey)
+        XCTAssertEqual(builderEnvelope.norito, encoderEnvelope.norito)
+        XCTAssertEqual(builderEnvelope.transactionHash, encoderEnvelope.transactionHash)
+        XCTAssertFalse(builderEnvelope.norito.isEmpty)
+    }
+
     func testGovernanceTransactionEncodersRejectNoncanonicalSelectorsBeforeNativeDispatch() throws {
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 4, count: 32))
         let authority = try canonicalAuthorityLiteral(from: signingKey)

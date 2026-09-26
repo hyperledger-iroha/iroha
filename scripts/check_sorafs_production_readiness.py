@@ -1380,9 +1380,11 @@ def load_resilience_qualification_binding(
     ):
         if summary.get(field) is not True:
             errors.append(f"resilience qualification summary {field} must be true")
-    if summary.get("readiness_lane_count_delta") != 0:
+    if type(summary.get("readiness_lane_count_delta")) is not int or summary.get(
+        "readiness_lane_count_delta"
+    ) != 0:
         errors.append(
-            "resilience qualification summary readiness_lane_count_delta must be zero"
+            "resilience qualification summary readiness_lane_count_delta must be integer zero"
         )
     if summary.get("errors") != []:
         errors.append("resilience qualification summary errors must be empty")
@@ -1462,9 +1464,11 @@ def load_resilience_qualification_binding(
             "19-requirement contract in canonical order"
         )
     recognized_count = summary.get("recognized_requirement_count")
-    if recognized_count != len(RESILIENCE_QUALIFICATION_REQUIREMENTS):
+    if type(recognized_count) is not int or recognized_count != len(
+        RESILIENCE_QUALIFICATION_REQUIREMENTS
+    ):
         errors.append(
-            "resilience qualification summary recognized_requirement_count must be 19"
+            "resilience qualification summary recognized_requirement_count must be integer 19"
         )
 
     artifacts_value = summary.get("artifact_bindings")
@@ -1538,11 +1542,17 @@ def load_resilience_qualification_binding(
         )
     earliest_capture = min(captures) if captures else None
     latest_capture = max(captures) if captures else None
-    if summary.get("earliest_capture_unix") != earliest_capture:
+    if (
+        type(summary.get("earliest_capture_unix")) is not int
+        or summary.get("earliest_capture_unix") != earliest_capture
+    ):
         errors.append(
             "resilience qualification summary earliest_capture_unix must match artifacts"
         )
-    if summary.get("latest_capture_unix") != latest_capture:
+    if (
+        type(summary.get("latest_capture_unix")) is not int
+        or summary.get("latest_capture_unix") != latest_capture
+    ):
         errors.append(
             "resilience qualification summary latest_capture_unix must match artifacts"
         )

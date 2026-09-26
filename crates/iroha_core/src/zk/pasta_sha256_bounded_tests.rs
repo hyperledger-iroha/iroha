@@ -95,6 +95,7 @@ enum Mutation {
     BitLength,
     FinalSelector,
     NonFinalSnapshot,
+    SelectedOutput,
     Chain,
 }
 
@@ -170,6 +171,9 @@ fn bounded_circuit<F: BigPrimeField>(
         .use_instance_columns(1);
     let range = builder.range_chip();
     let mut jobs = PastaSha256JobsV1::default();
+    if mutation == Mutation::SelectedOutput {
+        jobs = jobs.with_output_word_xor(1, 0, 1);
+    }
     let mut public_cells = Vec::new();
     let mut instances = Vec::new();
     let prefix = b"fixed job before bounded SHA";
@@ -206,10 +210,15 @@ fn bounded_circuit<F: BigPrimeField>(
         if index == 0 {
             first_length = Some(length_cell);
         }
-        public_cells.extend(
-            jobs.digest_bounded_constrained(builder.main(0), &range, &message, length_cell)
-                .expect("bounded SHA relation construction"),
-        );
+        let output = jobs
+            .digest_bounded_constrained(builder.main(0), &range, &message, length_cell)
+            .expect("bounded SHA relation construction");
+        if index == 0 && mutation == Mutation::SelectedOutput {
+            // Give the attacker its own changed public digest. A stale public instance must not
+            // be the reason the combined SHA relation rejects this witness.
+            instances[DIGEST_SIZE] = *output[0].value();
+        }
+        public_cells.extend(output);
     }
     let suffix = b"fixed job after bounded SHA";
     let assigned_suffix = assign_message(builder.main(0), &range, suffix);
@@ -219,7 +228,7 @@ fn bounded_circuit<F: BigPrimeField>(
     );
     instances.extend(digest_words::<F>(suffix));
     match mutation {
-        Mutation::None | Mutation::ZeroTail => {}
+        Mutation::None | Mutation::ZeroTail | Mutation::SelectedOutput => {}
         Mutation::Length => {
             let length = first_length.expect("first bounded length");
             replace_base_equivalence_class(&mut builder, length, *length.value() + F::ONE);
@@ -362,6 +371,68 @@ fn shape_cases<F: BigPrimeField>() {
     let mut witnessless = baseline.without_witnesses();
     assert!(witnessless.jobs.use_unknown);
     assert_same_shape(&mut baseline, &mut witnessless);
+}
+
+#[test]
+fn bounded_selected_output_only_tamper_passes_base_but_fails_table8_copy() {
+    fn run<F: BigPrimeField>() {
+        let cases = [(128, 65)];
+        let original = bounded_circuit::<F>(&cases, Mutation::None);
+        let altered = bounded_circuit::<F>(&cases, Mutation::SelectedOutput);
+        assert_eq!(
+            original.jobs.canonical_plan_messages().unwrap(),
+            altered.jobs.canonical_plan_messages().unwrap(),
+            "active preimage, capacity and selected block must remain unchanged"
+        );
+        let differing_instances = original
+            .instances
+            .iter()
+            .zip(&altered.instances)
+            .enumerate()
+            .filter_map(|(index, (before, after))| (before != after).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(differing_instances, vec![DIGEST_SIZE]);
+        let selected = 1;
+        for (block_index, (before, after)) in original.jobs.jobs[1]
+            .bounded
+            .as_ref()
+            .unwrap()
+            .block_outputs
+            .iter()
+            .zip(&altered.jobs.jobs[1].bounded.as_ref().unwrap().block_outputs)
+            .enumerate()
+        {
+            for word_index in 0..DIGEST_SIZE {
+                let expected = if block_index == selected && word_index == 0 {
+                    F::from(u64::from(
+                        u32::try_from(fe_to_biguint(before[word_index].value())).unwrap() ^ 1,
+                    ))
+                } else {
+                    *before[word_index].value()
+                };
+                assert_eq!(*after[word_index].value(), expected);
+            }
+        }
+        MockProver::run(TEST_K, &altered.builder, vec![altered.instances.clone()])
+            .expect("Base-only bounded output witness")
+            .assert_satisfied();
+        MockProver::run(TEST_K, &original, vec![original.instances.clone()])
+            .expect("combined bounded baseline")
+            .assert_satisfied();
+        let failures = MockProver::run(TEST_K, &altered, vec![altered.instances.clone()])
+            .expect("combined bounded output witness")
+            .verify()
+            .expect_err("Table8-to-Base selected-snapshot copy must reject the changed word");
+        assert!(
+            failures.iter().all(|failure| matches!(
+                failure,
+                halo2_proofs::dev::VerifyFailure::Permutation { .. }
+            )),
+            "only Table8/Base copy equality should fail: {failures:?}"
+        );
+    }
+    run::<Fp>();
+    run::<Fq>();
 }
 
 #[test]

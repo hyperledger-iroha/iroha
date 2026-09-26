@@ -60,7 +60,7 @@ enum AuthorityReviewPurposeV1 {
 const CANDIDATE_CONTEXT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:release-candidate-context";
 const VERIFICATION_RECORDS_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:verification-records";
 const NATIVE_ARTIFACT_MANIFEST_MAX_BYTES_V1: usize = 64 * 1024;
-const NATIVE_ARTIFACT_SCHEMA_V1: &str = "iroha.native-sdk-abi23-artifact.v1";
+const NATIVE_ARTIFACT_SCHEMA_V1: &str = "iroha.native-sdk-abi24-artifact.v1";
 const AUTHENTICATED_RELEASE_REPORT_SCHEMA_V1: &str =
     "iroha.kagemusha.v1.authenticated-release-report";
 const AUTHENTICATED_EXPERIMENTAL_RELEASE_REPORT_SCHEMA_V1: &str =
@@ -212,7 +212,7 @@ struct AuthenticateReleaseV1Args {
     /// SHA-256 pin for the exact authority-review projection bytes.
     #[arg(long, value_name = "LOWER_HEX")]
     authority_review_projection_sha256: String,
-    /// Canonical ABI23 c-jni native-artifact evidence manifest.
+    /// Canonical ABI24 c-jni native-artifact evidence manifest.
     #[arg(long, value_name = "PATH")]
     native_artifact_manifest: PathBuf,
     /// SHA-256 pin for the exact native-artifact manifest bytes.
@@ -475,19 +475,19 @@ fn authenticate_release_v1<T: Write>(
     let native_manifest_bytes = read_bounded_immutable_file(
         &args.native_artifact_manifest,
         NATIVE_ARTIFACT_MANIFEST_MAX_BYTES_V1,
-        "ABI23 c-jni native-artifact manifest",
+        "ABI24 c-jni native-artifact manifest",
     )?;
     let native_manifest_sha256 = parse_lower_sha256(
         &args.native_artifact_manifest_sha256,
-        "ABI23 c-jni native-artifact manifest SHA-256",
+        "ABI24 c-jni native-artifact manifest SHA-256",
     )?;
     if sha256(&native_manifest_bytes) != native_manifest_sha256 {
-        bail!("ABI23 c-jni native-artifact manifest does not match its SHA-256 pin");
+        bail!("ABI24 c-jni native-artifact manifest does not match its SHA-256 pin");
     }
     let native_manifest = validate_native_artifact_manifest_v1(&native_manifest_bytes)?;
     let native_artifact_sha256 = parse_lower_sha256(
         &native_manifest.artifact_sha256,
-        "ABI23 c-jni native artifact SHA-256",
+        "ABI24 c-jni native artifact SHA-256",
     )?;
     authenticate_native_artifact_bytes_v1(
         &args.native_artifact,
@@ -1634,30 +1634,30 @@ fn validate_native_artifact_manifest_v1(
     bytes: &[u8],
 ) -> color_eyre::Result<NativeArtifactManifestV1> {
     let value = norito::json::from_slice_value(bytes)
-        .map_err(|source| eyre!("invalid ABI23 c-jni native-artifact manifest JSON: {source}"))?;
+        .map_err(|source| eyre!("invalid ABI24 c-jni native-artifact manifest JSON: {source}"))?;
     if python_canonical_json_bytes(&value, false)? != bytes {
-        bail!("ABI23 c-jni native-artifact manifest JSON is not canonical");
+        bail!("ABI24 c-jni native-artifact manifest JSON is not canonical");
     }
     let manifest: NativeArtifactManifestV1 = norito::json::from_slice(bytes)
-        .map_err(|source| eyre!("invalid ABI23 c-jni native-artifact manifest: {source}"))?;
+        .map_err(|source| eyre!("invalid ABI24 c-jni native-artifact manifest: {source}"))?;
     if manifest.schema != NATIVE_ARTIFACT_SCHEMA_V1
         || manifest.sdk != "c-jni"
-        || manifest.bridge_abi_version != 23
+        || manifest.bridge_abi_version != 24
         || !manifest.source_tree_clean
         || !manifest.privacy_c_exports_inspected
         || manifest.artifact_size == 0
         || !valid_native_target(&manifest.target)
         || !is_lower_hex(&manifest.source_commit, 40)
     {
-        bail!("ABI23 c-jni native-artifact manifest identity is unsupported");
+        bail!("ABI24 c-jni native-artifact manifest identity is unsupported");
     }
     parse_lower_sha256(
         &manifest.artifact_sha256,
-        "ABI23 c-jni native artifact SHA-256",
+        "ABI24 c-jni native artifact SHA-256",
     )?;
     let source_manifest_sha256 = parse_lower_sha256(
         &manifest.workspace_source_manifest_sha256,
-        "ABI23 c-jni workspace source-manifest SHA-256",
+        "ABI24 c-jni workspace source-manifest SHA-256",
     )?;
     if source_manifest_sha256 == [0; 32]
         || !manifest
@@ -1671,7 +1671,7 @@ fn validate_native_artifact_manifest_v1(
             .map(String::as_str)
             .eq(REQUIRED_PRIVACY_C_EXPORTS_V1)
     {
-        bail!("ABI23 c-jni native-artifact manifest inventory is not exact");
+        bail!("ABI24 c-jni native-artifact manifest inventory is not exact");
     }
     Ok(manifest)
 }
@@ -1700,9 +1700,9 @@ fn authenticate_native_artifact_bytes_v1(
     expected_len: u64,
     expected_sha256: [u8; 32],
 ) -> color_eyre::Result<()> {
-    let observed = hash_immutable_file_exact(path, expected_len, "ABI23 c-jni native artifact")?;
+    let observed = hash_immutable_file_exact(path, expected_len, "ABI24 c-jni native artifact")?;
     if observed != expected_sha256 {
-        bail!("ABI23 c-jni native artifact bytes do not match the evidence manifest");
+        bail!("ABI24 c-jni native artifact bytes do not match the evidence manifest");
     }
     Ok(())
 }

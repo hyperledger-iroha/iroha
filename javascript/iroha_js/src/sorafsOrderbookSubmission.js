@@ -1,27 +1,10 @@
 import { Buffer } from "node:buffer";
 
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
+export { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
 
 export const SORAFS_ORDERBOOK_TRANSACTION_MAX_BYTES_V1 = 2 * 1024 * 1024;
 export const SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1 = 1024 * 1024;
-
-export class SorafsOrderbookSubmissionAmbiguousError extends Error {
-  constructor(route, identity, cause) {
-    super(
-      "SoraFS orderbook submission outcome is ambiguous after dispatch; "
-      + "do not resubmit automatically, reconcile the expected transaction identity",
-      cause === undefined ? undefined : { cause },
-    );
-    this.name = "SorafsOrderbookSubmissionAmbiguousError";
-    Object.defineProperties(this, {
-      route: { value: route, enumerable: true },
-      expectedIdentity: {
-        value: Object.freeze({ ...identity }),
-        enumerable: true,
-      },
-    });
-  }
-}
 
 const HASH_HEX_PATTERN = /^[0-9a-f]{63}[13579bdf]$/u;
 const RECEIPT_HASH_LITERAL_PATTERN = /^hash:[0-9A-F]{63}[13579BDF]#[0-9A-F]{4}$/u;

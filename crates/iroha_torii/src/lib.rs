@@ -46233,7 +46233,7 @@ impl Torii {
             })?;
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
-        let sorafs_admission = load_sorafs_admission(&config)?;
+        let sorafs_admission = load_sorafs_admission(&config, state.network_id_ref())?;
         #[cfg(feature = "app_api")]
         let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
             config.sorafs_por.enabled,
@@ -49760,6 +49760,7 @@ fn require_sorafs_potr_finalized_reader_inputs(
 }
 fn load_sorafs_admission(
     config: &iroha_config::parameters::actual::Torii,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<Option<Arc<sorafs::AdmissionRegistry>>, ToriiBuildError> {
     let Some(admission_cfg) = config.sorafs_discovery.admission.as_ref() else {
         if config.sorafs_discovery.discovery_enabled {
@@ -49800,8 +49801,12 @@ fn load_sorafs_admission(
         admission_cfg.signature_threshold.get(),
     )
     .map_err(|error| ToriiBuildError::invalid_configuration("sorafs.discovery.admission", error))?;
-    let registry = sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-        .map_err(|error| {
+    let registry = sorafs::AdmissionRegistry::load_from_dir(
+        &admission_cfg.envelopes_dir,
+        *network_id.as_bytes(),
+        policy,
+    )
+    .map_err(|error| {
         ToriiBuildError::component_initialization(
             "sorafs.discovery.admission.registry",
             format!(

@@ -43,6 +43,14 @@ class SumeragiV2MergeCarrierCommitment:
 
 
 @dataclass(frozen=True)
+class SumeragiV2TransactionTreeCommitment:
+    """Exact selective Merkle root and non-zero leaf count certified by a v2 QC."""
+
+    root: str
+    leaf_count: int
+
+
+@dataclass(frozen=True)
 class SumeragiV2ExecutionCommitment:
     """Exact deterministic execution commitment authenticated by a v2 QC."""
 
@@ -58,6 +66,8 @@ class SumeragiV2ExecutionCommitment:
     merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
     executed_block_wire_len: int
     executed_block_wire_hash: str
+    transaction_input_commitment: Optional[SumeragiV2TransactionTreeCommitment]
+    transaction_output_commitment: Optional[SumeragiV2TransactionTreeCommitment]
 
 
 @dataclass(frozen=True)

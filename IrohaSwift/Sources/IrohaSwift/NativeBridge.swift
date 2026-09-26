@@ -103,6 +103,7 @@ enum NoritoBridgeLoader {
         "connect_norito_bridge_abi_version",
         "connect_norito_free",
         "connect_norito_encode_transfer_signed_transaction",
+        "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg",
         "connect_norito_encode_transfer_instruction_box",
         "connect_norito_detached_transaction_scaffold_inspect_v1",
         "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
@@ -169,7 +170,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 23
+        return 24
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -740,7 +741,7 @@ public struct ParliamentTimedOvnCastingProofPageVerificationV1: Equatable, Senda
 
 /// Fail-closed errors from secret-local Parliament timed-OVN wallet operations.
 public enum ParliamentTimedOvnNativeWalletError: Error, Equatable, Sendable {
-    /// The exact ABI-23 bridge and all proof-gated V1 wallet symbols are unavailable.
+    /// The exact ABI-24 bridge and all proof-gated V1 wallet symbols are unavailable.
     case bridgeUnavailable
     /// The canonical proof response is empty or exceeds 8 MiB.
     case invalidCastingProof
@@ -756,99 +757,6 @@ public enum ParliamentTimedOvnNativeWalletError: Error, Equatable, Sendable {
     case nativeRejected
     /// Native code returned a public record with a noncanonical width.
     case invalidPublicRecord
-}
-
-enum NativeBridgeError: Error, Equatable {
-    case nullPointer
-    case utf8
-    case networkId
-    case authority
-    case assetDefinition
-    case destination
-    case quantity
-    case invalidTtl
-    case invalidNonce
-    case privateKey
-    case alloc
-    case hashOutBuffer
-    case invalidNoteCommitment
-    case confidentialPayload
-    case proofAttachment
-    case invalidNullifiers
-    case invalidRootHint
-    case kagemushaV1
-    case unsupportedAlgorithm
-    case metadataTarget
-    case metadataKey
-    case metadataValue
-    case governance
-    case hex
-    case accountList
-    case feePayment
-    case multisigSpec
-    case identifierReceipt
-    case accountOnboardingBody
-    case aliasInstruction
-    case verifyingKeyId
-    case zkAssetPolicy
-    case secpParse
-    case secpSign
-    case secpVerify
-    case invalidPrivacyRequest
-    case invalidPrivacyOutput
-    case bridgeUnavailable
-    case detachedTransactionScaffold
-    case detachedTransactionSignature
-    case canonicalJSON
-    case invalidDetachedTransactionOutput
-    case parliamentTimedOvnWallet
-    case unknown(Int32)
-
-    static func fromStatus(_ status: Int32) -> NativeBridgeError? {
-        if status == 0 { return nil }
-        switch status {
-        case -1: return .nullPointer
-        case -2: return .utf8
-        case -3: return .networkId
-        case -4: return .authority
-        case -5: return .assetDefinition
-        case -6: return .destination
-        case -7: return .quantity
-        case -8: return .invalidTtl
-        case -31: return .invalidNonce
-        case -9: return .privateKey
-        case -10: return .alloc
-        case -11: return .hashOutBuffer
-        case -14: return .invalidNoteCommitment
-        case -15: return .confidentialPayload
-        case -18: return .proofAttachment
-        case -19: return .invalidNullifiers
-        case -20: return .invalidRootHint
-        case -21: return .unsupportedAlgorithm
-        case -22: return .secpParse
-        case -23: return .secpSign
-        case -24: return .secpVerify
-        case -25: return .metadataTarget
-        case -26: return .metadataKey
-        case -27: return .metadataValue
-        case -28: return .governance
-        case -29: return .hex
-        case -30: return .accountList
-        case -34: return .feePayment
-        case -311: return .kagemushaV1
-        case -402: return .multisigSpec
-        case -406: return .identifierReceipt
-        case -408: return .accountOnboardingBody
-        case -409: return .aliasInstruction
-        case -403: return .verifyingKeyId
-        case -404: return .zkAssetPolicy
-        case -501: return .detachedTransactionScaffold
-        case -502: return .detachedTransactionSignature
-        case -503: return .canonicalJSON
-        case -505: return .parliamentTimedOvnWallet
-        default: return .unknown(status)
-        }
-    }
 }
 
 public final class NoritoNativeBridge: @unchecked Sendable {
@@ -898,7 +806,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     static let privacyExact12FixtureBundleMaxBytes = 2 * 1024 * 1024
     private static let detachedTransactionNativeMaximumBytes = 16 * 1024 * 1024
     private static let parliamentTimedOvnCastingProofMaximumBytes = 8 * 1024 * 1024
-    /// Exact ABI-23 page-verification result width.
+    /// Exact ABI-24 page-verification result width.
     public static let parliamentTimedOvnCastingProofPageVerificationBytes = 41
     private static let parliamentTimedOvnSeedBytes = 32
     private static let parliamentTimedOvnAuthorityMaximumBytes = 8 * 1024
@@ -998,8 +906,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UnsafePointer<CChar>?, UInt,
         UInt8,
-        UnsafePointer<CChar>?, UInt,
-        UInt8,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
@@ -1014,8 +920,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UInt64,
         UInt8,
         UnsafePointer<CChar>?, UInt,
-        UnsafePointer<CChar>?, UInt,
-        UInt8,
         UnsafePointer<CChar>?, UInt,
         UInt8,
         UnsafePointer<UInt8>?, UInt,
@@ -1232,6 +1136,24 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         UnsafePointer<CChar>?, UInt,
         UInt64,
         UInt8,
+        UnsafePointer<UInt8>?, UInt,
+        UnsafePointer<UInt8>?, UInt,
+        UInt8,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?,
+        UnsafeMutablePointer<UInt>?,
+        UnsafeMutablePointer<UInt8>?,
+        UInt
+    ) -> Int32
+    private typealias EncodeGovernanceUpdatePlainConvictionFn = @convention(c) (
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
+        UInt64,
+        UInt8,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UnsafePointer<CChar>?, UInt,
+        UInt64,
         UnsafePointer<UInt8>?, UInt,
         UnsafePointer<UInt8>?, UInt,
         UInt8,
@@ -1925,6 +1847,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private var encodeGovernanceProposeDeployWithAlgFn: EncodeGovernanceProposeDeployWithAlgFn? = nil
     private var encodeGovernanceCastPlainBallotFn: EncodeGovernanceCastPlainBallotFn? = nil
     private var encodeGovernanceCastPlainBallotWithAlgFn: EncodeGovernanceCastPlainBallotWithAlgFn? = nil
+    private var encodeGovernanceUpdatePlainConvictionFn: EncodeGovernanceUpdatePlainConvictionFn? = nil
     private var encodeGovernanceCastZkBallotFn: EncodeGovernanceCastZkBallotFn? = nil
     private var encodeGovernanceCastZkBallotWithAlgFn: EncodeGovernanceCastZkBallotWithAlgFn? = nil
     private var decodeSignedFn: DecodeSignedFn? = nil
@@ -2058,6 +1981,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
     private let encodeGovernanceProposeDeployWithAlgFn: Any? = nil
     private let encodeGovernanceCastPlainBallotFn: Any? = nil
     private let encodeGovernanceCastPlainBallotWithAlgFn: Any? = nil
+    private let encodeGovernanceUpdatePlainConvictionFn: Any? = nil
     private let encodeGovernanceCastZkBallotFn: Any? = nil
     private let encodeGovernanceCastZkBallotWithAlgFn: Any? = nil
     private let decodeSignedFn: Any? = nil
@@ -2264,7 +2188,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         }) else {
             self.loadedBridgeAbiVersion = nil
             NSLog(
-                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-23 exports"
+                "[NoritoNativeBridge] statically linked bridge is missing mandatory ABI-24 exports"
             )
             return
         }
@@ -2657,6 +2581,11 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                 self.encodeGovernanceCastPlainBallotWithAlgFn = unsafeBitCast(castPlainAlgSymbol, to: EncodeGovernanceCastPlainBallotWithAlgFn.self)
             } else {
                 self.encodeGovernanceCastPlainBallotWithAlgFn = nil
+            }
+            if let updatePlainSymbol = dlsym(handle, "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg") {
+                self.encodeGovernanceUpdatePlainConvictionFn = unsafeBitCast(updatePlainSymbol, to: EncodeGovernanceUpdatePlainConvictionFn.self)
+            } else {
+                self.encodeGovernanceUpdatePlainConvictionFn = nil
             }
             if let castZkSymbol = dlsym(handle, "connect_norito_encode_governance_cast_zk_ballot_signed_transaction") {
                 self.encodeGovernanceCastZkBallotFn = unsafeBitCast(castZkSymbol, to: EncodeGovernanceCastZkBallotFn.self)
@@ -3155,6 +3084,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeGovernanceProposeDeployWithAlgFn = nil
             self.encodeGovernanceCastPlainBallotFn = nil
             self.encodeGovernanceCastPlainBallotWithAlgFn = nil
+            self.encodeGovernanceUpdatePlainConvictionFn = nil
             self.encodeGovernanceCastZkBallotFn = nil
             self.encodeGovernanceCastZkBallotWithAlgFn = nil
             self.decodeSignedFn = nil
@@ -3386,7 +3316,7 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether the exact ABI-23 bridge exposes the complete proof-gated Parliament wallet.
+    /// Whether the exact ABI-24 bridge exposes the complete proof-gated Parliament wallet.
     public var isParliamentTimedOvnWalletAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
@@ -4723,7 +4653,6 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         ttlMs: UInt64?,
         assetDefinitionId: String,
         unshieldVerifyingKey: String?,
-        shieldVerifyingKey: String?,
         feePaymentJSON: Data,
         privateKey: Data,
         algorithm: SigningAlgorithm = .ed25519
@@ -4758,49 +4687,43 @@ public final class NoritoNativeBridge: @unchecked Sendable {
                             }
                             return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
                                 withOptionalCString(unshieldVerifyingKey) { unshieldPtr, unshieldLen, unshieldFlag in
-                                    withOptionalCString(shieldVerifyingKey) { shieldPtr, shieldLen, shieldFlag in
-                                            if useAlg, let encodeRegisterZkAssetWithAlgFn {
-                                                return encodeRegisterZkAssetWithAlgFn(
-                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
-                                                    authorityPtr, UInt(authority.utf8.count),
-                                                    creationTimeMs,
-                                                    ttlValue,
-                                                    ttlFlag,
-                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    unshieldPtr, unshieldLen,
-                                                    unshieldFlag,
-                                                    shieldPtr, shieldLen,
-                                                    shieldFlag,
-                                                    feePaymentPtr, UInt(feePaymentJSON.count),
-                                                    keyBase, UInt(privateKey.count),
-                                                    algorithmRaw,
-                                                    signedPtrPtr,
-                                                    signedLenPtr,
-                                                    hashPtr,
-                                                    hashLength
-                                                )
-                                            } else if let encodeRegisterZkAssetFn {
-                                                return encodeRegisterZkAssetFn(
-                                                    networkIdPtr, UInt(networkId.literal.utf8.count),
-                                                    authorityPtr, UInt(authority.utf8.count),
-                                                    creationTimeMs,
-                                                    ttlValue,
-                                                    ttlFlag,
-                                                    assetPtr, UInt(assetDefinitionId.utf8.count),
-                                                    unshieldPtr, unshieldLen,
-                                                    unshieldFlag,
-                                                    shieldPtr, shieldLen,
-                                                    shieldFlag,
-                                                    feePaymentPtr, UInt(feePaymentJSON.count),
-                                                    keyBase, UInt(privateKey.count),
-                                                    signedPtrPtr,
-                                                    signedLenPtr,
-                                                    hashPtr,
-                                                    hashLength
-                                                )
-                                            } else {
-                                                return -1
-                                            }
+                                    if useAlg, let encodeRegisterZkAssetWithAlgFn {
+                                        return encodeRegisterZkAssetWithAlgFn(
+                                            networkIdPtr, UInt(networkId.literal.utf8.count),
+                                            authorityPtr, UInt(authority.utf8.count),
+                                            creationTimeMs,
+                                            ttlValue,
+                                            ttlFlag,
+                                            assetPtr, UInt(assetDefinitionId.utf8.count),
+                                            unshieldPtr, unshieldLen,
+                                            unshieldFlag,
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
+                                            keyBase, UInt(privateKey.count),
+                                            algorithmRaw,
+                                            signedPtrPtr,
+                                            signedLenPtr,
+                                            hashPtr,
+                                            hashLength
+                                        )
+                                    } else if let encodeRegisterZkAssetFn {
+                                        return encodeRegisterZkAssetFn(
+                                            networkIdPtr, UInt(networkId.literal.utf8.count),
+                                            authorityPtr, UInt(authority.utf8.count),
+                                            creationTimeMs,
+                                            ttlValue,
+                                            ttlFlag,
+                                            assetPtr, UInt(assetDefinitionId.utf8.count),
+                                            unshieldPtr, unshieldLen,
+                                            unshieldFlag,
+                                            feePaymentPtr, UInt(feePaymentJSON.count),
+                                            keyBase, UInt(privateKey.count),
+                                            signedPtrPtr,
+                                            signedLenPtr,
+                                            hashPtr,
+                                            hashLength
+                                        )
+                                    } else {
+                                        return -1
                                     }
                                 }
                             }
@@ -5732,6 +5655,88 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         freeFn(signedPtr)
         let hashData = Data(hashBytes)
         return NativeSignedTransaction(signedBytes: signedData, hash: hashData)
+        #else
+        return nil
+        #endif
+    }
+
+    func encodeGovernanceUpdatePlainConviction(
+        networkId: NetworkId,
+        authority: String,
+        creationTimeMs: UInt64,
+        ttlMs: UInt64?,
+        referendumId: String,
+        owner: String,
+        amount: String,
+        durationBlocks: UInt64,
+        feePaymentJSON: Data,
+        privateKey: Data,
+        algorithm: SigningAlgorithm
+    ) throws -> NativeSignedTransaction? {
+        guard !feePaymentJSON.isEmpty else { throw NativeBridgeError.feePayment }
+        #if canImport(Darwin)
+        guard let freeFn, let encodeGovernanceUpdatePlainConvictionFn else { return nil }
+        let feePaymentBytes = feePaymentJSON as NSData
+        let feePaymentPtr = feePaymentBytes.bytes.assumingMemoryBound(to: UInt8.self)
+        let ttlValue = ttlMs ?? 0
+        let ttlFlag: UInt8 = ttlMs == nil ? 0 : 1
+        var signedPtr: UnsafeMutablePointer<UInt8>? = nil
+        var signedLen: UInt = 0
+        var hashBytes = [UInt8](repeating: 0, count: 32)
+        let hashLength = UInt(hashBytes.count)
+
+        let status = try withAuthorityChainDiscriminant(authority: authority) {
+            networkId.literal.withCString { networkIdPtr in
+                authority.withCString { authorityPtr in
+                    referendumId.withCString { referendumPtr in
+                        owner.withCString { ownerPtr in
+                            amount.withCString { amountPtr in
+                                privateKey.withUnsafeBytes { keyBuffer -> Int32 in
+                                    guard let keyPtr = keyBuffer.bindMemory(to: UInt8.self).baseAddress else {
+                                        return -1
+                                    }
+                                    return hashBytes.withUnsafeMutableBufferPointer { hashBuffer -> Int32 in
+                                        guard let hashPtr = hashBuffer.baseAddress else {
+                                            return -1
+                                        }
+                                        return withSignedOutputs(signedPtr: &signedPtr, signedLen: &signedLen) { signedPtrPtr, signedLenPtr in
+                                            encodeGovernanceUpdatePlainConvictionFn(
+                                                networkIdPtr, UInt(networkId.literal.utf8.count),
+                                                authorityPtr, UInt(authority.utf8.count),
+                                                creationTimeMs,
+                                                ttlValue,
+                                                ttlFlag,
+                                                referendumPtr, UInt(referendumId.utf8.count),
+                                                ownerPtr, UInt(owner.utf8.count),
+                                                amountPtr, UInt(amount.utf8.count),
+                                                durationBlocks,
+                                                feePaymentPtr, UInt(feePaymentJSON.count),
+                                                keyPtr, UInt(privateKey.count),
+                                                algorithm.noritoDiscriminant,
+                                                signedPtrPtr,
+                                                signedLenPtr,
+                                                hashPtr,
+                                                hashLength
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if status != 0 {
+            if let signedPtr { freeFn(signedPtr) }
+            try throwOnStatus(status)
+            return nil
+        }
+        guard let signedPtr else { return nil }
+        let signedData = Data(bytes: signedPtr, count: Int(signedLen))
+        freeFn(signedPtr)
+        return NativeSignedTransaction(signedBytes: signedData, hash: Data(hashBytes))
         #else
         return nil
         #endif

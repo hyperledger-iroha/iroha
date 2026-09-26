@@ -405,7 +405,7 @@ mod tests {
     }
     #[test]
     fn policy_denies_missing_manifest_envelope() {
-        let admission = Some(Arc::new(AdmissionRegistry::empty()));
+        let admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         let policy = GatewayPolicy::new_default(admission);
         let client = ClientFingerprint::from_identifier("client");
         let provider = sample_provider_id();
@@ -420,7 +420,7 @@ mod tests {
     }
     #[test]
     fn policy_denies_unknown_provider() {
-        let admission = Some(Arc::new(AdmissionRegistry::empty()));
+        let admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         let policy = GatewayPolicy::new_default(admission);
         let client = ClientFingerprint::from_identifier("client");
         let other_provider = [0x55; 32];
@@ -507,7 +507,7 @@ mod tests {
         };
         let policy = GatewayPolicy::new(
             config,
-            Some(Arc::new(AdmissionRegistry::empty())),
+            Some(Arc::new(AdmissionRegistry::empty([0xA1; 32]))),
             GatewayRateLimiter::new(config.rate_limit),
         );
         let client = ClientFingerprint::from_identifier("authoritative-wsv-client");

@@ -6,7 +6,7 @@ import java.nio.charset.StandardCharsets;
 public final class AtomicPrivateSettlementNativeResponseVerifierV1
     implements AtomicPrivateSettlementResponseVerifierV1 {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  private static final int REQUIRED_BRIDGE_ABI_VERSION = 23;
+  private static final int REQUIRED_BRIDGE_ABI_VERSION = 24;
   private static final int HASH_BYTES = 32;
   private static final int RESPONSE_MAX_BYTES = 32 * 1024 * 1024;
   private static final int APPROVAL_REQUEST_MAX_BYTES = 1024 * 1024;

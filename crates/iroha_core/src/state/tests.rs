@@ -45482,6 +45482,234 @@ fn governance_lock_index_rebuild_rejects_invalid_authoritative_records_fail_atom
 }
 
 #[test]
+fn standalone_election_restore_rejects_invalid_current_and_previous_state_atomically() {
+    let valid = ElectionState {
+        options: 2,
+        start_ts: 10,
+        end_ts: 20,
+        finalized: true,
+        tally: vec![u128::MAX, 0],
+        ..ElectionState::default()
+    };
+    let sentinel = BTreeMap::from([(
+        77_u64,
+        BTreeSet::from([("retained-index-entry".to_owned(), ALICE_ID.clone())]),
+    )]);
+    let ballot_entry = |index: usize| {
+        let mut nullifier = [0_u8; 32];
+        nullifier[..8].copy_from_slice(
+            &u64::try_from(index)
+                .expect("test ballot index fits u64")
+                .to_le_bytes(),
+        );
+        StandaloneBallotCorpusEntryV1 {
+            nullifier,
+            commitment: [7_u8; 32],
+        }
+    };
+    let oversized_corpus = (0..=MAX_STANDALONE_ELECTION_BALLOTS_V1)
+        .map(|index| ballot_entry(index))
+        .collect::<Vec<_>>();
+    let mut changed_commitment_same_nullifier = ballot_entry(1);
+    changed_commitment_same_nullifier.commitment = [8_u8; 32];
+    for (election_id, state, expected) in [
+        (
+            "invalid selector",
+            valid.clone(),
+            "invalid V1 election selector",
+        ),
+        (
+            "election-one-option",
+            ElectionState {
+                options: 1,
+                tally: vec![0],
+                ..valid.clone()
+            },
+            "below the minimum",
+        ),
+        (
+            "election-too-many-options",
+            ElectionState {
+                options: 65,
+                tally: vec![0; 65],
+                ..valid.clone()
+            },
+            "exceed the V1 maximum",
+        ),
+        (
+            "election-tally-mismatch",
+            ElectionState {
+                tally: vec![0],
+                ..valid.clone()
+            },
+            "does not match option count",
+        ),
+        (
+            "election-reversed-window",
+            ElectionState {
+                end_ts: 9,
+                ..valid.clone()
+            },
+            "end_ts precedes start_ts",
+        ),
+        (
+            "election-overflow",
+            ElectionState {
+                tally: vec![u128::MAX, 1],
+                ..valid.clone()
+            },
+            "tally total exceeds u128",
+        ),
+        (
+            "election-unfinalized-nonzero",
+            ElectionState {
+                finalized: false,
+                ..valid.clone()
+            },
+            "unfinalized tally is nonzero",
+        ),
+        (
+            "election-duplicate-nullifier",
+            ElectionState {
+                accepted_ballots: vec![ballot_entry(1), changed_commitment_same_nullifier],
+                ..valid.clone()
+            },
+            "duplicate ballot nullifier in accepted corpus",
+        ),
+        (
+            "election-too-many-ballots",
+            ElectionState {
+                accepted_ballots: oversized_corpus.clone(),
+                ..valid.clone()
+            },
+            "ballot corpus exceeds the V1 maximum",
+        ),
+    ] {
+        let mut world = World::new();
+        world.governance_lock_expiry_index = sentinel.clone().into_iter().collect();
+        world.elections.insert(election_id.to_owned(), state);
+        let error = world
+            .rebuild_governance_read_indexes()
+            .expect_err("invalid current election must fail restore");
+        assert!(
+            error.contains(expected),
+            "unexpected election error: {error}"
+        );
+        assert_eq!(
+            world
+                .governance_lock_expiry_index
+                .view()
+                .iter()
+                .map(|(height, entries)| (*height, entries.clone()))
+                .collect::<BTreeMap<_, _>>(),
+            sentinel,
+            "failed election validation must retain the previously published index"
+        );
+    }
+
+    for (previous, expected, expected_options) in [
+        (
+            ElectionState {
+                options: 1,
+                tally: vec![0],
+                ..valid.clone()
+            },
+            "below the minimum",
+            1,
+        ),
+        (
+            ElectionState {
+                finalized: false,
+                ..valid.clone()
+            },
+            "unfinalized tally is nonzero",
+            2,
+        ),
+        (
+            ElectionState {
+                accepted_ballots: vec![ballot_entry(1), changed_commitment_same_nullifier],
+                ..valid.clone()
+            },
+            "duplicate ballot nullifier in accepted corpus",
+            2,
+        ),
+        (
+            ElectionState {
+                accepted_ballots: oversized_corpus.clone(),
+                ..valid.clone()
+            },
+            "ballot corpus exceeds the V1 maximum",
+            2,
+        ),
+    ] {
+        let expected_previous = previous.clone();
+        let mut world = World::new();
+        world.governance_lock_expiry_index = sentinel.clone().into_iter().collect();
+        world
+            .elections
+            .insert("election-previous".to_owned(), previous);
+        {
+            let mut elections = world.elections.block();
+            elections.insert("election-previous".to_owned(), valid.clone());
+            elections.commit();
+        }
+        let error = world
+            .rebuild_governance_read_indexes()
+            .expect_err("invalid previous election must fail restore");
+        assert!(
+            error.contains("previous election") && error.contains(expected),
+            "unexpected previous-election error: {error}"
+        );
+        assert_eq!(
+            world
+                .governance_lock_expiry_index
+                .view()
+                .iter()
+                .map(|(height, entries)| (*height, entries.clone()))
+                .collect::<BTreeMap<_, _>>(),
+            sentinel,
+            "invalid previous election must not publish derived indexes"
+        );
+        let rollback = world.elections.block_and_revert();
+        let retained = rollback
+            .get("election-previous")
+            .expect("retained previous election");
+        assert_eq!(
+            retained.options, expected_options,
+            "failed validation must retain the authoritative rollback journal"
+        );
+        assert_eq!(
+            retained.accepted_ballots, expected_previous.accepted_ballots,
+            "failed validation must retain the previous ordered ballot corpus"
+        );
+    }
+
+    let mut world = World::new();
+    world.elections.insert(
+        "election-pending".to_owned(),
+        ElectionState {
+            finalized: false,
+            tally: vec![0, 0],
+            ..valid.clone()
+        },
+    );
+    world.elections.insert(
+        "election-full-corpus".to_owned(),
+        ElectionState {
+            accepted_ballots: oversized_corpus
+                .into_iter()
+                .take(MAX_STANDALONE_ELECTION_BALLOTS_V1)
+                .collect(),
+            ..valid.clone()
+        },
+    );
+    world.elections.insert("election-max".to_owned(), valid);
+    world
+        .rebuild_governance_read_indexes()
+        .expect("a full ballot corpus and u128::MAX finalized totals are valid");
+}
+
+#[test]
 fn governance_lock_restore_preserves_fractional_zk_bonds() {
     let referendum_id = "restore-fractional-zk-lock".to_owned();
     let mut record = indexed_governance_lock(ALICE_ID.clone(), 10);

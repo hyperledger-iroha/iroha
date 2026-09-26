@@ -674,6 +674,7 @@ fn bind_source(
     route: RoutingDecision,
 ) {
     transaction.current_entrypoint_index = Some(u64::from(index));
+    transaction.current_network_entrypoint_hash = Some(input.hash());
     transaction.tx_call_hash = Some(Hash::from(input.execution_call_hash()));
     transaction.current_tx_hash = signed_source(input).map(|signed| signed.hash());
     transaction.current_lane_id = Some(route.lane_id);
@@ -688,6 +689,7 @@ fn require_source(
     route: RoutingDecision,
 ) -> Result<(), String> {
     if transaction.current_entrypoint_index != Some(u64::from(index))
+        || transaction.current_network_entrypoint_hash != Some(input.hash())
         || transaction.tx_call_hash != Some(Hash::from(input.execution_call_hash()))
         || transaction.current_tx_hash != signed_source(input).map(|signed| signed.hash())
         || transaction.current_lane_id != Some(route.lane_id)
@@ -717,4 +719,85 @@ fn require_rejection_fragment(
         return Err("rejection settlement retained rejected business capture".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod source_binding_tests {
+    use super::*;
+    use crate::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        account::AccountId,
+        block::BlockHeader,
+        isi::Log,
+        transaction::{
+            FeePaymentIntent, TransactionBuilder,
+            signed::{SealedTransactionReveal, compute_sealed_transaction_commitment},
+        },
+    };
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn binding_keeps_outer_reveal_identity_distinct_from_inner_call() {
+        let key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519).unwrap();
+        let authority = AccountId::new(key.public_key().clone());
+        let state = State::new_for_testing(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let signed = TransactionBuilder::new(
+            state.network_id,
+            authority,
+            FeePaymentIntent::authority(vec![], None),
+        )
+        .with_instructions([Log::new(
+            iroha_data_model::Level::INFO,
+            "source identity".to_owned(),
+        )])
+        .sign(key.private_key());
+        let external = TransactionEntrypoint::External(signed.clone());
+        let salt = [0x92; 32];
+        let commitment = compute_sealed_transaction_commitment(&state.network_id, &signed, salt, 9);
+        let reveal = TransactionEntrypoint::SealedReveal(SealedTransactionReveal::new(
+            commitment, signed, salt,
+        ));
+        assert_ne!(
+            Hash::from(reveal.hash()),
+            Hash::from(reveal.execution_call_hash())
+        );
+
+        let mut block = state.block(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            1,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        let route = RoutingDecision::default();
+        bind_source(&mut transaction, &external, 0, route);
+        assert_eq!(
+            transaction.current_network_entrypoint_hash,
+            Some(external.hash())
+        );
+        require_source(&transaction, &external, 0, route).unwrap();
+        transaction.current_network_entrypoint_hash = None;
+        assert!(require_source(&transaction, &external, 0, route).is_err());
+
+        bind_source(&mut transaction, &reveal, 1, route);
+        assert_eq!(
+            transaction.current_network_entrypoint_hash,
+            Some(reveal.hash())
+        );
+        assert_eq!(
+            transaction.tx_call_hash,
+            Some(Hash::from(reveal.execution_call_hash()))
+        );
+        require_source(&transaction, &reveal, 1, route).unwrap();
+    }
 }

@@ -91,52 +91,45 @@ fn exact_same_epoch_descendants_authenticate_through_the_last_nonboundary_height
 }
 
 #[test]
-fn first_epoch_successor_consumes_the_signed_genesis_boundary_snapshot() {
-    let boundary = sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
-        &block(1, None),
-        None,
-        SccpFinalityFixtureEpochSchedule::GenesisBoundary,
-    );
-    let boundary_artifact = &boundary.proof().finality_artifact;
-    let snapshot = boundary_artifact
-        .height_context
+fn exact_epoch_one_successor_inherits_certified_boundary_and_parent_commit() {
+    let parent = sccp_finalize_taira_epoch_boundary_test_fixture_v1(&block(1, None));
+    let parent_artifact = &parent.proof().finality_artifact;
+    let parent_context = &parent_artifact.height_context;
+    let snapshot = parent_context
         .next_epoch_snapshot
         .as_ref()
-        .expect("signed genesis boundary selects the next epoch");
-    assert_eq!(boundary_artifact.height_context.epoch, 0);
-    assert_eq!(boundary_artifact.height_context.epoch_end_height, 1);
+        .expect("height-one boundary certifies the next epoch");
+    assert_eq!(parent_context.epoch, 0);
+    assert_eq!(parent_context.epoch_end_height, 1);
     assert_eq!(snapshot.epoch, 1);
     assert_eq!(snapshot.epoch_end_height, 10);
     assert_eq!(
         snapshot.kagemusha_mint_finality_authorization.first_height,
         2
     );
-    boundary_artifact
+    parent_artifact
         .verify()
         .expect("boundary CommitQC verifies");
 
-    let successor = sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
-        &block(2, Some(&boundary)),
-        Some(&boundary),
-        SccpFinalityFixtureEpochSchedule::GenesisBoundary,
-    );
-    let successor_artifact = &successor.proof().finality_artifact;
-    assert_eq!(successor_artifact.height_context.epoch, 1);
-    assert_eq!(successor_artifact.height_context.epoch_end_height, 10);
+    let child = sccp_finalize_taira_block_test_fixture_v1(&block(2, Some(&parent)), Some(&parent));
+    let context = &child.proof().finality_artifact.height_context;
+    assert_eq!(context.epoch, snapshot.epoch);
+    assert_eq!(context.epoch_end_height, snapshot.epoch_end_height);
     assert_eq!(
-        successor_artifact.height_context.parent_commit_qc.as_ref(),
-        Some(&boundary_artifact.commit_qc),
+        context.kagemusha_mint_finality_authorization,
+        snapshot.kagemusha_mint_finality_authorization
     );
     assert_eq!(
-        successor_artifact
-            .height_context
-            .kagemusha_mint_finality_authorization,
-        snapshot.kagemusha_mint_finality_authorization,
+        context.parent_commit_qc.as_ref(),
+        Some(&parent_artifact.commit_qc)
     );
-    assert_eq!(successor_artifact.height_context.roster, snapshot.roster);
-    successor_artifact
+    assert_eq!(context.roster, snapshot.roster);
+    child
+        .proof()
+        .finality_artifact
         .verify()
         .expect("successor CommitQC verifies");
+    assert_exact_finalized_block_fixture(&child);
 }
 
 #[test]

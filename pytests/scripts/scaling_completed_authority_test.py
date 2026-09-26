@@ -7,7 +7,9 @@ from types import SimpleNamespace
 
 import pytest
 from scaling_fixed_trial_fixture import trial_setup, ready_setup
+from scaling_replayed_workload import ReplayedWorkloadError
 import scaling_completed_authority as authority
+import scaling_native_facts_inputs as native_inputs
 from scaling_public_files import RunPublicFiles
 
 
@@ -243,6 +245,73 @@ def test_original_replay_reconciliation_rejects_all_join_and_schedule_changes(tr
     finally:
         for owner in owners: owner.close(token)
         captures.close(); public.close()
+
+
+def test_completed_owner_rejects_offer_beyond_original_journal_lag_without_digest_drift(trial_setup, monkeypatch):
+    trial, result, public = complete(trial_setup)
+    source = authority._source(trial)
+    token = object()
+    captures = transfer(trial, result, public)
+    _state_source(trial, source, monkeypatch)
+    owners = []
+    try:
+        replay = result.resources
+        first_measurement = trial._proof_plan.warmup_requests
+        request = replay.signed_requests[first_measurement]
+        application = replay.applied_requests[first_measurement]
+        lag = trial._plan.load.submission_lag_ns
+        late_offer = request.plan.scheduled_offset_ns + lag + 1
+        assert application.offer_offset_ns <= request.plan.scheduled_offset_ns + lag
+        assert late_offer < trial._plan.load.measurement_ns
+
+        valid = authority.CompletedRunAuthority.admit(trial, token); owners.append(valid)
+        valid.commit(token, public, captures)
+        assert valid.reconcile(token, replay).requests[first_measurement].offer_offset_ns == application.offer_offset_ns
+
+        applications = list(replay.applied_requests)
+        applications[first_measurement] = replace(application, offer_offset_ns=late_offer)
+        changed = replace(replay, applied_requests=tuple(applications))
+        assert changed.journal_sha256 == replay.journal_sha256
+        assert changed.capture_bytes == replay.capture_bytes
+        with pytest.raises(ReplayedWorkloadError):
+            authority.build_replay_plan(changed, trial._generated.inputs,
+                                        trial._journal_plan(), result.stopped_tip.reader)
+
+        rejected = authority.CompletedRunAuthority.admit(trial, token); owners.append(rejected)
+        rejected.commit(token, public, captures)
+        with pytest.raises(authority.CompletedAuthorityError):
+            rejected.reconcile(token, changed)
+        assert rejected._phase == 'failed'
+        with pytest.raises(authority.CompletedAuthorityError):
+            rejected.reconcile(token, replay)
+    finally:
+        for owner in owners: owner.close(token)
+        captures.close(); public.close()
+
+
+@pytest.mark.parametrize('replacement', [False, 0.0])
+def test_completed_owner_rejects_equal_valued_mistyped_original_journal_lag(
+    trial_setup, replacement,
+):
+    """A numerically equal lag cannot replace the original exact integer input."""
+    trial, result, public = complete(trial_setup)
+    original = trial._plan
+    accounts = tuple(row.account_id for row in result.generation.accounts)
+    try:
+        assert original.load.submission_lag_ns == replacement == 0
+        trial._plan = replace(
+            original,
+            load=replace(original.load, submission_lag_ns=replacement),
+        )
+        journal = trial._journal_plan()
+        assert type(journal.submission_lag_bound_ns) is type(replacement)
+        with pytest.raises(native_inputs.FactsInputError, match='native_facts_input_invalid'):
+            native_inputs.journal_snapshot(journal, accounts)
+        with pytest.raises(authority.CompletedAuthorityError):
+            authority.CompletedRunAuthority.admit(trial, object())
+    finally:
+        trial._plan = original
+        public.close()
 
 
 def test_all_thirteen_physical_bindings_and_capture_census_are_required(trial_setup, monkeypatch):

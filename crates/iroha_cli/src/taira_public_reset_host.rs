@@ -11991,11 +11991,11 @@ fn shared_drained_mesh_height(statuses: &[ValidatorMeshStatus]) -> Option<u64> {
     .then_some(first.blocks)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ValidatorMeshObservation {
     NotObserved,
-    Status(ValidatorMeshStatus),
-    Http(u16),
+    Status(Box<ValidatorMeshStatus>),
+    Http(Box<u16>),
     ConnectionFailed,
     TimedOut,
 }
@@ -12068,15 +12068,15 @@ fn wait_for_validator_mesh(
                         body.len() <= 64 * 1024,
                         "validator[{index}] /status exceeds mesh response bound"
                     );
-                    ValidatorMeshObservation::Status(
+                    ValidatorMeshObservation::Status(Box::new(
                         parse_validator_mesh_status(&body)
                             .wrap_err_with(|| format!("validator[{index}] /status is invalid"))?,
-                    )
+                    ))
                 }
                 Ok(response)
                     if matches!(response.status().as_u16(), 408 | 429 | 502 | 503 | 504) =>
                 {
-                    ValidatorMeshObservation::Http(response.status().as_u16())
+                    ValidatorMeshObservation::Http(Box::new(response.status().as_u16()))
                 }
                 Ok(response) => {
                     return Err(eyre!(
@@ -12092,7 +12092,7 @@ fn wait_for_validator_mesh(
         let statuses = last
             .iter()
             .filter_map(|entry| match entry {
-                ValidatorMeshObservation::Status(status) => Some(*status),
+                ValidatorMeshObservation::Status(status) => Some(**status),
                 _ => None,
             })
             .collect::<Vec<_>>();

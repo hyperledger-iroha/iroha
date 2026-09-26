@@ -220,7 +220,7 @@ fn deep_quantity_descriptor_binds_actual_protocol_and_preserves_value_relations(
         descriptor.fri_lengths,
         [8_388_608, 524_288, 32_768, 4_096, 512, 128]
     );
-    assert_eq!(descriptor.fri_degrees, [65_536, 4_096, 256, 32, 4, 1]);
+    assert_eq!(descriptor.fri_degrees, [131_072, 8_192, 512, 64, 8, 2]);
     assert_eq!(descriptor.query_count, 64);
     assert_eq!(descriptor.query_candidates, 74);
     assert_eq!(

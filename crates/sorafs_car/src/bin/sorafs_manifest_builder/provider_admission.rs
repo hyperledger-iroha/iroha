@@ -293,6 +293,15 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
             .split_once('=')
             .ok_or_else(|| format!("expected key=value option, got: {arg}"))?;
         match key {
+            "--network-id" => opts.network_id = Some(parse_hex_array(value)?),
+            "--policy-id" => opts.policy_id = Some(parse_hex_array(value)?),
+            "--policy-revision" => opts.policy_revision = Some(parse_u64(value)?),
+            "--policy-digest" => opts.policy_digest = Some(parse_hex_array(value)?),
+            "--admission-revision" => opts.admission_revision = Some(parse_u64(value)?),
+            "--expected-current-event-digest" => {
+                opts.expected_current_event_digest = Some(parse_hex_array(value)?);
+            }
+            "--previous-envelope" => opts.previous_envelope = Some(PathBuf::from(value)),
             "--proposal" => opts.proposal_path = Some(PathBuf::from(value)),
             "--advert" => opts.advert_path = Some(PathBuf::from(value)),
             "--advert-body" => opts.advert_body_path = Some(PathBuf::from(value)),
@@ -330,6 +339,13 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
         }
     }
     let SignOptions {
+        network_id,
+        policy_id,
+        policy_revision,
+        policy_digest,
+        admission_revision,
+        expected_current_event_digest,
+        previous_envelope,
         proposal_path,
         advert_path,
         advert_body_path,
@@ -342,6 +358,14 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
         envelope_out,
         json_out,
     } = opts;
+    let network_id = network_id.ok_or_else(|| "missing option --network-id".to_string())?;
+    let policy_id = policy_id.ok_or_else(|| "missing option --policy-id".to_string())?;
+    let policy_revision =
+        policy_revision.ok_or_else(|| "missing option --policy-revision".to_string())?;
+    let policy_digest =
+        policy_digest.ok_or_else(|| "missing option --policy-digest".to_string())?;
+    let admission_revision =
+        admission_revision.ok_or_else(|| "missing option --admission-revision".to_string())?;
     let proposal_path = proposal_path.ok_or_else(|| "missing option --proposal".to_string())?;
     let proposal_bytes = read_file_bytes_path(&proposal_path)?;
     let proposal: ProviderAdmissionProposalV1 = decode_from_bytes(&proposal_bytes)
@@ -357,6 +381,9 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
     advert
         .validate_with_body(advert.issued_at)
         .map_err(|err| format!("advert validation failed: {err}"))?;
+    if advert.network_id != network_id {
+        return Err("signed advert network id differs from --network-id".into());
+    }
     if let Some(body_path) = advert_body_path.as_ref() {
         let body_bytes =
             read_file_bytes_path_bounded(body_path, PROVIDER_ADVERT_MAX_CANONICAL_BYTES_V1)?;
@@ -376,6 +403,12 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
         retention_epoch.ok_or_else(|| "missing option --retention-epoch".to_string())?;
     let mut envelope = ProviderAdmissionEnvelopeV1 {
         version: ENVELOPE_VERSION,
+        network_id,
+        policy_id,
+        policy_revision,
+        policy_digest,
+        admission_revision,
+        expected_current_event_digest,
         proposal,
         proposal_digest,
         advert_body: advert_body.clone(),
@@ -402,8 +435,33 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
     }
     signatures.sort_unstable_by_key(|signature| signature.signer);
     envelope.council_signatures = signatures.clone();
-    let record = AdmissionRecord::new_untrusted_signers(envelope.clone())
-        .map_err(|err| format!("envelope validation failed: {err}"))?;
+    let record = if admission_revision == 1 {
+        if previous_envelope.is_some() {
+            return Err("initial admission must not provide --previous-envelope".into());
+        }
+        AdmissionRecord::new_untrusted_signers(envelope.clone())
+            .map_err(|err| format!("envelope validation failed: {err}"))?
+    } else {
+        let previous_path = previous_envelope
+            .ok_or_else(|| "renewal signing requires --previous-envelope".to_string())?;
+        let previous_bytes = read_file_bytes_path(&previous_path)?;
+        let previous_envelope: ProviderAdmissionEnvelopeV1 = decode_from_bytes(&previous_bytes)
+            .map_err(|err| format!("failed to decode previous envelope: {err}"))?;
+        let previous_record = AdmissionRecord::new_untrusted_signers(previous_envelope)
+            .map_err(|err| format!("previous envelope validation failed: {err}"))?;
+        let renewal = ProviderAdmissionRenewalV1 {
+            version: RENEWAL_VERSION,
+            provider_id: envelope.proposal.provider_id,
+            previous_envelope_digest: *previous_record.envelope_digest(),
+            envelope_digest: compute_envelope_digest(&envelope)
+                .map_err(|err| format!("failed to compute renewal envelope digest: {err}"))?,
+            envelope: envelope.clone(),
+            notes: None,
+        };
+        previous_record
+            .apply_renewal_untrusted_signers(&renewal)
+            .map_err(|err| format!("renewal envelope validation failed: {err}"))?
+    };
     verify_advert_against_record(&advert, &record)
         .map_err(|err| format!("advert validation failed: {err}"))?;
     let envelope_bytes =
@@ -413,6 +471,23 @@ fn run_sign(args: Vec<String>) -> Result<(), String> {
     }
     let mut map = Map::new();
     map.insert("version".into(), Value::from(ENVELOPE_VERSION));
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(encode_hex(&network_id)),
+    );
+    map.insert("policy_id_hex".into(), Value::from(encode_hex(&policy_id)));
+    map.insert("policy_revision".into(), Value::from(policy_revision));
+    map.insert(
+        "policy_digest_hex".into(),
+        Value::from(encode_hex(&policy_digest)),
+    );
+    map.insert("admission_revision".into(), Value::from(admission_revision));
+    if let Some(predecessor) = expected_current_event_digest {
+        map.insert(
+            "expected_current_event_digest_hex".into(),
+            Value::from(encode_hex(&predecessor)),
+        );
+    }
     map.insert(
         "proposal_digest_hex".into(),
         Value::from(encode_hex(&envelope.proposal_digest)),
@@ -462,6 +537,7 @@ fn run_verify(args: Vec<String>) -> Result<(), String> {
             .split_once('=')
             .ok_or_else(|| format!("expected key=value option, got: {arg}"))?;
         match key {
+            "--network-id" => opts.network_id = Some(parse_hex_array(value)?),
             "--envelope" => opts.envelope_path = Some(PathBuf::from(value)),
             "--proposal" => opts.proposal_path = Some(PathBuf::from(value)),
             "--advert" => opts.advert_path = Some(PathBuf::from(value)),
@@ -495,6 +571,12 @@ fn run_verify(args: Vec<String>) -> Result<(), String> {
     let envelope_bytes = read_file_bytes_path(&envelope_path)?;
     let envelope: ProviderAdmissionEnvelopeV1 = decode_from_bytes(&envelope_bytes)
         .map_err(|err| format!("failed to decode envelope: {err}"))?;
+    let network_id = opts
+        .network_id
+        .ok_or_else(|| "missing option --network-id".to_string())?;
+    if envelope.network_id != network_id {
+        return Err("envelope network id differs from --network-id".into());
+    }
     let record = AdmissionRecord::new(envelope.clone(), &policy)
         .map_err(|err| format!("envelope validation failed: {err}"))?;
     let mut proposal_match = None;
@@ -529,6 +611,10 @@ fn run_verify(args: Vec<String>) -> Result<(), String> {
     let trusted_signatures_verified = true;
     let mut map = Map::new();
     map.insert("version".into(), Value::from(ENVELOPE_VERSION));
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(encode_hex(&network_id)),
+    );
     map.insert(
         "proposal_digest_hex".into(),
         Value::from(encode_hex(&envelope.proposal_digest)),
@@ -629,6 +715,19 @@ fn run_renewal(args: Vec<String>) -> Result<(), String> {
         Value::from(encode_hex(&renewal.previous_envelope_digest)),
     );
     map.insert(
+        "admission_revision".into(),
+        Value::from(renewal.envelope.admission_revision),
+    );
+    map.insert(
+        "signed_expected_current_event_digest_hex".into(),
+        Value::from(encode_hex(
+            &renewal
+                .envelope
+                .expected_current_event_digest
+                .expect("validated renewal has signed predecessor"),
+        )),
+    );
+    map.insert(
         "envelope_digest_hex".into(),
         Value::from(encode_hex(&renewal.envelope_digest)),
     );
@@ -723,8 +822,19 @@ fn run_revoke(args: Vec<String>) -> Result<(), String> {
     let record = AdmissionRecord::new_untrusted_signers(envelope)
         .map_err(|err| format!("envelope validation failed: {err}"))?;
     let revoked_at = revoked_at.unwrap_or_else(now_secs);
+    let transition_revision = record
+        .envelope()
+        .admission_revision
+        .checked_add(1)
+        .ok_or_else(|| "admission revision overflow".to_string())?;
     let mut revocation = ProviderAdmissionRevocationV1 {
         version: REVOCATION_VERSION,
+        network_id: record.envelope().network_id,
+        policy_id: record.envelope().policy_id,
+        policy_revision: record.envelope().policy_revision,
+        policy_digest: record.envelope().policy_digest,
+        transition_revision,
+        expected_current_event_digest: *record.envelope_digest(),
         provider_id: *record.provider_id(),
         envelope_digest: *record.envelope_digest(),
         revoked_at,
@@ -761,6 +871,30 @@ fn run_revoke(args: Vec<String>) -> Result<(), String> {
     }
     let mut map = Map::new();
     map.insert("version".into(), Value::from(REVOCATION_VERSION));
+    map.insert(
+        "network_id_hex".into(),
+        Value::from(encode_hex(&revocation.network_id)),
+    );
+    map.insert(
+        "policy_id_hex".into(),
+        Value::from(encode_hex(&revocation.policy_id)),
+    );
+    map.insert(
+        "policy_revision".into(),
+        Value::from(revocation.policy_revision),
+    );
+    map.insert(
+        "policy_digest_hex".into(),
+        Value::from(encode_hex(&revocation.policy_digest)),
+    );
+    map.insert(
+        "transition_revision".into(),
+        Value::from(revocation.transition_revision),
+    );
+    map.insert(
+        "expected_current_event_digest_hex".into(),
+        Value::from(encode_hex(&revocation.expected_current_event_digest)),
+    );
     map.insert(
         "provider_id_hex".into(),
         Value::from(encode_hex(&revocation.provider_id)),
@@ -811,14 +945,16 @@ fn proposal_usage() -> &'static str {
         [--json-out=<path>]"
 }
 fn sign_usage() -> &'static str {
-    "usage: sorafs_manifest_builder provider-admission sign --proposal=<path> --advert=<path> \
+    "usage: sorafs_manifest_builder provider-admission sign --network-id=<genesis-block-hash-hex32> \
+        --policy-id=<hex32> --policy-revision=<u64> --policy-digest=<hex32> \
+        --admission-revision=<u64> [--expected-current-event-digest=<hex32> --previous-envelope=<path>] --proposal=<path> --advert=<path> \
         --retention-epoch=<epoch> [--issued-at=<secs>] --council-signature=<signer_hex:signature_hex> \
         [--advert-body=<path>] [--council-signature-file=<path>] \
         [--council-signature-public-key=<hex32>|--council-signature-public-key-file=<path>] \
         [--notes=<text>] [--envelope-out=<path>] [--json-out=<path>]"
 }
 fn verify_usage() -> &'static str {
-    "usage: sorafs_manifest_builder provider-admission verify --envelope=<path> \
+    "usage: sorafs_manifest_builder provider-admission verify --network-id=<genesis-block-hash-hex32> --envelope=<path> \
         --trusted-council-key=<hex32>... --signature-threshold=<count> [--proposal=<path>] \
         [--advert=<path>] [--advert-body=<path>] [--json-out=<path>]"
 }
@@ -854,6 +990,13 @@ struct ProposalOptions {
 }
 #[derive(Default)]
 struct SignOptions {
+    network_id: Option<[u8; 32]>,
+    policy_id: Option<[u8; 32]>,
+    policy_revision: Option<u64>,
+    policy_digest: Option<[u8; 32]>,
+    admission_revision: Option<u64>,
+    expected_current_event_digest: Option<[u8; 32]>,
+    previous_envelope: Option<PathBuf>,
     proposal_path: Option<PathBuf>,
     advert_path: Option<PathBuf>,
     advert_body_path: Option<PathBuf>,
@@ -868,6 +1011,7 @@ struct SignOptions {
 }
 #[derive(Default)]
 struct VerifyOptions {
+    network_id: Option<[u8; 32]>,
     envelope_path: Option<PathBuf>,
     proposal_path: Option<PathBuf>,
     advert_path: Option<PathBuf>,

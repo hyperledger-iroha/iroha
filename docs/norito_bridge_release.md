@@ -67,7 +67,7 @@ that workflow for local release verification.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 23, the privacy-production feature state,
+   manifest binds exact native bridge ABI 24, the privacy-production feature state,
    source commit and fingerprint, embedded source commit, header digest,
    required-symbol inventory, and per-slice SHA-256 hashes. Ordinary builds embed
    their own commit. An exact mechanical fallback-pin child embeds its parent commit,
@@ -121,7 +121,7 @@ that workflow for local release verification.
 
    Before releasing its authenticated artifact-publication lock, the builder invokes
    the sole archive owner on the generation it just published. The owner retains a
-   unique source snapshot and re-authenticates the exact ABI-23 inventory,
+   unique source snapshot and re-authenticates the exact ABI-24 inventory,
    recomputes source and tool provenance, verifies each Mach-O architecture and the
    required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
    stores them without host-zlib variance, normalizes modes and ZIP timestamps from
@@ -255,7 +255,7 @@ ignored `target/norito-bridge-local/` directory. Create owned canonical mode-070
 `cargo`, `build`, `artifacts`, and `projections` directories there, and use the first
 three as the explicit Cargo, build, and output roots. Reuse this fixed Cargo lane.
 The builder still performs all five real Apple builds, source/lock/tool seals,
-consumer links, ABI-23 checks and atomic artifact exchange. It does not clean Cargo.
+consumer links, ABI-24 checks and atomic artifact exchange. It does not clean Cargo.
 Select the current root graph explicitly with `--lockfile-path "$PWD/Cargo.lock"`
 for the builder, pin owner and artifact checker. This local-only route retains
 `--locked --offline` and the source/lock identity checks; it never changes the

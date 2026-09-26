@@ -1,5 +1,6 @@
 //! Rust-authority checks for shared Sumeragi v2 SDK wire fixtures.
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree};
+use iroha_data_model::block::execution_output::ExecutionOutputV1;
 use iroha_data_model::{
     NetworkId,
     block::consensus_v2::{
@@ -24,6 +25,7 @@ use iroha_data_model::{
         KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityValidatorKeysV1,
     },
     merge::MergeLedgerEntry,
+    transaction::signed::TransactionEntrypoint,
 };
 use iroha_model_base::peer::PeerId;
 use norito::codec::{DecodeAll, Encode};
@@ -142,6 +144,33 @@ fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertifica
         aggregate_signature: vec![0x5a; 48],
     }
 }
+fn transaction_commitments_execution_commitment(seed: u8) -> ExecutionCommitment {
+    let input_tree: MerkleTree<TransactionEntrypoint> = [
+        HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-fixture-input-0")),
+        HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-fixture-input-1")),
+    ]
+    .into_iter()
+    .collect();
+    let output_tree: MerkleTree<ExecutionOutputV1> = [
+        HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-fixture-output-0")),
+        HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-fixture-output-1")),
+        HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-fixture-output-2")),
+    ]
+    .into_iter()
+    .collect();
+    let mut commitment = execution_commitment(seed);
+    commitment.transaction_input_commitment = input_tree.commitment();
+    commitment.transaction_output_commitment = output_tree.commitment();
+    commitment
+        .validate()
+        .expect("populated transaction tree fixture execution commitment");
+    commitment
+}
+fn transaction_commitments_qc(context: &HeightContext) -> QuorumCertificate {
+    let mut certificate = qc(context, 5, GlobalPhase::Prepare);
+    certificate.execution_commitment = transaction_commitments_execution_commitment(6);
+    certificate
+}
 fn merge_carrier_entry_hash() -> HashOf<MergeLedgerEntry> {
     HashOf::from_untyped_unchecked(Hash::new(b"sumeragi-v2-v4-merge-carrier-fixture"))
 }
@@ -189,6 +218,26 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     let prepare = qc(&context, 1, GlobalPhase::Prepare);
     let merge_carrier_prepare = merge_carrier_qc(&context);
     assert_eq!(merge_carrier_prepare.validate(&context), Ok(()));
+    let transaction_commitments_prepare = transaction_commitments_qc(&context);
+    assert_eq!(transaction_commitments_prepare.validate(&context), Ok(()));
+    assert_eq!(
+        transaction_commitments_prepare
+            .execution_commitment
+            .transaction_input_commitment
+            .expect("populated input tree")
+            .leaf_count()
+            .get(),
+        2
+    );
+    assert_eq!(
+        transaction_commitments_prepare
+            .execution_commitment
+            .transaction_output_commitment
+            .expect("populated output tree")
+            .leaf_count()
+            .get(),
+        3
+    );
     let timeout = TimeoutCertificate {
         round: round(&context, 2),
         groups: vec![TimeoutVoteGroup {
@@ -249,6 +298,10 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     insert_message(
         "quorum_certificate_merge_carrier",
         ConsensusMessageV2Payload::QuorumCertificate(merge_carrier_prepare),
+    );
+    insert_message(
+        "quorum_certificate_transaction_commitments",
+        ConsensusMessageV2Payload::QuorumCertificate(transaction_commitments_prepare),
     );
     insert_message(
         "timeout_vote",

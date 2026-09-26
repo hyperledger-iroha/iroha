@@ -7,8 +7,8 @@
 use super::{
     BgvProfile, PlaintextModulus, ZkAmsMkheErrorV1,
     manifest::{
-        RELEASE_MODULI_V1, RELEASE_NEGACYCLIC_ROOTS_V1, ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1,
-        ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1, ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
+        ZK_AMS_MKHE_RELEASE_RING_DEGREE_V1, ZK_AMS_MKHE_RELEASE_ROSTER_SIZE_V1,
+        ZK_AMS_MKHE_RELEASE_SLOT_COUNT_V1,
     },
     modulus_product_bit_len,
 };
@@ -317,34 +317,92 @@ pub(super) const ZK_AMS_MKHE_RNS_NATIVE_PROOF_HASH_WIRE_SCHEMA_V1: &[u8] = conca
 ).as_bytes();
 
 /// Canonical ordered 40-prime NTT chain.
-pub const ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = {
-    // The basis extension retains the exact source chain under one owner.
-    let mut values = [0; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1];
-    let mut index = 0;
-    while index < RELEASE_MODULI_V1.len() {
-        values[index] = RELEASE_MODULI_V1[index];
-        index += 1;
-    }
-    assert!(RELEASE_MODULI_V1.len() + 2 == ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1);
-    values[RELEASE_MODULI_V1.len()] = 1_152_921_504_403_947_521;
-    values[RELEASE_MODULI_V1.len() + 1] = 1_152_921_504_396_869_633;
-    values
-};
+pub const ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = [
+    1_152_921_504_606_584_833,
+    1_152_921_504_598_720_513,
+    1_152_921_504_592_429_057,
+    1_152_921_504_581_419_009,
+    1_152_921_504_580_894_721,
+    1_152_921_504_578_273_281,
+    1_152_921_504_577_748_993,
+    1_152_921_504_577_486_849,
+    1_152_921_504_568_836_097,
+    1_152_921_504_565_166_081,
+    1_152_921_504_563_331_073,
+    1_152_921_504_556_515_329,
+    1_152_921_504_555_466_753,
+    1_152_921_504_554_156_033,
+    1_152_921_504_552_583_169,
+    1_152_921_504_542_883_841,
+    1_152_921_504_538_951_681,
+    1_152_921_504_537_378_817,
+    1_152_921_504_531_873_793,
+    1_152_921_504_521_650_177,
+    1_152_921_504_509_853_697,
+    1_152_921_504_508_280_833,
+    1_152_921_504_506_970_113,
+    1_152_921_504_495_697_921,
+    1_152_921_504_491_241_473,
+    1_152_921_504_488_620_033,
+    1_152_921_504_479_444_993,
+    1_152_921_504_470_794_241,
+    1_152_921_504_468_172_801,
+    1_152_921_504_462_929_921,
+    1_152_921_504_462_667_777,
+    1_152_921_504_455_589_889,
+    1_152_921_504_447_987_713,
+    1_152_921_504_442_482_689,
+    1_152_921_504_436_191_233,
+    1_152_921_504_427_278_337,
+    1_152_921_504_419_414_017,
+    1_152_921_504_409_190_401,
+    1_152_921_504_403_947_521,
+    1_152_921_504_396_869_633,
+];
 
 /// Canonical primitive `2N`-th roots paired with the 40-prime chain.
-pub const ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = {
-    // The basis extension retains the exact source chain under one owner.
-    let mut values = [0; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1];
-    let mut index = 0;
-    while index < RELEASE_NEGACYCLIC_ROOTS_V1.len() {
-        values[index] = RELEASE_NEGACYCLIC_ROOTS_V1[index];
-        index += 1;
-    }
-    assert!(RELEASE_NEGACYCLIC_ROOTS_V1.len() + 2 == ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1);
-    values[RELEASE_NEGACYCLIC_ROOTS_V1.len()] = 22_173_257_170_052_426;
-    values[RELEASE_NEGACYCLIC_ROOTS_V1.len() + 1] = 24_990_432_311_765_759;
-    values
-};
+pub const ZK_AMS_MKHE_RNS_NATIVE_NEGACYCLIC_ROOTS_V1: [u64; ZK_AMS_MKHE_RNS_NATIVE_LIMBS_V1] = [
+    720_645_352_895_426_071,
+    282_755_386_997_791_573,
+    1_129_868_644_045_593_393,
+    853_812_227_483_389_373,
+    313_941_090_484_177_697,
+    430_486_680_513_317_260,
+    143_942_864_930_673_074,
+    807_173_726_984_510_404,
+    191_722_530_547_666_486,
+    467_567_141_367_137_610,
+    941_895_608_111_266_529,
+    164_841_987_874_738_392,
+    662_956_088_516_163_749,
+    418_880_473_612_227_419,
+    392_461_511_604_930_516,
+    764_249_630_711_722_482,
+    864_013_988_376_557_277,
+    705_763_476_696_323_117,
+    1_036_023_418_809_922_092,
+    1_093_496_573_364_979_026,
+    465_626_502_647_312_456,
+    108_719_633_419_962_724,
+    1_009_384_194_290_538_050,
+    926_844_163_581_853_650,
+    935_039_477_417_276_816,
+    950_668_019_576_080_971,
+    551_479_639_661_014_597,
+    612_386_825_931_585_809,
+    452_213_060_731_776_498,
+    215_387_729_362_370_611,
+    506_439_537_974_696_847,
+    1_138_741_943_693_016_536,
+    378_985_449_492_583_188,
+    143_344_989_960_478_445,
+    879_283_036_444_379_690,
+    150_226_471_703_910_190,
+    1_049_010_867_608_938_030,
+    533_899_346_966_036_544,
+    22_173_257_170_052_426,
+    24_990_432_311_765_759,
+];
 
 /// Parameter-complete replacement profile plus its intentionally open evidence pins.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -414,7 +472,7 @@ fn profile_id_v1() -> [u8; 32] {
     hash.finalize()
 }
 
-fn candidate_profile_v1() -> BgvProfile {
+pub(super) fn candidate_profile_v1() -> BgvProfile {
     // TODO: Replace these static ceilings with the authenticated measurements
     // bound by the release-evidence records before this profile can authorize.
     BgvProfile {
@@ -872,7 +930,8 @@ mod tests {
     use crate::vega::zk_ams::mkhe::mod_pow;
 
     #[test]
-    fn native_basis_extension_preserves_the_source_prefix_and_reproduces_every_root() {
+    fn governed_native_chain_owns_the_release_prefix_and_reproduces_every_root() {
+        use super::super::manifest::{RELEASE_MODULI_V1, RELEASE_NEGACYCLIC_ROOTS_V1};
         assert_eq!(
             &ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[..RELEASE_MODULI_V1.len()],
             &RELEASE_MODULI_V1

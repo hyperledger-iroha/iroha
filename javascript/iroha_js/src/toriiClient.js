@@ -1,4 +1,5 @@
 import { parseGovernanceReferendumResponseV1, parseGovernanceTallyResponseV1, parseGovernanceLocksResponseV1 } from "./governancePlainV1.js";
+import { parseElectionTallyResponseV1 } from "./electionTallyV1.js";
 import { createSorafsAliasResponseNormalizers } from "./sorafsAliasResponses.js";
 import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
@@ -157,17 +158,7 @@ import {
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import { AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1 } from "./authenticatedBlockProofs.js";
 import { createVpnSchema } from "./vpnSchema.js";
-import {
-  assertSorafsOrderbookFixedHeaders,
-  createSorafsOrderbookSubmissionDeadline,
-  prepareSorafsOrderbookSubmission,
-  SorafsOrderbookSubmissionAmbiguousError,
-  sorafsOrderbookHeaderFingerprint,
-  SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
-  validateSorafsOrderbookSubmissionTransport,
-  validateSorafsOrderbookSubmissionHeaders,
-  verifySorafsOrderbookSubmissionReceipt,
-} from "./sorafsOrderbookSubmission.js";
+import { SorafsOrderbookSubmissionAmbiguousError } from "./sorafsOrderbookAmbiguousError.js";
 export { SorafsOrderbookSubmissionAmbiguousError };
 
 const CANONICAL_AUTH_FIELD = "canonicalAuth";
@@ -371,6 +362,7 @@ const DEFAULT_ISO_POLL_ATTEMPTS = 12;
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
+const ELECTION_TALLY_JSON_RESPONSE_MAX_BYTES = 8 * 1024;
 const SUMERAGI_EVIDENCE_COUNT_JSON_RESPONSE_MAX_BYTES = 1024;
 // The maximum 1,000-record fixed evidence envelope remains below this ceiling,
 // including full-width u64 integers and terminal penalty details.
@@ -7577,6 +7569,35 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch exact standalone-election weights and their authoritative block coordinates.
+   * Integers above Number.MAX_SAFE_INTEGER are returned as bigint.
+   * @param {string} electionId
+   * @returns {Promise<ToriiElectionTally | null>}
+   */
+  async getElectionTally(electionId, options) {
+    const normalized = requireGovernanceSelectorString(electionId, "electionId");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getElectionTally");
+    const response = await this._request("POST", "/v1/zk/vote/tally", {
+      headers: JSON_REQUEST_HEADERS,
+      body: JSON.stringify({ election_id: normalized }),
+      signal,
+      canonicalAuth,
+    });
+    await this._expectStatus(response, [200, 404], {
+      signal,
+      maximumBodyBytes: ELECTION_TALLY_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "election tally",
+    });
+    if (response.status === 404) {
+      return null;
+    }
+    const payload = await this._readBoundedLosslessIntegerJson(
+      response, ELECTION_TALLY_JSON_RESPONSE_MAX_BYTES, "election tally response", { signal },
+    );
+    return parseElectionTallyResponseV1(payload);
+  }
+
+  /**
    * Fetch exact referendum counts and their authoritative evaluated block coordinates.
    * Unsigned integers above Number.MAX_SAFE_INTEGER are returned as bigint.
    * @param {string} referendumId
@@ -11662,6 +11683,16 @@ export class ToriiClient {
   }
 
   async _submitSorafsOrderbookTransaction(path, route, signedTransaction, options, context) {
+    const {
+      assertSorafsOrderbookFixedHeaders,
+      createSorafsOrderbookSubmissionDeadline,
+      prepareSorafsOrderbookSubmission,
+      sorafsOrderbookHeaderFingerprint,
+      SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+      validateSorafsOrderbookSubmissionTransport,
+      validateSorafsOrderbookSubmissionHeaders,
+      verifySorafsOrderbookSubmissionReceipt,
+    } = await loadToriiOptionalModule();
     const normalized = requirePlainObjectOption(options, `${context} options`); assertSupportedOptionKeys(normalized, new Set(["signal", "expectedReceiptSigner"]), `${context} options`);
     const { signal } = normalizeSignalOption(normalized, context); if (!(this._localSigningContext instanceof LocalSigningContext)) {
       rejectType(`${context} requires ToriiClient options.localSigningContext`);

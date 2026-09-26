@@ -731,11 +731,73 @@ impl<'qpcs, 'cross, S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1>
     }
 }
 
-impl<K, P, S> RnsNativeStartedPreTranscriptPublicStatementV2<K, P, S>
+/// The same move-only started source/publication owner after its original
+/// ledger has admitted canonical Merkle and repeated initial leaf-hash work.
+/// Work-cap refusal returns the same owner with unchanged ledger counters
+/// before reader or qPCS authentication. Source-accessor errors require a
+/// concrete adapter invariant before claiming that its owner is unchanged.
+#[must_use = "the admitted owner must be consumed by the qPCS source transition"]
+pub(super) struct RnsNativeQpcsOpeningHashWorkAdmittedStartedV2<K, P, S>
 where
     K: ZkAmsMkheDirectObjectReadAtProviderV1,
     P: ZkAmsMkheDirectObjectReadAtProviderV1,
     S: ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
+{
+    started: RnsNativeStartedPreTranscriptPublicStatementV2<K, P, S>,
+}
+
+impl<K, P, S> RnsNativeStartedPreTranscriptPublicStatementV2<K, P, S>
+where
+    K: ZkAmsMkheDirectObjectReadAtProviderV1,
+    P: ZkAmsMkheDirectObjectReadAtProviderV1,
+    S: super::super::super::RnsNativeOriginalBudgetedSourceV1,
+{
+    /// Admit before any public reader or qPCS authentication side effect.
+    /// Work-cap refusal is atomic: the caller receives the owner with
+    /// unchanged ledger counters. An accessor error also returns the owner,
+    /// but its mutable implementation must establish a no-mutation invariant.
+    pub(super) fn admit_canonical_merkle_and_rebind_leaf_hash_work_v2(
+        mut self,
+    ) -> Result<
+        RnsNativeQpcsOpeningHashWorkAdmittedStartedV2<K, P, S>,
+        (Self, RnsNativeClaimedQpcsSourceCarrierErrorV2),
+    > {
+        use crate::vega::zk_ams::mkhe::{
+            rns_native_proof_hash::RnsNativeProofHashContextV1,
+            rns_native_qpcs_opening_work::RnsNativeQpcsOpeningHashWorkV1,
+        };
+        let parameter = match RnsNativeProofHashContextV1::canonical() {
+            Ok(context) => context.parameter_digest(),
+            Err(_) => return Err((self, RnsNativeClaimedQpcsSourceCarrierErrorV2::Qpcs)),
+        };
+        let work =
+            match RnsNativeQpcsOpeningHashWorkV1::for_canonical_merkle_and_rebind_leaf_hashes_v1(
+                parameter,
+            ) {
+                Ok(work) => work,
+                Err(_) => return Err((self, RnsNativeClaimedQpcsSourceCarrierErrorV2::Qpcs)),
+            };
+        let admitted = match self.source.original_budget_mut_v1() {
+            Ok(budget) => work.admit_v1(budget),
+            Err(_) => {
+                return Err((
+                    self,
+                    RnsNativeClaimedQpcsSourceCarrierErrorV2::SourcePreflight,
+                ));
+            }
+        };
+        if admitted.is_err() {
+            return Err((self, RnsNativeClaimedQpcsSourceCarrierErrorV2::Qpcs));
+        }
+        Ok(RnsNativeQpcsOpeningHashWorkAdmittedStartedV2 { started: self })
+    }
+}
+
+impl<K, P, S> RnsNativeQpcsOpeningHashWorkAdmittedStartedV2<K, P, S>
+where
+    K: ZkAmsMkheDirectObjectReadAtProviderV1,
+    P: ZkAmsMkheDirectObjectReadAtProviderV1,
+    S: super::super::super::RnsNativeOriginalBudgetedSourceV1,
 {
     /// Consume the sealed started owner through the complete claimed-qPCS,
     /// source-preflight, numeric-materialization, and schedule-extraction
@@ -750,11 +812,11 @@ where
         RnsNativeClaimedQpcsSourceCarrierV2<'proof, S>,
         RnsNativeClaimedQpcsSourceCarrierErrorV2,
     > {
-        let Self {
+        let RnsNativeStartedPreTranscriptPublicStatementV2 {
             bridge,
             source,
             facts,
-        } = self;
+        } = self.started;
         let mut batch = RnsNativeSingleQpcsScheduleBatchV2::begin_v2(bridge, relation_schedule)
             .map_err(map_public_read_error_v2)?;
         for _ in 0..RELATIONS_V2 {

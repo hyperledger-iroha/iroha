@@ -17,6 +17,7 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
     case invalidGovernanceHashLength(field: String, actual: Int)
     case invalidGovernanceManifestProvenance(field: String)
     case invalidGovernanceSelector(field: String, value: String)
+    case governanceOwnerMustEqualAuthority
     case invalidZkBallotPublicInputs(String)
 
     public var errorDescription: String? {
@@ -53,6 +54,8 @@ public enum TransactionInputError: Error, LocalizedError, Equatable {
             return "Governance manifest provenance \(field) must be an exact non-empty string."
         case let .invalidGovernanceSelector(field, value):
             return "Governance selector for \(field) must be 1...128 RFC 3986 unreserved ASCII bytes and must not start with a dot (received '\(value)')."
+        case .governanceOwnerMustEqualAuthority:
+            return "A public conviction update must be owned by its transaction authority."
         case let .invalidZkBallotPublicInputs(reason):
             return "Governance ZK public inputs are invalid: \(reason)"
         }
@@ -1080,7 +1083,6 @@ struct SwiftTransactionEncoder {
         }
         let privateKey = try privateKeyBytes(from: signingKey)
         let unshieldVk = request.unshieldVerifyingKey?.encodedValue
-        let shieldVk = request.shieldVerifyingKey?.encodedValue
         let native = try bridgeOrThrow {
             try NoritoNativeBridge.shared.encodeRegisterZkAsset(
                 networkId: ids.networkId,
@@ -1089,7 +1091,6 @@ struct SwiftTransactionEncoder {
                 ttlMs: request.ttlMs,
                 assetDefinitionId: assetDefinitionId,
                 unshieldVerifyingKey: unshieldVk,
-                shieldVerifyingKey: shieldVk,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm
@@ -1334,6 +1335,51 @@ struct SwiftTransactionEncoder {
                 amount: amount,
                 durationBlocks: request.durationBlocks,
                 direction: request.direction.rawValue,
+                feePaymentJSON: try request.feePayment.canonicalJSONData(),
+                privateKey: privateKey,
+                algorithm: signingKey.algorithm
+            )
+        }
+        return try wrap(native: native)
+    }
+
+    static func encodeUpdatePlainConviction(request: UpdatePlainConvictionRequest,
+                                            keypair: Keypair,
+                                            creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let signingKey = try SigningKey.ed25519(privateKey: keypair.privateKeyBytes)
+        return try encodeUpdatePlainConviction(request: request, signingKey: signingKey, creationTimeMs: creationTimeMs)
+    }
+
+    static func encodeUpdatePlainConviction(request: UpdatePlainConvictionRequest,
+                                            signingKey: SigningKey,
+                                            creationTimeMs: UInt64) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            networkId: request.networkId,
+            authorityId: request.authority,
+            accountIds: [.init(field: "owner", value: request.owner)]
+        )
+        let owner = ids.accountIds["owner"] ?? request.owner
+        guard owner == ids.authorityId else {
+            throw TransactionInputError.governanceOwnerMustEqualAuthority
+        }
+        let referendumId = try TransactionInputValidator.sanitizeGovernanceSelector(
+            request.referendumId,
+            field: "referendum_id"
+        )
+        let amount = try KotodamaNumericV1Codec
+            .decodeQuantityJSON(request.amount)
+            .canonicalString
+        let privateKey = try privateKeyBytes(from: signingKey)
+        let native = try bridgeOrThrow {
+            try NoritoNativeBridge.shared.encodeGovernanceUpdatePlainConviction(
+                networkId: ids.networkId,
+                authority: ids.authorityId,
+                creationTimeMs: creationTimeMs,
+                ttlMs: request.ttlMs,
+                referendumId: referendumId,
+                owner: owner,
+                amount: amount,
+                durationBlocks: request.durationBlocks,
                 feePaymentJSON: try request.feePayment.canonicalJSONData(),
                 privateKey: privateKey,
                 algorithm: signingKey.algorithm

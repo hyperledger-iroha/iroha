@@ -43,6 +43,8 @@ pub enum FinalPromotionAuthorityErrorV1 {
     Capacity,
     /// Key, policy or enrollment generation would roll back or reuse retired authority.
     Generation,
+    /// Reserve/Complete lacked its exact direct signed role-15 Network source.
+    Source,
     /// Independent signer authorization verification failed.
     Custody,
     /// The reservation is not eligible at the deterministic execution time.

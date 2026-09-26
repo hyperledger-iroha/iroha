@@ -280,6 +280,10 @@ pub struct PhoneRetailCanonicalityAttestationV1 {
 }
 impl PhoneRetailCanonicalityAttestationV1 {
     /// Verify the attestor's canonical statement under the pinned public key.
+    ///
+    /// # Errors
+    /// Returns a cryptographic error if the public key algorithm cannot be read,
+    /// the signature is malformed for that algorithm, or verification fails.
     pub fn verify(&self, public_key: &PublicKey) -> Result<(), iroha_crypto::Error> {
         let signature = signature_for_public_key_algorithm(public_key, &self.signature)?;
         SignatureOf::<PhoneRetailCanonicalityPayloadV1>::from_signature(signature)

@@ -1241,17 +1241,25 @@ impl V2CandidateAssembler {
                     .map_err(CandidateError::CanonicalEncoding)?;
                 chunk_count = encoded_chunk_count(request.context.da_layout, encoded_bytes)?;
             }
-            let independently_useful =
+            // All fitting is complete. The final builder header can have a
+            // later ledger time than the prospective header when retained
+            // Network inputs advance the clock. Probe scheduled work against
+            // the exact header that will be signed. This probe acquires State
+            // writers, so it must finish before taking the publication lease
+            // and entering the fail-stop signing region.
+            let prepared_header = builder.carrier_context_header();
+            let independent_proposal_work =
                 candidate_has_proposal_work(&selected, &carrier_attachments, &prepared_work);
-            // The start-of-block probe acquires State writers. It must finish
-            // before taking the publication lock used through signing.
-            let scheduled_start_work = !independently_useful
-                && request
+            let deterministic_start_work_pending = if independent_proposal_work {
+                false
+            } else {
+                request
                     .state
-                    .deterministic_start_work_pending(&builder.carrier_context_header())
+                    .deterministic_start_work_pending(&prepared_header)
                     .map_err(CandidateError::LocalStateAdmission)?
-                    == Some(true);
-            if !independently_useful && !scheduled_start_work {
+                    == Some(true)
+            };
+            if !independent_proposal_work && !deterministic_start_work_pending {
                 // Optional evidence cannot manufacture an empty/pulse-only
                 // carrier or terminate the runner when no proof fits. Retain its
                 // original custody and the existing bounded snapshot recheck so
@@ -1342,10 +1350,17 @@ impl V2CandidateAssembler {
                         .to_owned(),
                 ));
             }
+            if block.header() != prepared_header {
+                return Err(CandidateError::BuiltHeaderMismatch);
+            }
+            // No State admission occurs after signing. The State-derived
+            // scheduled-work result belongs to this exact signed header; the
+            // signed body must still preserve the independent work projected
+            // by the final pre-sign builder.
             if !candidate_block_has_independent_proposal_work(
                 &block,
                 carrier_attachments.time_trigger_clock_progress_required,
-            ) && !scheduled_start_work
+            ) && !deterministic_start_work_pending
             {
                 return Err(CandidateError::BuiltWithoutProposalWork);
             }
@@ -2339,6 +2354,9 @@ pub(crate) enum CandidateError {
     LocalStateAdmission(
         crate::state::StateBlockStartError<iroha_data_model::executor::IvmAdmissionError>,
     ),
+    /// Local evidence or stake-index penalty preparation could not fund a candidate plan.
+    #[error("local evidence preparation: {0}")]
+    LocalEvidencePreparation(crate::state::EvidencePreparationError),
     /// A prior fatal consensus operation requires process restart.
     #[error("Sumeragi v2 candidate signing requires process restart")]
     RestartRequired,
@@ -4640,6 +4658,73 @@ pub(super) mod tests {
         })
         .expect("empty snapshot candidate assembly")
     }
+    #[test]
+    fn busy_original_membership_refuses_before_signing_and_allows_release_retry() {
+        let (state, mut context, anchor, key) = snapshot_parent_fixture();
+        context.da_layout.max_payload_size_bytes = 64 * 1024;
+        context.da_layout.max_chunk_count = 128;
+        context.validate().expect("expanded fixture DA limits");
+        let candidate_time = anchor.snapshot_block_creation_time_ms + 1;
+        let header = BlockHeader::new(
+            NonZeroU64::new(context.height).expect("candidate height"),
+            Some(anchor.snapshot_block_hash),
+            None,
+            candidate_time,
+            0,
+        );
+        let held = state.try_block(header).expect("original history writer");
+        let (_, time_source) = TimeSource::new_mock(Duration::from_millis(candidate_time));
+        let queue = Arc::new(Queue::test(
+            iroha_config::parameters::actual::Queue::default(),
+            &time_source,
+        ));
+        let output_guard = ConsensusOutputGuard::isolated();
+        let tag = EventTag::new(
+            context.height,
+            0,
+            crate::sumeragi::v2_core::Generation::new(0),
+        );
+        let local_validator = context.leader(tag.view());
+        let directive = LocalProposalDirective::for_test(tag, local_validator, None, None, None);
+        let assembler = V2CandidateAssembler::new(
+            CandidateLimits::new(nonzero(8), nonzero(64 * 1024), nonzero(8))
+                .expect("fixture candidate limits"),
+            time_source,
+        );
+        let assemble = || {
+            assembler.assemble(CandidateRequest {
+                context: &context,
+                directive,
+                local_validator,
+                parent: CandidateParent::Snapshot(&anchor),
+                state: &state,
+                queue: &queue,
+                key_pair: &key,
+                output_guard: &output_guard,
+                attachments: CandidateAttachments::default(),
+                work_provider: SingleRouteWorkProvider,
+            })
+        };
+        let first = assemble();
+        assert!(
+            matches!(
+                &first,
+                Err(CandidateError::LocalStateAdmission(
+                    crate::state::StateBlockStartError::Membership(
+                        crate::state::MembershipAdmissionError::Busy(_)
+                    )
+                ))
+            ),
+            "first attempt: {first:?}"
+        );
+        assert!(!output_guard.restart_required());
+        drop(held);
+        assert!(matches!(
+            assemble().expect("retry after original writer release"),
+            CandidateAssemblyOutcome::NoProposalWork(_)
+        ));
+        assert!(!output_guard.restart_required());
+    }
     struct RecordingWorkErrorProvider<'a> {
         error: CandidateWorkError,
         observed: &'a std::cell::RefCell<Vec<Vec<HashOf<TransactionEntrypoint>>>>,
@@ -4999,6 +5084,10 @@ pub(super) mod tests {
         assert_eq!(candidate.block().external_entrypoints_cloned().count(), 0);
         assert!(candidate.block().is_resultless_proposal());
         assert!(candidate_block_has_proposal_work(candidate.block(), &state, false).unwrap());
+        assert!(
+            !candidate_block_has_independent_proposal_work(candidate.block(), false),
+            "scheduled protocol limits are the only work in this carrier"
+        );
         let mut signed = candidate.block().clone();
         {
             let outputs = crate::execution_output_test_support::structural_network_outputs(
@@ -5496,12 +5585,17 @@ pub(super) mod tests {
         let (state, context, _anchor, key) = snapshot_parent_fixture();
         let mut block: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
         assert!(!candidate_block_has_proposal_work(&block, &state, false).unwrap());
+        assert!(!candidate_block_has_independent_proposal_work(
+            &block, false
+        ));
+        assert!(candidate_block_has_independent_proposal_work(&block, true));
         assert!(
             candidate_block_has_proposal_work(&block, &state, true).unwrap(),
             "state-derived clock progress is semantic proposal work"
         );
         let transaction = accepted(71, "canonical-block-external");
         block.set_external_entrypoints(vec![transaction.entrypoint().clone()]);
+        assert!(candidate_block_has_independent_proposal_work(&block, false));
         assert!(candidate_block_has_proposal_work(&block, &state, false).unwrap());
         let mut autonomous: SignedBlock = ValidBlock::new_dummy(key.private_key()).into();
         autonomous.set_execution_context(Some(

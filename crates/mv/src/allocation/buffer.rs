@@ -14,7 +14,7 @@ use super::{AllocationBudget, AllocationCharge, AllocationRefusal};
 /// order frees the backing Vec before returning its credits. This owner accounts
 /// only its requested layout;
 /// callers must separately admit any nested objects, scratch or other storage.
-pub struct ChargedBuffer<T: Copy> {
+pub struct ChargedBuffer<T> {
     values: Vec<T>,
     capacity: usize,
     _charge: AllocationCharge,
@@ -101,7 +101,7 @@ impl std::fmt::Display for ChargedBufferFromChargeError {
 
 impl std::error::Error for ChargedBufferFromChargeError {}
 
-impl<T: Copy> ChargedBuffer<T> {
+impl<T> ChargedBuffer<T> {
     /// Admit the exact backing layout before requesting it from the allocator.
     ///
     /// Zero capacity and zero-sized elements request no backing allocation. On
@@ -218,6 +218,22 @@ impl<T: Copy> ChargedBuffer<T> {
         self.values.truncate(len);
     }
 
+    /// Move one element into the admitted backing without cloning or growing it.
+    ///
+    /// A full logical buffer returns the original element to its caller. This
+    /// includes zero-sized elements, whose `Vec` has an effectively unlimited
+    /// physical capacity. Nested storage owned by the element is not covered by
+    /// this buffer's backing charge.
+    pub fn try_push(&mut self, value: T) -> Result<(), T> {
+        if self.values.len() >= self.capacity {
+            return Err(value);
+        }
+        self.values.push(value);
+        Ok(())
+    }
+}
+
+impl<T: Copy> ChargedBuffer<T> {
     /// Fill already allocated capacity; never grow or replace the backing Vec.
     ///
     /// # Errors

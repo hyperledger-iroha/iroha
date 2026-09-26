@@ -235,7 +235,7 @@ _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
         "canonical_executed_block_need_for_height",
         "validate_canonical_executed_block_need",
         "validate_canonical_executed_block_request",
-        "canonical_executed_block_matches_need",
+        "canonical_executed_block_wire_matching_need",
         "build_canonical_executed_block_response",
         "plan_lane_application_evidence_repair",
         "apply_lane_application_evidence_repair",

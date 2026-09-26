@@ -188,6 +188,88 @@ fn every_physical_row_projects_exactly_and_every_phase_reconstructs_full_referen
 }
 
 #[test]
+fn complete_source_columns_are_borrowed_in_exact_retained_order() {
+    let zeros = vec![0; PHYSICAL_ROW_COUNT];
+    let known: Vec<Vec<u64>> = (0..PUBLIC_COLUMN_COUNT)
+        .map(|slot| {
+            (0..PHYSICAL_ROW_COUNT)
+                .map(|row| base_values(PhysicalRowIndex::new(row).unwrap())[slot])
+                .collect()
+        })
+        .collect();
+    let mut columns = vec![zeros.as_slice(); COLUMN_COUNT];
+    for (&column, values) in PUBLIC_COLUMNS.iter().zip(&known) {
+        columns[column] = values;
+    }
+    // Distinct cells on both sides of every omitted range make a retained
+    // column permutation visible even though the other rows share zero storage.
+    let sentinel_sources = [31, 36, 52, 64, 275, 302, 341];
+    let sentinels: Vec<Vec<u64>> = sentinel_sources
+        .iter()
+        .enumerate()
+        .map(|(slot, _)| {
+            let mut values = zeros.clone();
+            values[0] = slot as u64 + 1;
+            values[PHYSICAL_ROW_COUNT - 1] = slot as u64 + 101;
+            values
+        })
+        .collect();
+    for (&column, values) in sentinel_sources.iter().zip(&sentinels) {
+        columns[column] = values;
+    }
+    let source = SourceTraceColumns::new(&columns).unwrap();
+    let first = source.committed_row(0).unwrap();
+    let last = source.committed_row(PHYSICAL_ROW_COUNT - 1).unwrap();
+    for (slot, &column) in sentinel_sources.iter().enumerate() {
+        let retained = COMMITTED_COLUMNS.binary_search(&column).unwrap();
+        assert_eq!(first[retained], slot as u64 + 1);
+        assert_eq!(last[retained], slot as u64 + 101);
+        assert!(core::ptr::eq(
+            source.committed_column(retained).unwrap(),
+            sentinels[slot].as_slice()
+        ));
+    }
+    assert_eq!(
+        first.iter().filter(|&&value| value != 0).count(),
+        sentinels.len()
+    );
+    assert_eq!(
+        last.iter().filter(|&&value| value != 0).count(),
+        sentinels.len()
+    );
+    for (index, &column) in COMMITTED_COLUMNS.iter().enumerate() {
+        assert!(core::ptr::eq(
+            source.committed_column(index).unwrap(),
+            columns[column]
+        ));
+    }
+    assert!(source.committed_column(COMMITTED_COLUMN_COUNT).is_err());
+    assert!(source.committed_row(PHYSICAL_ROW_COUNT).is_err());
+    assert!(SourceTraceColumns::new(&columns[..COLUMN_COUNT - 1]).is_err());
+
+    let short = [0_u64; 1];
+    let last = COMMITTED_COLUMNS[COMMITTED_COLUMN_COUNT - 1];
+    columns[last] = &short;
+    assert!(SourceTraceColumns::new(&columns).is_err());
+    columns[last] = sentinels[sentinels.len() - 1].as_slice();
+
+    let mut invalid = zeros.clone();
+    invalid[PHYSICAL_ROW_COUNT - 1] = GOLDILOCKS_MODULUS;
+    columns[last] = &invalid;
+    assert!(matches!(
+        SourceTraceColumns::new(&columns),
+        Err(crate::Error::NonCanonicalGoldilocksElement { context, indices })
+            if context == "deep_source_trace" && indices == [last, PHYSICAL_ROW_COUNT - 1]
+    ));
+    columns[last] = sentinels[sentinels.len() - 1].as_slice();
+
+    let mut changed = known[PUBLIC_COLUMN_COUNT - 1].clone();
+    changed[PHYSICAL_ROW_COUNT - 1] += 1;
+    columns[PUBLIC_COLUMNS[PUBLIC_COLUMN_COUNT - 1]] = &changed;
+    assert!(SourceTraceColumns::new(&columns).is_err());
+}
+
+#[test]
 fn periodic_polynomials_match_full_ifft_reduced_lde_and_horner() {
     let reconstruction = PublicColumnReconstruction::new(&FASTPQ_FINAL_V1).unwrap();
     let rows = period_rows();

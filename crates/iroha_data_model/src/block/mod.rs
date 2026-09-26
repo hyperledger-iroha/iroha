@@ -146,9 +146,7 @@ pub enum SetExecutionOutputsError {
     },
 }
 /// Private payload-only forwarding adapter; no extra codec field/frame is introduced.
-#[cfg(feature = "transparent_api")]
 struct OutputFieldRef<'a, T>(&'a T);
-#[cfg(feature = "transparent_api")]
 impl<T: norito::core::SerializePayload> norito::core::SerializePayload for OutputFieldRef<'_, T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoFrameError> {
         norito::core::SerializePayload::serialize(self.0, writer)
@@ -160,16 +158,14 @@ impl<T: norito::core::SerializePayload> norito::core::SerializePayload for Outpu
         norito::core::SerializePayload::encoded_len_exact(self.0)
     }
 }
-/// Encode-only borrow of the sole SignedBlock layout for pre-mutation sizing.
+/// Encode-only borrow of the sole `SignedBlock` layout for pre-mutation sizing and proposal hashing.
 /// No raw source constructor or alternate accepted decoder is exposed.
-#[cfg(feature = "transparent_api")]
 #[derive(Encode)]
 struct SignedBlockOutputCandidate<'a> {
     signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
     payload: OutputFieldRef<'a, BlockPayload>,
     result: Option<OutputFieldRef<'a, BlockResult>>,
 }
-#[cfg(feature = "transparent_api")]
 impl norito::NoritoSchema for SignedBlockOutputCandidate<'_> {
     fn nominal_name() -> String {
         <SignedBlock as norito::NoritoSchema>::nominal_name()
@@ -442,9 +438,22 @@ impl SignedBlock {
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        self.canonical_resultless_proposal()
-            .encode_wire()
-            .map(|wire| Hash::new(&wire))
+        self.borrowed_resultless_wire().map(|wire| Hash::new(&wire))
+    }
+    /// Encode the resultless proposal by borrowing the exact signed layout, including the
+    /// signature set and payload. The frame still uses the canonical `SignedBlock` schema ID.
+    fn borrowed_resultless_wire(&self) -> Result<Vec<u8>, NoritoFrameError> {
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: None,
+        };
+        let payload = encode_signed_block_payload(&proposal);
+        let mut frame = Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len());
+        frame.push(self.version());
+        write_signed_block_header(&payload, &mut frame)?;
+        frame.extend_from_slice(&payload);
+        Ok(frame)
     }
     /// Hash this exact canonical block wire, including deterministic execution results.
     ///
@@ -1337,7 +1346,7 @@ fn borrow_framed_signed_block_payload(bytes: &[u8]) -> Result<(u8, &[u8]), Norit
     validate_signed_block_header(framed_payload)?;
     Ok((version, framed_payload))
 }
-fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
+fn encode_signed_block_payload<T: norito::core::SerializePayload>(block: &T) -> Vec<u8> {
     norito::core::reset_decode_state();
     norito::codec::encode_adaptive(block)
 }
@@ -2178,7 +2187,7 @@ mod tests {
         let proposal = block.clone();
         let header = block.header();
         let proposal_wire_hash = block.canonical_proposal_wire_hash().unwrap();
-        fixture::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        fixture::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         assert_eq!(block.header(), header);
         assert_eq!(block.hash(), proposal.hash());
         assert_eq!(
@@ -3051,11 +3060,11 @@ mod tests {
         assert!(block.lane_finality_statements().is_empty());
         block
             .set_execution_outputs(
-                vec![network(0, Ok(Default::default()))],
+                vec![network(0, Ok(Vec::default()))],
                 3,
-                Default::default(),
+                BTreeMap::default(),
                 vec![],
-                Default::default(),
+                crate::nexus::AxtPolicySnapshot::default(),
                 BTreeSet::from([iroha_model_base::topology::DataSpaceId::new(9)]),
                 vec![],
                 &fixture::limits(),
@@ -3072,7 +3081,7 @@ mod tests {
     fn set_transaction_results_records_committed_fragment_count() {
         let mut block = fixture::proposal(2);
         let rows = vec![
-            network(0, Ok(Default::default())),
+            network(0, Ok(Vec::default())),
             network(
                 1,
                 Err(
@@ -3224,7 +3233,7 @@ mod tests {
         let expected_policy_snapshot = policy_snapshot.clone();
         block
             .set_execution_outputs(
-                vec![network(0, Ok(Default::default()))],
+                vec![network(0, Ok(Vec::default()))],
                 1,
                 transcripts.clone(),
                 vec![axt_envelope.clone()],
@@ -3254,7 +3263,7 @@ mod tests {
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
         let mut block = fixture::proposal(1);
         let header = block.header();
-        let rows = vec![network(0, Ok(Default::default())), simple_time(&block, 0)];
+        let rows = vec![network(0, Ok(Vec::default())), simple_time(&block, 0)];
         let expected: MerkleTree<execution_output::ExecutionOutputV1> =
             rows.iter().map(HashOf::new).collect();
         fixture::install(&mut block, rows.clone(), 2).unwrap();
@@ -3283,7 +3292,7 @@ mod tests {
         let time = simple_time(&block, 0);
         fixture::install(
             &mut block,
-            vec![network(0, Ok(Default::default())), time.clone()],
+            vec![network(0, Ok(Vec::default())), time.clone()],
             2,
         )
         .unwrap();
@@ -3298,7 +3307,7 @@ mod tests {
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
         let mut block = fixture::proposal(2);
         let before = block.encode_wire().unwrap();
-        assert!(fixture::install(&mut block, vec![network(0, Ok(Default::default()))], 1).is_err());
+        assert!(fixture::install(&mut block, vec![network(0, Ok(Vec::default()))], 1).is_err());
         assert_eq!(block.encode_wire().unwrap(), before);
     }
     #[cfg(feature = "transparent_api")]
@@ -3307,8 +3316,8 @@ mod tests {
         for rows in [
             vec![],
             vec![
-                network(0, Ok(Default::default())),
-                network(1, Ok(Default::default())),
+                network(0, Ok(Vec::default())),
+                network(1, Ok(Vec::default())),
             ],
         ] {
             let mut block = fixture::proposal(1);
@@ -3322,7 +3331,7 @@ mod tests {
     fn set_transaction_results_rejects_external_hash_mismatch() {
         let mut block = fixture::proposal(1);
         let before = block.encode_wire().unwrap();
-        assert!(fixture::install(&mut block, vec![network(1, Ok(Default::default()))], 1).is_err());
+        assert!(fixture::install(&mut block, vec![network(1, Ok(Vec::default()))], 1).is_err());
         assert_eq!(block.encode_wire().unwrap(), before);
     }
     #[cfg(feature = "transparent_api")]
@@ -3334,7 +3343,7 @@ mod tests {
         )));
         let before = block.encode_wire().unwrap();
         assert!(matches!(
-            fixture::install_network(&mut block, vec![Ok(Default::default())]),
+            fixture::install_network(&mut block, vec![Ok(Vec::default())]),
             Err(SetExecutionOutputsError::InvalidProposal(_))
         ));
         assert_eq!(block.encode_wire().unwrap(), before);
@@ -3343,14 +3352,11 @@ mod tests {
     #[test]
     fn proofs_for_entry_hash_matches_merkle_roots() {
         let mut block = fixture::proposal(2);
-        fixture::install_network(
-            &mut block,
-            vec![Ok(Default::default()), Ok(Default::default())],
-        )
-        .unwrap();
+        fixture::install_network(&mut block, vec![Ok(Vec::default()), Ok(Vec::default())]).unwrap();
         for (index, hash) in block.network_input_hashes().enumerate() {
+            let expected_index = u32::try_from(index).expect("two-entry fixture index fits u32");
             let proof = block.network_execution_proof(&hash).unwrap();
-            assert_eq!(proof.entry_proof.proof().leaf_index(), index as u32);
+            assert_eq!(proof.entry_proof.proof().leaf_index(), expected_index);
             assert!(
                 proof
                     .entry_proof
@@ -3362,7 +3368,7 @@ mod tests {
                     .verify(&block.output_merkle_commitment().unwrap())
             );
             assert!(
-                matches!(proof.output_proof.output(), execution_output::ExecutionOutputV1::Network(row) if row.input_index == index as u32)
+                matches!(proof.output_proof.output(), execution_output::ExecutionOutputV1::Network(row) if row.input_index == expected_index)
             );
         }
     }
@@ -3370,7 +3376,7 @@ mod tests {
     #[test]
     fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
         let mut block = fixture::proposal(1);
-        let rows = vec![network(0, Ok(Default::default())), simple_time(&block, 0)];
+        let rows = vec![network(0, Ok(Vec::default())), simple_time(&block, 0)];
         fixture::install(&mut block, rows, 2).unwrap();
         let hash = block.network_input_hashes().next().unwrap();
         let proof = block.network_execution_proof(&hash).unwrap();
@@ -3397,7 +3403,7 @@ mod tests {
     #[test]
     fn proofs_for_entry_hash_missing_returns_none() {
         let mut block = fixture::proposal(1);
-        fixture::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        fixture::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         assert!(
             block
                 .network_execution_proof(&HashOf::from_untyped_unchecked(Hash::new(b"missing")))
@@ -3548,8 +3554,8 @@ mod tests {
             fixture::install(
                 &mut positive,
                 vec![
-                    network(0, Ok(Default::default())),
-                    network(0, Ok(Default::default()))
+                    network(0, Ok(Vec::default())),
+                    network(0, Ok(Vec::default()))
                 ],
                 1
             )
@@ -3565,8 +3571,8 @@ mod tests {
             fixture::install(
                 &mut ambiguous,
                 vec![
-                    network(0, Ok(Default::default())),
-                    network(1, Ok(Default::default()))
+                    network(0, Ok(Vec::default())),
+                    network(1, Ok(Vec::default()))
                 ],
                 2
             )
@@ -3578,7 +3584,7 @@ mod tests {
     fn full_output_replacement_rebuilds_exact_cache() {
         let mut block = fixture::proposal(2);
         let rows = vec![
-            network(0, Ok(Default::default())),
+            network(0, Ok(Vec::default())),
             network(
                 1,
                 Err(
@@ -3591,7 +3597,7 @@ mod tests {
         fixture::install(&mut block, rows.clone(), 1).unwrap();
         let first = block.output_merkle_commitment();
         let header = block.header();
-        let replacement = vec![rows[0].clone(), network(1, Ok(Default::default()))];
+        let replacement = vec![rows[0].clone(), network(1, Ok(Vec::default()))];
         let expected: MerkleTree<execution_output::ExecutionOutputV1> =
             replacement.iter().map(HashOf::new).collect();
         fixture::install(&mut block, replacement, 2).unwrap();
@@ -3605,3 +3611,7 @@ mod tests {
 #[cfg(all(test, feature = "transparent_api"))]
 #[path = "output_attachment_tests.rs"]
 mod output_attachment_tests;
+
+#[cfg(test)]
+#[path = "proposal_wire_hash_tests.rs"]
+mod proposal_wire_hash_tests;

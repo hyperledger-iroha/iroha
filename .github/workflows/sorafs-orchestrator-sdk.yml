@@ -59,9 +59,9 @@ on:
       - "fixtures/sorafs_orchestrator/multi_peer_parity_v1/**"
       - "integration_tests/tests/native_escrow.rs"
       - "scripts/check_sorafs_reference_sdk_fixtures.py"
-      - "scripts/check_native_sdk_abi23_artifact.py"
+      - "scripts/check_native_sdk_artifact.py"
       - "scripts/compute_workspace_source_manifest.py"
-      - "scripts/tests/check_native_sdk_abi23_artifact_test.py"
+      - "scripts/tests/check_native_sdk_artifact_test.py"
       - "scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh"
       - "scripts/tests/check_sorafs_fixture_workflow_contract_test.py"
       - "scripts/sorafs_javascript_test_events.mjs"
@@ -141,7 +141,7 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
-      - name: Verify Python ABI-23 evidence retention contract
+      - name: Verify Python ABI-24 evidence retention contract
         run: bash scripts/tests/check_sorafs_python_native_sdk_evidence_contract.sh
       - name: Bind the canonical mobile Python
         run: |
@@ -222,23 +222,23 @@ jobs:
           echo "MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
-      - name: Build exact ABI-23 NoritoBridge XCFramework
+      - name: Build exact ABI-24 NoritoBridge XCFramework
         run: scripts/build_norito_xcframework.sh --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
       - name: Authenticate Apple native artifact
         run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
-      - name: Run exact Python 3.12 ABI-23 native reference parity
+      - name: Run exact Python 3.12 ABI-24 native reference parity
         env:
-          SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi23-evidence
+          SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi24-evidence
           SORAFS_PYTHON_SDK_PYTHON_BIN: python3
         run: bash ci/check_sorafs_python_native_sdk.sh
       - name: Run Rust, Python, JavaScript, and Swift fixture parity
         run: bash ci/sdk_sorafs_orchestrator.sh
-      - name: Upload verified Python ABI-23 evidence
+      - name: Upload verified Python ABI-24 evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sorafs-python-native-abi23-${{ github.run_id }}
-          path: ${{ runner.temp }}/iroha-sorafs-python-native-abi23-evidence/python-native-abi23.json
+          name: sorafs-python-native-abi24-${{ github.run_id }}
+          path: ${{ runner.temp }}/iroha-sorafs-python-native-abi24-evidence/python-native-abi24.json
           if-no-files-found: error
           retention-days: 30
       - name: Upload parity evidence
@@ -313,7 +313,7 @@ jobs:
           echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
       - name: Fetch the locked Rust dependency graph
         run: cargo fetch --locked
-      - name: Build and authenticate the exact ABI-23 Kotlin bridge
+      - name: Build and authenticate the exact ABI-24 Kotlin bridge
         shell: bash
         run: |
           target=x86_64-unknown-linux-gnu
@@ -327,11 +327,11 @@ jobs:
             --target "$target" --target-dir "$native_root/cargo-target"
           native_dir="$native_root/cargo-target/$target/release"
           artifact="$native_dir/libconnect_norito_bridge.so"
-          manifest="$native_root/native-sdk-abi23.json"
-          python3 -I scripts/check_native_sdk_abi23_artifact.py record \
+          manifest="$native_root/native-sdk-abi24.json"
+          python3 -I scripts/check_native_sdk_artifact.py record \
             --artifact "$artifact" --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" --sdk c-jni --target "$target"
-          python3 -I scripts/check_native_sdk_abi23_artifact.py verify \
+          python3 -I scripts/check_native_sdk_artifact.py verify \
             --artifact "$artifact" --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"
           echo "IROHA_NATIVE_LIBRARY_PATH=$native_dir" >> "$GITHUB_ENV"
@@ -344,7 +344,7 @@ jobs:
           test ! -e "$artifact_dir"
           mkdir -m 0700 "$artifact_dir"
           echo "MOBILE_SDK_ANDROID_ARTIFACT_DIR=$artifact_dir" >> "$GITHUB_ENV"
-      - name: Require fresh ABI-23 JNI bridge in complete Kotlin and Java suites
+      - name: Require fresh ABI-24 JNI bridge in complete Kotlin and Java suites
         working-directory: kotlin
         shell: bash
         run: |
@@ -365,7 +365,7 @@ jobs:
       - name: Reauthenticate the consumed Kotlin bridge
         shell: bash
         run: |
-          python3 -I scripts/check_native_sdk_abi23_artifact.py verify \
+          python3 -I scripts/check_native_sdk_artifact.py verify \
             --artifact "$IROHA_NATIVE_LIBRARY_PATH/libconnect_norito_bridge.so" \
             --manifest "$SORAFS_MOBILE_NATIVE_MANIFEST" \
             --source-root "$GITHUB_WORKSPACE"
@@ -375,7 +375,7 @@ jobs:
         with:
           name: sorafs-orchestrator-mobile-parity-${{ github.run_id }}
           path: |
-            ${{ runner.temp }}/sorafs-mobile-native/native-sdk-abi23.json
+            ${{ runner.temp }}/sorafs-mobile-native/native-sdk-abi24.json
             ${{ runner.temp }}/sorafs-mobile-parity/test-execution.json
             ${{ runner.temp }}/sorafs-mobile-parity/gradle-build/iroha_kotlin_sdk/*/test-results/**/TEST-*.xml
           if-no-files-found: error
@@ -400,23 +400,23 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: sorafs-orchestrator-csharp-parity
-      - name: Build and authenticate the exact ABI-23 C# bridge
+      - name: Build and authenticate the exact ABI-24 C# bridge
         shell: bash
         run: |
           target=x86_64-unknown-linux-gnu
           cargo build --locked --release -p connect_norito_bridge --target "$target"
           native_dir="$RUNNER_TEMP/sorafs-csharp-native"
           artifact="$native_dir/libconnect_norito_bridge.so"
-          manifest="$native_dir/native-sdk-abi23.json"
+          manifest="$native_dir/native-sdk-abi24.json"
           mkdir -p "$native_dir"
           cp "target/$target/release/libconnect_norito_bridge.so" "$artifact"
-          python3 -I scripts/check_native_sdk_abi23_artifact.py record \
+          python3 -I scripts/check_native_sdk_artifact.py record \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE" \
             --sdk csharp \
             --target "$target"
-          python3 -I scripts/check_native_sdk_abi23_artifact.py verify \
+          python3 -I scripts/check_native_sdk_artifact.py verify \
             --artifact "$artifact" \
             --manifest "$manifest" \
             --source-root "$GITHUB_WORKSPACE"
@@ -427,6 +427,6 @@ jobs:
       - name: Build C# SDK with warnings denied
         working-directory: csharp
         run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
-      - name: Run complete C# ABI-23 parity suite
+      - name: Run complete C# ABI-24 parity suite
         working-directory: csharp
         run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build

@@ -85,3 +85,14 @@ export {
 } from "./validationFeeHijiriQuote.js";
 
 export { createSorafsReplicationResponseNormalizer } from "./sorafsReplicationResponses.js";
+
+export {
+  assertSorafsOrderbookFixedHeaders,
+  createSorafsOrderbookSubmissionDeadline,
+  prepareSorafsOrderbookSubmission,
+  sorafsOrderbookHeaderFingerprint,
+  SORAFS_ORDERBOOK_RECEIPT_MAX_BYTES_V1,
+  validateSorafsOrderbookSubmissionTransport,
+  validateSorafsOrderbookSubmissionHeaders,
+  verifySorafsOrderbookSubmissionReceipt,
+} from "./sorafsOrderbookSubmission.js";

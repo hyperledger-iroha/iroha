@@ -480,8 +480,13 @@ pub enum RamLfeError {
 /// The attestor must retain the same secret for the lifetime of the pinned policy.
 /// The signed canonicality statement is the consensus-visible proof that this
 /// private derivation was performed for the encrypted input.
+///
 /// TODO: Expose this operation through a separately deployed attestor that
 /// pins its decryption key and nullifier secret for the policy lifetime.
+///
+/// # Errors
+/// Returns an error for a noncanonical phone, a secret shorter than 32 bytes,
+/// or an HKDF expansion failure.
 pub fn derive_phone_retail_nullifier_v1(
     secret: &[u8],
     network_id: &[u8; Hash::LENGTH],
@@ -509,6 +514,10 @@ pub fn derive_phone_retail_nullifier_v1(
 /// Decrypt a BFV input at the trusted attestor boundary and derive its phone
 /// nullifier only if the encrypted plaintext itself is exact canonical E.164.
 /// The plaintext remains local to the attestor and is never a ledger field.
+///
+/// # Errors
+/// Returns an error if BFV decryption fails, the plaintext is not canonical E.164,
+/// the nullifier secret is shorter than 32 bytes, or HKDF expansion fails.
 pub fn derive_phone_retail_nullifier_from_ciphertext_v1(
     public_parameters: &BfvIdentifierPublicParameters,
     secret_key: &BfvSecretKey,

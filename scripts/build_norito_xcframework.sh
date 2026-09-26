@@ -1710,8 +1710,8 @@ protocol_abis = re.findall(
     protocol.read_text(encoding="utf-8"),
     re.MULTILINE,
 )
-if header_abis != ["23"]:
-    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 23")
+if header_abis != ["24"]:
+    raise SystemExit("authoritative NoritoBridge public header ABI is not exact 24")
 if bridge_aliases != ["PRIVACY_BRIDGE_ABI_VERSION_V1"]:
     raise SystemExit("NoritoBridge Rust ABI alias is not exact")
 if protocol_abis != header_abis:
@@ -1850,6 +1850,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_chain_discriminant_scope_enter",
     "connect_norito_chain_discriminant_scope_exit",
     "connect_norito_encode_transfer_signed_transaction",
+    "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg",
     "connect_norito_encode_transfer_instruction_box",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
@@ -2034,8 +2035,8 @@ for root, directories, files in os.walk(xcframework, followlinks=False):
 
 with manifest_path.open("r", encoding="utf-8") as handle:
     manifest = json.load(handle, object_pairs_hook=object_without_duplicates)
-if manifest.get("native_bridge_abi_version") != 23:
-    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 23")
+if manifest.get("native_bridge_abi_version") != 24:
+    raise SystemExit("staged NoritoBridge manifest does not bind exact ABI 24")
 hashes = manifest.get("hashes")
 if not isinstance(hashes, dict) or set(hashes) != set(expected_slices):
     raise SystemExit("staged NoritoBridge manifest has a non-canonical slice inventory")

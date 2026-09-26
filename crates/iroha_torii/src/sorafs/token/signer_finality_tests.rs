@@ -4,6 +4,7 @@ use super::{
     signer_finality::{
         CoreFinalityV1, FinalityFloorV1, HistoricalFinalityV1, SignerFinalityV1,
         check_control_pins, check_observed_control, check_registered_provider,
+        reject_unproved_completion,
     },
     signer_test_support::{
         CHAIN, NETWORK, NOW_MS, PROVIDER, SignedFixture, SignedObserver, TestSignerMode, anchor,
@@ -25,10 +26,15 @@ use iroha_data_model::{
 use sorafs_manifest::signer::custody::SignerCustodyAnchorV1;
 use sorafs_manifest::signer::{
     custody_control::{SignerCustodyControlStateV1, SignerCustodyPolicyV1},
+    protocol::{
+        SignerOperationAuditHeadV1, SignerOperationCommitmentV1, SignerOperationCustodyV1,
+        SignerOperationReservationV1,
+    },
+    receipt::{SignerCompletedOperationV1, SignerOperationFinalizedAnchorV1},
     stream_token_evidence::{
         SignerStreamTokenObservationExpectedV1, SignerStreamTokenObservationPhaseV1,
         SignerStreamTokenStateObservationBodyV1, SignerStreamTokenStateObservationV1,
-        verify_stream_token_signer_current_evidence_v1,
+        SignerStreamTokenStateSubjectV1, verify_stream_token_signer_current_evidence_v1,
     },
 };
 use std::{num::NonZeroUsize, sync::Arc};
@@ -62,6 +68,10 @@ fn actual_core_finality_requires_durable_certified_history_beyond_public_cache_c
         check_registered_provider(&state.view(), &pins)
             .expect("this test reaches the durable history gate after provider admission");
         let guard = CoreFinalityV1::new(Arc::new(state), pins);
+        assert!(matches!(
+            guard.require_completed_proof_source(),
+            Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+        ));
         assert!(matches!(
             guard.capture(anchor),
             Err(StreamTokenIssuerError::SignerFinalityUnavailable)
@@ -176,6 +186,70 @@ fn signed_control_fixture() -> (
     };
     state.validate().expect("well-formed comparison fixture");
     (pins, state, observation)
+}
+
+#[test]
+fn production_finality_refuses_unproved_completed_phase_or_subject() {
+    let (_, _, mut observation) = signed_control_fixture();
+    for phase in [
+        SignerStreamTokenObservationPhaseV1::Startup,
+        SignerStreamTokenObservationPhaseV1::BeforeAdmission,
+        SignerStreamTokenObservationPhaseV1::BeforeProvider,
+        SignerStreamTokenObservationPhaseV1::AfterProvider,
+        SignerStreamTokenObservationPhaseV1::BeforeCommit,
+    ] {
+        observation.phase = phase;
+        assert!(reject_unproved_completion(&observation).is_ok());
+    }
+    for phase in [
+        SignerStreamTokenObservationPhaseV1::AfterCommit,
+        SignerStreamTokenObservationPhaseV1::BeforeRelease,
+    ] {
+        observation.phase = phase;
+        assert!(matches!(
+            reject_unproved_completion(&observation),
+            Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+        ));
+    }
+    observation.phase = SignerStreamTokenObservationPhaseV1::BeforeAdmission;
+    // This is an intentionally untrusted row shape, not a finalized native operation.
+    observation.subject = SignerStreamTokenStateSubjectV1::CompletedOperation {
+        binding_digest: [1; 32],
+        operation_id: [2; 32],
+        signing_payload_digest: [3; 32],
+        signing_payload_size: 1,
+        completed_operation: Box::new(SignerCompletedOperationV1 {
+            operation_id: [2; 32],
+            intent_digest: [4; 32],
+            original_custody: SignerOperationCustodyV1 {
+                record_digest: [5; 32],
+                control_state_digest: [6; 32],
+            },
+            reservation: SignerOperationReservationV1 {
+                reservation_id: [7; 32],
+                fence: 1,
+                expires_at_unix_ms: NOW_MS + 1,
+            },
+            commitment: SignerOperationCommitmentV1 {
+                audit: SignerOperationAuditHeadV1 {
+                    sequence: 1,
+                    digest: [8; 32],
+                },
+                response_digest: [9; 32],
+            },
+            signatures_digest: [10; 32],
+            completed_at_unix_ms: NOW_MS,
+            anchor: SignerOperationFinalizedAnchorV1 {
+                height: 1,
+                block_hash: [11; 32],
+                operation_state_digest: [12; 32],
+            },
+        }),
+    };
+    assert!(matches!(
+        reject_unproved_completion(&observation),
+        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+    ));
 }
 
 #[test]

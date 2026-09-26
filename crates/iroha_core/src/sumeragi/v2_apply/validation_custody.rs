@@ -20,8 +20,12 @@ mod sealed {
 
 /// An original candidate phase, never an erased allocation or scalar receipt.
 pub(crate) trait RetainedValidationOwner: sealed::Owner + Send + 'static {
-    /// Compare only the original frozen context and canonical proposal bytes.
+    /// Match the original frozen context and proposal identity. The service
+    /// compares complete bodies while an unfinished phase retains its decode.
     fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool;
+    /// Retain the decoded body only while this phase needs it for a source or
+    /// capture retry. A ready phase can authenticate a fresh durable decode.
+    fn needs_decoded_body(&self) -> bool;
     /// The original prefix only after all captures complete, without reexecution.
     fn ready_commitment(&self) -> Option<wire::ExecutionCommitment>;
 }
@@ -30,6 +34,9 @@ impl<A> sealed::Owner for crate::state::RetainedCarrier<A> {}
 impl<A: Send + 'static> RetainedValidationOwner for crate::state::RetainedCarrier<A> {
     fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool {
         self.matches_validation_candidate(context, body)
+    }
+    fn needs_decoded_body(&self) -> bool {
+        self.ready_commitment().is_none()
     }
     fn ready_commitment(&self) -> Option<wire::ExecutionCommitment> {
         self.ready_commitment()
@@ -90,6 +97,9 @@ pub(in crate::sumeragi) mod test_support {
                     .canonical_proposal_wire_hash()
                     .is_ok_and(|hash| hash == self.wire_hash)
         }
+        fn needs_decoded_body(&self) -> bool {
+            self.commitment.is_none()
+        }
         fn ready_commitment(&self) -> Option<wire::ExecutionCommitment> {
             self.commitment
         }
@@ -100,6 +110,12 @@ pub(in crate::sumeragi) mod test_support {
                 .iter()
                 .find(|row| row.subject == subject)
                 .and_then(|row| row.owner.as_ref())
+        }
+        pub(crate) fn body_for_test(&self, subject: wire::BlockSubject) -> Option<&SignedBlock> {
+            self.candidates
+                .iter()
+                .find(|row| row.subject == subject)
+                .and_then(|row| row.body.as_ref())
         }
         pub(crate) fn marker_counts_for_test(&self) -> (usize, usize) {
             (
@@ -134,12 +150,14 @@ pub(crate) trait CarrierValidator {
         context: &wire::HeightContext,
         body: &SignedBlock,
     ) -> Result<Self::Owner, Self::Error>;
-    /// Advance only the original retained phase, or return it with its local refusal.
+    /// Advance only the original retained phase with its original decoded body,
+    /// or return it with its local refusal.
     /// Source recovery may finish the first execution; executed phases must never rerun
     /// that execution or turn a local readiness failure into a proposal rejection.
     fn resume(
         &mut self,
         owner: Self::Owner,
+        body: &SignedBlock,
     ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)>;
 }
 
@@ -184,6 +202,7 @@ pub(crate) enum CarrierCustodyError {
 
 struct Candidate<O> {
     subject: wire::BlockSubject,
+    body: Option<SignedBlock>,
     owner: Option<O>,
 }
 
@@ -193,7 +212,8 @@ struct Marker {
 }
 
 /// Descriptor storage admitted by count and exact requested allocation bytes.
-/// Nested candidate payload capacity remains inside each original owner.
+/// The decoded body handle lives inline in the admitted candidate descriptor.
+/// Its nested decoded payload allocations remain outside this descriptor charge.
 pub(crate) struct RetainedBodyValidationService<P: CarrierValidator> {
     candidates: Vec<Candidate<P::Owner>>,
     markers: Vec<Marker>,
@@ -217,7 +237,7 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
     }
 
     /// Plan both actual vector allocations without allocating or executing.
-    /// This funds inline owner storage, not its separately retained payloads.
+    /// This funds inline owner and decoded-body handles, not nested payloads.
     pub(crate) fn descriptor_bytes(limit: usize) -> Result<usize, AllocationRefusal> {
         Self::descriptor_layouts(limit)?
             .into_iter()
@@ -273,7 +293,10 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
             .candidates
             .iter()
             .find(|row| row.subject == durable.subject());
-        if candidate.is_some_and(|row| row.owner.is_none()) {
+        if candidate.is_some_and(|row| match row.owner.as_ref() {
+            None => true,
+            Some(owner) => owner.needs_decoded_body() && row.body.is_none(),
+        }) {
             return Err(CarrierCustodyError::MissingOwner);
         }
         if (!self.markers.iter().any(|row| row.durable == *durable)
@@ -285,16 +308,18 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
         Ok(())
     }
 
-    /// Install before capture retry or fsync. Incomplete capture retains only its
-    /// candidate; a complete capture can add a pending marker occurrence. A prior
-    /// confirmed occurrence is never overwritten.
+    /// Install the subject tombstone before producer execution, then retain the
+    /// decoded body only when the returned phase needs it for a later retry.
+    /// A complete capture can add a pending marker occurrence. A prior confirmed
+    /// occurrence is never overwritten.
     pub(crate) fn prepare_marker(
         &mut self,
         context: &wire::HeightContext,
-        body: &SignedBlock,
+        body: SignedBlock,
         durable: &DurableBodyReceipt,
         requires_existing_owner: bool,
     ) -> Result<CarrierMarkerPreparation<P::Error>, CarrierCustodyError> {
+        let mut decoded = Some(body);
         let existing = self
             .candidates
             .iter()
@@ -304,7 +329,22 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
             return Err(CarrierCustodyError::Capacity);
         }
         let index = match existing {
-            Some(index) => index,
+            Some(index) => {
+                let candidate = &self.candidates[index];
+                let owner = candidate
+                    .owner
+                    .as_ref()
+                    .ok_or(CarrierCustodyError::MissingOwner)?;
+                if owner.needs_decoded_body() && candidate.body.is_none() {
+                    return Err(CarrierCustodyError::MissingOwner);
+                }
+                if let Some(retained) = candidate.body.as_ref() {
+                    if decoded.as_ref() != Some(retained) {
+                        return Err(CarrierCustodyError::Identity);
+                    }
+                }
+                index
+            }
             None => {
                 if requires_existing_owner {
                     return Err(CarrierCustodyError::MissingOwner);
@@ -318,9 +358,16 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
                 let index = self.candidates.len();
                 self.candidates.push(Candidate {
                     subject: durable.subject(),
+                    body: None,
                     owner: None,
                 });
-                let owner = match self.validator.prepare(context, body) {
+                // Keep the decoded payload on this stack while the producer
+                // runs. A prepare panic leaves only the subject tombstone;
+                // its nested decoded allocations unwind with this local.
+                let original_body = decoded
+                    .as_ref()
+                    .expect("decoded body precedes original preparation");
+                let owner = match self.validator.prepare(context, original_body) {
                     Ok(owner) => owner,
                     Err(error) => {
                         // The producer's explicit error contract guarantees no
@@ -335,21 +382,34 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
                         return Ok(CarrierMarkerPreparation::ValidationError(error));
                     }
                 };
+                if owner.needs_decoded_body() {
+                    self.candidates[index].body = decoded.take();
+                }
                 self.candidates[index].owner = Some(owner);
                 index
             }
         };
-        let owner = self.candidates[index]
+        let candidate = &self.candidates[index];
+        let current_body = candidate
+            .body
+            .as_ref()
+            .or(decoded.as_ref())
+            .ok_or(CarrierCustodyError::MissingOwner)?;
+        let owner = candidate
             .owner
             .as_ref()
             .ok_or(CarrierCustodyError::MissingOwner)?;
-        if !owner.matches_candidate(context, body) {
+        let matches = owner.matches_candidate(context, current_body);
+        let ready = owner.ready_commitment();
+        if !matches {
+            self.unretain_finished_body(index, &mut decoded);
             return Err(CarrierCustodyError::Identity);
         }
-        let commitment = match owner.ready_commitment() {
+        self.unretain_finished_body(index, &mut decoded);
+        let commitment = match ready {
             Some(commitment) => commitment,
             None => {
-                if let Some(refusal) = self.resume_candidate(index, context, body)? {
+                if let Some(refusal) = self.resume_candidate(index, context, decoded.as_ref())? {
                     return Ok(CarrierMarkerPreparation::Deferred(refusal));
                 }
                 self.candidates[index]
@@ -360,6 +420,9 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
                     .ok_or(CarrierCustodyError::IncompleteCapture)?
             }
         };
+        // A ready owner no longer retains the decoded proposal while the marker
+        // is written; any current-call retry decode also ends before that I/O.
+        drop(decoded);
         if marker.is_none() {
             self.markers.push(Marker {
                 durable: durable.clone(),
@@ -369,36 +432,64 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
         Ok(CarrierMarkerPreparation::Ready(commitment))
     }
 
+    /// Give the current call the moved decode until its synchronous checks end;
+    /// only an unfinished source/capture phase keeps it in the candidate slot.
+    fn unretain_finished_body(&mut self, index: usize, decoded: &mut Option<SignedBlock>) {
+        let candidate = &mut self.candidates[index];
+        if candidate
+            .owner
+            .as_ref()
+            .is_some_and(|owner| !owner.needs_decoded_body())
+        {
+            let retained = candidate.body.take();
+            if decoded.is_none() {
+                *decoded = retained;
+            } else {
+                drop(retained);
+            }
+        }
+    }
+
     // Only unfinished capture enters this consuming frame. Ready marker/cache
     // paths borrow their original owner without moving it through a resume Result.
     fn resume_candidate(
         &mut self,
         index: usize,
         context: &wire::HeightContext,
-        body: &SignedBlock,
+        decoded_body: Option<&SignedBlock>,
     ) -> Result<Option<LocalValidationRefusal>, CarrierCustodyError> {
-        let owner = self.candidates[index]
+        let candidate = &mut self.candidates[index];
+        let body = candidate
+            .body
+            .as_ref()
+            .or(decoded_body)
+            .ok_or(CarrierCustodyError::MissingOwner)?;
+        let owner = candidate
             .owner
             .take()
             .ok_or(CarrierCustodyError::MissingOwner)?;
         // Resume consumes the same phase; ordinary refusal restores it before
         // any outward error or wake can escape. Panic remains fail-stop, with an
         // occupied subject tombstone that cannot authorize fresh execution.
-        let refusal = match self.validator.resume(owner) {
+        let refusal = match self.validator.resume(owner, body) {
             Ok(owner) => {
-                self.candidates[index].owner = Some(owner);
+                candidate.owner = Some(owner);
                 None
             }
             Err((owner, refusal)) => {
-                self.candidates[index].owner = Some(owner);
+                candidate.owner = Some(owner);
                 Some(refusal)
             }
         };
-        let owner = self.candidates[index]
+        let owner = candidate
             .owner
             .as_ref()
             .expect("capture completion restored its current original phase");
-        if !owner.matches_candidate(context, body) {
+        let matches = owner.matches_candidate(context, body);
+        if !owner.needs_decoded_body() {
+            drop(candidate.body.take());
+        }
+        if !matches {
             return Err(CarrierCustodyError::Identity);
         }
         Ok(refusal)
@@ -495,6 +586,9 @@ impl<P: CarrierValidator> SelectedValidationCarrier<'_, P> {
                 self.service
                     .markers
                     .retain(|row| row.durable.subject() != subject);
+                // Publication succeeded; the subject tombstone no longer needs
+                // the decoded proposal, while local refusal keeps it for retry.
+                drop(self.service.candidates[self.index].body.take());
                 Ok(value)
             }
             Err((owner, error)) => {

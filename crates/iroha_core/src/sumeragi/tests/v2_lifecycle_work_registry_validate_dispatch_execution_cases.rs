@@ -4927,6 +4927,7 @@ mod retained_dispatch {
         fn resume(
             &mut self,
             owner: Self::Owner,
+            _body: &SignedBlock,
         ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
             self.resumes.fetch_add(1, Ordering::SeqCst);
             assert!(!self.ready, "ready owners must not enter capture again");

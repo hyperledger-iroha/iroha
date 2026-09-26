@@ -13,7 +13,7 @@ use std::ptr;
 
 use smallvec::SmallVec;
 
-#[cfg(feature = "simd_support")]
+#[cfg(feature = "simd")]
 use core_simd::u64x8;
 
 #[cfg(test)]
@@ -41,13 +41,13 @@ pub(crate) const HBV_CAPACITY: usize = H_CAPACITY + 1;
 
 const DEFAULT_BUCKET_ALLOC: usize = 1;
 
-#[cfg(not(feature = "simd_support"))]
+#[cfg(not(feature = "simd"))]
 #[allow(non_camel_case_types)]
 pub struct u64x8 {
     _data: [u64; 8],
 }
 
-#[cfg(not(feature = "simd_support"))]
+#[cfg(not(feature = "simd"))]
 impl u64x8 {
     #[inline(always)]
     fn from_array(data: [u64; 8]) -> Self {

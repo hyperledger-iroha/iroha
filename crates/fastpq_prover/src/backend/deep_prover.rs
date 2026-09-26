@@ -21,8 +21,8 @@ use super::{
     deep_geometry::{CONSTRAINTS, DeepGeometry, FRI_ARITIES, FRI_LENGTHS, LDE_ROWS, TRACE_ROWS},
     deep_polynomial::DeepPolynomialSource,
     deep_proof::{
-        self, DeepProof, FriGroup, FriRound, OodAnswers, OpeningPlans, QuotientOpening, RowOpening,
-        RowValues,
+        self, DeepProof, FriGroup, FriRound, FriValues, OodAnswers, OpeningPlans, QuotientOpening,
+        RowOpening, RowValues,
     },
     deep_quotient::{DeepQuotientLimits, PreparedDeepTrace},
     deep_relation::DeepRelation,
@@ -307,15 +307,19 @@ pub(super) fn prove(
         .map(|(round, indices)| {
             let groups = indices
                 .iter()
-                .map(|&index| FriGroup {
-                    index: index as u32,
-                    values: (0..FRI_ARITIES[round])
-                        .map(|coordinate| {
-                            layers[round][index + coordinate * FRI_LENGTHS[round + 1]]
-                        })
-                        .collect(),
+                .map(|&index| {
+                    Ok(FriGroup {
+                        index: index as u32,
+                        values: FriValues::new(
+                            (0..FRI_ARITIES[round])
+                                .map(|coordinate| {
+                                    layers[round][index + coordinate * FRI_LENGTHS[round + 1]]
+                                })
+                                .collect(),
+                        )?,
+                    })
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             Ok(FriRound {
                 groups,
                 siblings: trees[round].frontier(&plans.rounds[round])?,
