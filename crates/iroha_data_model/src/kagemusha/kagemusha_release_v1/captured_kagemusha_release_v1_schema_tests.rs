@@ -1,4 +1,4 @@
-//! Immutable compiler-captured identities for this source owner’s existing codecs.
+//! Immutable captured codec identities and separate checks for later declarations.
 
 const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::KagemushaArtifactRoleV1>(
@@ -62,12 +62,6 @@ const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::KagemushaInternalValidationReceiptV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaInternalValidationReceiptV1",
     ),
-    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaTestnetExperimentScopeV1>(
-        "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaTestnetExperimentScopeV1",
-    ),
-    crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleasePurposeV1>(
-        "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleasePurposeV1",
-    ),
     crate::captured_schema_tests::Case::bidirectional::<super::KagemushaReleaseManifestV1>(
         "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleaseManifestV1",
     ),
@@ -113,4 +107,30 @@ fn captured_codec_schema_identities() {
     for case in CASES {
         case.check();
     }
+}
+
+#[test]
+fn experimental_release_schema_identities() {
+    // These declarations postdate the immutable compiler capture. Pin their current
+    // declared roots and domain-separated hashes without rewriting capture evidence.
+    fn check<T>(name: &str, hash: &str)
+    where
+        T: norito::NoritoSchema + norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), name);
+        assert_eq!(T::frame_name(), name);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    check::<super::KagemushaTestnetExperimentScopeV1>(
+        "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaTestnetExperimentScopeV1",
+        "80b9f5c811009932adef52a35db83a72",
+    );
+    check::<super::KagemushaReleasePurposeV1>(
+        "iroha_data_model::kagemusha::kagemusha_release_v1::KagemushaReleasePurposeV1",
+        "0832c83fa53142b7a13be5cab6cdc8a5",
+    );
 }
