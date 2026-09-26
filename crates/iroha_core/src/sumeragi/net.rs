@@ -493,6 +493,27 @@ impl SumeragiIngress {
 
     /// Route one message from the P2P subscription. Its retention (P2P credit) is released
     /// before this returns.
+    ///
+    /// Only a [`PeerMessage`] reaches a driver, so every routed frame carries the peer of the
+    /// authenticated connection it arrived on (and is dropped as [`Routed::Relayed`] when its
+    /// origin differs). A decoded [`SumeragiFrame`] carries no sender and cannot be routed:
+    ///
+    /// ```compile_fail
+    /// use iroha_core::sumeragi::net::{SumeragiFrame, SumeragiIngress};
+    ///
+    /// fn route_senderless_frame(ingress: &SumeragiIngress, frame: SumeragiFrame) {
+    ///     ingress.route(frame);
+    /// }
+    /// ```
+    ///
+    /// ```no_run
+    /// use iroha_core::{NetworkMessage, sumeragi::net::SumeragiIngress};
+    /// use iroha_p2p::peer::message::PeerMessage;
+    ///
+    /// fn route_authenticated(ingress: &SumeragiIngress, message: PeerMessage<NetworkMessage>) {
+    ///     ingress.route(message);
+    /// }
+    /// ```
     pub fn route(&self, message: PeerMessage<NetworkMessage>) -> Routed {
         let (origin, authenticated_via, payload, _bytes, retention) = message.into_parts();
         drop(retention);
