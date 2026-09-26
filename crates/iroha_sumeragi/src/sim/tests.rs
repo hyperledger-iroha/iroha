@@ -588,3 +588,31 @@ fn host_seam_runs_a_wrapped_host() {
         );
     }
 }
+
+/// §13.5 O2 hook: a machine killed at its `n`-th write completion — just before the write is
+/// durable, or right after and before anything waiting for it — for every early completion;
+/// the oracles (O-PBS above all) hold, the machine restarts and the chain goes on.
+#[test]
+fn io_kill_at_each_write_completion() {
+    use super::scenario::IoKill;
+    let plain = run(scenarios::smoke(0, 4)).unwrap_or_else(|e| panic!("{e}"));
+    let writes = plain.io_completions[0];
+    assert!(writes > 40, "{writes}");
+    for nth in 1..=24 {
+        for before_durable in [true, false] {
+            let mut sc = scenarios::smoke(0, 4);
+            // The kill and the restart precede the heal time (as every crash of F13/F14/F27).
+            sc.heal_at = 12_000;
+            sc.duration = 30_000;
+            sc.io_kill = Some(IoKill {
+                machine: 0,
+                nth,
+                before_durable,
+                down: 300,
+            });
+            let world = run(sc).unwrap_or_else(|e| panic!("nth {nth} {before_durable}: {e}"));
+            assert_eq!(world.stats.crashes, 1, "nth {nth}");
+            assert!(world.committed(0) >= 5, "nth {nth}: {}", world.committed(0));
+        }
+    }
+}

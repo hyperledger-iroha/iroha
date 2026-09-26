@@ -18,15 +18,15 @@ use super::{
     byz::Adversary,
     crypto::{SharedLog, SimCrypto, SimSigner},
     driver::{
-        Clock, Executor, Io, Write, block_exec, decode_txs, divergent_exec, encode_tx_flagged,
-        payload_mints,
+        Clock, Executor, Io, OwnedWrite, Write, block_exec, decode_txs, divergent_exec,
+        encode_tx_flagged, payload_mints,
     },
-    host::{Host, Start},
+    host::{Done, Host, Op, Start, fake_host},
     net::{Fate, NetConfig, Nic, Packet, approx_size, class_of, lane},
     oracle::Oracle,
     records::{KeyStore, StoreId},
     rng::{Rng, seed_of},
-    scenario::{Authority, Checks, Churn, CrashPoint, Fault, Profile, Scenario, Workload},
+    scenario::{Authority, Checks, Churn, CrashPoint, Fault, IoKill, Profile, Scenario, Workload},
 };
 use crate::{
     api::{Action, CommittedTip, Event, ExecOutcome, HaltReason, Init, LocalParams},
@@ -188,6 +188,21 @@ enum Ev {
         epoch: u64,
         job: u64,
     },
+    /// A device operation of a host that owns its scheduling completed.
+    Done {
+        r: usize,
+        epoch: u64,
+        done: Box<Done>,
+    },
+    /// An owned `Execute` finished: the post-state is cached, then the host learns it.
+    OwnedExec {
+        r: usize,
+        epoch: u64,
+        op: u64,
+        bh: Hash32,
+        height: u64,
+        outcome: ExecOutcome,
+    },
     NicFree {
         r: usize,
         epoch: u64,
@@ -276,6 +291,9 @@ pub struct World {
     ready: Vec<Millis>,
     script: Vec<Option<Fault>>,
     churn: Option<Churn>,
+    io_kill: Option<IoKill>,
+    /// Write completions per machine so far.
+    pub io_completions: Vec<u64>,
     workload: Option<Workload>,
     /// Submitted transactions per instance.
     pub txs: Vec<TxLog>,
@@ -441,7 +459,12 @@ impl World {
                     machine: m,
                     inst: i,
                     keys: keys.clone(),
-                    host: (sc.host)(m, i),
+                    // Byzantine strategies rewrite the fake driver's actions (§13.5).
+                    host: if sc.is_byz(m) {
+                        fake_host(m, i)
+                    } else {
+                        (sc.host)(m, i)
+                    },
                     crypto,
                     records: BTreeMap::new(),
                     bodies: BTreeMap::new(),
@@ -507,6 +530,8 @@ impl World {
             ready: vec![Millis::MAX; replica_count],
             script: Vec::new(),
             churn: sc.churn,
+            io_kill: sc.io_kill,
+            io_completions: vec![0; machines_n],
             workload: sc.workload,
             txs: Vec::new(),
             next_tx: 0,
@@ -655,12 +680,41 @@ impl World {
             Ev::Local { r, epoch, event } => {
                 if self.alive(r, epoch) {
                     self.replicas[r].host.deliver(*event);
+                    self.poll_host(r, self.now);
                     self.refresh(r);
+                }
+            }
+            Ev::Done { r, epoch, done } => {
+                if self.alive(r, epoch) {
+                    self.complete_host(r, *done);
+                }
+            }
+            Ev::OwnedExec {
+                r,
+                epoch,
+                op,
+                bh,
+                height,
+                outcome,
+            } => {
+                if self.alive(r, epoch) {
+                    if let ExecOutcome::Valid(res) = &outcome {
+                        let instance = self.instances[self.replicas[r].inst].id;
+                        let exec = &mut self.replicas[r].exec;
+                        exec.cache.insert(bh, (height, *res));
+                        exec.executed.record(&instance, height, &bh, res);
+                    }
+                    let outcome = Some(outcome);
+                    self.complete_host(r, Done::Executed { op, outcome });
                 }
             }
             Ev::IoDone { r, epoch, id } => {
                 if self.alive(r, epoch) {
-                    self.io_done(r, id);
+                    match self.io_kill_at(r) {
+                        Some(true) => self.io_kill(r),
+                        Some(false) => self.io_done(r, id, true),
+                        None => self.io_done(r, id, false),
+                    }
                 }
             }
             Ev::ExecDone { r, epoch, job } => {
@@ -741,8 +795,10 @@ impl World {
             self.ready[r] = Millis::MAX;
             return;
         }
-        let wake = rep.host.next_wakeup();
+        // The core's own deadline (a host that owns its scheduling may also wake for its timers).
+        let wake = core_wakeup(&*rep.host);
         let Some(event) = rep.host.next_input(local_now) else {
+            self.poll_host(r, self.now);
             self.refresh(r);
             return;
         };
@@ -760,7 +816,7 @@ impl World {
         let is_tick = matches!(event, Event::Tick);
         let before = rep.crypto.pairings();
         let actions = rep.host.handle(local_now, event);
-        let after_wake = rep.host.next_wakeup();
+        let after_wake = core_wakeup(&*rep.host);
         let pairings = rep.crypto.pairings() - before;
         if let Some(core) = rep.host.core() {
             rep.height = core.status().height;
@@ -791,7 +847,12 @@ impl World {
             self.after_handle(r, &actions);
             actions
         };
-        self.apply_actions(r, actions, at);
+        if self.replicas[r].host.owns_io() {
+            self.observe_owned(r, &actions);
+            self.poll_host(r, at);
+        } else {
+            self.apply_actions(r, actions, at);
+        }
         self.refresh(r);
     }
 
@@ -816,6 +877,11 @@ impl World {
         let Action::PersistSafety(record) = action else {
             return CrashPoint::Random;
         };
+        self.crash_point_of_record(r, record)
+    }
+
+    /// The crash point right after the write of `record` was submitted.
+    fn crash_point_of_record(&mut self, r: usize, record: &SafetyRecord) -> CrashPoint {
         let rep = &mut self.replicas[r];
         let point = match rep.last_persisted.get(&record.key) {
             Some(old) if old.height == record.height => {
@@ -843,7 +909,7 @@ impl World {
             }
         };
         rep.last_persisted
-            .insert(record.key.clone(), (**record).clone());
+            .insert(record.key.clone(), record.clone());
         point
     }
 
@@ -1200,10 +1266,38 @@ impl World {
 
     // ---- storage, execution, building -------------------------------------------------------
 
-    fn io_done(&mut self, r: usize, id: u64) {
+    /// Count a write completion of replica `r`'s machine: `Some(before_durable)` if the scenario
+    /// kills the machine at it (§13.5 O2 conformance, [`Scenario::io_kill`]).
+    fn io_kill_at(&mut self, r: usize) -> Option<bool> {
+        let m = self.replicas[r].machine;
+        self.io_completions[m] += 1;
+        let kill = self.io_kill?;
+        (kill.machine == m && self.io_completions[m] == kill.nth).then_some(kill.before_durable)
+    }
+
+    /// Kill replica `r`'s machine at a write completion and restart it after the scenario's
+    /// down time.
+    fn io_kill(&mut self, r: usize) {
+        let m = self.replicas[r].machine;
+        let down = self.io_kill.map_or(0, |kill| kill.down);
+        self.trace(m, "IO KILL".to_owned());
+        self.crash(m);
+        self.schedule(self.now + down, Ev::Restart(m));
+    }
+
+    /// Complete the writes up to `id` (durable), then perform what waited for them — unless
+    /// `kill` kills the machine right after they became durable.
+    fn io_done(&mut self, r: usize, id: u64, kill: bool) {
         let writes = self.replicas[r].io.complete(id);
+        let mut owned = Vec::new();
         for write in writes {
             match write {
+                Write::Owned { op, ok, write } => {
+                    if ok && !self.owned_durable(r, write) {
+                        return;
+                    }
+                    owned.push(Done::Written { op, ok });
+                }
                 Write::Record(record, bytes) => {
                     let rep = &mut self.replicas[r];
                     // MS33a: one record file per instance for all keys.
@@ -1237,6 +1331,22 @@ impl World {
             }
         }
         let m = self.replicas[r].machine;
+        if kill {
+            return self.io_kill(r);
+        }
+        if self.replicas[r].host.owns_io() {
+            if !owned.is_empty() && self.churn_hit(m, CrashPoint::AfterDurable) {
+                self.crash_by_churn(m);
+                return;
+            }
+            for done in owned {
+                self.complete_host(r, done);
+            }
+            if self.churn_hit(m, CrashPoint::Random) {
+                self.crash_by_churn(m);
+            }
+            return;
+        }
         // O2: the host releases the effects that waited for these writes.
         let released = self.replicas[r].host.durable(id);
         if !released.is_empty() && self.churn_hit(m, CrashPoint::AfterDurable) {
@@ -1362,24 +1472,7 @@ impl World {
                 self.replicas[r].exec.parked.push(job);
                 continue;
             };
-            let m = self.replicas[r].machine;
-            let profile = self.machines[m].profile;
-            let outcome = if self.rng.chance(profile.exec_fail_ppm) {
-                ExecOutcome::Failed("injected".to_owned())
-            } else if profile.reject_nonempty && !job.block.payload.is_empty() {
-                ExecOutcome::Invalid
-            } else if profile.divergent && !job.block.payload.is_empty() {
-                divergent_exec(&parent, &job.block.payload, &job.bh)
-            } else {
-                block_exec(&parent, &job.block)
-            };
-            let kib = u64::try_from(job.block.payload.len()).unwrap_or(u64::MAX) / 1024;
-            let nonempty = if job.block.payload.is_empty() {
-                0
-            } else {
-                profile.exec_nonempty
-            };
-            let latency = profile.exec_base + profile.exec_per_kib.saturating_mul(kib) + nonempty;
+            let (outcome, latency) = self.exec_outcome(r, &job.block, &job.bh, &parent);
             job.outcome = Some(outcome);
             let id = job.id;
             let finish = at + latency;
@@ -1388,6 +1481,41 @@ impl World {
             self.schedule(finish, Ev::ExecDone { r, epoch, job: id });
             return;
         }
+    }
+
+    /// The executor's outcome for `block` (hash `bh`) on the post-state `parent` under the
+    /// machine profile (injected failures, defects, divergence), and its latency.
+    fn exec_outcome(
+        &mut self,
+        r: usize,
+        block: &Block,
+        bh: &Hash32,
+        parent: &Hash32,
+    ) -> (ExecOutcome, Millis) {
+        let m = self.replicas[r].machine;
+        let profile = self.machines[m].profile;
+        let outcome = if self.rng.chance(profile.exec_fail_ppm) {
+            ExecOutcome::Failed("injected".to_owned())
+        } else if profile.reject_nonempty && !block.payload.is_empty() {
+            ExecOutcome::Invalid
+        } else if profile.divergent && !block.payload.is_empty() {
+            divergent_exec(parent, &block.payload, bh)
+        } else {
+            block_exec(parent, block)
+        };
+        (outcome, self.exec_latency(m, block))
+    }
+
+    /// Execution latency of `block` on machine `m`.
+    fn exec_latency(&self, m: usize, block: &Block) -> Millis {
+        let profile = self.machines[m].profile;
+        let kib = u64::try_from(block.payload.len()).unwrap_or(u64::MAX) / 1024;
+        let nonempty = if block.payload.is_empty() {
+            0
+        } else {
+            profile.exec_nonempty
+        };
+        profile.exec_base + profile.exec_per_kib.saturating_mul(kib) + nonempty
     }
 
     fn exec_unpark(&mut self, r: usize) {
@@ -1546,6 +1674,241 @@ impl World {
         }
     }
 
+    // ---- hosts that own their driver scheduling (§13.5) ------------------------------------
+
+    /// The world's side of the core's actions of a host that owns its scheduling: the halt
+    /// reason is recorded (O-HALT); every other action is the host's to schedule.
+    fn observe_owned(&mut self, r: usize, actions: &[Action]) {
+        for action in actions {
+            if let Action::Halt(reason) = action {
+                self.replicas[r].halted = Some(*reason);
+                self.trace(r, format!("HALT {reason:?}"));
+            }
+        }
+    }
+
+    /// Perform the device operations replica `r`'s host wants now (in order; a churn crash may
+    /// cut the list short).
+    fn poll_host(&mut self, r: usize, at: Millis) {
+        let m = self.replicas[r].machine;
+        let epoch = self.machines[m].epoch;
+        if !self.alive(r, epoch) || !self.replicas[r].host.owns_io() {
+            return;
+        }
+        let local = self.machines[m].clock.local(self.now);
+        let ops = self.replicas[r].host.poll(local);
+        for op in ops {
+            if !self.alive(r, epoch) {
+                return;
+            }
+            let point = match &op {
+                Op::WriteRecord { record, .. } => self.crash_point_of_record(r, record),
+                _ => CrashPoint::Random,
+            };
+            if self.verbose {
+                eprintln!("t={:>7} #{r:<3} op {}", self.now, describe_op(&op));
+            }
+            self.perform_op(r, op, at);
+            if self.churn_hit(m, point) {
+                self.crash_by_churn(m);
+                return;
+            }
+        }
+    }
+
+    /// Hand a completion to replica `r`'s host, then perform what it wants next.
+    fn complete_host(&mut self, r: usize, done: Done) {
+        let m = self.replicas[r].machine;
+        let local = self.machines[m].clock.local(self.now);
+        self.replicas[r].host.complete(local, done);
+        self.poll_host(r, self.now);
+        self.refresh(r);
+    }
+
+    /// Make an owned write durable; `false` if the run failed or a churn crash hit inside apply.
+    fn owned_durable(&mut self, r: usize, write: OwnedWrite) -> bool {
+        match write {
+            OwnedWrite::Record(record, bytes) => {
+                let durable = Durable {
+                    record: *record,
+                    bytes,
+                };
+                let key = durable.record.key.clone();
+                self.replicas[r].records.insert(key, durable);
+            }
+            OwnedWrite::Body(block) => {
+                if block.header.height > self.replicas[r].applied.0 {
+                    let bh = block.hash(&self.hasher);
+                    self.replicas[r].bodies.insert(bh, *block);
+                }
+            }
+            OwnedWrite::Append(entry) => {
+                let height = entry.0.header.height;
+                let stored = u64::try_from(self.replicas[r].store.len()).unwrap_or(u64::MAX);
+                if height != stored + 1 {
+                    self.fail(format!(
+                        "O3: replica {r} appended height {height} to a block store of {stored} heights"
+                    ));
+                    return false;
+                }
+                self.replicas[r].store.push(*entry);
+                let m = self.replicas[r].machine;
+                if self.churn_hit(m, CrashPoint::InsideApply) {
+                    self.crash_by_churn(m);
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// A write of the device: its latency, and whether it succeeds (F27 failures are reported
+    /// to the host, which retries).
+    fn owned_write(&mut self, m: usize, extra: Millis) -> (Millis, bool) {
+        let p = self.machines[m].profile;
+        let latency = self.rng.range(p.write_min, p.write_max) + extra;
+        (latency, !self.rng.chance(p.write_fail_ppm))
+    }
+
+    /// Perform one device operation of replica `r`'s host (§13.5).
+    #[allow(clippy::too_many_lines)] // one arm per device operation
+    fn perform_op(&mut self, r: usize, op: Op, at: Millis) {
+        let m = self.replicas[r].machine;
+        let epoch = self.machines[m].epoch;
+        let done = |world: &mut Self, when: Millis, done: Done| {
+            world.schedule(
+                when,
+                Ev::Done {
+                    r,
+                    epoch,
+                    done: Box::new(done),
+                },
+            );
+        };
+        match op {
+            Op::WriteRecord { op, record } => {
+                let bytes = match record.encode(&self.hasher) {
+                    Ok(bytes) => bytes,
+                    Err(e) => return self.fail(format!("replica {r}: record encode: {e}")),
+                };
+                let (latency, ok) = self.owned_write(m, 0);
+                let write = OwnedWrite::Record(record, bytes);
+                let (id, when) =
+                    self.replicas[r]
+                        .io
+                        .write(at, latency, Write::Owned { op, ok, write });
+                self.schedule(when, Ev::IoDone { r, epoch, id });
+            }
+            Op::WriteBody { op, block } => {
+                let (latency, ok) = self.owned_write(m, 0);
+                let write = OwnedWrite::Body(block);
+                let (id, when) =
+                    self.replicas[r]
+                        .io
+                        .write(at, latency, Write::Owned { op, ok, write });
+                self.schedule(when, Ev::IoDone { r, epoch, id });
+            }
+            Op::Append { op, block, qc } => {
+                self.expose_qc(r, &qc);
+                let extra = self.machines[m].profile.block_write_extra;
+                let (latency, ok) = self.owned_write(m, extra);
+                let write = OwnedWrite::Append(Box::new((*block, *qc)));
+                let (id, when) =
+                    self.replicas[r]
+                        .io
+                        .write(at, latency, Write::Owned { op, ok, write });
+                self.schedule(when, Ev::IoDone { r, epoch, id });
+            }
+            Op::Execute { op, block } => {
+                let bh = block.hash(&self.hasher);
+                let Some(parent) = self.parent_result(r, &block) else {
+                    let outcome = None;
+                    return done(self, at, Done::Executed { op, outcome });
+                };
+                let (outcome, latency) = self.exec_outcome(r, &block, &bh, &parent);
+                let height = block.header.height;
+                self.schedule(
+                    at + latency,
+                    Ev::OwnedExec {
+                        r,
+                        epoch,
+                        op,
+                        bh,
+                        height,
+                        outcome,
+                    },
+                );
+            }
+            Op::Discard { op, height, keep } => {
+                self.replicas[r]
+                    .exec
+                    .cache
+                    .retain(|bh, (h, _)| *h != height || keep.contains(bh));
+                done(self, at, Done::Discarded { op });
+            }
+            Op::Prepare { op, block, qc } => {
+                let (tip_height, tip_hash, tip_result) = self.replicas[r].applied;
+                let height = block.header.height;
+                if height != tip_height + 1 || block.header.parent_hash != tip_hash {
+                    return self.fail(format!(
+                        "O3: replica {r} prepares {height}, which does not extend the applied state {tip_height}"
+                    ));
+                }
+                let cached = self.replicas[r]
+                    .exec
+                    .cache
+                    .get(&qc.block_hash)
+                    .map(|(_, res)| *res)
+                    .filter(|res| *res == qc.result);
+                let (result, latency) = if let Some(res) = cached {
+                    (Some(res), 0)
+                } else {
+                    let profile = self.machines[m].profile;
+                    let outcome = if profile.divergent && !block.payload.is_empty() {
+                        divergent_exec(&tip_result, &block.payload, &qc.block_hash)
+                    } else {
+                        block_exec(&tip_result, &block)
+                    };
+                    let result = match outcome {
+                        ExecOutcome::Valid(res) => Some(res),
+                        _ => None,
+                    };
+                    (result, self.exec_latency(m, &block))
+                };
+                done(self, at + latency, Done::Prepared { op, result });
+            }
+            Op::Commit { op, block, qc } => {
+                let inst = self.replicas[r].inst;
+                let height = block.header.height;
+                let rep = &mut self.replicas[r];
+                rep.applied = (height, qc.block_hash, qc.result);
+                rep.bodies.retain(|_, b| b.header.height > height);
+                rep.exec.cache.retain(|_, (h, _)| *h >= height);
+                rep.exec.executed.prune_through(height);
+                for (id, _) in decode_txs(&block.payload) {
+                    rep.txs.remove(&id);
+                }
+                let config_after_next = self.instances[inst].config(height + 2);
+                let when = at + self.machines[m].profile.apply_ms;
+                done(
+                    self,
+                    when,
+                    Done::Committed {
+                        op,
+                        config_after_next,
+                    },
+                );
+            }
+            Op::Build {
+                req,
+                max_bytes,
+                exec_budget_ms,
+            } => self.build_payload(r, req, max_bytes, exec_budget_ms, at),
+            Op::Reject { block_hash } => self.quarantine(r, &block_hash),
+            Op::Effect(effect) => self.perform(r, *effect, at),
+        }
+    }
+
     // ---- crashes and restarts ---------------------------------------------------------------
 
     fn churn_hit(&mut self, m: usize, point: CrashPoint) -> bool {
@@ -1686,7 +2049,7 @@ impl World {
             match started {
                 Ok(actions) => {
                     let rep = &mut self.replicas[r];
-                    let core_wake = rep.host.next_wakeup();
+                    let core_wake = core_wakeup(&*rep.host);
                     rep.wake_mark = (core_wake, local_now);
                     if let Some(core) = rep.host.core() {
                         rep.height = core.status().height;
@@ -1710,7 +2073,12 @@ impl World {
                     } else {
                         actions
                     };
-                    self.apply_actions(r, actions, self.now);
+                    if self.replicas[r].host.owns_io() {
+                        self.observe_owned(r, &actions);
+                        self.poll_host(r, self.now);
+                    } else {
+                        self.apply_actions(r, actions, self.now);
+                    }
                     self.refill_txs(r);
                     self.refresh(r);
                 }
@@ -2013,6 +2381,27 @@ impl World {
         (0..self.replicas.len())
             .filter(|r| !self.machines[self.replicas[*r].machine].byz)
             .collect()
+    }
+}
+
+/// The core's own next deadline behind a host (`Millis::MAX` while it is not running).
+fn core_wakeup(host: &dyn Host) -> Millis {
+    host.core().map_or(Millis::MAX, crate::Core::next_wakeup)
+}
+
+/// A short description of a host's device operation for verbose traces.
+fn describe_op(op: &Op) -> String {
+    match op {
+        Op::WriteRecord { op, record } => format!("write-record#{op} h{}", record.height),
+        Op::WriteBody { op, block } => format!("write-body#{op} h{}", block.header.height),
+        Op::Execute { op, block } => format!("execute#{op} h{}", block.header.height),
+        Op::Discard { op, height, .. } => format!("discard#{op} h{height}"),
+        Op::Prepare { op, block, .. } => format!("prepare#{op} h{}", block.header.height),
+        Op::Append { op, block, .. } => format!("append#{op} h{}", block.header.height),
+        Op::Commit { op, block, .. } => format!("commit#{op} h{}", block.header.height),
+        Op::Build { req, .. } => format!("build req{req}"),
+        Op::Reject { .. } => "reject".to_owned(),
+        Op::Effect(effect) => summarize(std::slice::from_ref(&**effect)),
     }
 }
 

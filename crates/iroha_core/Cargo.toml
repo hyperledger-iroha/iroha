@@ -198,6 +198,7 @@ iroha_schema = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 settlement_router = { path = "../settlement_router" }
 iroha_sccp = { path = "../iroha_sccp" }
+iroha_sumeragi = { workspace = true }
 tracing = { workspace = true }
 sha2 = { version = "0.10.9", default-features = false, features = ["compress"] }
 sha3 = { version = "0.10.8", default-features = false, features = ["std", "zeroize"] }
@@ -267,6 +268,8 @@ hex = { workspace = true }
 expect-test = { workspace = true }
 rcgen = "0.14.5"
 rand_08 = { package = "rand", version = "=0.8.7" }
+# The simulator hosts the Sumeragi driver for its §13.5 conformance tests.
+iroha_sumeragi = { workspace = true, features = ["sim"] }
 
 [[bench]]
 name = "validation"

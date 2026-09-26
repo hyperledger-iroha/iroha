@@ -196,6 +196,21 @@ pub struct Churn {
     pub targets: Vec<usize>,
 }
 
+/// Kill one machine at its `nth` write completion (§13.5 O2 conformance: nothing externally
+/// visible may precede durability, whichever completion the process dies at).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IoKill {
+    /// The machine.
+    pub machine: usize,
+    /// Which of its write completions (counted from 1 over the whole run).
+    pub nth: u64,
+    /// Kill just before the write becomes durable (it is lost), else right after it became
+    /// durable and before anything waiting for it takes effect.
+    pub before_durable: bool,
+    /// Down time before the restart.
+    pub down: Millis,
+}
+
 /// Transaction workload of an instance.
 #[derive(Clone, Copy, Debug)]
 pub struct Workload {
@@ -347,6 +362,8 @@ pub struct Scenario {
     pub script: Vec<(Millis, Fault)>,
     /// Random crash churn.
     pub churn: Option<Churn>,
+    /// Kill a machine at one write completion (§13.5 O2).
+    pub io_kill: Option<IoKill>,
     /// Workload (per instance), `None` = idle.
     pub workload: Option<Workload>,
     /// Committee schedule: from height → members as `(machine, key slot)`; the first entry
@@ -387,6 +404,7 @@ impl Scenario {
             silent_leader_from: 0,
             script: Vec::new(),
             churn: None,
+            io_kill: None,
             workload: Some(Workload::default()),
             committees: vec![(0, (0..n).map(|m| (m, 0)).collect())],
             checks: Checks::default(),

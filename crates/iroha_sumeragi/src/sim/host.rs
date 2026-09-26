@@ -11,18 +11,150 @@
 //! The default host, [`FakeHost`], is the simulator's fake driver. An external node
 //! implementation (the production driver of `iroha_core`, run against the world as its
 //! hardware) is another [`Host`], chosen per replica by [`Scenario::host`](super::Scenario).
+//! Byzantine machines always run the fake driver: their strategies rewrite its actions.
 //!
-//! TODO(WP4): when the production driver's persistence, serving or `Init` assembly are to run
-//! in the simulator too, move them behind this seam as backend traits of the same shape.
+//! **Hosts that own their driver scheduling.** A host whose [`Host::owns_io`] is `true` also
+//! schedules its own persistence (one ordered write queue with retries), execution (parking,
+//! most-recent-first, exactly one answer per `Execute`), apply (`CommitBlock` in order, reusing
+//! an execution in flight) and payload building. The world then no longer interprets the core's
+//! actions (the oracles still observe them): it performs only the host's device operations
+//! ([`Op`]) on the replica's fake backends — the write device (whose writes may fail, F27, and
+//! are lost in a crash), the executor with its post-state cache, the block store, the builder,
+//! the network and serving — and reports their completions ([`Done`]) back. `Init` assembly and
+//! serving stay with the world.
 
 use super::driver::{Barrier, Lanes};
 use crate::{
     Core,
-    api::{Action, ConfigError, Event, Init, LocalParams},
+    api::{Action, ConfigError, Event, ExecOutcome, Init, LocalParams},
     crypto::{Attestation, Crypto, Signer},
-    message::{TrafficClass, WireMessage},
-    types::{Millis, PublicKey},
+    message::{Block, Qc, TrafficClass, WireMessage},
+    safety::SafetyRecord,
+    types::{Hash32, HeightConfig, Millis, PublicKey},
 };
+
+/// A device operation of a host that owns its driver scheduling ([`Host::owns_io`]). `op` is
+/// the host's id of the operation; its [`Done`] carries it back.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Op {
+    /// Durably write a safety record (the write may fail: nothing is written, F27).
+    WriteRecord {
+        /// Operation id.
+        op: u64,
+        /// The record.
+        record: Box<SafetyRecord>,
+    },
+    /// Durably store a block body (may fail like a record write).
+    WriteBody {
+        /// Operation id.
+        op: u64,
+        /// The block.
+        block: Box<Block>,
+    },
+    /// Execute a block on its parent's post-state (the applied state or a cached post-state).
+    Execute {
+        /// Operation id.
+        op: u64,
+        /// The block.
+        block: Box<Block>,
+    },
+    /// Drop the cached post-states of the blocks at `height` other than `keep`.
+    Discard {
+        /// Operation id.
+        op: u64,
+        /// Height.
+        height: u64,
+        /// Blocks whose post-states are kept.
+        keep: Vec<Hash32>,
+    },
+    /// The post-state of the next committed block: the cached one if its commitment is
+    /// `qc.result`, otherwise by executing the block on the applied state (O3).
+    Prepare {
+        /// Operation id.
+        op: u64,
+        /// The committed block.
+        block: Box<Block>,
+        /// Its `CommitQC`.
+        qc: Box<Qc>,
+    },
+    /// Durably append a committed block and its `CommitQC` to the block store (may fail).
+    Append {
+        /// Operation id.
+        op: u64,
+        /// The committed block.
+        block: Box<Block>,
+        /// Its `CommitQC`.
+        qc: Box<Qc>,
+    },
+    /// Make the prepared post-state of the appended block the applied state.
+    Commit {
+        /// Operation id.
+        op: u64,
+        /// The committed block.
+        block: Box<Block>,
+        /// Its `CommitQC`.
+        qc: Box<Qc>,
+    },
+    /// Build a payload; answered with `Event::PayloadBuilt{req}` through [`Host::deliver`] (and
+    /// later `Event::PayloadReady{req}` if it was `EMPTY`).
+    Build {
+        /// Request id of the `BuildPayload`.
+        req: u64,
+        /// Size limit.
+        max_bytes: u32,
+        /// Execution budget hint.
+        exec_budget_ms: u32,
+    },
+    /// Quarantine the transactions of a rejected block (no completion).
+    Reject {
+        /// Block hash.
+        block_hash: Hash32,
+    },
+    /// An externally visible effect the host's barrier released — `Send`, `Broadcast`,
+    /// `FetchBody`, `ServeBody`, `ServeBlocks` or `ReportEvidence` — performed (and served) as
+    /// for the fake driver; a local body found by `FetchBody` arrives through
+    /// [`Host::deliver`].
+    Effect(Box<Action>),
+}
+
+/// The completion of an [`Op`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Done {
+    /// A `WriteRecord`, `WriteBody` or `Append` completed: durable (`ok`) or failed (nothing
+    /// was written).
+    Written {
+        /// Operation id.
+        op: u64,
+        /// Whether the write is durable.
+        ok: bool,
+    },
+    /// An `Execute` completed; `None`: the parent's post-state is not held (nothing ran).
+    Executed {
+        /// Operation id.
+        op: u64,
+        /// The outcome.
+        outcome: Option<ExecOutcome>,
+    },
+    /// A `Discard` completed.
+    Discarded {
+        /// Operation id.
+        op: u64,
+    },
+    /// A `Prepare` completed with the local commitment of the block (`None`: not `Valid`).
+    Prepared {
+        /// Operation id.
+        op: u64,
+        /// The local commitment.
+        result: Option<Hash32>,
+    },
+    /// A `Commit` completed: the block is applied.
+    Committed {
+        /// Operation id.
+        op: u64,
+        /// Configuration of `height + 2` scheduled by the state after the block.
+        config_after_next: HeightConfig,
+    },
+}
 
 /// What the world hands a host that (re)starts: the core's configuration and startup input
 /// (§12.1), assembled by the world from the machine's durable stores, and the machine profile's
@@ -84,6 +216,21 @@ pub trait Host {
     fn held(&self) -> Vec<Action>;
     /// Messages dropped by the ingress bounds (O6).
     fn ingress_drops(&self) -> u64;
+    /// Whether the host schedules its own persistence, execution, apply and building over the
+    /// world's devices: the world then performs only its [`Op`]s and never calls
+    /// [`Host::persisting`], [`Host::gate`] or [`Host::durable`]. Default: `false`.
+    fn owns_io(&self) -> bool {
+        false
+    }
+    /// For a host that owns its scheduling: the device operations to perform now, in order.
+    /// The world asks after every input, completion and handled event, and when
+    /// [`Host::next_wakeup`] (which then includes the host's own timers, e.g. a write retry)
+    /// is due.
+    fn poll(&mut self, _now: Millis) -> Vec<Op> {
+        Vec::new()
+    }
+    /// For a host that owns its scheduling: a device operation completed at local time `now`.
+    fn complete(&mut self, _now: Millis, _done: Done) {}
 }
 
 /// Creates the host of a replica: `(machine, instance index)` → host.
@@ -243,6 +390,307 @@ mod tests {
         assert_eq!(host.next_wakeup(), Millis::MAX);
         assert_eq!(host.next_input(Millis::MAX), None);
         assert!(host.handle(0, Event::Tick).is_empty());
+    }
+
+    /// What a [`Probe`] host shares with its test.
+    #[derive(Default)]
+    struct ProbeState {
+        /// Operations to perform at the next poll.
+        ops: Vec<Op>,
+        /// Completions received.
+        done: Vec<Done>,
+        /// Local events received (builder answers).
+        events: Vec<Event>,
+    }
+
+    /// A host that owns its scheduling and performs exactly the operations its test queues; its
+    /// core runs, but none of its actions is performed.
+    struct Probe {
+        inner: FakeHost,
+        state: std::rc::Rc<std::cell::RefCell<ProbeState>>,
+    }
+
+    impl Host for Probe {
+        fn start(&mut self, start: Start) -> Result<Vec<Action>, ConfigError> {
+            self.inner.start(start)
+        }
+        fn crash(&mut self) {
+            self.inner.crash();
+        }
+        fn running(&self) -> bool {
+            self.inner.running()
+        }
+        fn receive(&mut self, from: PublicKey, msg: WireMessage, class: TrafficClass) {
+            self.inner.receive(from, msg, class);
+        }
+        fn deliver(&mut self, event: Event) {
+            self.state.borrow_mut().events.push(event);
+        }
+        fn has_input(&self) -> bool {
+            self.inner.has_input()
+        }
+        fn next_input(&mut self, now: Millis) -> Option<Event> {
+            self.inner.next_input(now)
+        }
+        fn handle(&mut self, now: Millis, event: Event) -> Vec<Action> {
+            self.inner.handle(now, event)
+        }
+        fn next_wakeup(&self) -> Millis {
+            self.inner.next_wakeup()
+        }
+        fn persisting(&mut self, _write: u64) {
+            unreachable!("the world never calls `persisting` on a host that owns its I/O")
+        }
+        fn gate(&mut self, _effect: Action) -> Option<Action> {
+            unreachable!("the world never calls `gate` on a host that owns its I/O")
+        }
+        fn durable(&mut self, _write: u64) -> Vec<Action> {
+            unreachable!("the world never calls `durable` on a host that owns its I/O")
+        }
+        fn core(&self) -> Option<&Core> {
+            self.inner.core()
+        }
+        fn held(&self) -> Vec<Action> {
+            Vec::new()
+        }
+        fn ingress_drops(&self) -> u64 {
+            0
+        }
+        fn owns_io(&self) -> bool {
+            true
+        }
+        fn poll(&mut self, _now: Millis) -> Vec<Op> {
+            std::mem::take(&mut self.state.borrow_mut().ops)
+        }
+        fn complete(&mut self, _now: Millis, done: Done) {
+            self.state.borrow_mut().done.push(done);
+        }
+    }
+
+    /// §13.5 seam for a host that owns its scheduling: every device operation is performed on
+    /// the replica's fake backends and completed exactly once — durable writes (and failed ones,
+    /// which store nothing), executions with and without the parent post-state, discards, the
+    /// three apply steps, the builder and network effects — and a crash loses the operations in
+    /// flight. The world never interprets such a host's core actions.
+    #[test]
+    #[allow(clippy::too_many_lines)] // one scripted walk through every device operation
+    fn owned_host_ops_and_completions() {
+        use crate::{
+            message::{Block, BlockHeader, Qc, VoteKind},
+            preimage::payload_hash,
+            safety::SafetyRecord,
+            sim::{crypto::SimCrypto, driver::reference_exec},
+            types::{AggregateSignature, Bitmap, SIGNATURE_LEN},
+        };
+        let mut sc = Scenario::base("owned", 1, 4);
+        sc.checks.liveness = false;
+        sc.checks.progress = 0;
+        let mut world = World::new(sc);
+        let state = std::rc::Rc::new(std::cell::RefCell::new(ProbeState::default()));
+        world.crash(0);
+        world.replicas[0].host = Box::new(Probe {
+            inner: FakeHost::default(),
+            state: std::rc::Rc::clone(&state),
+        });
+        world.restart(0);
+        assert!(world.replicas[0].host.owns_io());
+        let inst = world.instances[0].clone();
+        let key = world.replicas[0].keys[0].clone();
+        let crypto = SimCrypto::new();
+        let block_at = |height: u64, parent: Hash32, parent_result: Hash32| Block {
+            header: BlockHeader {
+                instance: inst.id,
+                height,
+                origin_view: 0,
+                parent_hash: parent,
+                parent_result,
+                payload_hash: payload_hash(&crypto, &[]),
+                payload_len: 0,
+                proposer: 0,
+                skipped_leaders: Vec::new(),
+                attest: false,
+            },
+            payload: Vec::new(),
+        };
+        let b1 = block_at(1, inst.genesis_hash, inst.genesis_result);
+        let bh1 = b1.hash(&crypto);
+        let ExecOutcome::Valid(r1) = reference_exec(&inst.genesis_result, &[]) else {
+            unreachable!("an empty payload is valid")
+        };
+        let orphan = block_at(2, Hash32([9; 32]), Hash32([9; 32]));
+        let qc = Qc {
+            kind: VoteKind::Commit,
+            instance: inst.id,
+            height: 1,
+            view: 0,
+            block_hash: bh1,
+            result: r1,
+            attest: false,
+            signers: Bitmap::new(4),
+            agg_sig: AggregateSignature([0; SIGNATURE_LEN]),
+            attestations: Vec::new(),
+        };
+        let step = |world: &mut World, ops: Vec<Op>, until: Millis| {
+            state.borrow_mut().ops = ops;
+            world.run_until(until);
+            assert!(world.failure.is_none(), "{:?}", world.failure);
+            let mut s = state.borrow_mut();
+            (std::mem::take(&mut s.done), std::mem::take(&mut s.events))
+        };
+        // Writes and executions.
+        let record = SafetyRecord::fresh(inst.id, key.clone(), 5, None);
+        let (done, _) = step(
+            &mut world,
+            vec![
+                Op::WriteRecord {
+                    op: 1,
+                    record: Box::new(record.clone()),
+                },
+                Op::WriteBody {
+                    op: 2,
+                    block: Box::new(b1.clone()),
+                },
+                Op::Execute {
+                    op: 3,
+                    block: Box::new(b1.clone()),
+                },
+                Op::Execute {
+                    op: 4,
+                    block: Box::new(orphan),
+                },
+            ],
+            500,
+        );
+        assert!(
+            done.contains(&Done::Written { op: 1, ok: true }),
+            "{done:?}"
+        );
+        assert!(done.contains(&Done::Written { op: 2, ok: true }));
+        assert!(done.contains(&Done::Executed {
+            op: 3,
+            outcome: Some(ExecOutcome::Valid(r1))
+        }));
+        assert!(done.contains(&Done::Executed {
+            op: 4,
+            outcome: None
+        }));
+        assert_eq!(done.len(), 4, "each operation completes once");
+        let rep = &world.replicas[0];
+        assert_eq!(rep.records.get(&key).map(|d| &d.record), Some(&record));
+        assert!(rep.bodies.contains_key(&bh1));
+        assert_eq!(rep.exec.cache.get(&bh1), Some(&(1, r1)));
+        // A discard drops the post-state; Prepare then executes the block again.
+        let (done, _) = step(
+            &mut world,
+            vec![
+                Op::Discard {
+                    op: 5,
+                    height: 1,
+                    keep: Vec::new(),
+                },
+                Op::Prepare {
+                    op: 6,
+                    block: Box::new(b1.clone()),
+                    qc: Box::new(qc.clone()),
+                },
+            ],
+            1_000,
+        );
+        assert_eq!(
+            done,
+            vec![
+                Done::Discarded { op: 5 },
+                Done::Prepared {
+                    op: 6,
+                    result: Some(r1)
+                }
+            ]
+        );
+        assert!(!world.replicas[0].exec.cache.contains_key(&bh1));
+        // Apply: append, then commit; the builder answers through `deliver`.
+        let (done, events) = step(
+            &mut world,
+            vec![
+                Op::Append {
+                    op: 7,
+                    block: Box::new(b1.clone()),
+                    qc: Box::new(qc.clone()),
+                },
+                Op::Commit {
+                    op: 8,
+                    block: Box::new(b1.clone()),
+                    qc: Box::new(qc),
+                },
+                Op::Build {
+                    req: 9,
+                    max_bytes: 1024,
+                    exec_budget_ms: 100,
+                },
+                Op::Reject { block_hash: bh1 },
+            ],
+            1_500,
+        );
+        assert_eq!(done.len(), 2, "{done:?}");
+        assert!(done.contains(&Done::Written { op: 7, ok: true }));
+        assert!(done.iter().any(|d| matches!(
+            d,
+            Done::Committed { op: 8, config_after_next } if *config_after_next == inst.config(3)
+        )));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::PayloadBuilt { req: 9, .. }))
+        );
+        let rep = &world.replicas[0];
+        assert_eq!(rep.store.len(), 1);
+        assert_eq!(rep.applied, (1, bh1, r1));
+        assert!(rep.bodies.is_empty(), "applied bodies are pruned");
+        // A failing device reports the failure and stores nothing.
+        world.machines[0].profile.write_fail_ppm = 1_000_000;
+        let later = SafetyRecord::fresh(inst.id, key.clone(), 9, None);
+        let (done, _) = step(
+            &mut world,
+            vec![Op::WriteRecord {
+                op: 10,
+                record: Box::new(later),
+            }],
+            2_000,
+        );
+        assert_eq!(done, vec![Done::Written { op: 10, ok: false }]);
+        assert_eq!(
+            world.replicas[0].records.get(&key).map(|d| d.record.height),
+            Some(5)
+        );
+        // A crash loses the operations in flight.
+        world.machines[0].profile.write_fail_ppm = 0;
+        world.machines[0].profile.write_min = 400;
+        world.machines[0].profile.write_max = 400;
+        state.borrow_mut().ops = vec![Op::WriteBody {
+            op: 11,
+            block: Box::new(b1),
+        }];
+        world.run_until(2_100);
+        world.crash(0);
+        world.run_until(3_000);
+        assert!(state.borrow().done.is_empty(), "{:?}", state.borrow().done);
+        assert!(world.replicas[0].bodies.is_empty());
+        // An effect is performed as for the fake driver (a request to machine 1). The synthetic
+        // block (its CommitQC has no signers) must not become the restarted core's tip.
+        world.replicas[0].store.clear();
+        world.restart(0);
+        let packets = world.stats.packets[0];
+        let to = world.replicas[1].keys[0].clone();
+        let msg = WireMessage::BlockRequest(BlockRequest {
+            instance: inst.id,
+            height: 1,
+            block_hash: bh1,
+        });
+        step(
+            &mut world,
+            vec![Op::Effect(Box::new(Action::Send { to, msg }))],
+            3_100,
+        );
+        assert!(world.stats.packets[0] > packets);
     }
 
     /// A host that refuses its configuration reports the error.

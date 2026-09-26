@@ -224,6 +224,27 @@ pub enum Write {
     Body(Box<Block>),
     /// A committed block and its `CommitQC` (block store), then apply.
     Commit(Box<(Block, Qc)>),
+    /// A write of a host that owns its scheduling (§13.5): operation id, whether it succeeds
+    /// (a failed write stores nothing), and what it writes.
+    Owned {
+        /// The host's operation id.
+        op: u64,
+        /// Whether the write succeeds.
+        ok: bool,
+        /// What it writes.
+        write: OwnedWrite,
+    },
+}
+
+/// What a write of a host that owns its scheduling stores (§13.5).
+#[derive(Clone, Debug)]
+pub enum OwnedWrite {
+    /// A safety record and its encoding.
+    Record(Box<SafetyRecord>, Vec<u8>),
+    /// A block body.
+    Body(Box<Block>),
+    /// A committed block and its `CommitQC`, appended to the block store (no apply).
+    Append(Box<(Block, Qc)>),
 }
 
 /// The write device of a replica: FIFO completion; a write is durable at its completion and
@@ -267,7 +288,11 @@ impl Io {
     /// A body in a pending (not yet durable) write.
     pub fn pending_body(&self, bh: &Hash32, crypto: &dyn crate::crypto::Crypto) -> Option<Block> {
         self.pending.iter().find_map(|(_, _, w)| match w {
-            Write::Body(block) if block.hash(crypto) == *bh => Some((**block).clone()),
+            Write::Body(block)
+            | Write::Owned {
+                write: OwnedWrite::Body(block),
+                ..
+            } if block.hash(crypto) == *bh => Some((**block).clone()),
             _ => None,
         })
     }

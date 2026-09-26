@@ -476,6 +476,9 @@ mod epoch_schedule_tests {
 }
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
+/// The node driver of the sans-IO Sumeragi core (`iroha_sumeragi`), not yet started by the
+/// node (the v2 runtime still runs until the cutover).
+pub mod driver;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;
 pub mod message;

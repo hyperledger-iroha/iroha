@@ -5003,6 +5003,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_sccp",
  "iroha_schema",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii_shared",
