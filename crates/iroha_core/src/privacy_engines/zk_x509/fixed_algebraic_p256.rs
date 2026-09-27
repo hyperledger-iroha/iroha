@@ -44,7 +44,7 @@ use super::{
     stark::ZK_X509_DIGEST_CONTEXT_V1,
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, PrivacyOuterDigestV1,
+    GOLDILOCKS_GENERATOR_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E, PrivacyOuterDigestV1,
     privacy_outer_digest_frame_v1,
 };
 use std::{sync::OnceLock, vec::Vec};
@@ -2738,6 +2738,28 @@ impl ZkX509P256FixedAlgebraicScheduleV1 {
         }
         Ok(())
     }
+    /// Evaluate the same ordered child fixed polynomials at the DEEP point.
+    /// Each child enforces its public work bound; only one child table is live.
+    pub(crate) fn evaluate_extension_point_v1(
+        &self,
+        point: E,
+    ) -> Result<Vec<E>, ZkX509FixedAlgebraicErrorV1> {
+        let mut combined = Vec::new();
+        combined
+            .try_reserve_exact(ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1)
+            .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
+        for child in &self.children {
+            let row = child.evaluate_extension_point_v1(point)?;
+            if row.len() != usize::from(child.width_v1()) {
+                return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
+            }
+            combined.extend(row);
+        }
+        if combined.len() != ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1 {
+            return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
+        }
+        Ok(combined)
+    }
     /// Evaluate and concatenate all six child openings in canonical order.
     pub(crate) fn evaluate_query_indices_v1(
         &self,
@@ -4193,5 +4215,72 @@ mod tests {
             }
             assert_eq!(actual, expected, "global fixed column {global_column}");
         }
+    }
+}
+
+#[cfg(test)]
+mod extension_wrapper_tests {
+    use super::*;
+    use crate::privacy_engines::transparent_stark::{
+        goldilocks_ifft_v1, goldilocks_primitive_root_v1,
+    };
+
+    #[test]
+    fn extension_wrapper_preserves_all_child_columns_and_rejects_native_points() {
+        // A small arithmetic fixture exercises the private forwarding owner;
+        // the production constructor still accepts only its closed full schedule.
+        let widths = P256_FIXED_ALGEBRAIC_CHILD_WIDTHS_V1;
+        let domain =
+            ZkX509FixedAlgebraicDomainV1::new_v1(3, 6, F(GOLDILOCKS_GENERATOR_V1)).unwrap();
+        let children = core::array::from_fn(|child| {
+            let mut builder = ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(
+                domain,
+                u16::try_from(widths[child]).unwrap(),
+            )
+            .unwrap();
+            builder
+                .push_atom_v1(ZkX509FixedAlgebraicAtomV1::Sparse {
+                    column: 0,
+                    row: child as u64,
+                    value: F(7 + child as u64),
+                })
+                .unwrap();
+            builder
+                .push_atom_v1(ZkX509FixedAlgebraicAtomV1::Sparse {
+                    column: u16::try_from(widths[child] - 1).unwrap(),
+                    row: 7,
+                    value: F(19 + child as u64),
+                })
+                .unwrap();
+            builder.finish_v1().unwrap()
+        });
+        let schedule = ZkX509P256FixedAlgebraicScheduleV1 {
+            children,
+            descriptor_digest: PrivacyOuterDigestV1::default(),
+        };
+        let point = E::canonical([2, 3, 5, 7]).unwrap();
+        let actual = schedule.evaluate_extension_point_v1(point).unwrap();
+        assert_eq!(actual.len(), ZK_X509_P256_FIXED_ALGEBRAIC_WIDTH_V1);
+        let root = goldilocks_primitive_root_v1(3).unwrap();
+        let mut offset = 0;
+        for (child, &width) in widths.iter().enumerate() {
+            for column in 0..width {
+                let mut coefficients = vec![F::ZERO; 8];
+                if column == 0 {
+                    coefficients[child] = F(7 + child as u64);
+                }
+                if column + 1 == width {
+                    coefficients[7] = F(19 + child as u64);
+                }
+                goldilocks_ifft_v1(&mut coefficients, root).unwrap();
+                let expected = coefficients.iter().rev().fold(E::ZERO, |sum, &value| {
+                    sum.mul(point).add(E::from_base(value))
+                });
+                assert_eq!(actual[offset + column], expected);
+            }
+            offset += width;
+        }
+        assert_eq!(offset, actual.len());
+        assert!(schedule.evaluate_extension_point_v1(E::ONE).is_err());
     }
 }

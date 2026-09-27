@@ -799,6 +799,27 @@ inputs = [
 check = "python3 scripts/regenerate_kotodama_goldens.py --check --koto target/debug/koto --iroha target/debug/iroha"
 
 [[generated]]
+name = "kagami-norito-schemas"
+kind = "file"
+outputs = [
+  "specs/references/schema.json",
+  "specs/references/genesis_schema.json",
+]
+generator = "bash scripts/tests/consistency.sh --update schema"
+generator_sources = [
+  "scripts/tests/consistency.sh",
+  "crates/iroha_kagami/src/main.rs",
+  "crates/iroha_kagami/src/schema.rs",
+]
+inputs = [
+  "crates/iroha_data_model/src/**/*.rs",
+  "crates/iroha_genesis/src/**/*.rs",
+  "crates/iroha_schema/src/**/*.rs",
+  "crates/iroha_schema_gen/src/**/*.rs",
+]
+check = "bash scripts/tests/consistency.sh schema"
+
+[[generated]]
 name = "default-docker-compose"
 kind = "file"
 outputs = [
@@ -825,73 +846,3 @@ check = "bash scripts/tests/consistency.sh docker-compose"
 # Complete Kagami profile bundles are operator-generated release artifacts and are intentionally
 # untracked. Checked-in `.template.json` files are non-signable source references, not generated
 # outputs; production generation requires an externally provisioned public-authority directory.
-
-# Upstream-generated Go sources imported unchanged into the SCCP vendor tree.
-
-[[generated]]
-name = "sccp-vendor-bitset"
-kind = "file"
-external = true
-outputs = [
-  "circuits/sccp/vendor/github.com/bits-and-blooms/bitset/pext.gen.go",
-]
-generator = "cd circuits/sccp && GOTOOLCHAIN=local go mod vendor"
-generator_sources = []
-inputs = [
-  "circuits/sccp/go.mod",
-  "circuits/sccp/go.sum",
-  "circuits/sccp/vendor/modules.txt",
-  "scripts/check_sccp_vendor_generated.py",
-]
-check = "python3 scripts/check_sccp_vendor_generated.py"
-provenance = "Upstream cmd/pextgen/main.go generates pext.gen.go; bitset.go records the go:generate invocation. Both are present in the module archive pinned by circuits/sccp/go.mod and authenticated by circuits/sccp/go.sum. The check verifies imported bytes; upstream generator execution is not asserted."
-
-[[generated]]
-name = "sccp-vendor-testify"
-kind = "file"
-external = true
-outputs = [
-  "circuits/sccp/vendor/github.com/stretchr/testify/assert/assertion_format.go",
-  "circuits/sccp/vendor/github.com/stretchr/testify/assert/assertion_forward.go",
-  "circuits/sccp/vendor/github.com/stretchr/testify/require/require.go",
-  "circuits/sccp/vendor/github.com/stretchr/testify/require/require_forward.go",
-]
-generator = "cd circuits/sccp && GOTOOLCHAIN=local go mod vendor"
-generator_sources = []
-inputs = [
-  "circuits/sccp/go.mod",
-  "circuits/sccp/go.sum",
-  "circuits/sccp/vendor/modules.txt",
-  "scripts/check_sccp_vendor_generated.py",
-]
-check = "python3 scripts/check_sccp_vendor_generated.py"
-provenance = "Upstream github.com/stretchr/testify/_codegen generates the assert and require forwarding/formatting files from their adjacent .go.tmpl templates. The templates and go:generate directives are in the pinned module archive; _codegen is a separate upstream module. Version and authentication are owned by circuits/sccp/go.mod and circuits/sccp/go.sum. The check verifies imported bytes; upstream generator execution is not asserted."
-
-[[generated]]
-name = "sccp-vendor-x-sys"
-kind = "file"
-external = true
-outputs = [
-  "circuits/sccp/vendor/golang.org/x/sys/cpu/zcpu_windows.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/zerrors_linux.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_armnn_linux.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_linux_arm64.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_mipsnn_linux.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_mipsnnle_linux.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/zptrace_x86_linux.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/zsyscall_linux.go",
-  "circuits/sccp/vendor/golang.org/x/sys/unix/ztypes_linux.go",
-  "circuits/sccp/vendor/golang.org/x/sys/windows/zerrors_windows.go",
-  "circuits/sccp/vendor/golang.org/x/sys/windows/zknownfolderids_windows.go",
-  "circuits/sccp/vendor/golang.org/x/sys/windows/zsyscall_windows.go",
-]
-generator = "cd circuits/sccp && GOTOOLCHAIN=local go mod vendor"
-generator_sources = []
-inputs = [
-  "circuits/sccp/go.mod",
-  "circuits/sccp/go.sum",
-  "circuits/sccp/vendor/modules.txt",
-  "scripts/check_sccp_vendor_generated.py",
-]
-check = "python3 scripts/check_sccp_vendor_generated.py"
-provenance = "Upstream generators are cpu/cpu_windows.go and windows/mksyscall.go go:generate directives invoking windows/mkwinsyscall, unix/internal/mkmerge with unix/linux/mkall.go, and windows/mkerrors.bash and windows/mkknownfolderids.bash. The pinned module archive contains those inputs; circuits/sccp/go.mod owns its version and circuits/sccp/go.sum authenticates it. The check verifies imported bytes; upstream generator execution is not asserted."

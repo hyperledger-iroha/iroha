@@ -491,6 +491,12 @@ pub mod uri {
     /// Lifecycle changes are signed `SetParameter` transactions; no HTTP
     /// mutation or compatibility route is mounted at this path.
     pub const NEXUS_LANE_LIFECYCLE: &str = "/v1/nexus/lifecycle";
+    /// Exact validator committee preparation and immutable finality attachments.
+    pub const NEXUS_VALIDATOR_COMMITTEE: &str =
+        crate::route_catalog::core::NEXUS_VALIDATOR_COMMITTEE_GET.path();
+    /// Read-only exact staking monetary plan preparation.
+    pub const NEXUS_STAKING_PREPARATION: &str =
+        crate::route_catalog::core::NEXUS_STAKING_PREPARATION_POST.path();
     /// URI to report status for administration
     pub const STATUS: &str = "/status";
     /// Canonical committed block-height diagnostic.

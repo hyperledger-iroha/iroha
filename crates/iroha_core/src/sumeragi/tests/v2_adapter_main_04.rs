@@ -1331,6 +1331,7 @@ mod kagemusha_finality_boundary {
             [0x73; 32],
         );
             context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+                committee_preparation: None,
                 epoch: context.epoch + 1,
                 kagemusha_mint_finality_authorization: next_authorization,
                 kagemusha_mint_finality_authority: next_roster,

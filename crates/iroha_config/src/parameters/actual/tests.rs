@@ -1862,6 +1862,7 @@ mod tests {
             metadata: Metadata::default(),
             status: PublicLaneValidatorStatus::Active,
             activation_height: 1,
+            election_exit_height: None,
             deactivation_height: None,
             last_reward_epoch: None,
         };
@@ -2081,9 +2082,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             r#"{MINIMAL_CONFIG}
 
 [sorafs.discovery.admission]
-envelopes_dir = "admission"
-trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
-signature_threshold = 1
+enabled = true
 "#
         );
         let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");

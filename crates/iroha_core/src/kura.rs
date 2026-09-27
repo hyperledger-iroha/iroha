@@ -149,7 +149,6 @@ use iroha_data_model::{
         ParliamentTimedOvnFinalizedCastingProofV1,
     },
     parliament_types::BallotAttemptId,
-    privacy::GoldilocksDigest384V1,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
 };
@@ -13369,7 +13368,7 @@ impl Kura {
             return Ok(());
         }
         let wire = block.canonical_wire()?;
-        let (frame, _versioned) = wire.into_parts();
+        let frame = wire.into_vec();
         let expected_len = u64::try_from(frame.len())?;
         if index.length != expected_len {
             return Err(Error::CorruptedBlockRange {
@@ -18034,7 +18033,7 @@ impl Kura {
     }
     fn block_required_bytes(block: &SignedBlock) -> Result<u64> {
         let wire = block.canonical_wire()?;
-        let (frame, _) = wire.into_parts();
+        let frame = wire.into_vec();
         let frame_len = u64::try_from(frame.len())?;
         Ok(frame_len
             .saturating_add(BlockIndex::SIZE)
@@ -43011,7 +43010,6 @@ impl BlockStore {
             hashes_file: None,
             fsync: FsyncState::new(fsync_mode, fsync_interval),
             fsync_telemetry: FsyncTelemetry::new(fsync_mode),
-            encode_scratch: Vec::new(),
             read_scratch: Vec::new(),
             data_mmap: None,
             data_mmap_len: 0,
@@ -46847,12 +46845,11 @@ impl BlockStore {
                 "append_block_batch encoding block"
             );
             let wire = block.canonical_wire()?;
-            let (frame, versioned) = wire.into_parts();
+            let frame = wire.into_vec();
             let frame_len = u64::try_from(frame.len())?;
             frames.push(frame);
             lengths.push(frame_len);
             hashes.push(block.hash());
-            self.encode_scratch = versioned;
             debug!(
                 start_height,
                 block_idx = idx,

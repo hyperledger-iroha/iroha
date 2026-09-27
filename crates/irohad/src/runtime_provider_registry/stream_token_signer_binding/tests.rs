@@ -27,7 +27,7 @@ pub(in crate::runtime_provider_registry) fn hardware_config(
 ) -> iroha_config::parameters::actual::SorafsStreamTokenSignerConfig {
     use iroha_config::parameters::actual::{
         SorafsStreamTokenAttesterConfig, SorafsStreamTokenAuthorityConfig,
-        SorafsStreamTokenSignerConfig, SorafsStreamTokenObserverConfig,
+        SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
     };
     let authority = |seed, service: &str, administrator: &str| {
         let key =
@@ -45,6 +45,8 @@ pub(in crate::runtime_provider_registry) fn hardware_config(
         }
     };
     SorafsStreamTokenSignerConfig {
+        native: None,
+            clock_uncertainty_ms: 250,
         runtime_handle: "hsm://sorafs/stream-token/primary".to_owned(),
         key_handle: "pkcs11://sorafs/stream-token/key-primary".to_owned(),
         service_id: "stream-signer-primary".to_owned(),
@@ -100,7 +102,10 @@ fn complete_signer_catalog_survives_canonical_roundtrip_in_every_layout() {
     let binding =
         IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(signer_backend.clone()).unwrap();
     assert_eq!(binding.handle(), signer_backend.custody().runtime_handle);
-    assert_eq!(binding.revision(), Some(signer_backend.custody().key_revision));
+    assert_eq!(
+        binding.revision(),
+        Some(signer_backend.custody().key_revision)
+    );
     assert_eq!(
         binding.policy_digest(),
         Some(signer_backend.custody().policy_digest)
@@ -122,11 +127,7 @@ fn complete_signer_catalog_survives_canonical_roundtrip_in_every_layout() {
         let loaded = IrohaRuntimeProviderBindingsV1::load_canonical_v1(&canonical).unwrap();
         assert_eq!(loaded.export_canonical_v1().unwrap(), canonical);
         assert_eq!(
-            loaded
-                .iter()
-                .next()
-                .unwrap()
-                .stream_token_signer_binding(),
+            loaded.iter().next().unwrap().stream_token_signer_binding(),
             Some(&signer_backend)
         );
     }
@@ -197,11 +198,7 @@ fn software_signer_and_observer_survive_public_catalog_roundtrip() {
         let loaded = IrohaRuntimeProviderBindingsV1::load_canonical_v1(&canonical).unwrap();
         assert_eq!(loaded.export_canonical_v1().unwrap(), canonical);
         assert_eq!(
-            loaded
-                .iter()
-                .next()
-                .unwrap()
-                .stream_token_signer_binding(),
+            loaded.iter().next().unwrap().stream_token_signer_binding(),
             Some(&metadata)
         );
     }
@@ -211,7 +208,10 @@ fn software_signer_and_observer_survive_public_catalog_roundtrip() {
 fn catalog_rejects_enclosing_network_or_header_drift() {
     let signer_backend = fixture();
     signer_backend
-        .validate_network(&signer_backend.custody.chain_id, &signer_backend.custody.network_id)
+        .validate_network(
+            &signer_backend.custody.chain_id,
+            &signer_backend.custody.network_id,
+        )
         .unwrap();
     assert_eq!(
         signer_backend.validate_network("other-chain", &signer_backend.custody.network_id),
@@ -221,7 +221,8 @@ fn catalog_rejects_enclosing_network_or_header_drift() {
         signer_backend.validate_network(&signer_backend.custody.chain_id, &[0x77; 32]),
         Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
     );
-    let binding = IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(signer_backend).unwrap();
+    let binding =
+        IrohaRuntimeProviderBindingV1::try_new_stream_token_signer(signer_backend).unwrap();
     let mut catalog = IrohaRuntimeProviderBindingsV1 {
         chain_id: "other-chain".to_owned(),
         network_id: runtime_provider_test_network_id(),

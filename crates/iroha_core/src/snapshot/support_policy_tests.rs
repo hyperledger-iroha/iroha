@@ -644,7 +644,8 @@ async fn snapshot_publication_defers_without_checkpoint_and_selects_nothing() {
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
             &snapshot_read_budget_for_testing(),
-        )
+                    &crate::state::kagemusha_operation_indexes::default_budget(),
+)
         .is_err(),
         "restart must not select a rejected unpublished generation"
     );
@@ -750,7 +751,8 @@ async fn snapshot_publication_accepts_complete_authenticated_tuple() {
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         &snapshot_read_budget_for_testing(),
-    )
+            &crate::state::kagemusha_operation_indexes::default_budget(),
+)
     .expect("post-height snapshot must remain exactly restart-readable");
     SNAPSHOT_HASH_RECONCILIATION_PASSES.with(|passes| {
         assert_eq!(

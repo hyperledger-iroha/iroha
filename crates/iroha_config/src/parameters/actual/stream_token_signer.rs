@@ -51,6 +51,10 @@ pub struct SorafsStreamTokenObserverConfig {
 /// the node context. Neither is duplicated here. No private key material or default trust is provided.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsStreamTokenSignerConfig {
+    /// Closed UTC eligibility uncertainty on each side of the host's fresh clock sample.
+    pub clock_uncertainty_ms: u64,
+    /// Explicit native software runtime; absent selects externally supplied adapters.
+    pub native: Option<SorafsStreamTokenNativeConfig>,
     /// Public opaque software or hardware runtime handle.
     pub runtime_handle: String,
     /// Public opaque key-generation handle for the configured provider.
@@ -71,4 +75,25 @@ pub struct SorafsStreamTokenSignerConfig {
     pub attester: SorafsStreamTokenAttesterConfig,
     /// Independent finalized-state observer trust.
     pub observer: SorafsStreamTokenObserverConfig,
+}
+
+/// Explicit local software custody for the native State/queue stream-token runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsStreamTokenNativeConfig {
+    /// Owner-only role-11 private-key credential, in the canonical runtime credential format.
+    pub signer_credential: std::path::PathBuf,
+    /// Bounded signed custody record; this file is material, never state authority.
+    pub custody_record: std::path::PathBuf,
+    /// Existing owner-only private completed-receipt directory.
+    pub receipt_journal: std::path::PathBuf,
+    /// Exact registered provider-owner transaction account.
+    pub operator: iroha_data_model::account::AccountId,
+    /// Independent owner-only operator transaction key credential.
+    pub operator_credential: std::path::PathBuf,
+    /// Independent owner-only observer key credential, matching public observer trust.
+    pub observer_credential: std::path::PathBuf,
+    /// Explicit fee approval used for each native operator and Check transaction.
+    pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    /// Complete bounded native transaction observation deadline.
+    pub timeout_ms: u64,
 }

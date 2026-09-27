@@ -546,8 +546,9 @@ impl<'owner, 'state> MergePrefixOwner<'owner, 'state> {
                 self.quarantine_overflow[index],
                 reservation,
                 cache,
-            )
-            .map_err(invalid)?;
+            );
+            self.state.require_storage_admission()?;
+            let row = row.map_err(invalid)?;
             let ExecutionOutputV1::Network(NetworkExecutionOutputV1 { result, .. }) = &row else {
                 return Err(invalid(
                     "merge signed attempt returned a non-Network row".into(),

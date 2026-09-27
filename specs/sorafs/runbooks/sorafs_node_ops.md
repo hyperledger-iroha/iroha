@@ -28,8 +28,8 @@ pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
   ```
 
 - Configure distinct proof-outcome, repair, reserve, and orderbook entries under
-  `sorafs.storage.native_transaction_signers`, and inject all four matching live
-  providers. Storage startup requires this durable-drain bundle even when the
+  `sorafs.storage.native_transaction_signers`. Select an explicit owner-only
+  `software_credential` or matching external provider for each role. Storage startup requires this durable-drain bundle even when the
   repair/reserve/orderbook new-work generation flags are disabled. A reserve or
   orderbook role with both storage and its generation flag disabled is paused
   before task creation and makes zero external progress. Opening the local

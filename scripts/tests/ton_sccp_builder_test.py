@@ -1,13 +1,21 @@
-"""Adversarial unit tests for the fail-closed TON SCCP release builder."""
+"""Unit tests for the SCCP v1 TON toolchain, vector and StateInit tooling.
+
+Covers `scripts/ton_sccp_builder.py` (Acton pinning and resolution,
+Keccak-256, secp256k1, TON cells and BoCs, §3.7 rosters, §5.3.1 canonical
+minter data, the Tolk test-vector renderer, the v1 contract source set and
+its SECURITY.md) and
+`scripts/generate_ton_sccp_stateinit_golden.py` (fixture consistency from
+code hashes and depths alone, script-output parsing and cross-checking).
+None of these tests needs Acton or network access.
+"""
 
 from __future__ import annotations
 
-import base64
-import copy
 import hashlib
 import io
+import json
 import os
-import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -15,650 +23,501 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import sccp_release_common as common  # noqa: E402
+import generate_ton_sccp_stateinit_golden as golden  # noqa: E402
 import ton_sccp_builder as builder  # noqa: E402
 
 
-def _keypair(label: str) -> tuple[bytes, bytes, int]:
-    entropy = hashlib.sha256(f"ton-builder-test:{label}".encode("ascii")).digest()
-    digest = hashlib.sha512(entropy).digest()
-    scalar_bytes = bytearray(digest[:32])
-    scalar_bytes[0] &= 248
-    scalar_bytes[31] &= 63
-    scalar_bytes[31] |= 64
-    scalar = int.from_bytes(scalar_bytes, "little")
-    public = common._ed_encode(common._ed_scalar_multiply(common._ED_BASE, scalar))
-    return public, digest[32:], scalar
+class OpaqueCell:
+    """A child cell known only by its representation hash and depth."""
+
+    def __init__(self, hash_hex: str, depth: int) -> None:
+        self.hash = bytes.fromhex(hash_hex)
+        self.depth = depth
 
 
-def _sign(keypair: tuple[bytes, bytes, int], message: bytes) -> str:
-    public, prefix, scalar = keypair
-    nonce = int.from_bytes(hashlib.sha512(prefix + message).digest(), "little") % common._ED_L
-    encoded_r = common._ed_encode(common._ed_scalar_multiply(common._ED_BASE, nonce))
-    challenge = int.from_bytes(
-        hashlib.sha512(encoded_r + public + message).digest(), "little"
-    ) % common._ED_L
-    encoded_s = ((nonce + challenge * scalar) % common._ED_L).to_bytes(32, "little")
-    signature = encoded_r + encoded_s
-    assert common.verify_ed25519(public, signature, message)
-    return base64.b64encode(signature).decode("ascii")
+# ---------------------------------------------------------------------------
+# Toolchain pinning.
 
 
-def _policy() -> tuple[dict[str, object], dict[str, tuple[bytes, bytes, int]]]:
-    keys = {role: _keypair(role) for role in builder.APPROVER_ROLES}
-    policy: dict[str, object] = {
-        "schema": builder.POLICY_SCHEMA,
-        "source": {
-            "commit": "10" * 20,
-            "commit_signer_fingerprint": "0123456789abcdef",
-            "source_date_epoch": 1_700_000_000,
-        },
-        "builder": {
-            "image": f"registry.example/iroha-ton-builder@sha256:{'20' * 32}",
-            "platform": builder.PLATFORM,
-            "driver_path": "/usr/local/bin/iroha-sccp-ton-builder-final-v1",
-            "acton_archive_sha256": builder.ACTON_ARCHIVE_SHA256,
-            "acton_reported_version": builder.ACTON_VERSION,
-            "tolk_reported_version": builder.TOLK_VERSION,
-            "host_python_sha256": "2f" * 32,
-            "host_git_sha256": "30" * 32,
-            "host_docker_sha256": "40" * 32,
-            "host_commit_verifier_sha256": "41" * 32,
-            "toolchain_inventory": [
-                {
-                    "path": "toolchain/acton",
-                    "role": "acton-executable",
-                    "sha256": "50" * 32,
-                    "size_bytes": 100,
-                    "executable": True,
-                },
-                {
-                    "path": "toolchain/driver",
-                    "role": "builder-driver",
-                    "sha256": "60" * 32,
-                    "size_bytes": 101,
-                    "executable": True,
-                },
-                {
-                    "path": "toolchain/stdlib/common.tolk",
-                    "role": "tolk-stdlib",
-                    "sha256": "70" * 32,
-                    "size_bytes": 102,
-                    "executable": False,
-                },
-            ],
-        },
-        "limits": {
-            "max_artifacts": 128,
-            "max_artifact_bytes": 16 * 1024 * 1024,
-            "max_total_bytes": 256 * 1024 * 1024,
-            "max_log_bytes": 1024 * 1024,
-            "timeout_seconds": 1800,
-        },
-        "approvers": [
-            {
-                "role": role,
-                "signer_id": f"ton-{role}",
-                "public_key_hex": keys[role][0].hex(),
-            }
-            for role in builder.APPROVER_ROLES
-        ],
-    }
-    return policy, keys
+def test_acton_pins_cover_native_hosts_and_are_sha256() -> None:
+    assert builder.ACTON_VERSION == "1.2.0"
+    assert builder.TOLK_VERSION == "1.4.2"
+    assert builder.ACTON_REPORTED_VERSION.startswith("acton 1.2.0 ")
+    assert builder.ACTON_RELEASE_URL.startswith("https://github.com/ton-blockchain/acton/releases/download/v1.2.0/")
+    for host in (("Darwin", "arm64"), ("Darwin", "x86_64"), ("Linux", "aarch64"), ("Linux", "x86_64")):
+        name, digest = builder.ACTON_ARCHIVES[host]
+        assert name.startswith("acton-") and name.endswith(".tar.gz")
+        assert len(digest) == 64 and int(digest, 16) >= 0
+    assert builder.ACTON_ARCHIVES[("Darwin", "arm64")][0] == "acton-aarch64-apple-darwin.tar.gz"
 
 
-def _unsigned_lock() -> dict[str, object]:
-    return {
-        "schema": builder.LOCK_SCHEMA,
-        "builder_policy_sha256": "80" * 32,
-        "source_closure_sha256": "90" * 32,
-        "source_commit": "10" * 20,
-        "artifact_tree_sha256": "a0" * 32,
-        "artifacts": [
-            {
-                "path": "build/TairaXorSccpBridge.json",
-                "sha256": "b0" * 32,
-                "size_bytes": 100,
-                "executable": False,
-            }
-        ],
-        "toolchain_inventory": [
-            {
-                "path": "toolchain/acton",
-                "role": "acton-executable",
-                "sha256": "50" * 32,
-                "size_bytes": 100,
-                "executable": True,
-            }
-        ],
-    }
+def test_host_archive_rejects_unknown_hosts(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(builder.platform, "system", lambda: "Plan9")
+    monkeypatch.setattr(builder.platform, "machine", lambda: "mips")
+    with pytest.raises(builder.TonBuilderError, match="no pinned Acton"):
+        builder.host_archive()
 
 
-def _signed_lock(
-    unsigned: dict[str, object],
-    policy: dict[str, object],
-    keys: dict[str, tuple[bytes, bytes, int]],
-) -> dict[str, object]:
-    payload = builder.output_lock_signing_payload(unsigned)
-    approvers = policy["approvers"]
-    assert isinstance(approvers, list)
-    return {
-        **copy.deepcopy(unsigned),
-        "provenance": [
-            {
-                "role": role,
-                "signer_id": approvers[index]["signer_id"],
-                "algorithm": "ed25519",
-                "public_key_hex": approvers[index]["public_key_hex"],
-                "signature_b64": _sign(keys[role], payload),
-            }
-            for index, role in enumerate(builder.APPROVER_ROLES)
-        ],
-    }
+def _tar(members: dict) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, data in members.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    return buffer.getvalue()
 
 
-def test_policy_closes_versions_image_host_tools_inventory_and_approvers() -> None:
-    policy, _ = _policy()
-    assert builder.validate_policy(policy) == policy
-    for mutation in range(10):
-        candidate = copy.deepcopy(policy)
-        if mutation == 0:
-            candidate["builder"]["image"] = "registry.example/builder:latest"
-        elif mutation == 1:
-            candidate["builder"]["platform"] = "linux/arm64"
-        elif mutation == 2:
-            candidate["builder"]["acton_archive_sha256"] = "00" * 32
-        elif mutation == 3:
-            candidate["builder"]["acton_reported_version"] = "acton 1.1.0"
-        elif mutation == 4:
-            candidate["builder"]["tolk_reported_version"] = "1.4.0"
-        elif mutation == 5:
-            candidate["builder"]["host_git_sha256"] = "00" * 32
-        elif mutation == 6:
-            candidate["builder"]["toolchain_inventory"].pop()
-        elif mutation == 7:
-            candidate["approvers"][1]["public_key_hex"] = candidate["approvers"][0][
-                "public_key_hex"
-            ]
-        elif mutation == 8:
-            candidate["source"]["commit"] = "1" * 39
-        else:
-            candidate["extra"] = True
-        with pytest.raises(builder.TonBuilderError):
-            builder.validate_policy(candidate)
+def test_extract_acton_takes_only_the_single_executable(tmp_path: Path) -> None:
+    destination = tmp_path / "bin" / "acton"
+    builder.extract_acton(_tar({"./acton": b"#!/bin/sh\necho hi\n"}), destination)
+    assert destination.read_bytes() == b"#!/bin/sh\necho hi\n"
+    assert destination.stat().st_mode & stat.S_IXUSR
+    with pytest.raises(builder.TonBuilderError, match="unexpected Acton archive layout"):
+        builder.extract_acton(_tar({"./acton": b"x", "./evil": b"y"}), tmp_path / "other")
+    with pytest.raises(builder.TonBuilderError, match="unexpected Acton archive layout"):
+        builder.extract_acton(_tar({"../acton": b"x"}), tmp_path / "third")
 
 
-def test_output_lock_requires_two_exact_fresh_independent_signatures() -> None:
-    policy, keys = _policy()
-    unsigned = _unsigned_lock()
-    signed = _signed_lock(unsigned, policy, keys)
-    assert builder.validate_signed_lock(
-        signed,
-        expected_unsigned=unsigned,
-        policy=policy,
-    ) == signed
-
-    for mutation in range(6):
-        candidate = copy.deepcopy(signed)
-        if mutation == 0:
-            candidate["artifact_tree_sha256"] = "c0" * 32
-        elif mutation == 1:
-            candidate["provenance"].reverse()
-        elif mutation == 2:
-            candidate["provenance"][0]["signature_b64"] = candidate["provenance"][1][
-                "signature_b64"
-            ]
-        elif mutation == 3:
-            candidate["provenance"][0]["algorithm"] = "ed25519ph"
-        elif mutation == 4:
-            candidate["provenance"][0]["signature_b64"] = "AA=="
-        else:
-            candidate["legacy"] = True
-        with pytest.raises(builder.TonBuilderError):
-            builder.validate_signed_lock(
-                candidate,
-                expected_unsigned=unsigned,
-                policy=policy,
-            )
+def _fake_acton(path: Path, version: str) -> Path:
+    path.write_text(f"#!/bin/sh\necho '{version}'\n")
+    path.chmod(0o755)
+    return path
 
 
-def test_tree_scanner_hashes_regular_files_and_rejects_symlinks(tmp_path: Path) -> None:
-    root = tmp_path / "artifacts"
-    root.mkdir(mode=0o700)
-    artifact = root / "contract.json"
-    artifact.write_bytes(b'{"code":"bounded-public-bytecode"}\n')
-    artifact.chmod(0o600)
-    entries = builder._scan_tree(
-        root,
-        label="test artifact tree",
-        maximum_files=4,
-        maximum_file_bytes=1024,
-        maximum_total_bytes=4096,
-        scan_text=True,
+def test_explicit_acton_must_report_the_pinned_version(tmp_path: Path) -> None:
+    good = _fake_acton(tmp_path / "good", builder.ACTON_REPORTED_VERSION)
+    assert builder.resolve_acton(str(good)) == good
+    bad = _fake_acton(tmp_path / "bad", "acton 1.1.0 (9cf4d1f 2026-05-22)")
+    with pytest.raises(builder.TonBuilderError, match="expected"):
+        builder.resolve_acton(str(bad))
+    with pytest.raises(builder.TonBuilderError, match="absolute executable"):
+        builder.resolve_acton("relative/acton")
+
+
+def test_offline_resolution_never_downloads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(builder, "TOOLCHAIN_DIR", tmp_path / "empty")
+
+    def refuse(*_args, **_kwargs):  # pragma: no cover - must not be called
+        raise AssertionError("network used")
+
+    monkeypatch.setattr(builder.urllib.request, "urlopen", refuse)
+    with pytest.raises(builder.TonBuilderError, match="--offline"):
+        builder.resolve_acton(None, offline=True)
+
+
+def test_download_verifies_the_archive_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(builder, "TOOLCHAIN_DIR", tmp_path / "cache")
+    archive = _tar({"./acton": b"#!/bin/sh\necho wrong\n"})
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(builder.urllib.request, "urlopen", lambda *_a, **_k: Response(archive))
+    with pytest.raises(builder.TonBuilderError, match="SHA-256 mismatch"):
+        builder.resolve_acton(None)
+    # a digest-correct archive that reports the wrong version is refused too
+    name, _ = builder.host_archive()
+    monkeypatch.setitem(
+        builder.ACTON_ARCHIVES,
+        (builder.platform.system(), builder.platform.machine()),
+        (name, hashlib.sha256(archive).hexdigest()),
     )
-    assert entries == [
-        {
-            "path": "contract.json",
-            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
-            "size_bytes": artifact.stat().st_size,
-            "executable": False,
-        }
-    ]
-    (root / "alias.json").symlink_to(artifact)
-    with pytest.raises(builder.TonBuilderError, match="symlink"):
-        builder._scan_tree(
-            root,
-            label="test artifact tree",
-            maximum_files=4,
-            maximum_file_bytes=1024,
-            maximum_total_bytes=4096,
-            scan_text=True,
-        )
+    with pytest.raises(builder.TonBuilderError, match="downloaded Acton reports"):
+        builder.resolve_acton(None)
 
 
-def test_candidate_publication_is_private_exclusive_and_manifest_last(tmp_path: Path) -> None:
-    source = tmp_path / "source"
-    artifact = source / "artifacts" / "build" / "contract.json"
-    artifact.parent.mkdir(parents=True, mode=0o700)
-    payload = b'{"contract":"canonical"}\n'
-    artifact.write_bytes(payload)
-    artifact.chmod(0o600)
-    unsigned = _unsigned_lock()
-    unsigned["artifacts"] = [
-        {
-            "path": "build/contract.json",
-            "sha256": hashlib.sha256(payload).hexdigest(),
-            "size_bytes": len(payload),
-            "executable": False,
-        }
-    ]
-    output = tmp_path / "candidate"
-    builder._publish_candidate(output, build_output=source, unsigned_lock=unsigned)
-    assert (output.stat().st_mode & 0o077) == 0
-    published = output / "artifacts" / "build" / "contract.json"
-    assert published.read_bytes() == payload
-    assert (published.stat().st_mode & 0o077) == 0
-    assert (output / "unsigned-output-lock.json").read_bytes() == common.canonical_json_file_bytes(
-        unsigned
-    )
-    assert (output / "output-lock-signing-payload.bin").read_bytes() == (
-        builder.output_lock_signing_payload(unsigned)
-    )
-    with pytest.raises(builder.TonBuilderError, match="never overwrites"):
-        builder._publish_candidate(output, build_output=source, unsigned_lock=unsigned)
+def test_tolk_stdlib_check(tmp_path: Path) -> None:
+    acton_dir = tmp_path / ".acton" / "tolk-stdlib"
+    acton_dir.mkdir(parents=True)
+    (tmp_path / ".acton" / ".version").write_text("1.2.0")
+    (acton_dir / "common.tolk").write_text("// Standard library\n// x\n// y\ntolk 1.4.2\n")
+    builder.check_tolk_stdlib(tmp_path)
+    (acton_dir / "common.tolk").write_text("tolk 1.4.1\n")
+    with pytest.raises(builder.TonBuilderError, match="tolk 1.4.2"):
+        builder.check_tolk_stdlib(tmp_path)
+    (tmp_path / ".acton" / ".version").write_text("1.1.0")
+    with pytest.raises(builder.TonBuilderError, match="Acton 1.2.0"):
+        builder.check_tolk_stdlib(tmp_path)
 
 
-def test_release_builder_has_no_path_acton_or_single_build_production_escape() -> None:
+def test_no_docker_corridor_or_environment_toggles_remain() -> None:
     python_source = (SCRIPTS / "ton_sccp_builder.py").read_text(encoding="utf-8")
+    golden_source = (SCRIPTS / "generate_ton_sccp_stateinit_golden.py").read_text(encoding="utf-8")
     wrapper = (SCRIPTS / "sccp_ton_contract_build.sh").read_text(encoding="utf-8")
-    assert "ACTON_BIN" not in python_source + wrapper
-    assert "--network=none" in python_source
-    assert "--platform=linux/amd64" in python_source
-    assert "--pull=never" in python_source
-    assert "--read-only" in python_source
-    assert "--cap-drop=ALL" in python_source
-    assert python_source.count("_run_container_build(") >= 3
-    assert "report_one != report_two" in python_source
-    assert builder.APPROVER_ROLES == ("release-engineering", "release-security")
-    for field in (
-        "ton_builder_policy_sha256",
-        "ton_source_closure_sha256",
-        "ton_output_lock_sha256",
+    for source in (python_source, golden_source, wrapper):
+        for retired in ("docker run", '"docker"', "--pull=never", "production-prepare", "production-release"):
+            assert retired not in source
+        assert "os.environ" not in source
+        assert "replay_forest" not in source
+        assert "ACTON_BIN" not in source
+    assert 'exec python3 "$script_dir/ton_sccp_builder.py" "$@"' in wrapper
+    assert os.stat(SCRIPTS / "ton_sccp_builder.py").st_mode & 0o111
+
+
+def test_acton_project_pins_the_toolchain_and_pascal_case_contracts() -> None:
+    manifest = (builder.PROJECT / "Acton.toml").read_text(encoding="utf-8")
+    assert 'acton = "1.2.0"' in manifest
+    for name in builder.CONTRACTS:
+        assert f"[contracts.{name}]" in manifest
+        assert (builder.PROJECT / "contracts" / f"{name}.tolk").is_file()
+        assert (builder.PROJECT / "wrappers" / f"{name}.gen.tolk").is_file()
+    for retired in ("TairaXorSccpBridge", "TairaXorJettonMaster", "proof-verifier", "replay-forest"):
+        assert retired not in manifest
+    assert ".toolchain/" in (builder.PROJECT / ".gitignore").read_text(encoding="utf-8")
+
+
+# Sources of the retired bridge/master/wallet, proof verifier and replay forest.
+# TODO(ws14): the retired wrappers (`wrappers/TairaXor*.gen.tolk`), the old
+# suites directly under `tests/`, `scripts/generate-stateinit-golden.tolk` and
+# `fixtures/sccp/ton_stateinit_golden_v1.json` await deletion by the
+# orchestrator (the fixture only after `crates/iroha_sccp/src/ton_native.rs`,
+# owned by ws10/ws3A, stops including it); add them here once removed.
+RETIRED_CONTRACT_SOURCES = (
+    "TairaXorSccpBridge.tolk",
+    "TairaXorJettonMaster.tolk",
+    "TairaXorJettonWallet.tolk",
+    "proof-verifier.tolk",
+    "replay-forest.tolk",
+    "sccp-codec.tolk",
+    "constants.tolk",
+    "errors.tolk",
+    "jetton-utils.tolk",
+    "messages.tolk",
+    "storage.tolk",
+)
+
+
+def test_contract_sources_are_exactly_the_v1_set() -> None:
+    contracts = builder.PROJECT / "contracts"
+    present = sorted(path.name for path in contracts.glob("*.tolk"))
+    expected = sorted(Path(path).name for path in builder.SOURCE_FILES if path.startswith("contracts/"))
+    assert present == expected
+    for retired in RETIRED_CONTRACT_SOURCES:
+        assert not (contracts / retired).exists()
+
+
+def test_security_notes_describe_the_v1_design() -> None:
+    text = (builder.PROJECT / "SECURITY.md").read_text(encoding="utf-8")
+    for retired in (
+        "SccpDisableMinting",
+        "3-of-5",
+        "Ed25519",
+        "forest",
+        "mintingDisabled",
+        "ton_stateinit_golden_v1",
+        "Acton 1.1.0",
+        "Tolk 1.4.1",
+        "Linux/amd64",
     ):
-        assert field in python_source
-    mode = os.stat(SCRIPTS / "ton_sccp_builder.py").st_mode
-    assert mode & 0o111
+        assert retired not in text
+    for current in (
+        "sccp_apply_control",
+        "control_nonce",
+        "raw_reserve",
+        "MINTER_FLOOR",
+        "BUCKET_FLOOR",
+        "library",
+        "fixtures/sccp/ton_stateinit_v1.json",
+        "Acton 1.2.0",
+        "Tolk 1.4.2",
+    ):
+        assert current in text
 
 
-def test_cli_shape_errors_do_not_echo_untrusted_arguments() -> None:
-    marker = "authorization=Bearer-do-not-echo"
+def test_cli_rejects_unknown_arguments() -> None:
     result = subprocess.run(
-        [sys.executable, str(SCRIPTS / "ton_sccp_builder.py"), "--unknown", marker],
+        [sys.executable, str(SCRIPTS / "ton_sccp_builder.py"), "--unknown"],
         cwd=ROOT,
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     assert result.returncode == 2
-    assert marker not in result.stdout + result.stderr
-    assert len(result.stderr) < 1024
 
 
-def test_policy_requires_a_nonzero_commit_verifier_digest() -> None:
-    policy, _ = _policy()
-    for value in (None, "00" * 32, "short"):
-        candidate = copy.deepcopy(policy)
-        if value is None:
-            del candidate["builder"]["host_commit_verifier_sha256"]
-        else:
-            candidate["builder"]["host_commit_verifier_sha256"] = value
-        with pytest.raises(builder.TonBuilderError):
-            builder.validate_policy(candidate)
+# ---------------------------------------------------------------------------
+# Keccak-256 and secp256k1.
 
 
-def test_git_environment_ignores_ambient_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in ("GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_DIR", "HOME"):
-        monkeypatch.setenv(key, "ambient-setting")
-    environment = builder._closed_environment(source_date_epoch=1_700_000_000)
-    assert environment["GIT_CONFIG_NOSYSTEM"] == "1"
-    assert environment["GIT_CONFIG_GLOBAL"] == os.devnull
-    assert environment["GIT_NO_REPLACE_OBJECTS"] == "1"
-    assert environment["GIT_NO_LAZY_FETCH"] == "1"
-    assert environment["GIT_TERMINAL_PROMPT"] == "0"
-    assert environment["SOURCE_DATE_EPOCH"] == "1700000000"
-    assert "ambient-setting" not in environment.values()
+def test_keccak256_known_answers() -> None:
+    assert builder.keccak256(b"").hex() == "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+    assert builder.keccak256(b"SCCP").hex() == "d7bacbdfe367013f66397ff7242325c31126ab14c95620817c994f22f1d123ba"
+    assert builder.keccak256(b"1").hex() == "c89efdaa54c0f20c7adf612882df0950f5a951637e0307cdcb4c672f298b8bc6"
+    # rate boundary (135, 136, 137 bytes) agrees with pycryptodome when present
+    try:
+        from Crypto.Hash import keccak  # type: ignore
+    except ImportError:
+        keccak = None
+    if keccak is not None:
+        for size in (135, 136, 137, 272, 1000):
+            data = bytes(range(256)) * 4
+            reference = keccak.new(digest_bits=256)
+            reference.update(data[:size])
+            assert builder.keccak256(data[:size]) == reference.digest()
 
 
-def test_git_reads_original_objects_despite_local_replacement_refs(tmp_path: Path) -> None:
-    git_path = shutil.which("git")
-    if git_path is None:
-        pytest.skip("Git unavailable")
-    git = Path(git_path)
-
-    def run(*arguments: str, payload: bytes | None = None) -> bytes:
-        return subprocess.run(
-            [str(git), "-C", str(tmp_path), *arguments],
-            input=payload, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=builder._closed_environment(),
-        ).stdout.strip()
-
-    run("init", "--quiet")
-    original = run("hash-object", "-w", "--stdin", payload=b"approved source\n").decode()
-    replacement = run("hash-object", "-w", "--stdin", payload=b"unapproved source\n").decode()
-    run("update-ref", f"refs/replace/{original}", replacement)
-    assert builder._git_command(git, tmp_path, ("cat-file", "blob", original)) == b"approved source\n"
+def test_spec_constants_self_check() -> None:
+    builder._self_check_spec_constants()
 
 
-def test_git_operations_disable_repository_command_hooks(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls = []
-
-    def run(executable, arguments, **kwargs):
-        calls.append((arguments, kwargs))
-        return b"", b""
-
-    monkeypatch.setattr(builder, "_run_bounded", run)
-    builder._git_command(Path("/approved/git"), ROOT, ("status", "--porcelain=v1"))
-    arguments, options = calls[0]
-    assert "core.fsmonitor=false" in arguments
-    assert f"core.hooksPath={os.devnull}" in arguments
-    assert options["environment"]["GIT_NO_REPLACE_OBJECTS"] == "1"
+def test_ecdsa_sign_is_low_s_and_recovers() -> None:
+    private = 0x1234567890ABCDEF
+    public = builder.point_mul(private)
+    assert public is not None
+    address = builder.eth_address(public)
+    for nonce in (5, 7, 0xDEADBEEF):
+        digest = builder.keccak_int(nonce.to_bytes(8, "big"))
+        r, s, v = builder.ecdsa_sign(private, digest, nonce)
+        assert 1 <= r < builder.SECP_N and 1 <= s <= builder.SECP_HALF_N and v in (27, 28)
+        assert builder.ecdsa_recover(digest, r, s, v) == address
+        assert builder.ecdsa_recover(digest + 1, r, s, v) != address
 
 
-@pytest.mark.parametrize("path", ["relative/verifier", "/approved/tool name", "/approved/../verifier"])
-def test_commit_verifier_path_is_rejected_before_git(
-    path: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def unexpected_git(*args, **kwargs):
-        pytest.fail("invalid verifier path reached Git")
-
-    monkeypatch.setattr(builder, "_git_command", unexpected_git)
-    policy, _ = _policy()
-    with pytest.raises(builder.TonBuilderError, match="canonical shell-inert"):
-        builder._verify_source_and_archive(Path("/approved/git"), Path(path), policy, tmp_path / "source.tar")
+def test_eth_address_of_generator_point() -> None:
+    # address of private key 1 (well-known)
+    assert builder.eth_address(builder.SECP_G) == 0x7E5F4552091A69125D5DFCB7B8C2659029395BDF
 
 
-def test_both_signature_checks_bind_every_verifier_format(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    policy, _ = _policy()
-    commands = []
-
-    def git_command(git, root, arguments, **kwargs):
-        commands.append(arguments)
-        if "--show-toplevel" in arguments:
-            return str(ROOT).encode() + b"\n"
-        if "--show-object-format=storage" in arguments:
-            return b"sha1\n"
-        if "--git-path" in arguments:
-            return str(tmp_path).encode() + b"\n"
-        if "rev-parse" in arguments:
-            return policy["source"]["commit"].encode() + b"\n"
-        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
-            fingerprint = policy["source"]["commit_signer_fingerprint"].encode()
-            return b"G\x00" + fingerprint + b"\x00" + fingerprint + b"\x00\n"
-        if "--format=%ct" in arguments:
-            return b"0\n"  # Stop before archive creation; only signature dispatch is under test.
-        return b""
-
-    monkeypatch.setattr(builder, "_git_command", git_command)
-    with pytest.raises(builder.TonBuilderError, match="commit time"):
-        builder._verify_source_and_archive(
-            Path("/approved/git"), Path("/approved/verifier"), policy, tmp_path / "source.tar",
-        )
-    checks = [args for args in commands if "verify-commit" in args or "--format=%G?%x00%GF%x00%GP%x00" in args]
-    assert len(checks) == 2
-    for arguments in checks:
-        assert "gpg.format=openpgp" in arguments
-        for slot in ("gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program"):
-            assert f"{slot}=/approved/verifier" in arguments
+# ---------------------------------------------------------------------------
+# TON cells and BoCs.
 
 
-def test_production_rejects_unapproved_commit_verifier_before_build(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    policy, _ = _policy()
-    policy_bytes = common.canonical_json_file_bytes(policy)
-    policy_path = tmp_path / "policy.json"
-    policy_path.write_bytes(policy_bytes)
-
-    def open_executable(path, *, label):
-        hashes = {
-            "pinned Python executable": "2f" * 32,
-            "pinned Git executable": "30" * 32,
-            "pinned Docker executable": "40" * 32,
-            "pinned OpenPGP commit signature verifier": "42" * 32,
-        }
-        return Path(path), (1, 2, 3, 4, 5), hashes[label]
-
-    def unexpected_build(*args, **kwargs):
-        pytest.fail("unapproved commit verifier reached container work")
-
-    monkeypatch.setattr(builder, "_open_stable_executable", open_executable)
-    monkeypatch.setattr(builder, "_inspect_image", unexpected_build)
-    with pytest.raises(builder.TonBuilderError, match="verifier does not match"):
-        builder._production_build(
-            policy_path=policy_path, trusted_policy_sha256=hashlib.sha256(policy_bytes).hexdigest(),
-            git_path="/approved/git", docker_path="/approved/docker",
-            commit_verifier_path="/approved/verifier",
-        )
+def test_cell_hashes_match_ton_reference_values() -> None:
+    assert builder.Cell("").hash.hex() == "96a296d224f285c67bee93c30f8a309157f0daa35dc5b87e410b78630a09cfc7"
+    child = builder.Builder().uint(1, 8).end()
+    parent = builder.Builder().uint(0b101, 3).ref(child).end()
+    assert parent.depth == 1 and child.depth == 0
+    material = bytes([1, 1]) + bytes([0b10110000]) + (0).to_bytes(2, "big") + child.hash
+    assert parent.hash == hashlib.sha256(material).digest()
 
 
-def test_source_archive_uses_the_same_git_isolation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    policy, _ = _policy()
-    archive_bytes = b"bounded archive stream\n"
-    invocations = []
+def test_builder_serialization_rules() -> None:
+    assert builder.Builder().coins(0).bits == "0000"
+    assert builder.Builder().coins(256).bits == "0010" + format(256, "016b")
+    assert builder.Builder().address(0, 5).bits == "100" + "0" * 8 + format(5, "0256b")
+    assert builder.Builder().int(-1, 8).bits == "11111111"
+    assert builder.Builder().maybe_ref(None).bits == "0"
+    with pytest.raises(builder.TonBuilderError):
+        builder.Builder().uint(256, 8)
+    with pytest.raises(builder.TonBuilderError):
+        builder.Cell("1" * 1024)
 
-    def git_command(git, root, arguments, **kwargs):
-        if "--show-toplevel" in arguments:
-            return str(ROOT).encode() + b"\n"
-        if "--show-object-format=storage" in arguments:
-            return b"sha1\n"
-        if "--git-path" in arguments:
-            return str(tmp_path).encode() + b"\n"
-        if "rev-parse" in arguments:
-            return policy["source"]["commit"].encode() + b"\n"
-        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
-            fingerprint = policy["source"]["commit_signer_fingerprint"].encode()
-            return b"G\x00" + fingerprint + b"\x00" + fingerprint + b"\x00\n"
-        if "--format=%ct" in arguments:
-            return str(policy["source"]["source_date_epoch"]).encode() + b"\n"
-        return b""
 
-    class ArchiveProcess:
-        def __init__(self, arguments, **kwargs):
-            invocations.append((arguments, kwargs))
-            self.stdout = io.BytesIO(archive_bytes)
-            self.stderr = io.BytesIO()
+def _serialize_boc(root: builder.Cell) -> bytes:
+    order = []
+    index = {}
 
-        def wait(self, timeout=None):
-            return 0
+    def visit(cell: builder.Cell) -> None:
+        if cell.hash in index:
+            return
+        index[cell.hash] = len(order)
+        order.append(cell)
+        for ref in cell.refs:
+            visit(ref)
 
-    monkeypatch.setattr(builder, "_git_command", git_command)
-    monkeypatch.setattr(builder.subprocess, "Popen", ArchiveProcess)
-    archive = tmp_path / "source.tar"
-    digest = builder._verify_source_and_archive(
-        Path("/approved/git"), Path("/approved/verifier"), policy, archive,
+    visit(root)
+    body = b""
+    for cell in order:
+        body += cell.descriptors() + cell.data_bytes() + bytes(index[ref.hash] for ref in cell.refs)
+    header = bytes.fromhex("b5ee9c72") + bytes([0x01, 0x02]) + bytes([len(order), 1, 0])
+    header += len(body).to_bytes(2, "big") + bytes([0])
+    return header + body
+
+
+def test_parse_boc_round_trips_a_cell_tree() -> None:
+    leaf = builder.Builder().uint(0xABC, 12).end()
+    mid = builder.Builder().uint(1, 1).ref(leaf).end()
+    root = builder.Builder().uint(0x55, 8).ref(mid).ref(leaf).end()
+    parsed = builder.parse_boc(_serialize_boc(root))
+    assert parsed.hash == root.hash
+    assert parsed.depth == 2
+    assert builder.cell_tree_size(parsed) == (3, 8 + 1 + 12)
+    with pytest.raises(builder.TonBuilderError, match="serialized_boc"):
+        builder.parse_boc(b"\x00" * 16)
+
+
+# ---------------------------------------------------------------------------
+# Rosters and canonical minter data.
+
+
+def test_roster_digest_rules() -> None:
+    members = [golden.golden_member(i) for i in range(1, 5)]
+    digest = builder.roster_digest(golden.NETWORK_ID, 7, 1, 2, members)
+    preimage = (
+        b"SCCP/ROSTER/V1" + bytes.fromhex("11" * 32) + (7).to_bytes(8, "big") + (1).to_bytes(8, "big")
+        + (2).to_bytes(8, "big") + bytes([4, 3]) + b"".join(m.to_bytes(20, "big") for m in members)
     )
-    assert digest == hashlib.sha256(archive_bytes).hexdigest()
-    assert archive.read_bytes() == archive_bytes
-    arguments, options = invocations[0]
-    assert "core.fsmonitor=false" in arguments
-    assert f"core.hooksPath={os.devnull}" in arguments
-    assert options["env"]["GIT_CONFIG_NOSYSTEM"] == "1"
-    assert options["env"]["GIT_CONFIG_GLOBAL"] == os.devnull
-    assert options["env"]["GIT_NO_REPLACE_OBJECTS"] == "1"
-    assert options["env"]["GIT_NO_LAZY_FETCH"] == "1"
-    assert options["env"]["GIT_ATTR_NOSYSTEM"] == "1"
-    assert options["env"]["GIT_DIR"] != str(ROOT / ".git")
-    for slot in ("gpg.program", "gpg.openpgp.program", "gpg.x509.program", "gpg.ssh.program"):
-        assert f"{slot}=/approved/verifier" in arguments
+    assert digest == builder.keccak_int(preimage)
+    assert builder.roster_threshold(4) == 3 and builder.roster_threshold(31) == 21
+    builder.roster_digest(golden.NETWORK_ID, 7, 1, 2, [0, 0] + members[:3])
+    for bad in (
+        members[:3],
+        [members[1], members[0]] + members[2:],
+        [members[0], 0] + members[2:],
+        [members[0], members[0]] + members[2:],
+        [0] * 32,
+    ):
+        with pytest.raises(builder.TonBuilderError):
+            builder.roster_digest(golden.NETWORK_ID, 7, 1, 2, bad)
+    with pytest.raises(builder.TonBuilderError):
+        builder.roster_digest(golden.NETWORK_ID, 7, 2, 2, members)
+    with pytest.raises(builder.TonBuilderError):
+        builder.roster_digest(golden.NETWORK_ID, 0, 1, 2, members)
 
 
-@pytest.mark.parametrize("mode", ["production-prepare", "production-release"])
-def test_production_cli_requires_commit_verifier(mode: str) -> None:
-    arguments = [
-        mode, "--policy", "/approved/policy.json", "--trusted-policy-sha256", "11" * 32,
-        "--git", "/approved/git", "--docker", "/approved/docker", "--output-dir", "/approved/output",
-    ]
-    if mode == "production-release":
-        arguments.extend(["--signed-output-lock", "/approved/lock.json"])
-    with pytest.raises(builder.TonBuilderError, match="invalid final-V1 shape"):
-        builder._parser().parse_args(arguments)
-    parsed = builder._parser().parse_args(arguments + ["--commit-verifier", "/approved/verifier"])
-    assert parsed.commit_verifier == "/approved/verifier"
+def test_member_chunks_are_maximal() -> None:
+    members = list(range(1, 14))
+    chunk = builder.member_chunks(members)
+    sizes = []
+    current = chunk
+    while True:
+        sizes.append((len(current.bits) - 1) // 160)
+        if not current.refs:
+            assert current.bits[-1] == "0"
+            break
+        assert current.bits[-1] == "1"
+        current = current.refs[0]
+    assert sizes == [6, 6, 1]
 
 
-@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
-@pytest.mark.parametrize("dirty", [None, "staged", "worktree", "untracked", "staged-gitlink"])
-def test_source_archive_uses_only_signed_attributes_and_no_repository_filters(
-    object_format: str, dirty: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    git_path = shutil.which("git")
-    if git_path is None:
-        pytest.skip("Git unavailable")
-    git = Path(git_path)
-    repository = tmp_path / "repository"
-    repository.mkdir(mode=0o700)
-    scratch = tmp_path / "scratch"
-    scratch.mkdir(mode=0o700)
-
-    def run(*arguments: str, payload: bytes | None = None) -> bytes:
-        return subprocess.run(
-            [str(git), "-C", str(repository), *arguments],
-            input=payload, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=builder._closed_environment(),
-        ).stdout.strip()
-
-    # Assemble inert Git objects directly: this test does not create signatures
-    # or execute a production verifier. Only the signature result is mocked.
-    run("init", "--quiet", f"--object-format={object_format}", "--template=")
-    blobs = {
-        ".gitattributes": b"keep.txt filter=sccp-test\nomitted.txt export-ignore\nexpanded.txt export-subst\n",
-        "expanded.txt": b"$Format:%H$\n",
-        "keep.txt": b"approved source bytes\n",
-        "omitted.txt": b"intentionally excluded by signed attributes\n",
-    }
-    entries = []
-    for name, contents in sorted(blobs.items()):
-        oid = run("hash-object", "-w", "--stdin", payload=contents).decode()
-        entries.append(f"100644 blob {oid}\t{name}\n")
-    oid_length = 40 if object_format == "sha1" else 64
-    entries.append(f"160000 commit {'7' * oid_length}\toptional-docs\n")
-    tree = run("mktree", payload="".join(entries).encode()).decode()
-    commit = run(
-        "hash-object", "-w", "-t", "commit", "--stdin",
-        payload=(
-            f"tree {tree}\nauthor Fixture <fixture@example.invalid> 1700000000 +0000\n"
-            "committer Fixture <fixture@example.invalid> 1700000000 +0000\n\n"
-            "Isolated archive regression fixture\n"
-        ).encode(),
-    ).decode()
-    run("update-ref", "HEAD", commit)
-    run("read-tree", "--reset", "-u", commit)
-    # Optional gitlink worktrees can contain independent, unusable metadata.
-    # Parent-source validation must never recurse into that child checkout.
-    child_git = repository / "optional-docs" / ".git"
-    child_git.mkdir(parents=True)
-    (child_git / "objects").mkdir()
-    (child_git / "refs").mkdir()
-    (child_git / "HEAD").write_text("ref: refs/heads/fixture\n")
-    (child_git / "config").write_text("[core]\n\trepositoryformatversion = 999\n")
-    # These files are deliberately outside the signed tree. Required, absent
-    # filter executables make any accidental helper selection fail the test.
-    (repository / ".git" / "info").mkdir(exist_ok=True)
-    (repository / ".git" / "info" / "attributes").write_text("keep.txt export-ignore\n")
-    ambient_attributes = tmp_path / "ambient-attributes"
-    ambient_attributes.write_text("expanded.txt export-ignore\n")
-    run("config", "core.attributesFile", str(ambient_attributes))
-    for kind in ("clean", "smudge", "process"):
-        run("config", f"filter.sccp-test.{kind}", str(tmp_path / "unavailable-filter"))
-    run("config", "filter.sccp-test.required", "true")
-    # Force a worktree recheck even when its bytes still match the index.
-    keep = repository / "keep.txt"
-    modified = keep.stat().st_mtime_ns + 2_000_000_000
-    os.utime(keep, ns=(modified, modified))
-    if dirty == "worktree":
-        keep.write_bytes(b"changed working tree\n")
-    elif dirty == "staged":
-        staged = run("hash-object", "-w", "--stdin", payload=b"changed index\n").decode()
-        run("update-index", "--cacheinfo", f"100644,{staged},keep.txt")
-    elif dirty == "untracked":
-        (repository / "untracked.txt").write_bytes(b"untracked source\n")
-    elif dirty == "staged-gitlink":
-        run("update-index", "--cacheinfo", f"160000,{'8' * oid_length},optional-docs")
-    index = repository / ".git" / "index"
-    original_index = index.read_bytes()
-    original_index_mtime = index.stat().st_mtime_ns
-    fingerprint = "0123456789abcdef"
-    original_git_command = builder._git_command
-
-    def git_command(executable, root, arguments, **kwargs):
-        if "verify-commit" in arguments:
-            return b""
-        if "--format=%G?%x00%GF%x00%GP%x00" in arguments:
-            return f"G\0{fingerprint}\0{fingerprint}\0\n".encode()
-        return original_git_command(executable, root, arguments, **kwargs)
-
-    monkeypatch.setattr(builder, "ROOT", repository)
-    monkeypatch.setattr(builder, "_git_command", git_command)
-    policy = {"source": {
-        "commit": commit, "commit_signer_fingerprint": fingerprint, "source_date_epoch": 1_700_000_000,
-    }}
-    archive_path = scratch / "source.tar"
-    if dirty is not None:
-        with pytest.raises(builder.TonBuilderError, match="completely clean"):
-            builder._verify_source_and_archive(git, Path("/approved/verifier"), policy, archive_path)
-    else:
-        digest = builder._verify_source_and_archive(git, Path("/approved/verifier"), policy, archive_path)
-        assert digest == hashlib.sha256(archive_path.read_bytes()).hexdigest()
-        with tarfile.open(archive_path) as archive:
-            assert "source/omitted.txt" not in archive.getnames()
-            assert archive.extractfile("source/keep.txt").read() == blobs["keep.txt"]
-            assert archive.extractfile("source/expanded.txt").read() == (commit + "\n").encode()
-    assert index.read_bytes() == original_index
-    assert index.stat().st_mtime_ns == original_index_mtime
+def test_minter_initial_data_layout() -> None:
+    wallet = OpaqueCell("aa" * 32, 3)
+    bucket = OpaqueCell("bb" * 32, 5)
+    members = [golden.golden_member(i) for i in range(1, 5)]
+    cells = builder.minter_initial_data(golden.NETWORK_ID, 1, 10**18, 7, 1, 2, members, wallet, bucket)
+    root = cells["root"]
+    assert len(root.bits) == 267 and root.refs == [cells["config"], cells["roster"]]
+    assert set(root.bits) == {"0"}
+    assert cells["config"].refs == [wallet, bucket]
+    assert len(cells["roster"].bits) == 256 + 3 * 64 + 16
+    si = builder.state_init(OpaqueCell("cc" * 32, 9), root)
+    assert si.bits == "00110"
 
 
-@pytest.mark.parametrize(
-    "object_format,commit", [("sha512", "1" * 40), ("sha1", "1" * 64), ("sha256", "0" * 64)],
-)
-def test_isolated_git_directory_rejects_invalid_source_identity(
-    object_format: str, commit: str, tmp_path: Path,
-) -> None:
-    with pytest.raises(common.SccpReleaseError, match="identity is not canonical"):
-        common.create_isolated_git_directory(tmp_path, object_format=object_format, commit=commit)
+def test_state_init_hash_matches_tvm_formula() -> None:
+    code = OpaqueCell("01" * 32, 2)
+    data = builder.Builder().uint(1, 1).end()
+    si = builder.state_init(code, data)
+    material = bytes([2, 1]) + bytes([0b00110100]) + (2).to_bytes(2, "big") + data.depth.to_bytes(2, "big")
+    material += code.hash + data.hash
+    assert si.hash == hashlib.sha256(material).digest()
 
 
-def test_isolated_git_directory_rejects_shared_scratch_parent(tmp_path: Path) -> None:
-    parent = tmp_path / "shared"
-    parent.mkdir(mode=0o755)
-    with pytest.raises(common.SccpReleaseError, match="owner-only"):
-        common.create_isolated_git_directory(parent, object_format="sha1", commit="1" * 40)
+# ---------------------------------------------------------------------------
+# Tolk test vectors.
+
+
+def test_test_keys_are_sorted_and_sign_consistently() -> None:
+    keys = builder.test_keys()
+    assert len(keys) == builder.TEST_KEY_COUNT
+    addresses = [key["address"] for key in keys]
+    assert addresses == sorted(addresses) and len(set(addresses)) == len(addresses)
+    digest = builder.keccak_int(b"vector")
+    for key in keys[:3]:
+        r, s, v = builder.ecdsa_sign(key["private"], digest, key["nonce"])
+        assert r == key["r"]
+        assert key["k_inverse"] * key["nonce"] % builder.SECP_N == 1
+        assert builder.ecdsa_recover(digest, r, s, v) == key["address"]
+
+
+def test_committed_tolk_vectors_are_current() -> None:
+    assert builder.VECTORS_FILE.read_text(encoding="utf-8") == builder.render_test_vectors()
+
+
+def test_merkle_helpers_follow_promote_odd() -> None:
+    leaves = [builder.keccak_int(bytes([i])) for i in range(5)]
+    levels = builder.merkle_levels(leaves)
+    assert [len(level) for level in levels] == [5, 3, 2, 1]
+    assert levels[1][2] == leaves[4]
+    assert builder.merkle_path(leaves, 4) == [levels[2][0]]
+    assert len(builder.merkle_path(leaves, 3)) == 3
+
+
+# ---------------------------------------------------------------------------
+# StateInit golden.
+
+
+def _fixture() -> dict:
+    return json.loads(golden.FIXTURE.read_text(encoding="utf-8"))
+
+
+def test_fixture_is_canonical_json() -> None:
+    fixture = _fixture()
+    assert golden.render(fixture) == golden.FIXTURE.read_text(encoding="utf-8")
+    assert fixture["schema"] == golden.SCHEMA
+    assert fixture["toolchain"] == {"acton": "1.2.0", "tolk": "1.4.2"}
+    assert [vector["label"] for vector in fixture["vectors"]] == ["n4", "n31"]
+
+
+def test_fixture_reproduces_from_code_hashes_and_depths_alone() -> None:
+    fixture = _fixture()
+    code = {name: OpaqueCell(record["hash"], record["depth"]) for name, record in fixture["code"].items()}
+    for vector, spec in zip(fixture["vectors"], golden.VECTORS):
+        members = [int(member, 16) for member in vector["members"]]
+        assert members == spec["members"]
+        network = int(vector["taira_network_id"], 16)
+        cells = builder.minter_initial_data(
+            network,
+            vector["route_revision"],
+            int(vector["max_supply"]),
+            vector["generation"],
+            vector["valid_from_ms"],
+            vector["valid_until_ms"],
+            members,
+            code["wallet"],
+            code["bucket"],
+        )
+        assert cells["root"].hash.hex() == vector["initial_data"]["hash"]
+        assert cells["root"].depth == vector["initial_data"]["depth"]
+        assert cells["config"].data_hex() == vector["initial_data"]["config"]["data"]
+        assert f"{builder.roster_digest(network, vector['generation'], vector['valid_from_ms'], vector['valid_until_ms'], members):064x}" == vector["roster_digest"]
+        state_init = builder.state_init(code["minter"], cells["root"])
+        assert state_init.hash.hex() == vector["state_init_hash"] == vector["address"]["account_id"]
+        account = int(vector["address"]["account_id"], 16)
+        children = vector["children"]
+        assert f"{golden.wallet_address(golden.WALLET_OWNER, account, code['wallet']):064x}" == children["wallet_account_id"]
+        assert f"{golden.bucket_address(account, 0, code['bucket']):064x}" == children["bucket_0_account_id"]
+        assert f"{golden.bucket_address(account, 1, code['bucket']):064x}" == children["bucket_1_account_id"]
+        assert vector["t"] == builder.roster_threshold(vector["n"])
+    n31 = fixture["vectors"][1]
+    assert len(n31["initial_data"]["members"]) == 6
+    assert n31["members"][:3] == ["0" * 40] * 3
+
+
+def test_script_output_parser_and_cross_check() -> None:
+    fixture = _fixture()
+    lines = []
+    for name, record in fixture["code"].items():
+        lines.append(f"sccp-stateinit code {name}_code_hash={record['hash']}")
+        lines.append(f"sccp-stateinit code {name}_code_depth={record['depth']}")
+    for vector in fixture["vectors"]:
+        label = vector["label"]
+        lines += [
+            f"sccp-stateinit {label} roster_digest={vector['roster_digest']}",
+            f"sccp-stateinit {label} data_hash={vector['initial_data']['hash']}",
+            f"sccp-stateinit {label} data_depth={vector['initial_data']['depth']}",
+            f"sccp-stateinit {label} state_init_hash={vector['state_init_hash']}",
+            f"sccp-stateinit {label} workchain=0",
+            f"sccp-stateinit {label} account_id={vector['address']['account_id']}",
+            f"sccp-stateinit {label} wallet_of_abab={vector['children']['wallet_account_id']}",
+            f"sccp-stateinit {label} bucket_0={vector['children']['bucket_0_account_id']}",
+            f"sccp-stateinit {label} bucket_1={vector['children']['bucket_1_account_id']}",
+        ]
+    output = "noise line\n" + "\n".join(lines) + "\n"
+    golden.cross_check(fixture, golden.parse_script_output(output))
+    tampered = output.replace(fixture["vectors"][0]["address"]["account_id"], "00" * 32, 1)
+    with pytest.raises(golden.GoldenError):
+        golden.cross_check(fixture, golden.parse_script_output(tampered))
+    with pytest.raises(golden.GoldenError, match="duplicate"):
+        golden.parse_script_output(output + lines[0] + "\n")
+    with pytest.raises(golden.GoldenError, match="keys differ"):
+        golden.cross_check(fixture, golden.parse_script_output("\n".join(lines[1:])))

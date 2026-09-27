@@ -154,10 +154,14 @@ impl WorldDeltaBuilder {
 
     /// Append a storage's exact borrowed net changes, using its owner's value projection.
     /// No `is_dirty` shortcut can discard an explicit absent-to-absent journal row.
-    pub(crate) fn append_storage_with<K: Key + Encode, V: Value>(
+    pub(crate) fn append_storage_with<
+        K: Key + Encode,
+        V: Value,
+        M: mv::storage::StorageMode<K, V>,
+    >(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V>,
+        storage: &StorageBlock<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         self.begin_field(name, 0)?;
@@ -213,10 +217,10 @@ impl WorldDeltaBuilder {
 /// Exhaustive semantic World visitor shared by delta and persistent baseline owners.
 /// Each owner supplies the hash of its actual borrowed value, excluding caches.
 pub(crate) trait WorldProjection {
-    fn append_storage_with<K: Key + Encode, V: Value>(
+    fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V>,
+        storage: &StorageBlock<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String>;
 
@@ -229,10 +233,10 @@ pub(crate) trait WorldProjection {
 }
 
 impl<T: WorldProjection> WorldProjection for &mut T {
-    fn append_storage_with<K: Key + Encode, V: Value>(
+    fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V>,
+        storage: &StorageBlock<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         (**self).append_storage_with(name, storage, encode)
@@ -248,10 +252,10 @@ impl<T: WorldProjection> WorldProjection for &mut T {
 }
 
 impl WorldProjection for WorldDeltaBuilder {
-    fn append_storage_with<K: Key + Encode, V: Value>(
+    fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V>,
+        storage: &StorageBlock<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         Self::append_storage_with(self, name, storage, encode)
@@ -275,7 +279,9 @@ trait AppendWorldField {
     ) -> Result<(), String>;
 }
 
-impl<K: Key + Encode, V: Value + Encode> AppendWorldField for StorageBlock<'_, K, V> {
+impl<K: Key + Encode, V: Value + Encode, M: mv::storage::StorageMode<K, V>> AppendWorldField
+    for StorageBlock<'_, K, V, M>
+{
     fn append_world_field(
         &self,
         name: &'static str,

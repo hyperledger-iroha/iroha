@@ -333,3 +333,73 @@ state_test! { sync native_transport_production_decision_reaches_global_nonmember
     drop(transport);
     assert!(!guard.restart_required());
 }
+
+state_test! { sync native_transport_exact_retransmissions_cannot_exhaust_slots_behind_silent_peer
+    use crate::sumeragi::{
+        output_guard::ConsensusOutputGuard,
+        v2_lane_transport::{NativeLaneTransport, NativeTransportAdmission, NativeTransportProgress},
+    };
+    use iroha_p2p::network::{NetworkActorAdmissionError, NetworkActorAdmissionTicketTestFixture};
+    let fixture = native_process_fixture(false, std::time::Instant::now());
+    let observed = fixture.state.verified_lane_consensus_contexts().unwrap().unwrap();
+    let lane = &observed.contexts()[0];
+    let local = lane.frozen().committee[0].clone();
+    let blocked = lane.frozen().committee[1].clone();
+    let guard = ConsensusOutputGuard::isolated();
+    let mut transport = NativeLaneTransport::new(Arc::clone(&fixture.state), Arc::clone(&guard), local, nonzero!(2_usize));
+    assert!(matches!(transport.retain(&observed, native_transport_packet_for_test(&fixture,lane)), NativeTransportAdmission::Retained));
+    let mut ticket_owner = None;
+    let mut held_frame = None;
+    transport.poll_for_test(&observed, |post, ticket| {
+        assert_eq!(post.peer_id, blocked);
+        assert!(ticket.is_none());
+        let crate::NetworkMessage::SumeragiBlock(frame) = &post.data else { panic!("native frame") };
+        held_frame = Some(Arc::clone(frame));
+        let (owner, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+        ticket_owner = Some(owner);
+        Err(NetworkActorAdmissionError::Backpressured { message: post, ticket: Some(ticket), rank: 1 })
+    }).unwrap();
+    for peer in &lane.frozen().committee[2..] {
+        transport.poll_for_test(&observed, |post, ticket| {
+            assert_eq!(&post.peer_id, peer);
+            assert!(ticket.is_none());
+            Ok(())
+        }).unwrap();
+    }
+    // The original blocked post survives any number of identical retransmissions.
+    // Each serviced honest destination acquires only one pending resend occurrence.
+    for _ in 0..32 {
+        assert!(matches!(transport.retain(&observed, native_transport_packet_for_test(&fixture,lane)), NativeTransportAdmission::Retained));
+        assert_eq!(ticket_owner.as_ref().unwrap().waiter_count(), 1);
+        assert_eq!(ticket_owner.as_ref().unwrap().ticket_drop_cancellations(), 0);
+    }
+    let mut distinct = native_transport_packet_for_test(&fixture,lane);
+    distinct.envelope = native_driver_control_for_test(&fixture,lane,2);
+    distinct.canonical_bytes = norito::encode_canonical(&distinct.envelope).unwrap();
+    assert!(matches!(transport.retain(&observed,distinct), NativeTransportAdmission::Retained),
+        "duplicate retries must leave capacity for another authenticated timeout share");
+    let mut accepted_ticket = None;
+    let mut deliveries = BTreeMap::new();
+    for _ in 0..6 {
+        let progress = transport.poll_for_test(&observed, |post, ticket| {
+            let crate::NetworkMessage::SumeragiBlock(frame) = &post.data else { panic!("native frame") };
+            if ticket.is_some() {
+                assert_eq!(post.peer_id, blocked);
+                assert!(Arc::ptr_eq(frame, held_frame.as_ref().unwrap()));
+                assert_eq!(ticket.as_ref().unwrap().rank(), Some(1));
+                assert!(accepted_ticket.is_none());
+                accepted_ticket = ticket;
+            }
+            *deliveries.entry(post.peer_id).or_insert(0) += 1;
+            Ok(())
+        }).unwrap();
+        assert!(matches!(progress, NativeTransportProgress::Admitted { .. }));
+    }
+    assert_eq!(deliveries.len(), 3);
+    assert!(deliveries.values().all(|count| *count == 2), "one original retry and one distinct share per peer");
+    assert_eq!(transport.poll_for_test(&observed, |_,_| panic!("all exact fanouts drained")).unwrap(), NativeTransportProgress::Idle);
+    assert_eq!(ticket_owner.as_ref().unwrap().ticket_drop_cancellations(), 0);
+    drop(transport);
+    assert!(!guard.restart_required());
+    drop(accepted_ticket);
+}

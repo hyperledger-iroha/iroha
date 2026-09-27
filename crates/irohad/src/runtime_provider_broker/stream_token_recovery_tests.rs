@@ -552,6 +552,14 @@ fn stream_token_server_dispatch_routes_sign_recovery_and_observer_to_separate_ba
         reads: AtomicU64,
     }
     impl StreamTokenStateObserverClientV1 for Observer {
+        fn finalize_check(
+            &self,
+            _instruction: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+        ) -> Result<iroha_data_model::transaction::SignedTransaction, StreamTokenSignerCallErrorV1>
+        {
+            Err(StreamTokenSignerCallErrorV1::Unavailable)
+        }
+
         fn handle(&self) -> &str {
             "state://sorafs/stream-token/observer-primary"
         }
@@ -773,5 +781,6 @@ fn stream_token_decoded_receipt_signatures_are_scrubbed_on_success_and_every_rej
 }
 
 include!("stream_token_window_tests.rs");
+include!("stream_token_check_tests.rs");
 
 include!("stream_token_blocking_worker_tests.rs");

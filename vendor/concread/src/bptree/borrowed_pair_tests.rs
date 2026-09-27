@@ -17,13 +17,13 @@ fn borrowed_writers_keep_original_locks_and_first_preimages() {
         (3, 31, Some(30)),
         (3, 32, Some(31)),
     ] {
-        let calls = pool.callbacks.get();
-        let copies = pool.clones.get();
+        let calls = pool.callbacks.load();
+        let copies = pool.clones.load();
         assert_eq!(
             cw.try_insert_with_undo_admitted(&mut uw, key, value, |d, incoming| {
                 assert_eq!(*incoming, key, "borrow the original incoming key");
                 assert_eq!(
-                    pool.clones.get(),
+                    pool.clones.load(),
                     copies,
                     "borrow precedes every payload copy"
                 );
@@ -32,7 +32,7 @@ fn borrowed_writers_keep_original_locks_and_first_preimages() {
             .unwrap(),
             before
         );
-        assert_eq!(pool.callbacks.get(), calls + 1);
+        assert_eq!(pool.callbacks.load(), calls + 1);
         assert_eq!(
             (cw.inner.as_ref() as *const _, uw.inner.as_ref() as *const _),
             shells
@@ -54,7 +54,7 @@ fn borrowed_writers_keep_original_locks_and_first_preimages() {
     assert!(current.read().is_empty() && undo.read().is_empty());
     without_allocations(|| drop((cw, uw)));
     without_allocations(|| drop((current, undo)));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -70,7 +70,7 @@ fn parent_refusal_and_full_budget_abort_preserve_exact_original_buffers() {
     let original = (
         identity(cw.inner.as_ref()),
         identity(uw.inner.as_ref()),
-        pool.used.get(),
+        pool.used.load(),
     );
     let mut cp = cw.checkpoint().unwrap();
     let mut up = uw.checkpoint().unwrap();
@@ -78,8 +78,8 @@ fn parent_refusal_and_full_budget_abort_preserve_exact_original_buffers() {
     let plan = without_allocations(|| {
         plan_pair::<_, _, Policy>(cp.inner.as_ref(), up.inner.as_ref(), &7).unwrap()
     });
-    pool.limit.set(pool.used.get() + plan.demand.bytes() - 1);
-    let clones = pool.clones.get();
+    pool.limit.store(pool.used.load() + plan.demand.bytes() - 1);
+    let clones = pool.clones.load();
     let ((key, value), error) = without_allocations(|| {
         cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d, _key| {
             assert_eq!(d, plan.demand);
@@ -94,8 +94,8 @@ fn parent_refusal_and_full_budget_abort_preserve_exact_original_buffers() {
         (identity(cp.inner.as_ref()), identity(up.inner.as_ref())),
         parent
     );
-    assert_eq!(pool.clones.get(), clones);
-    pool.limit.set(pool.limit.get() + 1);
+    assert_eq!(pool.clones.load(), clones);
+    pool.limit.store(pool.limit.load() + 1);
     assert_eq!(
         cp.try_insert_with_undo_admitted(&mut up, key, value, |d, _key| pool.reserve(d))
             .unwrap(),
@@ -105,13 +105,13 @@ fn parent_refusal_and_full_budget_abort_preserve_exact_original_buffers() {
     assert_eq!(up.get(&7), Some(&None));
     assert_eq!(cp.get_before(&3), Some(&30));
     assert_eq!(cp.get_before(&7), None);
-    pool.limit.set(pool.used.get());
+    pool.limit.store(pool.used.load());
     without_allocations(|| drop((cp, up)));
     assert_eq!(
         (
             identity(cw.inner.as_ref()),
             identity(uw.inner.as_ref()),
-            pool.used.get()
+            pool.used.load()
         ),
         original
     );
@@ -119,7 +119,7 @@ fn parent_refusal_and_full_budget_abort_preserve_exact_original_buffers() {
     assert_eq!(uw.get(&3), Some(&Some(29)));
     without_allocations(|| drop((cw, uw)));
     without_allocations(|| drop((current, undo)));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn parent_apply_keeps_private_successors_and_outer_abort_restores_custody() {
     let original = (
         identity(cw.inner.as_ref()),
         identity(uw.inner.as_ref()),
-        pool.used.get(),
+        pool.used.load(),
     );
     let mut outer_c = cw.checkpoint().unwrap();
     let mut outer_u = uw.checkpoint().unwrap();
@@ -156,19 +156,19 @@ fn parent_apply_keeps_private_successors_and_outer_abort_restores_custody() {
     assert_eq!(outer_u.get(&7), Some(&Some(69)));
     assert_eq!(outer_u.get(&8), Some(&None));
     assert!(current.read().is_empty() && undo.read().is_empty());
-    pool.limit.set(pool.used.get());
+    pool.limit.store(pool.used.load());
     without_allocations(|| drop((outer_c, outer_u)));
     assert_eq!(
         (
             identity(cw.inner.as_ref()),
             identity(uw.inner.as_ref()),
-            pool.used.get()
+            pool.used.load()
         ),
         original
     );
     without_allocations(|| drop((cw, uw)));
     without_allocations(|| drop((current, undo)));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -192,7 +192,7 @@ fn borrowed_parent_generation_refuses_before_callback_and_skips_existing_undo() 
             let mut cp = cw.checkpoint().unwrap();
             let mut up = uw.checkpoint().unwrap();
             let before = (identity(cp.inner.as_ref()), identity(up.inner.as_ref()));
-            let calls = pool.callbacks.get();
+            let calls = pool.callbacks.load();
             if exhausted_current || entry.is_none() {
                 let ((key, value), error) = without_allocations(|| {
                     cp.try_insert_with_undo_admitted(
@@ -215,18 +215,18 @@ fn borrowed_parent_generation_refuses_before_callback_and_skips_existing_undo() 
                     (identity(cp.inner.as_ref()), identity(up.inner.as_ref())),
                     before
                 );
-                assert_eq!(pool.callbacks.get(), calls);
+                assert_eq!(pool.callbacks.load(), calls);
             } else {
                 cp.try_insert_with_undo_admitted(&mut up, 7, 70, |d, _key| pool.reserve(d))
                     .unwrap();
                 assert_eq!(identity(up.inner.as_ref()), before.1);
                 assert_eq!(up.get(&7), entry.as_ref().map(|(_, v)| v));
-                assert_eq!(pool.callbacks.get(), calls + 1);
+                assert_eq!(pool.callbacks.load(), calls + 1);
             }
             without_allocations(|| drop((cp, up)));
             without_allocations(|| drop((cw, uw)));
             without_allocations(|| drop((current, undo)));
-            assert_eq!(pool.used.get(), 0);
+            assert_eq!(pool.used.load(), 0);
         }
     }
 }
@@ -252,13 +252,13 @@ fn caught_callback_clone_and_provider_panics_invalidate_both_borrowed_parents() 
                     }
                     let provider = pool.reserve(d)?;
                     if fault == 1 {
-                        pool.panic_clone.set(1);
+                        pool.panic_clone.store(1);
                     }
                     if fault == 2 {
-                        pool.panic_clone.set(2);
+                        pool.panic_clone.store(2);
                     }
                     if fault == 3 {
-                        pool.panic_drop.set(true);
+                        pool.panic_drop.store(true);
                     }
                     Ok(provider)
                 });
@@ -281,7 +281,7 @@ fn caught_callback_clone_and_provider_panics_invalidate_both_borrowed_parents() 
         assert!(current.read().is_empty() && undo.read().is_empty());
         without_allocations(|| drop((cw, uw)));
         without_allocations(|| drop((current, undo)));
-        assert_eq!(pool.used.get(), 0);
+        assert_eq!(pool.used.load(), 0);
     }
 }
 
@@ -311,22 +311,22 @@ fn first_and_second_apply_cleanup_failures_invalidate_both_attached_writers() {
                 // No charge destruction can precede final provider cleanup in
                 // these scalar edits. The next charge is the saved buffer of
                 // the first apply, or of the second after current applied cleanly.
-                pool.arm_charge_panic_on_provider_drop.set(true);
+                pool.arm_charge_panic_on_provider_drop.store(true);
                 Ok::<_, ()>(provider)
             });
         }))
         .is_err());
         assert!(
-            !pool.panic_next_charge.get(),
+            !pool.panic_next_charge.load(),
             "the selected apply cleanup must execute"
         );
-        assert!(!pool.arm_charge_panic_on_provider_drop.get());
+        assert!(!pool.arm_charge_panic_on_provider_drop.load());
         assert!(catch_unwind(AssertUnwindSafe(|| cw.len())).is_err());
         assert!(catch_unwind(AssertUnwindSafe(|| uw.len())).is_err());
         assert!(current.read().is_empty() && undo.read().is_empty());
         without_allocations(|| drop((cw, uw)));
         without_allocations(|| drop((current, undo)));
-        assert_eq!(pool.used.get(), 0);
+        assert_eq!(pool.used.load(), 0);
     }
 }
 
@@ -344,13 +344,13 @@ fn prefailed_parent_entry_invalidates_the_other_original_cursor_before_admission
             if failed_current {
                 let _ = cp.try_insert_admitted(9, 90, |d| {
                     let provider = pool.reserve(d)?;
-                    pool.panic_drop.set(true);
+                    pool.panic_drop.store(true);
                     Ok::<_, ()>(provider)
                 });
             } else {
                 let _ = up.try_insert_admitted(9, Some(90), |d| {
                     let provider = pool.reserve(d)?;
-                    pool.panic_drop.set(true);
+                    pool.panic_drop.store(true);
                     Ok::<_, ()>(provider)
                 });
             }
@@ -379,6 +379,6 @@ fn prefailed_parent_entry_invalidates_the_other_original_cursor_before_admission
         assert!(current.read().is_empty() && undo.read().is_empty());
         without_allocations(|| drop((cw, uw)));
         without_allocations(|| drop((current, undo)));
-        assert_eq!(pool.used.get(), 0);
+        assert_eq!(pool.used.load(), 0);
     }
 }

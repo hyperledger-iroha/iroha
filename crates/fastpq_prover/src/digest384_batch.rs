@@ -20,6 +20,9 @@ use crate::{DigestExecutionV1, gpu::GpuError};
 pub(crate) const MAX_LAST_FIELD_BYTES: usize = MAX_DIGEST384_BATCH_WORDS_V1 * 8;
 /// Existing sensitive Metal pool alignment, checked against its owner on Metal.
 pub(crate) const STAGING_PAGE_BYTES: usize = 16 * 1024;
+/// Eight independent CPU known answers, eight device answers and one public probe.
+/// The enclosing prover charges this cold bound even for CPU or warm execution.
+pub(crate) const MAX_PREFLIGHT_HASH_CALLS: usize = 17;
 
 /// Bound the four shared backing buffers, returned digests and fixed readiness payload.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
@@ -94,6 +97,47 @@ fn validate_jobs(jobs: &[Digest384LastFieldJob<'_>]) -> Result<usize, GpuError> 
 fn native_error(error: impl core::fmt::Display) -> crate::Error {
     crate::Error::NativeDigestExecution {
         details: error.to_string(),
+    }
+}
+
+/// Check the selected continuation backend using only a fixed public probe.
+/// CPU needs no device access. Required-device failure precedes witness expansion,
+/// entropy or transforms; the actual dispatch still rechecks quarantine later.
+pub(crate) fn preflight_last_fields_execution(execution: DigestExecutionV1) -> crate::Result<()> {
+    match execution {
+        DigestExecutionV1::Cpu => Ok(()),
+        #[cfg(feature = "fastpq-gpu")]
+        DigestExecutionV1::Device(backend) => {
+            {
+                let readiness = backend_readiness_v1(backend)
+                    .lock()
+                    .map_err(|_| native_error(Digest384GpuErrorV1::Quarantined { backend }))?;
+                readiness
+                    .ensure_available_v1(backend)
+                    .map_err(native_error)?;
+                if readiness.last_fields == Digest384ReadinessV1::Ready {
+                    return Ok(());
+                }
+            }
+            let domain = fastpq_isi::GoldilocksDigestDomainV1 {
+                catalog: b"iroha-privacy-exact12-v1",
+                protocol: b"last-field-public-preflight-v1",
+                profile: b"stark-fri-poseidon-x7-goldilocks-6x64-v1",
+                role: b"public-availability",
+                phase: b"preflight",
+                level: 0,
+                index: 0,
+                counter: 0,
+            };
+            let bytes = b"public-probe";
+            let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain, &[], bytes.len())
+                .ok_or_else(|| native_error("invalid fixed public preflight prefix"))?;
+            let job = Digest384LastFieldJob::new(prefix, bytes).map_err(native_error)?;
+            // The executor runs its independent public KAT before this probe.
+            // Its readiness allocation is already in last_fields_payload_charge.
+            try_hash_last_fields_device(&[job], backend).map_err(native_error)?;
+            Ok(())
+        }
     }
 }
 
@@ -174,7 +218,7 @@ pub(crate) fn execute_last_fields(
 }
 
 /// A fresh canonical typed prefix and its exact final byte field.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct Digest384LastFieldJob<'a> {
     prefix: GoldilocksDigest384LastFieldStreamV1,
     final_field: &'a [u8],
@@ -231,7 +275,7 @@ pub(crate) fn hash_last_fields_cpu(
 
 #[cfg(test)]
 fn hash_last_field_cpu(job: &Digest384LastFieldJob<'_>) -> Result<GoldilocksDigest384V1, GpuError> {
-    let mut stream = job.prefix;
+    let mut stream = job.prefix.clone();
     stream.update(job.final_field).map_err(|_| {
         GpuError::InvalidInput("Digest384 prepared CPU payload violates its length bound")
     })?;
@@ -265,6 +309,45 @@ pub(crate) fn try_hash_last_fields_metal(
     {
         Err(GpuError::Unsupported(GpuBackend::Metal))
     }
+}
+
+#[cfg(feature = "fastpq-gpu")]
+/// Check actual six-lane continuation execution on an explicitly required device.
+///
+/// The backend must finish its independent public known-answer batch before
+/// returning a matching canonical digest. Unsupported devices and uncertain
+/// completion return errors; no CPU digest substitutes for device execution.
+///
+/// # Errors
+/// Returns the required backend's readiness, allocation or execution failure.
+pub fn preflight_digest384_continuation_v1(
+    backend: Digest384GpuBackendV1,
+) -> Result<(), Digest384GpuErrorV1> {
+    let domain = fastpq_isi::GoldilocksDigestDomainV1 {
+        catalog: b"iroha-privacy-exact12-v1",
+        protocol: b"continuation-device-preflight-v1",
+        profile: b"stark-fri-poseidon-x7-goldilocks-6x64-v1",
+        role: b"trace-merkle",
+        phase: b"leaf",
+        level: 0,
+        index: 0,
+        counter: 0,
+    };
+    let payload = b"canonical continuation readiness";
+    let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain, &[], payload.len())
+        .expect("fixed public readiness prefix");
+    let job = Digest384LastFieldJob::new(prefix, payload).expect("fixed public readiness job");
+    let actual = try_hash_last_fields_device(&[job], backend)?;
+    let expected =
+        fastpq_isi::hash_bytes_384_v1(domain, &[payload]).expect("fixed public readiness digest");
+    if actual != [expected] {
+        backend_readiness_v1(backend)
+            .lock()
+            .map_err(|_| Digest384GpuErrorV1::Quarantined { backend })?
+            .last_fields = Digest384ReadinessV1::Quarantined;
+        return Err(Digest384GpuErrorV1::Conformance { backend });
+    }
+    Ok(())
 }
 
 #[cfg(feature = "fastpq-gpu")]
@@ -375,6 +458,25 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn cpu_preflight_requires_no_device() {
+        preflight_last_fields_execution(DigestExecutionV1::Cpu).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "fastpq-gpu")]
+    fn unavailable_required_continuation_backend_fails_before_private_work() {
+        // CUDA has no continuation implementation. It must never become a CPU
+        // success; repeating the request also respects shared quarantine.
+        let execution = DigestExecutionV1::Device(Digest384GpuBackendV1::Cuda);
+        for _ in 0..2 {
+            assert!(matches!(
+                preflight_last_fields_execution(execution),
+                Err(crate::Error::NativeDigestExecution { .. })
+            ));
+        }
+    }
+
     fn domain(index: u64) -> GoldilocksDigestDomainV1<'static> {
         GoldilocksDigestDomainV1 {
             catalog: b"iroha-privacy-exact12-v1",
@@ -428,8 +530,8 @@ mod tests {
             GoldilocksDigest384LastFieldStreamV1::new(domain(9), &[], bytes.len()).unwrap();
         let job = Digest384LastFieldJob::new(prefix, bytes).unwrap();
         assert_eq!(
-            execute_last_fields(&[job], DigestExecutionV1::Cpu).unwrap(),
-            hash_last_fields_cpu(&[job]).unwrap()
+            execute_last_fields(core::slice::from_ref(&job), DigestExecutionV1::Cpu).unwrap(),
+            hash_last_fields_cpu(core::slice::from_ref(&job)).unwrap()
         );
         let expected = hash_last_field_cpu(&job).unwrap();
         for threads in [1, 2, 6] {
@@ -438,7 +540,7 @@ mod tests {
                 .build()
                 .unwrap();
             for count in [63, 64, 65, 256] {
-                let jobs = vec![job; count];
+                let jobs = vec![job.clone(); count];
                 assert_eq!(
                     pool.install(|| execute_last_fields(&jobs, DigestExecutionV1::Cpu))
                         .unwrap(),
@@ -502,7 +604,9 @@ mod tests {
         let backend = DigestExecutionV1::Device(Digest384GpuBackendV1::Cuda);
         let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain(0), &[], 1).unwrap();
         let job = Digest384LastFieldJob::new(prefix, &[9]).unwrap();
-        for (count, bytes, prepared) in [(1, 1, vec![]), (1, 0, vec![job]), (2, 2, vec![job])] {
+        for (count, bytes, prepared) in
+            [(1, 1, vec![]), (1, 0, vec![job.clone()]), (2, 2, vec![job])]
+        {
             let error = execute_last_fields_with_cpu(
                 count,
                 bytes,
@@ -593,7 +697,7 @@ mod tests {
             .unwrap()
             .is_empty()
         );
-        let invalid = vec![jobs[0]; MAX_DIGEST384_BATCH_FRAMES_V1 + 1];
+        let invalid = vec![jobs[0].clone(); MAX_DIGEST384_BATCH_FRAMES_V1 + 1];
         assert!(
             execute_prepared_jobs_with_cpu(&invalid, DigestExecutionV1::Cpu, |_| panic!(
                 "invalid batch callback"
@@ -647,6 +751,20 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[cfg(feature = "fastpq-gpu")]
+    #[test]
+    fn continuation_preflight_refuses_unsupported_device_execution() {
+        assert!(preflight_digest384_continuation_v1(Digest384GpuBackendV1::Cuda).is_err());
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires actual Metal continuation readiness and public known-answer execution"]
+    fn continuation_preflight_completes_on_metal() {
+        let _lane = crate::backend::acquire_gpu_lane();
+        preflight_digest384_continuation_v1(Digest384GpuBackendV1::Metal).unwrap();
     }
 
     #[cfg(feature = "fastpq-gpu")]
@@ -735,7 +853,7 @@ mod tests {
         let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain(0), &[], 0).unwrap();
         let job = Digest384LastFieldJob::new(prefix, &[]).unwrap();
         let mut readiness = Digest384ReadinessV1::Unchecked;
-        let excessive = vec![job; MAX_DIGEST384_BATCH_FRAMES_V1 + 1];
+        let excessive = vec![job.clone(); MAX_DIGEST384_BATCH_FRAMES_V1 + 1];
         assert!(
             readiness
                 .execute_last_fields(Digest384GpuBackendV1::Metal, &excessive, &mut |_| panic!(
@@ -765,10 +883,10 @@ mod tests {
     #[test]
     fn prepared_jobs_reject_consumed_or_wrong_length_streams() {
         let prefix = GoldilocksDigest384LastFieldStreamV1::new(domain(0), &[], 8).unwrap();
-        assert!(Digest384LastFieldJob::new(prefix, b"1234567").is_err());
-        assert!(Digest384LastFieldJob::new(prefix, b"123456789").is_err());
+        assert!(Digest384LastFieldJob::new(prefix.clone(), b"1234567").is_err());
+        assert!(Digest384LastFieldJob::new(prefix.clone(), b"123456789").is_err());
         for consumed in 1..=8 {
-            let mut partially_consumed = prefix;
+            let mut partially_consumed = prefix.clone();
             partially_consumed.update(&b"12345678"[..consumed]).unwrap();
             assert!(Digest384LastFieldJob::new(partially_consumed, b"12345678").is_err());
         }
@@ -834,7 +952,7 @@ mod tests {
     #[test]
     fn unavailable_metal_reports_error_and_cpu_fallback_remains_identical() {
         let stream = GoldilocksDigest384LastFieldStreamV1::new(domain(0), &[], 0).unwrap();
-        let jobs = [Digest384LastFieldJob::new(stream, &[]).unwrap()];
+        let jobs = [Digest384LastFieldJob::new(stream.clone(), &[]).unwrap()];
         assert!(matches!(
             try_hash_last_fields_metal(&jobs),
             Err(GpuError::Unsupported(GpuBackend::Metal))

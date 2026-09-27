@@ -31,7 +31,8 @@ use super::{
     },
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -76,8 +77,12 @@ const SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1: usize = 180;
 /// Exact residue width of the fixed-capacity word relation.
 pub(crate) const SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1: usize =
     SHA_WORD_STARK_CONSTRAINT_COUNT_V1 + SHA_WORD_CAPACITY_CONTROL_CONSTRAINT_COUNT_V1;
-/// Maximum algebraic degree after private activity and padding gates.
-pub(crate) const SHA_WORD_CAPACITY_CONSTRAINT_DEGREE_V1: u8 = 4;
+/// Maximum total degree, including private activity and verifier-fixed selectors.
+///
+/// Both the ordinary padding equation (degree-four gate times a degree-two
+/// byte/mask product) and the Boolean operation's first event pair (degree-three
+/// gate times a degree-three pair after polynomial address selection) reach six.
+pub(crate) const SHA_WORD_CAPACITY_CONSTRAINT_DEGREE_V1: u8 = 6;
 /// Emitted STARK-local rows reserved by one SHA-256 compression block.
 ///
 /// This is deliberately smaller than `sha256_word_air::WORD_AIR_ROWS_PER_BLOCK_V1`: the latter's
@@ -1949,22 +1954,22 @@ pub(crate) fn build_sha_word_stark_base_v1(
 fn is_boolean(value: F) -> bool {
     value.mul(value.sub(F::ONE)) == F::ZERO
 }
-fn pack_bits(bits: &[F]) -> F {
+fn pack_bits<A: PolynomialAirFieldV1>(bits: &[A]) -> A {
     bits.iter()
         .copied()
         .enumerate()
-        .fold(F::ZERO, |sum, (bit, value)| {
-            sum.add(value.mul(F(1_u64 << bit)))
+        .fold(A::ZERO, |sum, (bit, value)| {
+            sum.add(value.mul_base(F(1_u64 << bit)))
         })
 }
-fn xor_three(x: F, y: F, z: F) -> F {
+fn xor_three<A: PolynomialAirFieldV1>(x: A, y: A, z: A) -> A {
     let xy = x.mul(y);
     let xz = x.mul(z);
     let yz = y.mul(z);
     x.add(y)
         .add(z)
-        .sub(F(2).mul(xy.add(xz).add(yz)))
-        .add(F(4).mul(xy.mul(z)))
+        .sub(xy.add(xz).add(yz).mul_base(F(2)))
+        .add(xy.mul(z).mul_base(F(4)))
 }
 #[cfg(test)]
 fn ensure_canonical_fields(rows: &[Vec<F>], width: usize) -> Result<(), ZkX509ShaWordStarkErrorV1> {
@@ -2435,21 +2440,21 @@ pub(crate) fn zk_x509_sha_word_stark_aggregate_aux_row_v1(
     write_continuation(&mut row, continuations[physical_slot], global_local_end)?;
     Ok(row)
 }
-fn fixed_sum_v1(
-    fixed: &[F; SHA_WORD_STARK_FIXED_WIDTH_V1],
+fn fixed_sum_v1<A: PolynomialAirFieldV1>(
+    fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
     indices: impl IntoIterator<Item = usize>,
-) -> F {
+) -> A {
     indices
         .into_iter()
-        .fold(F::ZERO, |sum, index| sum.add(fixed[index]))
+        .fold(A::ZERO, |sum, index| sum.add(fixed[index]))
 }
-fn sigma_expected_bit_v1(
-    input: &[F],
+fn sigma_expected_bit_v1<A: PolynomialAirFieldV1>(
+    input: &[A],
     bit: usize,
     rotate_first: usize,
     rotate_second: usize,
     third: SigmaThirdV1,
-) -> F {
+) -> A {
     let first = input[(bit + rotate_first) % 32];
     let second = input[(bit + rotate_second) % 32];
     let third = match third {
@@ -2457,52 +2462,50 @@ fn sigma_expected_bit_v1(
         SigmaThirdV1::Shift(distance) => input
             .get(bit + usize::from(distance))
             .copied()
-            .unwrap_or(F::ZERO),
+            .unwrap_or(A::ZERO),
     };
     xor_three(first, second, third)
 }
-fn event_factor_v1(
-    fixed: &[F; SHA_WORD_STARK_FIXED_WIDTH_V1],
+fn event_factor_v1<A: PolynomialAirFieldV1>(
+    fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
     slot: usize,
-    value: F,
+    value: A,
     is_write: bool,
     challenge: ZkX509WordMemoryLaneChallengesV1,
-) -> F {
-    challenge
-        .beta
-        .add(challenge.address.mul(fixed[FIX_EVENT_ADDRESS + slot]))
-        .add(challenge.value.mul(value))
-        .add(challenge.is_write.mul(F(u64::from(is_write))))
+) -> A {
+    A::from_base(challenge.beta)
+        .add(fixed[FIX_EVENT_ADDRESS + slot].mul_base(challenge.address))
+        .add(value.mul_base(challenge.value))
+        .add(A::from_base(challenge.is_write.mul(F(u64::from(is_write)))))
 }
-fn local_pair_error_v1(
-    pair: F,
+fn local_pair_error_v1<A: PolynomialAirFieldV1>(
+    pair: A,
     pair_slots: [usize; 2],
-    fixed: &[F; SHA_WORD_STARK_FIXED_WIDTH_V1],
-    values: [F; 6],
+    fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
+    values: [A; 6],
     writes: [bool; 6],
     event_count: usize,
     challenge: ZkX509WordMemoryLaneChallengesV1,
-) -> F {
+) -> A {
     let factor = |slot: usize| {
         if slot < event_count {
             event_factor_v1(fixed, slot, values[slot], writes[slot], challenge)
         } else {
-            F::ONE
+            A::ONE
         }
     };
     pair.sub(factor(pair_slots[0]).mul(factor(pair_slots[1])))
 }
-fn memory_factor_v1(
-    address: F,
-    value: F,
-    is_write: F,
+fn memory_factor_v1<A: PolynomialAirFieldV1>(
+    address: A,
+    value: A,
+    is_write: A,
     challenge: ZkX509WordMemoryLaneChallengesV1,
-) -> F {
-    challenge
-        .beta
-        .add(challenge.address.mul(address))
-        .add(challenge.value.mul(value))
-        .add(challenge.is_write.mul(is_write))
+) -> A {
+    A::from_base(challenge.beta)
+        .add(address.mul_base(challenge.address))
+        .add(value.mul_base(challenge.value))
+        .add(is_write.mul_base(challenge.is_write))
 }
 /// Evaluate the canonical SHA-word aggregate AIR as a fixed-width polynomial
 /// vector. Every semantic selector, public digest word, word address,
@@ -2513,6 +2516,7 @@ fn memory_factor_v1(
 /// commitment. Auxiliary constraints remain separate because the prover sees those challenges
 /// before committing the auxiliary trace.
 #[allow(clippy::too_many_lines)]
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     current: &[F; SHA_WORD_BASE_WIDTH_V1],
     next: &[F; SHA_WORD_BASE_WIDTH_V1],
@@ -2521,6 +2525,25 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     fixed: &[F; SHA_WORD_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<F>, ZkX509ShaWordStarkErrorV1> {
+    evaluate_zk_x509_sha_word_stark_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        challenges,
+    )
+}
+/// Evaluate the raw SHA-word polynomial over the base or extension field.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; SHA_WORD_BASE_WIDTH_V1],
+    next: &[A; SHA_WORD_BASE_WIDTH_V1],
+    current_aux: &[A; SHA_WORD_AUX_WIDTH_V1],
+    next_aux: &[A; SHA_WORD_AUX_WIDTH_V1],
+    fixed: &[A; SHA_WORD_STARK_FIXED_WIDTH_V1],
+    challenges: ZkX509ShaWordStarkChallengesV1,
+) -> Result<Vec<A>, ZkX509ShaWordStarkErrorV1> {
     validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
     if current
         .iter()
@@ -2528,7 +2551,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .any(|value| value.0 >= GOLDILOCKS_MODULUS_V1)
+        .any(|value| !value.is_canonical())
     {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
@@ -2555,11 +2578,11 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     let add_any = fixed[FIX_ADD_ARITY_TWO].add(fixed[FIX_ADD_ARITY_FOUR]);
     let word_or_digest = word.add(digest);
     let local = word_or_digest.add(sigma_any).add(boolean_any).add(add_any);
-    let mut folded_base = [F::ZERO; SHA_WORD_COPY_LANES_V1];
+    let mut folded_base = [A::ZERO; SHA_WORD_COPY_LANES_V1];
     let mut base_error_count = 0_usize;
-    let mut push_base_error = |error: F| {
+    let mut push_base_error = |error: A| {
         for (folded, challenge) in folded_base.iter_mut().zip(challenges.base_folding) {
-            *folded = folded.mul(challenge).add(error);
+            *folded = folded.mul_base(challenge).add(error);
         }
         base_error_count += 1;
     };
@@ -2578,11 +2601,11 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     for value in current {
         push_base_error(padding.mul(*value));
     }
-    let mut word_value = F::ZERO;
+    let mut word_value = A::ZERO;
     for bit in 0..32 {
         let value = current[1 + bit];
-        push_base_error(word_or_digest.mul(value.mul(value.sub(F::ONE))));
-        word_value = word_value.add(value.mul(F(1_u64 << bit)));
+        push_base_error(word_or_digest.mul(value.mul(value.sub(A::ONE))));
+        word_value = word_value.add(value.mul(A::from_base(F(1_u64 << bit))));
     }
     push_base_error(word_or_digest.mul(current[0].sub(word_value)));
     for byte in 0..4 {
@@ -2594,7 +2617,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     }
     push_base_error(digest.mul(current[0].sub(fixed[FIX_DIGEST_EXPECTED])));
     for value in current {
-        push_base_error(sigma_any.mul(value.mul(value.sub(F::ONE))));
+        push_base_error(sigma_any.mul(value.mul(value.sub(A::ONE))));
     }
     for bit in 0..32 {
         let mut error = sigma_any.mul(current[32 + bit]);
@@ -2615,18 +2638,18 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
         push_base_error(error);
     }
     for bit in &current[4..36] {
-        push_base_error(boolean_any.mul(bit.mul(bit.sub(F::ONE))));
+        push_base_error(boolean_any.mul(bit.mul(bit.sub(A::ONE))));
     }
     for within in 0..8 {
         let x = current[4 + within];
         let y = current[12 + within];
         let z = current[20 + within];
         let output = current[28 + within];
-        let choose_value = x.mul(y).add(F::ONE.sub(x).mul(z));
+        let choose_value = x.mul(y).add(A::ONE.sub(x).mul(z));
         let xy = x.mul(y);
         let xz = x.mul(z);
         let yz = y.mul(z);
-        let majority_value = xy.add(xz).add(yz).sub(F(2).mul(xy.mul(z)));
+        let majority_value = xy.add(xz).add(yz).sub(A::from_base(F(2)).mul(xy.mul(z)));
         push_base_error(
             boolean_any
                 .mul(output)
@@ -2643,8 +2666,8 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
             .iter()
             .copied()
             .enumerate()
-            .fold(F::ZERO, |sum, (within, bit)| {
-                sum.add(bit.mul(F(1_u64 << within)))
+            .fold(A::ZERO, |sum, (within, bit)| {
+                sum.add(bit.mul(A::from_base(F(1_u64 << within))))
             })
             .mul(fixed[FIX_BOOLEAN_SCALE]);
         push_base_error(boolean_first.mul(current[36 + operand].sub(contribution)));
@@ -2652,8 +2675,8 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
             .iter()
             .copied()
             .enumerate()
-            .fold(F::ZERO, |sum, (within, bit)| {
-                sum.add(bit.mul(F(1_u64 << within)))
+            .fold(A::ZERO, |sum, (within, bit)| {
+                sum.add(bit.mul(A::from_base(F(1_u64 << within))))
             })
             .mul(fixed[FIX_BOOLEAN_NEXT_SCALE]);
         push_base_error(
@@ -2663,29 +2686,35 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
         push_base_error(boolean_last.mul(current[36 + operand].sub(current[operand])));
     }
     for bit in &current[6..9] {
-        push_base_error(add_any.mul(bit.mul(bit.sub(F::ONE))));
+        push_base_error(add_any.mul(bit.mul(bit.sub(A::ONE))));
     }
-    let mut add_output = F::ZERO;
+    let mut add_output = A::ZERO;
     for bit in 0..32 {
         let value = current[9 + bit];
-        push_base_error(add_any.mul(value.mul(value.sub(F::ONE))));
-        add_output = add_output.add(value.mul(F(1_u64 << bit)));
+        push_base_error(add_any.mul(value.mul(value.sub(A::ONE))));
+        add_output = add_output.add(value.mul(A::from_base(F(1_u64 << bit))));
     }
     push_base_error(add_any.mul(current[5].sub(add_output)));
     push_base_error(fixed[FIX_ADD_ARITY_TWO].mul(current[2]));
     push_base_error(fixed[FIX_ADD_ARITY_TWO].mul(current[3]));
     push_base_error(add_any.mul(current[4]));
     let carry = current[6]
-        .add(F(2).mul(current[7]))
-        .add(F(4).mul(current[8]));
+        .add(A::from_base(F(2)).mul(current[7]))
+        .add(A::from_base(F(4)).mul(current[8]));
     let add_sum = current[..5]
         .iter()
         .copied()
-        .fold(F::ZERO, F::add)
+        .fold(A::ZERO, A::add)
         .add(fixed[FIX_ADD_CONSTANT]);
-    push_base_error(add_any.mul(add_sum.sub(current[5]).sub(F(1_u64 << 32).mul(carry))));
-    push_base_error(memory.mul(current[2].mul(current[2].sub(F::ONE))));
-    push_base_error(memory.mul(current[5].mul(current[5].sub(F::ONE))));
+    push_base_error(
+        add_any.mul(
+            add_sum
+                .sub(current[5])
+                .sub(A::from_base(F(1_u64 << 32)).mul(carry)),
+        ),
+    );
+    push_base_error(memory.mul(current[2].mul(current[2].sub(A::ONE))));
+    push_base_error(memory.mul(current[5].mul(current[5].sub(A::ONE))));
     push_base_error(memory.mul(current[0].sub(fixed[FIX_MEMORY_EXECUTION_ADDRESS])));
     push_base_error(memory.mul(current[2].sub(fixed[FIX_MEMORY_EXECUTION_WRITE])));
     push_base_error(memory.mul(current[3].sub(fixed[FIX_MEMORY_SORTED_ADDRESS])));
@@ -2695,8 +2724,8 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
     push_base_error(memory_same.mul(next[4].sub(current[4])));
     push_base_error(memory_same.mul(next[5]));
     let memory_new = fixed[FIX_MEMORY_NEW_NEXT];
-    push_base_error(memory_new.mul(next[3].sub(current[3].add(F::ONE))));
-    push_base_error(memory_new.mul(next[5].sub(F::ONE)));
+    push_base_error(memory_new.mul(next[3].sub(current[3].add(A::ONE))));
+    push_base_error(memory_new.mul(next[5].sub(A::ONE)));
     if base_error_count != SHA_WORD_STARK_BASE_ERROR_COUNT_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
@@ -2717,7 +2746,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
                 pair,
                 pair_slots,
                 fixed,
-                [current[0], F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
+                [current[0], A::ZERO, A::ZERO, A::ZERO, A::ZERO, A::ZERO],
                 [true, false, false, false, false, false],
                 1,
                 challenge,
@@ -2726,7 +2755,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
                 pair,
                 pair_slots,
                 fixed,
-                [current[0], F::ZERO, F::ZERO, F::ZERO, F::ZERO, F::ZERO],
+                [current[0], A::ZERO, A::ZERO, A::ZERO, A::ZERO, A::ZERO],
                 [false; 6],
                 1,
                 challenge,
@@ -2738,10 +2767,10 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
                 [
                     packed_input,
                     packed_output,
-                    F::ZERO,
-                    F::ZERO,
-                    F::ZERO,
-                    F::ZERO,
+                    A::ZERO,
+                    A::ZERO,
+                    A::ZERO,
+                    A::ZERO,
                 ],
                 [false, true, false, false, false, false],
                 2,
@@ -2756,15 +2785,15 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
                     current[1],
                     current[2],
                     current[3],
-                    F::ZERO,
-                    F::ZERO,
+                    A::ZERO,
+                    A::ZERO,
                 ],
                 [false, false, false, true, false, false],
                 4,
                 challenge,
             )));
             for (selector, arity) in [(FIX_ADD_ARITY_TWO, 2_usize), (FIX_ADD_ARITY_FOUR, 4)] {
-                let mut values = [F::ZERO; 6];
+                let mut values = [A::ZERO; 6];
                 let mut writes = [false; 6];
                 values[..arity].copy_from_slice(&current[..arity]);
                 values[arity] = current[5];
@@ -2779,8 +2808,8 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
                     challenge,
                 )));
             }
-            let no_events = boolean_any.mul(F::ONE.sub(fixed[FIX_BOOLEAN_FIRST]));
-            error = error.add(no_events.mul(pair.sub(F::ONE)));
+            let no_events = boolean_any.mul(A::ONE.sub(fixed[FIX_BOOLEAN_FIRST]));
+            error = error.add(no_events.mul(pair.sub(A::ONE)));
             residues.push(error);
         }
         residues.push(
@@ -2799,7 +2828,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
             ),
         );
         residues
-            .push(fixed[FIX_LOCAL_FIRST].mul(current_aux[LOCAL_PRODUCT_BEFORE + lane].sub(F::ONE)));
+            .push(fixed[FIX_LOCAL_FIRST].mul(current_aux[LOCAL_PRODUCT_BEFORE + lane].sub(A::ONE)));
         residues.push(fixed[FIX_LOCAL_CONTINUE].mul(
             next_aux[LOCAL_PRODUCT_BEFORE + lane].sub(current_aux[LOCAL_PRODUCT_AFTER + lane]),
         ));
@@ -2859,10 +2888,10 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
             current_aux[GLOBAL_LOCAL_PRODUCT_END + lane].sub(current_aux[CONT_EXEC_END + lane]),
         ));
         residues.push(
-            fixed[FIX_FIRST_AGGREGATE_ROW].mul(current_aux[CONT_EXEC_START + lane].sub(F::ONE)),
+            fixed[FIX_FIRST_AGGREGATE_ROW].mul(current_aux[CONT_EXEC_START + lane].sub(A::ONE)),
         );
         residues.push(
-            fixed[FIX_FIRST_AGGREGATE_ROW].mul(current_aux[CONT_SORT_START + lane].sub(F::ONE)),
+            fixed[FIX_FIRST_AGGREGATE_ROW].mul(current_aux[CONT_SORT_START + lane].sub(A::ONE)),
         );
         residues.push(
             fixed[FIX_PHYSICAL_BOUNDARY]
@@ -2905,7 +2934,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_stark_residues_v1(
 /// layer supplies private active/final-block selectors, dynamic SHA padding,
 /// the selected final-state address, and independently gated execution and
 /// sorted-memory tables.  No actual length or block count is verifier-fixed.
-#[allow(clippy::too_many_lines)]
+#[cfg(test)]
 pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     current: &[F; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
     next: &[F; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
@@ -2914,6 +2943,28 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     fixed: &[F; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
     challenges: ZkX509ShaWordStarkChallengesV1,
 ) -> Result<Vec<F>, ZkX509ShaWordStarkErrorV1> {
+    evaluate_zk_x509_sha_word_capacity_residues_over_field_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        challenges,
+    )
+}
+/// Evaluate all 335 capacity residues over the base or extension field.
+///
+/// This shares the complete polynomial implementation with the scalar API. It
+/// does not implement the enclosing SHA call-bus AIR or enable a MAIN Fp4 proof.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
+    next: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
+    current_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1],
+    next_aux: &[A; SHA_WORD_CAPACITY_AUX_WIDTH_V1],
+    fixed: &[A; SHA_WORD_CAPACITY_FIXED_WIDTH_V1],
+    challenges: ZkX509ShaWordStarkChallengesV1,
+) -> Result<Vec<A>, ZkX509ShaWordStarkErrorV1> {
     validate_zk_x509_sha_word_stark_challenges_v1(challenges)?;
     if current
         .iter()
@@ -2921,7 +2972,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .any(|value| F::canonical(value.0).is_none())
+        .any(|value| !value.is_canonical())
     {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);
     }
@@ -2949,7 +3000,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
             FIX_ADD_ARITY_FOUR,
         ],
     );
-    let mut effective_fixed: [F; SHA_WORD_STARK_FIXED_WIDTH_V1] = fixed
+    let mut effective_fixed: [A; SHA_WORD_STARK_FIXED_WIDTH_V1] = fixed
         [..SHA_WORD_STARK_FIXED_WIDTH_V1]
         .try_into()
         .expect("raw fixed prefix");
@@ -2967,8 +3018,8 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     ] {
         effective_fixed[selector] = effective_fixed[selector].mul(row_active);
     }
-    effective_fixed[FIX_MEMORY] = F::ZERO;
-    effective_fixed[FIX_PADDING] = F::ZERO;
+    effective_fixed[FIX_MEMORY] = A::ZERO;
+    effective_fixed[FIX_PADDING] = A::ZERO;
     for selector in [
         FIX_MEMORY_CONTINUE,
         FIX_MEMORY_SAME_NEXT,
@@ -2980,35 +3031,35 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
         FIX_PHYSICAL_BOUNDARY,
         FIX_CONTINUATION_WITHIN_SLOT,
     ] {
-        effective_fixed[selector] = F::ZERO;
+        effective_fixed[selector] = A::ZERO;
     }
     for byte in 0..4 {
         effective_fixed[FIX_WORD_BYTE_MASK + byte] = effective_fixed[FIX_WORD_BYTE_MASK + byte]
             .mul(row_active)
-            .mul(F::ONE.sub(input_word));
+            .mul(A::ONE.sub(input_word));
     }
     effective_fixed[FIX_DIGEST_EXPECTED] = current[0];
-    effective_fixed[FIX_EVENT_ADDRESS] = if digest == F::ONE {
-        current[SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1]
-    } else {
-        effective_fixed[FIX_EVENT_ADDRESS]
-    };
+    // FIX_DIGEST is Boolean only on the native schedule. Its LDE and OODS
+    // values must select algebraically; an equality branch changes the AIR.
+    effective_fixed[FIX_EVENT_ADDRESS] = digest
+        .mul(current[SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1])
+        .add(A::ONE.sub(digest).mul(effective_fixed[FIX_EVENT_ADDRESS]));
     for index in 0..7 {
         effective_fixed[FIX_CONTINUATION_PUBLIC + index] = current_aux[CONT_SEGMENT_INDEX + index];
     }
-    let current_raw: &[F; SHA_WORD_BASE_WIDTH_V1] = current[..SHA_WORD_BASE_WIDTH_V1]
+    let current_raw: &[A; SHA_WORD_BASE_WIDTH_V1] = current[..SHA_WORD_BASE_WIDTH_V1]
         .try_into()
         .expect("raw base prefix");
-    let next_raw: &[F; SHA_WORD_BASE_WIDTH_V1] = next[..SHA_WORD_BASE_WIDTH_V1]
+    let next_raw: &[A; SHA_WORD_BASE_WIDTH_V1] = next[..SHA_WORD_BASE_WIDTH_V1]
         .try_into()
         .expect("raw base prefix");
-    let current_aux_raw: &[F; SHA_WORD_AUX_WIDTH_V1] = current_aux[..SHA_WORD_AUX_WIDTH_V1]
+    let current_aux_raw: &[A; SHA_WORD_AUX_WIDTH_V1] = current_aux[..SHA_WORD_AUX_WIDTH_V1]
         .try_into()
         .expect("raw aux prefix");
-    let next_aux_raw: &[F; SHA_WORD_AUX_WIDTH_V1] = next_aux[..SHA_WORD_AUX_WIDTH_V1]
+    let next_aux_raw: &[A; SHA_WORD_AUX_WIDTH_V1] = next_aux[..SHA_WORD_AUX_WIDTH_V1]
         .try_into()
         .expect("raw aux prefix");
-    let mut residues = evaluate_zk_x509_sha_word_stark_residues_v1(
+    let mut residues = evaluate_zk_x509_sha_word_stark_residues_over_field_v1(
         current_raw,
         next_raw,
         current_aux_raw,
@@ -3016,52 +3067,52 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
         &effective_fixed,
         challenges,
     )?;
-    let boolean_error = |value: F| value.mul(value.sub(F::ONE));
+    let boolean_error = |value: A| value.mul(value.sub(A::ONE));
     residues.push(boolean_error(row_active));
     residues.push(boolean_error(final_block));
     residues.push(boolean_error(sorted_same_next));
-    residues.push(final_block.mul(F::ONE.sub(row_active)));
+    residues.push(final_block.mul(A::ONE.sub(row_active)));
     for byte in 0..4 {
         let message = current[SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte];
         let marker = current[SHA_WORD_CAPACITY_MARKER_MASK_V1 + byte];
         residues.push(boolean_error(message));
         residues.push(boolean_error(marker));
         residues.push(message.mul(marker));
-        residues.push(message.mul(F::ONE.sub(fixed[SHA_WORD_CAPACITY_MESSAGE_ALLOWED_V1 + byte])));
-        residues.push(F::ONE.sub(row_active).mul(message));
-        residues.push(F::ONE.sub(row_active).mul(marker));
+        residues.push(message.mul(A::ONE.sub(fixed[SHA_WORD_CAPACITY_MESSAGE_ALLOWED_V1 + byte])));
+        residues.push(A::ONE.sub(row_active).mul(message));
+        residues.push(A::ONE.sub(row_active).mul(marker));
     }
-    residues.push(F::ONE.sub(memory).mul(sorted_same_next));
-    residues.push(F::ONE.sub(local_compute).mul(final_block));
+    residues.push(A::ONE.sub(memory).mul(sorted_same_next));
+    residues.push(A::ONE.sub(local_compute).mul(final_block));
     for byte in 0..4 {
         residues.push(
-            F::ONE
+            A::ONE
                 .sub(input_word)
                 .mul(current[SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte]),
         );
         residues.push(
-            F::ONE
+            A::ONE
                 .sub(input_word)
                 .mul(current[SHA_WORD_CAPACITY_MARKER_MASK_V1 + byte]),
         );
     }
     residues.push(
-        F::ONE
+        A::ONE
             .sub(digest)
             .mul(current[SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1]),
     );
-    residues.push(digest.mul(row_active.sub(F::ONE)));
-    let inactive_compute = local_compute.mul(F::ONE.sub(row_active));
-    let inactive_memory = memory.mul(F::ONE.sub(row_active));
-    let mut folded_inactive_compute = [F::ZERO; SHA_WORD_COPY_LANES_V1];
-    let mut folded_inactive_memory = [F::ZERO; SHA_WORD_COPY_LANES_V1];
+    residues.push(digest.mul(row_active.sub(A::ONE)));
+    let inactive_compute = local_compute.mul(A::ONE.sub(row_active));
+    let inactive_memory = memory.mul(A::ONE.sub(row_active));
+    let mut folded_inactive_compute = [A::ZERO; SHA_WORD_COPY_LANES_V1];
+    let mut folded_inactive_memory = [A::ZERO; SHA_WORD_COPY_LANES_V1];
     for value in current_raw {
         for lane in 0..SHA_WORD_COPY_LANES_V1 {
             folded_inactive_compute[lane] = folded_inactive_compute[lane]
-                .mul(challenges.base_folding[lane])
+                .mul_base(challenges.base_folding[lane])
                 .add(inactive_compute.mul(*value));
             folded_inactive_memory[lane] = folded_inactive_memory[lane]
-                .mul(challenges.base_folding[lane])
+                .mul_base(challenges.base_folding[lane])
                 .add(inactive_memory.mul(*value));
         }
     }
@@ -3073,17 +3124,17 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     let maximum_block_last = fixed[SHA_WORD_CAPACITY_MAX_BLOCK_LAST_V1];
     residues.push(block_continue.mul(next_active.sub(row_active)));
     residues.push(block_continue.mul(next_final_block.sub(final_block)));
-    residues.push(fixed[SHA_WORD_CAPACITY_CALL_FIRST_V1].mul(row_active.sub(F::ONE)));
+    residues.push(fixed[SHA_WORD_CAPACITY_CALL_FIRST_V1].mul(row_active.sub(A::ONE)));
     residues.push(
         block_last
-            .mul(F::ONE.sub(maximum_block_last))
-            .mul(final_block.sub(row_active.mul(F::ONE.sub(next_active)))),
+            .mul(A::ONE.sub(maximum_block_last))
+            .mul(final_block.sub(row_active.mul(A::ONE.sub(next_active)))),
     );
     residues.push(
         block_last
-            .mul(F::ONE.sub(maximum_block_last))
+            .mul(A::ONE.sub(maximum_block_last))
             .mul(next_active)
-            .mul(F::ONE.sub(row_active)),
+            .mul(A::ONE.sub(row_active)),
     );
     residues.push(maximum_block_last.mul(final_block.sub(row_active)));
     let message_count = current_aux[SHA_WORD_CAPACITY_MESSAGE_COUNT_V1];
@@ -3098,36 +3149,42 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     residues.push(call_first.mul(message_count));
     residues.push(call_first.mul(padding_phase));
     residues.push(call_first.mul(active_blocks));
-    residues.push(call_last.mul(padding_phase.sub(F::ONE)));
+    residues.push(call_last.mul(padding_phase.sub(A::ONE)));
     residues.push(
         call_last
             .mul(fixed[SHA_WORD_CAPACITY_EXACT_LENGTH_V1])
             .mul(message_count.sub(fixed[SHA_WORD_CAPACITY_MAXIMUM_MESSAGE_LEN_V1])),
     );
     residues.push(
-        F::ONE
+        A::ONE
             .sub(call_last)
             .mul(next_active_blocks.sub(active_blocks.add(block_first.mul(row_active)))),
     );
     let mut phase_after = padding_phase;
-    let mut message_increment = F::ZERO;
-    let mut marker_increment = F::ZERO;
+    let mut message_increment = A::ZERO;
+    let mut marker_increment = A::ZERO;
     let length_word = fixed[SHA_WORD_CAPACITY_LENGTH_HIGH_WORD_V1]
         .add(fixed[SHA_WORD_CAPACITY_LENGTH_LOW_WORD_V1]);
     let length_gate = input_word.mul(row_active).mul(final_block).mul(length_word);
     let ordinary_gate = input_word
         .mul(row_active)
-        .mul(F::ONE.sub(final_block.mul(length_word)));
+        .mul(A::ONE.sub(final_block.mul(length_word)));
     for byte in 0..4 {
         let message = current[SHA_WORD_CAPACITY_MESSAGE_MASK_V1 + byte];
         let marker = current[SHA_WORD_CAPACITY_MARKER_MASK_V1 + byte];
         let bits_start = 1 + (3 - byte) * 8;
         let byte_value = pack_bits(&current[bits_start..bits_start + 8]);
-        residues.push(ordinary_gate.mul(message.add(marker).sub(F::ONE.sub(phase_after))));
-        residues
-            .push(ordinary_gate.mul(F::ONE.sub(message).mul(byte_value).sub(F(128).mul(marker))));
+        residues.push(ordinary_gate.mul(message.add(marker).sub(A::ONE.sub(phase_after))));
+        residues.push(
+            ordinary_gate.mul(
+                A::ONE
+                    .sub(message)
+                    .mul(byte_value)
+                    .sub(A::from_base(F(128)).mul(marker)),
+            ),
+        );
         residues.push(length_gate.mul(message.add(marker)));
-        residues.push(length_gate.mul(phase_after.sub(F::ONE)));
+        residues.push(length_gate.mul(phase_after.sub(A::ONE)));
         phase_after = phase_after.add(marker);
         message_increment = message_increment.add(message);
         marker_increment = marker_increment.add(marker);
@@ -3144,32 +3201,34 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
             .mul(row_active)
             .mul(final_block)
             .mul(fixed[SHA_WORD_CAPACITY_LENGTH_LOW_WORD_V1])
-            .mul(current[0].sub(message_count.mul(F(8)))),
+            .mul(current[0].sub(message_count.mul(A::from_base(F(8))))),
     );
     residues.push(
-        F::ONE.sub(call_last).mul(
+        A::ONE.sub(call_last).mul(
             next_message_count
                 .sub(message_count.add(input_word.mul(row_active).mul(message_increment))),
         ),
     );
-    residues.push(F::ONE.sub(call_last).mul(
+    residues.push(A::ONE.sub(call_last).mul(
         next_padding_phase.sub(padding_phase.add(input_word.mul(row_active).mul(marker_increment))),
     ));
     residues.push(
         digest.mul(
             current[SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1].sub(
                 active_blocks
-                    .mul(F(u64::try_from(SHA_WORD_CAPACITY_WORD_IDS_PER_BLOCK_V1)
-                        .expect("SHA word-id stride fits u64")))
+                    .mul(A::from_base(F(u64::try_from(
+                        SHA_WORD_CAPACITY_WORD_IDS_PER_BLOCK_V1,
+                    )
+                    .expect("SHA word-id stride fits u64"))))
                     .add(fixed[SHA_WORD_CAPACITY_DIGEST_WORD_INDEX_V1]),
             ),
         ),
     );
     for lane in 0..SHA_WORD_COPY_LANES_V1 {
-        residues.push(inactive_compute.mul(current_aux[LOCAL_PAIR_01 + lane].sub(F::ONE)));
-        residues.push(inactive_compute.mul(current_aux[LOCAL_PAIR_23 + lane].sub(F::ONE)));
-        residues.push(inactive_compute.mul(current_aux[LOCAL_PAIR_45 + lane].sub(F::ONE)));
-        residues.push(inactive_compute.mul(current_aux[LOCAL_QUAD + lane].sub(F::ONE)));
+        residues.push(inactive_compute.mul(current_aux[LOCAL_PAIR_01 + lane].sub(A::ONE)));
+        residues.push(inactive_compute.mul(current_aux[LOCAL_PAIR_23 + lane].sub(A::ONE)));
+        residues.push(inactive_compute.mul(current_aux[LOCAL_PAIR_45 + lane].sub(A::ONE)));
+        residues.push(inactive_compute.mul(current_aux[LOCAL_QUAD + lane].sub(A::ONE)));
         residues.push(inactive_compute.mul(
             current_aux[LOCAL_PRODUCT_AFTER + lane].sub(current_aux[LOCAL_PRODUCT_BEFORE + lane]),
         ));
@@ -3180,18 +3239,18 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     residues.push(inactive_memory.mul(sorted_same_next));
     residues.push(
         memory
-            .mul(F::ONE.sub(row_active))
-            .mul(F::ONE.sub(call_last))
+            .mul(A::ONE.sub(row_active))
+            .mul(A::ONE.sub(call_last))
             .mul(next[SHA_WORD_CAPACITY_ROW_ACTIVE_V1]),
     );
     residues.push(
         memory
             .mul(row_active)
-            .mul(F::ONE.sub(next_active))
+            .mul(A::ONE.sub(next_active))
             .mul(sorted_same_next),
     );
     let adjacent_active = memory_continue.mul(row_active).mul(next_active);
-    residues.push(adjacent_active.mul(next[3].sub(current[3].add(F::ONE.sub(sorted_same_next)))));
+    residues.push(adjacent_active.mul(next[3].sub(current[3].add(A::ONE.sub(sorted_same_next)))));
     residues.push(
         adjacent_active
             .mul(sorted_same_next)
@@ -3200,17 +3259,17 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
     residues.push(adjacent_active.mul(sorted_same_next).mul(next[5]));
     residues.push(
         adjacent_active
-            .mul(F::ONE.sub(sorted_same_next))
-            .mul(next[5].sub(F::ONE)),
+            .mul(A::ONE.sub(sorted_same_next))
+            .mul(next[5].sub(A::ONE)),
     );
     residues.push(fixed[FIX_MEMORY_FIRST_SEGMENT].mul(current[3]));
-    residues.push(fixed[FIX_MEMORY_FIRST_SEGMENT].mul(current[5].sub(F::ONE)));
+    residues.push(fixed[FIX_MEMORY_FIRST_SEGMENT].mul(current[5].sub(A::ONE)));
     for lane in 0..SHA_WORD_COPY_LANES_V1 {
         let challenge = challenges.memory.lanes[lane];
         let execution_factor = memory_factor_v1(current[0], current[1], current[2], challenge);
         let sorted_factor = memory_factor_v1(current[3], current[4], current[5], challenge);
-        let gated_execution_factor = F::ONE.add(row_active.mul(execution_factor.sub(F::ONE)));
-        let gated_sorted_factor = F::ONE.add(row_active.mul(sorted_factor.sub(F::ONE)));
+        let gated_execution_factor = A::ONE.add(row_active.mul(execution_factor.sub(A::ONE)));
+        let gated_sorted_factor = A::ONE.add(row_active.mul(sorted_factor.sub(A::ONE)));
         residues.push(
             memory.mul(
                 current_aux[MEMORY_EXEC_AFTER + lane]
@@ -3234,10 +3293,10 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
             ),
         );
         residues.push(
-            fixed[FIX_MEMORY_FIRST_SEGMENT].mul(current_aux[MEMORY_EXEC_BEFORE + lane].sub(F::ONE)),
+            fixed[FIX_MEMORY_FIRST_SEGMENT].mul(current_aux[MEMORY_EXEC_BEFORE + lane].sub(A::ONE)),
         );
         residues.push(
-            fixed[FIX_MEMORY_FIRST_SEGMENT].mul(current_aux[MEMORY_SORT_BEFORE + lane].sub(F::ONE)),
+            fixed[FIX_MEMORY_FIRST_SEGMENT].mul(current_aux[MEMORY_SORT_BEFORE + lane].sub(A::ONE)),
         );
         residues.push(call_last.mul(
             current_aux[MEMORY_EXEC_AFTER + lane].sub(current_aux[GLOBAL_LOCAL_PRODUCT_END + lane]),
@@ -3246,7 +3305,7 @@ pub(crate) fn evaluate_zk_x509_sha_word_capacity_residues_v1(
             current_aux[MEMORY_SORT_AFTER + lane].sub(current_aux[GLOBAL_LOCAL_PRODUCT_END + lane]),
         ));
         residues.push(
-            F::ONE.sub(call_last).mul(
+            A::ONE.sub(call_last).mul(
                 next_aux[GLOBAL_LOCAL_PRODUCT_END + lane]
                     .sub(current_aux[GLOBAL_LOCAL_PRODUCT_END + lane]),
             ),
@@ -4639,3 +4698,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "sha_word_stark_polynomial_tests.rs"]
+mod polynomial_tests;

@@ -1022,6 +1022,7 @@ fn timeout_delivery_state_fixture(participants_per_lane: u8) -> (State, Vec<Peer
                     metadata: Default::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },

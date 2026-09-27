@@ -2427,7 +2427,7 @@ export type ToriiVerifierBackendLabelV1 =
   | "halo2/ipa"
   | "halo2/pasta/kaigi-authorization-v1"
   | "halo2/pasta/kaigi-usage-v1"
-  | "halo2/pasta/ivm-execution-v1"
+  | "halo2/pasta/ivm-replay-binding-v1"
   | "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3"
   | "halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4"
@@ -10371,14 +10371,25 @@ export interface ConfidentialTransferProofInputV2 {
   amount: NumericLike;
   rhoHex: string;
   diversifierHex: string;
+  /** Existing leaf position, from 0 through 65535. */
   leafIndex: number;
 }
+
+/** Actual consumed notes; the native prover supplies any absent second input. */
+export type ConfidentialProofInputsV2 =
+  | readonly [ConfidentialTransferProofInputV2]
+  | readonly [ConfidentialTransferProofInputV2, ConfidentialTransferProofInputV2];
 
 export interface ConfidentialTransferProofOutputV2 {
   amount: NumericLike;
   rhoHex: string;
   ownerTagHex: string;
 }
+
+/** One or two actual output notes for a transfer. */
+export type ConfidentialTransferProofOutputsV2 =
+  | readonly [ConfidentialTransferProofOutputV2]
+  | readonly [ConfidentialTransferProofOutputV2, ConfidentialTransferProofOutputV2];
 
 export interface ConfidentialTransferProofResultV2 {
   nullifiers: ReadonlyArray<Buffer>;
@@ -13426,8 +13437,8 @@ export function buildConfidentialTransferProofV2(input: {
   assetDefinitionId: string;
   spendKey: BinaryLike;
   treeCommitments: ReadonlyArray<BinaryLike>;
-  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
-  outputs: ReadonlyArray<ConfidentialTransferProofOutputV2>;
+  inputs: ConfidentialProofInputsV2;
+  outputs: ConfidentialTransferProofOutputsV2;
   rootHintHex: string;
   verifyingKey: ToriiVerifyingKeyDetail;
 }): ConfidentialTransferProofResultV2;
@@ -13436,7 +13447,7 @@ export function buildConfidentialUnshieldProofV2(input: {
   assetDefinitionId: string;
   spendKey: BinaryLike;
   treeCommitments: ReadonlyArray<BinaryLike>;
-  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
+  inputs: ConfidentialProofInputsV2;
   publicAmount: NumericLike;
   rootHintHex: string;
   verifyingKey: ToriiVerifyingKeyDetail;
@@ -13446,8 +13457,8 @@ export function buildConfidentialUnshieldProofV3(input: {
   assetDefinitionId: string;
   spendKey: BinaryLike;
   treeCommitments: ReadonlyArray<BinaryLike>;
-  inputs: ReadonlyArray<ConfidentialTransferProofInputV2>;
-  outputs?: ReadonlyArray<ConfidentialUnshieldProofOutputV3>;
+  inputs: ConfidentialProofInputsV2;
+  outputs?: readonly [] | readonly [ConfidentialUnshieldProofOutputV3];
   publicAmount: NumericLike;
   rootHintHex: string;
   verifyingKey: ToriiVerifyingKeyDetail;
@@ -14823,3 +14834,29 @@ export function buildCanonicalMultisigContractCall(
   instructions_hash: string;
   metadata: Record<string, unknown>;
 };
+
+/** Public output of a locally verified confidential proof; ledger admission is separate. */
+export interface ConfidentialProof extends ConfidentialTransferProofResultV2 {
+  relation: "confidential-transfer" | "confidential-redemption" | "confidential-redemption-with-change";
+}
+
+/** Common authenticated tree snapshot and one or two actual private notes. */
+export interface ConfidentialSpend {
+  treeCommitments: ReadonlyArray<BinaryLike>;
+  rootHex: string;
+  inputs: ConfidentialProofInputsV2;
+}
+
+export class ConfidentialProverError extends Error {
+  readonly code: "INVALID_INPUT" | "NATIVE_UNAVAILABLE" | "PROVING_FAILED" | "DISPOSED";
+}
+
+/** Local wallet prover with automatic circuit/key selection and native self-verification.
+ * Owns a key copy until dispose(); callers remain responsible for their original key.
+ */
+export class ConfidentialProver {
+  constructor(options: { networkId: NetworkId; assetDefinitionId: string; spendKey: Uint8Array });
+  dispose(): void;
+  proveTransfer(request: ConfidentialSpend & { outputs: ConfidentialTransferProofOutputsV2 }): ConfidentialProof;
+  proveRedemption(request: ConfidentialSpend & { publicAmount: NumericLike; change?: ConfidentialUnshieldProofOutputV3 }): ConfidentialProof;
+}

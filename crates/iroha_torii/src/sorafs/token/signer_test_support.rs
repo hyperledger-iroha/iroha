@@ -146,6 +146,16 @@ impl SimulatedFinality {
     }
 }
 impl SignerFinalityV1 for SimulatedFinality {
+    fn prepare_completed_check(
+        &self,
+        _receipt: &SignerStreamTokenReceiptV1,
+        _phase: SignerStreamTokenObservationPhaseV1,
+        _observer: &dyn StreamTokenStateObserverClientV1,
+    ) -> Result<super::signer_completed_finality::PendingCompletedFinalityV1, StreamTokenIssuerError>
+    {
+        self.require_completed_proof_source()?;
+        Ok(super::signer_completed_finality::PendingCompletedFinalityV1::Simulated)
+    }
     fn require_completed_proof_source(&self) -> Result<(), StreamTokenIssuerError> {
         if !self.completed_proof_source_available.load(Ordering::SeqCst) {
             return Err(StreamTokenIssuerError::SignerFinalityUnavailable);
@@ -172,6 +182,7 @@ impl SignerFinalityV1 for SimulatedFinality {
         floor: FinalityFloorV1,
         historical: &[HistoricalFinalityV1],
         observation: &SignerStreamTokenStateObservationBodyV1,
+        _completed: Option<&super::signer_completed_finality::CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError> {
         let call = self.validations.fetch_add(1, Ordering::SeqCst) + 1;
         if self.unavailable.load(Ordering::SeqCst)
@@ -284,6 +295,8 @@ pub(crate) fn storage_config(limit: u32) -> actual::SorafsStorage {
     storage.stream_tokens = actual::SorafsTokenConfig {
         enabled: true,
         signer: Some(actual::SorafsStreamTokenSignerConfig {
+            native: None,
+            clock_uncertainty_ms: 250,
             runtime_handle: HARDWARE_HANDLE.into(),
             key_handle: "pkcs11:production/stream-token/key-4".into(),
             service_id: "stream-primary".into(),
@@ -333,6 +346,19 @@ impl SignedFixture {
         fixture
     }
 
+    pub(crate) fn with_clock_uncertainty(uncertainty_ms: u64) -> Arc<Self> {
+        let mut storage = storage_config(1);
+        storage
+            .stream_tokens
+            .signer
+            .as_mut()
+            .unwrap()
+            .clock_uncertainty_ms = uncertainty_ms;
+        let fixture = Self::from_storage(storage, TestSignerMode::Sign, 0x33, NOW_MS);
+        fixture.observation_lifetime.store(5_000, Ordering::SeqCst);
+        fixture
+    }
+
     pub(crate) fn substitute_historical_custody(&mut self) {
         let mut record: SignerCustodyRecordV1 = norito::decode_canonical(&self.record).unwrap();
         record.statement.anchor.block_hash[0] ^= 1;
@@ -377,7 +403,7 @@ impl SignedFixture {
         statement.sequence = 2;
         statement.predecessor_digest = self.current.active_head.record_digest;
         statement.anchor = anchor(101);
-        statement.issued_at_unix_ms = self.initial_time;
+        statement.issued_at_unix_ms = self.initial_time - self.pins.clock_uncertainty_ms();
         let mut payload = b"iroha:sorafs:signer-custody:v1\0".to_vec();
         payload.extend(norito::encode_canonical(&statement).unwrap());
         let record = norito::encode_canonical(&SignerCustodyRecordV1 {
@@ -804,6 +830,13 @@ impl StreamTokenSignerClientV1 for SignedFixture {
 
 pub(crate) struct SignedObserver(pub Arc<SignedFixture>);
 impl StreamTokenStateObserverClientV1 for SignedObserver {
+    fn finalize_check(
+        &self,
+        _instruction: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+    ) -> Result<iroha_data_model::transaction::SignedTransaction, StreamTokenSignerCallErrorV1>
+    {
+        Err(StreamTokenSignerCallErrorV1::Unavailable)
+    }
     fn handle(&self) -> &str {
         &self.0.observer_handle
     }

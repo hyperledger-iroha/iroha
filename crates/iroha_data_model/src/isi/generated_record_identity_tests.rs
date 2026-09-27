@@ -68,6 +68,18 @@ where
     .expect("generated instruction record")
 }
 
+/// Capture the populated staking records whose required monetary plans changed.
+pub(crate) fn staking_monetary_fixture_rows() -> Vec<Value> {
+    values::values()
+        .into_iter()
+        .filter(|row| {
+            row.get("nominal")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.contains("::staking::"))
+        })
+        .collect()
+}
+
 fn missing_record_values() -> Vec<Value> {
     let mut records = values::values();
     records.extend(super::musubi::generated_identity_values::values());
@@ -107,13 +119,13 @@ fn captured(nominal: &str) -> &'static Value {
             );
             assert_eq!(
                 hex(&Sha256::digest(source.as_bytes())),
-                "59a6162b6c1b3ab384b3e06dd61cf8326eade4333beae4a07b782813ae88f97a",
+                "f2b1a70d690730c6015f8e7cce2d12c6b7c72240f105985edb3a199fe06cae76",
                 "instruction record capture digest drift"
             );
             let capture: Value =
                 json::from_str(source).expect("immutable instruction record capture");
             let rows = capture.as_array().expect("captured type rows");
-            assert_eq!(rows.len(), 321, "complete instantiated record inventory");
+            assert_eq!(rows.len(), 323, "complete instantiated record inventory");
             let mut previous = None;
             let mut case_count = 0;
             for row in rows {
@@ -131,12 +143,12 @@ fn captured(nominal: &str) -> &'static Value {
                     .expect("captured cases")
                     .len();
             }
-            assert_eq!(case_count, 357, "complete populated record case inventory");
+            assert_eq!(case_count, 359, "complete populated record case inventory");
             capture
         })
         .as_array()
         .expect("captured type rows");
-    assert_eq!(rows.len(), 321, "complete instantiated record inventory");
+    assert_eq!(rows.len(), 323, "complete instantiated record inventory");
     let mut matches = rows
         .iter()
         .filter(|row| row.get("nominal").and_then(Value::as_str) == Some(nominal));
@@ -235,5 +247,64 @@ fn print_privacy_qualification_record_fixture_row() {
     println!(
         "PRIVACY_QUALIFICATION_FIXTURE_ROW={}",
         json::to_json(&row).expect("privacy qualification record")
+    );
+}
+
+#[test]
+#[ignore = "explicit maintenance command captures first-release SoraFS instruction frames"]
+fn print_capacity_declaration_record_fixture_row() {
+    let row = capture(super::sorafs::RegisterCapacityDeclaration::new(vec![
+        1, 2, 3,
+    ]));
+    println!(
+        "CAPACITY_DECLARATION_FIXTURE_ROW={}",
+        json::to_json(&row).expect("capacity declaration record")
+    );
+    let key =
+        iroha_crypto::KeyPair::try_from_seed(vec![0x51; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("capture council/owner key");
+    let envelope: sorafs_manifest::ProviderAdmissionEnvelopeV1 = norito::decode_from_bytes(
+        include_bytes!("../../../../fixtures/sorafs_manifest/provider_admission/envelope_v1.to"),
+    )
+    .expect("structural provider material fixture");
+    let material = sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1 {
+        proposal: envelope.proposal,
+        advert_body: envelope.advert_body,
+        issued_at: envelope.issued_at,
+        retention_epoch: envelope.retention_epoch,
+    };
+    material
+        .validate()
+        .expect("valid network-independent material");
+    let initializer = super::sorafs::InitializeSorafsProviderAdmissionV1 {
+        council: crate::sorafs::provider_admission::governance::InitialProviderAdmissionCouncilV1 {
+            policy_id: [0x52; 32],
+            trusted_signers: vec![key.public_key().to_bytes().1.try_into().expect("Ed25519")],
+            signature_threshold: 1,
+        },
+        providers: vec![
+            crate::sorafs::provider_admission::governance::InitialProviderAdmissionV1 {
+                owner: crate::account::AccountId::new(key.public_key().clone()),
+                material: norito::encode_canonical(&material).expect("canonical genesis material"),
+            },
+        ],
+    };
+    println!(
+        "INITIALIZE_SORAFS_ADMISSION_FIXTURE_ROW={}",
+        json::to_json(&capture(initializer)).expect("initializer record")
+    );
+    let assertion = super::sorafs::AssertSorafsPublicationV1 {
+        manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new([0x61; 32]),
+        order_id: crate::sorafs::pin_registry::ReplicationOrderId::new([0x62; 32]),
+        assignment_revision: 3,
+        canonical_order_digest: [0x63; 32],
+        require_complete: true,
+        challenge: [0x64; 32],
+        minimum_height: 9,
+        minimum_block_hash: [0x65; 32],
+    };
+    println!(
+        "ASSERT_SORAFS_PUBLICATION_FIXTURE_ROW={}",
+        json::to_json(&capture(assertion)).expect("publication assertion record")
     );
 }

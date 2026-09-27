@@ -831,6 +831,7 @@ mod tests {
             "SoraNet transport and node-signing identities must be independent"
         );
         Root {
+            sccp: iroha_config::parameters::actual::SccpNode::default(),
             common: Common {
                 chain: ChainId::from("test-chain"),
                 key_pair,
@@ -842,6 +843,13 @@ mod tests {
                     pops: std::collections::BTreeMap::new(),
                 }),
                 chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
+            },
+            runtime_provider_broker: iroha_config::parameters::actual::RuntimeProviderBroker {
+                endpoint_path:
+                    iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
+                        defaults::runtime_provider_broker::endpoint_path(),
+                    )
+                    .expect("default runtime-provider broker endpoint is valid"),
             },
             network: Network {
                 address: WithOrigin::inline(socket_addr!(127.0.0.1:0)),

@@ -64,7 +64,7 @@ pub trait StorageMode<K: Key, V: Value>:
     /// Physical acquisition custody carried by this mode's original block.
     /// Ordinary storage has no allocation scope; prepaid storage retains the
     /// original thread-bound refund scope until its physical writers release.
-    type AcquisitionCustody: Copy;
+    type AcquisitionCustody: Clone;
 }
 impl<K: Key, V: Value> StorageMode<K, V> for Untracked {
     type AcquisitionCustody = ();
@@ -79,13 +79,17 @@ where
 
 /// Thread custody for physical prepaid storage acquisition.
 ///
-/// This zero-sized marker cannot be constructed outside the original scoped
-/// constructor and is not admission authority by itself. The constructor binds
-/// the returned slot and block's existing storage lifetime to the borrowed
-/// AllocationScope. Keeping this mode-associated type independent of that
-/// lifetime preserves ordinary Block covariance and zero-sized ordinary custody.
-#[derive(Clone, Copy)]
-pub struct AdmittedAcquisitionCustody(std::marker::PhantomData<*mut ()>);
+/// Borrowed acquisition binds the storage lifetime to its original scope.
+/// Returned acquisition instead retains that scope's prepaid control owner.
+/// Both forms stay on the original thread and grant no new allocation authority;
+/// ordinary storage keeps its separate zero-sized custody and covariance.
+#[derive(Clone)]
+pub struct AdmittedAcquisitionCustody {
+    // A returned physical owner retains the actual original scope, not merely
+    // a marker claiming a scope existed earlier during admission.
+    _owned: Option<crate::allocation::OwnedAllocationScope>,
+    _thread: std::marker::PhantomData<*mut ()>,
+}
 
 /// Multi-version key value storage using the original current and undo maps.
 pub struct Storage<K: Key, V: Value, M: StorageMode<K, V> = Untracked> {
@@ -712,9 +716,9 @@ mod block {
         pub(super) predecessor: CapturedPublication,
         pub(super) next: Option<NextPublication>,
         pub(super) mode: BlockMode,
-        // The scoped constructor binds 'store to the original borrowed scope.
-        // This mode-specific marker keeps physical owners on that same thread
-        // without adding a scope pointer or changing ordinary Block covariance.
+        // LAST: original physical writers and allocation owners release before
+        // the returned-scope custodian can notify a capacity retry. Borrowed
+        // acquisition instead binds 'store to the original synchronous scope.
         pub(super) _acquisition_custody: M::AcquisitionCustody,
     }
     impl<'store, K: Key, V: Value, M: StorageMode<K, V>> Block<'store, K, V, M> {

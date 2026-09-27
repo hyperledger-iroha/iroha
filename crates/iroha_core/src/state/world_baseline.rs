@@ -142,10 +142,10 @@ impl BaselineBuilder {
 }
 
 impl WorldProjection for BaselineBuilder {
-    fn append_storage_with<K: Key + Encode, V: Value>(
+    fn append_storage_with<K: Key + Encode, V: Value, M: mv::storage::StorageMode<K, V>>(
         &mut self,
         name: &'static str,
-        storage: &StorageBlock<'_, K, V>,
+        storage: &StorageBlock<'_, K, V, M>,
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), String> {
         let field = self.field(name, 0)?;

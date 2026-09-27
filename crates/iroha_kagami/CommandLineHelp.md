@@ -621,7 +621,7 @@ Synthetic mode is useful when we need a semi-realistic genesis for stress-testin
 
 Materialize an incomplete source template with operator-provisioned public authority
 
-**Usage:** `kagami genesis materialize --kagemusha-mint-finality-parameters <PATH> <TEMPLATE_FILE>`
+**Usage:** `kagami genesis materialize --kagemusha-mint-finality-parameters <PATH> --xor-asset-definition-id <ASSET_DEFINITION_ID> <TEMPLATE_FILE>`
 
 ###### **Arguments:**
 
@@ -630,6 +630,7 @@ Materialize an incomplete source template with operator-provisioned public autho
 ###### **Options:**
 
 * `--kagemusha-mint-finality-parameters <PATH>` — Explicitly provisioned public KAGEMUSHA mint-finality genesis parameters
+* `--xor-asset-definition-id <ASSET_DEFINITION_ID>` — Required for NPoS sources; exact network XOR identity committed at genesis. Omit for permissioned sources.
 
 
 

@@ -248,7 +248,7 @@ state_test! { sync native_candidate_uses_exact_decisions_and_canonical_recorded_
         let (block, bytes, encoded, _, _, _lease) = candidate.into_parts();
         assert_eq!(block.encode_wire().unwrap(), bytes);
         assert!(!encoded.into_parts().1.is_empty());
-        let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state.prepare_proposed_native_lane_batch_source(&block, &[]).unwrap()
+        let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state.prepare_proposed_native_lane_batch_source(block.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&block)).unwrap()
         else { panic!("actual candidate rejoins original certified input"); };
         let context = native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
         drop(block);
@@ -274,7 +274,11 @@ state_test! { sync native_candidate_after_idle_uses_input_time_in_full_preparati
         assert!(block.header().creation_time() > fixture.parent.header().creation_time()
             + fixture.state.sumeragi_block_cadence());
         let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state
-            .prepare_proposed_native_lane_batch_source(block, &[]).unwrap()
+            .prepare_proposed_native_lane_batch_source(
+                block.clone(),
+                &[],
+                crate::state::NativeExecutionResourceAdmission::for_test_carrier(block),
+            ).unwrap()
         else { panic!("original authenticated input remains available"); };
         let context = native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
         // The actual preflight must derive the same time from the Native source,
@@ -365,7 +369,7 @@ state_test! { sync native_candidate_controls_fit_without_displacing_or_duplicati
         input.entrypoint.creation_time_ms().unwrap() + 1);
     assert_eq!(complete.block().execution_context().unwrap().queue_plan_admissions(), &[control]);
     assert!(complete.block().external_entrypoints_slice().is_empty());
-    let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state.prepare_proposed_native_lane_batch_source(complete.block(), &[]).unwrap()
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = fixture.state.prepare_proposed_native_lane_batch_source(complete.block().clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(complete.block())).unwrap()
     else { panic!("complete source with admission control"); };
     let context = native_control_verified_context(&fixture.state, fixture.parent.header().height().get());
     let recorded = source.record_execution(context).unwrap().unwrap();

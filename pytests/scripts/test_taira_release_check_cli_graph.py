@@ -45,7 +45,7 @@ class CombinedCliGraphTests(unittest.TestCase):
 
     def test_malformed_binary_selection_fails_before_cargo(self):
         for arguments in (["-p", "iroha_cli", "--bins"],
-                          ["-p", "iroha_cli", "--bin", "ivm_execution_keygen"],
+                          ["-p", "iroha_cli", "--bin", "ivm_replay_binding_keygen"],
                           ["-p", "iroha_cli", "--bin", "iroha", "--all-targets"]):
             with self.subTest(arguments=arguments), \
                  patch.dict(gate.HARNESS_TARGETS, {"cli": ("native CLI", "iroha", "bin", arguments)}), \
@@ -61,7 +61,7 @@ class CombinedCliGraphTests(unittest.TestCase):
             cli | {"profile": {"test": False}},
             cli | {"profile": {"test": 1}},
             cli | {"target": {"name": "iroha", "kind": ["lib"]}},
-            cli | {"target": {"name": "ivm_execution_keygen", "kind": ["bin"]}},
+            cli | {"target": {"name": "ivm_replay_binding_keygen", "kind": ["bin"]}},
             cli | {"executable": None},
         ):
             with self.subTest(replacement=replacement), \

@@ -412,6 +412,7 @@ fn epoch_boundary_commit_signer_completion_verifies_bls_and_pasta_seal() {
         );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
         epoch: context.epoch + 1,
+        committee_preparation: None,
         kagemusha_mint_finality_authorization: next_authorization,
         kagemusha_mint_finality_authority: next_authority,
         epoch_end_height: context.height + 8,

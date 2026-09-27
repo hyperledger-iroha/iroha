@@ -61,7 +61,7 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("integration_tests", "sorafs-gateway-fixtures"),
         ("iroha_cli", "account_literal_reencode"),
         ("iroha_cli", "gov_instruction"),
-        ("iroha_cli", "ivm_execution_keygen"),
+        ("iroha_cli", "ivm_replay_binding_keygen"),
         ("iroha_cli", "taira_fee_sponsor_program"),
         ("iroha_core", "fastpq_fixture_capture"),
         ("iroha_core", "kagemusha_real_proof"),

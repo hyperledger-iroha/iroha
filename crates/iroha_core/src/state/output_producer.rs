@@ -22,11 +22,17 @@ use iroha_data_model::{
     },
     transaction::signed::TransactionEntrypoint,
 };
+use mv::allocation::AllocationCharge;
+
+#[path = "output_host_resources.rs"]
+mod host_resources;
+use host_resources::NativeOutputProducerCharges;
 
 /// Retained by State until the complete common tail can consume this owner.
 /// Neither a clone nor an output-only setter can authorize its publication.
 pub(in crate::state) struct RetainedExecutionOutputs {
     rows: Vec<ExecutionOutputV1>,
+    row_slots_charge: Option<AllocationCharge>,
     row_bytes: u64,
     native: bool,
     proposal: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
@@ -49,6 +55,9 @@ pub(in crate::state) struct SealedExecutionOutputs {
     // Preserve the actual complete invocation owner after inventory derivation;
     // a projection or caller-supplied row list cannot replace these sources.
     sources: OwnedExecutionSources,
+    // The result-bearing block still owns these original row slots through
+    // publication; the source prefix outlives the block on every abort path.
+    _row_slots_charge: Option<AllocationCharge>,
 }
 
 /// Exact durable finality over this owner's complete outputs and actual witness.
@@ -94,6 +103,7 @@ struct ExecutionOutputProducer<'owner, 'state, 'source> {
     network_sources: Option<network::FrozenNetworkSources<'source>>,
     source_entries: Vec<OwnedExecutionSource>,
     source_routes: Vec<crate::queue::RoutingDecision>,
+    native_host: Option<NativeOutputProducerCharges>,
     pipeline_started: bool,
     time_started: bool,
     failed: bool,
@@ -157,7 +167,8 @@ impl StateBlock<'_> {
         source: &SignedBlock,
         execute: impl FnOnce(&mut ExecutionOutputProducer<'_, '_, '_>) -> Result<(), String>,
     ) -> Result<(), String> {
-        let mut producer = ExecutionOutputProducer::new(self, ExecutionSource::Ordinary(source))?;
+        let mut producer =
+            ExecutionOutputProducer::new(self, ExecutionSource::Ordinary(source), None)?;
         execute(&mut producer)?;
         producer.finish()
     }
@@ -171,6 +182,7 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
     fn new(
         state: &'owner mut StateBlock<'state>,
         source: ExecutionSource<'source>,
+        native_host: Option<NativeOutputProducerCharges>,
     ) -> Result<Self, String> {
         let Some(ExecutionOutputPlanState::Reserved(plan)) = state.execution_output_plan.as_ref()
         else {
@@ -194,6 +206,9 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
         {
             return Err("output producer does not own this input projection".into());
         }
+        if plan.native != native_host.is_some() {
+            return Err("output producer lacks its exact Native host reservation".into());
+        }
         // The publication guard remains occupied through allocation and unwind.
         let Some(ExecutionOutputPlanState::Reserved(plan)) = state
             .execution_output_plan
@@ -213,6 +228,7 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
             network_sources: None,
             source_entries: Vec::new(),
             source_routes: Vec::new(),
+            native_host,
             pipeline_started: false,
             time_started: false,
             failed: false,
@@ -271,16 +287,17 @@ struct OutputTransaction<'block, 'state> {
 }
 
 impl<'block, 'state> OutputTransaction<'block, 'state> {
-    fn new(state: &'block mut StateBlock<'state>) -> Self {
+    fn new(state: &'block mut StateBlock<'state>) -> Result<Self, String> {
         #[cfg(feature = "zk-preverify")]
         let zk_checkpoint = Some(state.zk_dedup.clone());
+        let transaction = state.try_transaction().map_err(|error| error.to_string())?;
         let witness = Some(crate::exec_witness::begin_exec_witness_overlay());
-        Self {
-            transaction: Some(state.transaction()),
+        Ok(Self {
+            transaction: Some(transaction),
             witness,
             #[cfg(feature = "zk-preverify")]
             zk_checkpoint,
-        }
+        })
     }
 
     fn apply(mut self) -> Result<(), String> {
@@ -410,7 +427,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 ))?;
             self.state
                 .retain_fastpq_source_invocation(Hash::from(input.execution_call_hash()))?;
-            let mut attempt = OutputTransaction::new(self.state);
+            let mut attempt = OutputTransaction::new(self.state)?;
             let transaction = attempt
                 .transaction
                 .as_mut()
@@ -643,6 +660,14 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     },
                     entries: core::mem::take(&mut self.source_entries),
                     network_routes: core::mem::take(&mut self.source_routes),
+                    _entries_charge: self
+                        .native_host
+                        .as_mut()
+                        .and_then(|charges| charges.source_entries.take()),
+                    _network_routes_charge: self
+                        .native_host
+                        .as_mut()
+                        .and_then(|charges| charges.source_routes.take()),
                     merge_prefix,
                 })
             } else {
@@ -666,6 +691,10 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         self.state.execution_output_plan = Some(ExecutionOutputPlanState::Retained(
             RetainedExecutionOutputs {
                 rows: core::mem::take(&mut self.rows),
+                row_slots_charge: self
+                    .native_host
+                    .as_mut()
+                    .and_then(|charges| charges.row_slots.take()),
                 row_bytes,
                 native: self.source.is_native(),
                 proposal: self.source.hash(),

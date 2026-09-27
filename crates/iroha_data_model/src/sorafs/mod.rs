@@ -38,6 +38,10 @@ pub mod pricing;
 pub mod proof_ledger;
 /// Canonical council-policy claims for native provider admission.
 pub mod provider_admission;
+/// Publisher preparation and native signed-execution proof verification.
+pub mod publication;
+/// Authenticated chunk sources for finalized native repair leases.
+pub mod repair_source;
 /// Chain-authoritative PoR, provider-dispute, and stream-token reputation journal.
 pub mod reputation;
 /// Reserve + rent policy and lifecycle quoting.

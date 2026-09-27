@@ -79,8 +79,10 @@ rollout checks required before hosted production settlement.
 | Telemetry: publish `capacity_commitment_bytes`, `capacity_utilisation_percent`, `replication_order_backlog`. | Observability | Feed dashboards + alerts. |
 
 - Torii app API now accepts capacity registry submissions via dedicated endpoints:
-  - `POST /v1/sorafs/capacity/declare` wraps a signed `CapacityDeclarationV1` and queues the
-    corresponding `RegisterCapacityDeclaration` instruction.【crates/iroha_torii/src/routing.rs:4390】【crates/iroha_torii/src/lib.rs:3175】
+  - `POST /v1/sorafs/capacity/declare` accepts the caller-signed transaction containing
+    exactly one `RegisterCapacityDeclaration` with canonical declaration bytes. It
+    returns HTTP 202, `status: submitted`, and the exact transaction hash. Consensus
+    derives the registration timestamp and summary; queue admission is not finality.
   - `POST /v1/sorafs/capacity/telemetry` records per-epoch utilisation snapshots through
     `RecordCapacityTelemetry`, enforcing sanity bounds before dispatch.【crates/iroha_torii/src/routing.rs:4744】【crates/iroha_torii/src/lib.rs:3248】
 - Capacity mutation quotas are charged to the verified transaction authority,
@@ -134,13 +136,15 @@ rollout checks required before hosted production settlement.
   Required fields: `provider_id_hex`, `complainant_id_hex`, `kind` (`replication_shortfall`, `uptime_breach`,
   `proof_failure`, `fee_dispute`, or `other`), `submitted_epoch`, `description`, and an `evidence` object with
   `digest_hex` (BLAKE3-256). Optional fields include `replication_order_id_hex`, `requested_remedy`, `evidence.media_type`,
-  `evidence.uri`, and `evidence.size_bytes`. The CLI emits canonical Norito bytes, base64 payloads, and a Torii-ready
-  request body so operators can lodge disputes or archive evidence deterministically. See
+  `evidence.uri`, and `evidence.size_bytes`. The CLI emits canonical Norito bytes, base64 payloads, and a JSON
+  summary for signed transaction preparation and evidence archiving. See
   `specs/sorafs/dispute_revocation_runbook.md` for the end-to-end governance playbook.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:35】
-- `sorafs_manifest_builder capacity {declaration, telemetry, replication-order, complete}` gained `--request-out`
-  helpers (with `--authority`/`--private-key` for declarations and telemetry) so operators can emit
-  ready-to-post JSON payloads for the Torii endpoints without hand-assembling request
-  bodies.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:20】
+- `sorafs_manifest_builder capacity declaration` emits a submission summary containing
+  only `declaration_b64`. The canonical declaration owns its metadata, capacity and
+  validity; consensus assigns the registration epoch. Independent record windows,
+  epoch overrides and signing-key/request-body options are rejected. Prepare the
+  instruction with `iroha app sorafs toolkit instruction capacity-declaration --summary`
+  and use the ordinary signed transaction submission path.
 
 ### 4. Metering & Fee Distribution
 
@@ -236,7 +240,7 @@ in-sync with the implementation.
 
 1. Generate dispute payloads with the CLI harness
    (`sorafs_manifest_builder capacity dispute` and
-   `cargo test -p sorafs_car --test capacity_cli`) so every `CapacityDisputeV1` bundle has
+   `cargo test -p sorafs_car --features cli --test sorafs_car_integration capacity_cli`) so every `CapacityDisputeV1` bundle has
    canonical JSON/Norito artefacts.
 2. Exercise the deterministic ledger hooks with the focused selectors
    `register_capacity_dispute_exact_replay_is_idempotent`,
@@ -255,10 +259,11 @@ in-sync with the implementation.
 
 ### Provider onboarding & exit smoke tests
 
-1. Stage declarations with `sorafs_manifest_builder capacity declaration --spec <file>` and
-   replay the CLI regression (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)
+1. Stage declarations with `sorafs_manifest_builder capacity declaration --spec=<file>` and
+   replay the CLI regression (`cargo test -p sorafs_car --features cli --test sorafs_car_integration capacity_cli::capacity_declaration`)
    before handing submissions to Torii. The helper emits Norito `.to`, JSON, and Base64
-   outputs plus the chunk-plan metadata described earlier in this guide.
+   outputs. The JSON submission summary contains only `declaration_b64`; all
+   provider fields and validity remain in the canonical declaration.
 2. Verify Torii behaviour by calling `POST /v1/sorafs/capacity/declare` and
    `GET /v1/sorafs/capacity/state`—records should match the governance defaults captured in
    `specs/sorafs/provider_admission_policy.md` and the runbook at

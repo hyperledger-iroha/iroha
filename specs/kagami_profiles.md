@@ -25,9 +25,18 @@ genesis manifests without juggling per-network knobs.
 - Profile sources: `defaults/kagami/iroha3-{dev,nexus}/` contains incomplete
   `genesis.template.json` sources plus non-secret topology/configuration scaffolding, not runnable
   signed bundles. Materialize complete operator-owned output with
-  `cargo xtask kagami-profiles --kagemusha-mint-finality-parameters-dir <DIR> [--profile <name>|all] [--out <private-dir>] [--kagami <bin>] [--nexus-xor-asset-definition-id <BASE58>]`; `<DIR>` must contain one operator-provisioned `<profile>.json` public-authority file with an `authority_generation` object set to generation zero. Its validator identities must exactly match that profile's final topology. The Nexus flag is required when generating `iroha3-nexus` or `all`.
+  `cargo xtask kagami-profiles --kagemusha-mint-finality-parameters-dir <DIR> --xor-allocations-dir <ALLOCATIONS> [--profile <name>|all] [--out <private-dir>] [--kagami <bin>] [--nexus-xor-asset-definition-id <BASE58>]`; `<DIR>` must contain one operator-provisioned `<profile>.json` public-authority file containing the required generation-zero `authority_generation` template, whose validator identities exactly match the final topology. Scheduling authorizations are derived from the signed genesis and later certified boundaries; no successor schedule is a genesis parameter. The Nexus flag is required when generating `iroha3-nexus` or `all`.
 - Mochi: `mochi` accepts `--genesis-profile <profile>` and `--vrf-seed-hex <hex>` (NPoS only) and forwards them to Kagami for generation, signing, and verification.
 
 Generated bundles embed BLS PoPs alongside topology entries and bind the separately provisioned
 KAGEMUSHA authority, so `kagami verify` can validate the complete operator-owned output. Adjust the
 trusted peers and ports before materialization when preparing a deployment.
+
+The profile publisher requires `--xor-allocations-dir <DIR>` alongside its explicit
+public authority directory. Each `<profile>.json` allocation file contains
+`version: 1`, the exact committed `asset_definition_id`, and `allocations` sorted
+by canonical account identity, each with `account` and positive exact `amount`.
+Every generated validator must be explicitly allocated at least its 10,000 XOR
+genesis self bond. These are reviewed genesis allocations; neither genesis signing
+nor localnet startup mints missing balances. Nexus requires its operator-provisioned
+mainnet XOR identity and rejects the Taira definition.

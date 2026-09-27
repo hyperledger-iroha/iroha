@@ -30,12 +30,20 @@ pub(super) struct NativeCandidateResult {
     result: Result<NativeCandidateAssembly, CandidateError>,
 }
 
-enum OwnedCandidateParent {
-    Block(SignedBlock),
+/// Exact parent retained across the candidate worker's physical lifetime.
+#[expect(
+    variant_size_differences,
+    reason = "the bounded snapshot anchor is retained inline; block parents share their original allocation"
+)]
+pub(super) enum OwnedCandidateParent {
+    /// The original immutable Kura allocation, including its execution result.
+    Block(Arc<SignedBlock>),
+    /// The exact authenticated snapshot anchor for its one successor.
     Snapshot(wire::SnapshotBootstrapAnchor),
 }
 impl OwnedCandidateParent {
-    fn borrow(&self) -> CandidateParent<'_> {
+    /// Borrow the original parent without constructing another block graph.
+    pub(super) fn borrow(&self) -> CandidateParent<'_> {
         match self {
             Self::Block(block) => CandidateParent::Block(block),
             Self::Snapshot(anchor) => CandidateParent::Snapshot(anchor),
@@ -87,7 +95,7 @@ impl NativeRunnerProcess {
         context: &wire::HeightContext,
         directive: LocalProposalDirective,
         local_validator: wire::ValidatorIndex,
-        parent: CandidateParent<'_>,
+        parent: OwnedCandidateParent,
         queue: &Arc<Queue>,
         attachments: CandidateAttachments,
     ) -> Result<Option<Result<NativeCandidateAssembly, CandidateError>>, V2RunnerError> {
@@ -114,10 +122,6 @@ impl NativeRunnerProcess {
         let key = self.key.clone();
         let queue = Arc::clone(queue);
         let context = context.clone();
-        let parent = match parent {
-            CandidateParent::Block(block) => OwnedCandidateParent::Block(block.clone()),
-            CandidateParent::Snapshot(anchor) => OwnedCandidateParent::Snapshot(anchor.clone()),
-        };
         let (send, receive) = mpsc::sync_channel(1);
         let worker = thread::Builder::new()
             .name("sumeragi-native-candidate".into())
@@ -244,5 +248,74 @@ impl NativeRunnerProcess {
         process.prune_closed_candidate_source_waits(closed);
         assert!(process.candidate_source_requirement().is_none());
         process.shutdown().join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod parent_custody_tests {
+    //! Preserve the original parent allocation and exact anchor across worker lifetime.
+
+    use super::*;
+    use iroha_crypto::{Algorithm, Hash, HashOf, SignatureOf};
+    use iroha_data_model::block::{BlockHeader, BlockSignature};
+
+    #[test]
+    fn candidate_parent_worker_retains_original_block_allocation_until_exit() {
+        let key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519).unwrap();
+        let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1_000, 0);
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::try_from_hash(key.private_key(), header.hash()).unwrap(),
+        );
+        let block = Arc::new(SignedBlock::presigned(signature, header, Vec::new()));
+        let expected_hash = block.hash();
+        let weak = Arc::downgrade(&block);
+        let worker_weak = weak.clone();
+        let parent = OwnedCandidateParent::Block(block);
+        let (ready_send, ready_receive) = mpsc::sync_channel(1);
+        let (release_send, release_receive) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || {
+            let CandidateParent::Block(borrowed) = parent.borrow() else {
+                panic!("ordinary parent changed to a snapshot anchor");
+            };
+            let original = worker_weak
+                .upgrade()
+                .expect("worker retains the original Kura allocation");
+            assert!(std::ptr::eq(borrowed, original.as_ref()));
+            assert_eq!(borrowed.hash(), expected_hash);
+            assert_eq!(borrowed.header().height().get(), 2);
+            drop(original);
+            ready_send.send(()).unwrap();
+            release_receive.recv().unwrap();
+            drop(parent);
+        });
+        ready_receive.recv().unwrap();
+        assert_eq!(weak.strong_count(), 1, "only the worker owns this parent");
+        release_send.send(()).unwrap();
+        worker.join().unwrap();
+        assert!(
+            weak.upgrade().is_none(),
+            "worker exit releases the exact owner"
+        );
+    }
+
+    #[test]
+    fn candidate_parent_worker_preserves_exact_snapshot_anchor() {
+        let anchor = wire::SnapshotBootstrapAnchor {
+            snapshot_height: 99,
+            snapshot_block_hash: HashOf::from_untyped_unchecked(Hash::new(b"parent snapshot")),
+            snapshot_block_creation_time_ms: 50_000,
+            snapshot_state_hash: Hash::new(b"parent snapshot state"),
+        };
+        let expected = anchor.clone();
+        let parent = OwnedCandidateParent::Snapshot(anchor);
+        thread::spawn(move || {
+            let CandidateParent::Snapshot(borrowed) = parent.borrow() else {
+                panic!("snapshot anchor changed to an ordinary block");
+            };
+            assert_eq!(borrowed, &expected);
+        })
+        .join()
+        .unwrap();
     }
 }

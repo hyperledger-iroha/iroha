@@ -2118,7 +2118,7 @@ impl LaneManifestRegistry {
         })
     }
     /// Install manifests into the registry from pre-built statuses (testing/telemetry scaffolding).
-    #[cfg(any(test, feature = "telemetry"))]
+    #[cfg(any(test, feature = "telemetry", feature = "iroha-core-tests"))]
     pub fn from_statuses(statuses: BTreeMap<LaneId, LaneManifestStatus>) -> Self {
         let consensus_policy_digest = Self::status_policy_digest(&statuses);
         let manifest_source_aliases = statuses

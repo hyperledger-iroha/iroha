@@ -17,14 +17,22 @@
 //! residue group.  Consequently the working set is
 //! `O(native_size + query_count * width + atom_count)`, never a materialized
 //! `native_size * width` matrix or an LDE table.
+//!
+//! The extension-point evaluator uses the same schedule and sum kernels with
+//! quartic-field weights. It evaluates the actual fixed polynomials at `z`,
+//! without treating an extension element as an LDE index or a selector bit.
 use super::stark::ZK_X509_DIGEST_CONTEXT_V1;
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PrivacyOuterDigestV1, TransparentStarkErrorV1,
-    goldilocks_batch_invert_v1, goldilocks_primitive_root_v1, privacy_outer_digest_frame_v1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, GoldilocksFp4V1 as E, PolynomialAirFieldV1,
+    PrivacyOuterDigestV1, TransparentStarkErrorV1, goldilocks_batch_invert_v1,
+    goldilocks_primitive_root_v1, privacy_outer_digest_frame_v1,
 };
 use core::cmp::Ordering;
 use std::vec::Vec;
 use thiserror::Error;
+#[cfg(test)]
+#[path = "fixed_algebraic_oods_tests.rs"]
+mod oods_tests;
 /// Exact first-release semantics committed alongside every schedule digest.
 pub(crate) const ZK_X509_FIXED_ALGEBRAIC_DESCRIPTOR_V1: &[u8] = b"zk-x509-fixed-algebraic-v1-incompatible:verifier-derived-only:no-proof-fixed-material:no-artifact:no-merkle:additive-canonical-atoms=affine-range+repeated-affine-stride+sparse:overlap=goldilocks-field-addition:exact-duplicate-atoms-rejected:semantically-equivalent-alternate-decompositions-have-distinct-descriptor-digests:goldilocks-modulus=0xffffffff00000001:native-root-domain:generator-shifted-lde-coset:coset-disjoint-from-lde-subgroup:query-index-derived-point:residue-grouped-barycentric-lagrange:batch-inverted-native-denominators:cyclic-prefix-affine-sums:repeated-sums=generic-gcd-cycles+reduced-stride-modular-inverse+cyclic-weight-and-ordinal-prefixes+per-stride-min-direct-occurrence-work-vs-native-prefix-work:one-column-native-streaming:no-native-times-width-or-lde-table:bounded-native20-lde25-blowup8-width472-atoms65536-queries272-output-fields128384-work2pow28:digest=sha3-384-opaque48:wire=X5K1+u16be-version1+u16be-header24+native-log2-u8+lde-log2-u8+width-u16be+atom-count-u32be+coset-shift-u64be+canonical-variable-atoms:first-release-no-legacy";
 const ZK_X509_FIXED_ALGEBRAIC_MAGIC_V1: [u8; 4] = *b"X5K1";
@@ -1015,6 +1023,80 @@ impl ZkX509FixedAlgebraicScheduleV1 {
             fields,
         })
     }
+    /// Evaluate the native fixed polynomials at a canonical quartic-field point.
+    ///
+    /// Only native subgroup points are rejected here: embedded base-field
+    /// points outside that subgroup are useful for differential validation.
+    /// The enclosing DEEP verifier must additionally enforce its challenge
+    /// admissibility rules. No prover-supplied fixed values are accepted.
+    ///
+    /// MAIN uses this owner for its complete Fp4 constraint check while keeping
+    /// the authenticated scalar relation queries in the current wire format.
+    pub(crate) fn evaluate_extension_point_v1(
+        &self,
+        point: E,
+    ) -> Result<Vec<E>, ZkX509FixedAlgebraicErrorV1> {
+        if !point.is_canonical() {
+            return Err(ZkX509FixedAlgebraicErrorV1::NonCanonicalField);
+        }
+        let native_size = self.domain.native_size_v1()?;
+        let (references, runs) = repeated_stride_plan_v1(&self.atoms)?;
+        // The same public schedule-work bound applies to one field point.
+        // Here its units are extension operations, not base-field operations
+        // or elapsed time. Shape and allocations are unchanged by the point.
+        self.validate_evaluation_work_v1(
+            &[GroupedQueryV1 {
+                remainder: 0,
+                shift: 0,
+                slot: 0,
+            }],
+            &references,
+            &runs,
+            native_size,
+        )?;
+        let table = LagrangeTableV1::<E>::at_extension_point_v1(self.domain, point)?;
+        let mut row = Vec::new();
+        row.try_reserve_exact(usize::from(self.width))
+            .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
+        row.resize(usize::from(self.width), E::ZERO);
+        for atom in self
+            .atoms
+            .iter()
+            .copied()
+            .filter(|atom| !matches!(atom, ZkX509FixedAlgebraicAtomV1::Repeated { .. }))
+        {
+            let contribution = table.non_repeated_atom_sum_v1(atom, 0)?;
+            let target = row
+                .get_mut(usize::from(atom.column_v1()))
+                .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?;
+            *target = target.add(contribution);
+        }
+        for run in runs {
+            let stride_table = repeated_stride_uses_table_v1(run, 1, native_size)?
+                .then(|| CyclicStrideTableV1::new_v1(&table.weights, run.stride))
+                .transpose()?;
+            for reference in references
+                .get(run.references_start..run.references_end)
+                .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?
+            {
+                let atom = self
+                    .atoms
+                    .get(reference.atom_index)
+                    .copied()
+                    .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?;
+                let contribution = if let Some(stride_table) = &stride_table {
+                    stride_table.repeated_atom_sum_v1(atom, 0)?
+                } else {
+                    table.repeated_atom_sum_naive_v1(atom, 0)?
+                };
+                let target = row
+                    .get_mut(usize::from(atom.column_v1()))
+                    .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?;
+                *target = target.add(contribution);
+            }
+        }
+        Ok(row)
+    }
     fn validate_evaluation_work_v1(
         &self,
         grouped_queries: &[GroupedQueryV1],
@@ -1230,13 +1312,13 @@ fn repeated_stride_uses_table_v1(
         .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
     Ok(table < direct)
 }
-struct LagrangeTableV1 {
+struct LagrangeTableV1<A = F> {
     native_size: usize,
-    weights: Vec<F>,
-    prefix: Vec<F>,
-    linear_prefix: Vec<F>,
+    weights: Vec<A>,
+    prefix: Vec<A>,
+    linear_prefix: Vec<A>,
 }
-impl LagrangeTableV1 {
+impl LagrangeTableV1<F> {
     fn new_v1(
         domain: ZkX509FixedAlgebraicDomainV1,
         remainder: u64,
@@ -1287,6 +1369,79 @@ impl LagrangeTableV1 {
         if native_point != F::ONE || weight_sum != F::ONE {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
+        Self::from_weights_v1(weights)
+    }
+}
+impl LagrangeTableV1<E> {
+    fn at_extension_point_v1(
+        domain: ZkX509FixedAlgebraicDomainV1,
+        point: E,
+    ) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
+        if !point.is_canonical() {
+            return Err(ZkX509FixedAlgebraicErrorV1::NonCanonicalField);
+        }
+        let native_size_u64 = domain.native_size_v1()?;
+        let native_size = usize::try_from(native_size_u64)
+            .map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
+        let root =
+            goldilocks_primitive_root_v1(domain.native_log2).map_err(map_transparent_error_v1)?;
+        let numerator = point.pow(u128::from(native_size_u64)).sub(E::ONE);
+        if numerator == E::ZERO {
+            return Err(ZkX509FixedAlgebraicErrorV1::DivisionByZero);
+        }
+        let common = numerator.mul_base(
+            F(native_size_u64)
+                .inv()
+                .ok_or(ZkX509FixedAlgebraicErrorV1::DivisionByZero)?,
+        );
+        // L_j(z) = (z^N - 1) * g^j / (N * (z - g^j)). Batch inversion
+        // uses one true Fp4 inverse. These are public fixed/challenge values.
+        let mut weights = Vec::new();
+        let mut products = Vec::new();
+        weights
+            .try_reserve_exact(native_size)
+            .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
+        products
+            .try_reserve_exact(native_size)
+            .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
+        let mut native_point = F::ONE;
+        let mut product = E::ONE;
+        for _ in 0..native_size {
+            let denominator = point.sub(E::from_base(native_point));
+            products.push(product);
+            product = product.mul(denominator);
+            weights.push(denominator);
+            native_point = native_point.mul(root);
+        }
+        if native_point != F::ONE {
+            return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
+        }
+        let mut inverse = product
+            .inv()
+            .ok_or(ZkX509FixedAlgebraicErrorV1::DivisionByZero)?;
+        for (weight, prefix) in weights.iter_mut().zip(&products).rev() {
+            let denominator = *weight;
+            *weight = inverse.mul(*prefix);
+            inverse = inverse.mul(denominator);
+        }
+        drop(products);
+        native_point = F::ONE;
+        for weight in &mut weights {
+            *weight = common.mul_base(native_point).mul(*weight);
+            native_point = native_point.mul(root);
+        }
+        Self::from_weights_v1(weights)
+    }
+}
+impl<A: PolynomialAirFieldV1 + PartialEq> LagrangeTableV1<A> {
+    fn from_weights_v1(weights: Vec<A>) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
+        let native_size = weights.len();
+        if native_size < 2
+            || !native_size.is_power_of_two()
+            || weights.iter().any(|weight| !weight.is_canonical())
+        {
+            return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
+        }
         let prefix_len = native_size
             .checked_add(1)
             .ok_or(ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
@@ -1298,8 +1453,8 @@ impl LagrangeTableV1 {
         linear_prefix
             .try_reserve_exact(prefix_len)
             .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
-        prefix.push(F::ZERO);
-        linear_prefix.push(F::ZERO);
+        prefix.push(A::ZERO);
+        linear_prefix.push(A::ZERO);
         for (row, weight) in weights.iter().copied().enumerate() {
             let prefix_value = prefix
                 .last()
@@ -1312,11 +1467,11 @@ impl LagrangeTableV1 {
                 .last()
                 .copied()
                 .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?
-                .add(F(row_u64).mul(weight));
+                .add(weight.mul_base(F(row_u64)));
             prefix.push(prefix_value);
             linear_prefix.push(linear_value);
         }
-        if prefix.last() != Some(&F::ONE) {
+        if prefix.last() != Some(&A::ONE) {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
         Ok(Self {
@@ -1330,7 +1485,7 @@ impl LagrangeTableV1 {
         &self,
         row: usize,
         shift: usize,
-    ) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<A, ZkX509FixedAlgebraicErrorV1> {
         if row >= self.native_size || shift >= self.native_size {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
@@ -1350,7 +1505,7 @@ impl LagrangeTableV1 {
         end: usize,
         start_value: F,
         step: F,
-    ) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<A, ZkX509FixedAlgebraicErrorV1> {
         if start > end || end > self.native_size {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
@@ -1379,10 +1534,10 @@ impl LagrangeTableV1 {
             u64::try_from(start).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
         let relative_linear_sum = linear_end
             .sub(linear_start)
-            .sub(F(start_u64).mul(weight_sum));
-        Ok(start_value
-            .mul(weight_sum)
-            .add(step.mul(relative_linear_sum)))
+            .sub(weight_sum.mul_base(F(start_u64)));
+        Ok(weight_sum
+            .mul_base(start_value)
+            .add(relative_linear_sum.mul_base(step)))
     }
     fn shifted_affine_sum_v1(
         &self,
@@ -1391,7 +1546,7 @@ impl LagrangeTableV1 {
         start_value: F,
         step: F,
         shift: usize,
-    ) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<A, ZkX509FixedAlgebraicErrorV1> {
         if shift >= self.native_size {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
@@ -1401,7 +1556,7 @@ impl LagrangeTableV1 {
         if start >= end || end > self.native_size {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
-        let mut result = F::ZERO;
+        let mut result = A::ZERO;
         let before_end = end.min(shift);
         if start < before_end {
             let mapped_start = start
@@ -1452,7 +1607,7 @@ impl LagrangeTableV1 {
         &self,
         atom: ZkX509FixedAlgebraicAtomV1,
         shift: usize,
-    ) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<A, ZkX509FixedAlgebraicErrorV1> {
         match atom {
             ZkX509FixedAlgebraicAtomV1::Affine {
                 start,
@@ -1467,7 +1622,7 @@ impl LagrangeTableV1 {
             ZkX509FixedAlgebraicAtomV1::Sparse { row, value, .. } => {
                 let row = usize::try_from(row)
                     .map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
-                Ok(value.mul(self.shifted_weight_v1(row, shift)?))
+                Ok(self.shifted_weight_v1(row, shift)?.mul_base(value))
             }
         }
     }
@@ -1475,7 +1630,7 @@ impl LagrangeTableV1 {
         &self,
         atom: ZkX509FixedAlgebraicAtomV1,
         shift: usize,
-    ) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<A, ZkX509FixedAlgebraicErrorV1> {
         let ZkX509FixedAlgebraicAtomV1::Repeated {
             first,
             count,
@@ -1487,7 +1642,7 @@ impl LagrangeTableV1 {
         else {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         };
-        let mut result = F::ZERO;
+        let mut result = A::ZERO;
         for occurrence in 0..count {
             let row = occurrence
                 .checked_mul(stride)
@@ -1496,7 +1651,7 @@ impl LagrangeTableV1 {
             let row =
                 usize::try_from(row).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
             let value = start_value.add(step.mul(F(occurrence)));
-            result = result.add(value.mul(self.shifted_weight_v1(row, shift)?));
+            result = result.add(self.shifted_weight_v1(row, shift)?.mul_base(value));
         }
         Ok(result)
     }
@@ -1558,17 +1713,17 @@ fn modular_inverse_power_of_two_v1(
 /// `g` cycles of length `N/g`.  The reduced stride is odd and therefore
 /// invertible modulo that power-of-two cycle length.  Two prefixes per cycle
 /// recover both `sum(weight)` and `sum(k * weight)` for a cyclic interval.
-struct CyclicStrideTableV1 {
+struct CyclicStrideTableV1<A = F> {
     native_size: usize,
     stride: usize,
     gcd: usize,
     cycle_len: usize,
     reduced_stride_inverse: usize,
-    prefix: Vec<F>,
-    ordinal_prefix: Vec<F>,
+    prefix: Vec<A>,
+    ordinal_prefix: Vec<A>,
 }
-impl CyclicStrideTableV1 {
-    fn new_v1(weights: &[F], stride: u64) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
+impl<A: PolynomialAirFieldV1> CyclicStrideTableV1<A> {
+    fn new_v1(weights: &[A], stride: u64) -> Result<Self, ZkX509FixedAlgebraicErrorV1> {
         let native_size = weights.len();
         let stride =
             usize::try_from(stride).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
@@ -1576,10 +1731,7 @@ impl CyclicStrideTableV1 {
             || !native_size.is_power_of_two()
             || stride == 0
             || stride >= native_size
-            || weights
-                .iter()
-                .copied()
-                .any(|weight| !canonical_field_v1(weight))
+            || weights.iter().copied().any(|weight| !weight.is_canonical())
         {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
@@ -1609,8 +1761,8 @@ impl CyclicStrideTableV1 {
             .try_reserve_exact(table_len)
             .map_err(|_| ZkX509FixedAlgebraicErrorV1::AllocationFailure)?;
         for cycle in 0..gcd {
-            prefix.push(F::ZERO);
-            ordinal_prefix.push(F::ZERO);
+            prefix.push(A::ZERO);
+            ordinal_prefix.push(A::ZERO);
             let mut index = cycle;
             for ordinal in 0..cycle_len {
                 let weight = weights
@@ -1630,9 +1782,8 @@ impl CyclicStrideTableV1 {
                         .copied()
                         .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?
                         .add(
-                            F(u64::try_from(ordinal)
-                                .map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?)
-                            .mul(weight),
+                            weight.mul_base(F(u64::try_from(ordinal)
+                                .map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?)),
                         ),
                 );
                 index = index
@@ -1662,7 +1813,7 @@ impl CyclicStrideTableV1 {
         cycle: usize,
         start: usize,
         end: usize,
-    ) -> Result<(F, F), ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<(A, A), ZkX509FixedAlgebraicErrorV1> {
         if cycle >= self.gcd || start > end || end > self.cycle_len {
             return Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant);
         }
@@ -1709,7 +1860,7 @@ impl CyclicStrideTableV1 {
         start_value: F,
         step: F,
         shift: usize,
-    ) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<A, ZkX509FixedAlgebraicErrorV1> {
         let first =
             usize::try_from(first).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?;
         let count =
@@ -1759,7 +1910,7 @@ impl CyclicStrideTableV1 {
             u64::try_from(position).map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?
         );
         let mut weight_sum = first_weights;
-        let mut relative_sum = first_ordinals.sub(position_field.mul(first_weights));
+        let mut relative_sum = first_ordinals.sub(first_weights.mul_base(position_field));
         let remaining = count
             .checked_sub(first_count)
             .ok_or(ZkX509FixedAlgebraicErrorV1::InternalInvariant)?;
@@ -1768,19 +1919,20 @@ impl CyclicStrideTableV1 {
             weight_sum = weight_sum.add(second_weights);
             relative_sum = relative_sum.add(
                 second_ordinals.add(
-                    F(u64::try_from(first_count)
-                        .map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?)
-                    .mul(second_weights),
+                    second_weights.mul_base(F(u64::try_from(first_count)
+                        .map_err(|_| ZkX509FixedAlgebraicErrorV1::IntegerOverflow)?)),
                 ),
             );
         }
-        Ok(start_value.mul(weight_sum).add(step.mul(relative_sum)))
+        Ok(weight_sum
+            .mul_base(start_value)
+            .add(relative_sum.mul_base(step)))
     }
     fn repeated_atom_sum_v1(
         &self,
         atom: ZkX509FixedAlgebraicAtomV1,
         shift: usize,
-    ) -> Result<F, ZkX509FixedAlgebraicErrorV1> {
+    ) -> Result<A, ZkX509FixedAlgebraicErrorV1> {
         let ZkX509FixedAlgebraicAtomV1::Repeated {
             first,
             count,

@@ -692,7 +692,7 @@ fn beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install() {
 }
 
 #[test]
-fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substitution() {
+fn beacon_public_preparation_derives_native_network_bound_seats_and_rejects_substitution() {
     let fixture = Fixture::new();
     let wire = fixture.block.encode_wire().unwrap();
     let manifest = json_line(&fixture.manifest).unwrap();
@@ -734,6 +734,12 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
         value
     );
     let units = value.get("final_units").unwrap().as_array().unwrap();
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(fixture.block.hash());
+    let network_root = hex::encode(network_id.as_bytes());
+    let attempt = hex::encode(<[u8; 32]>::from(iroha_crypto::Hash::new_from_chunks(&[
+        b"iroha.global-beacon.genesis-attempt.v1\0",
+        network_id.as_bytes(),
+    ])));
     let roster = iroha_core::sumeragi::startup::genesis_committee_peers(&fixture.block).unwrap();
     for (index, unit) in units.iter().enumerate() {
         let seat = roster
@@ -753,14 +759,12 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
             unit.get("config_file").unwrap().as_str(),
             Some("beacon.toml")
         );
-        assert!(
-            unit.get("credential_path")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .ends_with(&format!(
-                    "/seat-{seat}/iroha-global-beacon-partial-signer-v1.norito"
-                ))
+        let expected = format!(
+            "/var/lib/taira/.public-reset-control-v1/beacon/{network_root}/ceremony/attempt-{attempt}-seat-{seat}/iroha-global-beacon-partial-signer-v1.norito"
+        );
+        assert_eq!(
+            unit.get("credential_path").unwrap().as_str(),
+            Some(expected.as_str())
         );
     }
     let other_nonce = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -770,7 +774,12 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
     let other =
         json::to_value(&prepare(other_nonce, &inventory.validator_clients, &manifest).unwrap())
             .unwrap();
-    assert_ne!(value.get("request"), other.get("request"));
+    assert_eq!(value.get("request"), other.get("request"));
+    assert_eq!(value.get("final_units"), other.get("final_units"));
+    assert_ne!(
+        value.get("authorization_nonce"),
+        other.get("authorization_nonce")
+    );
     let mut wrong = inventory.validator_clients.clone();
     wrong[0].peer_id = wrong[1].peer_id.clone();
     assert!(prepare(&inventory.authorization_nonce, &wrong, &manifest).is_err());

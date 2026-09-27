@@ -437,7 +437,12 @@ pub struct PublicLaneValidatorRecord {
     /// status is promoted, so a finalized boundary snapshot can project them
     /// without depending on block-local execution order.
     pub activation_height: u64,
-    /// Exclusive first height no longer covered by this validator binding.
+    /// Requested exclusive end for selection into a new, unfrozen committee.
+    ///
+    /// This does not revoke a current or already frozen seat. Certified retention
+    /// may extend voting and slashing obligations beyond the requested height.
+    pub election_exit_height: Option<u64>,
+    /// Authenticated exclusive first height no longer covered by this binding.
     ///
     /// Retained custody records preserve this boundary after exit or slash so
     /// evidence can be matched to the exact historical tenure.
@@ -453,7 +458,7 @@ pub enum PublicLaneValidatorStatus {
     PendingActivation(u64),
     /// Validator participates in consensus for the target lane.
     Active,
-    /// Validator is exiting and the bonded stake is being unlocked.
+    /// Exit requested at the payload release time; certified replacement is still required.
     Exiting(u64),
     /// Validator exit processing is complete.
     ///
@@ -588,7 +593,7 @@ pub struct PublicLaneRewardRecord {
     pub epoch: u64,
     /// Asset identifier used for payouts.
     pub asset: AssetId,
-    /// Total reward minted or transferred into the pool.
+    /// Total explicit entitlement reserved from the already funded treasury asset.
     pub total_reward: Quantity,
     /// Individual reward shares emitted in this payout.
     pub shares: Vec<PublicLaneRewardShare>,

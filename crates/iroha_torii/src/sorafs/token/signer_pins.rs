@@ -25,6 +25,7 @@ pub struct StreamTokenSignerPinsV1 {
     observer: SignerStateObserverTrustV1,
     observer_handle: String,
     config_digest: [u8; 32],
+    clock_uncertainty_ms: u64,
 }
 impl fmt::Debug for StreamTokenSignerPinsV1 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -66,7 +67,8 @@ impl StreamTokenSignerPinsV1 {
             return Err(invalid());
         }
         let provider_id = storage.provider_id.as_ref().ok_or_else(invalid)?.0;
-        if !storage.enabled
+        if signer_backend.clock_uncertainty_ms > 5_000
+            || !storage.enabled
             || provider_id == [0; 32]
             || u32::try_from(signer_backend.key_revision)
                 .ok()
@@ -158,6 +160,7 @@ impl StreamTokenSignerPinsV1 {
             observer_active_until: observer.active_until_unix_ms,
             max_state_age_ms: observer.max_state_age_ms,
             observer_handle: observer_config.runtime_handle.clone(),
+            clock_uncertainty_ms: signer_backend.clock_uncertainty_ms,
         };
         let bytes = norito::encode_canonical(&preimage).map_err(|_| invalid())?;
         let mut hasher = blake3::Hasher::new();
@@ -173,8 +176,14 @@ impl StreamTokenSignerPinsV1 {
             custody,
             observer,
             observer_handle: observer_config.runtime_handle.clone(),
+            clock_uncertainty_ms: signer_backend.clock_uncertainty_ms,
             config_digest: *hasher.finalize().as_bytes(),
         }))
+    }
+    /// Configured UTC uncertainty used for both endpoints of every release check.
+    #[must_use]
+    pub const fn clock_uncertainty_ms(&self) -> u64 {
+        self.clock_uncertainty_ms
     }
     /// Exact provider-scoped signing subject; not runtime qualification.
     #[must_use]
@@ -219,6 +228,7 @@ struct PinsPreimageV1 {
     observer_active_until: u64,
     max_state_age_ms: u64,
     observer_handle: String,
+    clock_uncertainty_ms: u64,
 }
 fn strong_key(bytes: [u8; 32]) -> Result<PublicKey, StreamTokenIssuerError> {
     let key = VerifyingKey::from_bytes(&bytes)

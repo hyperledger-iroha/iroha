@@ -4118,7 +4118,7 @@ redistributable schemas, and official trust/revocation bundles.
 	  generic AIR constructors
 	  now also reserve ZK-ACE and IVM execution circuit aliases for their dedicated
 	  AIR paths before envelope synthesis, and generic STARK wrapper verification
-	  pins `ivm-execution-v1` payloads to the canonical schema plus 16 single-row
+	  pins `ivm-replay-binding-v1` payloads to the canonical schema plus 16 single-row
 	  commitment columns, with preverify/dedup metadata admission rejecting the
 	  same malformed IVM-shaped wrapper/schema combinations before cache insert.
 	  The governed material-native AIR

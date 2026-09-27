@@ -1376,12 +1376,68 @@ impl GenesisSourceTemplate {
     ///
     /// # Errors
     ///
-    /// Returns an error when the authority shape is invalid or the completed JSON is not a valid
-    /// [`RawGenesisTransaction`].
+    /// Returns an error when the authority or explicit NPoS XOR selection is invalid, or the
+    /// completed JSON is not a valid [`RawGenesisTransaction`].
     pub fn materialize(
         mut self,
         parameters: KagemushaMintFinalityGenesisParametersV1,
+        xor_asset_definition_id: Option<AssetDefinitionId>,
     ) -> Result<RawGenesisTransaction> {
+        let is_npos = self
+            .value
+            .get("consensus_mode")
+            .and_then(norito::json::Value::as_str)
+            == Some("Npos");
+        if is_npos != xor_asset_definition_id.is_some() {
+            return Err(eyre!(
+                "NPoS source materialization requires an explicit canonical XOR definition; permissioned sources omit it"
+            ));
+        }
+        if let Some(asset) = xor_asset_definition_id {
+            let chain = self
+                .value
+                .get("chain")
+                .and_then(norito::json::Value::as_str)
+                .unwrap_or_default();
+            if chain == "00000000-0000-0000-0000-000000000753"
+                && asset.to_string() == "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            {
+                return Err(eyre!(
+                    "public Nexus requires its operator-provisioned mainnet XOR definition; the Taira testnet definition is forbidden"
+                ));
+            }
+            if chain == "fc56984b-2be7-431d-840e-21514d1883f0"
+                && asset.to_string() != "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+            {
+                return Err(eyre!("public Taira requires its canonical XOR definition"));
+            }
+            let transactions = self
+                .value
+                .get_mut("transactions")
+                .and_then(norito::json::Value::as_array_mut)
+                .ok_or_else(|| eyre!("genesis source has no transaction array"))?;
+            let mut pinned = 0;
+            for transaction in transactions {
+                if let Some(payload) = transaction
+                    .get_mut("parameters")
+                    .and_then(|value| value.get_mut("custom"))
+                    .and_then(|value| value.get_mut("sumeragi_npos_parameters"))
+                    .and_then(|value| value.get_mut("payload"))
+                    .and_then(norito::json::Value::as_object_mut)
+                {
+                    payload.insert(
+                        "xor_asset_definition_id".to_owned(),
+                        norito::json::Value::String(asset.to_string()),
+                    );
+                    pinned += 1;
+                }
+            }
+            if pinned != 1 {
+                return Err(eyre!(
+                    "NPoS source must have exactly one authoritative XOR asset pin"
+                ));
+            }
+        }
         parameters
             .validate()
             .map_err(|error| eyre!("invalid KAGEMUSHA mint-finality parameters: {error}"))?;
@@ -3062,8 +3118,10 @@ mod tests {
 
     fn load_genesis_source_template_for_test(relative_path: &str) -> Result<RawGenesisTransaction> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(relative_path);
-        GenesisSourceTemplate::from_path(path)?
-            .materialize(deterministic_test_kagemusha_mint_finality_genesis_parameters())
+        GenesisSourceTemplate::from_path(path)?.materialize(
+            deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+            Some(SumeragiNposParameters::default().xor_asset_definition_id),
+        )
     }
 
     #[test]
@@ -3072,8 +3130,10 @@ mod tests {
             .join("../../defaults/genesis.template.json");
         assert!(RawGenesisTransaction::from_path(&path).is_err());
         let parameters = deterministic_test_kagemusha_mint_finality_genesis_parameters();
-        let materialized =
-            GenesisSourceTemplate::from_path(&path)?.materialize(parameters.clone())?;
+        let materialized = GenesisSourceTemplate::from_path(&path)?.materialize(
+            parameters.clone(),
+            Some(SumeragiNposParameters::default().xor_asset_definition_id),
+        )?;
         assert_eq!(
             materialized.kagemusha_mint_finality_genesis_parameters(),
             &parameters

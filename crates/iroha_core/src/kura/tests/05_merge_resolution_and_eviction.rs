@@ -274,9 +274,9 @@ fn append_block_batch_sidecars_block_when_inline_budget_exceeded() {
         })
         .into(),
     );
-    let (block1_len, _) = block1.canonical_wire().expect("block1 wire").into_parts();
-    let (block2_frame, _) = block2.canonical_wire().expect("block2 wire").into_parts();
-    let block1_len = u64::try_from(block1_len.len()).expect("block1 length");
+    let block1_frame = block1.canonical_wire().expect("block1 wire").into_vec();
+    let block2_frame = block2.canonical_wire().expect("block2 wire").into_vec();
+    let block1_len = u64::try_from(block1_frame.len()).expect("block1 length");
     let block2_len = u64::try_from(block2_frame.len()).expect("block2 length");
     block_store
         .append_block_batch_at(0, std::slice::from_ref(&block1), 0)
@@ -328,10 +328,7 @@ fn restart_resolves_staged_evicted_rewrite_by_durable_marker() {
         .into(),
     );
     assert_ne!(replacement.hash(), block2.hash());
-    let (block1_frame, _) = block1
-        .canonical_wire()
-        .expect("block one wire")
-        .into_parts();
+    let block1_frame = block1.canonical_wire().expect("block one wire").into_vec();
     let inline_budget = u64::try_from(block1_frame.len())
         .expect("block one length")
         .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
@@ -453,10 +450,7 @@ fn startup_recovers_both_abrupt_da_rewrite_boundaries() {
         })
         .into(),
     );
-    let (block1_frame, _) = block1
-        .canonical_wire()
-        .expect("block one wire")
-        .into_parts();
+    let block1_frame = block1.canonical_wire().expect("block one wire").into_vec();
     let inline_budget = u64::try_from(block1_frame.len())
         .expect("block one length")
         .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
@@ -563,10 +557,7 @@ fn carrier_pins_reject_da_rewrite_recovery_before_mutation() {
             })
             .into(),
         );
-        let (block1_frame, _) = block1
-            .canonical_wire()
-            .expect("block one wire")
-            .into_parts();
+        let block1_frame = block1.canonical_wire().expect("block one wire").into_vec();
         let inline_budget = u64::try_from(block1_frame.len())
             .expect("block one length")
             .saturating_add(2 * (BlockIndex::SIZE + SIZE_OF_BLOCK_HASH));
@@ -1498,8 +1489,7 @@ fn eviction_accounting_handles_sidecar_shrink() {
     let canonical = blocks[1]
         .canonical_wire()
         .expect("canonical block wire")
-        .into_parts()
-        .0;
+        .into_vec();
     let mut oversized = canonical.clone();
     oversized.extend(std::iter::repeat_n(0xA5, 4096));
     let cache_path = {

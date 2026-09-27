@@ -411,7 +411,7 @@ final class IrohaPeerNearbyV1Tests: XCTestCase {
         )
         var retiredProfileHello = try validReceiver.localHello.encode()
         retiredProfileHello[6] = 0
-        retiredProfileHello[7] = 1
+        retiredProfileHello[7] = 0
         XCTAssertThrowsError(try IrohaPeerNearbyHelloV1.decode(retiredProfileHello)) {
             XCTAssertEqual($0 as? IrohaPeerNearbyErrorV1, .invalidProfile)
         }

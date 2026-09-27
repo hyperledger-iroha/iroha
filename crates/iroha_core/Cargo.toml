@@ -175,7 +175,7 @@ iroha_data_model = { workspace = true, default-features = false, features = ["tr
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }
-iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
+iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc"] }
 iroha_version = { workspace = true }
 iroha_config = { workspace = true }
 iroha_futures = { workspace = true }
@@ -340,6 +340,10 @@ required-features = ["iroha-core-tests"]
 [[example]]
 name = "gen_pin_snapshot"
 required-features = ["iroha-core-tests"]
+
+[[example]]
+name = "confidential_redemption"
+required-features = ["zk-halo2-ipa"]
 
 [package.metadata.cargo-all-features]
 denylist = [

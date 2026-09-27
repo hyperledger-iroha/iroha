@@ -29,7 +29,8 @@ use super::{
     der_limits::ZK_X509_DER_MAX_DOCUMENT_BYTES_V1,
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 use thiserror::Error;
 /// Stable identity of the fixed-capacity strict-DER numeric adapter.
@@ -537,18 +538,18 @@ pub(crate) struct ZkX509DerStarkTerminalClaimsV1 {
 /// The order is the DER adapter's committed node tuple order. Exposing the typed event and
 /// compression helper avoids a second, subtly divergent host encoding in a downstream adapter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ZkX509DerStarkNodeEventV1 {
-    pub(crate) document: F,
-    pub(crate) ordinal: F,
-    pub(crate) parent_frame: F,
-    pub(crate) tag_class: F,
-    pub(crate) tag_number: F,
-    pub(crate) constructed: F,
-    pub(crate) start: F,
-    pub(crate) content_start: F,
-    pub(crate) content_end: F,
-    pub(crate) depth: F,
-    pub(crate) content_len: F,
+pub(crate) struct ZkX509DerStarkNodeEventV1<A = F> {
+    pub(crate) document: A,
+    pub(crate) ordinal: A,
+    pub(crate) parent_frame: A,
+    pub(crate) tag_class: A,
+    pub(crate) tag_number: A,
+    pub(crate) constructed: A,
+    pub(crate) start: A,
+    pub(crate) content_start: A,
+    pub(crate) content_end: A,
+    pub(crate) depth: A,
+    pub(crate) content_len: A,
 }
 /// Challenge-dependent strict-DER trace. Only active rows are materialized;
 /// aggregate padding rows are reconstructed from the final accumulators.
@@ -1343,12 +1344,12 @@ pub(crate) fn build_zk_x509_der_stark_base_v1(
         rows,
     })
 }
-fn pack_bits_v1(bits: &[F]) -> F {
+fn pack_bits_v1<A: PolynomialAirFieldV1>(bits: &[A]) -> A {
     bits.iter()
         .copied()
         .enumerate()
-        .fold(F::ZERO, |sum, (bit, value)| {
-            sum.add(value.mul(F(1_u64 << bit)))
+        .fold(A::ZERO, |sum, (bit, value)| {
+            sum.add(value.mul(A::from_base(F(1_u64 << bit))))
         })
 }
 #[cfg(test)]
@@ -1365,18 +1366,20 @@ fn equality_selector_from_bits_v1(bits: &[F], value: usize) -> F {
             })
         })
 }
-fn compress_tuple_v1(values: &[F], challenge: [F; 12]) -> F {
+fn compress_tuple_v1<A: PolynomialAirFieldV1>(values: &[A], challenge: [F; 12]) -> A {
     values
         .iter()
         .copied()
         .zip(challenge)
-        .fold(F::ZERO, |sum, (value, coefficient)| {
-            sum.add(value.mul(coefficient))
+        .fold(A::ZERO, |sum, (value, coefficient)| {
+            sum.add(value.mul_base(coefficient))
         })
 }
-fn stack_push_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
+fn stack_push_tuple_v1<A: PolynomialAirFieldV1>(
+    row: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+) -> [A; 12] {
     [
-        F::ONE,
+        A::ONE,
         row[BASE_DOCUMENT],
         row[BASE_NODE_COUNT],
         pack_bits_v1(&row[BASE_DEPTH_BITS..BASE_DEPTH_BITS + 5]),
@@ -1390,12 +1393,14 @@ fn stack_push_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
         row[BASE_FRAME_PREVIOUS_END],
     ]
 }
-fn stack_pop_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
+fn stack_pop_tuple_v1<A: PolynomialAirFieldV1>(
+    row: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+) -> [A; 12] {
     [
-        F::ONE,
+        A::ONE,
         row[BASE_DOCUMENT],
         row[BASE_FRAME_ID],
-        pack_bits_v1(&row[BASE_DEPTH_BITS..BASE_DEPTH_BITS + 5]).sub(F::ONE),
+        pack_bits_v1(&row[BASE_DEPTH_BITS..BASE_DEPTH_BITS + 5]).sub(A::ONE),
         row[BASE_PAYLOAD],
         row[BASE_PAYLOAD + 1],
         row[BASE_PAYLOAD + 2],
@@ -1406,16 +1411,16 @@ fn stack_pop_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
         row[BASE_PAYLOAD + 7],
     ]
 }
-fn document_tuple_v1(document: F, document_len: F) -> [F; 12] {
-    let mut tuple = [F::ZERO; 12];
-    tuple[0] = F(2);
+fn document_tuple_v1<A: PolynomialAirFieldV1>(document: A, document_len: A) -> [A; 12] {
+    let mut tuple = [A::ZERO; 12];
+    tuple[0] = A::from_base(F(2));
     tuple[1] = document;
     tuple[2] = document_len;
     tuple
 }
-fn node_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
+fn node_tuple_v1<A: PolynomialAirFieldV1>(row: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [A; 12] {
     [
-        F(3),
+        A::from_base(F(3)),
         row[BASE_DOCUMENT],
         row[BASE_NODE_COUNT],
         row[BASE_FRAME_ID],
@@ -1429,10 +1434,12 @@ fn node_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
         row[BASE_LENGTH_ACCUMULATOR],
     ]
 }
-fn pair_producer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
-    let mut tuple = [F::ZERO; 12];
+fn pair_producer_tuple_v1<A: PolynomialAirFieldV1>(
+    row: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+) -> [A; 12] {
+    let mut tuple = [A::ZERO; 12];
     tuple[..9].copy_from_slice(&[
-        F(4),
+        A::from_base(F(4)),
         row[BASE_DOCUMENT],
         row[BASE_FRAME_ID],
         row[BASE_FRAME_PREVIOUS_ID],
@@ -1444,10 +1451,12 @@ fn pair_producer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12]
     ]);
     tuple
 }
-fn pair_consumer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12] {
-    let mut tuple = [F::ZERO; 12];
+fn pair_consumer_tuple_v1<A: PolynomialAirFieldV1>(
+    row: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+) -> [A; 12] {
+    let mut tuple = [A::ZERO; 12];
     tuple[..9].copy_from_slice(&[
-        F(4),
+        A::from_base(F(4)),
         row[0],
         row[1],
         row[2],
@@ -1459,30 +1468,30 @@ fn pair_consumer_tuple_v1(row: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1]) -> [F; 12]
     ]);
     tuple
 }
-fn byte_tuple_v1(document: F, address: F, value: F) -> [F; 12] {
-    let mut tuple = [F::ZERO; 12];
-    tuple[0] = F(5);
+fn byte_tuple_v1<A: PolynomialAirFieldV1>(document: A, address: A, value: A) -> [A; 12] {
+    let mut tuple = [A::ZERO; 12];
+    tuple[0] = A::from_base(F(5));
     tuple[1] = document;
     tuple[2] = address;
     tuple[3] = value;
     tuple
 }
-fn input_byte_tuple_v1(document: F, address: F, value: F) -> [F; 12] {
-    let mut tuple = [F::ZERO; 12];
-    tuple[0] = F(6);
+fn input_byte_tuple_v1<A: PolynomialAirFieldV1>(document: A, address: A, value: A) -> [A; 12] {
+    let mut tuple = [A::ZERO; 12];
+    tuple[0] = A::from_base(F(6));
     tuple[1] = document;
     tuple[2] = address;
     tuple[3] = value;
     tuple
 }
 /// Return the exact DER input-byte factor consumed by a downstream adapter.
-pub(crate) fn zk_x509_der_stark_input_byte_factor_v1(
-    document: F,
-    address: F,
-    value: F,
+pub(crate) fn zk_x509_der_stark_input_byte_factor_v1<A: PolynomialAirFieldV1>(
+    document: A,
+    address: A,
+    value: A,
     lane: usize,
     challenges: ZkX509DerStarkChallengesV1,
-) -> Result<F, ZkX509DerStarkErrorV1> {
+) -> Result<A, ZkX509DerStarkErrorV1> {
     challenges.validate()?;
     let tuple_challenge = challenges
         .tuple
@@ -1495,11 +1504,11 @@ pub(crate) fn zk_x509_der_stark_input_byte_factor_v1(
     ))
 }
 /// Return the exact DER node factor consumed by a downstream adapter.
-pub(crate) fn zk_x509_der_stark_node_factor_v1(
-    event: ZkX509DerStarkNodeEventV1,
+pub(crate) fn zk_x509_der_stark_node_factor_v1<A: PolynomialAirFieldV1>(
+    event: ZkX509DerStarkNodeEventV1<A>,
     lane: usize,
     challenges: ZkX509DerStarkChallengesV1,
-) -> Result<F, ZkX509DerStarkErrorV1> {
+) -> Result<A, ZkX509DerStarkErrorV1> {
     challenges.validate()?;
     let tuple_challenge = challenges
         .tuple
@@ -1508,7 +1517,7 @@ pub(crate) fn zk_x509_der_stark_node_factor_v1(
         .ok_or(ZkX509DerStarkErrorV1::Challenge)?;
     Ok(compress_tuple_v1(
         &[
-            F(3),
+            A::from_base(F(3)),
             event.document,
             event.ordinal,
             event.parent_frame,
@@ -1524,8 +1533,13 @@ pub(crate) fn zk_x509_der_stark_node_factor_v1(
         tuple_challenge,
     ))
 }
-fn byte_denominator_v1(tuple: [F; 12], lane: usize, challenges: ZkX509DerStarkChallengesV1) -> F {
-    challenges.byte_lookup[lane].add(compress_tuple_v1(&tuple, challenges.tuple[lane]))
+fn byte_denominator_v1<A: PolynomialAirFieldV1>(
+    tuple: [A; 12],
+    lane: usize,
+    challenges: ZkX509DerStarkChallengesV1,
+) -> A {
+    A::from_base(challenges.byte_lookup[lane])
+        .add(compress_tuple_v1(&tuple, challenges.tuple[lane]))
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 fn derive_zk_x509_der_stark_private_document_product_v1(
@@ -1606,17 +1620,18 @@ pub(crate) fn zk_x509_der_stark_terminal_claims_v1(
 }
 /// Bind ordered input-byte then node claims to the committed final auxiliary
 /// row. This helper is shared by native and aggregate opened-row evaluation.
-pub(crate) fn evaluate_zk_x509_der_stark_terminal_claim_residues_v1(
-    last_aggregate: F,
-    aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+pub(crate) fn evaluate_zk_x509_der_stark_terminal_claim_residues_v1<A: PolynomialAirFieldV1>(
+    last_aggregate: A,
+    aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
     claims: ZkX509DerStarkTerminalClaimsV1,
-) -> [F; 2 * ZK_X509_DER_STARK_BUS_LANES_V1] {
+) -> [A; 2 * ZK_X509_DER_STARK_BUS_LANES_V1] {
     core::array::from_fn(|index| {
         if index < ZK_X509_DER_STARK_BUS_LANES_V1 {
-            last_aggregate.mul(aux[AUX_INPUT_BYTE_AFTER + index].sub(claims.input_byte[index]))
+            last_aggregate
+                .mul(aux[AUX_INPUT_BYTE_AFTER + index].sub(A::from_base(claims.input_byte[index])))
         } else {
             let lane = index - ZK_X509_DER_STARK_BUS_LANES_V1;
-            last_aggregate.mul(aux[AUX_NODE_AFTER + lane].sub(claims.node[lane]))
+            last_aggregate.mul(aux[AUX_NODE_AFTER + lane].sub(A::from_base(claims.node[lane])))
         }
     })
 }
@@ -2288,19 +2303,19 @@ pub(crate) fn build_zk_x509_der_stark_native_fixed_column_v1(
     }
     Ok(column)
 }
-fn push_boolean_residues_v1(residues: &mut Vec<F>, gate: F, values: &[F]) {
+fn push_boolean_residues_v1<A: PolynomialAirFieldV1>(residues: &mut Vec<A>, gate: A, values: &[A]) {
     residues.extend(
         values
             .iter()
             .copied()
-            .map(|value| gate.mul(value).mul(value.sub(F::ONE))),
+            .map(|value| gate.mul(value).mul(value.sub(A::ONE))),
     );
 }
-fn push_carry_residues_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+fn push_carry_residues_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
     columns: &[usize],
 ) {
     residues.extend(
@@ -2310,52 +2325,65 @@ fn push_carry_residues_v1(
             .map(|column| gate.mul(next[column].sub(current[column]))),
     );
 }
-fn push_one_hot_projection_residues_v1(residues: &mut Vec<F>, selectors: &[F], gate: F, value: F) {
+fn push_one_hot_projection_residues_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    selectors: &[A],
+    gate: A,
+    value: A,
+) {
     for selector in selectors {
-        residues.push(selector.mul(selector.sub(F::ONE)));
+        residues.push(selector.mul(selector.sub(A::ONE)));
     }
-    residues.push(selectors.iter().copied().fold(F::ZERO, F::add).sub(gate));
+    residues.push(selectors.iter().copied().fold(A::ZERO, A::add).sub(gate));
     residues.push(
         selectors
             .iter()
             .copied()
             .enumerate()
-            .fold(F::ZERO, |sum, (index, selector)| {
-                sum.add(F(u64::try_from(index).expect("selector index fits u64")).mul(selector))
+            .fold(A::ZERO, |sum, (index, selector)| {
+                sum.add(
+                    A::from_base(F(u64::try_from(index).expect("selector index fits u64")))
+                        .mul(selector),
+                )
             })
             .sub(gate.mul(value)),
     );
 }
-fn push_zero_test_residues_v1(residues: &mut Vec<F>, value: F, selector: F, inverse: F) {
-    residues.push(selector.mul(selector.sub(F::ONE)));
+fn push_zero_test_residues_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    value: A,
+    selector: A,
+    inverse: A,
+) {
+    residues.push(selector.mul(selector.sub(A::ONE)));
     residues.push(value.mul(selector));
-    residues.push(value.mul(inverse).sub(F::ONE.sub(selector)));
+    residues.push(value.mul(inverse).sub(A::ONE.sub(selector)));
     residues.push(selector.mul(inverse));
 }
 /// Constrain a total, event-gated inverse. `zero` is one exactly when an active event's denominator
 /// is zero; inactive events canonically use `(zero, inverse) = (0, 0)`.
-fn push_gated_zero_safe_inverse_residues_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    denominator: F,
-    zero: F,
-    inverse: F,
+fn push_gated_zero_safe_inverse_residues_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    denominator: A,
+    zero: A,
+    inverse: A,
 ) {
-    residues.push(zero.mul(zero.sub(F::ONE)));
-    residues.push(F::ONE.sub(gate).mul(zero));
-    residues.push(F::ONE.sub(gate).mul(inverse));
+    residues.push(zero.mul(zero.sub(A::ONE)));
+    residues.push(A::ONE.sub(gate).mul(zero));
+    residues.push(A::ONE.sub(gate).mul(inverse));
     residues.push(denominator.mul(zero));
-    residues.push(denominator.mul(inverse).sub(gate.mul(F::ONE.sub(zero))));
+    residues.push(denominator.mul(inverse).sub(gate.mul(A::ONE.sub(zero))));
     residues.push(zero.mul(inverse));
 }
 #[allow(clippy::too_many_lines)]
-fn evaluate_zk_x509_der_stark_base_residues_into_v1(
-    current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    current_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
-    fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-    next_fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-    residues: &mut Vec<F>,
+fn evaluate_zk_x509_der_stark_base_residues_into_v1<A: PolynomialAirFieldV1>(
+    current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    residues: &mut Vec<A>,
 ) {
     let row_active = current[BASE_ROW_ACTIVE];
     let next_row_active = next[BASE_ROW_ACTIVE];
@@ -2364,9 +2392,9 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     let next_parser = next_fixed[FIX_PARSER].mul(next_row_active);
     let next_comparator = next_fixed[FIX_COMPARATOR].mul(next_row_active);
     let parser_continue = parser.mul(next_parser);
-    let last_parser = parser.mul(F::ONE.sub(next_parser));
-    let last_comparator = comparator.mul(F::ONE.sub(next_comparator));
-    let phases: &[F; 8] = current_aux[AUX_PHASE_SELECTORS..AUX_PHASE_SELECTORS + 8]
+    let last_parser = parser.mul(A::ONE.sub(next_parser));
+    let last_comparator = comparator.mul(A::ONE.sub(next_comparator));
+    let phases: &[A; 8] = current_aux[AUX_PHASE_SELECTORS..AUX_PHASE_SELECTORS + 8]
         .try_into()
         .expect("eight phase selectors");
     let next_phase_value = pack_bits_v1(&next[BASE_PHASE_BITS..BASE_PHASE_BITS + 3]);
@@ -2385,22 +2413,22 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         .add(primitive);
     let non_consuming = finalize.add(boundary);
     residues.clear();
-    residues.push(row_active.mul(row_active.sub(F::ONE)));
-    residues.push(row_active.mul(F::ONE.sub(fixed[FIX_ACTIVE])));
+    residues.push(row_active.mul(row_active.sub(A::ONE)));
+    residues.push(row_active.mul(A::ONE.sub(fixed[FIX_ACTIVE])));
     residues.push(row_active.sub(parser).sub(comparator));
-    residues.push(fixed[FIX_FIRST_ACTIVE].mul(row_active.sub(F::ONE)));
-    residues.push(fixed[FIX_FIRST_PARSER].mul(parser.sub(F::ONE)));
+    residues.push(fixed[FIX_FIRST_ACTIVE].mul(row_active.sub(A::ONE)));
+    residues.push(fixed[FIX_FIRST_PARSER].mul(parser.sub(A::ONE)));
     residues.push(
         fixed[FIX_PARSER_CONTINUE]
             .mul(next_row_active)
-            .mul(F::ONE.sub(row_active)),
+            .mul(A::ONE.sub(row_active)),
     );
     let comparator_capacity_continue =
-        fixed[FIX_COMPARATOR].mul(F::ONE.sub(fixed[FIX_LAST_COMPARATOR]));
+        fixed[FIX_COMPARATOR].mul(A::ONE.sub(fixed[FIX_LAST_COMPARATOR]));
     residues.push(
         comparator_capacity_continue
             .mul(next_row_active)
-            .mul(F::ONE.sub(row_active)),
+            .mul(A::ONE.sub(row_active)),
     );
     for (column, value) in current.iter().copied().enumerate() {
         if column != BASE_FINAL_DOCUMENT
@@ -2408,17 +2436,17 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             && !(BASE_FINAL_DOCUMENT_SLACK_BITS..BASE_FINAL_DOCUMENT_SLACK_BITS + 5)
                 .contains(&column)
         {
-            residues.push(F::ONE.sub(row_active).mul(value));
+            residues.push(A::ONE.sub(row_active).mul(value));
         }
     }
     push_boolean_residues_v1(
         residues,
-        F::ONE,
+        A::ONE,
         &current[BASE_FINAL_DOCUMENT_BITS..BASE_FINAL_DOCUMENT_BITS + 5],
     );
     push_boolean_residues_v1(
         residues,
-        F::ONE,
+        A::ONE,
         &current[BASE_FINAL_DOCUMENT_SLACK_BITS..BASE_FINAL_DOCUMENT_SLACK_BITS + 5],
     );
     let final_document =
@@ -2426,22 +2454,22 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     let final_document_slack =
         pack_bits_v1(&current[BASE_FINAL_DOCUMENT_SLACK_BITS..BASE_FINAL_DOCUMENT_SLACK_BITS + 5]);
     residues.push(current[BASE_FINAL_DOCUMENT].sub(final_document));
-    residues.push(final_document.add(final_document_slack).sub(F(
+    residues.push(final_document.add(final_document_slack).sub(A::from_base(F(
         u64::try_from(ZK_X509_DER_STARK_MAX_DOCUMENTS_V1 - 1).expect("fixed cap"),
-    )));
+    ))));
     residues.push(
-        F::ONE
+        A::ONE
             .sub(fixed[FIX_LAST_AGGREGATE])
             .mul(next[BASE_FINAL_DOCUMENT].sub(current[BASE_FINAL_DOCUMENT])),
     );
     push_one_hot_projection_residues_v1(residues, phases, parser, phase_value);
     let depth = pack_bits_v1(&current[BASE_DEPTH_BITS..BASE_DEPTH_BITS + 5]);
-    let depth_selectors: &[F; 17] = current_aux
+    let depth_selectors: &[A; 17] = current_aux
         [AUX_DEPTH_SELECTORS..AUX_DEPTH_SELECTORS + ZK_X509_DER_MAX_NESTING_DEPTH_V1 + 1]
         .try_into()
         .expect("seventeen depth selectors");
     push_one_hot_projection_residues_v1(residues, depth_selectors, parser, depth);
-    let count_selectors: &[F; 8] = current_aux
+    let count_selectors: &[A; 8] = current_aux
         [AUX_IDENTIFIER_COUNT_SELECTORS..AUX_IDENTIFIER_COUNT_SELECTORS + 8]
         .try_into()
         .expect("eight identifier-count selectors");
@@ -2451,7 +2479,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         identifier_high,
         pack_bits_v1(&current[BASE_PAYLOAD..BASE_PAYLOAD + 3]),
     );
-    let kind_selectors: &[F; 8] = current_aux
+    let kind_selectors: &[A; 8] = current_aux
         [AUX_PRIMITIVE_KIND_SELECTORS..AUX_PRIMITIVE_KIND_SELECTORS + 8]
         .try_into()
         .expect("eight primitive-kind selectors");
@@ -2461,7 +2489,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         primitive,
         pack_bits_v1(&current[BASE_PAYLOAD..BASE_PAYLOAD + 3]),
     );
-    let unused_selectors: &[F; 8] = current_aux
+    let unused_selectors: &[A; 8] = current_aux
         [AUX_UNUSED_BIT_SELECTORS..AUX_UNUSED_BIT_SELECTORS + 8]
         .try_into()
         .expect("eight unused-bit selectors");
@@ -2471,7 +2499,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         primitive,
         pack_bits_v1(&current[BASE_PAYLOAD + 3..BASE_PAYLOAD + 6]),
     );
-    let remaining_selectors: &[F; 4] = current_aux
+    let remaining_selectors: &[A; 4] = current_aux
         [AUX_LENGTH_REMAINING_SELECTORS..AUX_LENGTH_REMAINING_SELECTORS + 4]
         .try_into()
         .expect("four length-remaining selectors");
@@ -2501,23 +2529,23 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         current_aux[AUX_HIGH_LOW_GE_31].sub(
             identifier_high.mul(
-                F::ONE.sub(
-                    F::ONE
+                A::ONE.sub(
+                    A::ONE
                         .sub(byte_bits[6])
-                        .mul(F::ONE.sub(byte_bits[5]))
-                        .mul(F::ONE.sub(current_aux[AUX_HIGH_TAG])),
+                        .mul(A::ONE.sub(byte_bits[5]))
+                        .mul(A::ONE.sub(current_aux[AUX_HIGH_TAG])),
                 ),
             ),
         ),
     );
-    residues.push(current_aux[AUX_HIGH_LOW_GE_31].mul(current_aux[AUX_HIGH_LOW_GE_31].sub(F::ONE)));
+    residues.push(current_aux[AUX_HIGH_LOW_GE_31].mul(current_aux[AUX_HIGH_LOW_GE_31].sub(A::ONE)));
     let long_length = byte_bits[7];
     residues.push(
         current_aux[AUX_LENGTH_COUNT_TWO]
-            .sub(length_first.mul(long_length).mul(high_low.sub(F::ONE))),
+            .sub(length_first.mul(long_length).mul(high_low.sub(A::ONE))),
     );
     residues
-        .push(current_aux[AUX_LENGTH_COUNT_TWO].mul(current_aux[AUX_LENGTH_COUNT_TWO].sub(F::ONE)));
+        .push(current_aux[AUX_LENGTH_COUNT_TWO].mul(current_aux[AUX_LENGTH_COUNT_TWO].sub(A::ONE)));
     push_zero_test_residues_v1(
         residues,
         current[BASE_BYTE_VALUE],
@@ -2526,13 +2554,13 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     );
     push_zero_test_residues_v1(
         residues,
-        current[BASE_BYTE_VALUE].sub(F(64)),
+        current[BASE_BYTE_VALUE].sub(A::from_base(F(64))),
         current_aux[AUX_BYTE_IS_64],
         current_aux[AUX_BYTE_64_INVERSE],
     );
     push_zero_test_residues_v1(
         residues,
-        current[BASE_BYTE_VALUE].sub(F(128)),
+        current[BASE_BYTE_VALUE].sub(A::from_base(F(128))),
         current_aux[AUX_BYTE_IS_128],
         current_aux[AUX_BYTE_128_INVERSE],
     );
@@ -2553,7 +2581,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             kind_selectors[2]
                 .add(kind_selectors[6])
                 .mul(current[BASE_PRIMITIVE_FIRST])
-                .mul(F::ONE.sub(last_primitive)),
+                .mul(A::ONE.sub(last_primitive)),
         ),
     );
     residues.push(
@@ -2563,27 +2591,27 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         current_aux[AUX_BIT_STRING_LAST_CONTINUATION_GUARD].sub(
             kind_selectors[3]
-                .mul(F::ONE.sub(current[BASE_PRIMITIVE_FIRST]))
+                .mul(A::ONE.sub(current[BASE_PRIMITIVE_FIRST]))
                 .mul(last_primitive),
         ),
     );
     residues.push(
         current_aux[AUX_NEXT_OID_START_EXPECTED].sub(
             kind_selectors[5]
-                .mul(F::ONE.sub(last_primitive))
-                .mul(F::ONE.sub(byte_bits[7])),
+                .mul(A::ONE.sub(last_primitive))
+                .mul(A::ONE.sub(byte_bits[7])),
         ),
     );
     residues.push(
         current_aux[AUX_PRIMITIVE_ENTRY].sub(
             finalize
-                .mul(F::ONE.sub(current[BASE_CONSTRUCTED]))
-                .mul(F::ONE.sub(current[BASE_CHECK_IS_ZERO])),
+                .mul(A::ONE.sub(current[BASE_CONSTRUCTED]))
+                .mul(A::ONE.sub(current[BASE_CHECK_IS_ZERO])),
         ),
     );
     residues.push(
         current_aux[AUX_ENTERS_CHILD]
-            .sub(current[BASE_CONSTRUCTED].mul(F::ONE.sub(current[BASE_CHECK_IS_ZERO]))),
+            .sub(current[BASE_CONSTRUCTED].mul(A::ONE.sub(current[BASE_CHECK_IS_ZERO]))),
     );
     residues.push(
         current_aux[AUX_PAIR_PRODUCER_EVENT].sub(
@@ -2601,8 +2629,8 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         parser.mul(
             phase_value.sub(
                 current[BASE_PHASE_BITS]
-                    .add(F(2).mul(current[BASE_PHASE_BITS + 1]))
-                    .add(F(4).mul(current[BASE_PHASE_BITS + 2])),
+                    .add(A::from_base(F(2)).mul(current[BASE_PHASE_BITS + 1]))
+                    .add(A::from_base(F(4)).mul(current[BASE_PHASE_BITS + 2])),
             ),
         ),
     );
@@ -2647,12 +2675,12 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     let check_used = identifier_first.add(finalize).add(primitive).add(boundary);
     residues.push(
         parser
-            .mul(F::ONE.sub(check_used))
+            .mul(A::ONE.sub(check_used))
             .mul(current[BASE_CHECK_IS_ZERO]),
     );
     residues.push(
         parser
-            .mul(F::ONE.sub(check_used))
+            .mul(A::ONE.sub(check_used))
             .mul(current[BASE_CHECK_INVERSE]),
     );
     let boundary_delta = current[BASE_CONSTRUCTED]
@@ -2660,17 +2688,17 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             depth_one
                 .mul(current[BASE_DOCUMENT_LEN].sub(current[BASE_OFFSET]))
                 .add(
-                    F::ONE
+                    A::ONE
                         .sub(depth_one)
                         .mul(current[BASE_PAYLOAD + 2].sub(current[BASE_OFFSET])),
                 ),
         )
         .add(
-            F::ONE.sub(current[BASE_CONSTRUCTED]).mul(
+            A::ONE.sub(current[BASE_CONSTRUCTED]).mul(
                 depth_zero
                     .mul(current[BASE_DOCUMENT_LEN].sub(current[BASE_OFFSET]))
                     .add(
-                        F::ONE
+                        A::ONE
                             .sub(depth_zero)
                             .mul(current[BASE_FRAME_END].sub(current[BASE_OFFSET])),
                     ),
@@ -2678,14 +2706,15 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         );
     let expected_check_delta = identifier_first
         .mul(
-            F(u64::try_from(ZK_X509_DER_MAX_VALUES_V1).expect("cap")).sub(current[BASE_NODE_COUNT]),
+            A::from_base(F(u64::try_from(ZK_X509_DER_MAX_VALUES_V1).expect("cap")))
+                .sub(current[BASE_NODE_COUNT]),
         )
         .add(finalize.mul(current[BASE_LENGTH_ACCUMULATOR]))
         .add(
             primitive.mul(
                 current[BASE_CONTENT_END]
                     .sub(current[BASE_OFFSET])
-                    .sub(F::ONE),
+                    .sub(A::ONE),
             ),
         )
         .add(boundary.mul(boundary_delta));
@@ -2696,7 +2725,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         check_used.mul(
             check_delta
                 .mul(current[BASE_CHECK_INVERSE])
-                .sub(F::ONE.sub(current[BASE_CHECK_IS_ZERO])),
+                .sub(A::ONE.sub(current[BASE_CHECK_IS_ZERO])),
         ),
     );
     residues.push(
@@ -2737,34 +2766,34 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     );
     for column in 0..19 {
         let used = identifier_payload
-            .mul(F(u64::from(column < 10)))
-            .add(length_payload.mul(F(u64::from(column < 4))))
+            .mul(A::from_base(F(u64::from(column < 10))))
+            .add(length_payload.mul(A::from_base(F(u64::from(column < 4)))))
             .add(finalize)
-            .add(primitive.mul(F(u64::from(column < 10))))
-            .add(boundary.mul(F(u64::from(column < 8))));
+            .add(primitive.mul(A::from_base(F(u64::from(column < 10)))))
+            .add(boundary.mul(A::from_base(F(u64::from(column < 8)))));
         residues.push(
             parser
-                .mul(F::ONE.sub(used))
+                .mul(A::ONE.sub(used))
                 .mul(current[BASE_PAYLOAD + column]),
         );
     }
     residues.push(
         parser
-            .mul(F::ONE.sub(primitive))
+            .mul(A::ONE.sub(primitive))
             .mul(current[BASE_PRIMITIVE_FIRST]),
     );
     residues.push(
         parser
-            .mul(F::ONE.sub(primitive))
+            .mul(A::ONE.sub(primitive))
             .mul(current[BASE_OID_START]),
     );
     residues.push(
         parser
-            .mul(F::ONE.sub(primitive))
+            .mul(A::ONE.sub(primitive))
             .mul(current[BASE_UNUSED_BITS]),
     );
     // Initial document state.
-    residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_DOCUMENT_FIRST].sub(F::ONE)));
+    residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_DOCUMENT_FIRST].sub(A::ONE)));
     residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_DOCUMENT]));
     residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_OFFSET]));
     residues.push(fixed[FIX_FIRST_PARSER].mul(current[BASE_NODE_COUNT]));
@@ -2785,7 +2814,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser
             .mul(current[BASE_DOCUMENT_FIRST])
-            .mul(F::ONE.sub(identifier_first)),
+            .mul(A::ONE.sub(identifier_first)),
     );
     residues.push(
         parser
@@ -2832,21 +2861,25 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser_continue
             .mul(identifier_first)
-            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(F::ONE))),
+            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(A::ONE))),
     );
     residues.push(
         parser_continue.mul(identifier_first).mul(
             next_phase_value.sub(
                 high_tag
-                    .mul(F(PHASE_IDENTIFIER_HIGH as u64))
-                    .add(F::ONE.sub(high_tag).mul(F(PHASE_LENGTH_FIRST as u64))),
+                    .mul(A::from_base(F(PHASE_IDENTIFIER_HIGH as u64)))
+                    .add(
+                        A::ONE
+                            .sub(high_tag)
+                            .mul(A::from_base(F(PHASE_LENGTH_FIRST as u64))),
+                    ),
             ),
         ),
     );
     residues.push(
         parser_continue
             .mul(identifier_first)
-            .mul(next[BASE_TAG_CLASS].sub(byte_bits[6].add(F(2).mul(byte_bits[7])))),
+            .mul(next[BASE_TAG_CLASS].sub(byte_bits[6].add(A::from_base(F(2)).mul(byte_bits[7])))),
     );
     residues.push(
         parser_continue
@@ -2890,7 +2923,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(next[BASE_NODE_COUNT].sub(current[BASE_NODE_COUNT])),
     );
     for bit in 0..3 {
-        let expected = high_tag.mul(F(u64::from(bit == 0)));
+        let expected = high_tag.mul(A::from_base(F(u64::from(bit == 0))));
         residues.push(
             parser_continue
                 .mul(identifier_first)
@@ -2906,8 +2939,8 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             count_selectors[1..=5]
                 .iter()
                 .copied()
-                .fold(F::ZERO, F::add)
-                .sub(F::ONE),
+                .fold(A::ZERO, A::add)
+                .sub(A::ONE),
         ),
     );
     let high_low_zero = current_aux[AUX_HIGH_LOW_ZERO];
@@ -2915,8 +2948,8 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         identifier_high
             .mul(count_one)
-            .mul(F::ONE.sub(byte_bits[7]))
-            .mul(F::ONE.sub(current_aux[AUX_HIGH_LOW_GE_31])),
+            .mul(A::ONE.sub(byte_bits[7]))
+            .mul(A::ONE.sub(current_aux[AUX_HIGH_LOW_GE_31])),
     );
     residues.push(identifier_high.mul(count_five).mul(byte_bits[7]));
     for bit in 4..7 {
@@ -2927,14 +2960,16 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         );
     }
     let updated_tag = count_one.mul(high_low).add(
-        F::ONE
-            .sub(count_one)
-            .mul(current[BASE_TAG_ACCUMULATOR].mul(F(128)).add(high_low)),
+        A::ONE.sub(count_one).mul(
+            current[BASE_TAG_ACCUMULATOR]
+                .mul(A::from_base(F(128)))
+                .add(high_low),
+        ),
     );
     residues.push(
         parser_continue
             .mul(identifier_high)
-            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(F::ONE))),
+            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(A::ONE))),
     );
     residues.push(
         parser_continue
@@ -2945,17 +2980,21 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         parser_continue.mul(identifier_high).mul(
             next_phase_value.sub(
                 byte_bits[7]
-                    .mul(F(PHASE_IDENTIFIER_HIGH as u64))
-                    .add(F::ONE.sub(byte_bits[7]).mul(F(PHASE_LENGTH_FIRST as u64))),
+                    .mul(A::from_base(F(PHASE_IDENTIFIER_HIGH as u64)))
+                    .add(
+                        A::ONE
+                            .sub(byte_bits[7])
+                            .mul(A::from_base(F(PHASE_LENGTH_FIRST as u64))),
+                    ),
             ),
         ),
     );
     for bit in 0..3 {
         let expected_count_bit = {
-            let incremented = identifier_count.add(F::ONE);
+            let incremented = identifier_count.add(A::ONE);
             // The packed next count is constrained below; individual
             // Booleanity is already part of the next row.
-            if bit == 0 { incremented } else { F::ZERO }
+            if bit == 0 { incremented } else { A::ZERO }
         };
         if bit == 0 {
             residues.push(
@@ -2975,7 +3014,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser_continue
             .mul(identifier_high)
-            .mul(F::ONE.sub(byte_bits[7]))
+            .mul(A::ONE.sub(byte_bits[7]))
             .mul(pack_bits_v1(&next[BASE_PAYLOAD..BASE_PAYLOAD + 4])),
     );
     push_carry_residues_v1(
@@ -3009,27 +3048,31 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         length_first
             .mul(long_length)
-            .mul(length_count.sub(F::ONE))
-            .mul(length_count.sub(F(2))),
+            .mul(length_count.sub(A::ONE))
+            .mul(length_count.sub(A::from_base(F(2)))),
     );
     residues.push(
         parser_continue
             .mul(length_first)
-            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(F::ONE))),
+            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(A::ONE))),
     );
     residues.push(
         parser_continue.mul(length_first).mul(
             next_phase_value.sub(
                 long_length
-                    .mul(F(PHASE_LENGTH_BODY as u64))
-                    .add(F::ONE.sub(long_length).mul(F(PHASE_FINALIZE_HEADER as u64))),
+                    .mul(A::from_base(F(PHASE_LENGTH_BODY as u64)))
+                    .add(
+                        A::ONE
+                            .sub(long_length)
+                            .mul(A::from_base(F(PHASE_FINALIZE_HEADER as u64))),
+                    ),
             ),
         ),
     );
     residues.push(
         parser_continue
             .mul(length_first)
-            .mul(next[BASE_LENGTH_ACCUMULATOR].sub(F::ONE.sub(long_length).mul(length_count))),
+            .mul(next[BASE_LENGTH_ACCUMULATOR].sub(A::ONE.sub(long_length).mul(length_count))),
     );
     residues.push(
         parser_continue
@@ -3076,19 +3119,19 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     let remaining_two = remaining_selectors[2];
     let long_two = current[BASE_PAYLOAD + 2];
     let first_was_64 = current[BASE_PAYLOAD + 3];
-    residues.push(length_body.mul(remaining_one.add(remaining_two).sub(F::ONE)));
-    let first_long_body = remaining_two.add(remaining_one.mul(F::ONE.sub(long_two)));
+    residues.push(length_body.mul(remaining_one.add(remaining_two).sub(A::ONE)));
+    let first_long_body = remaining_two.add(remaining_one.mul(A::ONE.sub(long_two)));
     residues.push(first_long_body.mul(current_aux[AUX_BYTE_ZERO]));
     residues.push(remaining_two.mul(byte_bits[7]));
     residues.push(
         remaining_two
             .mul(byte_bits[6])
-            .mul(byte_bits[..6].iter().copied().fold(F::ZERO, F::add)),
+            .mul(byte_bits[..6].iter().copied().fold(A::ZERO, A::add)),
     );
     residues.push(
         remaining_one
-            .mul(F::ONE.sub(long_two))
-            .mul(F::ONE.sub(byte_bits[7])),
+            .mul(A::ONE.sub(long_two))
+            .mul(A::ONE.sub(byte_bits[7])),
     );
     residues.push(
         remaining_one
@@ -3097,7 +3140,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(current[BASE_BYTE_VALUE]),
     );
     let next_length_accumulator = current[BASE_LENGTH_ACCUMULATOR]
-        .mul(F(256))
+        .mul(A::from_base(F(256)))
         .add(current[BASE_BYTE_VALUE]);
     residues.push(
         parser_continue
@@ -3107,14 +3150,14 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser_continue
             .mul(length_body)
-            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(F::ONE))),
+            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(A::ONE))),
     );
     residues.push(
         parser_continue.mul(length_body).mul(
             next_phase_value.sub(
                 remaining_one
-                    .mul(F(PHASE_FINALIZE_HEADER as u64))
-                    .add(remaining_two.mul(F(PHASE_LENGTH_BODY as u64))),
+                    .mul(A::from_base(F(PHASE_FINALIZE_HEADER as u64)))
+                    .add(remaining_two.mul(A::from_base(F(PHASE_LENGTH_BODY as u64)))),
             ),
         ),
     );
@@ -3122,7 +3165,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         parser_continue
             .mul(length_body)
             .mul(remaining_two)
-            .mul(pack_bits_v1(&next[BASE_PAYLOAD..BASE_PAYLOAD + 2]).sub(F::ONE)),
+            .mul(pack_bits_v1(&next[BASE_PAYLOAD..BASE_PAYLOAD + 2]).sub(A::ONE)),
     );
     residues.push(
         parser_continue
@@ -3168,13 +3211,13 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
                 .sub(current[BASE_LENGTH_ACCUMULATOR]),
         ),
     );
-    let class_universal = F::ONE
+    let class_universal = A::ONE
         .sub(current[BASE_TAG_CLASS_BITS])
-        .mul(F::ONE.sub(current[BASE_TAG_CLASS_BITS + 1]));
+        .mul(A::ONE.sub(current[BASE_TAG_CLASS_BITS + 1]));
     let universal_sum = current[BASE_PAYLOAD..BASE_PAYLOAD + 19]
         .iter()
         .copied()
-        .fold(F::ZERO, F::add);
+        .fold(A::ZERO, A::add);
     residues.push(finalize.mul(universal_sum.sub(class_universal)));
     for (selector, tag) in current[BASE_PAYLOAD..BASE_PAYLOAD + 19]
         .iter()
@@ -3184,7 +3227,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         residues.push(
             finalize
                 .mul(selector)
-                .mul(current[BASE_TAG_ACCUMULATOR].sub(F(u64::from(tag)))),
+                .mul(current[BASE_TAG_ACCUMULATOR].sub(A::from_base(F(u64::from(tag))))),
         );
     }
     let sequence = current[BASE_PAYLOAD + 8];
@@ -3203,7 +3246,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         finalize
             .mul(boolean)
-            .mul(current[BASE_LENGTH_ACCUMULATOR].sub(F::ONE)),
+            .mul(current[BASE_LENGTH_ACCUMULATOR].sub(A::ONE)),
     );
     residues.push(finalize.mul(null).mul(current[BASE_LENGTH_ACCUMULATOR]));
     for nonempty in [integer, bit_string, oid, enumerated] {
@@ -3214,7 +3257,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser_continue
             .mul(finalize)
-            .mul(next[BASE_NODE_COUNT].sub(current[BASE_NODE_COUNT].add(F::ONE))),
+            .mul(next[BASE_NODE_COUNT].sub(current[BASE_NODE_COUNT].add(A::ONE))),
     );
     residues.push(
         parser_continue
@@ -3224,19 +3267,23 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     let content_zero = current[BASE_CHECK_IS_ZERO];
     let expected_phase = current[BASE_CONSTRUCTED]
         .mul(
-            content_zero.mul(F(PHASE_BOUNDARY as u64)).add(
-                F::ONE
-                    .sub(content_zero)
-                    .mul(F(PHASE_IDENTIFIER_FIRST as u64)),
-            ),
+            content_zero
+                .mul(A::from_base(F(PHASE_BOUNDARY as u64)))
+                .add(
+                    A::ONE
+                        .sub(content_zero)
+                        .mul(A::from_base(F(PHASE_IDENTIFIER_FIRST as u64))),
+                ),
         )
         .add(
-            F::ONE.sub(current[BASE_CONSTRUCTED]).mul(
-                content_zero.mul(F(PHASE_BOUNDARY as u64)).add(
-                    F::ONE
-                        .sub(content_zero)
-                        .mul(F(PHASE_PRIMITIVE_CONTENT as u64)),
-                ),
+            A::ONE.sub(current[BASE_CONSTRUCTED]).mul(
+                content_zero
+                    .mul(A::from_base(F(PHASE_BOUNDARY as u64)))
+                    .add(
+                        A::ONE
+                            .sub(content_zero)
+                            .mul(A::from_base(F(PHASE_PRIMITIVE_CONTENT as u64))),
+                    ),
             ),
         );
     residues.push(
@@ -3245,11 +3292,11 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(next_phase_value.sub(expected_phase)),
     );
     let expected_kind = boolean
-        .add(F(2).mul(integer))
-        .add(F(3).mul(bit_string))
-        .add(F(4).mul(null))
-        .add(F(5).mul(oid))
-        .add(F(6).mul(enumerated));
+        .add(A::from_base(F(2)).mul(integer))
+        .add(A::from_base(F(3)).mul(bit_string))
+        .add(A::from_base(F(4)).mul(null))
+        .add(A::from_base(F(5)).mul(oid))
+        .add(A::from_base(F(6)).mul(enumerated));
     residues.push(
         parser_continue
             .mul(current_aux[AUX_PRIMITIVE_ENTRY])
@@ -3275,7 +3322,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         parser_continue.mul(finalize).mul(
             next[BASE_FRAME_ID].sub(
                 current[BASE_CONSTRUCTED].mul(current[BASE_NODE_COUNT]).add(
-                    F::ONE
+                    A::ONE
                         .sub(current[BASE_CONSTRUCTED])
                         .mul(current[BASE_FRAME_ID]),
                 ),
@@ -3286,7 +3333,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         parser_continue.mul(finalize).mul(
             next[BASE_FRAME_START].sub(
                 current[BASE_CONSTRUCTED].mul(current[BASE_NODE_START]).add(
-                    F::ONE
+                    A::ONE
                         .sub(current[BASE_CONSTRUCTED])
                         .mul(current[BASE_FRAME_START]),
                 ),
@@ -3299,7 +3346,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
                 current[BASE_CONSTRUCTED]
                     .mul(current[BASE_CONTENT_END])
                     .add(
-                        F::ONE
+                        A::ONE
                             .sub(current[BASE_CONSTRUCTED])
                             .mul(current[BASE_FRAME_END]),
                     ),
@@ -3310,7 +3357,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         parser_continue.mul(finalize).mul(
             next[BASE_FRAME_IS_SET].sub(
                 current[BASE_CONSTRUCTED].mul(set).add(
-                    F::ONE
+                    A::ONE
                         .sub(current[BASE_CONSTRUCTED])
                         .mul(current[BASE_FRAME_IS_SET]),
                 ),
@@ -3326,7 +3373,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         residues.push(
             parser_continue
                 .mul(finalize)
-                .mul(next[column].sub(F::ONE.sub(current[BASE_CONSTRUCTED]).mul(current[column]))),
+                .mul(next[column].sub(A::ONE.sub(current[BASE_CONSTRUCTED]).mul(current[column]))),
         );
     }
     residues.push(
@@ -3354,7 +3401,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         residues.push(
             parser_continue
                 .mul(finalize)
-                .mul(next[column].sub(F::ONE.sub(enters_child).mul(current[column]))),
+                .mul(next[column].sub(A::ONE.sub(enters_child).mul(current[column]))),
         );
     }
     residues.push(
@@ -3362,7 +3409,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             next[BASE_NODE_START].sub(
                 enters_child
                     .mul(current[BASE_CONTENT_START])
-                    .add(F::ONE.sub(enters_child).mul(current[BASE_NODE_START])),
+                    .add(A::ONE.sub(enters_child).mul(current[BASE_NODE_START])),
             ),
         ),
     );
@@ -3373,8 +3420,8 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             kind_selectors[..=6]
                 .iter()
                 .copied()
-                .fold(F::ZERO, F::add)
-                .sub(F::ONE),
+                .fold(A::ZERO, A::add)
+                .sub(A::ONE),
         ),
     );
     let unused_bits = &current[BASE_PAYLOAD + 3..BASE_PAYLOAD + 6];
@@ -3384,7 +3431,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         primitive
             .mul(kind_selectors[1])
             .mul(current[BASE_BYTE_VALUE])
-            .mul(current[BASE_BYTE_VALUE].sub(F(0xff))),
+            .mul(current[BASE_BYTE_VALUE].sub(A::from_base(F(0xff)))),
     );
     let byte_zero = current[BASE_PAYLOAD + 6];
     let byte_inverse = current[BASE_PAYLOAD + 7];
@@ -3395,18 +3442,18 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         primitive.mul(
             current[BASE_BYTE_VALUE]
                 .mul(byte_inverse)
-                .sub(F::ONE.sub(byte_zero)),
+                .sub(A::ONE.sub(byte_zero)),
         ),
     );
     residues.push(primitive.mul(byte_zero).mul(byte_inverse));
-    let byte_ff_delta = current[BASE_BYTE_VALUE].sub(F(0xff));
+    let byte_ff_delta = current[BASE_BYTE_VALUE].sub(A::from_base(F(0xff)));
     residues.push(primitive.mul(byte_ff_delta).mul(byte_ff));
-    residues.push(primitive.mul(byte_ff_delta.mul(byte_ff_inverse).sub(F::ONE.sub(byte_ff))));
+    residues.push(primitive.mul(byte_ff_delta.mul(byte_ff_inverse).sub(A::ONE.sub(byte_ff))));
     residues.push(primitive.mul(byte_ff).mul(byte_ff_inverse));
     residues.push(
         current_aux[AUX_SIGNED_FIRST_GUARD]
             .mul(byte_zero)
-            .mul(F::ONE.sub(next[BASE_BYTE_BITS + 7])),
+            .mul(A::ONE.sub(next[BASE_BYTE_BITS + 7])),
     );
     residues.push(
         current_aux[AUX_SIGNED_FIRST_GUARD]
@@ -3442,7 +3489,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         let bit_must_be_zero = unused_selectors[bit + 1..]
             .iter()
             .copied()
-            .fold(F::ZERO, F::add);
+            .fold(A::ZERO, A::add);
         residues.push(
             current_aux[AUX_BIT_STRING_LAST_CONTINUATION_GUARD]
                 .mul(bit_must_be_zero)
@@ -3452,16 +3499,18 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser_continue
             .mul(primitive)
-            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(F::ONE))),
+            .mul(next[BASE_OFFSET].sub(current[BASE_OFFSET].add(A::ONE))),
     );
     residues.push(
         parser_continue.mul(primitive).mul(
             next_phase_value.sub(
-                last_primitive.mul(F(PHASE_BOUNDARY as u64)).add(
-                    F::ONE
-                        .sub(last_primitive)
-                        .mul(F(PHASE_PRIMITIVE_CONTENT as u64)),
-                ),
+                last_primitive
+                    .mul(A::from_base(F(PHASE_BOUNDARY as u64)))
+                    .add(
+                        A::ONE
+                            .sub(last_primitive)
+                            .mul(A::from_base(F(PHASE_PRIMITIVE_CONTENT as u64))),
+                    ),
             ),
         ),
     );
@@ -3478,13 +3527,13 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser_continue
             .mul(primitive)
-            .mul(F::ONE.sub(last_primitive))
+            .mul(A::ONE.sub(last_primitive))
             .mul(pack_bits_v1(&next[BASE_PAYLOAD..BASE_PAYLOAD + 3]).sub(pack_bits_v1(kind_bits))),
     );
     residues.push(
         parser_continue
             .mul(primitive)
-            .mul(F::ONE.sub(last_primitive))
+            .mul(A::ONE.sub(last_primitive))
             .mul(next[BASE_UNUSED_BITS].sub(current[BASE_UNUSED_BITS])),
     );
     push_carry_residues_v1(
@@ -3515,28 +3564,28 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     );
     // Boundary terminal and document sequencing. Stack restoration is also
     // bound by the challenge-dependent push/pop products.
-    let expected_root_completion = F::ONE
+    let expected_root_completion = A::ONE
         .sub(current[BASE_CONSTRUCTED])
         .mul(depth_zero)
         .add(current[BASE_CONSTRUCTED].mul(depth_one));
     residues.push(current_aux[AUX_ROOT_COMPLETION].sub(expected_root_completion));
     let root_completion = current_aux[AUX_ROOT_COMPLETION];
     residues
-        .push(current_aux[AUX_BOUNDARY_NOT_ROOT].sub(boundary.mul(F::ONE.sub(root_completion))));
+        .push(current_aux[AUX_BOUNDARY_NOT_ROOT].sub(boundary.mul(A::ONE.sub(root_completion))));
     residues.push(
         current_aux[AUX_BOUNDARY_COMPLETES_PARENT]
             .sub(current_aux[AUX_BOUNDARY_NOT_ROOT].mul(current[BASE_CHECK_IS_ZERO])),
     );
-    residues.push(last_parser.mul(root_completion.sub(F::ONE)));
-    residues.push(last_parser.mul(current[BASE_CHECK_IS_ZERO].sub(F::ONE)));
+    residues.push(last_parser.mul(root_completion.sub(A::ONE)));
+    residues.push(last_parser.mul(current[BASE_CHECK_IS_ZERO].sub(A::ONE)));
     residues.push(last_parser.mul(current[BASE_DOCUMENT].sub(current[BASE_FINAL_DOCUMENT])));
     residues.push(last_parser.mul(current[BASE_OFFSET].sub(current[BASE_DOCUMENT_LEN])));
     let boundary_continue = boundary.mul(parser_continue);
-    let not_root_completion = F::ONE.sub(root_completion);
+    let not_root_completion = A::ONE.sub(root_completion);
     residues.push(
         boundary_continue
             .mul(root_completion)
-            .mul(next[BASE_DOCUMENT].sub(current[BASE_DOCUMENT].add(F::ONE))),
+            .mul(next[BASE_DOCUMENT].sub(current[BASE_DOCUMENT].add(A::ONE))),
     );
     residues.push(
         boundary_continue
@@ -3551,12 +3600,12 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         boundary_continue
             .mul(root_completion)
-            .mul(next[BASE_DOCUMENT_FIRST].sub(F::ONE)),
+            .mul(next[BASE_DOCUMENT_FIRST].sub(A::ONE)),
     );
     residues.push(
         boundary_continue
             .mul(root_completion)
-            .mul(next_phase_value.sub(F(PHASE_IDENTIFIER_FIRST as u64))),
+            .mul(next_phase_value.sub(A::from_base(F(PHASE_IDENTIFIER_FIRST as u64)))),
     );
     residues.push(
         boundary_continue
@@ -3579,9 +3628,10 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             .mul(next[BASE_NODE_COUNT].sub(current[BASE_NODE_COUNT])),
     );
     residues.push(
-        boundary_continue
-            .mul(not_root_completion)
-            .mul(next_phase_value.sub(current[BASE_CHECK_IS_ZERO].mul(F(PHASE_BOUNDARY as u64)))),
+        boundary_continue.mul(not_root_completion).mul(
+            next_phase_value
+                .sub(current[BASE_CHECK_IS_ZERO].mul(A::from_base(F(PHASE_BOUNDARY as u64)))),
+        ),
     );
     residues.push(
         boundary_continue
@@ -3595,42 +3645,42 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
         ),
     );
     let parent_id = current[BASE_CONSTRUCTED].mul(current[BASE_PAYLOAD]).add(
-        F::ONE
+        A::ONE
             .sub(current[BASE_CONSTRUCTED])
             .mul(current[BASE_FRAME_ID]),
     );
     let parent_start = current[BASE_CONSTRUCTED]
         .mul(current[BASE_PAYLOAD + 1])
         .add(
-            F::ONE
+            A::ONE
                 .sub(current[BASE_CONSTRUCTED])
                 .mul(current[BASE_FRAME_START]),
         );
     let parent_end = current[BASE_CONSTRUCTED]
         .mul(current[BASE_PAYLOAD + 2])
         .add(
-            F::ONE
+            A::ONE
                 .sub(current[BASE_CONSTRUCTED])
                 .mul(current[BASE_FRAME_END]),
         );
     let parent_is_set = current[BASE_CONSTRUCTED]
         .mul(current[BASE_PAYLOAD + 3])
         .add(
-            F::ONE
+            A::ONE
                 .sub(current[BASE_CONSTRUCTED])
                 .mul(current[BASE_FRAME_IS_SET]),
         );
     let completed_id = current[BASE_CONSTRUCTED].mul(current[BASE_FRAME_ID]).add(
-        F::ONE
+        A::ONE
             .sub(current[BASE_CONSTRUCTED])
-            .mul(current[BASE_NODE_COUNT].sub(F::ONE)),
+            .mul(current[BASE_NODE_COUNT].sub(A::ONE)),
     );
     for (column, expected) in [
         (BASE_FRAME_ID, parent_id),
         (BASE_FRAME_START, parent_start),
         (BASE_FRAME_END, parent_end),
         (BASE_FRAME_IS_SET, parent_is_set),
-        (BASE_FRAME_HAS_CHILD, F::ONE),
+        (BASE_FRAME_HAS_CHILD, A::ONE),
         (BASE_FRAME_PREVIOUS_ID, completed_id),
         (BASE_FRAME_PREVIOUS_START, current[BASE_NODE_START]),
         (BASE_FRAME_PREVIOUS_END, current[BASE_CONTENT_END]),
@@ -3656,7 +3706,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         parser_continue
             .mul(current_aux[AUX_BOUNDARY_COMPLETES_PARENT])
-            .mul(next[BASE_CONSTRUCTED].sub(F::ONE)),
+            .mul(next[BASE_CONSTRUCTED].sub(A::ONE)),
     );
     for column in [
         BASE_TAG_CLASS,
@@ -3673,7 +3723,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     for value in &current[BASE_PAYLOAD..BASE_PAYLOAD + 8] {
         residues.push(
             boundary
-                .mul(F::ONE.sub(current[BASE_CONSTRUCTED]))
+                .mul(A::ONE.sub(current[BASE_CONSTRUCTED]))
                 .mul(*value),
         );
     }
@@ -3709,24 +3759,31 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     }
     let byte_delta = current[11].sub(current[10]);
     residues.push(comparator.mul(byte_delta).mul(current[16]));
-    residues.push(comparator.mul(byte_delta.mul(current[17]).sub(F::ONE.sub(current[16]))));
+    residues.push(comparator.mul(byte_delta.mul(current[17]).sub(A::ONE.sub(current[16]))));
     residues.push(comparator.mul(current[16]).mul(current[17]));
-    residues
-        .push(comparator.mul(current[18].sub(byte_delta.sub(F::ONE).add(F(256).mul(current[27])))));
+    residues.push(
+        comparator.mul(
+            current[18].sub(
+                byte_delta
+                    .sub(A::ONE)
+                    .add(A::from_base(F(256)).mul(current[27])),
+            ),
+        ),
+    );
     residues.push(comparator.mul(current[14].sub(current[12].mul(current[16]))));
     residues.push(
         comparator.mul(
             current[15].sub(
                 current[13].add(
                     current[12]
-                        .mul(F::ONE.sub(current[16]))
-                        .mul(F::ONE.sub(current[27])),
+                        .mul(A::ONE.sub(current[16]))
+                        .mul(A::ONE.sub(current[27])),
                 ),
             ),
         ),
     );
     residues.push(comparator.mul(cmp_first).mul(current[9]));
-    residues.push(comparator.mul(cmp_first).mul(current[12].sub(F::ONE)));
+    residues.push(comparator.mul(cmp_first).mul(current[12].sub(A::ONE)));
     residues.push(comparator.mul(cmp_first).mul(current[13]));
     let left_len = current[5].sub(current[4]);
     let right_len = current[7].sub(current[6]);
@@ -3735,27 +3792,27 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
             cmp_left_le
                 .mul(right_len.sub(left_len).sub(current[33]))
                 .add(
-                    F::ONE
+                    A::ONE
                         .sub(cmp_left_le)
-                        .mul(left_len.sub(right_len).sub(F::ONE).sub(current[33])),
+                        .mul(left_len.sub(right_len).sub(A::ONE).sub(current[33])),
                 ),
         ),
     );
     let minimum_len = cmp_left_le
         .mul(left_len)
-        .add(F::ONE.sub(cmp_left_le).mul(right_len));
+        .add(A::ONE.sub(cmp_left_le).mul(right_len));
     residues.push(
         comparator
             .mul(cmp_last)
-            .mul(current[9].add(F::ONE).sub(minimum_len)),
+            .mul(current[9].add(A::ONE).sub(minimum_len)),
     );
     residues.push(
         comparator
             .mul(cmp_last)
-            .mul(current[15].add(current[14].mul(cmp_left_le)).sub(F::ONE)),
+            .mul(current[15].add(current[14].mul(cmp_left_le)).sub(A::ONE)),
     );
     residues.push(comparator.mul(cmp_same_next).mul(cmp_same_inverse));
-    residues.push(comparator.mul(cmp_same_next.add(cmp_last).sub(F::ONE)));
+    residues.push(comparator.mul(cmp_same_next.add(cmp_last).sub(A::ONE)));
     residues.push(comparator.mul(cmp_same_inverse.sub(cmp_last)));
     let comparator_continue = comparator.mul(next_comparator);
     for column in 0..=8 {
@@ -3768,7 +3825,7 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     residues.push(
         comparator_continue
             .mul(cmp_same_next)
-            .mul(next[9].sub(current[9].add(F::ONE))),
+            .mul(next[9].sub(current[9].add(A::ONE))),
     );
     residues.push(
         comparator_continue
@@ -3782,24 +3839,24 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
     );
     residues.push(
         comparator_continue
-            .mul(F::ONE.sub(cmp_same_next))
-            .mul(next[8].sub(current[8].add(F::ONE))),
+            .mul(A::ONE.sub(cmp_same_next))
+            .mul(next[8].sub(current[8].add(A::ONE))),
     );
     residues.push(
         comparator_continue
-            .mul(F::ONE.sub(cmp_same_next))
-            .mul(next[28].sub(F::ONE)),
+            .mul(A::ONE.sub(cmp_same_next))
+            .mul(next[28].sub(A::ONE)),
     );
     residues.push(
         fixed[FIX_FIRST_COMPARATOR]
             .mul(comparator)
-            .mul(cmp_first.sub(F::ONE)),
+            .mul(cmp_first.sub(A::ONE)),
     );
-    residues.push(last_comparator.mul(cmp_last.sub(F::ONE)));
+    residues.push(last_comparator.mul(cmp_last.sub(A::ONE)));
     residues.push(
         comparator
             .mul(next_row_active)
-            .mul(F::ONE.sub(next_fixed[FIX_COMPARATOR])),
+            .mul(A::ONE.sub(next_fixed[FIX_COMPARATOR])),
     );
 }
 /// Evaluate every base/fixed strict-DER identity as one numeric polynomial
@@ -3808,13 +3865,13 @@ fn evaluate_zk_x509_der_stark_base_residues_into_v1(
 /// Challenge-dependent stack, event, and byte-lookup identities are appended by the full evaluator
 /// below; keeping this base evaluator separate makes pre-commitment mutation audits exhaustive.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn evaluate_zk_x509_der_stark_base_residues_v1(
-    current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    current_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
-    fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-    next_fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-) -> Vec<F> {
+pub(crate) fn evaluate_zk_x509_der_stark_base_residues_v1<A: PolynomialAirFieldV1>(
+    current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+) -> Vec<A> {
     let mut residues = Vec::with_capacity(ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1);
     evaluate_zk_x509_der_stark_base_residues_into_v1(
         current,
@@ -3829,17 +3886,17 @@ pub(crate) fn evaluate_zk_x509_der_stark_base_residues_v1(
 /// Evaluate the complete strict-DER adapter, including every challenge-bound
 /// permutation and logarithmic-derivative lookup.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
-    current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    current_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
-    next_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
-    fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-    next_fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1<A: PolynomialAirFieldV1>(
+    current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509DerStarkChallengesV1,
     _public: ZkX509DerStarkPublicTerminalsV1,
     terminal_claims: ZkX509DerStarkTerminalClaimsV1,
-    residues: &mut Vec<F>,
+    residues: &mut Vec<A>,
 ) -> Result<(), ZkX509DerStarkErrorV1> {
     challenges.validate()?;
     if current
@@ -3849,9 +3906,12 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
         .chain(next_aux)
         .chain(fixed)
         .chain(next_fixed)
-        .chain(terminal_claims.input_byte.iter())
-        .chain(terminal_claims.node.iter())
-        .any(|value| value.0 >= GOLDILOCKS_MODULUS_V1 || F::canonical(value.0).is_none())
+        .any(|value| !value.is_canonical())
+        || terminal_claims
+            .input_byte
+            .iter()
+            .chain(terminal_claims.node.iter())
+            .any(|value| F::canonical(value.0).is_none())
     {
         return Err(ZkX509DerStarkErrorV1::Row);
     }
@@ -3863,7 +3923,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
         next_fixed,
         residues,
     );
-    let phases: &[F; 8] = current_aux[AUX_PHASE_SELECTORS..AUX_PHASE_SELECTORS + 8]
+    let phases: &[A; 8] = current_aux[AUX_PHASE_SELECTORS..AUX_PHASE_SELECTORS + 8]
         .try_into()
         .expect("eight phase selectors");
     let comparator = fixed[FIX_COMPARATOR].mul(current[BASE_ROW_ACTIVE]);
@@ -3881,7 +3941,7 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
     let pair_consumer_event = comparator.mul(current[28]);
     let first_aggregate = fixed[FIX_FIRST_AGGREGATE];
     let last_aggregate = fixed[FIX_LAST_AGGREGATE];
-    let aggregate_continue = F::ONE.sub(last_aggregate);
+    let aggregate_continue = A::ONE.sub(last_aggregate);
     for lane in 0..ZK_X509_DER_STARK_BUS_LANES_V1 {
         let tuple_challenge = challenges.tuple[lane];
         let stack_push_factor = compress_tuple_v1(&stack_push_tuple_v1(current), tuple_challenge);
@@ -3956,9 +4016,9 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
         ] {
             residues.push(
                 current_aux[after]
-                    .sub(current_aux[before].mul(F::ONE.add(gate.mul(factor.sub(F::ONE))))),
+                    .sub(current_aux[before].mul(A::ONE.add(gate.mul(factor.sub(A::ONE))))),
             );
-            residues.push(first_aggregate.mul(current_aux[before].sub(F::ONE)));
+            residues.push(first_aggregate.mul(current_aux[before].sub(A::ONE)));
             residues.push(aggregate_continue.mul(next_aux[next_before].sub(current_aux[after])));
         }
         let table_tuple = byte_tuple_v1(
@@ -4093,17 +4153,17 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_into_v1(
 /// Streaming composition builders should use [`evaluate_zk_x509_der_stark_residues_into_v1`] to
 /// reuse one bounded scratch vector across every common-domain row.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_zk_x509_der_stark_residues_v1(
-    current: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_DER_STARK_BASE_WIDTH_V1],
-    current_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
-    next_aux: &[F; ZK_X509_DER_STARK_AUX_WIDTH_V1],
-    fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
-    next_fixed: &[F; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+pub(crate) fn evaluate_zk_x509_der_stark_residues_v1<A: PolynomialAirFieldV1>(
+    current: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_DER_STARK_BASE_WIDTH_V1],
+    current_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; ZK_X509_DER_STARK_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
+    next_fixed: &[A; ZK_X509_DER_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509DerStarkChallengesV1,
     public: ZkX509DerStarkPublicTerminalsV1,
     terminal_claims: ZkX509DerStarkTerminalClaimsV1,
-) -> Result<Vec<F>, ZkX509DerStarkErrorV1> {
+) -> Result<Vec<A>, ZkX509DerStarkErrorV1> {
     let mut residues = Vec::with_capacity(ZK_X509_DER_STARK_CONSTRAINT_COUNT_V1);
     evaluate_zk_x509_der_stark_residues_into_v1(
         current,
@@ -4119,6 +4179,9 @@ pub(crate) fn evaluate_zk_x509_der_stark_residues_v1(
     )?;
     Ok(residues)
 }
+#[cfg(test)]
+#[path = "der_stark_fp4_tests.rs"]
+mod fp4_tests;
 #[cfg(test)]
 #[path = "der_stark_unit_tests.rs"]
 mod tests;

@@ -82,12 +82,13 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
     num::{NonZeroU8, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     time::Duration,
 };
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
+mod sccp;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -98,6 +99,12 @@ pub use iroha_data_model::nexus::DaManifestPolicy;
 use norito::{
     codec::{Decode, Encode},
     streaming::EntropyMode,
+};
+pub use sccp::{
+    SCCP_MAX_SECRET_HEADER_NAME_BYTES, SCCP_RESERVED_SECRET_HEADER_NAMES, SccpAttestor,
+    SccpEndpointError, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode,
+    SccpSecretHeader, SccpTonLiteserver, compiled_http_endpoints, compiled_ton_liteservers,
+    derived_bridge_key_dir, parse_sccp_http_endpoint, parse_sccp_secret_header_name,
 };
 pub use sorafs_reputation::{
     SorafsReputationFinalizedArchiveRetentionAuthority, SorafsReputationRuntime,
@@ -123,6 +130,8 @@ macro_rules! impl_default {
 pub struct Root {
     /// Common options shared across components.
     pub common: Common,
+    /// Authenticated local runtime-provider broker endpoint.
+    pub runtime_provider_broker: RuntimeProviderBroker,
     /// Network configuration.
     pub network: Network,
     /// Genesis configuration.
@@ -191,6 +200,71 @@ pub struct Root {
     pub settlement: Settlement,
     /// Streaming configuration (control-plane key material).
     pub streaming: Streaming,
+    /// Node-local SCCP attestor and light-client keeper.
+    pub sccp: SccpNode,
+}
+/// Public endpoint of the authenticated local runtime-provider broker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeProviderBroker {
+    /// Lexically validated absolute Unix socket path.
+    pub endpoint_path: RuntimeProviderBrokerEndpointPath,
+}
+
+/// An absolute, bounded broker socket path with the canonical socket basename.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeProviderBrokerEndpointPath(PathBuf);
+
+/// Invalid public runtime-provider broker endpoint path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error(
+    "runtime-provider broker endpoint must be an absolute, canonical UTF-8 Unix socket path of at most 103 bytes ending in runtime-provider-broker-v1.sock"
+)]
+pub struct RuntimeProviderBrokerEndpointPathError;
+
+impl RuntimeProviderBrokerEndpointPath {
+    /// Validate a public endpoint path without requiring the broker to be running.
+    ///
+    /// Ownership, mode, ancestor, and peer-UID checks are performed again at
+    /// the authenticated transport boundary when the socket is used.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a non-UTF-8, relative, ambiguous, oversized, or wrongly named path.
+    pub fn try_new(
+        path: PathBuf,
+    ) -> core::result::Result<Self, RuntimeProviderBrokerEndpointPathError> {
+        let raw = path
+            .as_os_str()
+            .to_str()
+            .ok_or(RuntimeProviderBrokerEndpointPathError)?;
+        if !raw.starts_with('/')
+            || raw.len() > 103
+            || raw.rsplit('/').next() != Some("runtime-provider-broker-v1.sock")
+            || raw.split('/').skip(1).any(|component| {
+                component.is_empty()
+                    || matches!(component, "." | "..")
+                    || component.contains('\\')
+                    || component.chars().any(char::is_control)
+            })
+        {
+            return Err(RuntimeProviderBrokerEndpointPathError);
+        }
+        Ok(Self(path))
+    }
+
+    /// Return the validated public Unix socket path.
+    #[must_use]
+    pub fn as_path(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl FromStr for RuntimeProviderBrokerEndpointPath {
+    type Err = RuntimeProviderBrokerEndpointPathError;
+
+    fn from_str(path: &str) -> core::result::Result<Self, Self::Err> {
+        Self::try_new(PathBuf::from(path))
+    }
 }
 /// Embedded Soracloud runtime-manager configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2856,6 +2930,9 @@ pub struct NexusStorage {
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     pub max_wsv_memory_bytes: Bytes,
+    /// Original allocation pool for the four fixed KAGEMUSHA operation indexes.
+    /// Current/undo versions and overlapping execution retain this same capacity.
+    pub kagemusha_operation_index_bytes: Bytes,
     /// Finite shared pool for retained carrier World shells, effects and service descriptors.
     /// This is not an aggregate RAM or nested execution-payload limit; zero admits none.
     pub retained_carrier_shell_bytes: usize,
@@ -2894,6 +2971,10 @@ impl fmt::Debug for NexusStorage {
             )
             .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
             .field(
+                "kagemusha_operation_index_bytes",
+                &self.kagemusha_operation_index_bytes,
+            )
+            .field(
                 "retained_carrier_shell_bytes",
                 &self.retained_carrier_shell_bytes,
             )
@@ -2916,6 +2997,8 @@ impl_default!(NexusStorage => {
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+            kagemusha_operation_index_bytes:
+                defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
             retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
             consensus_evidence_preparation_bytes:
                 defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
@@ -6605,6 +6688,8 @@ mod sumeragi_core_config_tests {
 pub struct Sumeragi {
     /// Node-local participation role.
     pub role: NodeRole,
+    /// Fixed inherited private descriptor for the locally consumed Pasta seed.
+    pub mint_finality_seed_fd: Option<u16>,
     /// Public deployment binding for the runtime-only global beacon share signer.
     pub global_beacon_partial_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision paired with the beacon signer handle.
@@ -6635,6 +6720,7 @@ impl_default!(Sumeragi => {
         let store_dir = PathBuf::from(defaults::kura::STORE_DIR);
         Self {
             role: NodeRole::Validator,
+            mint_finality_seed_fd: None,
             global_beacon_partial_signer_provider_handle: None,
             global_beacon_partial_signer_provider_revision: None,
             global_beacon_partial_signer_provider_policy_digest: None,
@@ -9252,15 +9338,9 @@ impl_default!(SorafsDiscovery => {
         }
 });
 /// Governance admission registry configuration for SoraFS providers.
-#[derive(Debug, Clone)]
-pub struct SorafsAdmission {
-    /// Directory containing governance-signed provider admission envelopes.
-    pub envelopes_dir: PathBuf,
-    /// Canonical Ed25519 council keys trusted to authorise admission changes.
-    pub trusted_council_keys: Vec<PublicKey>,
-    /// Minimum number of distinct trusted council signatures required.
-    pub signature_threshold: NonZeroUsize,
-}
+#[derive(Debug, Clone, Copy)]
+pub struct SorafsAdmission;
+
 /// Config-backed SoraFS publish peer hints exposed by Torii.
 #[derive(Debug, Clone, Default)]
 pub struct SorafsPublishDiscovery {
@@ -9399,8 +9479,10 @@ pub enum SorafsPublishBaseUrlError {
     NonCanonical,
 }
 /// Native repair worker and durable transaction-forwarder configuration.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct SorafsRepair {
+    /// Optional authenticated remote source reader for finalized native repair leases.
+    pub source: Option<SorafsRepairSource>,
     /// Enable native repair processing.
     pub enabled: bool,
     /// Lease duration requested by native repair claims (seconds).
@@ -9414,6 +9496,7 @@ pub struct SorafsRepair {
 }
 impl_default!(SorafsRepair => {
         Self {
+            source: None,
             enabled: defaults::sorafs::repair::ENABLED,
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
             heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
@@ -9421,6 +9504,19 @@ impl_default!(SorafsRepair => {
             worker_concurrency: defaults::sorafs::repair::WORKER_CONCURRENCY,
         }
 });
+/// Account-authenticated remote repair source configuration.
+#[derive(Debug, Clone)]
+pub struct SorafsRepairSource {
+    /// Provider-id hex to origin allowlist, matched against live signed adverts.
+    /// HTTPS is required except for explicitly configured numeric loopback HTTP origins.
+    pub origins: std::collections::BTreeMap<String, String>,
+    /// Account owning the finalized repair worker lease.
+    pub authority: AccountId,
+    /// Owner-only runtime software credential; contents never enter configuration or logs.
+    pub credential: PathBuf,
+    /// Maximum duration of the complete remote repair operation in milliseconds.
+    pub timeout_ms: u64,
+}
 /// GC scheduler configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsGc {
@@ -9944,11 +10040,12 @@ pub struct SorafsModerationQuarantineKeyProviderBinding {
 }
 /// Exact public identity and qualification of one native SoraFS transaction signer.
 ///
-/// The handle is resolved through deployment-owned runtime injection. Private
-/// keys, credentials, tokens, and vendor-specific connection material are not
-/// part of this configuration boundary.
+/// A credential path explicitly selects daemon-owned software custody; omission resolves
+/// the handle through deployment-owned runtime injection. Secret bytes never enter config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsNativeTransactionSignerBinding {
+    /// Owner-only canonical private-key credential; absent selects an external provider.
+    pub software_credential: Option<PathBuf>,
     /// Stable opaque production provider handle.
     pub handle: String,
     /// Canonical transaction authority derived from `public_key`.
@@ -10683,11 +10780,16 @@ pub struct SorafsProviderIngestFinalizedArchive {
 }
 /// Non-secret production policy for supervised SoraFS provider ingest.
 ///
-/// The opaque handles identify runtime-registered providers. Credentials,
-/// bearer tokens, endpoint secrets, and signer material are never represented
-/// in configuration.
+/// The opaque handles identify qualified providers. An owner-only credential path explicitly
+/// selects native software custody; secret bytes and fetched payloads stay outside configuration.
 #[derive(Debug, Clone)]
 pub struct SorafsProviderIngestRuntime {
+    /// Explicit admitted provider id to HTTPS origin mapping for native assignment source reads.
+    /// Explicit numeric loopback HTTP origins are allowed for local networks.
+    pub native_source_origins: BTreeMap<String, String>,
+    /// Owner-only canonical completion credential selecting the built-in software producer.
+    /// None selects explicitly injected external provider adapters.
+    pub native_completion_credential: Option<PathBuf>,
     /// Identity-pinned authenticated source-fetch provider handle.
     pub authenticated_source_fetch_handle: String,
     /// Exact non-zero authenticated source-pool adapter/public-policy revision.
@@ -11146,7 +11248,7 @@ pub struct SorafsMeteringSmoothing {
 mod stream_token_signer;
 pub use stream_token_signer::{
     SorafsStreamTokenAttesterConfig, SorafsStreamTokenAuthorityConfig,
-    SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
+    SorafsStreamTokenNativeConfig, SorafsStreamTokenObserverConfig, SorafsStreamTokenSignerConfig,
 };
 
 /// Stream-token issuance configuration for chunk-range gateways.

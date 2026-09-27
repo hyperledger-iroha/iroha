@@ -1,5 +1,6 @@
 //! Exact historical selection, bounded canonical decoding and no-write read regressions.
 use super::*;
+use iroha_crypto::Hash;
 use iroha_sccp::sccp_finalize_taira_block_test_fixture_v1;
 use std::num::NonZeroUsize;
 

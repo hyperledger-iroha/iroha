@@ -42,7 +42,6 @@ use iroha_data_model::{
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_telemetry::metrics::global_or_default;
 use norito::to_bytes;
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
 use sorafs_manifest::PorReportIsoWeek;
@@ -7873,8 +7872,10 @@ fn privacy_checkpoint_rollback_behind_finalized_release_anchor_fails_closed() {
 }
 #[test]
 fn publish_due_configured_privacy_aggregate_cycle_skips_when_disabled() {
+    let (_base, dir) = validator_storage_config_with_temp_dir();
     let cfg = StorageConfig::builder()
         .enabled(false)
+        .data_dir(dir.path().join("disabled-privacy"))
         .privacy_aggregate_schedule(None)
         .build();
     let handle = NodeHandle::new(cfg);
@@ -9244,32 +9245,102 @@ fn gc_eviction_transaction_rejects_acknowledged_link_counter_tampering() {
     assert!(error.to_string().contains("storage counter generation"));
 }
 #[test]
-fn gc_blocks_shared_chunks_with_zero_byte_audit() {
-    let (_cfg, handle, _dir) = gc_node_with_temp_storage();
+fn gc_expires_private_copy_without_removing_live_identical_content() {
+    let (cfg, handle, _dir) = gc_node_with_temp_storage();
+    let publisher = Arc::new(RecordingPublisher::default());
+    handle
+        .try_set_governance_publisher(publisher.clone())
+        .unwrap();
     let now_unix = 1_710_000_600;
-    let payload = b"gc-shared-chunk-zero-byte-audit";
-    build_manifest_with_retention(vec![0x76; 8], now_unix + 60, payload, &handle);
-    build_manifest_with_retention(vec![0x77; 8], now_unix - 1, payload, &handle);
+    let payload = b"gc-private-copy-retirement";
+    let live = build_manifest_with_retention(vec![0x76; 8], now_unix + 60, payload, &handle);
+    let expired = build_manifest_with_retention(vec![0x77; 8], now_unix - 1, payload, &handle);
     let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
     assert_eq!(report.errors, 0);
-    assert!(report.evictions.is_empty());
-    assert_eq!(report.freed_bytes, 0);
-    assert!(
-        report
-            .skipped
-            .iter()
-            .any(|skip| skip.reason == GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1)
-    );
-    assert_eq!(handle.storage.as_ref().unwrap().gc_counters(), (0, 0));
-    let outbox = handle.governance_outbox.read().expect("outbox lock");
-    let entry = outbox.entries.values().next().expect("GC audit entry");
-    let audit: GcAuditEventV1 =
-        norito::decode_from_bytes(&entry.payload_bytes).expect("decode zero-byte audit");
-    audit.validate().expect("zero-byte GC audit validates");
-    assert_eq!(audit.payload.freed_bytes, 0);
+    assert_eq!(report.evictions.len(), 1);
+    assert_eq!(report.freed_bytes, payload.len() as u64);
+    assert!(report.skipped.is_empty());
+    let storage = handle.storage.as_ref().unwrap();
+    assert_eq!(storage.gc_counters(), (payload.len() as u64, 1));
+    assert!(storage.manifest(&hex::encode(expired)).is_none());
     assert_eq!(
-        audit.payload.blocked_reason.as_deref(),
-        Some(GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1)
+        storage
+            .read_payload_range(&hex::encode(live), 0, payload.len())
+            .unwrap(),
+        payload
+    );
+    assert!(
+        storage
+            .chunk_refcount_snapshot()
+            .iter()
+            .all(|entry| entry.count == 1)
+    );
+    let publications = publisher.take();
+    let entry = publications.first().expect("GC audit entry");
+    let audit: GcAuditEventV1 = norito::decode_from_bytes(entry).expect("decode retirement audit");
+    audit
+        .validate()
+        .expect("private-copy retirement audit validates");
+    assert_eq!(audit.payload.freed_bytes, payload.len() as u64);
+    assert!(audit.payload.blocked_reason.is_none());
+    drop(handle);
+    let restored =
+        NodeHandle::try_new_with_policies(cfg, RepairConfig::default(), enabled_gc_config(1))
+            .expect("shared-digest retirement and its audit linkage survive restart");
+    let storage = restored.storage.as_ref().unwrap();
+    assert_eq!(storage.gc_counters(), (payload.len() as u64, 1));
+    assert!(storage.manifest(&hex::encode(expired)).is_none());
+    assert_eq!(
+        storage
+            .read_payload_range(&hex::encode(live), 0, payload.len())
+            .unwrap(),
+        payload
+    );
+}
+#[test]
+fn gc_reclaims_one_manifest_with_repeated_chunk_digests() {
+    let (_cfg, handle, _dir) = gc_node_with_temp_storage();
+    handle
+        .try_set_governance_publisher(Arc::new(RecordingPublisher::default()))
+        .unwrap();
+    let now_unix = 1_710_000_601;
+    let chunk = b"same bytes in distinct directory entries";
+    let (plan, payload) = CarBuildPlan::from_files_with_profile(
+        vec![
+            sorafs_car::FileEntry {
+                path: vec!["a".into()],
+                data: chunk.to_vec(),
+            },
+            sorafs_car::FileEntry {
+                path: vec!["b".into()],
+                data: chunk.to_vec(),
+            },
+        ],
+        sorafs_chunker::ChunkProfile::DEFAULT,
+    )
+    .unwrap();
+    assert_eq!(plan.chunks.len(), 2);
+    assert_eq!(plan.chunks[0].digest, plan.chunks[1].digest);
+    let mut policy = PinPolicy::default();
+    policy.retention_epoch = now_unix - 1;
+    let manifest = manifest_builder_for_plan(&payload, &plan)
+        .pin_policy(policy)
+        .build()
+        .unwrap();
+    handle
+        .ingest_manifest(&manifest, &plan, &mut payload.as_slice())
+        .unwrap();
+    let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
+    assert_eq!(report.errors, 0);
+    assert_eq!(report.evictions.len(), 1);
+    assert_eq!(report.freed_bytes, payload.len() as u64);
+    assert!(
+        handle
+            .storage
+            .as_ref()
+            .unwrap()
+            .chunk_refcount_snapshot()
+            .is_empty()
     );
 }
 #[test]
@@ -9343,7 +9414,7 @@ fn gc_eviction_transaction_serializes_concurrent_sweeps() {
     );
 }
 #[test]
-fn gc_blocked_audit_full_outbox_is_reported_without_eviction() {
+fn gc_full_outbox_preserves_expired_private_copies_until_audit_is_admitted() {
     let (base, _dir) = storage_config_with_temp_dir();
     let cfg = enabled_storage_builder(base.data_dir().clone())
         .runtime_retention(RuntimeRetentionPolicy::new(1, 1, 2 * 1024 * 1024))
@@ -9359,12 +9430,7 @@ fn gc_blocked_audit_full_outbox_is_reported_without_eviction() {
     let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
     assert!(report.evictions.is_empty());
     assert_eq!(report.errors, 1);
-    assert!(
-        report
-            .skipped
-            .iter()
-            .any(|skip| skip.reason == GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1)
-    );
+    assert!(report.skipped.is_empty());
     assert!(handle.manifest_metadata(&hex::encode(first)).is_ok());
     assert!(handle.manifest_metadata(&hex::encode(second)).is_ok());
     assert_eq!(handle.storage.as_ref().unwrap().gc_counters(), (0, 0));

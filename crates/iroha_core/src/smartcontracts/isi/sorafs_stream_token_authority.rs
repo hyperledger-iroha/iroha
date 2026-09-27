@@ -4,6 +4,7 @@
 //! operation execution, private receipt, or stream-token release.
 
 use super::Execute;
+use crate::query::stream_token_authority::eligibility::{authorized, eligible_custody};
 use crate::{
     query::{
         signer_finality::verify_signer_finality_v1,
@@ -15,16 +16,17 @@ use crate::{
             read_active, read_stream_token_custody_control_at_v1, validate_state_binding,
         },
     },
-    state::{StateReadOnly, StateTransaction, WorldReadOnly},
+    state::{StateReadOnly, StateTransaction},
 };
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
+use iroha_data_model::permission::Permission;
 use iroha_data_model::{
     account::AccountId,
     isi::{
         error::{InstructionExecutionError, InvalidParameterError},
         sorafs::MutateSorafsStreamTokenAuthority,
     },
-    permission::Permission,
     sorafs::{
         capacity::ProviderId,
         stream_token_authority::{
@@ -37,81 +39,12 @@ use iroha_data_model::{
     },
     transaction::TransactionEntrypoint,
 };
-use iroha_executor_data_model::permission::sorafs::{
-    CanCheckSorafsStreamToken, CanManageSorafsStreamTokenCustody, CanOperateSorafsStreamToken,
-};
 use mv::storage::StorageReadOnly;
 
 fn rejected(error: Error) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
         error.to_string(),
     ))
-}
-
-fn has_permission(
-    world: &impl WorldReadOnly,
-    authority: &AccountId,
-    permission: Permission,
-) -> bool {
-    world.accounts().get(authority).is_some()
-        && (world.account_contains_inherent_permission(authority, &permission)
-            || world
-                .account_roles_iter(authority)
-                .filter_map(|id| world.roles().get(id))
-                .any(|role| role.permissions().any(|token| token == &permission)))
-}
-
-fn authorized(
-    tx: &StateTransaction<'_, '_>,
-    authority: &AccountId,
-    provider: ProviderId,
-    action: &Action,
-) -> bool {
-    let world = tx.world();
-    let is_owner = tx.world.provider_owners.get(&provider) == Some(authority);
-    let can_operate = has_permission(
-        world,
-        authority,
-        CanOperateSorafsStreamToken {
-            provider_id: provider,
-        }
-        .into(),
-    );
-    match action {
-        Action::Reserve(_) | Action::Complete(_) => is_owner && can_operate,
-        Action::Expire(_) => {
-            is_owner && can_operate
-                || has_permission(
-                    world,
-                    authority,
-                    CanManageSorafsStreamTokenCustody {
-                        provider_id: provider,
-                    }
-                    .into(),
-                )
-        }
-        Action::Check(check) => {
-            authority == &check.expected_observer
-                && authority != &check.expected_operator
-                && tx.world.provider_owners.get(&provider) == Some(&check.expected_operator)
-                && has_permission(
-                    world,
-                    &check.expected_operator,
-                    CanOperateSorafsStreamToken {
-                        provider_id: provider,
-                    }
-                    .into(),
-                )
-                && has_permission(
-                    world,
-                    authority,
-                    CanCheckSorafsStreamToken {
-                        provider_id: provider,
-                    }
-                    .into(),
-                )
-        }
-    }
 }
 
 /// Consume one exact directly signed role-11 instruction position before any mutation.
@@ -181,27 +114,6 @@ fn current_custody(
     verify_signer_finality_v1(tx, parent, committed.anchor.block_hash)
         .map_err(|_| Error::Custody)?;
     Ok(current)
-}
-
-fn eligible_custody(
-    current: &crate::query::stream_token_custody::NativeControl,
-    original_record_digest: [u8; 32],
-    now: u64,
-) -> Result<(), Error> {
-    let state = &current.state;
-    let active = state.active_head.ok_or(Error::Custody)?;
-    if state.signer_revoked
-        || state.attester_revoked
-        || now < state.policy.active_from_unix_ms
-        || now >= state.policy.active_until_unix_ms
-        || active.record_digest != original_record_digest
-        || active.key_revision != state.policy.binding.key_revision
-        || active.policy_revision != state.policy.binding.policy_revision
-        || active.policy_digest != state.policy.binding.policy_digest
-    {
-        return Err(Error::Custody);
-    }
-    Ok(())
 }
 
 fn stage_transition(

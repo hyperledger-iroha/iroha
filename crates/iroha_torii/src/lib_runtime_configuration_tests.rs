@@ -2233,6 +2233,7 @@ mod sorafs_native_transaction_signer_startup_tests {
         ) -> iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
             let public_key = self.key_pair.public_key().clone();
             iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding {
+                software_credential: None,
                 handle: self.handle.clone(),
                 authority: AccountId::new(public_key.clone()),
                 algorithm: Algorithm::Ed25519,

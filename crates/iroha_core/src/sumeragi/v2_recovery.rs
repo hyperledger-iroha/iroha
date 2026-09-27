@@ -3058,6 +3058,7 @@ mod tests {
                 metadata: iroha_model_base::metadata::Metadata::default(),
                 status,
                 activation_height,
+                election_exit_height: deactivation_height,
                 deactivation_height,
                 last_reward_epoch: None,
             };

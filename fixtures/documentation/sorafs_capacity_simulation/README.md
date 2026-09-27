@@ -26,11 +26,14 @@ The `run_cli.sh` script invokes `sorafs_manifest_builder capacity` to build:
 - Telemetry snapshots for the failover window.
 - A dispute payload capturing the slashing request.
 
-The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), Torii request
-bodies, and human-readable summaries (`*_summary.json`) under the chosen artifact
-directory.
+The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), and JSON
+summaries (`*_summary.json`) under the chosen artifact directory. Declaration
+submission summaries contain only `declaration_b64`; validity and metadata remain
+inside that canonical payload, and registration time is assigned by consensus.
+The builder accepts no signing keys and does not submit transactions.
 
-`analyze.py` consumes the generated summaries, produces an aggregated report
+`analyze.py` consumes the copied declaration authoring specs (`*_spec.json`) and
+the telemetry, replication and dispute summaries, then produces an aggregated report
 (`capacity_simulation_report.json`), and emits a Prometheus textfile
 (`capacity_simulation.prom`) carrying:
 
@@ -40,6 +43,11 @@ directory.
   replacement provider.
 - `sorafs_simulation_slash_requested` recording the remediation percentage extracted
   from the dispute payload.
+
+Quota reports identify their declaration source as `authoring_spec`; these are
+simulation inputs, not a finalized capacity registry. The Rust fixture test
+decodes each canonical declaration and checks provider identity and capacity
+against its source specification.
 
 Import the Grafana bundle in `dashboards/grafana/sorafs_capacity_simulation.json`
 and point it at a Prometheus datasource that scrapes the generated textfile (for

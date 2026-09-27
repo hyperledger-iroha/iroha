@@ -49,9 +49,7 @@ replay_checkpoint_path = "sorafs_discovery/test-provider-advert-replay.to"
 replay_checkpoint_max_entries = 4096
 
 [sorafs.discovery.admission]
-envelopes_dir = "tests/fixtures/sorafs_admission"
-trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
-signature_threshold = 1
+enabled = true
 
 [sorafs.storage]
 enabled = true

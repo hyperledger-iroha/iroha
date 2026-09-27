@@ -1561,6 +1561,8 @@ on callback-first code.
 
 ### Verifying key registry
 
+The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
+
 Inspect verifying keys via the Torii helpers:
 
 ```swift
@@ -2344,3 +2346,10 @@ all five private actions and a complex private create to Rust-owned model
 bytes. Its synthetic proofs are wire fixtures. Proof generation, native bridge
 qualification and four-validator execution require separate evidence. The
 canonical Swift package always requires the real ABI24 NoritoBridge artifact.
+
+`ValidatorStakingNoritoV1` decodes first-release authority generations, epoch
+authorizations, signed all-edge beacon DKG records, committee transitions,
+monetary plans, and peer rebinding. Its Rust-authored fixture is
+`fixtures/validator_staking/norito_v1.tsv`; the consumer tests also reject
+truncated records and noncanonical quantity decimals. This structural codec
+does not verify signatures, custody, or committee activation.

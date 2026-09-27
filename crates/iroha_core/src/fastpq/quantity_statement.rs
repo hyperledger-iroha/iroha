@@ -50,9 +50,8 @@ impl FastpqQuantityStatement {
 /// old/new roots describe the touched-balance tree; other caller inputs are retained.
 /// Empty input preserves unchanged caller roots under ordinary-transfer semantics.
 ///
-/// TODO: bind this full-domain statement to the compact outer profile and authenticated
-/// finality before accepting it as production proof authority. The existing narrow
-/// legacy batch producer remains a separate path during that migration.
+/// The ordinary prover lane binds this exact full-domain statement to its canonical
+/// compact artifact. Source authentication and finality remain the caller's responsibility.
 ///
 /// # Errors
 /// Rejects public/private construction bounds, malformed digests, invalid quantities,

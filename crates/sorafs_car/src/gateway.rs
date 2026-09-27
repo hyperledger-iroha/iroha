@@ -596,6 +596,15 @@ impl GatewayFetcherInner {
                 },
             })?;
         if !response.status.is_success() {
+            if response.status == StatusCode::TOO_MANY_REQUESTS {
+                return Err(GatewayFetchError::RateLimited {
+                    provider: provider_alias,
+                    retry_after: retry_after_delay(
+                        response.headers.get(reqwest::header::RETRY_AFTER),
+                        SystemTime::now(),
+                    ),
+                });
+            }
             if let Some(evidence) = extract_failure_evidence(&response) {
                 return Err(GatewayFetchError::PolicyBlocked {
                     provider: provider_alias,
@@ -763,6 +772,27 @@ fn observed_cache_version(headers: &HeaderMap) -> Option<String> {
         .filter(|value| !value.is_empty() && value.len() <= MAX_CACHE_VERSION_BYTES)
         .map(ToOwned::to_owned)
 }
+/// Convert an HTTP retry hint to a bounded duration once; the scheduler then uses monotonic time.
+/// Both delay-seconds and HTTP-date follow RFC 9110 section 10.2.3:
+/// <https://www.rfc-editor.org/rfc/rfc9110.html#name-retry-after>.
+fn retry_after_delay(value: Option<&HeaderValue>, now: SystemTime) -> Duration {
+    const MINIMUM: Duration = Duration::from_secs(1);
+    const MAXIMUM: Duration = Duration::from_secs(86_400);
+    let Some(value) = value.and_then(|value| value.to_str().ok()) else {
+        return MINIMUM;
+    };
+    if !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()) {
+        // An overflowing but syntactically valid delay is still a long cooldown.
+        return Duration::from_secs(value.parse::<u64>().unwrap_or(u64::MAX))
+            .clamp(MINIMUM, MAXIMUM);
+    }
+    httpdate::parse_http_date(value)
+        .ok()
+        .and_then(|date| date.duration_since(now).ok())
+        .unwrap_or(MINIMUM)
+        .clamp(MINIMUM, MAXIMUM)
+}
+
 fn extract_failure_evidence(response: &HttpResponse) -> Option<GatewayFailureEvidence> {
     // Obsolete local-evidence headers make an otherwise valid body noncanonical.
     if response.status != StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS
@@ -1166,6 +1196,7 @@ impl ProviderDescriptor {
         metadata.provider_id = Some(provider_id_hex.clone());
         metadata.profile_id = Some(config.chunker_handle.clone());
         metadata.max_streams = Some(token.body.max_streams);
+        metadata.requests_per_minute = Some(token.body.requests_per_minute);
         metadata
             .capability_names
             .push("chunk_range_fetch".to_string());
@@ -1788,6 +1819,14 @@ fn parse_manifest_response(
 /// Errors encountered while fetching chunks from a gateway.
 #[derive(Debug, Error)]
 pub enum GatewayFetchError {
+    /// A healthy gateway deferred admission; this is not a provider-health failure.
+    #[error("provider `{provider}` rate limited the request; retry after {retry_after:?}")]
+    RateLimited {
+        /// Provider that returned HTTP 429.
+        provider: String,
+        /// Minimum delay before another request to this provider.
+        retry_after: Duration,
+    },
     #[error("no configuration registered for provider `{provider}`")]
     UnknownProvider { provider: String },
     #[error("provider `{provider}` stream token expired before request dispatch")]
@@ -1854,6 +1893,11 @@ pub enum GatewayFetchError {
 }
 impl From<GatewayFetchError> for AttemptFailure {
     fn from(error: GatewayFetchError) -> Self {
+        Self::from(&error)
+    }
+}
+impl From<&GatewayFetchError> for AttemptFailure {
+    fn from(error: &GatewayFetchError) -> Self {
         let message = error.to_string();
         let policy_block = match &error {
             GatewayFetchError::PolicyBlocked { evidence, .. } => {
@@ -1917,6 +1961,53 @@ mod tests {
         assert!(header_value("invalid\0nonce").is_err());
     }
     use crate::{CarBuildPlan, ChunkFetchSpec, multi_fetch::FetchProvider};
+    #[test]
+    fn retry_after_accepts_seconds_and_http_dates_with_bounded_delays() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let header = |value: &str| HeaderValue::from_str(value).unwrap();
+        assert_eq!(retry_after_delay(None, now), Duration::from_secs(1));
+        for (value, seconds) in [
+            ("0", 1),
+            ("1", 1),
+            ("60", 60),
+            ("86400", 86_400),
+            ("86401", 86_400),
+            ("18446744073709551615", 86_400),
+            ("18446744073709551616", 86_400),
+            ("", 1),
+            ("+60", 1),
+            ("-60", 1),
+            ("1.5", 1),
+            ("not-a-date", 1),
+        ] {
+            assert_eq!(
+                retry_after_delay(Some(&header(value)), now),
+                Duration::from_secs(seconds),
+                "{value}"
+            );
+        }
+        for (date, expected) in [
+            (now - Duration::from_secs(60), Duration::from_secs(1)),
+            (now, Duration::from_secs(1)),
+            (now + Duration::from_secs(60), Duration::from_secs(60)),
+            (
+                now + Duration::from_secs(86_401),
+                Duration::from_secs(86_400),
+            ),
+        ] {
+            let value = header(&httpdate::fmt_http_date(date));
+            assert_eq!(retry_after_delay(Some(&value), now), expected);
+        }
+        let value = header(&httpdate::fmt_http_date(now + Duration::from_secs(2)));
+        assert_eq!(
+            retry_after_delay(Some(&value), now + Duration::from_millis(500)),
+            Duration::from_millis(1500)
+        );
+        assert_eq!(
+            retry_after_delay(Some(&HeaderValue::from_bytes(&[0xff]).unwrap()), now),
+            Duration::from_secs(1)
+        );
+    }
     fn sample_payload(len: usize) -> Vec<u8> {
         (0..len).map(|idx| (idx % 251) as u8).collect()
     }
@@ -2833,8 +2924,7 @@ mod tests {
             .and_then(|value| value.to_str().ok());
         assert_eq!(req_nonce, sorafs_nonce);
     }
-    #[tokio::test(flavor = "multi_thread")]
-    async fn gateway_fetcher_propagates_error_status() {
+    async fn assert_gateway_rate_limit(hint: Option<HeaderValue>, expected: Duration) {
         let payload = sample_payload(1024);
         let plan = plan_for_payload(&payload);
         let manifest_id_hex = manifest_id_from_payload(&payload);
@@ -2852,12 +2942,16 @@ mod tests {
                     .as_slice()
             )
         );
+        let mut headers = HeaderMap::new();
+        if let Some(hint) = hint {
+            headers.insert(reqwest::header::RETRY_AFTER, hint);
+        }
         let mut responses = HashMap::new();
         responses.insert(
             path.clone(),
             HttpResponse {
                 status: StatusCode::TOO_MANY_REQUESTS,
-                headers: HeaderMap::new(),
+                headers,
                 body: br#"{"error":"stream_token_rate_limited"}"#.to_vec(),
             },
         );
@@ -2893,18 +2987,36 @@ mod tests {
         };
         let error = fetcher.fetch(request).await.expect_err("should fail");
         match error {
-            GatewayFetchError::UnexpectedStatus { status, body, .. } => {
-                assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-                assert_eq!(
-                    body.as_deref(),
-                    Some(r#"{"error":"stream_token_rate_limited"}"#)
-                );
+            GatewayFetchError::RateLimited {
+                provider,
+                retry_after,
+            } => {
+                assert_eq!(provider, "alpha");
+                assert_eq!(retry_after, expected);
             }
             other => panic!("unexpected error {other:?}"),
         }
         let recorded = engine.recorded();
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].path, path);
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gateway_fetcher_types_rate_limit_without_retry_after_as_one_second() {
+        assert_gateway_rate_limit(None, Duration::from_secs(1)).await;
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gateway_fetcher_preserves_numeric_retry_after() {
+        assert_gateway_rate_limit(
+            Some(HeaderValue::from_static("60")),
+            Duration::from_secs(60),
+        )
+        .await;
+    }
+    #[tokio::test(flavor = "multi_thread")]
+    async fn gateway_fetcher_preserves_and_bounds_http_date_retry_after() {
+        let date = SystemTime::now() + Duration::from_secs(2 * 86_400);
+        let hint = HeaderValue::from_str(&httpdate::fmt_http_date(date)).unwrap();
+        assert_gateway_rate_limit(Some(hint), Duration::from_secs(86_400)).await;
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn gateway_fetcher_surfaces_policy_block_evidence() {
@@ -3368,4 +3480,5 @@ mod tests {
         }
     }
     include!("gateway/canonical_token_tests.rs");
+    include!("gateway/retrieval_quota_tests.rs");
 }

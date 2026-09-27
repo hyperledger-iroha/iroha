@@ -4,69 +4,74 @@ use super::*;
 use crate::internals::bptree::node::allocation_tests::without_allocations;
 use crate::internals::bptree::node::{TXID_MASK, TXID_SHF};
 use crate::internals::bptree::states::LeafInsertState;
+use crossbeam_utils::atomic::AtomicCell;
 use std::{
     cell::Cell,
     panic::{catch_unwind, AssertUnwindSafe},
-    rc::Rc,
+    sync::Arc,
 };
 
 #[derive(Default)]
 struct Pool {
-    limit: Cell<usize>,
-    used: Cell<usize>,
-    callbacks: Cell<usize>,
-    takes: Cell<usize>,
-    clones: Cell<usize>,
-    drops: Cell<usize>,
-    panic_drop: Cell<bool>,
-    panic_clone: Cell<u8>,
-    arm_charge_panic_on_provider_drop: Cell<bool>,
-    panic_next_charge: Cell<bool>,
+    limit: AtomicCell<usize>,
+    used: AtomicCell<usize>,
+    callbacks: AtomicCell<usize>,
+    takes: AtomicCell<usize>,
+    clones: AtomicCell<usize>,
+    drops: AtomicCell<usize>,
+    panic_drop: AtomicCell<bool>,
+    panic_clone: AtomicCell<u8>,
+    arm_charge_panic_on_provider_drop: AtomicCell<bool>,
+    panic_next_charge: AtomicCell<bool>,
 }
 impl Pool {
-    fn new() -> Rc<Self> {
-        Rc::new(Self {
-            limit: Cell::new(4 * 1024 * 1024),
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            limit: AtomicCell::new(4 * 1024 * 1024),
             ..Self::default()
         })
     }
-    fn reserve(self: &Rc<Self>, demand: AllocationDemand) -> Result<Policy, ()> {
-        self.callbacks.set(self.callbacks.get() + 1);
-        let next = self.used.get().checked_add(demand.bytes()).ok_or(())?;
-        if next > self.limit.get() {
-            return Err(());
+    fn reserve(self: &Arc<Self>, demand: AllocationDemand) -> Result<Policy, ()> {
+        self.callbacks.fetch_add(1);
+        let mut used = self.used.load();
+        loop {
+            let next = used.checked_add(demand.bytes()).ok_or(())?;
+            if next > self.limit.load() {
+                return Err(());
+            }
+            match self.used.compare_exchange(used, next) {
+                Ok(_) => break,
+                Err(actual) => used = actual,
+            }
         }
-        self.used.set(next);
         Ok(Policy {
-            pool: Rc::clone(self),
+            pool: Arc::clone(self),
             remaining: demand.bytes(),
         })
     }
     fn copied(&self, role: u8) {
-        self.clones.set(self.clones.get() + 1);
-        if self.panic_clone.get() == role {
-            self.panic_clone.set(0);
+        self.clones.fetch_add(1);
+        if self.panic_clone.load() == role {
+            self.panic_clone.store(0);
             panic!("selected payload clone failed");
         }
     }
 }
 struct Charge {
-    pool: Rc<Pool>,
+    pool: Arc<Pool>,
     bytes: usize,
 }
 impl Drop for Charge {
     fn drop(&mut self) {
-        self.pool
-            .used
-            .set(self.pool.used.get().checked_sub(self.bytes).unwrap());
+        assert!(self.pool.used.fetch_sub(self.bytes) >= self.bytes);
         assert!(
-            !self.pool.panic_next_charge.replace(false),
+            !self.pool.panic_next_charge.swap(false),
             "original charged allocation cleanup failed"
         );
     }
 }
 struct Policy {
-    pool: Rc<Pool>,
+    pool: Arc<Pool>,
     remaining: usize,
 }
 impl NodeFunding for Policy {
@@ -76,24 +81,22 @@ impl NodeFunding for Policy {
             .remaining
             .checked_sub(layout.size())
             .expect("single reservation covers each actual layout");
-        self.pool.takes.set(self.pool.takes.get() + 1);
+        self.pool.takes.fetch_add(1);
         Charge {
-            pool: Rc::clone(&self.pool),
+            pool: Arc::clone(&self.pool),
             bytes: layout.size(),
         }
     }
 }
 impl Drop for Policy {
     fn drop(&mut self) {
-        self.pool
-            .used
-            .set(self.pool.used.get().checked_sub(self.remaining).unwrap());
-        self.pool.drops.set(self.pool.drops.get() + 1);
-        if self.pool.arm_charge_panic_on_provider_drop.replace(false) {
-            self.pool.panic_next_charge.set(true);
+        assert!(self.pool.used.fetch_sub(self.remaining) >= self.remaining);
+        self.pool.drops.fetch_add(1);
+        if self.pool.arm_charge_panic_on_provider_drop.swap(false) {
+            self.pool.panic_next_charge.store(true);
         }
         assert!(
-            !self.pool.panic_drop.replace(false),
+            !self.pool.panic_drop.swap(false),
             "unused provider cleanup failed"
         );
     }
@@ -138,13 +141,13 @@ impl ClonePlanning<usize, Option<usize>> for Policy {
 // actual nested key/value charges; these controls exercise engine ownership.
 type Map<V> = BptreeMap<usize, V, Prepaid<Policy>>;
 type Owner<V> = BptreeMapOwned<usize, V, Prepaid<Policy>>;
-fn map<V: Clone + Send + Sync + 'static>(pool: &Rc<Pool>) -> Map<V>
+fn map<V: Clone + Send + Sync + 'static>(pool: &Arc<Pool>) -> Map<V>
 where
     Policy: ClonePlanning<usize, V>,
 {
     Map::try_new_with_node_custody(|d| pool.reserve(d)).unwrap()
 }
-fn start<V: Clone + Send + Sync + 'static>(map: &Map<V>, pool: &Rc<Pool>) -> Owner<V>
+fn start<V: Clone + Send + Sync + 'static>(map: &Map<V>, pool: &Arc<Pool>) -> Owner<V>
 where
     Policy: ClonePlanning<usize, V>,
 {
@@ -157,7 +160,7 @@ fn put<V: Clone + Send + Sync + 'static>(
     owner: Owner<V>,
     key: usize,
     value: V,
-    pool: &Rc<Pool>,
+    pool: &Arc<Pool>,
 ) -> Owner<V>
 where
     Policy: ClonePlanning<usize, V>,
@@ -195,7 +198,7 @@ fn pair(
     u: Owner<Option<usize>>,
     key: usize,
     value: usize,
-    pool: &Rc<Pool>,
+    pool: &Arc<Pool>,
 ) -> ((Owner<usize>, Owner<Option<usize>>), Option<usize>) {
     current
         .try_insert_with_undo_owned_admitted(c, undo, u, key, value, |d| pool.reserve(d))
@@ -210,16 +213,16 @@ fn exact_joined_limit_and_one_byte_below_preserve_original_owners() {
     let c = start(&current, &pool);
     let u = start(&undo, &pool);
     let original = (identity(c.inner.as_ref()), identity(u.inner.as_ref()));
-    let used = pool.used.get();
-    let takes = pool.takes.get();
-    let clones = pool.clones.get();
+    let used = pool.used.load();
+    let takes = pool.takes.load();
+    let clones = pool.clones.load();
     let plan = without_allocations(|| {
         plan_pair::<_, _, Policy>(c.inner.as_ref(), u.inner.as_ref(), &7).unwrap()
     });
     let demand = plan.demand;
     assert!(demand.bytes() > 0);
-    pool.limit.set(used + demand.bytes() - 1);
-    let callbacks = pool.callbacks.get();
+    pool.limit.store(used + demand.bytes() - 1);
+    let callbacks = pool.callbacks.load();
     let ((c, u, key, value), error) = without_allocations(|| {
         current
             .try_insert_with_undo_owned_admitted(c, &undo, u, 7, 70, |d| {
@@ -236,24 +239,24 @@ fn exact_joined_limit_and_one_byte_below_preserve_original_owners() {
     );
     assert_eq!((key, value), (7, 70));
     assert_eq!(
-        (pool.used.get(), pool.takes.get(), pool.clones.get()),
+        (pool.used.load(), pool.takes.load(), pool.clones.load()),
         (used, takes, clones)
     );
-    assert_eq!(pool.callbacks.get(), callbacks + 1);
-    pool.limit.set(used + demand.bytes());
-    let drops = pool.drops.get();
+    assert_eq!(pool.callbacks.load(), callbacks + 1);
+    pool.limit.store(used + demand.bytes());
+    let drops = pool.drops.load();
     let ((c, u), previous) = pair(&current, c, &undo, u, key, value, &pool);
     assert_eq!(previous, None);
-    assert_eq!(pool.callbacks.get(), callbacks + 2);
-    assert_eq!(pool.drops.get(), drops + 1);
-    assert!(pool.used.get() <= pool.limit.get());
+    assert_eq!(pool.callbacks.load(), callbacks + 2);
+    assert_eq!(pool.drops.load(), drops + 1);
+    assert!(pool.used.load() <= pool.limit.load());
     assert_eq!(c.inner.as_ref() as *const _ as usize, original.0.cursor);
     assert_eq!(u.inner.as_ref() as *const _ as usize, original.1.cursor);
     assert_eq!(c.get(&7), Some(&70));
     assert_eq!(u.get(&7), Some(&None));
     assert!(current.read().is_empty() && undo.read().is_empty());
     without_allocations(|| drop((c, u, current, undo)));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -269,10 +272,10 @@ fn joined_growth_keeps_first_none_and_some_without_rewriting_existing_undo() {
     let mut c = start(&current, &pool);
     let mut u = start(&undo, &pool);
     for key in 0..96 {
-        let callbacks = pool.callbacks.get();
+        let callbacks = pool.callbacks.load();
         let ((next_c, next_u), previous) = pair(&current, c, &undo, u, key, key * 10 + 1, &pool);
         assert_eq!(previous, (key == 7).then_some(70));
-        assert_eq!(pool.callbacks.get(), callbacks + 1);
+        assert_eq!(pool.callbacks.load(), callbacks + 1);
         assert_eq!(next_u.get(&key), Some(&((key == 7).then_some(70))));
         assert!(next_c.inner.as_ref().verify() && next_u.inner.as_ref().verify());
         c = next_c;
@@ -291,7 +294,7 @@ fn joined_growth_keeps_first_none_and_some_without_rewriting_existing_undo() {
     assert_eq!(current.read().len(), 1);
     assert!(undo.read().is_empty());
     drop((c, u, current, undo));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -312,41 +315,41 @@ fn both_checkpoints_abort_to_prior_private_roots_without_credit() {
     let before = (
         identity(cw.as_ref()),
         identity(uw.as_ref()),
-        pool.used.get(),
+        pool.used.load(),
     );
     let plan =
         without_allocations(|| plan_pair::<_, _, Policy>(cw.as_ref(), uw.as_ref(), &7).unwrap());
     let provider = pool.reserve(plan.demand).unwrap();
-    let callbacks = pool.callbacks.get();
+    let callbacks = pool.callbacks.load();
     let mut cc = cw.as_mut().checkpoint().unwrap();
     let mut uc = uw.as_mut().checkpoint().unwrap();
     assert_eq!(
         execute_pair(&mut cc, Some(&mut uc), plan, 7, 70, provider),
         None
     );
-    pool.limit.set(pool.used.get());
+    pool.limit.store(pool.used.load());
     without_allocations(|| drop((cc, uc)));
     assert_eq!(
         (
             identity(cw.as_ref()),
             identity(uw.as_ref()),
-            pool.used.get()
+            pool.used.load()
         ),
         before
     );
-    assert_eq!(pool.callbacks.get(), callbacks);
+    assert_eq!(pool.callbacks.load(), callbacks);
     assert_eq!(cw.as_ref().search(&3), Some(&30));
     assert_eq!(uw.as_ref().search(&3), Some(&Some(29)));
     assert!(cw.as_ref().search(&7).is_none() && uw.as_ref().search(&7).is_none());
     without_allocations(|| drop((cw, uw)));
     without_allocations(|| drop((current, undo)));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 // Build one real leaf with its correct generation and exact finite charges,
 // avoiding impractically many commits without forging a cursor/root tag pair.
 fn at_generation<V: Clone + Send + Sync + 'static>(
-    pool: &Rc<Pool>,
+    pool: &Arc<Pool>,
     txid: u64,
     entry: Option<(usize, V)>,
 ) -> Map<V>
@@ -359,6 +362,7 @@ where
         Layout::new::<CachePadded<Leaf<usize, V, Charge>>>(),
         layouts.root,
         layouts.reader,
+        layouts.notification,
     ] {
         demand.add_layout(layout).unwrap();
     }
@@ -375,6 +379,9 @@ where
     let root = leaf.cast::<Node<usize, V, Charge>>();
     let source = SuperBlock::<usize, V, Prepaid<Policy>>::from_leaf_test(root, size, txid);
     let charges = InitialCharges {
+        notification: crate::release::ReleaseNotification::new_charged(
+            provider.take_node_charge(layouts.notification),
+        ),
         root: provider.take_node_charge(layouts.root),
         reader: provider.take_node_charge(layouts.reader),
     };
@@ -394,7 +401,7 @@ fn undo_generation_is_required_only_for_missing_first_preimage() {
         let u = start(&undo, &pool);
         let before = identity(u.inner.as_ref());
         assert_eq!(before.txid, maximum);
-        let callbacks = pool.callbacks.get();
+        let callbacks = pool.callbacks.load();
         if entry.is_none() {
             let ((c, u, key, value), error) = without_allocations(|| {
                 current
@@ -415,18 +422,18 @@ fn undo_generation_is_required_only_for_missing_first_preimage() {
             ));
             assert_eq!((key, value), (7, 70));
             assert_eq!(identity(u.inner.as_ref()), before);
-            assert_eq!(pool.callbacks.get(), callbacks);
+            assert_eq!(pool.callbacks.load(), callbacks);
             drop((c, u));
         } else {
             let ((c, u), previous) = pair(&current, c, &undo, u, 7, 70, &pool);
             assert_eq!(previous, None);
             assert_eq!(identity(u.inner.as_ref()), before);
             assert_eq!(u.get(&7), entry.as_ref().map(|(_, value)| value));
-            assert_eq!(pool.callbacks.get(), callbacks + 1);
+            assert_eq!(pool.callbacks.load(), callbacks + 1);
             drop((c, u));
         }
         drop((current, undo));
-        assert_eq!(pool.used.get(), 0);
+        assert_eq!(pool.used.load(), 0);
     }
 }
 
@@ -456,7 +463,7 @@ fn current_generation_refusal_preserves_both_inputs_before_callback() {
     );
     assert_eq!((key, value), (7, 70));
     drop((c, u, current, undo));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -544,7 +551,7 @@ fn foreign_stale_busy_and_poisoned_roles_refuse_before_joined_admission() {
             assert_eq!((key, value), (7, 70));
             drop((current_lock, undo_lock));
             drop((c, u, current, undo, other_current, other_undo));
-            assert_eq!(pool.used.get(), 0);
+            assert_eq!(pool.used.load(), 0);
         }
     }
 }
@@ -561,7 +568,7 @@ fn callback_clone_and_remainder_drop_panics_poison_both_without_publication() {
             current.read().inner.as_ref().get_root(),
             undo.read().inner.as_ref().get_root(),
         );
-        let takes = pool.takes.get();
+        let takes = pool.takes.load();
         assert!(catch_unwind(AssertUnwindSafe(|| {
             let _ = current.try_insert_with_undo_owned_admitted(
                 c,
@@ -575,13 +582,13 @@ fn callback_clone_and_remainder_drop_panics_poison_both_without_publication() {
                     }
                     let provider = pool.reserve(d)?;
                     if fault == 1 {
-                        pool.panic_clone.set(1);
+                        pool.panic_clone.store(1);
                     }
                     if fault == 2 {
-                        pool.panic_clone.set(2);
+                        pool.panic_clone.store(2);
                     }
                     if fault == 3 {
-                        pool.panic_drop.set(true);
+                        pool.panic_drop.store(true);
                     }
                     Ok(provider)
                 },
@@ -599,7 +606,7 @@ fn callback_clone_and_remainder_drop_panics_poison_both_without_publication() {
         assert!(current.read().is_empty() && undo.read().is_empty());
         if fault >= 2 {
             assert!(
-                pool.takes.get() > takes,
+                pool.takes.load() > takes,
                 "panic follows real admitted allocations"
             );
         }
@@ -613,7 +620,7 @@ fn callback_clone_and_remainder_drop_panics_poison_both_without_publication() {
         assert!(matches!(undo_refused, Err(MapAdmissionError::Poisoned)));
         drop((current_refused, undo_refused));
         drop((current, undo));
-        assert_eq!(pool.used.get(), 0);
+        assert_eq!(pool.used.load(), 0);
     }
 }
 
@@ -625,7 +632,7 @@ fn single_borrowed_edit_keeps_failure_armed_through_provider_drop() {
     assert!(catch_unwind(AssertUnwindSafe(|| {
         let _ = writer.try_insert_admitted(7, 70, |d| {
             let provider = pool.reserve(d)?;
-            pool.panic_drop.set(true);
+            pool.panic_drop.store(true);
             Ok::<_, ()>(provider)
         });
     }))
@@ -634,7 +641,7 @@ fn single_borrowed_edit_keeps_failure_armed_through_provider_drop() {
     assert!(current.read().is_empty());
     drop(writer);
     drop(current);
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]

@@ -531,7 +531,7 @@ impl PotrAdmissionReaderV1 for PotrFinalizedAdmissionReaderV1 {
             .resolver
             .resolve(provider_id, policy.admission_envelope_digest)?;
         self.check_dependency_identities()?;
-        if !admission.is_council_verified()
+        if !(admission.is_council_verified() || admission.is_genesis_material())
             || admission.provider_id() != &provider_id
             || admission.envelope_digest() != &policy.admission_envelope_digest
             || admission.potr_mldsa_key() != Some(policy.potr_mldsa_public_key.as_slice())
@@ -1241,7 +1241,7 @@ fn validate_admission_snapshot(
         .binding
         .ensure_at_or_after(policy_floor)
         .map_err(PotrReceiptRuntimeSigningError::AdmissionPolicyProgress)?;
-    if !snapshot.admission.is_council_verified() {
+    if !(snapshot.admission.is_council_verified() || snapshot.admission.is_genesis_material()) {
         return Err(PotrReceiptRuntimeSigningError::UntrustedAdmission);
     }
     if snapshot.admission.provider_id() != &receipt.provider_id {

@@ -3,50 +3,86 @@
 //! Combine trace columns before the two linear divisions, then apply their
 //! common `(1 + lambda X^2)` shift. Combine the quotient halves before their
 //! linear division, then apply `(1 + lambda X)`. This takes linear coefficient
-//! work and two N-cell allocations, with no per-LDE-point inversions or 606
+//! work and two 2N-cell allocations, with no per-LDE-point inversions or 606
 //! materialized polynomials. Owned coefficient buffers use unconditional erasure;
 //! borrowed inputs and incidental arithmetic copies remain caller-owned.
 //!
-//! The source borrows canonical coefficients of degree <N, and splits an exact
-//! degree-<2N quotient at coefficient N. It neither computes nor authenticates
-//! that AIR quotient. OOD answers are constructed before the caller supplies
-//! lambda, but the caller owns transcript chronology and coefficient commitments.
-//! TODO: Bind this unmasked arithmetic into the reviewed protocol transcript,
-//! quotient and LDE owners before production admission.
+//! The source borrows explicit masked base trace columns, two randomized quotient
+//! chunks, and a complete independent composition mask R, all of degree <2N.
+//! It constructs R + lambda H_lambda, reserving the constant batching coefficient
+//! for R. It neither computes nor authenticates the AIR quotient or entropy.
+//! OOD answers are constructed before lambda; the caller must commit the source
+//! and R before the transcript derives that challenge.
+//! The replay adapter borrows fresh masks and virtual trace coefficients from
+//! `deep_masked_replay`; `deep_masked_quotient` supplies exact blinded chunks.
+//! The producer joins these owners to bounded commitments/FRI.
+//! TODO: Execute and qualify the full soundness/hiding reduction.
 
 #[cfg(test)]
 use super::deep_composition::DeepComposition;
 use super::{
     compact_public_columns::COMMITTED_COLUMN_COUNT, deep_composition::OodPair,
-    polynomial_field::PolynomialField, polynomial_transform::validate_coefficients,
-    secret_polynomial::SecretPolynomial,
+    deep_masked_replay::MaskedTraceReplay, polynomial_field::PolynomialField,
+    polynomial_transform::validate_coefficients, secret_polynomial::SecretPolynomial,
 };
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};
 
 /// Exclusive degree bound and exact returned coefficient extent.
-pub(super) const DEGREE_BOUND: usize = super::deep_geometry::TRACE_ROWS;
+pub(super) const DEGREE_BOUND: usize = super::deep_geometry::FRI_DEGREES[0];
 /// Simultaneous owned scratch and result payload; excludes borrowed inputs/OOD answers.
 pub(super) const WORKSPACE_BYTES: usize = 2 * DEGREE_BOUND * core::mem::size_of::<F>();
 
 /// Validated immutable source coefficients; absent trailing coefficients are zero.
 #[derive(Clone, Copy)]
 pub(super) struct DeepPolynomialSource<'a> {
-    trace: &'a [&'a [u64]],
-    quotient: &'a [F],
+    trace: TraceCoefficients<'a>,
+    quotient: [&'a [F]; 2],
+    composition_mask: &'a [F],
+}
+
+// Both storage forms feed the same composition arithmetic; neither is a wire layout.
+#[derive(Clone, Copy)]
+enum TraceCoefficients<'a> {
+    #[cfg(test)]
+    Dense(&'a [&'a [u64]]),
+    VanishingReplay(&'a MaskedTraceReplay),
+}
+impl TraceCoefficients<'_> {
+    fn extent(self, _column: usize) -> usize {
+        match self {
+            #[cfg(test)]
+            Self::Dense(columns) => columns[_column].len(),
+            Self::VanishingReplay(replay) => replay.coefficient_extent(),
+        }
+    }
+    fn coefficient(self, column: usize, degree: usize) -> u64 {
+        match self {
+            #[cfg(test)]
+            Self::Dense(columns) => columns[column][degree],
+            Self::VanishingReplay(replay) => replay.coefficient(column, degree),
+        }
+    }
 }
 
 impl<'a> DeepPolynomialSource<'a> {
     /// Check the complete fixed width, degree extents and canonical coordinates.
     ///
-    /// Empty slices denote zero. Extents over the exclusive bounds are rejected
-    /// even when the excess coefficients are zero; no input is truncated.
-    pub(super) fn new(trace: &'a [&'a [u64]], quotient: &'a [F]) -> Result<Self> {
+    /// Empty trace/chunk slices denote zero; R always has exactly 2N coefficients.
+    /// Extents over the exclusive bounds are rejected even when the excess
+    /// coefficients are zero; no input is truncated.
+    #[cfg(test)]
+    pub(super) fn new(
+        trace: &'a [&'a [u64]],
+        quotient: [&'a [F]; 2],
+        composition_mask: &'a [F],
+    ) -> Result<Self> {
         if trace.len() != COMMITTED_COLUMN_COUNT
             || trace.iter().any(|column| column.len() > DEGREE_BOUND)
-            || quotient.len() > 2 * DEGREE_BOUND
+            || quotient.iter().any(|chunk| chunk.len() > DEGREE_BOUND)
+            || composition_mask.len() != DEGREE_BOUND
         {
             return Err(invalid(
-                "DEEP source requires 301 degree-<N columns and a degree-<2N quotient",
+                "DEEP source requires 301 bounded columns, two bounded chunks and complete explicit R",
             ));
         }
         for (column, coefficients) in trace.iter().enumerate() {
@@ -54,16 +90,46 @@ impl<'a> DeepPolynomialSource<'a> {
                 value.validate("deep_polynomial_trace", &[column, degree])?;
             }
         }
-        validate_coefficients(quotient, quotient.len(), "deep_polynomial_quotient")?;
-        Ok(Self { trace, quotient })
+        for (part, chunk) in quotient.into_iter().enumerate() {
+            for (degree, &value) in chunk.iter().enumerate() {
+                value.validate("deep_polynomial_quotient", &[part, degree])?;
+            }
+        }
+        validate_coefficients(composition_mask, DEGREE_BOUND, "deep_polynomial_mask")?;
+        Ok(Self {
+            trace: TraceCoefficients::Dense(trace),
+            quotient,
+            composition_mask,
+        })
     }
 
-    /// Borrow Q0 and Q1 such that Q(X) = Q0(X) + X^N Q1(X), without copying.
+    /// Borrow the actual masked replay without allocating 301 masked coefficient columns.
+    /// Its composition mask is the same move-only entropy owned by that replay.
+    pub(super) fn from_replay(
+        replay: &'a MaskedTraceReplay,
+        quotient: [&'a [F]; 2],
+    ) -> Result<Self> {
+        if !replay.has_candidate_geometry() || quotient.iter().any(|part| part.len() > DEGREE_BOUND)
+        {
+            return Err(invalid(
+                "DEEP replay composition requires the exact candidate geometry and bounded chunks",
+            ));
+        }
+        for (part, coefficients) in quotient.iter().enumerate() {
+            for (degree, &value) in coefficients.iter().enumerate() {
+                value.validate("deep_polynomial_quotient", &[part, degree])?;
+            }
+        }
+        Ok(Self {
+            trace: TraceCoefficients::VanishingReplay(replay),
+            quotient,
+            composition_mask: replay.composition_mask(),
+        })
+    }
+
+    /// Borrow both explicitly randomized chunks without re-splitting or truncation.
     pub(super) fn quotient_halves(self) -> [&'a [F]; 2] {
-        let (low, high) = self
-            .quotient
-            .split_at(self.quotient.len().min(DEGREE_BOUND));
-        [low, high]
+        self.quotient
     }
 
     /// Construct full extension-field answers before the composition challenge.
@@ -73,11 +139,12 @@ impl<'a> DeepPolynomialSource<'a> {
     pub(super) fn prepare(self, points: OodPair) -> PreparedDeepPolynomial<'a> {
         let trace_answers = points.points().map(|point| {
             core::array::from_fn(|column| {
-                self.trace[column]
-                    .iter()
+                (0..self.trace.extent(column))
                     .rev()
-                    .fold(F::ZERO, |value, &coefficient| {
-                        value.mul(point).add(F::embed_base(coefficient))
+                    .fold(F::ZERO, |value, degree| {
+                        value
+                            .mul(point)
+                            .add(F::embed_base(self.trace.coefficient(column, degree)))
                     })
             })
         });
@@ -125,11 +192,11 @@ impl PreparedDeepPolynomial<'_> {
         )
     }
 
-    /// Build degree-<N coefficients after every exact division remainder is zero.
+    /// Build R + lambda H_lambda after every exact division remainder is zero.
     ///
     /// The workspace cap covers simultaneous owned coefficient allocations, not
     /// borrowed source storage or the separately bounded OOD answer arrays. The
-    /// returned N-cell polynomial can feed the existing polynomial transform;
+    /// returned 2N-cell polynomial can feed the existing polynomial transform;
     /// this method performs no LDE, transcript operation or proof activation.
     pub(super) fn compose(&self, lambda: F, max_workspace_bytes: usize) -> Result<DeepPolynomial> {
         lambda.validate("deep_polynomial_challenge", &[])?;
@@ -143,13 +210,17 @@ impl PreparedDeepPolynomial<'_> {
         let mut scratch = SecretPolynomial::<F>::zeroed(DEGREE_BOUND)?;
         let mut coefficients = SecretPolynomial::<F>::zeroed(DEGREE_BOUND)?;
         let step = lambda.mul(lambda);
-        let mut weight = F::ONE;
+        coefficients.copy_from_slice(self.source.composition_mask);
+        // R owns lambda^0; every relation component has a distinct positive power.
+        let mut weight = lambda;
         let mut answers = [F::ZERO; 2];
         let mut extent = 2;
-        for (column, source) in self.source.trace.iter().enumerate() {
-            extent = extent.max(source.len());
-            for (destination, &value) in scratch.iter_mut().zip(*source) {
-                *destination = destination.add(weight.mul_base(value));
+        for column in 0..COMMITTED_COLUMN_COUNT {
+            let source_extent = self.source.trace.extent(column);
+            extent = extent.max(source_extent);
+            for (degree, destination) in scratch[..source_extent].iter_mut().enumerate() {
+                *destination =
+                    destination.add(weight.mul_base(self.source.trace.coefficient(column, degree)));
             }
             for (row, answer) in answers.iter_mut().enumerate() {
                 *answer = answer.add(weight.mul(self.trace_answers[row][column]));
@@ -177,7 +248,7 @@ impl PreparedDeepPolynomial<'_> {
         scratch.fill(F::ZERO);
         extent = 1;
         let mut answer = F::ZERO;
-        // weight is lambda^(2*301), so the halves start at powers 602 and 604.
+        // R uses power zero; the quotient chunks start at powers 603 and 605.
         for (part, half) in self.source.quotient_halves().into_iter().enumerate() {
             extent = extent.max(half.len());
             for (destination, &value) in scratch.iter_mut().zip(half) {
@@ -208,7 +279,7 @@ pub(super) struct DeepPolynomial {
 }
 
 impl DeepPolynomial {
-    /// Borrow the full N-cell coefficient vector, including canonical zero padding.
+    /// Borrow the full 2N-cell coefficient vector, including canonical zero padding.
     pub(super) fn coefficients(&self) -> &[F] {
         &self.coefficients
     }

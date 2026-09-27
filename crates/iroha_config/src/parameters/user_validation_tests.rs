@@ -134,6 +134,70 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .expect("load minimal user config")
     }
     #[test]
+    fn runtime_provider_broker_endpoint_is_public_bounded_and_exact() {
+        let default = load_root(base_table());
+        assert_eq!(
+            default.runtime_provider_broker.endpoint_path.as_path(),
+            Path::new(defaults::runtime_provider_broker::ENDPOINT_PATH)
+        );
+        let custom = "/var/iroha-seat-7/runtime-provider-broker-v1.sock";
+        let mut table = base_table();
+        table.insert(
+            "runtime_provider_broker".to_owned(),
+            Value::Table(Table::from_iter([(
+                "endpoint_path".to_owned(),
+                Value::String(custom.to_owned()),
+            )])),
+        );
+        let configured = load_root(table);
+        assert_eq!(
+            configured.runtime_provider_broker.endpoint_path.as_path(),
+            Path::new(custom)
+        );
+        assert_eq!(
+            custom
+                .parse::<actual::RuntimeProviderBrokerEndpointPath>()
+                .expect("parse standalone endpoint")
+                .as_path(),
+            Path::new(custom)
+        );
+        for invalid in [
+            "runtime-provider-broker-v1.sock",
+            "/var/./runtime-provider-broker-v1.sock",
+            "/var/../runtime-provider-broker-v1.sock",
+            "/var//runtime-provider-broker-v1.sock",
+            "/var/runtime-provider-broker-v1.sock/",
+            "/var\\run/runtime-provider-broker-v1.sock",
+            "/var/line\nfeed/runtime-provider-broker-v1.sock",
+            "/var/other.sock",
+        ] {
+            assert!(
+                invalid
+                    .parse::<actual::RuntimeProviderBrokerEndpointPath>()
+                    .is_err(),
+                "invalid standalone path {invalid:?}"
+            );
+            let mut table = base_table();
+            table.insert(
+                "runtime_provider_broker".to_owned(),
+                Value::Table(Table::from_iter([(
+                    "endpoint_path".to_owned(),
+                    Value::String(invalid.to_owned()),
+                )])),
+            );
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
+                "invalid config path {invalid:?}"
+            );
+        }
+        let oversized = format!("/{}/runtime-provider-broker-v1.sock", "a".repeat(103));
+        assert!(
+            oversized
+                .parse::<actual::RuntimeProviderBrokerEndpointPath>()
+                .is_err()
+        );
+    }
+    #[test]
     fn enabled_sccp_replay_snapshot_must_fit_the_norito_archive_limit() {
         let mut config = load_user_root(base_table());
         let replay_archive = &mut config.torii.sccp_replay_archive;
@@ -240,6 +304,30 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 Value::String(policy_digest_hex.to_owned()),
             );
         }
+    }
+    #[test]
+    fn mint_finality_seed_accepts_only_validator_private_descriptor_199() {
+        let mut accepted = base_table();
+        provider_table_mut(&mut accepted, "sumeragi")
+            .insert("mint_finality_seed_fd".into(), Value::Integer(199));
+        assert_eq!(
+            load_root(accepted).sumeragi.mint_finality_seed_fd,
+            Some(199)
+        );
+        for fd in [0, 198, 200, 65535] {
+            let mut rejected = base_table();
+            provider_table_mut(&mut rejected, "sumeragi")
+                .insert("mint_finality_seed_fd".into(), Value::Integer(fd));
+            assert!(
+                actual::Root::from_toml_source(TomlSource::inline(rejected)).is_err(),
+                "descriptor {fd} must not become a second seed source"
+            );
+        }
+        let mut observer = base_table();
+        let section = provider_table_mut(&mut observer, "sumeragi");
+        section.insert("role".into(), Value::String("observer".into()));
+        section.insert("mint_finality_seed_fd".into(), Value::Integer(199));
+        assert!(actual::Root::from_toml_source(TomlSource::inline(observer)).is_err());
     }
     fn set_parliament_tle_provider_binding(
         table: &mut Table,

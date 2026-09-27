@@ -179,7 +179,10 @@ fn autonomous_merge_beacon_composition_rejects_invalid_effects_and_post_seal_dri
     let state = &fixture.native.state;
     let original = carrier.npos_consensus_effects().unwrap().clone();
     let super::NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_canonical_native_lane_batch_source(&carrier)
+        .prepare_canonical_native_lane_batch_source(
+            carrier.clone(),
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .expect("the complete native source is authentic before pristine controls")
     else {
         panic!("locally retained exact native source");
@@ -5428,6 +5431,7 @@ fn autonomous_runtime_catalog_effects_commit_and_recover_exactly_on_consensus_st
         "recovering an already applied catalog must preserve its exact state"
     );
     let restored = deserialize::KuraSeed {
+        operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         kura: Arc::clone(&state.kura),
         lane_manifests: state.lane_manifests.read().clone(),
         query_handle: LiveQueryStore::start_test(),

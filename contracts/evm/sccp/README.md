@@ -1,169 +1,142 @@
-# SCCP EVM contracts
+# SCCP v1 destination contract for Ethereum, BSC and TRON
 
-These contracts provide the shared exact V1 implementation used by Ethereum
-and BNB Smart Chain routes.
+`SccpTairaXor.sol` is the single SCCP v1 destination for the three EVM-family
+profiles of [`specs/sccp.md`](../../../specs/sccp.md) (§5.1, §5.2). It is the
+ERC-20/BEP-20/TRC-20 token **Taira XOR** (`tXOR`, 9 decimals, one token unit =
+one Taira unit) with the bridge built in. It has no owner, guardian, admin key,
+setter, upgrade path, external call or roster-signed mint breaker. The minting
+pause changes only through `applyControl` with a Parliament control leaf of an
+attested Taira block.
 
-Production sources require exact Solidity `0.7.6`. EVM artifacts use Ethereum's
-native `0.7.6+commit.7338295f` compiler; TVM artifacts use TRON's distinct native
-`0.7.6+commit.d1802f25` compiler. Both use optimizer run count `200`
-and the `istanbul` target over distinct reviewed source maps. Their target
-identities, complete standard-json inputs,
-ABIs, creation/runtime bytes, immutable-runtime patch ranges, and hashes are
-reviewed release-policy inputs. The fixed opcode target avoids instructions
-that are not shared by every first-release destination. The runtime smoke loads
-production artifacts only from that verified manifest, compiles test-only
-harnesses separately with the same locked EVM compiler, rejects compiler,
-artifact, and source-staleness mutation before creating a provider, and checks
-deployed runtime bytes outside compiler-declared immutable slots. The BLAKE2b
-compressor's intentional modulo-2^64 additions are isolated in the documented
-`_add64` helper with an explicit 64-bit mask; every value-moving overflow remains
-explicitly checked.
+| Profile | Tag | Chain id | Domain | Route id | Compiler |
+|---|---|---|---|---|---|
+| `ethereum-mainnet` | `0x41` | 1 | 1 | `taira_eth_xor` | solc `0.8.31+commit.fd3a2265` |
+| `bsc-mainnet` | `0x42` | 56 | 2 | `taira_bsc_xor` | solc `0.8.31+commit.fd3a2265` |
+| `tron-mainnet` | `0x43` | `0x2b6653dc` | 5 | `taira_tron_xor` | tronprotocol `tv_0.8.31` `0.8.31+commit.c2812a3d` |
 
-Compiler downloads, platform executables and full native version responses are
-authenticated by the [native compiler policy](../../../scripts/contract_tooling/README.md).
-Supported hosts are Linux x86-64 and macOS with x86-64 execution (Rosetta on
-arm64). Compilation and execution use private verified native binaries.
+## Deployment
 
-## Components
-
-- `SccpExactTransferCodec.sol` implements the canonical network, lane, Transfer
-  payload, message-id, payload-hash, and source-event-digest encodings. EVM/BSC
-  hashing uses the EIP-152 BLAKE2F precompile so the route remains below the
-  24,576-byte runtime ceiling; the TRON route uses the deterministic software
-  compressor because TVM assigns precompile address `0x09` to a different
-  operation.
-- `TairaXorEvmToken.sol` is the constructor-bound wrapped-token implementation;
-  its sole route is immutable and it has no owner or bridge mutator.
-- `TairaXorExactEvmSccpBridge.sol` is the concrete value-moving base route. The
-  Ethereum and BSC wrappers fix their profiles and route identifiers.
-- `SccpSha256ReplayForest.sol` implements the canonical sharded SHA-256 sparse
-  Merkle replay forest and witness verifier shared by admission and outbound
-  burn paths.
-- `ISccpMessageVerifier.sol` and `SccpGroth16Bn254MessageVerifier.sol` define
-  and implement immutable BN254 verification for the eleven exact SCCP signals.
-
-Account roles are deliberately asymmetric. An external-to-Taira burn accepts
-only the exact `test...` I105 spelling for discriminant `369` and a single,
-canonical Ed25519 controller in the prime-order subgroup, matching Taira
-settlement admission and rejecting both small-order and mixed-torsion points.
-A proof-authenticated Taira-to-external sender uses that same canonical
-single-key Ed25519 controller because it is the sole account shape constrained
-by the fixed V1 semantic circuits. The destination parser still rejects
-malformed AccountAddress tags, noncanonical I105 round trips and checksums, and
-weak Ed25519 encodings. Taira rejects multisig, secp256k1, and every other
-controller before locking assets, so every accepted sender is provable by the
-immutable destination verifier.
-
-Generic owner emitters and the secp256k1 attestation verifier are intentionally
-absent. Generic proof-only message wrappers are also absent: accepting a proof
-without executing the value-moving route is not settlement. A production
-source event must be coupled to the concrete token burn, and a production
-destination proof must call `finalizeFromTaira` on the immutable typed route.
-Each concrete production route accepts one exact predeployed token address.
-Deployment tooling first precomputes the route address, deploys the token with
-that address as its immutable `bridge`, and then deploys the route at the exact
-precomputed address with the exact token address. The route constructor rejects
-token/route readback, code, policy, or role drift before storing any binding.
-There is no privileged initialization window or mutable bridge setter. The
-constructor also requires one positive u128-sized `maxWrappedSupply`, stores it
-immutably, commits it to `routeConfigHash`, and rejects any mint that would make
-the wrapped token's total supply exceed that ceiling. The revision is encoded
-immediately after the Transfer nonce and is included in `routeConfigHash`, so
-nonce reuse by a replacement route cannot collide with an older route's
-message identity. Each route deploys an immutable five-guardian, three-vote,
-one-way mint breaker. The route stores the breaker's deployment-time runtime
-hash, exposes it through `mintBreakerCodeHash()`, and checks the live runtime
-hash plus the disabled latch before every new mint admission. Breaker votes can
-never re-enable minting, withdraw assets, or block outbound burns.
-
-## Groth16 statement
-
-Proof bytes are the exact static ABI tuple:
-
-```text
-abi.encode(
-  uint256 version = 1,
-  bytes32 message_id,
-  uint256 source_domain,
-  bytes32 commitment_root,
-  uint256[2] a,
-  uint256[4] b,
-  uint256[2] c
-)
+```solidity
+constructor(bytes32 tairaNetworkId, uint8 networkTag, uint32 routeRevision,
+            uint256 maxWrappedSupply, RosterV1 initialRoster)
 ```
 
-The verifying key contains twelve G1 input-coefficient points: one constant plus
-eleven signals. Those points serialize with alpha, beta, gamma, and delta to the
-canonical 38-ABI-word verifying-key preimage. Ten-signal, eleven-IC-point, and
-36-word key representations are invalid. Each signal is
-`uint256(keccak256(abi.encode(label, value))) mod r`, in this order:
+The constructor requires `block.chainid` to equal the tag's identity word, a
+nonzero `NetworkId` and revision, a cap in `1..2^128-1`, and a §3.7-valid
+initial roster (4..=31 members, `t = ⌊2n/3⌋+1`, zero slots first, then
+strictly ascending addresses) whose validity satisfies the §5.1.5 bounds. It
+stores the immutables `INITIAL_ROSTER_DIGEST`, `INITIAL_GENERATION`,
+`TAIRA_NETWORK_ID`, `NETWORK_TAG`, `ROUTE_REVISION`, `MAX_WRAPPED_SUPPLY`,
+`DOMAIN_SEPARATOR` and `REQUIRE_DIRECT_CALLER` (TRON only). `controlNonce`,
+`opCount` and the previous roster start at zero and `mintingPaused` is false.
+The deployed runtime equals the locked template in
+`scripts/contract_tooling/artifact-lock.json` with those eight immutables
+filled at the recorded `immutable_references`; the EDR suite checks this
+byte for byte.
 
-1. message id
-2. payload hash
-3. target domain
-4. commitment root
-5. finality height
-6. finality block hash
-7. source domain
-8. statement hash
-9. destination binding hash
-10. route-configuration hash
-11. governed SORA finality-anchor hash
+## Entry points
 
-The verifier rejects wrong tuple lengths, zero required words, domain overflow
-or equality, noncanonical/zero/off-curve/non-subgroup points, and failed
-pairings. It has no mutable signer set or update function. Route rotation
-creates a new immutable route revision and destination binding.
+| Selector | Function | Rule |
+|---|---|---|
+| `0x8056d161` | `finalizeFromTaira` | §5.1.3 direct: roster accepted, `t` signatures, payload, deadline, leaf, nonce bit, cap, mint |
+| `0x96925736` | `finalizeFromTairaHistorical` | §5.1.3 through the attested history root |
+| `0x909ea456` | `rotateRosters(RotationV1[])` | §5.1.5, 1..=16 sequential rotations signed by the current roster |
+| `0x0ce970d6` | `applyControl` | §5.1.6 Parliament control leaf, strictly increasing `controlNonce` (gaps allowed) |
+| `0x935a913b` | `applyControlHistorical` | §5.1.6 through the history root |
+| `0xebfc6ca8` | `transferToTaira` | §5.1.7 canonical calldata only, per-sender nonce, burn |
+| `0xc3de98ad` / `0xbe335b84` | `voidExpired` / `voidExpiredHistorical` | §5.1.8 after the deadline, same nonce bit as mint |
+| `0x5b094c00` | `voidFrozen(first, count)` | §5.1.8, 1..=256 nonces once both rosters expired |
 
-The concrete destination binding commits the exact network, domains, Groth16
-backend, verifier address, value-moving route address, verifier runtime
-code hash, verifying-key hash, audited semantic-profile hash, and governed SORA
-finality-anchor hash, followed by the replay-verifier address and runtime hash
-and the mint-breaker address and runtime hash. The separate route-configuration
-signal also commits all of those policy roles plus the governed token identity,
-token runtime code hash, both lane hashes, network profile, route revision,
-maximum wrapped supply, and the same replay/breaker quartet. Proofs are
-therefore not portable between supply caps, policy revisions, route contracts,
-breaker deployments, or route revisions even if the verifier is shared.
-Route constructors take one typed
-`VerifierPolicyV1` tuple and reject zero, aliased, or getter-mismatched roles.
-Governed destination deployment records carry the same tuple as required
-`outbound_proof_policy`; policy-less JSON and Norito records are invalid.
+Views: `rosterState`, `isConsumed`, `transferNonces`, `tairaNetworkId`,
+`routeRevision`, `maxWrappedSupply`, `mintingPaused`, `controlNonce`
+(`0x4faac8ca`), `domainSeparator`, `initialRosterDigest`,
+`initialRosterGeneration`, `opCount`, `maxRosterValidityMs`, plus the ERC-20
+surface with ERC-6093 errors. `opCount` counts finalizations, voids, burns and
+applied controls, never rotations. Burns, rotations and voids stay open while
+minting is paused; `applyControl` needs an accepted roster, so a frozen
+destination (current roster expired) can only burn and, once the previous
+roster has also expired, `voidFrozen`.
 
-## Release requirements
+Verification details: the calldata roster is hashed and checked for `n`, `t`
+and ordering on the fly; signatures are positional (`signerBitmap`), low-S,
+`v ∈ {27, 28}`, nonzero `r`/`s`, and every `ecrecover` result is masked to 160
+bits and compared with a nonzero member. The consumed set is a
+`mapping(uint256 => uint256)` bitmap (word `nonce >> 8`, bit `nonce & 255`).
+Storage follows §5.2.3 (slots A..D, then the bitmap, transfer nonces and the
+ERC-20 state). On TRON `transferToTaira`, `voidExpired*` and `voidFrozen`
+require `msg.sender == tx.origin`.
 
-A successful pairing only establishes the statement encoded by its circuit.
-The checked-in labeled-signal circuit is a diagnostic-only artifact and is not
-production evidence; production validators reject its identifier,
-classification, and exact published digest. Production activation requires a
-signed independent audit and reproducible circuit, witness-generator,
-proving-key, and verifying-key
-commitments proving canonical payload semantics, message-leaf derivation,
-Merkle inclusion, the block-header commitment root, commit-QC finality, exact
-chain identity, and validator-set continuity rooted in the governed SORA
-anchor. The governed registry stores those typed commitments and derives all
-bindings; request callers never supply deployment material or
-expected-binding aliases.
+## Build, verify and test
 
-Run:
-
-```bash
-bash scripts/sccp_evm_contract_smoke.sh
+```sh
+python3 scripts/contract_artifact_corridor.py build     # target/sccp-contract-artifacts/
+python3 scripts/contract_artifact_corridor.py verify
+(cd scripts/contract_tooling/evm-runtime && npm ci --ignore-scripts)
+node --test contracts/evm/sccp/test/sccp_taira_xor.test.js
+bash scripts/sccp_evm_contract_smoke.sh                  # all of the above, fail-closed, in a private directory
 ```
 
-The suite verifies the authenticated EVM/TVM manifest against the current
-sources and deploys the exact reviewed EVM and TRON artifacts in an EVM
-runtime. Test harnesses are compiled separately with the same locked compiler,
-and their TRON output must reproduce the reviewed TRON creation code exactly.
-The suite enforces runtime, initcode, and deployment-gas
-ceilings, cross-checks precompiled and
-software BLAKE2b results, and exercises positive accounting plus malformed
-payloads, zero or mismatched route revisions, wrong routes/networks/codecs,
-replay, stale sparse-Merkle witnesses, cross-route proof attacks, token,
-replay-verifier and mint-breaker runtime drift, reentrancy, token failures,
-substituted/zero/aliased semantic-profile or finality-anchor commitments, and
-adversarial BN254 inputs.
+The toolchain policy (native arm64/x86-64 compilers, no Rosetta or Docker,
+cancun legacy pipeline without metadata hash or CBOR) is described in
+[`scripts/contract_tooling/README.md`](../../../scripts/contract_tooling/README.md).
+The source must not `delete` memory `bytes` elements or declare a custom
+storage layout (0.8.31 legacy-pipeline bug patterns); the corridor enforces it.
 
-EVM execution of the reviewed TRON bytecode is compatibility coverage only. It
-is never accepted as TVM deployment evidence; the production corridor's pinned
-real-TRE phase remains mandatory.
+`test/sccp_taira_xor.test.js` runs every §11 Contracts bullet under chain ids 1,
+56 and `0x2b6653dc` on the locked native EDR runtime: roster expiry,
+previous-roster grace and its cap, batched sequential rotation (up to 16) and
+every validity, skew and `validFromMs` bound; the frozen destination; deadline
+edges; `voidExpired` and `voidFrozen` range and revert rules; the supply cap and
+bitmap word boundaries; `applyControl` pause and resume, stale and equal
+nonces, nonce gaps, historical mode, foreign network, target, destination and
+revision leaves, and a transfer leaf offered as a control; non-canonical
+`transferToTaira` calldata (offset, padding, trailing bytes); the TRON
+direct-caller rule; the initial immutables, `opCount` and `controlNonce() == 0`;
+signature malleability (high-S, `v ∉ {27, 28}`, zero or out-of-range `r`/`s`,
+duplicate, outsider and zero-slot signers, unordered rosters); and a runtime
+`WrongChain` on a foreign chain id. `test/sccp_v1_model.js` is an independent
+ethers-based model of the §3 encodings; every typehash, topic and selector is
+computed from its canonical string and compared with the spec and the ABI.
+`SCCP_GAS_REPORT=<file>` writes the measured gas as JSON.
+
+The TRON profile runs on EDR with the Ethereum-compiler build, which checks the
+contract logic under TRON's chain id, codecs and direct-caller rule. The
+tronprotocol build itself (with its `CALLTOKENID`/`CALLTOKENVALUE` guards),
+TRON energy and the `ecrecover` masking golden are qualified on java-tron (TRE)
+separately.
+
+## Measured gas (§5.4)
+
+Measured on the locked EDR `0.12.1` runtime with Osaka rules (EIP-7623
+calldata floor included), `n` roster members and `t` signatures. "New balance,
+same bitmap word" is the typical mint: a first-time recipient, a warm
+consumed-bitmap word and a nonzero supply. The TRON column is the EVM build on
+EDR under chain id `0x2b6653dc`, not TRON energy.
+
+| Operation | §5.4 estimate | ETH (1) | BSC (56) | TRON profile |
+|---|---|---|---|---|
+| `finalizeFromTaira` n=4 t=3, new balance, same word | 75k–110k | 101,304 | 101,420 | 101,559 |
+| `finalizeFromTaira` n=4 t=3, existing balance, same word | 75k–110k | 85,721 | 85,861 | 85,976 |
+| `finalizeFromTaira` n=4 t=3, first mint (new word, zero supply) | — | 155,691 | 155,831 | 155,946 |
+| `finalizeFromTaira` n=31 t=21, new balance, same word | 160k–200k | 199,061 | 199,201 | 199,364 |
+| `finalizeFromTaira` n=31, all 31 signatures | — | 246,295 | 246,447 | 246,634 |
+| `finalizeFromTairaHistorical` n=4, history size 6 | direct + 8k–20k | 108,146 (+6.8k) | 108,262 | 108,365 |
+| `rotateRosters` 1 rotation n=4 (steady state) | 65k–80k | 76,046 | 76,102 | 76,115 |
+| `rotateRosters` 1 rotation n=31 (steady state) | 160k–180k | 186,584 | 186,616 | 186,593 |
+| `rotateRosters` 1 rotation n=31, first rotation | 160k–180k | 203,648 | 203,680 | 203,669 |
+| `rotateRosters` 3 / 16 rotations n=4 | — | 161,060 / 594,155 | 161,092 / 594,415 | 161,093 / 594,620 |
+| `voidExpired` n=4 | finalize − 20k | 73,740 | 73,892 | 74,068 |
+| `voidExpiredHistorical` n=4 | — | 75,289 | 75,417 | 75,605 |
+| `voidFrozen` 1 nonce | — | 37,073 | 37,105 | 37,155 |
+| `voidFrozen` 256 nonces, one / two bitmap words | ≈55k + 1.2k per nonce (≈362k) | 449,933 / 472,563 | 449,965 / 472,595 | 450,015 / 472,645 |
+| `applyControl` n=4 t=3 | 55k–85k | 65,458 | 65,546 | 65,560 |
+| `applyControl` n=31 t=21 | 140k–175k | 161,238 | 161,338 | 161,304 |
+| `applyControlHistorical` n=4, history size 6 | — | 68,338 | 68,402 | 68,392 |
+| `transferToTaira` (34-byte Taira recipient) | 55k–75k | 68,811 | 68,939 | 69,006 |
+| deployment (n=4) | — | 3,012,402 | 3,012,454 | 3,012,475 |
+
+Two measurements exceed the estimates. A steady-state n=31 rotation costs
+≈187k (≈204k for the first rotation, which initializes the previous-roster
+slots) against 160k–180k: it pays 21 recoveries, two 31-member roster hashes and
+≈2.6 KB of calldata. `voidFrozen` costs ≈1.6k per nonce against 1.2k because
+every nonce emits its own `SccpVoided(0, nonce)` LOG3 (1.5k alone).

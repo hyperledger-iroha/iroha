@@ -2,6 +2,9 @@
 
 use super::*;
 use iroha_data_model::block::builder::BlockBuilder;
+use iroha_data_model::block::consensus_v2::finality::{
+    validate_successor_height_context, verify_finality_successor,
+};
 
 fn block(height: u64, parent: Option<&SccpFinalizedBlockTestFixtureV1>) -> SignedBlock {
     let key = KeyPair::try_from_seed(vec![0x73; 32], Algorithm::Ed25519).unwrap();
@@ -33,6 +36,38 @@ fn block(height: u64, parent: Option<&SccpFinalizedBlockTestFixtureV1>) -> Signe
 }
 
 #[test]
+fn bounded_native_operation_schedule_authenticates_beyond_the_bridge_fixture_window() {
+    let mut parent =
+        sccp_finalize_taira_native_operation_block_test_fixture_v1(&block(1, None), None);
+    for height in 2..=12 {
+        let child = sccp_finalize_taira_native_operation_block_test_fixture_v1(
+            &block(height, Some(&parent)),
+            Some(&parent),
+        );
+        let artifact = &child.proof().finality_artifact;
+        verify_finality_successor(&parent.proof().finality_artifact, artifact).unwrap();
+        assert_eq!(artifact.height_context.epoch_end_height, 256);
+        assert_eq!(artifact.height_context.roster.len(), 4);
+        assert_eq!(artifact.commit_qc.signers.len(), 3);
+        assert_eq!(
+            artifact.height_context.da_layout.encoding,
+            PayloadEncoding::ReedSolomon16
+        );
+        parent = child;
+    }
+    let ordinary = sccp_finalize_taira_block_test_fixture_v1(&block(1, None), None);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            sccp_finalize_taira_native_operation_block_test_fixture_v1(
+                &block(2, Some(&ordinary)),
+                Some(&ordinary),
+            )
+        }))
+        .is_err()
+    );
+}
+
+#[test]
 fn exact_same_epoch_descendants_authenticate_through_the_last_nonboundary_height() {
     let mut parent = sccp_finalize_taira_block_test_fixture_v1(&block(1, None), None);
     for height in 2..=9 {
@@ -40,6 +75,7 @@ fn exact_same_epoch_descendants_authenticate_through_the_last_nonboundary_height
             sccp_finalize_taira_block_test_fixture_v1(&block(height, Some(&parent)), Some(&parent));
         let artifact = &child.proof().finality_artifact;
         artifact.verify().unwrap();
+        verify_finality_successor(&parent.proof().finality_artifact, artifact).unwrap();
         assert_eq!(
             artifact.height_context.epoch,
             parent.proof().finality_artifact.height_context.epoch
@@ -130,6 +166,54 @@ fn exact_epoch_one_successor_inherits_certified_boundary_and_parent_commit() {
         .verify()
         .expect("successor CommitQC verifies");
     assert_exact_finalized_block_fixture(&child);
+    verify_finality_successor(parent_artifact, &child.proof().finality_artifact).unwrap();
+}
+
+#[test]
+fn portable_finality_chain_rejects_forks_skips_and_corrupted_certificates() {
+    let parent = sccp_finalize_taira_block_test_fixture_v1(&block(1, None), None);
+    let child = sccp_finalize_taira_block_test_fixture_v1(&block(2, Some(&parent)), Some(&parent));
+    let grandchild =
+        sccp_finalize_taira_block_test_fixture_v1(&block(3, Some(&child)), Some(&child));
+    let parent_artifact = &parent.proof().finality_artifact;
+    let child_artifact = &child.proof().finality_artifact;
+    verify_finality_successor(parent_artifact, child_artifact).unwrap();
+    assert!(
+        verify_finality_successor(parent_artifact, &grandchild.proof().finality_artifact).is_err()
+    );
+    let foreign = sccp_finalize_taira_epoch_boundary_test_fixture_v1(&block(1, None));
+    foreign.proof().finality_artifact.verify().unwrap();
+    assert!(verify_finality_successor(&foreign.proof().finality_artifact, child_artifact).is_err());
+    for mutation in 0..4 {
+        let mut changed = child_artifact.clone();
+        match mutation {
+            0 => changed.commit_qc.aggregate_signature[0] ^= 1,
+            1 => changed.validator_set_pops[0][0] ^= 1,
+            2 => {
+                changed
+                    .height_context
+                    .parent_commit_qc
+                    .as_mut()
+                    .unwrap()
+                    .aggregate_signature[0] ^= 1
+            }
+            _ => changed.height_context.execution_policy_hash = Hash::new(b"unauthorized policy"),
+        }
+        assert!(
+            verify_finality_successor(parent_artifact, &changed).is_err(),
+            "mutation {mutation}"
+        );
+    }
+    let mut context = child_artifact.height_context.clone();
+    context.leader_seed[0] ^= 1;
+    assert!(
+        validate_successor_height_context(
+            parent_artifact,
+            &context,
+            &child_artifact.validator_set_pops
+        )
+        .is_err()
+    );
 }
 
 #[test]

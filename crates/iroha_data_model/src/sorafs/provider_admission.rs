@@ -1,8 +1,8 @@
 //! Canonical provider-admission council policy and exact signed-claim validation.
 //!
-//! This value is a candidate for governed State; constructing or decoding it does not enact it.
-//! Core must read the active policy from the same transaction State as the provider admission head,
-//! enforce its transition, and bind its result to finalized State/Kura before issuing a grant.
+//! Parliament enacts this policy and the signed admission effects in [`governance`]. Constructing
+//! or decoding a value does not enact it. Core reads policy, provider owner and admission history
+//! from one State view and authenticates its exact committed head against durable Kura finality.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;

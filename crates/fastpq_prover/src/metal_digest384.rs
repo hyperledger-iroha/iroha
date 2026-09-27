@@ -228,7 +228,7 @@ fn stage_sensitive_jobs(
                 .lane_prefix_v1(lane)
                 .expect("fixed canonical lane");
             let offset = (index * GOLDILOCKS_DIGEST384_LANES_V1 + lane) * 4;
-            pools[0].copy_from_slice_at(offset, &prefix.state());
+            pools[0].copy_from_slice_at(offset, prefix.state());
             pools[0].copy_from_slice_at(offset + 3, &[prefix.next_rate_position() as u64]);
         }
         pools[1].copy_from_slice_at(
@@ -378,7 +378,7 @@ mod tests {
                 let mut words = [0; 4];
                 buffers[0].copy_range_to_slice((index * 6 + lane) * 4, &mut words);
                 let prefix = job.prefix().lane_prefix_v1(lane).unwrap();
-                assert_eq!(&words[..3], &prefix.state());
+                assert_eq!(&words[..3], prefix.state());
                 assert_eq!(words[3], prefix.next_rate_position() as u64);
             }
             offset += job.final_field().len() as u64;

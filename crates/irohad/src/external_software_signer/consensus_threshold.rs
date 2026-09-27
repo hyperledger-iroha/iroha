@@ -11,9 +11,18 @@
 //! compromise. Rotation is a supervisor generation change: publish a bumped
 //! public provider-catalog revision with the matching replacement credential
 //! inventory, then restart the broker so the old process and shares are gone.
+//! Prepared rotation appends the target share while preserving the full incumbent inventory;
+//! a restart imports both, and only consensus chooses which session serves a pulse.
 //! There is no hot reload, and rolling back both catalog and credential rolls
 //! back this operational retirement. Core's committed-state retirement gates
 //! remain the authority for deciding when an old share may be removed.
+
+mod prepared;
+mod provisioning_command;
+pub use prepared::{
+    RuntimePreparedGlobalBeaconCredentialV1, prepare_global_beacon_transition_credential_v1,
+};
+pub(crate) use provisioning_command::dispatch_if_requested as dispatch_beacon_custody_preparation_if_requested;
 
 use crate::runtime_credential::{RuntimeCredentialErrorV1, load_bounded_runtime_credential_v1};
 use crate::{
@@ -1275,8 +1284,8 @@ pub(crate) mod tests {
     use iroha_config_base::toml::TomlSource;
     use iroha_core::{
         beacon::{
-            AdaptiveGlobalThresholdBeaconDkgCryptoV1, GlobalThresholdBeaconDkgStateV1,
-            GlobalThresholdBeaconPulseAggregatorV1, validate_global_threshold_beacon_session_v1,
+            GlobalThresholdBeaconPulseAggregatorV1, complete_beacon_dkg_fixture_for_seat_v1,
+            validate_global_threshold_beacon_session_v1,
         },
         governance::timed_ovn::TimedOvnReleaseIdentityPublicV1,
         tle_release::{
@@ -1287,19 +1296,13 @@ pub(crate) mod tests {
     use iroha_crypto::{
         Hash, HashOf,
         threshold_bls::{
-            AdaptiveThresholdBlsParameters, BeaconPurpose, DasRenDealerSecret,
+            AdaptiveThresholdBlsParameters, DasRenDealerSecret,
             THRESHOLD_BLS_MAX_COMMITTEE_SIZE_V1, ThresholdBlsSession, TleReleasePurpose,
-            ValidatedDealerCommitment,
         },
         tle::TleReleaseIdentityV1,
     };
     use iroha_data_model::{
-        block::BlockHeader,
-        consensus::{
-            GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconChainAnchorV1,
-            GlobalThresholdBeaconDkgConstantProofV1, GlobalThresholdBeaconDkgDealerCommitmentV1,
-            GlobalThresholdBeaconDkgSessionV1,
-        },
+        block::BlockHeader, consensus::GlobalThresholdBeaconChainAnchorV1,
         governance::types::BallotAttemptId,
     };
     use rand::{SeedableRng as _, rngs::StdRng};
@@ -1403,59 +1406,75 @@ pub(crate) mod tests {
         }
     }
 
+    fn beacon_fixture_roster_v1(committee_size: u16) -> Vec<iroha_model_base::peer::PeerId> {
+        let mut peers = (1..=committee_size)
+            .map(|seed| {
+                let key = iroha_crypto::KeyPair::try_from_seed(
+                    vec![u8::try_from(seed).expect("fixture seat fits u8"); 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+                .expect("deterministic signed-DKG roster key");
+                iroha_model_base::peer::PeerId::new(key.public_key().clone())
+            })
+            .collect::<Vec<_>>();
+        peers.sort();
+        peers
+    }
+
+    fn beacon_fixture_roster_hash_v1(committee_size: u16) -> [u8; 32] {
+        iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&beacon_fixture_roster_v1(
+            committee_size,
+        ))
+    }
+
     fn beacon_fixture_with_committee_v1(
         network_id: NetworkId,
         session_byte: u8,
         committee_size: u16,
     ) -> BeaconFixtureV1 {
-        let threshold = committee_size
-            .checked_sub(1)
-            .map(|fault_numerator| fault_numerator / 3 + 1)
-            .expect("beacon fixture committee is nonzero");
-        let dkg_session = GlobalThresholdBeaconDkgSessionV1 {
-            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
+        beacon_fixture_with_roster_hash_v1(
             network_id,
-            session_id: [session_byte; 32],
-            roster_hash: [0x31; 32],
+            session_byte,
             committee_size,
-            threshold,
-            start_height: 1,
-            sharing_end_height: 2,
-            complaints_end_height: 3,
-            responses_end_height: 4,
-        };
-        let threshold_session = ThresholdBlsSession::<BeaconPurpose>::new(
-            *network_id.as_bytes(),
-            dkg_session.session_id,
-            dkg_session.roster_hash,
-            dkg_session.committee_size,
-            dkg_session.threshold,
+            beacon_fixture_roster_hash_v1(committee_size),
         )
-        .expect("construct beacon threshold session");
-        let parameters = AdaptiveThresholdBlsParameters::derive(&threshold_session)
-            .expect("derive beacon fixture parameters");
-        let mut rng = StdRng::from_seed([session_byte.wrapping_add(0x21); 32]);
-        let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-        let mut reducer = GlobalThresholdBeaconDkgStateV1::new(dkg_session, &crypto)
-            .expect("start beacon fixture DKG");
-        let mut components = Zeroizing::new([[0_u8; 32]; 3]);
-        for dealer_index in 1_u16..=dkg_session.committee_size {
-            let (dealer_secret, dealer) =
-                DasRenDealerSecret::generate_with_rng(&parameters, dealer_index, &mut rng)
-                    .expect("generate beacon fixture dealer");
-            let contribution = dealer_secret
-                .private_share(&parameters, &dealer, 1)
-                .expect("derive authenticated beacon fixture contribution")
-                .components_for_authenticated_encryption();
-            accumulate_component_triple_v1(&mut components, &contribution);
-            reducer
-                .record_dealer_commitment(1, beacon_dealer_wire_v1(&dealer), &crypto)
-                .expect("record proof-valid beacon dealer");
-        }
-        let record = reducer
-            .finalize(dkg_session.responses_end_height, &crypto)
-            .expect("finalize beacon fixture DKG")
-            .clone();
+    }
+
+    fn beacon_fixture_with_roster_hash_v1(
+        network_id: NetworkId,
+        session_byte: u8,
+        committee_size: u16,
+        roster_hash: [u8; 32],
+    ) -> BeaconFixtureV1 {
+        beacon_fixture_with_session_v1(network_id, [session_byte; 32], committee_size, roster_hash)
+    }
+
+    fn beacon_fixture_with_session_v1(
+        network_id: NetworkId,
+        session_id: [u8; 32],
+        committee_size: u16,
+        roster_hash: [u8; 32],
+    ) -> BeaconFixtureV1 {
+        beacon_fixture_for_seat_v1(network_id, session_id, committee_size, roster_hash, 1)
+    }
+
+    fn beacon_fixture_for_seat_v1(
+        network_id: NetworkId,
+        session_id: [u8; 32],
+        committee_size: u16,
+        roster_hash: [u8; 32],
+        signer_index: u16,
+    ) -> BeaconFixtureV1 {
+        let (record, components) = complete_beacon_dkg_fixture_for_seat_v1(
+            network_id,
+            session_id,
+            committee_size,
+            signer_index,
+        );
+        assert_eq!(
+            record.roster_hash, roster_hash,
+            "beacon fixture must use the exact signed BLS roster"
+        );
         let binding = beacon_binding_v1(&record);
         let validated = validate_global_threshold_beacon_session_v1(record.clone(), &binding)
             .expect("revalidate beacon fixture transcript");
@@ -1468,23 +1487,6 @@ pub(crate) mod tests {
 
     fn beacon_fixture_v1(network_id: NetworkId, session_byte: u8) -> BeaconFixtureV1 {
         beacon_fixture_with_committee_v1(network_id, session_byte, 4)
-    }
-
-    fn beacon_dealer_wire_v1(
-        dealer: &ValidatedDealerCommitment<BeaconPurpose>,
-    ) -> GlobalThresholdBeaconDkgDealerCommitmentV1 {
-        GlobalThresholdBeaconDkgDealerCommitmentV1 {
-            dealer_index: dealer.dealer_index(),
-            coefficient_commitments: dealer
-                .coefficients()
-                .iter()
-                .map(|coefficient| *coefficient.as_bytes())
-                .collect(),
-            constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
-                commitment: *dealer.constant_proof().commitment_bytes(),
-                response: *dealer.constant_proof().response_bytes(),
-            },
-        }
     }
 
     fn tle_fixture_with_committee_v1(
@@ -1707,6 +1709,98 @@ pub(crate) mod tests {
     pub(crate) fn consensus_threshold_beacon_broker_test_fixture_v1()
     -> ConsensusThresholdBeaconBrokerTestFixtureV1 {
         consensus_threshold_beacon_broker_test_fixture_for_committee_v1(4, 0x79)
+    }
+
+    /// Build an exact-roster provider fixture for the separate readiness broker operation.
+    pub(crate) fn consensus_threshold_beacon_readiness_broker_test_fixture_v1() -> (
+        ConsensusThresholdBeaconBrokerTestFixtureV1,
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySeatReadinessContextV1,
+    ) {
+        use iroha_data_model::isi::kagemusha_v1::{
+            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1, KAGEMUSHA_CHAIN_VERSION_V1,
+            KagemushaMintFinalityAuthorityGenerationV1,
+            KagemushaMintFinalitySeatReadinessContextV1,
+        };
+        let network_id = network_id_v1(0xC1);
+        let mut peers = (1..=4_u8)
+            .map(|seed| {
+                iroha_model_base::peer::PeerId::new(
+                    iroha_crypto::KeyPair::try_from_seed(
+                        vec![seed; 32],
+                        iroha_crypto::Algorithm::BlsNormal,
+                    )
+                    .unwrap()
+                    .public_key()
+                    .clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        peers.sort();
+        let fixture = beacon_fixture_with_roster_hash_v1(
+            network_id,
+            0x89,
+            4,
+            iroha_core::beacon::global_threshold_beacon_roster_hash_v1(&peers),
+        );
+        let session = fixture.validated.clone();
+        let authority = KagemushaMintFinalityAuthorityGenerationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1, network_id, generation: 1,
+            validators: peers.into_iter().enumerate().map(|(index, peer)|
+                iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(&[0xB0 + u8::try_from(index).unwrap(); 32], 1, peer).unwrap()).collect(),
+        };
+        let context = KagemushaMintFinalitySeatReadinessContextV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            transition_id: [0xC3; 32],
+            target_epoch: 2,
+            authority_generation: 1,
+            authority_id: authority.authority_id().unwrap(),
+            first_height: 201,
+            last_height: 300,
+            validator_index: 0,
+            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
+                session_id: session.record().session_id,
+                transcript_hash: session.record().transcript_hash,
+            }),
+        };
+        let provisioning = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
+            fixture.record,
+            1,
+            fixture.components,
+        )];
+        let policy =
+            global_beacon_partial_signer_inventory_digest_v1(network_id, &provisioning).unwrap();
+        let catalog = beacon_catalog_v1(policy);
+        let credential = encode_global_beacon_partial_signer_credential_v1(
+            network_id,
+            HANDLE,
+            REVISION,
+            policy,
+            provisioning,
+        )
+        .unwrap();
+        let backend = decode_global_beacon_credential_v1(
+            &credential,
+            &network_id,
+            catalog.iter().next().unwrap(),
+        )
+        .unwrap();
+        let registry = RuntimeConsensusThresholdSignerBackendsV1 {
+            global_beacon: Some(backend),
+            parliament_tle: None,
+        };
+        let backends = registry.resolve(&catalog).unwrap();
+        (
+            ConsensusThresholdBeaconBrokerTestFixtureV1 {
+                catalog,
+                backends,
+                session,
+                credential,
+            },
+            authority,
+            context,
+        )
     }
 
     /// Builds a maximum-committee beacon fixture for ordinary-stack broker tests.
@@ -2005,6 +2099,8 @@ pub(crate) mod tests {
             .verify_partial_release(&identity, 100, &partial)
             .expect("independently verify Parliament TLE partial");
     }
+
+    include!("consensus_threshold/prepared_tests.rs");
 
     #[test]
     fn beacon_supervisor_restart_rotation_requires_revision_bump_and_removes_predecessor() {

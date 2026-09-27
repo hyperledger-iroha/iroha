@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 321
-type rows preserve 357 populated values and 1,428 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 323
+type rows preserve 359 populated values and 1,436 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`59a6162b6c1b3ab384b3e06dd61cf8326eade4333beae4a07b782813ae88f97a`.
+`f2b1a70d690730c6015f8e7cce2d12c6b7c72240f105985edb3a199fe06cae76`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -42,8 +42,14 @@ including exact root, vector, option and map decode/re-encode checks.
 typed fixture and its real codec roundtrip helper. Its Proposed lifecycle contains
 only `proposed_at_height`; the retired automatic activation-height field is absent.
 All four frame forms were decoded, compared and exactly re-encoded by the generator.
-Only that case's four frames changed in that recapture; nominal and directional
-identities and the strict retired-field rejection tests remained unchanged.
+That checkpoint changed one case while preserving its nominal and directional
+identities and the strict retired-field rejection tests.
+
+On 2026-09-23, the typed current-protocol printers recaptured the Exact12
+qualification and staking rows, including two distinct signed peer rebindings
+and the updated consensus evidence nested in penalty cancellation. The unchanged
+inventory count and complete four-frame roundtrips remain mandatory; no old
+decoder or identity fallback was introduced.
 The opt-in `capture_current_privacy_activation_instruction_identity_frames` test
 prints the actual capture to stdout and never writes the fixture itself.
 
@@ -67,3 +73,17 @@ their unchanged encoded account field, preserving original case order. Only
 these three rows' four frame forms changed; all declared type identities and
 the 321-row, 357-case inventory remain unchanged. The temporary typed capture
 tests were removed afterwards.
+
+`RegisterCapacityDeclaration` was recaptured on 2026-09-26 after its first-release
+input became the sole canonical `declaration` byte frame. Its nominal and directional
+identities are unchanged; the retired caller-authored registry projections are absent.
+`InitializeSorafsProviderAdmissionV1` and `AssertSorafsPublicationV1` were added from
+populated typed values in the same compiler run. The opt-in
+`print_capacity_declaration_record_fixture_row` maintenance test encoded, decoded,
+compared and exactly re-encoded all four frame forms for each of these three values
+before printing the captures. Only the capacity row changed among the existing 321
+rows; the two additions raise the inventory to 323 rows, 359 values and 1,436 frames.
+The initial admission material is a network-independent signed-genesis template;
+this codec fixture does not establish finalized admission or certify publication.
+The complete `generated_record_identity_tests` filter passed on 2026-09-26:
+325 tests passed, none failed and three explicit maintenance captures were ignored.

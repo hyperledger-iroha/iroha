@@ -174,8 +174,9 @@ impl RepairOrchestrator for FailingRepairOrchestrator {
         &self,
         _context: &native_repair_worker::NativeRepairExecutionContextV1,
         _manifest: &StoredManifest,
-        _missing_chunks: &[ChunkFileRecord],
-    ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError> {
+        _missing_chunks: &[&ChunkFileRecord],
+        _sink: &mut dyn FnMut(RepairChunkPayload) -> Result<(), RepairOrchestratorError>,
+    ) -> Result<(), RepairOrchestratorError> {
         self.calls.fetch_add(1, Ordering::Relaxed);
         Err(RepairOrchestratorError::other(
             "simulated transient remote provider outage",

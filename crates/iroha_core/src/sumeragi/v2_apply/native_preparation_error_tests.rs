@@ -2,7 +2,10 @@ mod native_preparation_errors {
     use super::*;
     use crate::{
         block::valid::NativeCandidatePreparationError,
-        state::{BlockHashAdmissionError, MergeLedgerCommitError},
+        state::{
+            BlockHashAdmissionError, MembershipAdmissionError, MergeLedgerCommitError,
+            StateStorageAdmissionError,
+        },
         sumeragi::v2_body_store::{BodyValidationRejectionIdentity, LocalValidationRefusal},
     };
     use std::{
@@ -12,39 +15,86 @@ mod native_preparation_errors {
     };
 
     #[test]
-    fn hash_admission_retains_original_release_and_runner_through_all_native_origins() {
+    fn local_admission_retains_original_release_and_runner_through_all_native_origins() {
         let fixture = ApplyFixture::new_for_production_recovered_decision_apply();
         let (sender, receiver) = std::sync::mpsc::sync_channel(1);
         fixture.service.queue.set_sumeragi_wake(sender);
         for origin in 0..4 {
-            for dependency in 0..3 {
+            for dependency in 0..7 {
                 let release = concread::release::ReleaseNotification::default();
                 let foreign = concread::release::ReleaseNotification::default();
                 let pool = mv::allocation::AllocationBudget::new(1);
                 let occupied = pool.try_reserve_bytes(1).unwrap();
                 let refusal = match dependency {
-                    0 => BlockHashAdmissionError::Busy(release.observe()),
-                    1 => BlockHashAdmissionError::Changed(release.observe()),
-                    _ => {
-                        BlockHashAdmissionError::Capacity(pool.try_reserve_bytes(1).err().unwrap())
-                    }
-                };
-                let expected = refusal.release_wait().unwrap().clone();
-                let error = match origin {
-                    0 => NativeCandidatePreparationError::Preflight(Box::new(
-                        BlockValidationError::BlockHashAdmission(refusal),
+                    0 => BlockValidationError::BlockHashAdmission(BlockHashAdmissionError::Busy(
+                        release.observe(),
                     )),
-                    1 => NativeCandidatePreparationError::Execution(
-                        MergeLedgerCommitError::BlockHashAdmission(refusal),
+                    1 => BlockValidationError::BlockHashAdmission(
+                        BlockHashAdmissionError::Changed(release.observe()),
                     ),
+                    2 => BlockValidationError::BlockHashAdmission(
+                        BlockHashAdmissionError::Capacity(pool.try_reserve_bytes(1).err().unwrap()),
+                    ),
+                    3 => BlockValidationError::StateStorageAdmission(
+                        StateStorageAdmissionError::World(
+                            mv::storage::AdmittedStorageError::Busy {
+                                role: mv::storage::StorageRole::Current,
+                                release: release.observe(),
+                            },
+                        ),
+                    ),
+                    4 => BlockValidationError::StateStorageAdmission(
+                        StateStorageAdmissionError::World(
+                            mv::storage::AdmittedStorageError::Allocation(
+                                pool.try_reserve_bytes(1).err().unwrap(),
+                            ),
+                        ),
+                    ),
+                    5 => BlockValidationError::MembershipAdmission(MembershipAdmissionError::Busy(
+                        release.observe(),
+                    )),
+                    _ => BlockValidationError::MembershipAdmission(
+                        MembershipAdmissionError::Changed(release.observe()),
+                    ),
+                };
+                let (expected_resource, expected) = match &refusal {
+                    BlockValidationError::StateStorageAdmission(error) => {
+                        ("state_storage", error.release_wait().unwrap().clone())
+                    }
+                    BlockValidationError::BlockHashAdmission(error) => {
+                        ("block_hash_history", error.release_wait().unwrap().clone())
+                    }
+                    BlockValidationError::MembershipAdmission(error) => (
+                        "transaction_membership_history",
+                        error.release_wait().unwrap().clone(),
+                    ),
+                    _ => unreachable!("fixture contains local admission errors only"),
+                };
+                let error = match origin {
+                    0 => NativeCandidatePreparationError::Preflight(Box::new(refusal)),
+                    1 | 3 => {
+                        let merge_error = match refusal {
+                            BlockValidationError::StateStorageAdmission(error) => {
+                                MergeLedgerCommitError::StateStorageAdmission(error)
+                            }
+                            BlockValidationError::BlockHashAdmission(error) => {
+                                MergeLedgerCommitError::BlockHashAdmission(error)
+                            }
+                            BlockValidationError::MembershipAdmission(error) => {
+                                MergeLedgerCommitError::MembershipAdmission(error)
+                            }
+                            _ => unreachable!("fixture contains local admission errors only"),
+                        };
+                        if origin == 1 {
+                            NativeCandidatePreparationError::Execution(merge_error)
+                        } else {
+                            NativeCandidatePreparationError::Preparation(merge_error)
+                        }
+                    }
                     2 => NativeCandidatePreparationError::Execution(
-                        MergeLedgerCommitError::NativeControlValidation(Box::new(
-                            BlockValidationError::BlockHashAdmission(refusal),
-                        )),
+                        MergeLedgerCommitError::NativeControlValidation(Box::new(refusal)),
                     ),
-                    _ => NativeCandidatePreparationError::Preparation(
-                        MergeLedgerCommitError::BlockHashAdmission(refusal),
-                    ),
+                    _ => unreachable!("fixture has four native origins"),
                 };
                 let classified = fixture
                     .service
@@ -53,9 +103,9 @@ mod native_preparation_errors {
                 assert!(!classified.requires_restart_recovery());
                 let Some(LocalValidationRefusal::PhysicalBusy(busy)) = classified.local_refusal()
                 else {
-                    panic!("Native origin {origin} lost its exact hash dependency: {classified:?}");
+                    panic!("Native origin {origin} lost its exact dependency: {classified:?}");
                 };
-                assert_eq!(busy.resource, "block_hash_history");
+                assert_eq!(busy.resource, expected_resource);
                 assert_eq!(busy.wait, expected);
                 let mut wait = busy.wait.clone().wait_for_release();
                 assert_eq!(
@@ -68,7 +118,7 @@ mod native_preparation_errors {
                     Poll::Pending
                 );
                 assert!(receiver.try_recv().is_err());
-                if dependency == 2 {
+                if matches!(dependency, 2 | 4) {
                     drop(release.guard(()));
                     assert_eq!(
                         Pin::new(&mut wait).poll(&mut Context::from_waker(busy.waker())),
@@ -95,6 +145,17 @@ mod native_preparation_errors {
                 assert!(receiver.try_recv().is_err());
             }
         }
+    }
+
+    #[test]
+    fn npos_application_semantic_error_remains_a_deterministic_rejection() {
+        assert_eq!(
+            BlockValidationError::from_npos_application_error(
+                eyre::eyre!("invalid penalty action"),
+                "NPoS effects",
+            ),
+            BlockValidationError::NposEffectsInvalid("NPoS effects: invalid penalty action".into()),
+        );
     }
 
     #[test]

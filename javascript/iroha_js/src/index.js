@@ -682,3 +682,5 @@ export {
 } from "./soradns.js";
 
 export { buildCanonicalMultisigContractCall } from "./multisigContractCall.js";
+
+export { ConfidentialProver, ConfidentialProverError } from "./confidentialProofBuilders.js";

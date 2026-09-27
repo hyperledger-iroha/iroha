@@ -51,10 +51,11 @@ fn fixture(queries: &[usize]) -> DeepProof {
             .collect(),
         quotients: queries
             .iter()
-            .map(|&index| QuotientOpening {
+            .map(|&index| QuotientMaskOpening {
                 index: index as u32,
                 low: fp4(index),
                 high: fp4(index + 1),
+                composition_mask: fp4(index + 2),
             })
             .collect(),
         row_siblings: vec![digest; plans.initial.work().siblings],
@@ -152,7 +153,7 @@ fn exact_linked_upper_frontier_encodes_below_512k_and_roundtrips() {
             .all(|indices| indices.len() == QUERY_COUNT)
     );
     let bytes = norito::encode_canonical(&proof).unwrap();
-    assert_eq!(bytes.len(), 500_783);
+    assert_eq!(bytes.len(), 502_895);
     assert_eq!(bytes.len(), MAX_FRAME_BYTES);
     assert_eq!(bytes.len(), maximum_frame_bytes());
     assert_eq!(
@@ -160,7 +161,7 @@ fn exact_linked_upper_frontier_encodes_below_512k_and_roundtrips() {
         bytes.len()
     );
     assert!(bytes.len() < PROOF_BYTE_TARGET);
-    assert_eq!(PROOF_BYTE_TARGET - bytes.len(), 23_505);
+    assert_eq!(PROOF_BYTE_TARGET - bytes.len(), 21_393);
     for offset in [0, 1, 7] {
         let mut storage = vec![0; offset];
         storage.extend(&bytes);
@@ -411,7 +412,8 @@ fn each_scalar_family_and_digest_lane_rejects_noncanonical_wire_values() {
     scalars.push(nested_field(&original, row, 1));
     let quotient = element(&original, field(&original, 5), 0);
     scalars.push(nested_field(&original, quotient.clone(), 1));
-    scalars.push(nested_field(&original, quotient, 2));
+    scalars.push(nested_field(&original, quotient.clone(), 2));
+    scalars.push(nested_field(&original, quotient, 3));
     scalars.push(element(&original, field(&original, 6), 0));
     scalars.push(element(&original, field(&original, 7), 0));
     let round = element(&original, field(&original, 8), 0);

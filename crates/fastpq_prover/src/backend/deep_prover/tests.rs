@@ -1,854 +1,400 @@
-//! Producer preflight, actual typed trees and an explicit full proof diagnostic.
+//! Whole-attempt budget/entropy controls and an explicit full-size native diagnostic.
 
 use super::*;
-use crate::backend::{
-    GOLDILOCKS_MODULUS,
-    compact_transfer_air::CompactTransferAir,
-    deep_engine,
-    deep_geometry::QUERY_COUNT,
-    deep_quotient::tests::{actual_smt_fixture, actual_smt_relation},
-    merkle_multiproof::{MultiproofLimits, MultiproofWork},
+use crate::{
+    backend::compact_transfer_air::CompactTransferAir,
+    gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
 };
+use rand::{SeedableRng, TryRngCore, rngs::StdRng};
 
-fn limits() -> ProverLimits {
-    ProverLimits {
+fn limits() -> ConstructionLimits {
+    ConstructionLimits {
         digest_execution: DigestExecutionV1::Cpu,
         max_payload_bytes: usize::MAX,
-        quotient: DeepQuotientLimits {
-            max_payload_bytes: usize::MAX,
-            max_work_units: usize::MAX,
-        },
+        max_work_units: usize::MAX,
+        max_hash_calls: usize::MAX,
         max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
     }
 }
-
-fn dense(seed: u64) -> F {
-    F::new([seed + 1, 2 * seed + 3, 3 * seed + 5, 5 * seed + 7]).unwrap()
+fn digest(seed: u8) -> [u32; 8] {
+    limbs(iroha_crypto::Hash::new([seed; 33]).as_ref())
 }
-
-fn multiproof(leaves: usize, indices: &[usize]) -> MultiproofPlan {
-    MultiproofPlan::new(
-        leaves,
-        indices,
-        MultiproofLimits {
-            max_depth: 23,
-            max_queried_leaves: 128,
-            max_siblings: 128 * 23,
-            max_parent_hashes: 128 * 23,
-        },
-    )
-    .unwrap()
+fn limbs(bytes: &[u8; 32]) -> [u32; 8] {
+    core::array::from_fn(|i| u32::from_le_bytes(bytes[4 * i..4 * i + 4].try_into().unwrap()))
 }
-
-fn verify_frontier(
-    context: &Context,
-    oracle: Oracle,
-    plan: &MultiproofPlan,
-    root: Digest,
-    leaves: &[Digest],
-    frontier: &[WireDigest],
-) -> Result<MultiproofWork> {
-    let siblings = frontier
-        .iter()
-        .map(|value| value.as_fastpq())
-        .collect::<Vec<_>>();
-    plan.verify_parallel_with(root, leaves, &siblings, |level, index, left, right| {
-        context
-            .hash_parent(oracle, level as u32, index as u32, left, right)
-            .map_err(binding_error)
-    })
+fn statement() -> PublicStatement {
+    PublicStatement {
+        updates: [
+            PublicUpdate {
+                old_leaf: digest(1),
+                new_leaf: digest(2),
+                path: 7,
+            },
+            PublicUpdate {
+                old_leaf: digest(3),
+                new_leaf: digest(4),
+                path: 11,
+            },
+        ],
+        old_root: digest(5),
+        new_root: digest(6),
+    }
 }
-
-fn changed_digest(digest: Digest) -> Digest {
-    let mut words = digest.words();
-    words[0] = if words[0] == GOLDILOCKS_MODULUS - 1 {
-        0
-    } else {
-        words[0] + 1
-    };
-    Digest::new(words).unwrap()
+struct NoEntropy(usize);
+impl TryRngCore for NoEntropy {
+    type Error = &'static str;
+    fn try_next_u32(&mut self) -> std::result::Result<u32, Self::Error> {
+        self.0 += 1;
+        Err("unexpected entropy")
+    }
+    fn try_next_u64(&mut self) -> std::result::Result<u64, Self::Error> {
+        self.0 += 1;
+        Err("unexpected entropy")
+    }
+    fn try_fill_bytes(&mut self, _: &mut [u8]) -> std::result::Result<(), Self::Error> {
+        self.0 += 1;
+        Err("unexpected entropy")
+    }
 }
+impl TryCryptoRng for NoEntropy {}
 
 #[test]
-fn preflight_checks_complete_source_shape_and_canonicality_before_large_allocations() {
-    let relation = actual_smt_relation(Some(b"preflight"));
-    let empty = [&[][..]; COMMITTED_COLUMN_COUNT];
-    for width in [0, 300, 302, 342] {
-        assert!(matches!(
-            preflight(&relation, &vec![&[][..]; width], limits()),
-            Err(Error::InvalidTraceShape { .. })
-        ));
-    }
-    let oversized = vec![0; TRACE_ROWS + 1];
-    let mut columns = empty;
-    columns[COMMITTED_COLUMN_COUNT - 1] = &oversized;
-    assert!(matches!(
-        preflight(&relation, &columns, limits()),
-        Err(Error::InvalidTraceShape { .. })
-    ));
-    for column in 0..COMMITTED_COLUMN_COUNT {
-        let invalid = [0, GOLDILOCKS_MODULUS];
-        let mut columns = empty;
-        columns[column] = &invalid;
-        assert!(matches!(preflight(&relation, &columns, limits()),
-            Err(Error::NonCanonicalGoldilocksElement { context: "deep_prover_coefficients", indices }) if indices == [column, 1]));
-    }
-    let mut boundary = vec![0; TRACE_ROWS];
-    boundary[TRACE_ROWS - 1] = GOLDILOCKS_MODULUS;
-    columns[COMMITTED_COLUMN_COUNT - 1] = &boundary;
-    assert!(matches!(preflight(&relation, &columns, limits()),
-        Err(Error::NonCanonicalGoldilocksElement { context: "deep_prover_coefficients", indices }) if indices == [COMMITTED_COLUMN_COUNT - 1, TRACE_ROWS - 1]));
-    boundary[TRACE_ROWS - 1] = GOLDILOCKS_MODULUS - 1;
-    let mut accepted = empty;
-    accepted[COMMITTED_COLUMN_COUNT - 1] = &boundary;
-    preflight(&relation, &accepted, limits()).unwrap();
-    preflight(&relation, &empty, limits()).unwrap();
-    let geometry = DeepGeometry::new().unwrap();
-    assert!(base_lde(&geometry, &oversized).is_err());
-    assert!(matches!(base_lde(&geometry, &[GOLDILOCKS_MODULUS]),
-        Err(Error::NonCanonicalGoldilocksElement { context: "deep_prover_base_lde", indices }) if indices == [0]));
-}
-
-#[test]
-fn proof_and_payload_policies_reject_before_domain_sized_buffers() {
-    let relation = actual_smt_relation(Some(b"policy preflight"));
-    let columns = [&[][..]; COMMITTED_COLUMN_COUNT];
-    let charge = payload_charge(0).unwrap();
-    assert!(charge > COMMITTED_COLUMN_COUNT * LDE_ROWS * 8);
-    assert_eq!(payload_charge(123_457).unwrap(), charge + 123_457);
-    assert!(payload_charge(usize::MAX).is_err());
-    assert!(matches!(
-        prove(
-            &relation,
-            &columns,
-            ProverLimits {
-                max_proof_bytes: deep_proof::MAX_FRAME_BYTES - 1,
-                ..limits()
-            }
-        ),
-        Err(Error::VerifierLimitExceeded {
-            limit: "max_deep_proof_bytes",
-            actual: deep_proof::MAX_FRAME_BYTES,
-            ..
-        })
-    ));
-    assert!(matches!(prove(&relation, &columns, ProverLimits {
-        max_payload_bytes: charge - 1, ..limits()
-    }), Err(Error::VerifierLimitExceeded { limit: "max_deep_prover_payload_bytes", actual, .. }) if actual == charge));
-    preflight(
-        &relation,
-        &columns,
-        ProverLimits {
-            max_payload_bytes: charge,
-            max_proof_bytes: deep_proof::MAX_FRAME_BYTES,
+#[cfg(feature = "fastpq-gpu")]
+fn required_device_failure_precedes_source_reading_and_entropy() {
+    let air = CompactTransferAir::new(&statement(), None).unwrap();
+    let plan = ProducerPlan::new(
+        &air,
+        ConstructionLimits {
+            digest_execution: DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Cuda),
             ..limits()
         },
     )
     .unwrap();
-    // The only calls to prove in ordinary tests fail before allocating a public
-    // coefficient matrix, base LDE, FRI layer or full commitment tree.
+    let mut rng = NoEntropy(0);
     assert!(matches!(
-        prove(
-            &relation,
-            &columns,
-            ProverLimits {
-                quotient: DeepQuotientLimits {
-                    max_payload_bytes: 0,
-                    max_work_units: 0
-                },
+        plan.build(&[], &mut rng),
+        Err(Error::NativeDigestExecution { .. })
+    ));
+    assert_eq!(rng.0, 0);
+}
+
+#[test]
+fn whole_attempt_preflight_binds_every_budget_before_entropy_or_private_allocation() {
+    let air = CompactTransferAir::new(&statement(), None).unwrap();
+    let plan = ProducerPlan::new(&air, limits()).unwrap();
+    eprintln!(
+        "deep_complete_producer_payload_bytes={}; structural_work_units={}; hash_calls={}",
+        plan.payload_bytes, plan.work_units, plan.hash_calls
+    );
+    assert!(plan.payload_bytes < 2 * 1024 * 1024 * 1024);
+    assert!(plan.payload_bytes > plan.quotient.payload_bytes);
+    assert!(plan.work_units > plan.quotient.work_units);
+    assert!(plan.hash_calls > 4 * (2 * LDE_ROWS - 1));
+    let exact = ConstructionLimits {
+        digest_execution: DigestExecutionV1::Cpu,
+        max_payload_bytes: plan.payload_bytes,
+        max_work_units: plan.work_units,
+        max_hash_calls: plan.hash_calls,
+        max_proof_bytes: deep_proof::MAX_FRAME_BYTES,
+    };
+    assert!(ProducerPlan::new(&air, exact).is_ok());
+    for budget in [
+        ConstructionLimits {
+            max_payload_bytes: exact.max_payload_bytes - 1,
+            ..exact
+        },
+        ConstructionLimits {
+            max_work_units: exact.max_work_units - 1,
+            ..exact
+        },
+        ConstructionLimits {
+            max_hash_calls: exact.max_hash_calls - 1,
+            ..exact
+        },
+        ConstructionLimits {
+            max_proof_bytes: exact.max_proof_bytes - 1,
+            ..exact
+        },
+    ] {
+        assert!(ProducerPlan::new(&air, budget).is_err());
+    }
+    let mut rng = NoEntropy(0);
+    // A valid plan cannot turn an absent source into entropy consumption or a tree.
+    assert!(plan.build(&[], &mut rng).is_err());
+    assert_eq!(rng.0, 0);
+    assert!(
+        ProducerPlan::new(
+            &air,
+            ConstructionLimits {
+                max_payload_bytes: 0,
                 ..limits()
             }
-        ),
-        Err(Error::VerifierLimitExceeded {
-            limit: "max_deep_quotient_preparation_bytes",
-            ..
-        })
-    ));
+        )
+        .is_err()
+    );
 }
 
 #[test]
-fn actual_final_fri_tree_has_exact_frontier_and_rejects_tampering() {
-    let binding = Context::new(b"small actual final FRI tree").unwrap();
-    let oracle = Oracle::Fri(4);
-    let mut tree = Tree::build(&binding, oracle, 128, DigestExecutionV1::Cpu, |index| {
-        let bytes: Vec<_> = (0..4)
-            .flat_map(|coordinate| dense((4 * index + coordinate) as u64).to_le_bytes())
-            .collect();
-        binding.prepare_leaf(oracle, index as u32, &bytes)
-    })
-    .unwrap();
+fn frontier_envelope_and_replayed_root_equality_are_explicit() {
+    let queries = maximal_queries();
+    let plans = OpeningPlans::new(&queries).unwrap();
+    assert_eq!(plans.initial.work().siblings, 1088);
     assert_eq!(
-        tree.levels.iter().map(Vec::len).collect::<Vec<_>>(),
-        [128, 64, 32, 16, 8, 4, 2, 1]
-    );
-    let indices = [0, 1, 31, 64, 127];
-    let plan = multiproof(128, &indices);
-    let leaves = indices.map(|index| tree.levels[0][index]);
-    let frontier = tree.frontier(&plan).unwrap();
-    assert_eq!(frontier.len(), plan.work().siblings);
-    for (value, position) in frontier.iter().zip(plan.sibling_positions()) {
-        assert_eq!(
-            value.as_fastpq(),
-            tree.levels[position.level][position.index]
-        );
-    }
-    assert_eq!(
-        verify_frontier(&binding, oracle, &plan, tree.root(), &leaves, &frontier).unwrap(),
-        plan.work()
-    );
-    let mut changed_leaves = leaves;
-    changed_leaves[2] = changed_digest(changed_leaves[2]);
-    assert!(
-        verify_frontier(
-            &binding,
-            oracle,
-            &plan,
-            tree.root(),
-            &changed_leaves,
-            &frontier
-        )
-        .is_err()
-    );
-    let mut changed_frontier = frontier.clone();
-    changed_frontier[0] = WireDigest::from(changed_digest(changed_frontier[0].as_fastpq()));
-    assert!(
-        verify_frontier(
-            &binding,
-            oracle,
-            &plan,
-            tree.root(),
-            &leaves,
-            &changed_frontier
-        )
-        .is_err()
+        plans.rounds.each_ref().map(|p| p.work().siblings),
+        [832, 576, 384, 192, 64]
     );
     assert!(
-        verify_frontier(
-            &binding,
-            oracle,
-            &plan,
-            tree.root(),
-            &leaves,
-            &frontier[..frontier.len() - 1]
-        )
-        .is_err()
+        plans
+            .round_indices
+            .iter()
+            .all(|positions| positions.len() == QUERY_COUNT)
     );
-    let changed_context = Context::new(b"different final FRI tree context").unwrap();
-    assert!(
-        verify_frontier(
-            &changed_context,
-            oracle,
-            &plan,
-            tree.root(),
-            &leaves,
-            &frontier
-        )
-        .is_err()
-    );
-    assert!(
-        verify_frontier(
-            &binding,
-            Oracle::Fri(3),
-            &plan,
-            tree.root(),
-            &leaves,
-            &frontier
-        )
-        .is_err()
-    );
-    assert!(tree.frontier(&multiproof(256, &[0])).is_err());
-    tree.levels[0][0] = changed_digest(tree.levels[0][0]);
-    assert!(tree.frontier(&plan).is_err());
-    // Invalid oracle geometry fails before the leaf callback can run.
-    for (oracle, leaves) in [
-        (Oracle::Fri(4), 64),
-        (Oracle::Fri(5), 128),
-        (Oracle::Terminal, 2),
-    ] {
-        assert!(
-            Tree::build(
-                &binding,
-                oracle,
-                leaves,
-                DigestExecutionV1::Cpu,
-                |_| panic!("invalid geometry reached leaf allocation")
-            )
-            .is_err()
-        );
-    }
+    let first = Digest::new([1, 2, 3, 5, 7, 11]).unwrap();
+    let second = Digest::new([1, 2, 3, 5, 7, 13]).unwrap();
+    same_root(first, first).unwrap();
+    assert!(same_root(first, second).is_err());
+    let context = Context::new(b"whole producer scheduling regression").unwrap();
+    let mut transcript = Transcript::new(context);
+    assert!(fields(&mut transcript, CONSTRAINTS).is_err());
+    assert!(fields(&mut transcript, 1).is_err());
 }
 
 #[test]
-fn complete_terminal_is_one_leaf_with_its_required_duplicate_parent() {
-    let binding = Context::new(b"complete terminal").unwrap();
-    let terminal: Vec<_> = [dense(19); 128]
-        .into_iter()
-        .flat_map(|value| value.to_le_bytes())
-        .collect();
-    let leaf = binding.hash_leaf(Oracle::Terminal, 0, &terminal).unwrap();
-    let mut tree = Tree::build(
-        &binding,
-        Oracle::Terminal,
-        1,
-        DigestExecutionV1::Cpu,
-        |_| binding.prepare_leaf(Oracle::Terminal, 0, &terminal),
-    )
-    .unwrap();
-    assert_eq!(tree.levels.iter().map(Vec::len).collect::<Vec<_>>(), [2, 1]);
-    assert_eq!(tree.levels[0], [leaf, leaf]);
-    let expected = binding
-        .hash_parent(Oracle::Terminal, 1, 0, leaf, leaf)
-        .unwrap();
-    assert_eq!(tree.root(), expected);
-    assert_ne!(tree.root(), leaf);
-    let plan = multiproof(1, &[0]);
-    let frontier = tree.frontier(&plan).unwrap();
-    assert!(frontier.is_empty());
-    let work = verify_frontier(
-        &binding,
-        Oracle::Terminal,
-        &plan,
-        tree.root(),
-        &[leaf],
-        &frontier,
-    )
-    .unwrap();
-    assert_eq!(work.parent_hashes, 1);
-    assert_eq!(work.queried_leaves, 1);
-    assert!(verify_frontier(&binding, Oracle::Terminal, &plan, leaf, &[leaf], &frontier).is_err());
-    assert!(
-        verify_frontier(
-            &binding,
-            Oracle::Terminal,
-            &plan,
-            tree.root(),
-            &[changed_digest(leaf)],
-            &frontier
-        )
-        .is_err()
-    );
-    tree.levels[0][1] = changed_digest(leaf);
-    assert!(tree.frontier(&plan).is_err());
-}
-
-// Only the explicitly ignored qualification probes use this test-only setting.
-// Artifact paths remain under ignored validation storage. Existing proof bytes
-// can be reverified without reconstructing a witness or running the producer.
-fn proof_artifact_path() -> Option<std::path::PathBuf> {
-    use std::path::{Component, PathBuf};
-    let requested = std::env::var_os("FASTPQ_DEEP_PROOF_ARTIFACT")?;
-    let base =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/fastpq-production-validation");
-    std::fs::create_dir_all(&base).unwrap();
-    let base = base.canonicalize().unwrap();
-    let requested = PathBuf::from(requested);
-    assert!(
-        !requested
-            .components()
-            .any(|component| matches!(component, Component::ParentDir))
-    );
-    let path = if requested.is_absolute() {
-        requested
-    } else {
-        base.join(requested)
-    };
-    assert!(
-        path.starts_with(&base),
-        "proof artifact must remain in ignored validation storage"
-    );
-    Some(path)
-}
-
-fn proof_artifact_base() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/fastpq-production-validation")
-        .canonicalize()
-        .unwrap()
-}
-
-// Preserve bytes before verification, so a failed full probe remains reproducible.
-fn preserve_proof_if_requested(bytes: &[u8]) {
-    use std::io::Write;
-    let Some(path) = proof_artifact_path() else {
-        return;
-    };
-    let parent = path.parent().unwrap();
-    std::fs::create_dir_all(parent).unwrap();
-    assert!(
-        parent
-            .canonicalize()
-            .unwrap()
-            .starts_with(proof_artifact_base())
-    );
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)
-        .unwrap();
-    file.write_all(bytes).unwrap();
-    file.sync_all().unwrap();
-    eprintln!(
-        "deep_proof_artifact={} bytes={}",
-        path.display(),
-        bytes.len()
-    );
-}
-
-fn read_captured_proof() -> Vec<u8> {
-    use std::io::Read;
-    let path = proof_artifact_path()
-        .expect("set FASTPQ_DEEP_PROOF_ARTIFACT to an existing captured proof");
-    assert!(
-        path.canonicalize()
-            .unwrap()
-            .starts_with(proof_artifact_base())
-    );
-    let mut file = std::fs::File::open(&path).unwrap();
-    let metadata = file.metadata().unwrap();
-    assert!(metadata.is_file());
-    let length = usize::try_from(metadata.len()).unwrap();
-    assert!(
-        length <= deep_proof::MAX_FRAME_BYTES,
-        "captured proof exceeds frame ceiling"
-    );
-    // Allocate only after inspecting the opened file's bounded length. Reading
-    // exactly that many bytes and checking EOF also rejects a concurrent append.
-    let mut bytes = vec![0; length];
-    file.read_exact(&mut bytes).unwrap();
-    assert_eq!(
-        file.read(&mut [0]).unwrap(),
-        0,
-        "captured proof changed while reading"
-    );
-    eprintln!(
-        "deep_proof_artifact_read={} bytes={}",
-        path.display(),
-        bytes.len()
-    );
-    bytes
-}
-
-#[test]
-#[ignore = "actual 8M-domain DEEP proof: tens of GiB and costly hashes/FFTs; explicit local qualification only"]
-fn actual_smt_proof_roundtrips_through_bounded_verifier_and_rejects_context_and_tampering() {
-    actual_smt_proof_with_execution(DigestExecutionV1::Cpu);
-}
-
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-#[test]
-#[ignore = "actual Metal 8M-domain DEEP proof; requires FASTPQ_DEEP_PROOF_ARTIFACT and tens of GiB; no CPU substitution"]
-fn actual_metal_smt_proof_roundtrips_through_bounded_verifier_and_rejects_context_and_tampering() {
-    let _lane = crate::backend::acquire_gpu_lane();
-    assert!(
-        proof_artifact_path().is_some(),
-        "set FASTPQ_DEEP_PROOF_ARTIFACT to preserve the actual Metal proof"
-    );
-    // Device is a required executor: unavailable/quarantined hardware or any
-    // dispatch failure returns an error, rather than a successful CPU proof.
-    actual_smt_proof_with_execution(DigestExecutionV1::Device(
-        crate::Digest384GpuBackendV1::Metal,
-    ));
-}
-
-fn actual_smt_proof_with_execution(execution: DigestExecutionV1) {
-    let started = std::time::Instant::now();
-    let (relation, coefficients) = actual_smt_fixture();
-    let borrowed = coefficients.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let bytes = prove(
-        &relation,
-        &borrowed,
-        ProverLimits {
-            digest_execution: execution,
-            // Conservative array payload ceilings, not limits on process RSS.
-            // These allow the ~30 GiB retained producer plus its 4N quotient.
-            max_payload_bytes: usize::try_from(64_u64 << 30).unwrap(),
-            quotient: DeepQuotientLimits {
-                max_payload_bytes: usize::try_from(8_u64 << 30).unwrap(),
-                // Finite structural field/inspection work, checked by the exact
-                // 4N quotient plan before any 8M LDE or commitment allocation.
-                // Even the checked ledger maxima bound this below 167e9 units.
-                max_work_units: usize::try_from(1_u64 << 42).unwrap(),
-            },
-            max_proof_bytes: deep_proof::PROOF_BYTE_TARGET,
+fn canonical_output_writer_is_byte_exact_and_refuses_short_cap_before_output() {
+    // Serializer-only fixture: empty vectors deliberately do not satisfy the
+    // proof relation. Production construction preflights and verifies separately.
+    let proof = DeepProof {
+        row_root: Digest::default().into(),
+        quotient_root: Digest::default().into(),
+        fri_roots: Vec::new(),
+        ood: OodAnswers {
+            current: Vec::new(),
+            next: Vec::new(),
+            quotient: Vec::new(),
         },
-    )
-    .unwrap();
-    drop(borrowed);
-    drop(coefficients);
-    preserve_proof_if_requested(&bytes);
-    let proving_elapsed = started.elapsed();
-    let started = std::time::Instant::now();
-    assert_valid_and_tamper(&relation, &bytes);
-    eprintln!(
-        "deep_full_proof_executor={execution:?}; bytes={}; proving={proving_elapsed:?}; verification_and_tampering={:?}; production_security_qualified=false",
-        bytes.len(),
-        started.elapsed()
-    );
-}
-
-#[test]
-#[ignore = "explicit retained-artifact qualification; requires FASTPQ_DEEP_PROOF_ARTIFACT"]
-fn verify_captured_actual_smt_proof() {
-    let bytes = read_captured_proof();
-    let relation = actual_smt_relation(Some(b"actual unmasked quotient control"));
-    assert_valid_and_tamper(&relation, &bytes);
-}
-
-fn assert_valid_and_tamper(relation: &CompactTransferAir, bytes: &[u8]) {
-    assert!(bytes.len() <= deep_proof::MAX_FRAME_BYTES);
-    assert!(bytes.len() <= deep_proof::PROOF_BYTE_TARGET);
-    let proof = deep_proof::decode(bytes, deep_proof::PROOF_BYTE_TARGET).unwrap();
-    assert_eq!(norito::encode_canonical(&proof).unwrap().as_slice(), bytes);
-    let policy = crate::VerifyLimits::default();
-    let committed =
-        deep_engine::verify_committed(relation, bytes, policy, deep_proof::MAX_ALLOCATION_CHARGES)
-            .unwrap();
-    assert_eq!(committed.row_root(), proof.row_root);
-    let work = committed.work();
-    assert_eq!(work.proof_bytes, bytes.len());
-    assert_eq!(work.air_evaluations, 1);
-    assert_eq!(work.verifier_messages, 10);
-    assert_eq!(work.g_blocks, 637);
-    assert_eq!(work.fold_checks, QUERY_COUNT * FRI_ARITIES.len());
-    assert_eq!(work.terminal_values, 128);
-    assert!(work.h_calls <= 5125);
-    eprintln!("deep_full_proof_verified={work:?}");
-    let changed_context =
-        actual_smt_relation(Some(b"changed caller context with identical SMT statement"));
-    assert!(
-        deep_engine::verify_committed(
-            &changed_context,
-            bytes,
-            policy,
-            deep_proof::MAX_ALLOCATION_CHARGES,
-        )
-        .is_err()
-    );
-    assert!(
-        deep_engine::verify_committed(
-            relation,
-            bytes,
-            crate::VerifyLimits {
-                max_proof_bytes: bytes.len() - 1,
-                ..policy
-            },
-            deep_proof::MAX_ALLOCATION_CHARGES,
-        )
-        .is_err()
-    );
-    let mut changed = proof.clone();
-    changed.ood.quotient[0] = changed.ood.quotient[0].add(F::ONE);
-    assert!(
-        deep_engine::verify_committed(
-            relation,
-            &norito::encode_canonical(&changed).unwrap(),
-            policy,
-            deep_proof::MAX_ALLOCATION_CHARGES,
-        )
-        .is_err()
-    );
-    changed = proof.clone();
-    let mut values = changed.rows[0].values.to_vec();
-    values[0] = if values[0] == GOLDILOCKS_MODULUS - 1 {
-        0
-    } else {
-        values[0] + 1
+        rows: Vec::new(),
+        quotients: Vec::new(),
+        row_siblings: Vec::new(),
+        quotient_siblings: Vec::new(),
+        rounds: Vec::new(),
+        terminal: Vec::new(),
     };
-    changed.rows[0].values = RowValues::new(values).unwrap();
-    assert!(
-        deep_engine::verify_committed(
-            relation,
-            &norito::encode_canonical(&changed).unwrap(),
-            policy,
-            deep_proof::MAX_ALLOCATION_CHARGES,
-        )
-        .is_err()
-    );
-    changed = proof;
-    changed.terminal[127] = changed.terminal[127].add(F::ONE);
-    assert!(
-        deep_engine::verify_committed(
-            relation,
-            &norito::encode_canonical(&changed).unwrap(),
-            policy,
-            deep_proof::MAX_ALLOCATION_CHARGES,
-        )
-        .is_err()
-    );
+    let expected = norito::encode_canonical(&proof).unwrap();
+    assert_eq!(encode_bounded(&proof, expected.len()).unwrap(), expected);
+    assert!(encode_bounded(&proof, expected.len() - 1).is_err());
+    assert!(deep_proof::decode(&expected, deep_proof::PROOF_BYTE_TARGET).is_err());
 }
 
 #[test]
-fn prepared_leaves_and_parents_match_independent_canonical_hashes() {
-    let binding = Context::new(&vec![73; 200 * 1024]).unwrap();
-    for oracle in [
-        Oracle::Row,
-        Oracle::QuotientPair,
-        Oracle::Fri(0),
-        Oracle::Fri(4),
-        Oracle::Terminal,
-    ] {
-        let (_, _, leaves, width) = oracle.shape().unwrap();
-        for index in [0, leaves - 1] {
-            let payload: Vec<_> = (0..width / 8)
-                .flat_map(|i| (i as u64 + 1).to_le_bytes())
-                .collect();
-            let prepared = binding
-                .prepare_leaf(oracle, index as u32, &payload)
-                .unwrap();
-            assert_eq!(prepared.job().unwrap().prefix().received_len(), 0);
-            assert!(prepared.job().unwrap().final_field().len() <= MAX_PREPARED_HASH_FRAME_BYTES);
-            assert_eq!(
-                execute_prepared_frames(&[prepared], DigestExecutionV1::Cpu).unwrap(),
-                [binding.hash_leaf(oracle, index as u32, &payload).unwrap()]
-            );
-            assert!(
-                binding
-                    .prepare_leaf(oracle, leaves as u32, &payload)
-                    .is_err()
-            );
-            assert!(
-                binding
-                    .prepare_leaf(oracle, index as u32, &payload[..width - 1])
-                    .is_err()
-            );
-            let mut malformed = payload;
-            malformed[..8].copy_from_slice(&GOLDILOCKS_MODULUS.to_le_bytes());
-            assert!(
-                binding
-                    .prepare_leaf(oracle, index as u32, &malformed)
-                    .is_err()
-            );
-        }
-    }
-    let left = Digest::new([1, 2, 3, 4, 5, 6]).unwrap();
-    let right = Digest::new([6, 5, 4, 3, 2, 1]).unwrap();
-    for (oracle, level, index) in [
-        (Oracle::Row, 1, 257),
-        (Oracle::Row, 23, 0),
-        (Oracle::Fri(0), 2, 513),
-    ] {
-        let frame = binding
-            .prepare_parent(oracle, level, index, left, right)
-            .unwrap();
-        assert_eq!(
-            execute_prepared_frames(&[frame], DigestExecutionV1::Cpu).unwrap(),
-            [binding
-                .hash_parent(oracle, level, index, left, right)
-                .unwrap()]
-        );
-        assert!(
-            binding
-                .prepare_parent(oracle, 0, index, left, right)
-                .is_err()
-        );
-    }
-    assert!(
-        binding
-            .prepare_parent(Oracle::Terminal, 1, 0, left, right)
-            .is_err()
-    );
-    assert!(
-        binding
-            .prepare_parent(Oracle::Row, 24, 0, left, right)
-            .is_err()
-    );
-}
-
-#[test]
-fn bounded_tree_preserves_all_levels_across_leaf_preparation_boundaries() {
-    let binding = Context::new(b"bounded tree preparation boundary").unwrap();
-    let oracle = Oracle::Fri(3);
-    let (_, _, count, width) = oracle.shape().unwrap();
-    assert_eq!(count, 2 * HASH_BATCH_FRAMES);
-    let payload = |index: usize| {
-        (0..width / 8)
-            .flat_map(|column| ((index * width + column) as u64).to_le_bytes())
-            .collect::<Vec<_>>()
+#[ignore = "explicit full 8M-row DEEP producer: over 69M typed hashes; run with measured resource budget"]
+fn complete_native_masked_deep_producer_roundtrip_and_statement_rejection() {
+    use crate::gadgets::{
+        compact_smt_air::PhysicalSmtWitness, compact_trace_columns::smt_row_cells,
     };
-    let tree = Tree::build(&binding, oracle, count, DigestExecutionV1::Cpu, |index| {
-        binding.prepare_leaf(oracle, index as u32, &payload(index))
-    })
-    .unwrap();
-    let mut expected = (0..count)
-        .map(|index| {
-            binding
-                .hash_leaf(oracle, index as u32, &payload(index))
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(tree.levels[0], expected);
-    for (level, actual) in tree.levels.iter().enumerate().skip(1) {
-        expected = expected
-            .chunks_exact(2)
-            .enumerate()
-            .map(|(index, pair)| {
-                binding
-                    .hash_parent(oracle, level as u32, index as u32, pair[0], pair[1])
-                    .unwrap()
-            })
-            .collect();
-        assert_eq!(actual, &expected);
-    }
-    assert_eq!(tree.root(), expected[0]);
-}
-
-#[test]
-fn fixed_hash_preparation_charge_includes_guarded_bodies_jobs_rows_and_backend_pages() {
-    let bodies = HASH_BATCH_FRAMES * MAX_PREPARED_HASH_FRAME_BYTES;
-    let descriptors_and_rows = HASH_BATCH_FRAMES
-        * (core::mem::size_of::<Result<PreparedHashFrame>>()
-            + core::mem::size_of::<PreparedHashFrame>()
-            + core::mem::size_of::<Result<Digest384LastFieldJob<'_>>>()
-            + core::mem::size_of::<Digest384LastFieldJob<'_>>()
-            + 128 * F::BYTES);
-    assert_eq!(
-        hash_batch_payload_charge().unwrap(),
-        bodies
-            + descriptors_and_rows
-            + last_fields_payload_charge(HASH_BATCH_FRAMES, bodies).unwrap()
-    );
-    assert!(payload_charge(0).unwrap() > hash_batch_payload_charge().unwrap());
-    let binding = Context::new(b"oversized prepared batch").unwrap();
-    let payload = vec![0; COMMITTED_COLUMN_COUNT * 8];
-    let frames = (0..=HASH_BATCH_FRAMES)
-        .map(|index| {
-            binding
-                .prepare_leaf(Oracle::Row, index as u32, &payload)
-                .unwrap()
-        })
-        .collect::<Vec<_>>();
-    assert!(execute_prepared_frames(&frames, DigestExecutionV1::Cpu).is_err());
-}
-
-#[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
-#[test]
-#[ignore = "requires actual Metal DEEP body/parent execution; no CPU substitution"]
-fn bounded_deep_tree_metal_matches_cpu_at_every_level_and_opening() {
-    let _lane = crate::backend::acquire_gpu_lane();
-    let binding = Context::new(b"actual Metal canonical DEEP tree").unwrap();
-    let oracle = Oracle::Fri(3);
-    let (_, _, count, width) = oracle.shape().unwrap();
-    let make_leaf = |index: usize| {
-        let payload = (0..width / 8)
-            .flat_map(|column| ((index * width + column) as u64).to_le_bytes())
-            .collect::<Vec<_>>();
-        binding.prepare_leaf(oracle, index as u32, &payload)
-    };
-    let cpu = Tree::build(&binding, oracle, count, DigestExecutionV1::Cpu, &make_leaf).unwrap();
-    let metal = Tree::build(
-        &binding,
-        oracle,
-        count,
-        DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Metal),
-        &make_leaf,
-    )
-    .unwrap();
-    assert_eq!(metal.levels, cpu.levels);
-    let plan = multiproof(count, &[0, 255, 256, count - 1]);
-    assert_eq!(metal.frontier(&plan).unwrap(), cpu.frontier(&plan).unwrap());
-}
-
-#[test]
-fn parallel_prepared_jobs_preserve_canonical_hashes_across_worker_counts() {
-    let binding = Context::new(b"ordered parallel canonical device jobs").unwrap();
-    let oracles = [
-        Oracle::Row,
-        Oracle::QuotientPair,
-        Oracle::Fri(0),
-        Oracle::Fri(4),
-        Oracle::Terminal,
-    ];
-    let mut frames = Vec::with_capacity(HASH_BATCH_FRAMES);
-    let mut expected = Vec::with_capacity(HASH_BATCH_FRAMES);
-    for slot in 0..HASH_BATCH_FRAMES {
-        let oracle = oracles[slot % oracles.len()];
-        let (_, _, leaves, width) = oracle.shape().unwrap();
-        if slot % 2 == 0 || oracle == Oracle::Terminal {
-            let index = ((slot * 31) % leaves) as u32;
-            let payload = (0..width / 8)
-                .flat_map(|column| ((slot * width + column) as u64).to_le_bytes())
-                .collect::<Vec<_>>();
-            frames.push(binding.prepare_leaf(oracle, index, &payload).unwrap());
-            expected.push(binding.hash_leaf(oracle, index, &payload).unwrap());
+    let siblings: [_; 32] = core::array::from_fn(|level| digest((level + 17) as u8));
+    let path = 0xa59c_71e3;
+    let first = digest(1);
+    let second = digest(2);
+    let mut root = first;
+    for (level, sibling) in siblings.iter().enumerate() {
+        let (left, right) = if (path >> level) & 1 == 0 {
+            (root, *sibling)
         } else {
-            let index = ((slot * 31) % (leaves / 2)) as u32;
-            let left = Digest::new([slot as u64 + 1; 6]).unwrap();
-            let right = Digest::new([slot as u64 + 2; 6]).unwrap();
-            frames.push(
-                binding
-                    .prepare_parent(oracle, 1, index, left, right)
-                    .unwrap(),
-            );
-            expected.push(binding.hash_parent(oracle, 1, index, left, right).unwrap());
+            (*sibling, root)
+        };
+        let mut message = b"fastpq:v1:smt:node|".to_vec();
+        for limb in left.into_iter().chain(right) {
+            message.extend_from_slice(&limb.to_le_bytes());
+        }
+        root = limbs(iroha_crypto::Hash::new(message).as_ref());
+    }
+    let statement = PublicStatement {
+        updates: [
+            PublicUpdate {
+                old_leaf: first,
+                new_leaf: second,
+                path,
+            },
+            PublicUpdate {
+                old_leaf: second,
+                new_leaf: first,
+                path,
+            },
+        ],
+        old_root: root,
+        new_root: root,
+    };
+    let witness = PhysicalSmtWitness::from_inputs(&statement, &[siblings, siblings]).unwrap();
+    let mut columns: Vec<_> = (0..342)
+        .map(|_| zeroize::Zeroizing::new(Vec::with_capacity(TRACE_ROWS)))
+        .collect();
+    for row in witness.rows() {
+        for (column, value) in columns.iter_mut().zip(smt_row_cells(row)) {
+            column.push(value);
         }
     }
-    for workers in [1, 2, 6] {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        for count in [0, 1, 17, HASH_BATCH_FRAMES] {
-            let jobs = pool
-                .install(|| prepare_hash_jobs(count, |index| frames[index].job()))
-                .unwrap();
-            assert_eq!(jobs.len(), count);
-            for (index, job) in jobs.iter().enumerate() {
-                let sequential = frames[index].job().unwrap();
-                assert_eq!(job.prefix().received_len(), 0);
-                assert_eq!(job.prefix().expected_len(), frames[index].payload_len());
-                assert_eq!(job.final_field(), sequential.final_field());
-                assert_eq!(
-                    job.final_field().as_ptr(),
-                    sequential.final_field().as_ptr()
-                );
-            }
-            assert_eq!(
-                crate::digest384_batch::hash_last_fields_cpu(&jobs).unwrap(),
-                expected[..count],
-                "canonical hashes differ with {workers} workers and {count} jobs"
-            );
-        }
-    }
+    drop(witness);
+    let air = CompactTransferAir::new(&statement, Some(b"native producer diagnostic")).unwrap();
+    let mut rng = StdRng::from_seed([83; 32]);
+    let borrowed = columns
+        .iter()
+        .map(|column| column.as_slice())
+        .collect::<Vec<_>>();
+    let plan = ProducerPlan::new(&air, limits()).unwrap();
+    eprintln!(
+        "complete DEEP attempt bound: payload={}, work={}, hashes={}",
+        plan.payload_bytes, plan.work_units, plan.hash_calls
+    );
+    let proof = plan.build(&borrowed, &mut rng).unwrap();
+    assert!(proof.len() <= deep_proof::MAX_FRAME_BYTES);
+    assert_eq!(
+        deep_engine::verify(&air, &proof, deep_proof::PROOF_BYTE_TARGET)
+            .unwrap()
+            .air_evaluations,
+        1
+    );
+    assert!(deep_engine::verify(&air, &proof, proof.len() - 1).is_err());
+    let other = CompactTransferAir::new(
+        &statement,
+        Some(b"different authoritative statement context"),
+    )
+    .unwrap();
+    assert!(deep_engine::verify(&other, &proof, deep_proof::PROOF_BYTE_TARGET).is_err());
+    let mut altered = proof;
+    let last = altered.len() - 1;
+    altered[last] ^= 1;
+    assert!(deep_engine::verify(&air, &altered, deep_proof::PROOF_BYTE_TARGET).is_err());
 }
 
 #[test]
-fn parallel_prepared_jobs_return_first_indexed_error_and_bound_work() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+fn default_policies_preflight_quantity_relations_without_private_columns_or_entropy() {
+    use crate::{
+        ProofSemantics,
+        backend::{
+            compact_axt_batch::AxtTransferBatch,
+            compact_axt_context::tests::Fixture,
+            compact_protocol::FixedAir,
+            compact_public_api::AxtVerificationContext,
+            compact_public_batch::{BatchContextLimits, PublicTransferBatch},
+            deep_relation::tests as relation_fixture,
+            offline_compact::{ProvingLimits, VerificationLimits},
+        },
+        gadgets::public_transfer_statement::{
+            PublicTransferLimits, prepare_quantity_public_transfers,
+        },
+    };
 
-    let binding = Context::new(b"ordered parallel job failures").unwrap();
-    let frame = binding
-        .prepare_leaf(Oracle::QuotientPair, 0, &[0; 2 * F::BYTES])
-        .unwrap();
-    for workers in [1, 2, 6] {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap();
-        let visited = AtomicUsize::new(0);
-        let result = pool.install(|| {
-            prepare_hash_jobs(16, |index| {
-                visited.fetch_or(1 << index, Ordering::Relaxed);
-                match index {
-                    1 => Err(invalid("first indexed device preparation error")),
-                    7 => Err(invalid("later indexed device preparation error")),
-                    _ => frame.job(),
-                }
-            })
-        });
-        assert!(matches!(result, Err(Error::InvalidTraceShape { details })
-            if details == "first indexed device preparation error"));
-        assert_eq!(visited.load(Ordering::Relaxed), (1 << 16) - 1);
-        assert!(
-            pool.install(|| prepare_hash_jobs(0, |_| panic!("empty batch performed work")))
-                .unwrap()
-                .is_empty()
+    fn check(relation: &impl DeepRelation) {
+        let proving = ProvingLimits::default();
+        let verification = VerificationLimits::default();
+        let limits = ConstructionLimits {
+            digest_execution: proving.digest_execution,
+            max_payload_bytes: proving.max_segment_charge_bytes,
+            max_work_units: proving.max_segment_work_units,
+            max_hash_calls: proving.max_segment_work_units,
+            max_proof_bytes: verification.bundle.segment.max_proof_bytes,
+        };
+        let plan = ProducerPlan::new(relation, limits).unwrap();
+        assert!(plan.payload_bytes <= proving.max_segment_charge_bytes);
+        // Preserve the existing resource boundary. Admission must cover the
+        // actual replay and additional quotient/commitment work within it.
+        assert_eq!(
+            proving.max_segment_work_units,
+            usize::try_from(1_u64 << 42).unwrap()
         );
-        assert!(matches!(
-            pool.install(|| prepare_hash_jobs(HASH_BATCH_FRAMES + 1, |_| {
-                panic!("oversized batch performed work")
-            })),
-            Err(Error::InvalidTraceShape { details })
-                if details == "DEEP hash preparation exceeds its fixed batch count"
-        ));
+        assert!(plan.work_units > plan.replay.work_units);
+        assert!(plan.work_units <= proving.max_segment_work_units);
+        assert!(plan.hash_calls <= proving.max_segment_work_units);
+        assert_eq!(
+            plan.binding
+                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+                .unwrap(),
+            Context::for_relation(relation)
+                .unwrap()
+                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+                .unwrap()
+        );
+        assert_ne!(
+            relation.schema().identity,
+            relation.deep_relation().schema().identity
+        );
+        assert_ne!(
+            plan.binding
+                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+                .unwrap(),
+            Context::for_relation(relation.deep_relation())
+                .unwrap()
+                .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+                .unwrap()
+        );
+        for limited in [
+            ConstructionLimits {
+                max_payload_bytes: plan.payload_bytes - 1,
+                ..limits
+            },
+            ConstructionLimits {
+                max_work_units: plan.work_units - 1,
+                ..limits
+            },
+            ConstructionLimits {
+                max_hash_calls: plan.hash_calls - 1,
+                ..limits
+            },
+        ] {
+            assert!(ProducerPlan::new(relation, limited).is_err());
+        }
+        let mut rng = NoEntropy(0);
+        assert!(plan.build(&[], &mut rng).is_err());
+        assert_eq!(rng.0, 0);
+    }
+
+    // This fixture constructs only public transfer facts. It never materializes
+    // touched-tree paths, a physical witness, coefficient matrices or an LDE.
+    let fixture = Fixture::multiple(2, true);
+    for semantics in [
+        ProofSemantics::StateTransition,
+        ProofSemantics::AxtTransferClaim,
+    ] {
+        let narrow = fixture.prepare(semantics);
+        let (rows, claims, inputs) = relation_fixture::quantity_copy(&narrow);
+        let prepared = prepare_quantity_public_transfers(
+            &rows,
+            &claims,
+            inputs,
+            semantics,
+            PublicTransferLimits::default(),
+        )
+        .unwrap();
+        let expected = relation_fixture::expected(&prepared);
+        let roots = [inputs.old_root];
+        if semantics == ProofSemantics::StateTransition {
+            let batch = PublicTransferBatch::new(
+                &prepared,
+                &expected,
+                &roots,
+                BatchContextLimits::default(),
+            )
+            .unwrap();
+            for index in 0..batch.segment_count() {
+                check(&batch.segment(index).unwrap());
+            }
+        } else {
+            let batch = AxtTransferBatch::new(
+                &prepared,
+                &expected,
+                &roots,
+                AxtVerificationContext {
+                    binding: &fixture.binding,
+                    metadata: fixture.metadata(),
+                    mirrors: fixture.outer,
+                    remote_spend_claims: fixture.remote.as_deref(),
+                },
+                BatchContextLimits::default(),
+            )
+            .unwrap();
+            for index in 0..batch.segment_count() {
+                check(&batch.segment(index).unwrap());
+            }
+        }
     }
 }

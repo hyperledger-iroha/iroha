@@ -83,6 +83,26 @@ def test_external_software_signer_requires_explicit_release_opt_in() -> None:
         assert expected in bundle
 
 
+def test_publication_governance_qualification_uses_the_explicit_parliament_boundary() -> None:
+    manifest = tomllib.loads(
+        (ROOT / "integration_tests" / "Cargo.toml").read_text(encoding="utf-8")
+    )
+    target = next(
+        target
+        for target in manifest["test"]
+        if target["name"] == "sorafs_publication_governance"
+    )
+    assert target["path"] == "tests/sorafs_publication_governance.rs"
+    assert target["required-features"] == ["parliament-test-signers"]
+    assert "parliament-test-signers" not in manifest["features"]["default"]
+    assert all(
+        target["name"] != "sorafs_publication_governance"
+        for target in manifest["bin"]
+    )
+    core_api = (ROOT / "integration_tests/tests/core_api.rs").read_text(encoding="utf-8")
+    assert "mod sorafs_publication;" in core_api
+
+
 def test_rejects_default_tool_and_retired_alias() -> None:
     metadata = TARGET_INVENTORY.load_metadata(ROOT)
     modified = copy.deepcopy(metadata)

@@ -921,6 +921,33 @@ fn dispatch_locked_host_request(
         if let Some(mut receipt) =
             read_existing_host_receipt(&receipt_dir, &receipt_name, admitted, action)?
         {
+            match action {
+                HostAction::Upload => verify_upload_body(&admitted, body, None)?,
+                HostAction::InrouStageUpload => {
+                    verify_inrou_stage_upload_body(&admitted, body, false)?
+                }
+                _ => {}
+            }
+            if action == HostAction::Cleanup {
+                verify_completed_cleanup_plan(&admitted, Some(&receipt))?;
+            }
+            match progress_decision {
+                HostProgressDecision::Advance if action != HostAction::Cleanup => {
+                    revalidate_cached_action_postcondition(&admitted, action)?;
+                }
+                HostProgressDecision::Replay if action != HostAction::Cleanup => {
+                    if action == HostAction::Rollback {
+                        revalidate_cached_action_postcondition(&admitted, HostAction::Rollback)?;
+                    } else {
+                        revalidate_current_target_postcondition(&admitted, &progress)?;
+                    }
+                }
+                HostProgressDecision::Advance | HostProgressDecision::Replay => {}
+                HostProgressDecision::AbsentNoOp => unreachable!("handled before receipt replay"),
+            }
+            if progress_decision == HostProgressDecision::Advance {
+                advance_host_progress(&admitted, action, &mut progress)?;
+            }
             receipt.idempotent = true;
             return Ok(receipt);
         }
@@ -4283,7 +4310,28 @@ fn verify_occupied_predecessor(admitted: &HostAdmission, validator: &ValidatorV1
     )
 }
 
+fn reject_retired_epoch_worker_paths(state: &Path, unit: &Path) -> Result<()> {
+    for path in [state, unit] {
+        match fs::symlink_metadata(path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+            Ok(_) => {
+                return Err(eyre!(
+                    "retired epoch worker must be removed before public reset; unsupported state or service exists at {}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn host_preflight(admitted: &HostAdmission) -> Result<()> {
+    reject_retired_epoch_worker_paths(
+        Path::new("/var/lib/taira-epoch-supervisor"),
+        Path::new("/etc/systemd/system/iroha-taira-epoch-supervisor.service"),
+    )?;
+
     #[cfg(unix)]
     if rustix::process::geteuid().as_raw() != 0 {
         return Err(eyre!("fixed public-reset dispatcher must run as root"));
@@ -10834,6 +10882,15 @@ fn ensure_root_directory_with_mode(path: &Path, mode: u32) -> Result<()> {
 }
 
 fn publish_root_private_noreplace(directory: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    publish_root_private_noreplace_with_directory_custody(directory, name, bytes, true)
+}
+
+fn publish_root_private_noreplace_with_directory_custody(
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+    private_directory: bool,
+) -> Result<()> {
     if name.is_empty()
         || name.len() > 192
         || name.contains('/')
@@ -10845,7 +10902,11 @@ fn publish_root_private_noreplace(directory: &Path, name: &str, bytes: &[u8]) ->
             "root-private publication escaped its closed namespace"
         ));
     }
-    require_root_directory(directory, true, "root-private publication directory")?;
+    require_root_directory(
+        directory,
+        private_directory,
+        "root-private publication directory",
+    )?;
     let parent = File::from(rustix::fs::open(
         directory,
         rustix::fs::OFlags::RDONLY
@@ -18963,6 +19024,45 @@ mod tests {
     use super::*;
 
     include!("taira_public_reset_host_canary_args_tests.rs");
+
+    #[test]
+    fn retired_epoch_worker_paths_reject_existing_state_and_service_without_mutation() {
+        let directory = tempfile::tempdir().expect("retired worker fixture");
+        let state = directory.path().join("state");
+        let unit = directory.path().join("worker.service");
+        reject_retired_epoch_worker_paths(&state, &unit).expect("no retired worker");
+
+        fs::create_dir(&state).expect("retired state directory");
+        let error = reject_retired_epoch_worker_paths(&state, &unit)
+            .expect_err("retired state blocks reset");
+        assert!(error.to_string().contains("retired epoch worker"));
+        assert!(state.is_dir());
+        fs::remove_dir(&state).expect("remove fixture state");
+
+        fs::write(&unit, b"retired service fixture").expect("retired unit");
+        let error = reject_retired_epoch_worker_paths(&state, &unit)
+            .expect_err("retired service blocks reset");
+        assert!(error.to_string().contains("retired epoch worker"));
+        assert_eq!(fs::read(&unit).unwrap(), b"retired service fixture");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retired_epoch_worker_broken_symlink_blocks_reset() {
+        let directory = tempfile::tempdir().expect("retired worker fixture");
+        let state = directory.path().join("state");
+        let unit = directory.path().join("worker.service");
+        std::os::unix::fs::symlink(directory.path().join("absent"), &unit)
+            .expect("retired unit symlink");
+        let _ = reject_retired_epoch_worker_paths(&state, &unit)
+            .expect_err("broken retired service symlink also blocks reset");
+        assert!(
+            fs::symlink_metadata(&unit)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 
     fn readiness_http_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<usize>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("readiness listener");

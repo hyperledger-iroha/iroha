@@ -23,6 +23,16 @@ pub(crate) fn torii_proof_finality_for_block(
     network_id: NetworkId,
     parent: Option<&V2FinalityArtifact>,
 ) -> V2FinalityArtifact {
+    torii_proof_finality_for_block_with_context(block, network_id, parent, |_| {})
+}
+
+/// Sign a structural fixture after one explicit context customization.
+pub(crate) fn torii_proof_finality_for_block_with_context(
+    block: &SignedBlock,
+    network_id: NetworkId,
+    parent: Option<&V2FinalityArtifact>,
+    customize: impl FnOnce(&mut HeightContext),
+) -> V2FinalityArtifact {
     use iroha_core::zk::kagemusha_v1_recursion::{
         KagemushaMintFinalitySignerV1, build_kagemusha_mint_finality_seal_message_v1,
         derive_kagemusha_mint_finality_validator_keys_v1, sign_kagemusha_mint_finality_seal_v1,
@@ -73,7 +83,7 @@ pub(crate) fn torii_proof_finality_for_block(
         block.header().prev_block_hash(),
         parent.map(|parent| parent.block_hash)
     );
-    let context = HeightContext {
+    let mut context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
         height,
@@ -96,6 +106,7 @@ pub(crate) fn torii_proof_finality_for_block(
         da_layout: iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
         leader_seed: [0x42; 32],
     };
+    customize(&mut context);
     context.validate().unwrap();
     let wire = block.encode_wire().unwrap();
     let subject = BlockSubject {

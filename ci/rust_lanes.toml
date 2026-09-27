@@ -90,6 +90,8 @@ packages = [
   "iroha_js_host",
   "iroha_musubi_service",
   "iroha_sccp",
+  "iroha_sccp_rpc",
+  "iroha_sccp_wallet",
   "iroha_storage_client",
   "mochi-core",
   "mochi-integration",

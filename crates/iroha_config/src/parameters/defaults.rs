@@ -93,6 +93,23 @@ pub mod common {
         CHAIN_DISCRIMINANT
     }
 }
+/// Public endpoint used by the stock runtime-provider broker.
+pub mod runtime_provider_broker {
+    use super::PathBuf;
+
+    /// Default Unix socket path for the local runtime-provider broker.
+    #[cfg(target_os = "macos")]
+    pub const ENDPOINT_PATH: &str = "/private/var/iroha/run/runtime-provider-broker-v1.sock";
+    /// Default Unix socket path for the local runtime-provider broker.
+    #[cfg(not(target_os = "macos"))]
+    pub const ENDPOINT_PATH: &str =
+        "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock";
+
+    /// Return the public default endpoint path.
+    pub fn endpoint_path() -> PathBuf {
+        PathBuf::from(ENDPOINT_PATH)
+    }
+}
 /// Canonical first-release Taira deployment policy shared by generators and launchers.
 pub mod taira {
     /// Canonical first-release Inrou canary guest CPU allocation.
@@ -1961,6 +1978,10 @@ pub mod sorafs {
         }
         /// Stream token issuance defaults.
         pub mod tokens {
+            /// Complete native stream-token transaction observation timeout.
+            pub const NATIVE_TRANSACTION_TIMEOUT_MS: u64 = 30_000;
+            /// Software host-clock uncertainty checked at both eligibility endpoints.
+            pub const CLOCK_UNCERTAINTY_MS: u64 = 250;
             /// Enable gateway-issued stream tokens.
             pub const ENABLED: bool = false;
             /// Default TTL applied to issued tokens (seconds).
@@ -1983,6 +2004,8 @@ pub mod sorafs {
     }
     /// Defaults for native SoraFS repair workers and transaction forwarding.
     pub mod repair {
+        /// Maximum total authenticated remote repair duration in milliseconds.
+        pub const SOURCE_TIMEOUT_MS: u64 = 60_000;
         /// Enable native repair processing (disabled by default).
         pub const ENABLED: bool = false;
         /// Default native claim lease duration (seconds).
@@ -3338,6 +3361,8 @@ pub mod nexus {
         pub const BUDGET_ENFORCE_INTERVAL_BLOCKS: u64 = 10;
         /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
         pub const MAX_WSV_MEMORY_BYTES: Bytes = Bytes(8 * 1024 * 1024 * 1024);
+        /// Finite original allocation pool shared by fixed KAGEMUSHA indexes.
+        pub const KAGEMUSHA_OPERATION_INDEX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
         /// Exact backing for one maximum-size committed-evidence prune-key plan.
@@ -4849,6 +4874,95 @@ pub mod settlement {
         pub const XOR_ONLY_PCT: u8 = 10;
         /// Halt threshold percentage.
         pub const HALT_PCT: u8 = 2;
+    }
+}
+/// Node-local SCCP defaults for `[sccp.attestor]` and `[sccp.light_client_keeper]`
+/// (`specs/sccp.md` §4.9, §4.13.4). Every value works without operator input.
+pub mod sccp {
+    /// `[sccp.attestor]` defaults.
+    pub mod attestor {
+        /// The attestor runs on every node by default.
+        pub const ENABLED: bool = true;
+        /// Bridge-key directory below `kura.store_dir`, used while `key_dir` is empty.
+        pub const KEY_DIR_UNDER_KURA_STORE: &str = "sccp/bridge-keys";
+        /// Register the node's newest bridge key with `SetSccpBridgeKeyV1` automatically.
+        pub const AUTO_REGISTER: bool = true;
+        /// Attestation entries per `SubmitSccpAttestationsV1` transaction.
+        pub const MAX_ENTRIES_PER_TRANSACTION: u32 = 64;
+        /// Largest accepted `max_entries_per_transaction`; the node also caps it at runtime
+        /// by the on-chain `max_attestation_entries_per_instruction`.
+        pub const MAX_ENTRIES_PER_TRANSACTION_CEILING: u32 = 1_024;
+        /// Blocks after which still-unrecorded attestation entries are resubmitted.
+        pub const RESUBMIT_AFTER_BLOCKS: u64 = 3;
+        /// Largest lead of a rotation subject's `timestamp_ms` over the local clock that is signed.
+        pub const MAX_CLOCK_DRIFT_MS: u64 = 3_600_000;
+        /// Longest graceful-shutdown delay spent getting pending subjects recorded.
+        pub const SHUTDOWN_GRACE_MS: u64 = 30_000;
+    }
+    /// `[sccp.light_client_keeper]` defaults.
+    pub mod light_client_keeper {
+        /// The keeper runs by default; it acts only while the node holds a registered bridge key.
+        pub const ENABLED: bool = true;
+        /// `0` advances once `ws_bound_ms / 4` of each light client has elapsed without progress.
+        pub const ADVANCE_AFTER_MS: u64 = 0;
+        /// Cadence of checking local light-client state.
+        pub const POLL_INTERVAL_MS: u64 = 60_000;
+        /// Timeout of one RPC request before failing over to the next endpoint.
+        pub const REQUEST_TIMEOUT_MS: u64 = 10_000;
+        /// Largest encoded advance the keeper builds.
+        pub const MAX_ADVANCE_BYTES: usize = 262_144;
+        /// Longest accepted endpoint list per chain.
+        pub const MAX_ENDPOINTS_PER_LIST: usize = 64;
+        /// Most accepted `[[sccp.light_client_keeper.secret_headers]]` entries.
+        pub const MAX_SECRET_HEADERS: usize = 64;
+    }
+    /// Compiled free public endpoints (no API key), used when a configured list is empty
+    /// and reused by `iroha_sccp_rpc` and `iroha_sccp_wallet`.
+    // TODO(ws70): verify terms of use and route coverage of every compiled endpoint (spec §13 item 10).
+    pub mod endpoints {
+        /// Ethereum mainnet execution-layer JSON-RPC endpoints.
+        pub const ETHEREUM_EXECUTION: &[&str] = &[
+            "https://ethereum-rpc.publicnode.com",
+            "https://eth.llamarpc.com",
+            "https://cloudflare-eth.com",
+        ];
+        /// Ethereum mainnet beacon API endpoints serving the light-client routes.
+        pub const ETHEREUM_BEACON: &[&str] = &[
+            "https://ethereum-beacon-api.publicnode.com",
+            "https://lodestar-mainnet.chainsafe.io",
+        ];
+        /// BNB Smart Chain mainnet JSON-RPC endpoints.
+        pub const BSC: &[&str] = &[
+            "https://bsc-dataseed.bnbchain.org",
+            "https://bsc-rpc.publicnode.com",
+        ];
+        /// TRON mainnet HTTP API endpoints.
+        pub const TRON: &[&str] = &["https://api.trongrid.io", "https://tron-rpc.publicnode.com"];
+        /// TON mainnet liteservers as `<ipv4>:<port>:<base64 ed25519 public key>`, copied from
+        /// the `liteservers` array of `https://ton.org/global-config.json` (signed-integer IP
+        /// converted to dotted form).
+        // TODO(ws70): re-check these entries against the live global config before release;
+        // the published liteserver set rotates over time.
+        pub const TON_LITESERVERS: &[&str] = &[
+            "5.9.10.47:19949:n4VDnSCUuSpjnCyUk9e3QOOd6o0ItSWYbTnW3Wnn8wk=",
+            "5.9.10.15:48014:3XO67K/qi+gu3T9v8G2hx1yNmWZhccL3O7SoosFo8G0=",
+            "135.181.177.59:53312:aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=",
+            "135.181.140.212:13206:K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=",
+            "135.181.140.221:46995:wQE0MVhXNWUXpWiW5Bk8cAirIh5NNG3cZM1/fSVKIts=",
+            "65.21.141.233:30131:wrQaeIFispPfHndEBc0s0fx7GSp8UFFvebnytQQfc6A=",
+            "65.21.141.198:47160:vOe1Xqt/1AQ2Z56Pr+1Rnw+f0NmAA7rNCZFIHeChB7o=",
+            "65.21.141.231:17728:BYSVpL7aPk0kU5CtlsIae/8mf2B/NrBi7DKmepcjX6Q=",
+            "65.21.141.197:13570:iVQH71cymoNgnrhOT35tl/Y7k86X5iVuu5Vf68KmifQ=",
+            "164.68.101.206:52995:QnGFe9kihW+TKacEvvxFWqVXeRxCB6ChjjhNTrL7+/k=",
+            "164.68.99.144:20334:gyLh12v4hBRtyBygvvbbO2HqEtgl+ojpeRJKt4gkMq0=",
+            "188.68.216.239:19925:ucho5bEkufbKN1JR1BGHpkObq602whJn3Q3UwhtgSo4=",
+            "51.195.189.59:19434:J5CwYXuCZWVPgiFPW+NY2roBwDWpRRtANHSTYTRSVtI=",
+            "51.195.189.140:23067:vX8d0i31zB0prVuZK8fBkt37WnEpuEHrb7PElk4FJ1o=",
+            "135.181.132.198:53560:NlYhh/xf4uQpE+7EzgorPHqIaqildznrpajJTRRH2HU=",
+            "135.181.132.253:46529:jLO6yoooqUQqg4/1QXflpv2qGCoXmzZCR+bOsYJ2hxw=",
+            "54.39.158.156:51565:TDg+ILLlRugRB4Kpg3wXjPcoc+d+Eeb7kuVe16CS9z8=",
+            "185.86.79.9:4701:G6cNAr6wXBBByWDzddEWP5xMFsAcp6y13fXA8Q7EJlM=",
+        ];
     }
 }
 #[cfg(test)]

@@ -3839,7 +3839,7 @@ mod tests_overlay_manifest {
         proved.sccp_ivm_proved_execution_binding =
             Some(crate::state::SccpIvmProvedExecutionBindingV1 {
                 contract_artifact_sha256: [0xb1; 32],
-                vk_ref: VerifyingKeyId::new("stark/fri/v1", "ivm-execution-v1"),
+                vk_ref: VerifyingKeyId::new("stark/fri/v1", "ivm-replay-binding-v1"),
                 vk_version: 1,
                 vk_commitment: [0xb2; 32],
                 gas_limit: 50_000_000,
@@ -6355,9 +6355,9 @@ mod tests {
         assert!(decode_ivm_proved_stark_open_proof(&alternate_open).is_err());
         let envelope = ZkOpenVerifyEnvelope {
             backend: ZkBackendTag::Stark,
-            circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1".to_owned(),
+            circuit_id: "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1".to_owned(),
             vk_hash: [9_u8; 32],
-            public_inputs: b"ivm-execution-v1".to_vec(),
+            public_inputs: b"ivm-replay-binding-v1".to_vec(),
             proof_bytes: canonical_open,
             aux: Vec::new(),
         };
@@ -6676,7 +6676,7 @@ mod tests {
         };
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             Hash::prehashed(*summary.code_hash.as_ref()),
             overlay_hash,
             events_commitment,
@@ -6691,7 +6691,7 @@ mod tests {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
             fixture.schema_hash,
@@ -6805,7 +6805,7 @@ seiyaku ProtectedProvedOverlay {
             .summarize_program(bytecode.as_ref())
             .expect("summarize IVM program");
         let code_hash = Hash::prehashed(*summary.code_hash.as_ref());
-        let vk_fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let vk_fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             Hash::new(b"vk-seed-overlay"),
             Hash::new(b"vk-events"),
@@ -6820,7 +6820,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
             vk_fixture.schema_hash,
@@ -6921,7 +6921,7 @@ seiyaku ProtectedProvedOverlay {
             let bytes = norito::to_bytes(&proved.overlay).expect("encode derived proved overlay");
             Hash::new(&bytes)
         };
-        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             overlay_hash,
             proved.events_commitment,
@@ -7392,7 +7392,7 @@ seiyaku ProtectedProvedOverlay {
         };
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             overlay_hash,
             events_commitment,
@@ -7407,7 +7407,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
             fixture.schema_hash,
@@ -7513,7 +7513,7 @@ seiyaku ProtectedProvedOverlay {
             Hash::new(&bytes)
         };
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -7534,7 +7534,7 @@ seiyaku ProtectedProvedOverlay {
             circuit_id,
             BackendTag::Stark,
             "goldilocks",
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             vk_commitment,
         );
         vk_record.status = ConfidentialStatus::Active;
@@ -7600,7 +7600,7 @@ seiyaku ProtectedProvedOverlay {
             replay.gas_used,
             replay.trace_hash,
         );
-        let proof_box = crate::zk::prove_stark_fri_ivm_execution_envelope(
+        let proof_box = crate::zk::prove_stark_fri_ivm_replay_binding_envelope(
             backend,
             circuit_id,
             &vk_box,
@@ -7653,7 +7653,7 @@ seiyaku ProtectedProvedOverlay {
             Hash::new(&bytes)
         };
         let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
+        let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -7674,7 +7674,7 @@ seiyaku ProtectedProvedOverlay {
             circuit_id,
             BackendTag::Stark,
             "goldilocks",
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             vk_commitment,
         );
         vk_record.status = ConfidentialStatus::Active;
@@ -7740,9 +7740,9 @@ seiyaku ProtectedProvedOverlay {
             replay.gas_used,
             replay.trace_hash,
         );
-        let err = crate::zk::prove_stark_fri_ivm_execution_envelope(
+        let err = crate::zk::prove_stark_fri_ivm_replay_binding_envelope(
             backend,
-            "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-ivm-execution-v1",
+            "stark/fri/poseidon-x7-goldilocks-6x64-v1:not-ivm-replay-binding-v1",
             &vk_box,
             code_hash,
             overlay_hash,
@@ -7780,7 +7780,7 @@ seiyaku ProtectedProvedOverlay {
             let bytes = norito::to_bytes(&overlay).expect("encode overlay");
             Hash::new(&bytes)
         };
-        let vk_fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let vk_fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             overlay_hash,
             Hash::new(b"vk-events"),
@@ -7795,7 +7795,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
             vk_fixture.schema_hash,
@@ -7874,7 +7874,7 @@ seiyaku ProtectedProvedOverlay {
             |events_commitment: Hash,
              gas_policy_commitment: Hash,
              mutate_envelope: Option<fn(&mut ZkOpenVerifyEnvelope)>| {
-                let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+                let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
                     code_hash,
                     overlay_hash,
                     events_commitment,
@@ -8063,7 +8063,7 @@ seiyaku ProtectedProvedOverlay {
         };
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             overlay_ok_hash,
             events_commitment,
@@ -8078,7 +8078,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
             fixture.schema_hash,
@@ -8161,7 +8161,7 @@ seiyaku ProtectedProvedOverlay {
         };
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
-        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             overlay_hash,
             events_commitment,
@@ -8176,7 +8176,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
             fixture.schema_hash,
@@ -8268,7 +8268,7 @@ seiyaku ProtectedProvedOverlay {
             let bytes = norito::to_bytes(&overlay).expect("encode overlay");
             Hash::new(&bytes)
         };
-        let vk_fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let vk_fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             overlay_hash,
             Hash::new(b"vk-events"),
@@ -8283,7 +8283,7 @@ seiyaku ProtectedProvedOverlay {
             .expect("fixture provides vk hash");
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
             vk_fixture.schema_hash,
@@ -8353,7 +8353,7 @@ seiyaku ProtectedProvedOverlay {
             replay.gas_used,
             replay.trace_hash,
         );
-        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             code_hash,
             overlay_hash,
             events_commitment,
@@ -8440,10 +8440,10 @@ seiyaku ProtectedProvedOverlay {
             .sign(kp.private_key());
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             [0u8; 32],
         );
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
@@ -8604,10 +8604,10 @@ seiyaku DeriveDispatch {
             .sign(kp.private_key());
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             BackendTag::Halo2IpaPasta,
             "pallas",
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             [0u8; 32],
         );
         vk_record.gas_schedule_id = Some("sched_0".to_owned());
@@ -10626,13 +10626,6 @@ fn extract_expected_single_row_columns(columns: Vec<Vec<[u8; 32]>>) -> Option<Ve
     }
     Some(out)
 }
-const IVM_OVERLAY_BIND_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa/ivm-overlay-bind";
-fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
-    backend == crate::zk::ZK_BACKEND_HALO2_IPA
-        && crate::zk::normalize_halo2_ipa_circuit_id(circuit_id)
-            .as_deref()
-            .is_some_and(|normalized| normalized == IVM_OVERLAY_BIND_CIRCUIT_CANONICAL)
-}
 fn validate_ivm_proved_queued_authorization(
     queued: &[crate::smartcontracts::ivm::host::QueuedInstruction],
     authority: &AccountId,
@@ -11053,28 +11046,20 @@ where
             }
         }
     }
-    if is_legacy_ivm_overlay_bind_circuit(attachment.backend.as_str(), &vk_record.circuit_id)
-        || is_legacy_ivm_overlay_bind_circuit(attachment.backend.as_str(), &env.circuit_id)
-    {
-        return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind`: the binding-only stand-in circuit is no longer accepted; `ivm-execution-v1` proof attachments are required"
-                .to_owned(),
-        ));
-    }
     if !circuit_id_matches(
         attachment.backend.as_str(),
         &vk_record.circuit_id,
         &env.circuit_id,
     ) {
         return Err(OverlayBuildError::ZkProof(
-            "verifying key and proof must use the exact canonical ivm-execution-v1 circuit id"
+            "verifying key and proof must use the exact canonical ivm-replay-binding-v1 circuit id"
                 .to_owned(),
         ));
     }
-    let expected_schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
+    let expected_schema_hash = crate::zk::ivm_replay_binding_public_inputs_schema_hash();
     if vk_record.public_inputs_schema_hash != expected_schema_hash {
         return Err(OverlayBuildError::ZkProof(
-            "verifying key schema hash mismatch for ivm-execution-v1".to_owned(),
+            "verifying key schema hash mismatch for ivm-replay-binding-v1".to_owned(),
         ));
     }
     let observed_schema_hash: [u8; 32] = *Hash::new(&env.public_inputs).as_ref();
@@ -11150,15 +11135,13 @@ where
             stark_max_proof_bytes: governed_max_proof_bytes,
         },
     };
-    let report = crate::zk::verify_backend_with_timing_guardrails(
-        attachment.backend.as_str(),
+    crate::zk::verify_for_relation(
+        crate::zk::ProofRelation::IvmReplayBinding,
         &attachment.proof,
-        Some(vk_box),
+        vk_box,
         verifier_guardrails,
-    );
-    if !report.ok {
-        return Err(OverlayBuildError::ZkProof("proof rejected".to_owned()));
-    }
+    )
+    .map_err(|error| OverlayBuildError::ZkProof(error.to_string()))?;
     // ABI V1 replay is consensus validation; no node-local setting may bypass it.
     let replay = replay_ivm_proved_overlay(
         state_ro,

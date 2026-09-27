@@ -12,6 +12,9 @@ a frozen release candidate.
 The [September 25 integration checkpoint](../docs/history/2026-09-25/first-release-integration-checkpoint.md)
 records the current ABI-24 source cut, typed fixture recapture and scoped
 validation without closing any candidate release gate.
+The [September 26 ownership/signer checkpoint](../docs/history/2026-09-26/retained-ownership-and-signer-integration.md)
+records later retained-source and decoding cuts, the pre-merge Swift pass,
+and current-source validation still in progress.
 The [integration checkpoint](../docs/history/2026-09-20/first-release-integration.md)
 records preservation, implementation boundaries and scoped validation failures.
 The [September 21 runtime checkpoint](../docs/history/2026-09-21/runtime-and-governance-integration.md)

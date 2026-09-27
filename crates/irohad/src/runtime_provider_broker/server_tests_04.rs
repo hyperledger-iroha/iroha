@@ -4038,3 +4038,100 @@ fn global_beacon_capability_server_rejects_a_qualified_backend_claiming_the_wron
         .expect("join capability broker")
         .expect("clean shutdown");
 }
+
+#[test]
+fn prepared_beacon_readiness_round_trips_over_its_typed_broker_domain() {
+    use iroha_core::beacon::seat_readiness::{
+        prove_global_threshold_beacon_seat_readiness_v1,
+        verify_global_threshold_beacon_seat_readiness_v1,
+    };
+    let (fixture, authority, context) = crate::external_software_signer::consensus_threshold_beacon_readiness_broker_test_fixture_v1();
+    let (_directory, policy, shutdown, server) =
+        start_signer(fixture.catalog.clone(), fixture.backends);
+    let dependencies = resolve_test_process(&fixture.catalog, &policy).unwrap();
+    let signer = dependencies
+        .sumeragi_global_beacon_partial_signer
+        .as_ref()
+        .unwrap();
+    let proof = prove_global_threshold_beacon_seat_readiness_v1(
+        signer.as_ref(),
+        &fixture.session,
+        &authority,
+        &context,
+    )
+    .unwrap();
+    verify_global_threshold_beacon_seat_readiness_v1(
+        &fixture.session,
+        &authority,
+        &context,
+        &proof,
+    )
+    .unwrap();
+    let mut replay = context;
+    replay.transition_id[0] ^= 1;
+    assert!(
+        verify_global_threshold_beacon_seat_readiness_v1(
+            &fixture.session,
+            &authority,
+            &replay,
+            &proof
+        )
+        .is_err()
+    );
+    let other_attempt = prove_global_threshold_beacon_seat_readiness_v1(
+        signer.as_ref(),
+        &fixture.session,
+        &authority,
+        &replay,
+    )
+    .unwrap();
+    assert_ne!(proof.signature_share, other_attempt.signature_share);
+    let mut wrong_seat = context;
+    wrong_seat.validator_index = 1;
+    assert!(
+        prove_global_threshold_beacon_seat_readiness_v1(
+            signer.as_ref(),
+            &fixture.session,
+            &authority,
+            &wrong_seat
+        )
+        .is_err()
+    );
+    let (challenge, _) =
+        iroha_core::beacon::seat_readiness::global_threshold_beacon_seat_readiness_challenge_v1(
+            &fixture.session,
+            &authority,
+            &context,
+        )
+        .unwrap();
+    assert!(
+        signer
+            .sign_partial(&fixture.session, challenge.as_ref())
+            .is_err(),
+        "the pulse operation never accepts readiness payloads"
+    );
+    let anchor = iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
+        height: 50,
+        block_hash:
+            iroha_crypto::HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"post-readiness ordinary pulse"),
+            ),
+    };
+    let mut pulse = iroha_core::beacon::GlobalThresholdBeaconPulseAggregatorV1::new(
+        fixture.session.clone(),
+        51,
+        anchor,
+    )
+    .unwrap();
+    assert!(
+        pulse.accept_partial(proof).is_err(),
+        "readiness cannot be relabeled as a pulse"
+    );
+    let ordinary = signer
+        .sign_partial(&fixture.session, pulse.payload())
+        .unwrap();
+    pulse.accept_partial(ordinary).unwrap();
+    drop(dependencies);
+    shutdown.request_shutdown();
+    server.join().unwrap().unwrap();
+}

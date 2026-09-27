@@ -58,6 +58,21 @@ mod sorafs_moderation_anchor;
 mod sorafs_network;
 #[path = "sorafs_orderbook_ledger.rs"]
 mod sorafs_orderbook_ledger;
+#[cfg(unix)]
+#[path = "sorafs_publication.rs"]
+mod sorafs_publication;
+#[cfg(unix)]
+#[path = "sorafs_publication_authority.rs"]
+mod sorafs_publication_authority;
+#[cfg(unix)]
+#[path = "sorafs_publication_compliance.rs"]
+mod sorafs_publication_compliance;
+#[cfg(unix)]
+#[path = "sorafs_publication_config.rs"]
+mod sorafs_publication_config;
+#[cfg(unix)]
+#[path = "sorafs_publication_http.rs"]
+mod sorafs_publication_http;
 #[path = "sorafs_repair_ledger.rs"]
 mod sorafs_repair_ledger;
 #[path = "sorafs_reserve_ledger.rs"]

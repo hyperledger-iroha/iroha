@@ -5,6 +5,7 @@ use crate::sumeragi::v2_lifecycle_coordinator::{
     PendingKuraActivatedProductionLifecycleV1, PendingKuraProductionLifecycleV1,
     ProductionLifecycleLaunchInputsV1, ProductionPendingKuraApplyRecoveryProgressV1,
 };
+use crate::sumeragi::v2_worker::durable_exact_output_service_owner;
 
 const PENDING_TIP_RECOVERY_DEADLINE_ROUNDS: u32 = 3;
 
@@ -568,6 +569,8 @@ fn run_pending_active_height(
                     .service_kura_replica_advert_refresh_turn(Instant::now())
                     .map_err(V2RunnerError::Service)?;
                 services.drain_completions(executor)?;
+                // Pending Kura has no local proposal owner to update; this
+                // still settles retained Decision cleanup and locked-body work.
                 let _ = reconcile_executor_locked_body(executor, services)?;
                 drain_decided_lane_recovery_ingress(
                     receiver,
@@ -1048,7 +1051,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         factory,
         body_store,
     )?;
-    let (exact_output_service_owner, _) = durable_exact_output_handoff_owner_pair();
+    let exact_output_service_owner = durable_exact_output_service_owner();
     let launch_inputs = ProductionLifecycleLaunchInputsV1::new(
         Instant::now(),
         round_timeout,
@@ -1271,6 +1274,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
         successor.lifecycle_storage_authority,
         None,
         Some(successor.pending_activation),
+        None,
         None,
         genesis_account,
         block_cadence,

@@ -157,9 +157,12 @@ fn fixture() -> Box<Fixture> {
         .unwrap();
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("real signed policy execution: {error}"))
-        .prepare_journals(Some(provider_candidate), Some(reputation_candidate), |_| {
-            Ok::<_, Infallible>(reservation(&capture_released))
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            Some(provider_candidate),
+            Some(reputation_candidate),
+            |_| Ok::<_, Infallible>(reservation(&capture_released)),
+        )
         .unwrap();
     assert!(journals.provider_capture.is_some());
     assert!(journals.reputation_capture.is_some());

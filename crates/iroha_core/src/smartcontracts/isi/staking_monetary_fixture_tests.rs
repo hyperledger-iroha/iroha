@@ -71,8 +71,9 @@ fn fixture_transfer_plan(
 
 fn fixture_registration_plan(
     stx: &StateTransaction<'_, '_>,
+    lane: LaneId,
     staker: &AccountId,
-    amount: Quantity,
+    amount: impl std::borrow::Borrow<Quantity>,
 ) -> PublicLaneMonetaryPlanV1 {
     let context = stake_context(
         &stx.world,
@@ -86,9 +87,9 @@ fn fixture_registration_plan(
         stx,
         context.staker_asset,
         context.escrow_asset,
-        amount,
+        amount.borrow().clone(),
         PublicLaneMonetaryPreconditionV1::Registration(PublicLaneMonetaryRegistrationV1 {
-            activation_height: scheduled_validator_eligibility_height(stx)
+            activation_height: scheduled_validator_eligibility_height(stx, lane)
                 .expect("fixture election height"),
         }),
     )
@@ -99,7 +100,7 @@ fn fixture_bond_plan(
     lane: LaneId,
     validator: &AccountId,
     staker: &AccountId,
-    amount: Quantity,
+    amount: impl std::borrow::Borrow<Quantity>,
 ) -> PublicLaneMonetaryPlanV1 {
     let context = stake_context(
         &stx.world,
@@ -118,7 +119,7 @@ fn fixture_bond_plan(
         stx,
         context.staker_asset,
         context.escrow_asset,
-        amount,
+        amount.borrow().clone(),
         PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
             activation_height: record.activation_height,
             peer_id: record.peer_id.clone(),
@@ -131,7 +132,7 @@ fn fixture_unbond_plan(
     lane: LaneId,
     validator: &AccountId,
     staker: &AccountId,
-    request_id: Hash,
+    request_id: impl std::borrow::Borrow<Hash>,
 ) -> PublicLaneMonetaryPlanV1 {
     let source = stx
         .world
@@ -153,7 +154,7 @@ fn fixture_unbond_plan(
         .get(&stake_key(lane, validator, staker))
         .expect("fixture withdrawal share")
         .pending_unbonds
-        .get(&request_id)
+        .get(request_id.borrow())
         .expect("fixture pending withdrawal");
     fixture_transfer_plan(
         stx,
@@ -173,7 +174,7 @@ fn fixture_slash_plan(
     lane: LaneId,
     validator: &AccountId,
     offence_height: u64,
-    amount: Quantity,
+    amount: impl std::borrow::Borrow<Quantity>,
 ) -> PublicLaneMonetaryPlanV1 {
     let source = stx
         .world
@@ -222,7 +223,7 @@ fn fixture_slash_plan(
         stx,
         source,
         destination,
-        amount,
+        amount.borrow().clone(),
         PublicLaneMonetaryPreconditionV1::Slash(PublicLaneMonetarySlashV1 {
             activation_height: record.activation_height,
             slashable_exposure: exposure,
@@ -324,7 +325,7 @@ fn registration_rejects_changed_signed_monetary_fields_without_custody_writes() 
         validator.clone(),
         Quantity::from(1_000_u64),
         Metadata::default(),
-        fixture_registration_plan(&stx, &validator, Quantity::from(1_000_u64)),
+        fixture_registration_plan(&stx, lane, &validator, Quantity::from(1_000_u64)),
     );
     let source = AssetId::new(definition.clone(), validator.clone());
     let destination = AssetId::new(definition.clone(), escrow);

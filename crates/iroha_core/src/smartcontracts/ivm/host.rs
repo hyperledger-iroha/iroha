@@ -159,6 +159,7 @@ const OPAQUE_SYSTEM_CONTRACT_STATE_PREFIXES: &[&str] = &[
     "sorafs_final_promotion_authority_v1",
     "sorafs_final_promotion_account_custody_v1",
     "sorafs_stream_token_custody_v1",
+    "sorafs/provider_admission",
     "sc/",
     "da_ingest_quota_v1/",
     "faucet_claim_consumed_v1/",
@@ -20242,6 +20243,7 @@ seiyaku OpaqueInstructionSubmission {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
+        crate::fastpq::quantity_fixture::materialize(&mut batch);
         fastpq_prover::bind_axt_batch_with_proof_metadata(
             &mut batch,
             &binding,
@@ -20251,12 +20253,15 @@ seiyaku OpaqueInstructionSubmission {
             Some(expiry_slot),
         )
         .expect("bind AXT test batch");
-        let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
-            .expect("FASTPQ prover")
-            .prove_axt_bound(&batch, &binding)
-            .expect("FASTPQ proof");
-        let fastpq_payload =
-            fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
+        let fastpq_payload = if opaque {
+            // This fixture exercises semantic rejection before child proof decoding.
+            vec![0]
+        } else {
+            fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
+                .expect("FASTPQ prover")
+                .prove_axt_bound(&batch, &binding)
+                .expect("canonical AXT proof")
+        };
         let envelope = axt::AxtProofEnvelope {
             dsid,
             manifest_root,
@@ -24168,9 +24173,9 @@ seiyaku DurableOwner {
         let commitment = [0x77; 32];
         let mut rec = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             "halo2/ipa",
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -24189,9 +24194,9 @@ seiyaku DurableOwner {
         let commitment = [0x78; 32];
         let mut rec = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             "halo2/ipa",
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -24217,9 +24222,9 @@ seiyaku DurableOwner {
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             backend,
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             "core",
             vk_bytes,
         );
@@ -24253,7 +24258,7 @@ seiyaku DurableOwner {
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let record = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24281,9 +24286,9 @@ seiyaku DurableOwner {
         let id = VerifyingKeyId::new(backend, "cached-vk");
         let rec = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             backend,
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             "core",
             vk_bytes,
         );
@@ -24301,21 +24306,21 @@ seiyaku DurableOwner {
                 .material
                 .as_ref()
                 .and_then(crate::zk::PreparedVerifyingKeyMaterialV1::ipa_k),
-            Some(crate::zk::IVM_EXECUTION_V1_IPA_K)
+            Some(crate::zk::IVM_REPLAY_BINDING_V1_IPA_K)
         );
     }
     #[cfg(feature = "zk-halo2-ipa")]
     #[test]
     fn prepared_vk_index_rejects_missing_schedule_duplicates_and_updates_atomically() {
         let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
         let vk_bytes = canonical_ivm_execution_vk_bytes();
         let commitment = CoreHost::hash_vk_bytes(backend, &vk_bytes);
         let mut host = CoreHost::new(fixture_account("alice"));
         let id = VerifyingKeyId::new(backend, "original");
         let original = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24326,7 +24331,7 @@ seiyaku DurableOwner {
         let original_record = Arc::clone(host.verifying_keys.get(&id).expect("original record"));
         let mut missing_schedule = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24347,7 +24352,7 @@ seiyaku DurableOwner {
         assert_eq!(host.prepared_verifying_keys.len(), 1);
         let first = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -24355,7 +24360,7 @@ seiyaku DurableOwner {
         );
         let second = active_vk_record(
             commitment,
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             backend,
             circuit_id,
             "core",
@@ -26454,9 +26459,9 @@ seiyaku DurableOwner {
         election.tally = vec![large_weight, 1, 0];
         world.elections.insert("election-1".to_string(), election);
         let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
         let commitment = [0x61; 32];
-        let schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
+        let schema_hash = crate::zk::ivm_replay_binding_public_inputs_schema_hash();
         let mut rec = active_vk_record(
             commitment,
             schema_hash,
@@ -26634,9 +26639,9 @@ seiyaku DurableOwner {
 
         let mut prior_vk = active_vk_record(
             [0x71; 32],
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             "halo2/ipa",
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             "core",
             Vec::new(),
         );
@@ -26829,9 +26834,9 @@ seiyaku DurableOwner {
         election.tally = vec![1, 2];
         world.elections.insert("election-1".to_string(), election);
         let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
         let commitment = [0x62; 32];
-        let schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
+        let schema_hash = crate::zk::ivm_replay_binding_public_inputs_schema_hash();
         let mut rec = active_vk_record(
             commitment,
             schema_hash,
@@ -27099,7 +27104,7 @@ seiyaku DurableOwner {
     }
     #[cfg(feature = "zk-halo2-ipa")]
     fn canonical_ivm_execution_vk_bytes() -> Vec<u8> {
-        crate::zk::halo2_ipa_ivm_execution_vk_box()
+        crate::zk::halo2_ipa_ivm_replay_binding_vk_box()
             .expect("canonical IVM execution verifier key")
             .bytes
     }
@@ -27164,8 +27169,8 @@ seiyaku DurableOwner {
         namespace: &str,
     ) -> iroha_data_model::zk::OpenVerifyEnvelope {
         let backend = "halo2/ipa";
-        let circuit_id = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        let fixture = crate::zk::test_utils::halo2_ivm_execution_envelope(
+        let circuit_id = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
+        let fixture = crate::zk::test_utils::halo2_ivm_replay_binding_envelope(
             Hash::new(b"host-batch-code"),
             Hash::new(b"host-batch-overlay"),
             Hash::new(b"host-batch-events"),

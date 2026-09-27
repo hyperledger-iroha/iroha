@@ -1176,8 +1176,11 @@ fn operation_response_rejects_session_order_slot_binding_and_digest_confusion() 
 }
 #[test]
 fn production_endpoint_policy_pins_non_root_service_uid() {
-    let policy =
-        EndpointPolicy::for_service_uid(PathBuf::from(STOCK_BROKER_ENDPOINT_V1), 42_424, true);
+    let policy = EndpointPolicy::for_service_uid(
+        iroha_config::parameters::defaults::runtime_provider_broker::endpoint_path(),
+        42_424,
+        true,
+    );
     assert_eq!(policy.expected_service_uid, 42_424);
     assert_eq!(verify_peer_uid(42_424, 42_424), Ok(()));
     assert_eq!(
@@ -1187,9 +1190,26 @@ fn production_endpoint_policy_pins_non_root_service_uid() {
     );
 }
 #[test]
+fn configured_production_endpoint_keeps_exact_custody_checks() {
+    let endpoint_path = "/var/iroha-seat-7/runtime-provider-broker-v1.sock"
+        .parse::<iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath>()
+        .expect("valid public broker endpoint");
+    let policy = EndpointPolicy::production(&endpoint_path);
+    assert_eq!(policy.path.as_path(), endpoint_path.as_path());
+    assert_eq!(
+        policy.expected_service_uid,
+        rustix::process::geteuid().as_raw()
+    );
+    assert_eq!(policy.socket_mode, STOCK_BROKER_SOCKET_MODE_V1);
+    assert!(policy.verify_all_ancestors);
+}
+#[test]
 fn endpoint_policy_rejects_outage_mode_owner_symlink_and_path_substitution() {
-    let production = EndpointPolicy::production();
-    assert_eq!(production.path, PathBuf::from(STOCK_BROKER_ENDPOINT_V1));
+    let production = EndpointPolicy::production(&validated_production_endpoint());
+    assert_eq!(
+        production.path,
+        iroha_config::parameters::defaults::runtime_provider_broker::endpoint_path()
+    );
     assert_eq!(
         production.expected_service_uid,
         rustix::process::geteuid().as_raw()

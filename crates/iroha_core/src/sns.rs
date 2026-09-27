@@ -6,7 +6,9 @@
 //! so the ledger-backed lifecycle model remains deterministic across peers.
 #[cfg(test)]
 use crate::state::{State, StateReadOnly};
-use crate::state::{StateBlock, StateTransaction, World, WorldReadOnly};
+use crate::state::{
+    StateBlock, StateStorageAdmissionError, StateTransaction, World, WorldReadOnly,
+};
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
 use iroha_data_model::sns::pricing::{
@@ -653,12 +655,12 @@ fn suspend_alias_auto_renew(
     state_block: &mut StateBlock<'_>,
     mut state: AliasAutoRenewStateV1,
     reason: &'static str,
-) {
+) -> Result<(), StateStorageAdmissionError> {
     advance_alias_auto_renew_revision(&mut state);
     state.next_retry_at_ms = None;
     state.suspended_reason = Some(reason.to_owned());
     let target = state.target.clone();
-    let mut transaction = state_block.transaction();
+    let mut transaction = state_block.try_transaction()?;
     match persist_alias_auto_renew_state(&mut transaction, &state) {
         Ok(()) => {
             transaction.apply();
@@ -668,6 +670,7 @@ fn suspend_alias_auto_renew(
             iroha_logger::error!(target = %target, %error, "failed to persist alias auto-renew suspension");
         }
     }
+    Ok(())
 }
 fn record_alias_auto_renew_failure(
     state_block: &mut StateBlock<'_>,
@@ -675,7 +678,7 @@ fn record_alias_auto_renew_failure(
     config: &AliasAutoRenewConfigV1,
     now_ms: u64,
     error: &str,
-) {
+) -> Result<(), StateStorageAdmissionError> {
     advance_alias_auto_renew_revision(&mut state);
     state.failure_count = state.failure_count.saturating_add(1);
     if state.failure_count >= config.max_failures {
@@ -688,7 +691,7 @@ fn record_alias_auto_renew_failure(
     let target = state.target.clone();
     let suspended = state.suspended_reason.is_some();
     let failure_count = state.failure_count;
-    let mut transaction = state_block.transaction();
+    let mut transaction = state_block.try_transaction()?;
     match persist_alias_auto_renew_state(&mut transaction, &state) {
         Ok(()) => {
             transaction.apply();
@@ -716,26 +719,27 @@ fn record_alias_auto_renew_failure(
             );
         }
     }
+    Ok(())
 }
 fn process_alias_auto_renew_storage_key(
     state_block: &mut StateBlock<'_>,
     storage_key: &StatePath,
     now_ms: u64,
-) {
+) -> Result<(), StateStorageAdmissionError> {
     let state = match alias_auto_renew_state_by_storage_key(&state_block.world, storage_key) {
         Ok(state) => state,
         Err(error) => {
             iroha_logger::error!(%storage_key, %error, "malformed alias auto-renew state skipped");
-            return;
+            return Ok(());
         }
     };
     let Some(config) = state.config.clone() else {
-        return;
+        return Ok(());
     };
     if state.suspended_reason.is_some() {
-        return;
+        return Ok(());
     }
-    let mut transaction = state_block.transaction();
+    let mut transaction = state_block.try_transaction()?;
     match alias_auto_renew_attempt(&mut transaction, &state, &config, now_ms) {
         AliasAutoRenewAttempt::NotDue => {}
         AliasAutoRenewAttempt::Renewed => {
@@ -757,25 +761,27 @@ fn process_alias_auto_renew_storage_key(
         }
         AliasAutoRenewAttempt::Suspend(reason) => {
             drop(transaction);
-            suspend_alias_auto_renew(state_block, state, reason);
+            suspend_alias_auto_renew(state_block, state, reason)?;
         }
         AliasAutoRenewAttempt::Retry(error) => {
             drop(transaction);
-            record_alias_auto_renew_failure(state_block, state, &config, now_ms, &error);
+            record_alias_auto_renew_failure(state_block, state, &config, now_ms, &error)?;
         }
     }
+    Ok(())
 }
 /// Process a bounded, fair slice of enabled alias auto-renew records at block time.
 ///
-/// This native maintenance path is intentionally infallible at the block level:
-/// individual payment or renewal failures update deterministic retry/suspension
-/// state, while malformed state or cursor records fail closed without mutation.
-pub(crate) fn process_alias_auto_renewals(state_block: &mut StateBlock<'_>) {
+/// Individual payment failures update deterministic retry/suspension state;
+/// a local World admission refusal returns to the original output owner.
+pub(crate) fn process_alias_auto_renewals(
+    state_block: &mut StateBlock<'_>,
+) -> Result<(), StateStorageAdmissionError> {
     let cursor = match alias_auto_renew_cursor(&state_block.world) {
         Ok(cursor) => cursor,
         Err(error) => {
             iroha_logger::error!(%error, "alias auto-renew sweep skipped because its cursor is invalid");
-            return;
+            return Ok(());
         }
     };
     let storage_keys = alias_auto_renew_candidate_keys(
@@ -786,13 +792,14 @@ pub(crate) fn process_alias_auto_renewals(state_block: &mut StateBlock<'_>) {
     let now_ms =
         u64::try_from(state_block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX);
     for storage_key in &storage_keys {
-        process_alias_auto_renew_storage_key(state_block, storage_key, now_ms);
+        process_alias_auto_renew_storage_key(state_block, storage_key, now_ms)?;
     }
     if let Some(last_storage_key) = storage_keys.last().cloned() {
-        let mut transaction = state_block.transaction();
+        let mut transaction = state_block.try_transaction()?;
         persist_alias_auto_renew_cursor(&mut transaction, last_storage_key);
         transaction.apply();
     }
+    Ok(())
 }
 /// Build the selector used for a full account-alias lease record.
 pub fn selector_for_account_alias(

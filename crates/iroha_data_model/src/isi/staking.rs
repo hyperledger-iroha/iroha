@@ -213,29 +213,25 @@ isi! {
         pub validator: AccountId,
         /// Replacement peer identity that signs consensus messages for the lane.
         pub peer_id: PeerId,
-        /// Replacement peer consent; absent only for its own account signatory or peer administrators.
-        pub peer_signature: Option<SignatureOf<PublicLanePeerBindingAuthorization>>,
+        /// Exact network, tenure, and previous-binding consent from the replacement peer.
+        pub peer_signature: SignatureOf<PublicLanePeerBindingAuthorization>,
     }
 }
 impl RebindPublicLaneValidatorPeer {
     /// Build a public-lane validator peer-rebinding instruction.
     #[must_use]
-    pub fn new(lane_id: LaneId, validator: AccountId, peer_id: PeerId) -> Self {
+    pub fn new(
+        lane_id: LaneId,
+        validator: AccountId,
+        peer_id: PeerId,
+        peer_signature: SignatureOf<PublicLanePeerBindingAuthorization>,
+    ) -> Self {
         Self {
             lane_id,
             validator,
             peer_id,
-            peer_signature: None,
+            peer_signature,
         }
-    }
-    /// Attach network-bound consent from the replacement consensus peer.
-    #[must_use]
-    pub fn with_peer_signature(
-        mut self,
-        signature: SignatureOf<PublicLanePeerBindingAuthorization>,
-    ) -> Self {
-        self.peer_signature = Some(signature);
-        self
     }
 }
 isi! {
@@ -422,31 +418,29 @@ mod tests {
     #[ignore = "explicit maintenance command prints canonical changed staking frame fixtures"]
     fn print_staking_admission_record_fixture_rows() {
         let (candidate, network_id) = candidate_fixture();
-        let rebind = RebindPublicLaneValidatorPeer::new(
-            candidate.registration.lane_id,
-            candidate.registration.validator.clone(),
-            candidate.registration.peer_id.clone(),
-        );
         let peer_key =
             KeyPair::try_from_seed(vec![0x31; 32], Algorithm::BlsNormal).expect("fixture peer");
         let consent = PublicLanePeerBindingAuthorization::new(
             network_id,
-            rebind.lane_id,
-            rebind.validator.clone(),
-            rebind.peer_id.clone(),
+            candidate.registration.lane_id,
+            candidate.registration.validator.clone(),
+            candidate.registration.peer_id.clone(),
             13,
             sample_peer_id(),
         );
-        let signed_rebind = rebind.clone().with_peer_signature(
+        let rebind = RebindPublicLaneValidatorPeer::new(
+            candidate.registration.lane_id,
+            candidate.registration.validator.clone(),
+            candidate.registration.peer_id.clone(),
             SignatureOf::try_new(peer_key.private_key(), &consent)
                 .expect("fixture rebind signature"),
         );
-        let rows = vec![
+        let mut rows = vec![
             crate::isi::generated_record_identity_tests::capture(candidate.registration.clone()),
             crate::isi::generated_record_identity_tests::capture(candidate),
             crate::isi::generated_record_identity_tests::capture(rebind),
-            crate::isi::generated_record_identity_tests::capture(signed_rebind),
         ];
+        rows.extend(crate::isi::generated_record_identity_tests::staking_monetary_fixture_rows());
         println!(
             "STAKING_ADMISSION_FIXTURE_ROWS={}",
             norito::json::to_json(&rows).expect("fixture rows")
@@ -596,11 +590,30 @@ mod tests {
     fn rebind_public_lane_validator_peer_new_sets_fields() {
         let validator = sample_account();
         let peer_id = sample_peer_id();
-        let instruction =
-            RebindPublicLaneValidatorPeer::new(LaneId::SINGLE, validator.clone(), peer_id.clone());
+        let peer_key =
+            KeyPair::try_from_seed(vec![0x22; 32], Algorithm::Ed25519).expect("fixture peer");
+        let consent = PublicLanePeerBindingAuthorization::new(
+            crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                Hash::new(b"staking-rebind-constructor"),
+            )),
+            LaneId::SINGLE,
+            validator.clone(),
+            peer_id.clone(),
+            13,
+            sample_peer_id(),
+        );
+        let signature = SignatureOf::try_new(peer_key.private_key(), &consent)
+            .expect("fixture rebind signature");
+        let instruction = RebindPublicLaneValidatorPeer::new(
+            LaneId::SINGLE,
+            validator.clone(),
+            peer_id.clone(),
+            signature.clone(),
+        );
         assert_eq!(*instruction.lane_id(), LaneId::SINGLE);
         assert_eq!(instruction.validator(), &validator);
         assert_eq!(instruction.peer_id(), &peer_id);
+        assert_eq!(instruction.peer_signature(), &signature);
     }
 }
 isi! {
@@ -641,6 +654,7 @@ isi! {
 }
 isi! {
     /// Slash a validator for misbehaviour and emit an audit trail entry.
+    #[derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::SlashPublicLaneValidator")]
     pub struct SlashPublicLaneValidator {
         /// Lane identifier.
@@ -825,7 +839,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RebindPublicLaneValidatorPeer {
             flags,
         )?;
         let peer_signature = super::decode_aos_canonical_field::<
-            Option<SignatureOf<PublicLanePeerBindingAuthorization>>,
+            SignatureOf<PublicLanePeerBindingAuthorization>,
         >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
         if offset != bytes.len() {
             return Err(norito::core::Error::LengthMismatch);
@@ -964,6 +978,21 @@ mod slice_tests {
             .expect("derive checked staking slice fixture peer keypair");
         PeerId::new(key_pair.public_key().clone())
     }
+    fn rebind_signature() -> SignatureOf<PublicLanePeerBindingAuthorization> {
+        let key_pair = KeyPair::try_from_seed(vec![0x14; 32], Algorithm::Ed25519)
+            .expect("derive rebind peer key");
+        let consent = PublicLanePeerBindingAuthorization::new(
+            NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"staking-slice-rebind",
+            ))),
+            LaneId::SINGLE,
+            account(0x11),
+            peer(0x14),
+            13,
+            peer(0x12),
+        );
+        SignatureOf::try_new(key_pair.private_key(), &consent).expect("rebind peer signature")
+    }
     fn transfer_plan(staker: AccountId, amount: Quantity, bond: bool) -> PublicLaneMonetaryPlanV1 {
         use crate::nexus::{
             PublicLaneMonetaryBondV1, PublicLaneMonetaryPreconditionV1,
@@ -1094,7 +1123,7 @@ mod slice_tests {
             lane_id: LaneId::SINGLE,
             validator: account(0x11),
             peer_id: peer(0x14),
-            peer_signature: None,
+            peer_signature: rebind_signature(),
         });
         assert_slice_roundtrip(ActivatePublicLaneValidator {
             lane_id: LaneId::SINGLE,
@@ -1147,7 +1176,7 @@ mod slice_tests {
                 lane_id: LaneId::SINGLE,
                 validator: account(0x11),
                 peer_id: peer(0x14),
-                peer_signature: None,
+                peer_signature: rebind_signature(),
             },
         );
         assert_registry_decodes(
@@ -1303,16 +1332,20 @@ mod slice_tests {
 #[cfg(test)]
 mod json_tests {
     use super::{
-        ActivatePublicLaneValidator, RebindPublicLaneValidatorPeer, RegisterPublicLaneValidator,
+        ActivatePublicLaneValidator, PublicLanePeerBindingAuthorization,
+        RebindPublicLaneValidatorPeer, RegisterPublicLaneValidator,
     };
     use crate::account::AccountId;
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, SignatureOf};
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::topology::LaneId;
     use iroha_primitives::numeric::Quantity;
-    use norito::json::value::{from_value, to_value};
+    use norito::json::{
+        Value,
+        value::{from_value, to_value},
+    };
     #[test]
     fn register_public_lane_validator_json_roundtrip() {
         let _domain: iroha_model_base::domain::DomainId =
@@ -1376,10 +1409,28 @@ mod json_tests {
             .expect("derive checked staking JSON rebind peer fixture keypair");
         let validator = AccountId::new(validator_key.public_key().clone());
         let peer_id = PeerId::new(peer_key.public_key().clone());
-        let isi = RebindPublicLaneValidatorPeer::new(LaneId::new(3), validator, peer_id);
+        let consent = PublicLanePeerBindingAuthorization::new(
+            crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+                b"staking-json-rebind",
+            ))),
+            LaneId::new(3),
+            validator.clone(),
+            peer_id.clone(),
+            13,
+            PeerId::new(validator_key.public_key().clone()),
+        );
+        let signature =
+            SignatureOf::try_new(peer_key.private_key(), &consent).expect("rebind consent");
+        let isi = RebindPublicLaneValidatorPeer::new(LaneId::new(3), validator, peer_id, signature);
         let encoded = to_value(&isi).expect("encode RebindPublicLaneValidatorPeer");
         let decoded: RebindPublicLaneValidatorPeer =
-            from_value(encoded).expect("decode RebindPublicLaneValidatorPeer");
+            from_value(encoded.clone()).expect("decode RebindPublicLaneValidatorPeer");
         assert_eq!(decoded, isi);
+        let mut missing_consent = encoded;
+        let Value::Object(ref mut fields) = missing_consent else {
+            panic!("rebind JSON must be an object");
+        };
+        assert!(fields.remove("peer_signature").is_some());
+        assert!(from_value::<RebindPublicLaneValidatorPeer>(missing_consent).is_err());
     }
 }

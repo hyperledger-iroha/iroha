@@ -1857,7 +1857,7 @@ class SccpClientExactTest {
         "contract_artifact_sha256" to upper(0xb1, 32),
         "vk_ref" to linkedMapOf(
             "backend" to "stark/fri/v1",
-            "name" to "ivm-execution-v1",
+            "name" to "ivm-replay-binding-v1",
             "version" to 1,
             "commitment" to upper(0xb2, 32),
         ),

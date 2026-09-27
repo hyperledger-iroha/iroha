@@ -95,10 +95,15 @@ state_test! { sync native_consumer_stage_applies_h_effective_asset_policy_before
     let exact_completed_root = scratch.overlay().merge_execution_write_set_root();
     assert!(scratch.executions()[0].result.is_ok(), "H-effective cancellation permits this exact transfer");
     drop(scratch);
-    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+    let group_count = crate::block::native_lane_batch_for_execution(&carrier).unwrap().groups.len();
+    let budget = mv::allocation::AllocationBudget::new(16 << 20);
+    let admission = crate::state::NativeExecutionResourceAdmission::try_reserve_source(&budget, group_count).unwrap();
+    let group_bytes = admission.group_layout_for_test().size();
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], admission).unwrap()
         else { panic!("actual current first carriers/Decisions prepare source authority"); };
     let NativeLaneBatchReplayV1::Ready(staged) = source.stage_with_start_hooks().unwrap()
         else { panic!("same base remains current"); };
+    assert!(budget.reserved_bytes() > group_bytes, "the same source pool retains the executed output vectors");
     assert_eq!(staged.batch(), &exact_batch, "scratch and canonical staging run identical ordered hooks+native writes");
     assert_eq!(staged.prefix_roots_for_test(), exact_roots);
     assert_eq!(staged.executions()[0].result, exact_result);
@@ -116,10 +121,11 @@ state_test! { sync native_consumer_stage_applies_h_effective_asset_policy_before
     assert_ne!(exact_completed_root, exact_roots.1,
         "the common tail owns additional runtime metadata after the native prefix");
     drop(staged);
+    assert_eq!(budget.reserved_bytes(), 0, "retained source and outputs refund together");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before, "hook and native economics roll back together");
     assert_eq!(*state.world.asset_definitions.view().get(fixture.source.definition()).unwrap().confidential_policy(),old_policy);
     // A later private-prefix failure must discard the already-applied H hook too.
-    let NativeLaneBatchSourcePreparationV1::Ready(source)=state.prepare_proposed_native_lane_batch_source(&carrier,&[]).unwrap() else {panic!("source still authentic")};
+    let NativeLaneBatchSourcePreparationV1::Ready(source)=state.prepare_proposed_native_lane_batch_source(carrier.clone(),&[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap() else {panic!("source still authentic")};
     let NativeLaneBatchReplayV1::Ready(mut altered)=source.stage_with_start_hooks().unwrap() else {panic!("same pre-State")};
     let path: iroha_model_base::state_path::StatePath="unbound_after_native_hook".parse().unwrap();
     altered.overlay_mut_for_test().world.smart_contract_state.insert(path,vec![1]);
@@ -172,7 +178,7 @@ state_test! { sync native_consumer_stage_compares_actual_alias_and_both_prefix_r
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let mut expected = None;
     for mutation in 0..3 {
-        let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap() else {panic!("ready")};
+        let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap() else {panic!("ready")};
         let NativeLaneBatchReplayV1::Ready(mut staged) = source.stage_with_start_hooks().unwrap() else {panic!("staged")};
         let alias = staged.executions()[0].authenticated_signed_replay_alias.expect("actual sealed authentication owns its alias");
         let input = &staged.batch().groups[0].payload.input.entrypoint;
@@ -227,7 +233,7 @@ state_test! { sync native_consumer_stage_prepared_authority_refuses_changed_publ
     use super::{NativeLaneBatchReplayV1,NativeLaneBatchSourcePreparationV1};
     let fixture = native_consumer_stage_fixture(false); let state=&fixture.native.state;
     let carrier=native_consumer_stage_carrier(&fixture);
-    let NativeLaneBatchSourcePreparationV1::Ready(source)=state.prepare_proposed_native_lane_batch_source(&carrier,&[]).unwrap() else {panic!("ready")};
+    let NativeLaneBatchSourcePreparationV1::Ready(source)=state.prepare_proposed_native_lane_batch_source(carrier.clone(),&[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap() else {panic!("ready")};
     state.append_committed_block_header_for_tests(carrier.header());
     let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     assert!(matches!(source.stage_with_start_hooks().unwrap(),NativeLaneBatchReplayV1::ObservationChanged));
@@ -241,21 +247,27 @@ state_test! { sync native_consumer_source_preparation_retains_exact_recovery_pos
     let state=&fixture.native.state;let first=&fixture.native.block;
     let before=crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     state.kura.evict_first_admission_body_for_testing(NonZeroUsize::new(first.header().height().get() as usize).unwrap(),first.hash()).unwrap();
-    let NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired{execution_index,source}=state.prepare_proposed_native_lane_batch_source(&carrier,&[]).unwrap() else {panic!("exact first body required")};
+    let budget = mv::allocation::AllocationBudget::new(16 << 20);
+    let group_count = crate::block::native_lane_batch_for_execution(&carrier).unwrap().groups.len();
+    let admission = crate::state::NativeExecutionResourceAdmission::try_reserve_source(&budget, group_count).unwrap();
+    let NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired{execution_index,source,pending}=state.prepare_proposed_native_lane_batch_source(carrier.clone(),&[], admission).unwrap() else {panic!("exact first body required")};
     assert_eq!(execution_index,0);
+    assert_eq!(pending.carrier(), &carrier);
+    assert!(budget.reserved_bytes() > 0);
     let (request,response,outstanding)=authenticated_native_batch_body_response_for_test(&fixture.native.validators[0],source.finality(),first);
     let recovered=source.complete_from_authenticated_response(&request,&response).unwrap();
     let mut retained=vec![(0,recovered)];
-    let NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired{execution_index,source}=state.prepare_proposed_native_lane_batch_source(&carrier,&retained).unwrap() else {panic!("retain first completion while recovering second input")};
+    let NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired{execution_index,source,pending}=state.resume_native_lane_batch_source(pending,&retained).unwrap() else {panic!("retain first completion while recovering second input")};
     assert_eq!(execution_index,1);assert_eq!(source.carrier_hash(),first.hash());
+    assert_eq!(pending.carrier(), &carrier);
     let second=source.complete_from_authenticated_response(&request,&response).unwrap();
-    assert!(state.prepare_proposed_native_lane_batch_source(&carrier,&[(0,second.clone())]).is_err());
+    assert!(state.prepare_proposed_native_lane_batch_source(carrier.clone(),&[(0,second.clone())], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).is_err());
     retained.push((1,second));
-    let NativeLaneBatchSourcePreparationV1::Ready(source)=state.prepare_proposed_native_lane_batch_source(&carrier,&retained).unwrap() else {panic!("all private inputs retained")};
+    let NativeLaneBatchSourcePreparationV1::Ready(source)=state.resume_native_lane_batch_source(pending,&retained).unwrap() else {panic!("all private inputs retained")};
     let NativeLaneBatchReplayV1::Ready(staged)=source.stage_with_start_hooks().unwrap() else {panic!("same pre-State")};
     assert_eq!(staged.overlay().world.assets.get(&fixture.destination).unwrap().0,Quantity::from(55u32));
     staged.overlay().validate_merge_carrier_entrypoint_binding().unwrap();
-    drop(staged);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
+    drop(staged);assert_eq!(budget.reserved_bytes(), 0);assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
     assert_eq!(outstanding.len(),1,"stage cannot release existing global recovery transport custody");
 }
 
@@ -269,9 +281,17 @@ state_test! { sync native_consumer_source_refuses_authentically_resigned_first_c
     source.payload.descriptor.admission_carrier_hash=HashOf::from_untyped_unchecked(Hash::new(b"foreign finalized source"));
     resign_changed_native_group_payload_for_test(&fixture.native,source);
     changed.set_execution_context(Some(bundle));
-    assert!(state.prepare_proposed_native_lane_batch_source(&changed,&[]).is_err(),
-        "even valid native signatures cannot substitute the canonical first carrier");
-    assert!(matches!(state.prepare_proposed_native_lane_batch_source(&carrier,&[]).unwrap(),NativeLaneBatchSourcePreparationV1::Ready(_)));
+    let budget = mv::allocation::AllocationBudget::new(16 << 20);
+    let group_count = crate::block::native_lane_batch_for_execution(&changed).unwrap().groups.len();
+    let admission = crate::state::NativeExecutionResourceAdmission::try_reserve_source(&budget, group_count).unwrap();
+    let error = state.prepare_proposed_native_lane_batch_source(changed.clone(), &[], admission)
+        .err().expect("even valid native signatures cannot substitute the canonical first carrier");
+    let pending = error.into_pending();
+    assert_eq!(pending.carrier(), &changed);
+    assert!(budget.reserved_bytes() > 0);
+    drop(pending);
+    assert_eq!(budget.reserved_bytes(), 0);
+    assert!(matches!(state.prepare_proposed_native_lane_batch_source(carrier.clone(),&[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap(),NativeLaneBatchSourcePreparationV1::Ready(_)));
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"),before);
 }
 
@@ -378,7 +398,7 @@ state_test! { sync native_consumer_source_custody_moves_original_all_route_owner
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("real four-validator first sources and all-route Decisions"); };
     let groups = source.groups_for_test();
     assert_eq!(groups.len(), 1);
@@ -429,7 +449,7 @@ state_test! { sync native_consumer_source_custody_refusal_keeps_state_and_storag
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("current authenticated source"); };
     assert!(!source.groups_for_test().is_empty());
     let mut publication_notice = state.state_view_publication();

@@ -1384,10 +1384,10 @@ fn get_block_rejects_hash_mismatched_local_sidecar() {
         .evict_block_bodies(payload_len)
         .expect("evict block body");
     assert!(freed >= payload_len);
-    let (frame, _versioned) = conflicting
+    let frame = conflicting
         .canonical_wire()
         .expect("encode conflicting sidecar")
-        .into_parts();
+        .into_vec();
     {
         let store = kura.block_store.lock();
         store

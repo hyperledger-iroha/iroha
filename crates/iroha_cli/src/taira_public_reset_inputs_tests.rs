@@ -751,9 +751,6 @@ fn topology_intent_forbids_generated_pins_and_plans() {
     assert!(decode_inventory(&bytes, "topology intent").is_err());
     for field in [
         "beacon_bootstrap",
-        "epoch_supervisor",
-        "maintenance_admin_identity",
-        "maintenance_admin_config_sha256",
         "operator_public_key",
         "runtime_client_config_sha256",
         "next_genesis_hash",

@@ -170,6 +170,36 @@ struct StreamTokenObserverBrokerClient {
 }
 
 impl StreamTokenStateObserverClientV1 for StreamTokenObserverBrokerClient {
+    fn finalize_check(
+        &self,
+        instruction: &iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+    ) -> Result<iroha_data_model::transaction::SignedTransaction, StreamTokenSignerCallErrorV1>
+    {
+        let deadline =
+            BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1).map_err(stream_token_transport_error)?;
+        let payload =
+            encode_canonical(instruction, 16 * 1024).map_err(stream_token_transport_error)?;
+        decode_stream_token_check_request(&self.binding, &payload)
+            .map_err(stream_token_transport_error)?;
+        let session =
+            stream_token_read_session(&self.session, &self.binding, self.metadata_digest, deadline)
+                .map_err(stream_token_transport_error)?;
+        let result = session
+            .call_before(
+                &self.binding,
+                self.metadata_digest,
+                OPERATION_STREAM_TOKEN_CHECK_V1,
+                ScrubbedBytes::new(payload.clone()),
+                true,
+                deadline,
+            )
+            .map_err(stream_token_transport_error)?;
+        let _scope = result.enter_decode_admission();
+        let signed = decode_stream_token_check_result(&self.binding, &payload, &result)
+            .map_err(stream_token_transport_error)?;
+        deadline.remaining().map_err(stream_token_transport_error)?;
+        Ok(signed)
+    }
     fn handle(&self) -> &str {
         &self.observer_handle
     }

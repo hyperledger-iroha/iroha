@@ -589,7 +589,7 @@ use sorafs_manifest::{
     proof_stream::ProofStreamTier,
     repair::{
         GC_AUDIT_BLOCKED_DEAL_ACTIVE_V1, GC_AUDIT_BLOCKED_REPAIR_ACTIVE_V1,
-        GC_AUDIT_BLOCKED_SHARED_CHUNKS_V1, GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1,
+        GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1,
         GC_AUDIT_REASON_RETENTION_EXPIRED_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1, GcAuditPayloadV1,
         RepairReportV1, SorafsAuditHeaderV1, gc_audit_payload_digest_v1,
     },
@@ -3270,6 +3270,9 @@ pub enum RepairOrchestratorError {
     /// Generic failure with human-readable context.
     #[error("{0}")]
     Other(String),
+    /// A verified chunk could not be installed through the storage lifecycle boundary.
+    #[error("repair payload storage failed: {0}")]
+    Storage(#[from] crate::store::StorageError),
 }
 impl RepairOrchestratorError {
     /// Construct a generic orchestrator failure.
@@ -3282,14 +3285,17 @@ impl RepairOrchestratorError {
 pub trait RepairOrchestrator: Send + Sync + std::fmt::Debug {
     /// Fetch invalid chunks from remote sources for the exact native lease.
     ///
-    /// Implementations must return no more payloads than `invalid_chunks` and
-    /// each payload must match one requested digest and length.
+    /// Deliver at most one payload per distinct requested digest to `sink`. Implementations must
+    /// bound each response to the requested chunk length before allocation and stop immediately
+    /// when the sink fails. The sink verifies and installs each chunk before returning, allowing
+    /// the transport to release it without retaining the complete repaired object.
     fn rehydrate_missing_chunks(
         &self,
         context: &native_repair_worker::NativeRepairExecutionContextV1,
         manifest: &StoredManifest,
-        invalid_chunks: &[ChunkFileRecord],
-    ) -> Result<Vec<RepairChunkPayload>, RepairOrchestratorError>;
+        invalid_chunks: &[&ChunkFileRecord],
+        sink: &mut dyn FnMut(RepairChunkPayload) -> Result<(), RepairOrchestratorError>,
+    ) -> Result<(), RepairOrchestratorError>;
 }
 /// Runtime-only dependencies supplied by the embedding daemon.
 ///
@@ -13251,24 +13257,9 @@ impl NodeHandle {
                 target.manifest_id()
             )));
         }
-        for index in 0..authoritative_target.chunk_count() {
-            let chunk = authoritative_target.chunk(index).ok_or_else(|| {
-                GovernancePublishError::other("GC target chunk metadata is incomplete")
-            })?;
-            let refcount = snapshot
-                .chunk_refcounts
-                .iter()
-                .find(|entry| entry.digest == chunk.digest)
-                .ok_or_else(|| {
-                    GovernancePublishError::other("GC target chunk lacks a storage refcount")
-                })?;
-            if refcount.count > 1 {
-                return Err(GovernancePublishError::other(format!(
-                    "GC target {} acquired shared chunks before intent preparation",
-                    target.manifest_id()
-                )));
-            }
-        }
+        // Physical chunks belong to this manifest directory, even when their digests
+        // repeat here or in another manifest. The exact post-state calculation below
+        // checks and decrements every logical reference while retaining other copies.
         let storage_after = gc_expected_post_storage_identity(&snapshot, authoritative_target)?;
         let checkpoint_guard = self.auxiliary_checkpoint_lock.lock().map_err(|_| {
             GovernancePublishError::other("auxiliary checkpoint transaction lock poisoned")
@@ -15613,6 +15604,28 @@ impl NodeHandle {
             None => (None, None),
         };
         self.ingest_manifest_with_layout(manifest, plan, reader, stripe_layout, chunk_roles)
+    }
+    /// Admit complete publisher-staged bytes under the native worker's independently finalized
+    /// authorization and exact current assignment revision. The authority callback must check
+    /// live native state on every invocation, including buffered reads and EOF. This shares the
+    /// ordinary pin scheduler, capacity and full integrity checks.
+    pub fn ingest_staged_publisher_source(
+        &self,
+        authorization: &FinalizedProviderIngestAuthorizationV1,
+        expected_assignment_revision: u64,
+        current_authority: &mut impl FnMut() -> Result<(), StorageError>,
+    ) -> Result<Option<String>, NodeStorageError> {
+        let storage = self.storage_backend()?;
+        let result = self.schedulers.try_with_pin(|| {
+            storage.ingest_staged_publisher_source(
+                authorization,
+                expected_assignment_revision,
+                current_authority,
+            )
+        })??;
+        self.schedulers
+            .update_storage_bytes(storage.total_bytes(), self.config.max_capacity_bytes().0);
+        Ok(result)
     }
     /// Ingest a manifest payload with optional stripe layout and chunk-role annotations.
     pub fn ingest_manifest_with_layout<R: Read>(

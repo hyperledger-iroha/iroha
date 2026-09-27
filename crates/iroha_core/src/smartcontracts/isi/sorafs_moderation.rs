@@ -5,7 +5,7 @@ use crate::{
     smartcontracts::isi::sorafs_pop_registry::{
         read_active_publications, read_pinned_publications,
     },
-    state::{StateBlock, StateTransaction, WorldReadOnly},
+    state::{StateBlock, StateStorageAdmissionError, StateTransaction, WorldReadOnly},
 };
 #[cfg(test)]
 use iroha_data_model::sorafs::moderation_ledger::{
@@ -1754,11 +1754,20 @@ fn insert_sortition_anchor_schedule_entry(
 ///
 /// # Errors
 ///
-/// Returns an invariant error if the bounded schedule and its indexed appeals disagree.
+/// Separates local transaction admission from invalid authenticated moderation state.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SortitionAnchorPinError {
+    /// The original finite World owner could not open a transaction locally.
+    #[error(transparent)]
+    Storage(#[from] StateStorageAdmissionError),
+    /// The bounded schedule or indexed appeal is invalid.
+    #[error(transparent)]
+    Instruction(#[from] InstructionExecutionError),
+}
 pub(crate) fn pin_due_sortition_anchors_v1(
     state_block: &mut StateBlock<'_>,
-) -> Result<usize, InstructionExecutionError> {
-    let mut transaction = state_block.transaction();
+) -> Result<usize, SortitionAnchorPinError> {
+    let mut transaction = state_block.try_transaction()?;
     let mut schedule = read_sortition_anchor_schedule(transaction.world())?;
     if schedule.entries.is_empty() {
         return Ok(0);
@@ -1775,7 +1784,8 @@ pub(crate) fn pin_due_sortition_anchors_v1(
     if block_hash == [0; 32] {
         return Err(corrupt_state(
             "moderation sortition anchor resolved a zero consensus block hash",
-        ));
+        )
+        .into());
     }
     let due = schedule.entries.drain(..due_count).collect::<Vec<_>>();
     for entry in &due {
@@ -1787,7 +1797,8 @@ pub(crate) fn pin_due_sortition_anchors_v1(
         {
             return Err(corrupt_state(
                 "moderation sortition-anchor schedule disagrees with its indexed appeal",
-            ));
+            )
+            .into());
         }
         appeal.sortition_anchor = Some(ModerationSortitionAnchorV1 {
             block_height,

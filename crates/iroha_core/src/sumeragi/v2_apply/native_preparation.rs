@@ -185,6 +185,16 @@ impl V2ApplyService {
                 MergeLedgerCommitError::NativeControlValidation(error),
             ) => self.classify_validation_failure(None, body, &error),
             NativeCandidatePreparationError::Execution(
+                MergeLedgerCommitError::StateStorageAdmission(error),
+            )
+            | NativeCandidatePreparationError::Preparation(
+                MergeLedgerCommitError::StateStorageAdmission(error),
+            ) => self.classify_validation_failure(
+                None,
+                body,
+                &BlockValidationError::StateStorageAdmission(error),
+            ),
+            NativeCandidatePreparationError::Execution(
                 MergeLedgerCommitError::BlockHashAdmission(error),
             )
             | NativeCandidatePreparationError::Preparation(
@@ -193,6 +203,16 @@ impl V2ApplyService {
                 None,
                 body,
                 &BlockValidationError::BlockHashAdmission(error),
+            ),
+            NativeCandidatePreparationError::Execution(
+                MergeLedgerCommitError::MembershipAdmission(error),
+            )
+            | NativeCandidatePreparationError::Preparation(
+                MergeLedgerCommitError::MembershipAdmission(error),
+            ) => self.classify_validation_failure(
+                None,
+                body,
+                &BlockValidationError::MembershipAdmission(error),
             ),
             NativeCandidatePreparationError::Execution(
                 error @ MergeLedgerCommitError::ExecutionBatchFull { .. },

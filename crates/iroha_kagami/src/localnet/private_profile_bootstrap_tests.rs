@@ -203,7 +203,7 @@ fn private_profiles_seed_exact_sns_owners_and_least_privilege_permissions() {
                 ensure.quote_guard,
                 AliasQuoteGuardV1 {
                     expected_policy_version: LOCALNET_ALIAS_SETUP_POLICY_VERSION,
-                    expected_payment_asset: localnet_fee_asset_definition_id(),
+                    expected_payment_asset: localnet_xor_asset_definition_id(),
                     max_amount: payment_amount.clone(),
                     valid_until_ms: u64::MAX,
                 }

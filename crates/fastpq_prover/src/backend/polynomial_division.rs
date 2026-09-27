@@ -109,7 +109,6 @@ impl VanishingDivisionPlan {
     }
 
     /// Conservative payload bytes including the borrowed full numerator.
-    #[cfg(test)]
     pub(super) const fn payload_bytes(self) -> usize {
         self.payload_bytes
     }
@@ -176,7 +175,6 @@ impl ExactQuotient {
     }
 
     /// Borrow complete quotient coefficients including the caller-declared zero padding.
-    #[cfg(test)]
     pub(super) fn coefficients(&self) -> &[F] {
         &self.coefficients
     }

@@ -145,6 +145,16 @@ fn state_paths(peer: usize) -> Vec<(Vec<&'static str>, PathBuf, &'static str)> {
     let state = PathBuf::from(format!("state/peer{peer}"));
     vec![
         (
+            vec!["sumeragi", "records_dir"],
+            state.join("sumeragi-records"),
+            "sumeragi-records",
+        ),
+        (
+            vec!["sumeragi", "installation_log"],
+            state.join("sumeragi-installation.log"),
+            "sumeragi-installation.log",
+        ),
+        (
             vec!["kura", "store_dir"],
             PathBuf::from(format!("storage/peer{peer}")),
             "storage",

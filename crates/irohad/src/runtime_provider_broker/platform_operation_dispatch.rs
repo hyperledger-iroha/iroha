@@ -145,6 +145,11 @@ fn dispatch_server_operation_with_session(
         {
             consensus_operations::global_beacon_partial_sign(state, request)
         }
+        (slot, OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            consensus_operations::global_beacon_seat_readiness(state, request)
+        }
         (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
             if slot == parliament_tle_partial_release_signer_slot =>
         {
@@ -454,6 +459,9 @@ fn dispatch_server_operation_with_session(
         }
         (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
             stream_token_operations::stream_token_observe(state, request)
+        }
+        (slot, OPERATION_STREAM_TOKEN_CHECK_V1) if slot == stream_token_slot => {
+            stream_token_operations::stream_token_check(state, request)
         }
         (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
             if slot == stream_token_gateway_admission_slot =>

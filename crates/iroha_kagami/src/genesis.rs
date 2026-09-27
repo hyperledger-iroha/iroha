@@ -149,6 +149,53 @@ mod authority_tests {
     }
 
     #[test]
+    fn genesis_topology_checks_generation_zero_independently_of_epoch_length() {
+        let current = test_peers(0x30);
+        for epoch_length in [3, 3_600] {
+            let mut npos = SumeragiNposParameters::default();
+            npos.epoch_length_blocks = NonZeroU64::new(epoch_length).unwrap();
+            npos.evidence_horizon_blocks = 1;
+            npos.slashing_delay_blocks = 1;
+            let manifest = complete_test_genesis_builder_for_peers(
+                GenesisBuilder::new_without_executor(
+                    ChainId::from("generation-zero-authority"),
+                    PathBuf::from("."),
+                )
+                .append_parameter(Parameter::Custom(npos.into_custom_parameter())),
+                current.clone(),
+            )
+            .build_raw()
+            .expect("complete generation-zero fixture")
+            .with_consensus_mode(SumeragiConsensusMode::Npos);
+            ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+                &manifest, &current,
+            )
+            .expect("generation-zero authority matches the genesis topology");
+            ensure_kagemusha_mint_finality_schedule_matches_consensus(&manifest)
+                .expect("scheduling epochs do not create extra key generations");
+        }
+    }
+
+    #[test]
+    fn genesis_topology_check_rejects_another_authority() {
+        let current = test_peers(0x70);
+        let manifest = complete_test_genesis_builder_for_peers(
+            GenesisBuilder::new_without_executor(
+                ChainId::from("wrong-genesis-authority"),
+                PathBuf::from("."),
+            ),
+            current,
+        )
+        .build_raw()
+        .expect("complete authority fixture");
+        ensure_kagemusha_mint_finality_generation_zero_authority_matches_topology(
+            &manifest,
+            &test_peers(0x90),
+        )
+        .expect_err("another committee cannot replace the genesis authority");
+    }
+
+    #[test]
     fn generation_zero_topology_requires_the_exact_initial_authority() {
         let current = test_peers(0x30);
         let manifest = complete_test_genesis_builder_for_peers(

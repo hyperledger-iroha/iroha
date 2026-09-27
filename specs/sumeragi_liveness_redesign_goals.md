@@ -349,9 +349,8 @@ The [State effect lock correction](../docs/history/2026-09-22/state-effect-lock-
 
 The [membership prerequisites](../docs/history/2026-09-22/membership-allocation-prerequisites.md) add one funded typed buffer and the native owned-generation allocation floor, with both MV layouts and corrected 884-control Core scope qualified. Integrate the original finite pool before membership construction, capture and restore; a late committed-state capacity error is not a progress design. The [indexed-publication and maintenance correction](../docs/history/2026-09-22/native-indexed-publication-recovery.md) extends the [partial-write repair correction](../docs/history/2026-09-22/native-repair-partial-write.md) through actual initial publication and completed latest-pointer maintenance; 1,004 selected Core, 21 Torii and 165 copied formal controls pass in their recorded scopes. The [authenticated map lookup prerequisite](../docs/history/2026-09-22/authenticated-map-node-lookup.md) now checks externally owned nodes and distinguishes proved absence from local read/corruption failures. The [bounded external update kernel](../docs/history/2026-09-22/authenticated-map-node-updates.md) now preserves original roots through failed path writes and passes 20 map controls plus Core compilation. The [membership root owner](../docs/history/2026-09-22/membership-root-publication.md) now binds both current and rollback cuts to the actual component publisher, rejects foreign/stale/recreated owners. Its [authenticated height reader](../docs/history/2026-09-22/authenticated-membership-values.md) now uses the [single located map kernel](../docs/history/2026-09-22/authenticated-map-locations.md); 26 map and 79 membership controls pass with all prior selectors retained. Explicit root/child/value locations avoid requiring a global content index while preserving exact logical commitments and old references. The [fixed Norito record codec](../docs/history/2026-09-22/fixed-membership-records.md) now passes all 88 membership controls and the full default Norito suite, with allocation-observed framing/validation. The [original funded append/range prerequisite](../docs/history/2026-09-22/retained-membership-append.md) now retains exact replay, ambiguity, sync, physical accounting and deferred cleanup, with 1,248 Core, 651 Config, 21 Torii and 18 focused formal controls joined to the final candidate. Complete State enrollment, authenticated restart and retained-generation reclamation remain required; a fresh value location cannot repair an old retained reference. Both full-State Apply checkpoints must be replaced together under consumed complete-journal publication authority; a copied prepublication hash cannot bridge the released commit-lock interval. The [post-Apply capture identity correction](../docs/history/2026-09-22/post-apply-checkpoint-binding.md) checks the actual captured network, height and block before metadata writes; its 263 Core, 651 Config and 21 Torii controls pass in the recorded scope, with the independent DA failures kept explicit. The next State/Kura membership milestone is authenticated durable lookup at the exact original State cut and incremental checkpoint construction before resident-cache cutover; the current production Apply path materializes the full membership history twice per fresh height, so a bounded lookup cache alone is insufficient. Missing or untrusted history must produce a typed local refusal, never a non-membership answer. Qualify eviction/cold restart, sealed aliases, old/replacement cuts and Kura-before-WSV interruption before that cutover. These corrections do not close L1–L6.
 
-Current integration location: `/Users/takemiyamakoto/dev/iroha`, branch
-`optimizations`. All ongoing source integration and validation use this checkout;
-no other branch or worktree is authorized for this work.
+Current integration branch: `optimizations`. Source integration and validation
+use the active checkout for this work.
 
 Set: 2026-09-16. Overall goal: **Active**. Implementation and qualification are
 open. Starting source: `b2e4c86cc2586038ea16e94de3d7aefe94ea4040`.
@@ -423,7 +422,13 @@ Its nine variants include real successor ordinals and wait tokens, and the
 historical transition oracle remains test-only until owner-fixture coverage can
 replace it. The projection is read-only, uncached, and cannot mint work.
 
-Next consolidate separate deferred-owner, timer-episode and schedule decisions
+The ordinary ingress batch now returns only its own retry and terminal-output
+facts. The outer runner reads the launched owner's current producer claim after
+the batch instead of retaining an earlier claim in the batch result. Busy
+adapter ownership and timer/FIFO debt in `v2_runtime.rs` remain independent
+mutable scheduling facts; this narrow removal does not complete L1 or L2.
+
+Then consolidate separate deferred-owner, timer-episode and schedule decisions
 in `v2_runtime.rs`. Ordinary production dispatch must use the surviving owner
 after each change. Moving the same state to another file, adding bypasses, or
 running two implementations behind a toggle does not satisfy this goal.
@@ -512,6 +517,41 @@ original allocation, bounded ingress accounting and global-rollover custody in
 this connected path. Qualify its retained Validate-to-Apply handoff, interruption
 recovery and finite-input progress on real four/seven-validator networks. This
 source connection closes no L1–L6 outcome by itself.
+
+The current native driver and transport coalesce exact authenticated control
+retransmissions into their existing retained occurrence. A blocked destination
+keeps its original actor post and FIFO ticket; already serviced peers acquire at
+most one pending resend each. Duplicate traffic therefore cannot alone consume
+all bounded ingress/fanout slots and exclude a different timeout share. Focused
+source controls are `native_driver_retains_exact_ingress_and_instance_across_global_carrier_change`
+and `native_transport_exact_retransmissions_cannot_exhaust_slots_behind_silent_peer`.
+These changes await runtime qualification. Distinct retained messages can still
+fill transport capacity; this correction does not establish full saturation
+liveness, production silent-author recovery, final-transaction completion or L1–L6.
+
+`v2_runner/native_process.rs` owns the active process-lived native driver and
+transport across global heights. Its pending outbox slot retains the original
+packet across actor pressure while each turn services native clocks, WAL, body
+completions and source recovery. Authenticated current-set absence can retire
+the transport copy; only the original publication settles reducer Apply. The
+production runner constructs this owner and drives native candidate preparation,
+Validate and publication through it. Network qualification of silent-author
+recovery, saturated ingress and final transaction completion remains required
+before claiming the L1–L6 liveness outcomes.
+
+The active runner constructs one `NativeRunnerProcess` for the lane driver,
+transport, source recovery and candidate work. It receives Native traffic from
+`FairV2Ingress::try_recv_native_process_checked`; the checked dequeue preserves
+the exact canonical wire, authenticated hop and route history.
+`consume_prepared_native_ingress` transfers that owned message to the driver or
+keeps it in the process retry slot on backpressure. The original process also
+retains the published carrier until reducer Apply is settled.
+
+`v2_apply/retained_lifecycle_apply.rs` contains the shared read-only
+`authenticate_exact_apply_body` check. It verifies the durable resultless body,
+proposal round, context, execution commitment and CommitQC before native
+validation and publication proceed. The active Apply path holds the original
+publication owner through completion and failure recovery.
 
 The [publication completion seam](../docs/history/2026-09-20/native-published-apply.md)
 now binds that original Apply to actual State publication, allowing different

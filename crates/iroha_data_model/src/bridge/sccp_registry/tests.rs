@@ -133,7 +133,7 @@ fn sora_outbound_execution_policy() -> SccpSoraOutboundExecutionPolicyV1 {
         contract_artifact_sha256: [0xb1; 32],
         vk_ref: SccpPortableVerifyingKeyRefV1 {
             backend: "stark/fri/v1".to_owned(),
-            name: "ivm-execution-v1".to_owned(),
+            name: "ivm-replay-binding-v1".to_owned(),
             version: 1,
             commitment: [0xb2; 32],
         },

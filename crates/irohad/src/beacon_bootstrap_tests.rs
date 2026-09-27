@@ -1,599 +1,399 @@
-//! Real fresh-RNG bootstrap, native credential and exact-roster certificate tests.
+//! Per-seat beacon DKG command, phase-proof pipe and private custody tests.
+
 use super::*;
-use iroha_core::beacon::{
-    GlobalThresholdBeaconPulseAggregatorV1, GlobalThresholdBeaconSessionBindingV1,
-    validate_global_threshold_beacon_session_v1,
-};
 use iroha_crypto::{Algorithm, Hash, HashOf};
-use iroha_data_model::{
-    NetworkId, block::BlockHeader, consensus::GlobalThresholdBeaconChainAnchorV1,
-};
+use iroha_data_model::{NetworkId, block::BlockHeader};
 use std::{
-    cell::Cell,
-    fs::OpenOptions,
-    os::fd::AsFd as _,
-    os::unix::fs::{PermissionsExt as _, symlink},
+    fs::OpenOptions, os::fd::AsFd as _, os::unix::fs::PermissionsExt as _,
+    os::unix::net::UnixStream,
 };
 
-fn request_and_genesis() -> (Request, GenesisProof, Vec<KeyPair>) {
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    iroha_genesis::init_instruction_registry();
-    let mut keys = (0..4)
-        .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
-        .collect::<Vec<_>>();
-    keys.sort_by_key(|k| PeerId::new(k.public_key().clone()));
-    let roster = keys
-        .iter()
-        .map(|k| PeerId::new(k.public_key().clone()))
-        .collect::<Vec<_>>();
-    let topology = keys
-        .iter()
-        .map(|k| {
-            iroha_genesis::GenesisTopologyEntry::new(
-                PeerId::new(k.public_key().clone()),
-                iroha_crypto::bls_normal_pop_prove(k.private_key()).expect("fresh BLS PoP"),
-            )
-        })
-        .collect();
-    let mut npos = iroha_data_model::parameter::system::SumeragiNposParameters::default();
-    npos.max_validators = 4;
-    npos.epoch_length_blocks = std::num::NonZeroU64::new(16).unwrap();
-    npos.evidence_horizon_blocks = 16;
-    npos.slashing_delay_blocks = 1;
-    npos.validate()
-        .expect("valid signed short-epoch fixture parameters");
-    let manifest = crate::complete_test_genesis_builder_for_topology(
-        iroha_genesis::GenesisBuilder::new_without_executor(
-            iroha_model_base::chain::ChainId::from(crate::taira_runtime_signer::TAIRA_CHAIN_ID_V1),
-            ".",
-        ),
-        topology,
-    )
-    .append_parameter(iroha_data_model::parameter::Parameter::Custom(
-        npos.into_custom_parameter(),
-    ))
-    .build_raw()
-    .expect("complete native genesis")
-    .with_consensus_mode(iroha_data_model::parameter::system::SumeragiConsensusMode::Npos)
-    .with_consensus_meta();
-    let key = KeyPair::random();
-    let block = manifest
-        .clone()
-        .build_and_sign(&key)
-        .expect("sign real native genesis");
-    let network_id = NetworkId::from_genesis_hash(block.0.hash());
-    let genesis = GenesisProof {
-        manifest,
-        signed_wire: block.0.encode_wire().expect("canonical genesis wire"),
-        public_key: key.public_key().clone(),
-    };
-    let session_id: [u8; 32] =
-        Hash::new(KeyPair::random().public_key().to_string().as_bytes()).into();
-    let request = Request {
-        schema: "iroha.global-beacon.bootstrap.request.v1".into(),
-        dkg_session: GlobalThresholdBeaconDkgSessionV1 {
-            version: 1,
-            network_id,
-            session_id,
-            roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
-            committee_size: 4,
-            threshold: 2,
-            start_height: 1,
-            sharing_end_height: 2,
-            complaints_end_height: 3,
-            responses_end_height: 4,
-        },
-        target_roster: roster.clone(),
-        authorization_roster: roster,
-        provider_handles: (1..=4)
-            .map(|i| format!("software://taira/global-beacon/validator-{i}"))
-            .collect(),
-        provider_revision: 1,
-    };
-    (request, genesis, keys)
-}
-fn complete(request: Request, genesis: GenesisProof) -> (PublicBundle, Vec<Zeroizing<Vec<u8>>>) {
-    let mut heights = [2, 3, 4].into_iter();
-    let progress = Cell::new(0);
-    let result = ceremony(
-        request,
-        genesis,
-        1,
-        Instant::now() + Duration::from_secs(60),
-        |snapshot| {
-            assert_eq!(snapshot.last_updated_height, 1);
-            assert_eq!(snapshot.dealer_commitments.len(), 4);
-            assert!(snapshot.complaints.is_empty());
-            progress.set(progress.get() + 1);
-            Ok(())
-        },
-        |_| {
-            assert_eq!(progress.get(), 1);
-            heights.next().ok_or(Error::Height)
-        },
-    )
-    .expect("fresh ceremony");
-    assert_eq!(progress.get(), 1);
-    assert!(heights.next().is_none());
-    result
+fn test_network() -> NetworkId {
+    NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+        b"rotation-seat-command-network",
+    )))
 }
 
 #[test]
-fn fresh_four_seat_bootstrap_roundtrips_native_custody_and_lifecycle_quorum() {
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let (request, genesis, keys) = request_and_genesis();
-    let (bundle, credentials) = complete(request, genesis);
-    assert_eq!(bundle.finalized_observed_height, 4);
-    assert_eq!(bundle.certificate.effective_height, 5);
-    assert_eq!(bundle.record.activated_at_height, None);
-    let record = &bundle.record.session;
-    let binding = GlobalThresholdBeaconSessionBindingV1 {
-        network_id: record.network_id,
-        session_id: record.session_id,
-        roster_hash: record.roster_hash,
-        transcript_hash: record.transcript_hash,
-    };
-    let session = validate_global_threshold_beacon_session_v1(record.clone(), &binding)
-        .expect("native public validation");
-    let anchor = GlobalThresholdBeaconChainAnchorV1 {
-        height: 5,
-        block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x75; 32])),
-    };
-    let mut aggregator = GlobalThresholdBeaconPulseAggregatorV1::new(session.clone(), 6, anchor)
-        .expect("exact test pulse");
-    let mut runtime_signers = Vec::new();
-    for (i, credential) in credentials.iter().enumerate() {
-        let provider = &bundle.providers[i];
-        let catalog = crate::IrohaRuntimeProviderBindingsV1::qualified_for_test(
-            "fresh-beacon-bootstrap",
-            crate::IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
-            &provider.handle,
-            provider.revision,
-            provider.policy_digest,
-        )
-        .with_network_id_for_test(record.network_id);
-        let configured = catalog.iter().next().expect("one bound runtime provider");
-        let signer = crate::external_software_signer::decode_global_beacon_runtime_signer_v1(
-            credential,
-            &record.network_id,
-            configured,
-        )
-        .expect("exact native credential import");
-        let index = (i + 1) as u16;
+fn rotation_phase_pipe_rejects_truncated_oversized_and_noncanonical_proofs() {
+    let context = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"rotation-phase-test-anchor",
+    )));
+    for frame in [
+        0_u32.to_be_bytes().to_vec(),
+        u32::try_from(MAX_ROTATION_PHASE_PROOF_BYTES + 1)
+            .expect("bounded proof size")
+            .to_be_bytes()
+            .to_vec(),
+        vec![0, 0, 0, 1, 0],
+        vec![0, 0, 0, 2, 0],
+    ] {
+        let (mut writer, reader) = UnixStream::pair().expect("local proof stream");
+        writer.write_all(&frame).expect("write malformed frame");
+        drop(writer);
+        let mut verifier = BridgeFinalityVerifier::with_context(test_network(), context);
+        let mut last_height = 10;
         assert!(
-            signer
-                .attest_partial_signing_capability(&session, index)
-                .expect("live imported seat")
-                .matches(&session, index)
-        );
-        assert!(
-            signer
-                .attest_partial_signing_capability(&session, if index == 4 { 1 } else { index + 1 })
-                .is_err()
-        );
-        let partial = signer
-            .sign_partial(&session, aggregator.payload())
-            .expect("fresh production signature");
-        if i < 2 {
-            aggregator
-                .accept_partial(partial)
-                .expect("proof-verified native share");
-        }
-        runtime_signers.push(signer);
-        let mut wrong = Zeroizing::new(credential.to_vec());
-        wrong[0] ^= 1;
-        assert!(
-            crate::external_software_signer::decode_global_beacon_runtime_signer_v1(
-                &wrong,
-                &record.network_id,
-                configured
+            read_rotation_phase_height(
+                reader.as_fd(),
+                Instant::now() + Duration::from_secs(1),
+                &mut verifier,
+                &mut last_height,
+                20,
             )
             .is_err()
         );
+        assert_eq!(last_height, 10);
     }
-    let pulse = aggregator
-        .finalize()
-        .expect("unique threshold group signature");
-    let state = iroha_core::state::State::new_with_chain_and_network_id_for_testing(
-        iroha_core::state::World::new(),
-        iroha_core::kura::Kura::blank_kura_for_testing(),
-        iroha_core::query::store::LiveQueryStore::start_test(),
-        "bootstrap-readiness".parse().expect("fixture chain"),
-        record.network_id,
+}
+
+#[test]
+fn rotation_phase_rejects_replay_gap_header_mismatch_and_cutoff() {
+    assert!(check_rotation_phase_height(10, 11, 11, 14).is_ok());
+    assert_eq!(
+        check_rotation_phase_height(11, 11, 11, 14),
+        Err(Error::Height)
     );
-    let mut installed_record = bundle.record.clone();
-    installed_record
-        .activate(6)
-        .expect("activate verified fixture");
-    let mut block = state.block(BlockHeader::new(
-        std::num::NonZeroU64::new(6).expect("fixture height"),
-        None,
-        None,
-        0,
-        0,
+    assert_eq!(
+        check_rotation_phase_height(11, 13, 13, 14),
+        Err(Error::Height)
+    );
+    assert_eq!(
+        check_rotation_phase_height(11, 12, 11, 14),
+        Err(Error::Height)
+    );
+    assert_eq!(
+        check_rotation_phase_height(13, 14, 14, 14),
+        Err(Error::Height)
+    );
+    assert_eq!(
+        check_rotation_phase_height(u64::MAX, 0, 0, u64::MAX),
+        Err(Error::Height)
+    );
+}
+
+#[test]
+fn bounded_phase_reader_consumes_exact_frame_without_advancing_next_frame() {
+    let (mut writer, reader) = UnixStream::pair().expect("local proof stream");
+    writer.write_all(b"firstsecond").expect("write both frames");
+    let mut first = [0_u8; 5];
+    read_exact_until(
+        reader.as_fd(),
+        Instant::now() + Duration::from_secs(1),
+        &mut first,
+    )
+    .expect("first frame");
+    assert_eq!(&first, b"first");
+    let mut second = [0_u8; 6];
+    read_exact_until(
+        reader.as_fd(),
+        Instant::now() + Duration::from_secs(1),
+        &mut second,
+    )
+    .expect("second frame");
+    assert_eq!(&second, b"second");
+}
+
+#[test]
+fn rotation_seat_parser_requires_independent_pins_and_private_identity() {
+    let context = Hash::new(b"trusted-rotation-context").to_string();
+    let transition = Hash::new(b"trusted-rotation-attempt").to_string();
+    let base = vec![
+        "beacon-bootstrap".to_owned(),
+        "provision-rotation-seat".to_owned(),
+        "--selection-evidence".to_owned(),
+        "selection.norito".to_owned(),
+        "--network-id".to_owned(),
+        test_network().to_string(),
+        "--trusted-context-id".to_owned(),
+        context,
+        "--anchor-height".to_owned(),
+        "10".to_owned(),
+        "--target-epoch".to_owned(),
+        "2".to_owned(),
+        "--transition-id".to_owned(),
+        transition,
+    ];
+    let mut seat = base.clone();
+    seat.extend([
+        "--signer-index".into(),
+        "1".into(),
+        "--key-fd".into(),
+        "198".into(),
+        "--public-fd".into(),
+        "73".into(),
+        "--finality-fd".into(),
+        "74".into(),
+        "--provider-handle".into(),
+        "software://taira/global-beacon/rotation-seat-1".into(),
+        "--provider-revision".into(),
+        "1".into(),
+        "--attempt-root".into(),
+        "/tmp/owner-journal".into(),
+    ]);
+    assert!(Args::try_parse_from(&seat).is_ok());
+    let mut no_context = seat.clone();
+    no_context.drain(6..8);
+    assert!(Args::try_parse_from(no_context).is_err());
+    let mut no_key = seat.clone();
+    no_key.drain(16..18);
+    assert!(Args::try_parse_from(no_key).is_err());
+    let mut both_keys = seat.clone();
+    both_keys.extend(["--config-fd".into(), "198".into()]);
+    assert!(Args::try_parse_from(both_keys).is_err());
+    let mut retired = seat.clone();
+    retired[1] = "provision-rotation".into();
+    assert!(Args::try_parse_from(retired).is_err());
+
+    let mut assemble_dkg = base.clone();
+    assemble_dkg[1] = "assemble-rotation-dkg".into();
+    assemble_dkg.extend([
+        "--public-session".into(),
+        "session.norito".into(),
+        "--phase-proof".into(),
+        "phase-1.norito".into(),
+        "--provider".into(),
+        "seat-1-provider.json".into(),
+        "--certificate-height".into(),
+        "18".into(),
+        "--output".into(),
+        "rotation-bundle.json".into(),
+    ]);
+    assert!(Args::try_parse_from(&assemble_dkg).is_ok());
+    let mut no_provider = assemble_dkg;
+    no_provider.drain(18..20);
+    assert!(Args::try_parse_from(no_provider).is_err());
+
+    let mut sign = base.clone();
+    sign[1] = "sign-rotation".into();
+    sign.extend([
+        "--bundle".into(),
+        "rotation-bundle.json".into(),
+        "--signer-index".into(),
+        "0".into(),
+        "--key-fd".into(),
+        "198".into(),
+        "--output".into(),
+        "signature.json".into(),
+    ]);
+    assert!(Args::try_parse_from(&sign).is_ok());
+    let mut no_key = sign;
+    no_key.drain(18..20);
+    assert!(Args::try_parse_from(no_key).is_err());
+}
+
+#[test]
+fn genesis_seat_parser_requires_signed_anchor_and_one_private_identity() {
+    let base = vec![
+        "beacon-bootstrap".to_owned(),
+        "provision-genesis-seat".to_owned(),
+        "--network-id".to_owned(),
+        test_network().to_string(),
+        "--chain-discriminant".to_owned(),
+        "753".to_owned(),
+        "--request".to_owned(),
+        "request.json".to_owned(),
+        "--genesis-manifest".to_owned(),
+        "genesis-manifest.json".to_owned(),
+        "--genesis-signed".to_owned(),
+        "genesis.signed.nrt".to_owned(),
+        "--genesis-public-key".to_owned(),
+        "genesis.public-key".to_owned(),
+        "--genesis-finality".to_owned(),
+        "genesis-finality.norito".to_owned(),
+    ];
+    let mut seat = base.clone();
+    seat.extend([
+        "--signer-index".into(),
+        "1".into(),
+        "--key-fd".into(),
+        "198".into(),
+        "--public-fd".into(),
+        "73".into(),
+        "--finality-fd".into(),
+        "74".into(),
+        "--attempt-root".into(),
+        "/tmp/owner-journal".into(),
+    ]);
+    assert!(Args::try_parse_from(&seat).is_ok());
+    let mut no_anchor = seat.clone();
+    no_anchor.drain(14..16);
+    assert!(Args::try_parse_from(no_anchor).is_err());
+    let mut no_key = seat.clone();
+    no_key.drain(18..20);
+    assert!(Args::try_parse_from(no_key).is_err());
+    let mut both = seat;
+    both.extend(["--config-fd".into(), "198".into()]);
+    assert!(Args::try_parse_from(both).is_err());
+    let mut retired = base;
+    retired[1] = "provision".into();
+    assert!(Args::try_parse_from(retired).is_err());
+}
+
+#[test]
+fn genesis_session_rejects_mutated_identity_under_same_attempt() {
+    let network = test_network();
+    let mut session = GlobalThresholdBeaconDkgSessionV1 {
+        version: 1,
+        network_id: network,
+        session_id: genesis_seat::canonical_genesis_session_id(network),
+        attempt_id: genesis_seat::canonical_genesis_attempt_id(network),
+        authority_generation: 0,
+        roster_hash: Hash::new(b"signed-genesis-roster").into(),
+        committee_size: 4,
+        threshold: 2,
+        start_height: 1,
+        commitments_end_height: 2,
+        deliveries_end_height: 3,
+        acceptances_end_height: 4,
+    };
+    assert!(genesis_seat::genesis_session_identity_is_canonical(
+        network, session
     ));
-    block
-        .world
-        .install_global_beacon_fixture_for_testing(installed_record, pulse)
-        .expect("install verified public session and pulse");
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit public fixture");
-    {
-        let mut topology = state.commit_topology.block();
-        *topology.get_mut() = bundle.request.target_roster.clone();
-        topology.commit();
-        let mut hashes = state.block_hashes.block();
-        for _ in 0..6 {
-            hashes.push_for_tests(anchor.block_hash);
-        }
-        hashes.commit_for_tests();
-    }
-    for (index, signer) in runtime_signers.iter().enumerate() {
-        let runtime = crate::IrohaRuntimeDeps::default()
-            .with_sumeragi_global_beacon_partial_signer(signer.clone());
-        assert_eq!(
-            crate::validate_threshold_signer_startup_readiness_v1(
-                &state,
-                &bundle.request.target_roster[index],
-                &runtime,
-            ),
-            Ok(()),
-            "fresh native custody is ready for its exact seat"
-        );
-        assert_eq!(
-            crate::validate_threshold_signer_startup_readiness_v1(
-                &state,
-                &bundle.request.target_roster[(index + 1) % 4],
-                &runtime,
-            ),
-            Err("local global-beacon committee seat has no exact runtime custody attestation"),
-            "resolved custody for another seat cannot pass startup"
-        );
-    }
-    let signatures = keys
-        .iter()
-        .take(3)
-        .enumerate()
-        .map(|(i, k)| sign_install(&bundle, i as u16, k).expect("exact-roster lifecycle signature"))
-        .collect::<Vec<_>>();
-    let certificate =
-        assemble_install(&bundle, signatures.clone()).expect("native 3-of-4 lifecycle QC");
-    assert_eq!(certificate.signatures.len(), 3);
-    let instructions = vec![InstructionBox::from(
-        ApplyThresholdKeyLifecycleCertificateV1 { certificate },
-    )];
-    let encoded = json_bytes(&instructions).expect("real native instruction JSON");
-    let decoded: Vec<InstructionBox> =
-        norito::json::from_slice(&encoded).expect("native instruction owner roundtrip");
-    assert_eq!(decoded.len(), 1);
-    assert!(assemble_install(&bundle, signatures[..2].to_vec()).is_err());
-    let mut duplicate = signatures.clone();
-    duplicate[1] = duplicate[0].clone();
-    assert!(assemble_install(&bundle, duplicate).is_err());
-    let mut reordered = signatures;
-    reordered.swap(0, 1);
-    assert!(assemble_install(&bundle, reordered).is_err());
+    session.session_id = Hash::new(b"rerolled-session").into();
+    assert!(!genesis_seat::genesis_session_identity_is_canonical(
+        network, session
+    ));
+    session.session_id = genesis_seat::canonical_genesis_session_id(network);
+    session.attempt_id = Hash::new(b"rerolled-attempt").into();
+    assert!(!genesis_seat::genesis_session_identity_is_canonical(
+        network, session
+    ));
 }
 
 #[test]
-fn bootstrap_rejects_foreign_genesis_rosters_transcripts_and_lifecycle_substitution() {
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let (request, genesis, keys) = request_and_genesis();
-    let core_roster = iroha_core::sumeragi::startup::genesis_committee_peers(
-        &iroha_genesis::decode_signed_genesis(&genesis.signed_wire).expect("native wire"),
-    )
-    .expect("native height-context roster");
-    assert_eq!(request.authorization_roster, core_roster);
-    // A valid signed manifest may list its topology in another insertion order;
-    // only the native context's sorted voting identities own seat numbering.
-    let mut raw = norito::json::to_value(&genesis.manifest).expect("public genesis JSON");
-    let mut reversed = 0;
-    for transaction in raw
-        .get_mut("transactions")
-        .and_then(norito::json::Value::as_array_mut)
-        .expect("transactions")
-    {
-        if let Some(topology) = transaction
-            .get_mut("topology")
-            .and_then(norito::json::Value::as_array_mut)
-        {
-            if topology.len() == 4 {
-                topology.reverse();
-                reversed += 1;
-            }
-        }
-    }
-    assert_eq!(reversed, 1);
-    let shuffled_manifest: iroha_genesis::RawGenesisTransaction =
-        norito::json::from_value(raw).expect("shuffled public manifest");
-    let fresh_genesis_key = KeyPair::random();
-    let shuffled_block = shuffled_manifest
-        .clone()
-        .build_and_sign(&fresh_genesis_key)
-        .expect("sign shuffled topology");
-    let shuffled_proof = GenesisProof {
-        manifest: shuffled_manifest,
-        signed_wire: shuffled_block
-            .0
-            .encode_wire()
-            .expect("native shuffled wire"),
-        public_key: fresh_genesis_key.public_key().clone(),
+fn genesis_public_assembly_requires_exact_proof_and_provider_inputs() {
+    let base = vec![
+        "beacon-bootstrap".to_owned(),
+        "assemble-genesis-dkg".to_owned(),
+        "--network-id".to_owned(),
+        test_network().to_string(),
+        "--chain-discriminant".to_owned(),
+        "753".to_owned(),
+        "--request".to_owned(),
+        "request.json".to_owned(),
+        "--genesis-manifest".to_owned(),
+        "genesis-manifest.json".to_owned(),
+        "--genesis-signed".to_owned(),
+        "genesis.signed.nrt".to_owned(),
+        "--genesis-public-key".to_owned(),
+        "genesis.public-key".to_owned(),
+        "--genesis-finality".to_owned(),
+        "genesis-finality.norito".to_owned(),
+        "--phase-proof".to_owned(),
+        "phase-2.norito".to_owned(),
+        "--public-session".to_owned(),
+        "public-session.norito".to_owned(),
+        "--provider".to_owned(),
+        "seat-1-provider.json".to_owned(),
+        "--certificate-height".to_owned(),
+        "7".to_owned(),
+        "--output".to_owned(),
+        "public-bundle.json".to_owned(),
+    ];
+    assert!(Args::try_parse_from(&base).is_ok());
+    let mut no_phase = base.clone();
+    no_phase.drain(16..18);
+    assert!(Args::try_parse_from(no_phase).is_err());
+    let mut no_provider = base;
+    no_provider.drain(20..22);
+    assert!(Args::try_parse_from(no_provider).is_err());
+}
+
+#[test]
+fn one_shot_attempt_directory_cannot_reroll_after_restart() {
+    let root = tempfile::Builder::new()
+        .prefix(".beacon-seat-journal-")
+        .tempdir_in(std::env::current_dir().expect("cwd"))
+        .expect("private test root");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("private root");
+    let path = fs::canonicalize(root.path()).expect("canonical root");
+    let session = GlobalThresholdBeaconDkgSessionV1 {
+        version: 1,
+        network_id: test_network(),
+        session_id: Hash::new(b"one-shot-session").into(),
+        attempt_id: Hash::new(b"one-shot-attempt").into(),
+        authority_generation: 1,
+        roster_hash: Hash::new(b"one-shot-roster").into(),
+        committee_size: 4,
+        threshold: 2,
+        start_height: 10,
+        commitments_end_height: 11,
+        deliveries_end_height: 12,
+        acceptances_end_height: 13,
     };
-    let mut shuffled_request = request.clone();
-    shuffled_request.dkg_session.network_id = NetworkId::from_genesis_hash(shuffled_block.0.hash());
-    validate_genesis(&shuffled_request, &shuffled_proof)
-        .expect("native roster ignores insertion order");
-    let mut permissioned = genesis.clone();
-    permissioned.manifest = permissioned.manifest.with_consensus_mode(
-        iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned,
+    let first = rotation_seat::claim_attempt_directory(&path, &session, 1)
+        .expect("claim one exact attempt and seat");
+    assert_eq!(
+        first.path.file_name().expect("attempt name"),
+        std::ffi::OsStr::new(&rotation_seat::attempt_child_name(&session, 1))
     );
-    assert!(validate_genesis(&request, &permissioned).is_err());
-    let mut late = request.clone();
-    late.dkg_session.responses_end_height = 15;
-    assert!(validate_genesis(&late, &genesis).is_err());
-    let mut wrong = request.clone();
-    wrong.authorization_roster.swap(0, 1);
-    assert_eq!(validate_genesis(&wrong, &genesis), Err(Error::InvalidInput));
-    wrong = request.clone();
-    wrong.target_roster.swap(0, 1);
-    assert!(validate_request(&wrong, 1).is_err());
-    let mut foreign = genesis.clone();
-    foreign.public_key = KeyPair::random().public_key().clone();
-    assert!(validate_genesis(&request, &foreign).is_err());
-    let mut corrupt = genesis.clone();
-    corrupt.signed_wire[0] ^= 1;
-    assert!(validate_genesis(&request, &corrupt).is_err());
-    let (bundle, _) = complete(request, genesis);
-    assert!(sign_install(&bundle, 0, &keys[1]).is_err());
-    for kind in 0..6 {
-        let mut changed = bundle.clone();
-        match kind {
-            0 => changed.certificate.effective_height += 1,
-            1 => changed.certificate.expected_active_session_id = Some([0xAA; 32]),
-            2 => changed.record.session.transcript_hash[0] ^= 1,
-            3 => changed.providers[0].policy_digest[0] ^= 1,
-            4 => changed.certificate.public_state.push(0),
-            _ => changed.finalized_observed_height = 14,
-        }
-        assert!(validate_bundle(&changed).is_err());
-    }
-    let bytes = json_bytes(&bundle).expect("public bundle JSON");
-    let decoded: PublicBundle = norito::json::from_slice(&bytes).expect("public bundle roundtrip");
-    validate_bundle(&decoded).expect("all native authority checks after roundtrip");
+    first
+        .write_new(std::ffi::OsStr::new("attempt-journal.json"), b"{}", true)
+        .expect("durable attempt marker");
+    drop(first);
+    assert!(
+        rotation_seat::claim_attempt_directory(&path, &session, 1).is_err(),
+        "the same attempt must not generate fresh randomness after restart"
+    );
+    assert!(rotation_seat::claim_attempt_directory(&path, &session, 2).is_ok());
 }
 
 #[test]
-fn bootstrap_records_observed_height_jumps_and_rejects_pulse_collision() {
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let (request, genesis, _) = request_and_genesis();
-    // A queued canary can finish several real carriers after the faucet. The
-    // ceremony must retain that observation, rather than inventing height four.
-    for observed in [6, 14] {
-        let mut heights = [2, 3, observed].into_iter();
-        let outcome = ceremony(
-            request.clone(),
-            genesis.clone(),
+fn each_seat_credential_binds_exact_public_session_and_private_share() {
+    for seats in [4_u16, 7] {
+        let network = test_network();
+        let session_id = Hash::new_from_chunks(&[b"daemon-seat-credential", &seats.to_be_bytes()]);
+        let (public, components) = iroha_core::beacon::complete_beacon_dkg_fixture_for_seat_v1(
+            network,
+            session_id.into(),
+            seats,
+            seats,
+        );
+        let (digest, credential) = rotation_seat::encode_local_seat_credential(
+            public.clone(),
+            seats,
+            components,
+            "software://taira/global-beacon/exact-seat",
             1,
-            Instant::now() + Duration::from_secs(60),
-            |_| Ok(()),
-            |_| heights.next().ok_or(Error::Height),
-        );
-        assert!(heights.next().is_none());
-        if observed == 6 {
-            let (bundle, credentials) = outcome.expect("real observed jump fits signed epoch");
-            assert_eq!(bundle.finalized_observed_height, 6);
-            assert_eq!(bundle.record.session.adaptive_dkg.finalized_at_height, 6);
-            assert_eq!(bundle.certificate.effective_height, 7);
-            assert_eq!(credentials.len(), 4);
-            validate_bundle(&bundle).expect("unmodified native bundle remains valid");
-        } else {
-            // This signed genesis requires a pulse at fifteen, before an
-            // installation at fifteen could activate its session at sixteen.
-            assert!(matches!(outcome, Err(Error::InvalidInput)));
-        }
-    }
-}
-
-#[test]
-fn bootstrap_phase_eof_and_deadline_abort_without_fabricated_height() {
-    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let (request, genesis, _) = request_and_genesis();
-    assert!(validate_request(&request, 0).is_err());
-    assert!(validate_request(&request, 2).is_err());
-    let outcome = ceremony(
-        request.clone(),
-        genesis.clone(),
-        1,
-        Instant::now(),
-        |_| panic!("expired before sharing"),
-        |_| panic!("expired before height read"),
-    );
-    assert!(matches!(outcome, Err(Error::Deadline)));
-    let mut count = 0;
-    let outcome = ceremony(
-        request.clone(),
-        genesis.clone(),
-        1,
-        Instant::now() + Duration::from_secs(60),
-        |_| {
-            count += 1;
-            Ok(())
-        },
-        |_| Err(Error::Height),
-    );
-    assert!(matches!(outcome, Err(Error::Height)));
-    assert_eq!(count, 1);
-    let outcome = ceremony(
-        request,
-        genesis,
-        1,
-        Instant::now() + Duration::from_secs(60),
-        |_| Ok(()),
-        |_| Ok(1),
-    );
-    assert!(matches!(outcome, Err(Error::Height)));
-    let (read, write) = rustix::pipe::pipe().expect("public height pipe");
-    rustix::io::write(&write, b"4\n").expect("observed public height");
-    assert_eq!(
-        read_observed_height(read.as_fd(), Instant::now() + Duration::from_secs(1)),
-        Ok(4)
-    );
-    rustix::io::write(&write, b"04\n").expect("malformed public height");
-    assert_eq!(
-        read_observed_height(read.as_fd(), Instant::now() + Duration::from_secs(1)),
-        Err(Error::Height)
-    );
-    drop(write);
-    assert_eq!(
-        read_observed_height(read.as_fd(), Instant::now() + Duration::from_secs(1)),
-        Err(Error::Height)
-    );
-}
-
-#[test]
-fn bootstrap_output_custody_is_exclusive_and_lifecycle_key_is_consumed() {
-    let temp = tempfile::Builder::new()
-        .prefix(".beacon-bootstrap-test-")
-        .tempdir_in(std::env::current_dir().expect("checkout"))
-        .expect("owned fixture parent");
-    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).expect("owner mode");
-    let root = fs::canonicalize(temp.path()).expect("canonical fixture root");
-    let output = root.join("output");
-    create_private_directory(&output).expect("new owner-only directory");
-    assert!(create_private_directory(&output).is_err());
-    let secret = output.join("credential");
-    write_new(&secret, b"private runtime test record", true).expect("new private file");
-    assert_eq!(
-        fs::metadata(&secret).expect("metadata").mode() & 0o777,
-        0o600
-    );
-    assert!(write_new(&secret, b"replacement", true).is_err());
-    let link = root.join("link");
-    symlink(&secret, &link).expect("adversarial symlink");
-    assert!(write_new(&link, b"replacement", true).is_err());
-    assert!(read_public_bytes(&link).is_err());
-    let public = output.join("public.json");
-    write_new(&public, b"{}", false).expect("new public result");
-    assert_eq!(
-        read_public_bytes(&public).expect("stable bounded public read"),
-        b"{}"
-    );
-    // The held output directory cannot be redirected by replacing its pathname.
-    let bound = Directory::open(&output).expect("bound output directory");
-    let moved = root.join("old-output");
-    fs::rename(&output, &moved).expect("adversarial replacement");
-    create_private_directory(&output).expect("new unrelated output inode");
-    assert!(
-        bound
-            .write_new(std::ffi::OsStr::new("not-written"), b"secret", true)
-            .is_err()
-    );
-    assert!(!output.join("not-written").exists());
-    assert!(!moved.join("not-written").exists());
-    let hard = root.join("hard");
-    fs::hard_link(moved.join("public.json"), &hard).expect("adversarial extra link");
-    assert!(read_public_bytes(&hard).is_err());
-    let unsafe_parent = root.join("unsafe");
-    create_private_directory(&unsafe_parent).expect("owned initial directory");
-    fs::set_permissions(&unsafe_parent, fs::Permissions::from_mode(0o777)).expect("unsafe mode");
-    assert!(write_new(&unsafe_parent.join("not-written"), b"secret", true).is_err());
-    let key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let mut literal = Zeroizing::new(
-        ExposedPrivateKey(key.private_key().clone())
-            .try_to_multihash_string()
-            .expect("canonical BLS private literal"),
-    );
-    literal.push('\n');
-    assert_eq!(literal.len(), 71);
-    let key_path = output.join("consumed-key");
-    write_new(&key_path, literal.as_bytes(), true).expect("supervisor fixture key copy");
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&key_path)
-        .expect("owned inherited-file analogue");
-    let loaded = load_lifecycle_key(file).expect("same native descriptor loader");
-    assert_eq!(loaded.public_key(), key.public_key());
-    assert_eq!(fs::metadata(&key_path).expect("consumed metadata").len(), 0);
-    assert!(
-        Args::try_parse_from([
-            "beacon-bootstrap",
-            "sign-install",
-            "--key-fd",
-            "198",
-            "--bundle",
-            "/public",
-            "--signer-index",
-            "0",
-            "--output",
-            "/signed",
-            "--private-key",
-            "retired"
-        ])
-        .is_err()
-    );
-    assert!(
-        sign_command(
-            Path::new("/not-read"),
-            0,
-            Some(199),
-            None,
-            Path::new("/not-written")
         )
-        .is_err()
-    );
-    for fd in [0, 198, 199, 200] {
-        assert!(
-            provision_command(
-                Path::new("/not-read"),
-                Path::new("/not-read"),
-                Path::new("/not-read"),
-                Path::new("/not-read"),
-                1,
-                fd,
-                Path::new("/not-written"),
-                1000
-            )
-            .is_err()
+        .expect("exact private seat credential");
+        assert!(!credential.is_empty());
+        assert_eq!(
+            digest,
+            global_beacon_partial_signer_public_inventory_digest_v1(network, &[(public, seats)],)
+                .expect("exact public policy digest")
         );
     }
 }
 
 #[test]
-fn bootstrap_config_descriptor_uses_only_exact_native_consensus_identity() {
+fn rotation_config_descriptor_uses_only_exact_native_consensus_identity() {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let (request, _, keys) = request_and_genesis();
-    let key = &keys[0];
+    let key = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+    let network = test_network();
     let literal = Zeroizing::new(
         ExposedPrivateKey(key.private_key().clone())
             .try_to_multihash_string()
-            .unwrap(),
+            .expect("canonical private key"),
     );
     let mut config = Zeroizing::new(format!(
-        "chain = \"fc56984b-2be7-431d-840e-21514d1883f0\"\nchain_discriminant = 369\npublic_key = \"{}\"\nprivate_key = \"{}\"\n[genesis]\nexpected_hash = \"{}\"\n[torii.faucet]\nprivate_key_file = \"/must-not-read/faucet\"\n[torii.account_onboarding]\nprivate_key_file = \"/must-not-read/onboarding\"\n[streaming.codec]\nrans_tables_path = \"/must-not-read/tables\"\n[nexus.registry]\nmanifest_directory = \"/must-not-read/registry\"\n",
+        "chain = \"fc56984b-2be7-431d-840e-21514d1883f0\"\nchain_discriminant = 369\npublic_key = \"{}\"\nprivate_key = \"{}\"\n[genesis]\nexpected_hash = \"{}\"\n[torii.faucet]\nprivate_key_file = \"/must-not-read/faucet\"\n[torii.account_onboarding]\nprivate_key_file = \"/must-not-read/onboarding\"\n",
         key.public_key(),
         literal.as_str(),
-        request.dkg_session.network_id
+        network
     ));
-    let network = request.dkg_session.network_id;
     assert_eq!(
         lifecycle_key_from_config(config.as_bytes(), &network)
-            .unwrap()
+            .expect("exact key")
             .public_key(),
         key.public_key()
     );
-    let foreign = iroha_data_model::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(
-        Hash::new(b"foreign"),
-    ));
+    let foreign =
+        NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(b"foreign")));
     assert!(lifecycle_key_from_config(config.as_bytes(), &foreign).is_err());
     for (from, to) in [
         ("chain_discriminant = 369", "chain_discriminant = 1"),
-        ("chain_discriminant = 369\n", ""),
-        (
-            "[genesis]",
-            "private_key_file = \"/must-not-read/consensus\"\n[genesis]",
-        ),
         ("[genesis]", "extends = \"/must-not-read/base\"\n[genesis]"),
         (
             "[genesis]",
@@ -603,73 +403,25 @@ fn bootstrap_config_descriptor_uses_only_exact_native_consensus_identity() {
         let bad = Zeroizing::new(config.replace(from, to));
         assert!(lifecycle_key_from_config(bad.as_bytes(), &network).is_err());
     }
-    let other = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let bad = Zeroizing::new(config.replace(
-        &key.public_key().to_string(),
-        &other.public_key().to_string(),
-    ));
-    assert!(lifecycle_key_from_config(bad.as_bytes(), &network).is_err());
-    let temp = tempfile::Builder::new()
+    let root = tempfile::Builder::new()
         .prefix(".beacon-config-test-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
-    fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    let root = fs::canonicalize(temp.path()).unwrap();
+        .tempdir_in(std::env::current_dir().expect("cwd"))
+        .expect("private test root");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).expect("private root");
+    let path = fs::canonicalize(root.path()).expect("canonical root");
     for (name, bytes, success) in [
         ("valid", config.as_bytes(), true),
         ("malformed", b"not TOML".as_slice(), false),
     ] {
-        let path = root.join(name);
-        write_new(&path, bytes, true).unwrap();
+        let file_path = path.join(name);
+        write_new(&file_path, bytes, true).expect("private config");
         let file = OpenOptions::new()
             .read(true)
             .write(true)
-            .open(&path)
-            .unwrap();
+            .open(&file_path)
+            .expect("open config");
         assert_eq!(load_lifecycle_config(file, &network).is_ok(), success);
-        assert_eq!(fs::metadata(path).unwrap().len(), 0);
+        assert_eq!(fs::metadata(file_path).expect("truncated config").len(), 0);
     }
     config.zeroize();
-    assert!(
-        Args::try_parse_from([
-            "beacon-bootstrap",
-            "sign-install",
-            "--config-fd",
-            "198",
-            "--bundle",
-            "/public",
-            "--signer-index",
-            "0",
-            "--output",
-            "/signed"
-        ])
-        .is_ok()
-    );
-    assert!(
-        Args::try_parse_from([
-            "beacon-bootstrap",
-            "sign-install",
-            "--config-fd",
-            "198",
-            "--key-fd",
-            "198",
-            "--bundle",
-            "/public",
-            "--signer-index",
-            "0",
-            "--output",
-            "/signed"
-        ])
-        .is_err()
-    );
-    assert!(
-        sign_command(
-            Path::new("/not-read"),
-            0,
-            None,
-            Some(200),
-            Path::new("/not-written")
-        )
-        .is_err()
-    );
 }

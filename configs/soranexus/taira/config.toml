@@ -228,9 +228,7 @@ known_capabilities = ["torii_gateway", "chunk_range_fetch", "potr_mldsa"]
 [sorafs.discovery.admission]
 # Each deployment must point this at its co-located `sorafs_admission`
 # directory under the operator's install root.
-envelopes_dir = "configs/soranexus/taira/sorafs_admission"
-trusted_council_keys = ["REPLACE_WITH_TAIRA_SORAFS_COUNCIL_PUBLIC_KEY"]
-signature_threshold = "REPLACE_WITH_TAIRA_SORAFS_COUNCIL_SIGNATURE_THRESHOLD"
+enabled = true
 
 [sorafs.discovery.publish]
 gateway_base_url = "https://taira.sora.org"

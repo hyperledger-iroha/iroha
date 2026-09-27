@@ -14,10 +14,7 @@ This crate hosts cross-component tests for Iroha.
 - Target a harness directly with `cargo test -p integration_tests --test <harness>`.
 - The focused `taira_consensus_contracts` target in `iroha_test_network` requires four real validators, three public routable lanes, and the exact signed Ordinary transaction to become state-resolved Applied while all four peers advance beyond genesis. It shares the existing multi-route NPoS/DA genesis fixture, keeps production proof defaults, and fails sandbox skips. Prebuild the native `iroha3d` daemon and `iroha` CLI and select them with `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`; set `IROHA_TEST_SKIP_BUILD=1` and run `cargo test --locked -p iroha_test_network --test taira_consensus_contracts four_peer_multiroute_ordinary_transaction_reaches_applied -- --exact --nocapture`. The maintained Taira release gate supplies these binaries from the same warm native build before the Linux build.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
-- Global candidate refusal: `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_candidate::fresh_global_candidate_requires_prepared_epoch_transition -- --exact --nocapture`. This required-network scenario starts four NPoS validators and a separate signed observer, funds its ordinary account through a live transaction, and submits a valid signed global candidacy. It requires rejection for the missing authenticated epoch-key transition before any peer registration or stake escrow, verifies unchanged custody on all five peers, and cryptographically checks the exact four-member/three-vote finality roster. It fails a sandbox skip. Fresh global admission, observer-to-voter process promotion, beacon/KAGEMUSHA roster replacement and later withdrawal remain separate unresolved qualification gates; this refusal regression does not establish a working global staking lifecycle.
-  The global-candidate refusal fixture explicitly requires an absent on-chain
-  validation-fee policy registry. It isolates the epoch-transition gate and
-  does not qualify candidate admission under an enabled validation-fee policy.
+- Global candidate admission: `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_candidate::fresh_global_candidate_bonds_before_authenticated_committee_activation -- --exact --nocapture`. This required-network scenario starts four NPoS validators and a separate signed observer, transfers canonical XOR from funded Alice to its ordinary account, rejects foreign peer consent without custody changes, and admits the operator's valid self-bonded candidacy for the E+2 boundary. All five replicas must agree on registration, exact liquid/escrow balances and pending eligibility, while authenticated current finality remains exactly four equal voters and three commit signatures. It fails a sandbox skip. This fee-policy-disabled admission fixture does not qualify fee-enabled quoting, subsequent election, runtime credential installation, observer-to-voter promotion or withdrawal.
 - Exact test filters are now module-qualified inside the grouped harnesses; for example:
   `cargo test -p integration_tests --test core_api asset::client_add_asset_quantities_should_increase_asset_amounts -- --exact --nocapture`
 - Release acceptance must require its network fixtures instead of accepting sandbox-related skips.
@@ -249,3 +246,36 @@ The new scenario rejects an unavailable network even in a developer run; require
 network startup for the whole target so sibling optional sandbox skips cannot be
 counted as successful qualification. Deterministic test signers are feature
 isolated and are not a deployment-selected custody provider.
+
+### Native SoraFS publication lifecycle
+
+`core_api::sorafs_publication::four_peer_publication_replication_retrieval_restart_and_native_repair`
+constructs four validators and three native software providers. Signed genesis
+establishes admission; ordinary transfers of the actual configured fee asset fund
+each distinct provider and worker account. Real reserve funding and capacity
+registration precede challenged assignment/completion proofs. Only one provider receives publisher
+staging, so the other two must use assignment-authorized source transport. The
+scenario verifies public CID bytes, healthy restart, unavailable corrupt payload
+after restart, and the production repair worker's finalized completion and readback.
+It then executes the actual same-source `sorafs_cli deploy` with an independently
+verified saved checkpoint, requires its complete success receipt and asset
+readback, and independently challenges the resulting native completion again.
+Set `TEST_NETWORK_BIN_SORAFS_CLI` to the absolute prebuilt `sorafs_cli` artifact
+built with `cli-orchestrator`; missing CLI artifacts fail before network startup.
+Both publication qualification tests fail if the four-validator network cannot
+start; an unavailable sandbox cannot produce a passing skip.
+Each provider explicitly declares and bounds two GiB for these two small pins;
+the test does not preallocate that disk space.
+The gateway uses a genuinely signed and acknowledged empty compliance catalog;
+its configured optional HTTPS feed is not fetched by this scenario.
+
+The explicit `sorafs_publication_governance` target requires
+`parliament-test-signers`. Its
+`four_peer_native_publication_repair_and_parliament_revocation` test adds the
+shared real seven-body Parliament corridor, then requires a specific admission
+denial across provider restart while an unaffected replica still serves bytes.
+Use the same-source Parliament daemon and ordinary CLI artifacts described above,
+`IROHA_TEST_REQUIRE_NETWORK=1`, and exact test filters. Native stream-token quota,
+sequencer and reputation deployment adapters remain separate qualification.
+Source and unit-test presence do not establish successful network qualification;
+the lifecycle and governed revocation tests must both run successfully.

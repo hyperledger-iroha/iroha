@@ -1,4 +1,4 @@
-//! Provider admission registry loading and verification for SoraFS adverts.
+//! Finalized native provider admission, with isolated offline envelope verification helpers.
 use crate::secure_file_metadata;
 use iroha_logger::{trace, warn};
 pub use sorafs_manifest::ProviderAdmissionAdvertError as AdmissionCheckError;
@@ -25,13 +25,35 @@ pub const MAX_ADMISSION_ENVELOPES: usize = 4_096;
 /// Maximum canonical Norito size of one admission envelope (1 MiB).
 pub const MAX_ADMISSION_ENVELOPE_BYTES: u64 = 1024 * 1024;
 /// Admission registry loaded from governance envelopes.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AdmissionRegistry {
     network_id: [u8; 32],
     policy: Option<Arc<ProviderAdmissionCouncilPolicy>>,
     by_provider: HashMap<[u8; 32], Arc<AdmissionRecord>>,
+    native_state: Option<Arc<iroha_core::state::State>>,
+}
+impl std::fmt::Debug for AdmissionRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdmissionRegistry")
+            .field("network_id", &self.network_id)
+            .field("finalized", &self.native_state.is_some())
+            .finish_non_exhaustive()
+    }
 }
 impl AdmissionRegistry {
+    /// Bind production admission to Torii's exact Core State and durable finalized history.
+    /// Local envelope directories and configured council keys cannot authorize this registry.
+    #[must_use]
+    pub fn from_state(state: Arc<iroha_core::state::State>) -> Self {
+        use iroha_core::state::StateReadOnly;
+        let network_id = *state.view().network_id().as_bytes();
+        Self {
+            network_id,
+            policy: None,
+            by_provider: HashMap::new(),
+            native_state: Some(state),
+        }
+    }
     /// Construct an empty registry (used when admission is optional).
     #[must_use]
     pub fn empty(network_id: [u8; 32]) -> Self {
@@ -39,24 +61,35 @@ impl AdmissionRegistry {
             network_id,
             policy: None,
             by_provider: HashMap::new(),
+            native_state: None,
         }
     }
-    /// Construct an empty registry capable of accepting records under `policy`.
+    /// Construct an isolated offline verifier capable of accepting records under `policy`.
+    /// Runtime constructors use `from_state` instead.
     #[must_use]
     pub fn with_policy(network_id: [u8; 32], policy: ProviderAdmissionCouncilPolicy) -> Self {
         Self {
             network_id,
             policy: Some(Arc::new(policy)),
             by_provider: HashMap::new(),
+            native_state: None,
         }
     }
-    /// Borrow the operator-controlled council policy used to verify this registry.
+    /// Read the current finalized council policy, or an explicit offline verification policy.
     ///
     /// Empty optional registries have no trust policy and therefore cannot be
     /// used to authorize alias proofs or other governance-signed payloads.
     #[must_use]
-    pub fn council_policy(&self) -> Option<&ProviderAdmissionCouncilPolicy> {
-        self.policy.as_deref()
+    pub fn council_policy(&self) -> Option<Arc<ProviderAdmissionCouncilPolicy>> {
+        if let Some(state) = &self.native_state {
+            return iroha_core::query::provider_admission::read_finalized_admission_council_v1(
+                &state.view(),
+            )
+            .ok()
+            .flatten()
+            .map(Arc::new);
+        }
+        self.policy.clone()
     }
     /// Return the exact genesis network identity enforced for every admitted envelope.
     #[must_use]
@@ -88,6 +121,7 @@ impl AdmissionRegistry {
             network_id,
             policy: Some(Arc::new(policy)),
             by_provider,
+            native_state: None,
         })
     }
     /// Populate the registry from the provided directory.
@@ -169,6 +203,7 @@ impl AdmissionRegistry {
             network_id,
             policy: Some(Arc::new(policy)),
             by_provider,
+            native_state: None,
         })
     }
     /// Atomically replace this registry with a freshly loaded trust store and council policy.
@@ -186,6 +221,9 @@ impl AdmissionRegistry {
         dir: &Path,
         policy: ProviderAdmissionCouncilPolicy,
     ) -> Result<(), AdmissionRegistryError> {
+        if self.native_state.is_some() {
+            return Err(AdmissionRegistryError::FinalizedAuthority);
+        }
         let replacement = Self::load_from_dir(dir, self.network_id, policy)?;
         *self = replacement;
         Ok(())
@@ -266,17 +304,48 @@ impl AdmissionRegistry {
     /// Look up an admission entry for the given provider identifier.
     #[must_use]
     pub fn entry(&self, provider_id: &[u8; 32]) -> Option<Arc<AdmissionRecord>> {
+        if let Some(state) = &self.native_state {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_secs();
+            return iroha_core::query::provider_admission::read_finalized_provider_admission_v1(
+                &state.view(),
+                iroha_data_model::sorafs::capacity::ProviderId::new(*provider_id),
+                now,
+            )
+            .ok()
+            .flatten()
+            .map(Arc::new);
+        }
         self.by_provider.get(provider_id).cloned()
     }
     /// Return the number of governance-admitted provider identities.
     #[must_use]
     pub fn len(&self) -> usize {
+        if let Some(state) = &self.native_state {
+            return iroha_core::query::provider_admission::retained_provider_count_v1(&state.view())
+                .unwrap_or(MAX_ADMISSION_ENVELOPES as u64) as usize;
+        }
         self.by_provider.len()
     }
     /// Return whether the registry contains no governance-admitted providers.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.by_provider.is_empty()
+        self.len() == 0
+    }
+
+    /// Whether the native history retains this identity, including a terminal tombstone.
+    /// Replay checkpoints preserve revoked identities so restart cannot reopen old advert windows.
+    pub fn retains_identity(&self, provider_id: &[u8; 32]) -> bool {
+        if let Some(state) = &self.native_state {
+            return iroha_core::query::provider_admission::retains_provider_identity_v1(
+                &state.view(),
+                iroha_data_model::sorafs::capacity::ProviderId::new(*provider_id),
+            )
+            .unwrap_or(false);
+        }
+        self.by_provider.contains_key(provider_id)
     }
 }
 fn load_single_envelope(
@@ -412,6 +481,9 @@ fn decode_envelope(bytes: &[u8]) -> Result<ProviderAdmissionEnvelopeV1, Envelope
 /// Errors raised while constructing the admission registry.
 #[derive(Debug, Error)]
 pub enum AdmissionRegistryError {
+    /// A production registry can change only through finalized Parliament effects.
+    #[error("provider admission is governed by finalized native state")]
+    FinalizedAuthority,
     /// Inspecting the configured trust-store directory failed.
     #[error("failed to inspect admission directory {dir:?}: {err}")]
     DirectoryMetadata {

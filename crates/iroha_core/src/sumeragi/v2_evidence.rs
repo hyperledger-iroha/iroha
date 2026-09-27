@@ -2121,10 +2121,13 @@ mod tests {
         };
         let evidence_prune_keys = v2_committed_evidence_prune_keys_from_state(state, height)
             .expect("fund exact committed-evidence prune keys");
-        let mut transaction = state_block.consensus_effects_transaction();
+        let mut transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            None,
             evidence_prune_keys.as_slice(),
             None,
             &[],
@@ -3376,11 +3379,14 @@ mod tests {
             state_block.world.consensus_evidence.get(&key).is_some(),
             "post-execution validation must roll its prune simulation back"
         );
-        let mut effects_transaction = state_block.consensus_effects_transaction();
+        let mut effects_transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         let application_error =
             match super::super::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut effects_transaction,
                 &effects,
+                None,
                 evidence_prune_keys.as_slice(),
                 None,
                 &[],
@@ -3463,10 +3469,13 @@ mod tests {
             state_block.world.consensus_evidence.get(&key).is_some(),
             "post-execution validation must leave the retained evidence intact"
         );
-        let mut effects_transaction = state_block.consensus_effects_transaction();
+        let mut effects_transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut effects_transaction,
             &effects,
+            None,
             evidence_prune_keys.as_slice(),
             None,
             &[],

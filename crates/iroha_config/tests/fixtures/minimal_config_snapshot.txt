@@ -153,6 +153,11 @@ Root {
             },
         },
     },
+    runtime_provider_broker: RuntimeProviderBroker {
+        endpoint_path: RuntimeProviderBrokerEndpointPath(
+            "<platform-default broker endpoint>",
+        ),
+    },
     network: Network {
         address: WithOrigin {
             value: Ipv4(
@@ -832,6 +837,9 @@ Root {
             budget_enforce_interval_blocks: 10,
             max_wsv_memory_bytes: Bytes(
                 8589934592,
+            ),
+            kagemusha_operation_index_bytes: Bytes(
+                67108864,
             ),
             retained_carrier_shell_bytes: 268435456,
             consensus_evidence_preparation_bytes: 8311968,
@@ -1985,6 +1993,69 @@ Root {
             entropy_mode: RansBundled,
             bundle_width: 2,
             bundle_accel: None,
+        },
+    },
+    sccp: SccpNode {
+        attestor: SccpAttestor {
+            enabled: true,
+            key_dir: WithOrigin {
+                value: "./storage/sccp/bridge-keys",
+                origin: Custom {
+                    message: "derived from kura.store_dir because sccp.attestor.key_dir was empty",
+                },
+            },
+            auto_register: true,
+            max_entries_per_transaction: 64,
+            resubmit_after_blocks: 3,
+            max_clock_drift: 3600s,
+            shutdown_grace: 30s,
+        },
+        light_client_keeper: SccpLightClientKeeper {
+            enabled: true,
+            advance_after: None,
+            poll_interval: 60s,
+            request_timeout: 10s,
+            max_advance_bytes: 262144,
+            endpoints: SccpLightClientKeeperEndpoints {
+                ethereum_execution: [
+                    "https://ethereum-rpc.publicnode.com/",
+                    "https://eth.llamarpc.com/",
+                    "https://cloudflare-eth.com/",
+                ],
+                ethereum_beacon: [
+                    "https://ethereum-beacon-api.publicnode.com/",
+                    "https://lodestar-mainnet.chainsafe.io/",
+                ],
+                bsc: [
+                    "https://bsc-dataseed.bnbchain.org/",
+                    "https://bsc-rpc.publicnode.com/",
+                ],
+                tron: [
+                    "https://api.trongrid.io/",
+                    "https://tron-rpc.publicnode.com/",
+                ],
+                ton_liteservers: [
+                    "5.9.10.47:19949:n4VDnSCUuSpjnCyUk9e3QOOd6o0ItSWYbTnW3Wnn8wk=",
+                    "5.9.10.15:48014:3XO67K/qi+gu3T9v8G2hx1yNmWZhccL3O7SoosFo8G0=",
+                    "135.181.177.59:53312:aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=",
+                    "135.181.140.212:13206:K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=",
+                    "135.181.140.221:46995:wQE0MVhXNWUXpWiW5Bk8cAirIh5NNG3cZM1/fSVKIts=",
+                    "65.21.141.233:30131:wrQaeIFispPfHndEBc0s0fx7GSp8UFFvebnytQQfc6A=",
+                    "65.21.141.198:47160:vOe1Xqt/1AQ2Z56Pr+1Rnw+f0NmAA7rNCZFIHeChB7o=",
+                    "65.21.141.231:17728:BYSVpL7aPk0kU5CtlsIae/8mf2B/NrBi7DKmepcjX6Q=",
+                    "65.21.141.197:13570:iVQH71cymoNgnrhOT35tl/Y7k86X5iVuu5Vf68KmifQ=",
+                    "164.68.101.206:52995:QnGFe9kihW+TKacEvvxFWqVXeRxCB6ChjjhNTrL7+/k=",
+                    "164.68.99.144:20334:gyLh12v4hBRtyBygvvbbO2HqEtgl+ojpeRJKt4gkMq0=",
+                    "188.68.216.239:19925:ucho5bEkufbKN1JR1BGHpkObq602whJn3Q3UwhtgSo4=",
+                    "51.195.189.59:19434:J5CwYXuCZWVPgiFPW+NY2roBwDWpRRtANHSTYTRSVtI=",
+                    "51.195.189.140:23067:vX8d0i31zB0prVuZK8fBkt37WnEpuEHrb7PElk4FJ1o=",
+                    "135.181.132.198:53560:NlYhh/xf4uQpE+7EzgorPHqIaqildznrpajJTRRH2HU=",
+                    "135.181.132.253:46529:jLO6yoooqUQqg4/1QXflpv2qGCoXmzZCR+bOsYJ2hxw=",
+                    "54.39.158.156:51565:TDg+ILLlRugRB4Kpg3wXjPcoc+d+Eeb7kuVe16CS9z8=",
+                    "185.86.79.9:4701:G6cNAr6wXBBByWDzddEWP5xMFsAcp6y13fXA8Q7EJlM=",
+                ],
+            },
+            secret_headers: [],
         },
     },
 }

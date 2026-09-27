@@ -1130,10 +1130,22 @@ mod tests {
             .expect("fixture seed derives Ed25519 keypair");
         let validator = AccountId::new(validator_key.public_key().clone());
         let peer_id = PeerId::from(peer_key.public_key().clone());
+        let consent = crate::isi::staking::PublicLanePeerBindingAuthorization::new(
+            crate::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"visit-rebind"),
+            )),
+            LaneId::SINGLE,
+            validator.clone(),
+            peer_id.clone(),
+            13,
+            PeerId::from(validator_key.public_key().clone()),
+        );
         let isi = InstructionBox::from(RebindPublicLaneValidatorPeer::new(
             LaneId::SINGLE,
             validator,
             peer_id,
+            iroha_crypto::SignatureOf::try_new(peer_key.private_key(), &consent)
+                .expect("replacement peer consent"),
         ));
         let mut visitor = RebindVisitor { called: false };
         visit_instruction(&mut visitor, &isi);

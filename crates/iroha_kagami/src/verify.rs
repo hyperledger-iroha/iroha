@@ -235,6 +235,24 @@ fn enforce_public_xor_binding(
             profile
         ));
     }
+    if profile == GenesisProfile::Iroha3Nexus
+        && public_xor_asset_definition_id.to_string() == TAIRA_XOR_ASSET_DEFINITION_ID
+    {
+        return Err(eyre!(
+            "Nexus requires its operator-provisioned mainnet XOR definition, not the Taira testnet definition"
+        ));
+    }
+    let parameters = manifest.effective_parameters()?;
+    let npos = parameters
+        .custom()
+        .get(&SumeragiNposParameters::parameter_id())
+        .and_then(SumeragiNposParameters::from_custom_parameter)
+        .ok_or_else(|| eyre!("public XOR requires the signed NPoS asset pin"))?;
+    if npos.xor_asset_definition_id != public_xor_asset_definition_id {
+        return Err(eyre!(
+            "public XOR alias differs from the immutable NPoS XOR definition"
+        ));
+    }
     if !registered_asset_definitions.contains(&public_xor_asset_definition_id) {
         return Err(eyre!(
             "public profile {:?} binds `{PUBLIC_XOR_ALIAS}` to `{public_xor_asset_definition_id}` but does not register that asset definition",
@@ -366,8 +384,18 @@ mod tests {
         let consensus_mode = manifest.consensus_mode();
         let chain_discriminant = manifest.chain_discriminant();
         let alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse().expect("valid alias");
+        let parameters = manifest.effective_parameters().expect("fixture parameters");
+        let mut npos = parameters
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("fixture NPoS snapshot");
+        npos.xor_asset_definition_id = asset_definition_id.clone();
         manifest
             .into_builder()
+            .append_parameter(iroha_data_model::parameter::Parameter::Custom(
+                npos.into_custom_parameter(),
+            ))
             .next_transaction()
             .append_instruction(Register::asset_definition(
                 AssetDefinition::new(

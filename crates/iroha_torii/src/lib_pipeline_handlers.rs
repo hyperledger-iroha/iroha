@@ -671,143 +671,24 @@ fn build_pipeline_recovery_fastpq_response(
     Ok(serialized)
 }
 fn fastpq_proof_snapshot_recovery_json(
-    kura: &Kura,
-    height: u64,
+    _kura: &Kura,
+    _height: u64,
     snapshot: &iroha_core::kura::FastpqProofSnapshot,
     artifact_bytes: &mut usize,
 ) -> Result<norito::json::Value, Error> {
-    if snapshot.proof.len() > PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES {
-        return Err(fastpq_recovery_capacity_error(format!(
-            "FASTPQ proof exceeds the {} byte per-proof budget",
-            PIPELINE_FASTPQ_RECOVERY_MAX_PROOF_BYTES
-        )));
-    }
-    charge_fastpq_recovery_artifact_bytes(artifact_bytes, snapshot.proof.len())?;
-    // Build the object field-by-field. `FastpqProofSnapshot::to_json_value`
-    // eagerly encodes its batch, which would duplicate expensive work before
-    // this endpoint can enforce its source-byte budget.
-    let mut object = norito::json::Map::new();
-    object.insert(
-        "entry_hash".to_owned(),
-        norito::json::to_value(&snapshot.entry_hash.to_string())
-            .expect("serialize FASTPQ entry hash"),
-    );
-    object.insert(
-        "batch_index".to_owned(),
-        norito::json::to_value(&snapshot.batch_index).expect("serialize FASTPQ batch index"),
-    );
-    object.insert(
-        "parameter".to_owned(),
-        norito::json::to_value(&snapshot.parameter).expect("serialize FASTPQ parameter"),
-    );
-    object.insert(
-        "transition_count".to_owned(),
-        norito::json::to_value(&snapshot.transition_count)
-            .expect("serialize FASTPQ transition count"),
-    );
-    object.insert(
-        "trace_commitment".to_owned(),
-        norito::json::to_value(&hex::encode(snapshot.trace_commitment.to_le_bytes()))
-            .expect("serialize FASTPQ trace commitment"),
-    );
-    object.insert(
-        "proof_digest".to_owned(),
-        norito::json::to_value(&snapshot.proof_digest.to_string())
-            .expect("serialize FASTPQ proof digest"),
-    );
-    object.insert(
-        "proof".to_owned(),
-        norito::json::to_value(&base64::engine::general_purpose::STANDARD.encode(&snapshot.proof))
-            .expect("serialize FASTPQ proof"),
-    );
-    match fastpq_committed_batch_base64(kura, height, snapshot, artifact_bytes)? {
-        Some((batch, reconstructed)) => {
-            object.insert(
-                "batch".to_string(),
-                norito::json::to_value(&batch).expect("serialize FASTPQ batch"),
-            );
-            object.insert(
-                "batch_compact".to_string(),
-                norito::json::to_value(&false).expect("serialize FASTPQ batch compact flag"),
-            );
-            object.insert(
-                "batch_reconstructed_from_block".to_string(),
-                norito::json::to_value(&reconstructed)
-                    .expect("serialize FASTPQ batch reconstruction flag"),
-            );
-        }
-        None => {
-            object.insert(
-                "batch_compact".to_string(),
-                norito::json::to_value(&snapshot.batch.transitions.is_empty())
-                    .expect("serialize FASTPQ batch compact flag"),
-            );
-            if snapshot.transition_count > 0 && snapshot.batch.transitions.is_empty() {
-                object.insert(
-                    "batch_reconstruction_error".to_string(),
-                    norito::json::to_value(
-                        "committed block transcripts were not available for this FASTPQ proof",
-                    )
-                    .expect("serialize FASTPQ batch reconstruction error"),
-                );
-            }
-        }
-    }
-    Ok(norito::json::Value::Object(object))
+    // Recovery sidecars retain only public metadata and the canonical artifact
+    // identity; proof frames and private witnesses are never served here.
+    let value = snapshot.to_json_value();
+    let encoded_len = norito::json::to_json(&value)
+        .map_err(|source| Error::SerializationFailure {
+            context: "pipeline_recovery_fastpq_proofs",
+            source: Box::new(source),
+        })?
+        .len();
+    charge_fastpq_recovery_artifact_bytes(artifact_bytes, encoded_len)?;
+    Ok(value)
 }
-fn fastpq_committed_batch_base64(
-    kura: &Kura,
-    height: u64,
-    snapshot: &iroha_core::kura::FastpqProofSnapshot,
-    artifact_bytes: &mut usize,
-) -> Result<Option<(String, bool)>, Error> {
-    if snapshot.transition_count == 0 {
-        return Ok(None);
-    }
-    if !snapshot.batch.transitions.is_empty() {
-        return encode_fastpq_recovery_batch(&snapshot.batch, false, artifact_bytes).map(Some);
-    }
-    let Some(height) = usize::try_from(height).ok().and_then(NonZeroUsize::new) else {
-        iroha_logger::warn!(
-            height,
-            "cannot reconstruct FASTPQ batch for invalid block height"
-        );
-        return Ok(None);
-    };
-    let Some(block) = kura.get_block(height) else {
-        iroha_logger::warn!(
-            height = height.get(),
-            entry_hash = %snapshot.entry_hash,
-            "cannot reconstruct FASTPQ batch because committed block is unavailable"
-        );
-        return Ok(None);
-    };
-    let Some(transcripts) = block.fastpq_transcripts().get(&snapshot.entry_hash) else {
-        iroha_logger::warn!(
-            height = height.get(),
-            entry_hash = %snapshot.entry_hash,
-            "cannot reconstruct FASTPQ batch because committed block has no matching transcript"
-        );
-        return Ok(None);
-    };
-    match iroha_core::fastpq::batch_from_transcript_bundle(
-        snapshot.parameter.clone(),
-        snapshot.batch.public_inputs,
-        snapshot.entry_hash,
-        transcripts,
-    ) {
-        Ok(batch) => encode_fastpq_recovery_batch(&batch, true, artifact_bytes).map(Some),
-        Err(err) => {
-            iroha_logger::warn!(
-                height = height.get(),
-                entry_hash = %snapshot.entry_hash,
-                ?err,
-                "failed to reconstruct FASTPQ batch from committed transcripts"
-            );
-            Ok(None)
-        }
-    }
-}
+#[cfg(test)]
 fn encode_fastpq_recovery_batch(
     batch: &fastpq_prover::TransitionBatch,
     reconstructed: bool,

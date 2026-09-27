@@ -26,13 +26,13 @@ use rayon::prelude::*;
 use super::{
     AirQuotientDomain, ExecutionMode, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1,
     JointFriBatch, MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
+    secret_polynomial::SecretPolynomial,
 };
 #[cfg(test)]
 use crate::Result;
 #[cfg(test)]
 use crate::{
     Error,
-    fft::Planner,
     proof::{FriQueryOpening, PublicIO, VerifyLimits, compact_fri_support},
 };
 
@@ -42,6 +42,9 @@ pub(super) mod metal_diagnostic;
 #[cfg(test)]
 #[path = "compact_protocol/profile.rs"]
 mod profile;
+#[cfg(test)]
+#[path = "compact_protocol/replay.rs"]
+pub(in crate::backend) mod replay;
 #[cfg(test)]
 #[path = "compact_protocol/shared_openings.rs"]
 pub(super) mod shared_openings;
@@ -329,7 +332,7 @@ fn collect_prover_rows<T: Send>(
 #[cfg(test)]
 struct PreparedTrace {
     geometry: Geometry,
-    columns: Vec<Vec<u64>>,
+    replay: replay::TraceReplay,
     rows: CommittedTree,
     binding: Binding,
     bound_statement: Vec<u8>,
@@ -377,59 +380,23 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
         relation.statement_bytes().len(),
         VerifyLimits::default().max_batch_bytes,
     )?;
-    if columns.len() != geometry.schema.width {
-        return Err(shape(
-            "compact prover requires the complete fixed column width",
-        ));
-    }
-    for (column, values) in columns.iter().enumerate() {
-        if values.len() != geometry.schema.trace_rows {
-            return Err(shape(
-                "compact prover columns must have the exact subgroup length",
-            ));
-        }
-        for (row, &value) in values.iter().enumerate() {
-            canonical_base(value, "compact_base_trace", &[column, row])?;
-        }
-    }
+    let plan = replay::TraceReplayPlan::new(geometry.schema.trace_rows, geometry.schema.width)?;
     let binding = Binding::new(relation, &geometry)?;
     let bound_statement = relation.statement_bytes().to_vec();
-    let planner = Planner::new(&FASTPQ_FINAL_V1);
-    let mut coefficients = columns.to_vec();
-    #[cfg(test)]
-    let phase_started = {
-        eprintln!("fastpq_test_prover phase=ifft start");
-        std::time::Instant::now()
-    };
-    planner.ifft_columns(&mut coefficients);
-    #[cfg(test)]
-    eprintln!(
-        "fastpq_test_prover phase=ifft elapsed={:?}",
-        phase_started.elapsed()
-    );
-    #[cfg(test)]
-    let phase_started = {
-        eprintln!("fastpq_test_prover phase=lde start");
-        std::time::Instant::now()
-    };
-    let columns = planner.lde_columns(&coefficients);
-    #[cfg(test)]
-    eprintln!(
-        "fastpq_test_prover phase=lde elapsed={:?}",
-        phase_started.elapsed()
-    );
-    drop(coefficients);
+    let replay = replay::TraceReplay::new(plan, columns)?;
     #[cfg(test)]
     let phase_started = {
         eprintln!("fastpq_test_prover phase=row_leaf_hashing start");
         std::time::Instant::now()
     };
-    let leaves = collect_prover_rows(geometry.lde_rows, |indices| {
-        let mut row = vec![0; geometry.schema.width];
+    // Retain digests, never the full LDE matrix. Each complete row is hashed
+    // at its original natural-domain index before the stripe is overwritten.
+    let leaves = replay.collect_rows(Digest::default(), |stripe, indices| {
+        let mut row = SecretPolynomial::<u64>::zeroed(geometry.schema.width)?;
         indices
             .map(|index| {
-                fill_row(&columns, index, &mut row);
-                binding.row(index, &row)
+                stripe.fill_row(index, &mut row);
+                binding.row(stripe.global_index(index), &row)
             })
             .collect()
     })?;
@@ -451,7 +418,7 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
     );
     Ok(PreparedTrace {
         geometry,
-        columns,
+        replay,
         rows,
         binding,
         bound_statement,
@@ -482,19 +449,20 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
         eprintln!("fastpq_test_prover phase=mixed_values start");
         std::time::Instant::now()
     };
-    let mixed: Vec<_> = (0..geometry.lde_rows)
-        .into_par_iter()
-        .with_min_len(64)
-        .map(|index| {
-            trace
-                .columns
-                .iter()
-                .zip(&mixing)
-                .fold(GoldilocksFp4V1::ZERO, |sum, (column, coefficient)| {
-                    sum.add(coefficient.mul_base(column[index]))
+    let mixed = trace
+        .replay
+        .collect_rows(GoldilocksFp4V1::ZERO, |stripe, indices| {
+            indices
+                .map(|index| {
+                    Ok(stripe
+                        .columns()
+                        .zip(&mixing)
+                        .fold(GoldilocksFp4V1::ZERO, |sum, (column, coefficient)| {
+                            sum.add(coefficient.mul_base(column[index]))
+                        }))
                 })
-        })
-        .collect();
+                .collect()
+        })?;
     #[cfg(test)]
     eprintln!(
         "fastpq_test_prover phase=mixed_values elapsed={:?}",
@@ -548,23 +516,22 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
         eprintln!("fastpq_test_prover phase=quotient_evaluation start");
         std::time::Instant::now()
     };
-    let quotients = collect_prover_rows(geometry.lde_rows, |indices| {
-        let mut evaluate = prepared.evaluator();
-        let mut current = vec![0; geometry.schema.width];
-        let mut next = vec![0; geometry.schema.width];
-        indices
-            .map(|index| {
-                fill_row(&trace.columns, index, &mut current);
-                fill_row(
-                    &trace.columns,
-                    next_index(index, geometry.lde_rows),
-                    &mut next,
-                );
-                let residues = evaluate(index, geometry.domain.point(index), &current, &next)?;
-                Ok(combine(&residues, &alphas)?.mul_base(weights.weights_at(index)?.all_rows))
-            })
-            .collect()
-    })?;
+    let quotients = trace
+        .replay
+        .collect_rows(GoldilocksFp4V1::ZERO, |stripe, indices| {
+            let mut evaluate = prepared.evaluator();
+            let mut current = SecretPolynomial::<u64>::zeroed(geometry.schema.width)?;
+            let mut next = SecretPolynomial::<u64>::zeroed(geometry.schema.width)?;
+            indices
+                .map(|row| {
+                    stripe.fill_row(row, &mut current);
+                    stripe.fill_row((row + 1) % geometry.schema.trace_rows, &mut next);
+                    let index = stripe.global_index(row);
+                    let residues = evaluate(index, geometry.domain.point(index), &current, &next)?;
+                    Ok(combine(&residues, &alphas)?.mul_base(weights.weights_at(index)?.all_rows))
+                })
+                .collect()
+        })?;
     #[cfg(test)]
     eprintln!(
         "fastpq_test_prover phase=quotient_evaluation elapsed={:?}",
@@ -609,17 +576,24 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
         &mut transcript,
     )?;
     let chains = fri.open_query_chains(&indices, FASTPQ_FINAL_V1.fri.arity)?;
+    let opening_indices: Vec<_> = indices
+        .iter()
+        .flat_map(|&index| [index, next_index(index, geometry.lde_rows)])
+        .collect();
+    // A fourth pass visits only stripes containing selected rows. Move these
+    // owned rows directly into the repeated opening DTO without another copy.
+    let mut opening_rows = trace.replay.selected_rows(&opening_indices)?.into_iter();
     let mut queries = Vec::with_capacity(indices.len());
-    let mut current = vec![0; geometry.schema.width];
-    let mut next = current.clone();
     for (index, fri) in indices.into_iter().zip(chains) {
-        fill_row(&trace.columns, index, &mut current);
         let next_index = next_index(index, geometry.lde_rows);
-        fill_row(&trace.columns, next_index, &mut next);
         queries.push(CompactQuery {
             index: index as u32,
-            current: current.clone(),
-            next: next.clone(),
+            current: opening_rows
+                .next()
+                .ok_or_else(|| shape("missing replayed current row"))?,
+            next: opening_rows
+                .next()
+                .ok_or_else(|| shape("missing replayed next row"))?,
             current_path: trace.rows.path(index)?,
             next_path: trace.rows.path(next_index)?,
             mixed: mixed[index],
@@ -899,13 +873,6 @@ fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4
         value = value.add(alpha.mul_base(residue));
     }
     Ok(value)
-}
-
-#[cfg(test)]
-fn fill_row(columns: &[Vec<u64>], index: usize, row: &mut [u64]) {
-    for (value, column) in row.iter_mut().zip(columns) {
-        *value = column[index];
-    }
 }
 
 #[cfg(test)]

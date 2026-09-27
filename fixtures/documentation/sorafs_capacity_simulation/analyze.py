@@ -19,10 +19,14 @@ def load_json(path: Path) -> Dict:
 def quota_analysis(artefact_dir: Path) -> Tuple[Dict, List[str]]:
     summary_dir = artefact_dir / "quota_negotiation"
     providers = ("alpha", "beta", "gamma")
-    provider_summaries = {}
+    # Declaration submission summaries contain only canonical Norito bytes. This
+    # simulation measures its copied authoring inputs, not finalized registry state.
+    # The Rust fixture suite decodes each produced declaration and checks these
+    # provider/capacity values against the original authoring specification.
+    provider_specs = {}
     for name in providers:
-        path = summary_dir / f"provider_{name}_declaration_summary.json"
-        provider_summaries[name] = load_json(path)
+        path = summary_dir / f"provider_{name}_declaration_spec.json"
+        provider_specs[name] = load_json(path)
 
     replication_summary = load_json(summary_dir / "replication_order_summary.json")
     assignments = replication_summary.get("assignments", [])
@@ -36,7 +40,7 @@ def quota_analysis(artefact_dir: Path) -> Tuple[Dict, List[str]]:
     total_assigned = 0
     total_declared = 0
 
-    for alias, summary in provider_summaries.items():
+    for alias, summary in provider_specs.items():
         provider_id = summary["provider_id_hex"]
         committed = summary["committed_capacity_gib"]
         assigned = allocation_map.get(provider_id, 0)
@@ -66,6 +70,7 @@ def quota_analysis(artefact_dir: Path) -> Tuple[Dict, List[str]]:
         )
 
     result = {
+        "declaration_source": "authoring_spec",
         "total_declared_gib": total_declared,
         "total_assigned_gib": total_assigned,
         "target_assigned_gib": target_total,

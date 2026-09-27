@@ -129,10 +129,15 @@ fn carrier_capture_unlocks_state_topology_before_world_parameters_notification()
 
     let admission_calls = AtomicUsize::new(0);
     let captured = prepared
-        .prepare_journals(None, None, |inputs| {
-            admission_calls.fetch_add(1, Ordering::SeqCst);
-            admit_journals_for_test(inputs)
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |inputs| {
+                admission_calls.fetch_add(1, Ordering::SeqCst);
+                admit_journals_for_test(inputs)
+            },
+        )
         .unwrap_or_else(|error| panic!("capture original carrier: {error}"));
     // Keep all returned journals alive until after every physical probe and
     // identity/image assertion. Probe cleanup is never destroyed inside Wake.
@@ -390,7 +395,12 @@ fn carrier_capture_refused_original_drop_releases_membership_before_world_notifi
     );
 
     let error = prepared
-        .prepare_journals(None, None, |_| Err::<(), _>("original retention refusal"))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Err::<(), _>("original retention refusal"),
+        )
         .err()
         .expect("real journal admission refuses");
     let CarrierJournalPreparationError::JournalAdmission {
@@ -398,6 +408,7 @@ fn carrier_capture_refused_original_drop_releases_membership_before_world_notifi
         provider,
         reputation,
         error: reason,
+        ..
     } = &error
     else {
         panic!("retain the exact original carrier on normal refusal");
@@ -463,9 +474,14 @@ fn carrier_capture_admission_panic_releases_healthy_membership_before_world_noti
     );
 
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        prepared.prepare_journals(None, None, |_| -> Result<(), &'static str> {
-            panic!("injected actual carrier journal admission panic");
-        })
+        prepared.prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| -> Result<(), &'static str> {
+                panic!("injected actual carrier journal admission panic");
+            },
+        )
     }));
     assert!(result.is_err());
     assert!(
@@ -533,7 +549,9 @@ fn state_capture_late_membership_refusal_retains_completed_world_and_runtime_unt
     } = block.into_fields();
     _read_releases = original_read_releases;
     let mut pending = StateJournalCapture::new(
-        world.capture_slot(),
+        world.capture_slot(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+        ),
         runtime_journals::RuntimeCapture::new(
             canonical_runtime.into_executing(),
             commit_topology.into_executing(),

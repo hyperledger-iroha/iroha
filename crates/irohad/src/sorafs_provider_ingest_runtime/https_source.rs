@@ -21,7 +21,7 @@ use sorafs_node::{
 };
 use std::{
     fmt,
-    io::{self, Cursor, Read},
+    io::{self, Read},
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -34,7 +34,7 @@ pub struct ProviderIngestHttpsSourceConfigV1 {
     pub network_id: NetworkId,
     /// Independently pinned source identity and public policy revision.
     pub binding: ProviderIngestAuthenticatedSourceBindingV1,
-    /// Complete metadata and retained-payload resource bounds.
+    /// Complete metadata and temporary-payload disk resource bounds.
     pub limits: GatewaySourceLimitsV1,
     /// Nonzero connection timeout, no longer than the request timeout.
     pub connect_timeout: Duration,
@@ -42,7 +42,7 @@ pub struct ProviderIngestHttpsSourceConfigV1 {
     pub request_timeout: Duration,
     /// Absolute complete operation/reader lifetime, at most 120 seconds.
     pub operation_timeout: Duration,
-    /// Maximum concurrent retained payloads and DNS workers; between one and four.
+    /// Maximum concurrent temporary payload spools and DNS workers; between one and four.
     pub max_in_flight: usize,
 }
 impl ProviderIngestHttpsSourceConfigV1 {
@@ -249,7 +249,7 @@ impl ProviderIngestHttpsSourceV1 {
         ensure_current(&self.config, self.resolver.as_ref(), &lease, deadline)?;
         let (manifest, plan, payload) = verified.into_parts();
         let reader = LeaseCheckedReader {
-            reader: Cursor::new(payload),
+            reader: Box::new(payload),
             config: self.config.clone(),
             resolver: Arc::clone(&self.resolver),
             lease,
@@ -395,7 +395,7 @@ fn ensure_current(
     resolver.ensure_current(lease)
 }
 struct LeaseCheckedReader {
-    reader: Cursor<Vec<u8>>,
+    reader: Box<dyn Read + Send>,
     config: ProviderIngestHttpsSourceConfigV1,
     resolver: Arc<dyn ProviderIngestGovernedHttpsGrantResolverV1>,
     lease: ProviderIngestHttpsSourceLeaseV1,

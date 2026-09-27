@@ -3,6 +3,7 @@
 use super::*;
 use crate::smartcontracts::isi::triggers::set::{PreparedSet, SetPublicationError};
 use mv::PublicationPreparationError;
+use resources::WorldJournalShellInstallation;
 use std::alloc::Layout;
 
 // These layouts describe the concrete Box pointees constructed below. Lifetimes
@@ -40,6 +41,10 @@ pub(in crate::state) struct FieldRefusal {
 pub(in crate::state) enum WorldPublicationError<E> {
     /// Complete installation resources were refused before any writer acquisition.
     Admission(E),
+    /// The original finite operation-index pool could not enter its local scope.
+    Scope(mv::storage::AdmittedStorageError),
+    /// A previous installation still owns its original delayed cleanup shells.
+    ShellsNotRetired(resources::ShellsNotRetired),
     /// One exact original owner could not be prepared.
     Field(FieldRefusal),
 }
@@ -159,7 +164,7 @@ where
 pub(super) fn storage_slot<'target, K: Key, V: Value, M: WorldStorageMode<K, V>>(
     mut original: Box<RetainedStorage<K, V, M>>,
     world: &'target World,
-    scope: Option<&'target AllocationScope<'target>>,
+    scope: &mv::allocation::OwnedAllocationScope,
 ) -> Box<dyn PreparedWorldField + 'target>
 where
     M::Charge: Send + Sync + 'static,
@@ -452,6 +457,8 @@ impl Drop for PreparedWorldFields<'_> {
 pub(in crate::state) struct AbortedWorld<'target, Installation> {
     _fields: PreparedWorldFields<'target>,
     _installation: Option<Installation>,
+    _shell_installation: Option<WorldJournalShellInstallation>,
+    _operation_index_scope: Option<mv::allocation::OwnedAllocationScope>,
 }
 
 /// All original World writers retained together, with no State authorization.
@@ -466,8 +473,11 @@ pub(in crate::state) struct PreparedWorld<'target, Admission, Installation> {
     retry: Vec<Box<dyn RetainedWorldField>>,
     dataspace_catalog: DataSpaceCatalog,
     external_event_buf: Vec<EventBox>,
+    shells: WorldJournalShellReservation,
+    shell_installation: WorldJournalShellInstallation,
     admission: Admission,
     installation: Installation,
+    operation_index_scope: mv::allocation::OwnedAllocationScope,
 }
 
 /// Original field boxes and containers retained after physical publication.
@@ -475,6 +485,9 @@ pub(in crate::state) struct PreparedWorld<'target, Admission, Installation> {
 pub(in crate::state) struct WorldRetirement<'target> {
     _fields: Vec<Box<dyn PreparedWorldField + 'target>>,
     _retry: Vec<Box<dyn RetainedWorldField>>,
+    _shells: WorldJournalShellReservation,
+    _shell_installation: WorldJournalShellInstallation,
+    _operation_index_scope: mv::allocation::OwnedAllocationScope,
 }
 
 #[path = "world_preparation.rs"]
@@ -486,7 +499,6 @@ impl<Admission> DetachedWorld<Admission> {
     pub(in crate::state) fn try_prepare_publication<'target, Installation, E>(
         self,
         target: &'target World,
-        scope: Option<&'target AllocationScope<'target>>,
         admit: impl FnOnce(&Self, &World) -> Result<Installation, E>,
     ) -> Result<
         PreparedWorld<'target, Admission, Installation>,
@@ -496,7 +508,7 @@ impl<Admission> DetachedWorld<Admission> {
             AbortedWorld<'target, Installation>,
         ),
     > {
-        let mut slot = self.publication_slot(target, scope);
+        let mut slot = self.publication_slot(target);
         match slot.try_prepare(admit) {
             Ok(()) => Ok(slot.into_prepared()),
             Err(error) => {
@@ -537,16 +549,22 @@ impl<'target, Admission, Installation> PreparedWorld<'target, Admission, Install
             mut retry,
             dataspace_catalog,
             external_event_buf,
+            shells,
+            shell_installation,
             admission: retained_admission,
             installation: retained_installation,
+            operation_index_scope,
         } = self;
         installation = retained_installation;
         admission = retained_admission;
+        let operation_index_budget = operation_index_scope.allocation_budget().clone();
         fields.recover_all();
         retry.extend(fields.iter_mut().map(|field| field.abort()));
         let retirement = AbortedWorld {
             _fields: fields,
             _installation: Some(installation),
+            _shell_installation: Some(shell_installation),
+            _operation_index_scope: Some(operation_index_scope),
         };
         (
             DetachedWorld {
@@ -554,7 +572,9 @@ impl<'target, Admission, Installation> PreparedWorld<'target, Admission, Install
                 fields: retry,
                 dataspace_catalog,
                 external_event_buf,
+                shells,
                 admission,
+                operation_index_budget,
             },
             retirement,
         )
@@ -579,8 +599,11 @@ impl<'target, Admission, Installation> PreparedWorld<'target, Admission, Install
             retry,
             dataspace_catalog,
             external_event_buf,
+            shells,
+            shell_installation,
             admission: retained_admission,
             installation: retained_installation,
+            operation_index_scope,
         } = self;
         installation = retained_installation;
         admission = retained_admission;
@@ -590,6 +613,9 @@ impl<'target, Admission, Installation> PreparedWorld<'target, Admission, Install
         let retirement = WorldRetirement {
             _fields: fields.into_inner(),
             _retry: retry,
+            _shells: shells,
+            _shell_installation: shell_installation,
+            _operation_index_scope: operation_index_scope,
         };
         (
             dataspace_catalog,

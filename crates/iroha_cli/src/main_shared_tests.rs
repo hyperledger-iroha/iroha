@@ -1006,7 +1006,12 @@ fn taira_public_reset_exposes_strict_preflight_and_apply() {
         Command::Taira(crate::taira::Command::PublicReset(_))
     ));
 
-    for retired in ["--journal-dir", "--canary-fee-payer"] {
+    for retired in [
+        "--journal-dir",
+        "--canary-fee-payer",
+        "--maintenance-admin-config",
+        "--epoch-seed-sources",
+    ] {
         let error = Args::try_parse_from([
             "iroha",
             "taira",

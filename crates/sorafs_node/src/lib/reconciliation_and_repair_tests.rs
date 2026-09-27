@@ -291,7 +291,7 @@ fn node_handle_gc_skips_manifest_with_active_repair_task() {
     assert!(handle.manifest_metadata(&manifest_id).is_ok());
 }
 #[test]
-fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
+fn node_handle_gc_reclaims_all_expired_private_copies() {
     let (cfg, _dir) = storage_config_with_temp_dir();
     let gc_actual = iroha_config::parameters::actual::SorafsGc {
         enabled: true,
@@ -301,6 +301,9 @@ fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
     };
     let handle =
         NodeHandle::new_with_policies(cfg, RepairConfig::default(), GcConfig::from(&gc_actual));
+    handle
+        .try_set_governance_publisher(Arc::new(RecordingPublisher::default()))
+        .unwrap();
     let payload = b"shared-chunk-payload";
     let plan = CarBuildPlan::single_file(payload).expect("plan");
     let retention_epoch = 1_700_000_000;
@@ -325,24 +328,20 @@ fn node_handle_gc_blocks_shared_chunks_and_records_metrics() {
     handle
         .ingest_manifest(&manifest_b, &plan, &mut reader)
         .expect("ingest manifest b");
-    let metrics = global_or_default();
-    let before = metrics
-        .torii_sorafs_gc_blocked_total
-        .with_label_values(&["shared_chunks"])
-        .get();
     let report = run_test_gc(&handle, now_unix, &empty_finalized_repair_projection());
-    assert!(report.evictions.is_empty());
+    assert_eq!(report.errors, 0);
+    assert_eq!(report.evictions.len(), 2);
+    assert_eq!(report.freed_bytes, payload.len() as u64 * 2);
+    assert!(report.skipped.is_empty());
+    assert_eq!(handle.storage.as_ref().unwrap().manifest_count(), 0);
     assert!(
-        report
-            .skipped
-            .iter()
-            .any(|skip| skip.reason == "shared_chunks")
+        handle
+            .storage
+            .as_ref()
+            .unwrap()
+            .chunk_refcount_snapshot()
+            .is_empty()
     );
-    let after = metrics
-        .torii_sorafs_gc_blocked_total
-        .with_label_values(&["shared_chunks"])
-        .get();
-    assert!(after >= before.saturating_add(1));
 }
 #[test]
 fn node_handle_reflects_config() {
@@ -380,6 +379,7 @@ fn node_handle_threads_repair_and_gc_config() {
         heartbeat_interval_secs: 45,
         max_attempts: 6,
         worker_concurrency: 9,
+        source: None,
     };
     let actual_gc = iroha_config::parameters::actual::SorafsGc {
         enabled: true,
@@ -409,35 +409,36 @@ fn native_repair_config_fails_startup_outside_consensus_and_resource_bounds() {
         heartbeat_interval_secs: 1,
         max_attempts: 1,
         worker_concurrency: 1,
+        source: None,
     };
     let mut invalid = Vec::new();
-    let mut lease_too_small = baseline;
+    let mut lease_too_small = baseline.clone();
     lease_too_small.claim_ttl_secs = 0;
     invalid.push(("claim_ttl_secs", lease_too_small));
-    let mut lease_overflow = baseline;
+    let mut lease_overflow = baseline.clone();
     lease_overflow.claim_ttl_secs = u64::MAX;
     invalid.push(("overflows", lease_overflow));
-    let mut renewal_zero = baseline;
+    let mut renewal_zero = baseline.clone();
     renewal_zero.heartbeat_interval_secs = 0;
     invalid.push(("heartbeat_interval_secs", renewal_zero));
-    let mut renewal_not_below = baseline;
+    let mut renewal_not_below = baseline.clone();
     renewal_not_below.heartbeat_interval_secs = renewal_not_below.claim_ttl_secs;
     invalid.push(("strictly below", renewal_not_below));
-    let mut attempts_zero = baseline;
+    let mut attempts_zero = baseline.clone();
     attempts_zero.max_attempts = 0;
     invalid.push(("max_attempts", attempts_zero));
-    let mut attempts_large = baseline;
+    let mut attempts_large = baseline.clone();
     attempts_large.max_attempts =
         iroha_config::parameters::defaults::sorafs::repair::MAX_ATTEMPTS_LIMIT + 1;
     invalid.push(("max_attempts", attempts_large));
-    let mut concurrency_zero = baseline;
+    let mut concurrency_zero = baseline.clone();
     concurrency_zero.worker_concurrency = 0;
     invalid.push(("worker_concurrency", concurrency_zero));
-    let mut concurrency_large = baseline;
+    let mut concurrency_large = baseline.clone();
     concurrency_large.worker_concurrency =
         iroha_config::parameters::defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT + 1;
     invalid.push(("worker_concurrency", concurrency_large));
-    let mut disabled_but_consumed = baseline;
+    let mut disabled_but_consumed = baseline.clone();
     disabled_but_consumed.enabled = false;
     disabled_but_consumed.max_attempts = 0;
     invalid.push(("max_attempts", disabled_but_consumed));
@@ -896,10 +897,14 @@ fn node_handle_storage_sample_por() {
         .expect("ingest");
     let storage = handle.storage().expect("storage backend");
     let stored = storage.manifest(&manifest_id).expect("stored manifest");
-    let expected = stored.por_tree().leaf_count().min(3);
+    let expected = stored
+        .por_tree()
+        .expect("available payload tree")
+        .leaf_count()
+        .min(3);
     let samples = handle.sample_por(&manifest_id, 3, 99).expect("sample por");
     assert_eq!(samples.len(), expected);
-    let root = *stored.por_tree().root();
+    let root = *stored.por_tree().expect("available payload tree").root();
     for (_idx, proof) in samples {
         assert!(proof.verify(&root));
     }
@@ -1208,6 +1213,30 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
     assert_ne!(target.path, source.path);
     let corrupt = vec![0xA5; target.length as usize];
     std::fs::write(&target.path, &corrupt).expect("corrupt target chunk");
+    drop(handle);
+    let handle =
+        NodeHandle::try_new_with_policies(cfg.clone(), repair_config.clone(), GcConfig::default())
+            .expect("damaged payload must not prevent provider restart");
+    assert!(
+        !handle
+            .manifest_metadata_by_digest(&target_digest)
+            .unwrap()
+            .payload_available()
+    );
+    assert!(
+        handle
+            .manifest_metadata_by_digest(&source_digest)
+            .unwrap()
+            .payload_available()
+    );
+    assert!(matches!(
+        handle
+            .storage
+            .as_ref()
+            .unwrap()
+            .read_chunk(&hex::encode(target_digest), &target.digest),
+        Err(StorageError::PayloadUnavailable { .. })
+    ));
     let authority_key =
         KeyPair::try_from_seed(vec![0xC5; 32], Algorithm::Ed25519).expect("authority key");
     let authority = AccountId::new(authority_key.public_key().clone());
@@ -1282,7 +1311,13 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
         },
     };
     assert!(matches!(
-        handle.execute_finalized_native_repair(&finalized_task, &authority, &stale_context, 2_000,),
+        handle.execute_finalized_native_repair(
+            &finalized_task,
+            &authority,
+            &stale_context,
+            2_000,
+            &|| Ok(())
+        ),
         Err(NativeRepairExecutionErrorV1::StaleFinalizedCursor)
     ));
     assert_eq!(
@@ -1296,7 +1331,13 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
             .is_empty()
     );
     assert!(matches!(
-        handle.execute_finalized_native_repair(&finalized_task, &other, &context, 2_000,),
+        handle.execute_finalized_native_repair(
+            &finalized_task,
+            &other,
+            &context,
+            2_000,
+            &|| Ok(())
+        ),
         Err(NativeRepairExecutionErrorV1::LeaseOwnerMismatch)
     ));
     assert_eq!(
@@ -1306,7 +1347,13 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
     let mut malformed_task = finalized_task.clone();
     malformed_task.task.action_receipts[0].resulting_revision = 3;
     assert!(matches!(
-        handle.execute_finalized_native_repair(&malformed_task, &authority, &context, 2_000,),
+        handle.execute_finalized_native_repair(
+            &malformed_task,
+            &authority,
+            &context,
+            2_000,
+            &|| Ok(())
+        ),
         Err(NativeRepairExecutionErrorV1::InvalidFinalizedTask)
     ));
     assert_eq!(
@@ -1319,7 +1366,13 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
         calls: Arc::clone(&orchestrator_calls),
     }));
     assert!(matches!(
-        handle.execute_finalized_native_repair(&finalized_task, &authority, &context, 2_000,),
+        handle.execute_finalized_native_repair(
+            &finalized_task,
+            &authority,
+            &context,
+            2_000,
+            &|| Ok(())
+        ),
         Err(NativeRepairExecutionErrorV1::Orchestrator(_))
     ));
     assert_eq!(orchestrator_calls.load(Ordering::Relaxed), 1);
@@ -1336,7 +1389,7 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
     handle.clear_repair_orchestrator();
     std::fs::write(&source.path, payload).expect("restore a valid local source replica");
     let first = handle
-        .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_000)
+        .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_000, &|| Ok(()))
         .expect("execute exact finalized native lease");
     assert!(matches!(
         first.enqueue_result,
@@ -1348,12 +1401,21 @@ fn finalized_native_repair_rejects_stale_leases_and_deduplicates_after_restart()
     ));
     assert_eq!(first.invalid_chunks_before, 1);
     assert_eq!(first.invalid_chunks_after, 0);
+    let repaired = handle.manifest_metadata_by_digest(&target_digest).unwrap();
+    assert!(repaired.payload_available());
+    let proof = handle
+        .storage
+        .as_ref()
+        .unwrap()
+        .sample_por(&hex::encode(target_digest), 1, 17)
+        .unwrap();
+    assert!(proof[0].1.verify(repaired.por_tree_ref().unwrap().root()));
     assert_eq!(
         blake3::hash(&std::fs::read(&target.path).expect("read restored target")).as_bytes(),
         &target.digest
     );
     let replay = handle
-        .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_001)
+        .execute_finalized_native_repair(&finalized_task, &authority, &context, 2_001, &|| Ok(()))
         .expect("deduplicate exact terminal operation");
     assert_eq!(replay.operation_id, first.operation_id);
     assert!(matches!(

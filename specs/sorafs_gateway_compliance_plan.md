@@ -29,10 +29,12 @@ runtime dependency is absent, unavailable, substituted, stale, test-marked, or
 only partially configured. Each DNS resolution, HTTPS fetch, and ACME order is
 fenced by identity checks before and after the operation; returned addresses,
 response bytes, certificates, and keys are discarded on drift. This
-controller/runtime integration ships locally. The standard launcher does not
-construct a process-local feed transport or ACME fallback: configured provider
-bindings require the exact deployment-owned injected instances before Torii
-startup.
+controller/runtime integration ships locally. The standard launcher constructs
+the bounded production HTTPS feed transport when configuration selects
+`sorafs.gateway.compliance.feed-https.v1` with its exact revision and canonical
+hostname/SPKI policy digest. Startup probes that identity twice and rejects an
+injected transport alongside this native selection. Other feed handles and ACME
+require their exact deployment-owned injected instances before Torii startup.
 
 Torii now exposes six canonical, account-signed, governed-operator routes:
 authenticated feed fetch and durable status reads plus canonical-Norito-JSON
@@ -46,7 +48,7 @@ authority can compete with the signed durable catalog. V1 has no local
 compliance packs, file-backed compliance authority, catalog-mutation CLI, or
 unsigned compatibility route.
 
-Real authenticated feed and ACME adapters for the standard daemon, finalized
+The authenticated feed transport ships in the standard daemon. ACME adapters, finalized
 accepted-appeal and legal/safety-hold catalog producers, independently audited
 threshold-signing integration, and deployment across two independently
 administered regional gateways remain open. The local SFM-4c transparency
@@ -67,7 +69,8 @@ evidence and cannot mark gateway compliance ready.
   acknowledgement quorum; atomic promotion; last-known-good rollback without
   rewriting the predecessor-chain head; bounded history; and
   legal/safety-hold > accepted-appeal > baseline precedence.
-- `GatewayComplianceFeedTransport` is runtime-injected and must connect only to
+- `GatewayComplianceFeedTransport` is explicitly selected as the native bounded
+  HTTPS implementation or an injected provider, and must connect only to
   controller-pinned public DNS answers. The core revalidates DNS after each
   response, verifies the connected address and configured SPKI digest, validates
   every redirect against the exact HTTPS host allowlist, and bounds encoded,
@@ -84,14 +87,22 @@ evidence and cannot mark gateway compliance ready.
   canonical signer, revocation, feed, host, SPKI-pin, resource, freshness, and
   history bounds before producing the runtime configuration.
 - `IrohaRuntimeDeps` and `ToriiRuntimeDeps` accept runtime-owned ACME and
-  authenticated feed-transport implementations. The standard daemon forwards
-  those runtime-only dependencies without putting credentials in
+  authenticated feed-transport implementations. The standard daemon assembles
+  the explicitly selected native feed transport or forwards an external
+  dependency without putting credentials in
   `iroha_config`. Only stable handles, non-zero revisions, and lowercase
   non-zero public-policy digests are configured. Torii maps every resolved
   field into the ACME/controller runtime, constructs the durable controller,
   retains the controller and transport in `AppState`, rejects dependencies
   injected while their feature is disabled, and refuses startup when an
   enabled dependency or exact provider binding is missing or mismatched.
+  Native feed selection is excluded from the external broker catalog and retains
+  public DNS, pinned addresses, exact SPKI, HTTPS, no-proxy and operation bounds.
+  It supplies authenticated transport only: catalog governance, signer revocation,
+  acknowledgement quorum and durable promotion remain controller responsibilities.
+  Optional feeds may be absent from a genuinely signed catalog; required feeds
+  continue to require authenticated anchors. No unsigned empty-catalog startup
+  path exists.
 - The control surface provides authenticated
   `GET /v1/sorafs/gateway/compliance/feeds/{feed_id}` and
   `GET /v1/sorafs/gateway/compliance/status` reads plus

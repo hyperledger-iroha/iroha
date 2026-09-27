@@ -1,80 +1,70 @@
-# Native beacon bootstrap contract
+# Native beacon DKG operator contract
 
-`iroha3d_taira beacon-bootstrap` is an offline, centralized four-seat custody
-owner. It uses the production Core DKG and existing runtime credential codec;
-it never submits transactions, changes a ledger, or resumes secret state.
-The intended Taira owner operates four validators in the Linux guest on the
-MacStadium host in Dublin.
+`iroha3d_taira beacon-bootstrap` prepares public DKG evidence and private
+per-seat credentials. It never submits a transaction or activates a committee.
+The first release has one signed, encrypted all-edge DKG layout; the former
+central dealer and decimal-height commands are removed.
 
-`provision` requires `--request`, `--genesis-manifest`, `--genesis-signed`,
-`--genesis-public-key`, `--observed-height`, `--height-fd`, and a new `--output`
-directory. The public request schema is
-`iroha.global-beacon.bootstrap.request.v1`: `dkg_session` is the existing native
-`GlobalThresholdBeaconDkgSessionV1`, `target_roster` and `authorization_roster`
-are ordered native peer arrays, and `provider_handles` plus `provider_revision`
-bind four distinct production provider slots. Both rosters must equal the
-verified native height-context BLS/PoP roster, ordered by validator identity;
-caller insertion order does not select seats. The signed mode must be NPoS.
-This command does not attest a changed retained network roster. The network identity is the independently verified signed
-genesis hash, with the fixed Taira chain ID and discriminant 369.
+For a fresh four-voter NPoS genesis, start one `provision-genesis-seat` process
+per exact signed-genesis voter. Each process takes the canonical request,
+signed prepared genesis manifest and block wire, genesis public key, canonical
+height-one `BridgeFinalityProof`, independently pinned `--network-id` and
+`--chain-discriminant`, and that voter's native BLS identity on `--key-fd 198`
+or `--config-fd 198`. The daemon verifies the exact signed roster, possession
+proofs, network, chain, context and fixed h1–h4 DKG schedule. Both session and
+attempt IDs derive deterministically from the signed network ID. Generation is
+zero. A new reset nonce cannot authorize another DKG for the same genesis.
 
-A controller must authenticate every supplied committed height. The initial
-height must be inside the native sharing phase. The dedicated inherited pipe
-carries strictly increasing decimal heights, one per line; descriptors 198–200
-are reserved for credentials. Fresh dealer material remains in memory, every
-recipient contribution is verified during sharing, and dealer polynomials are
-erased before waiting. Finalization uses the actual observed height after the
-native response phase. EOF, malformed/decreasing heights, cryptographic errors,
-or the single `--timeout-ms` deadline abort the ceremony; the default is 180000
-and the maximum is 3600000. An aborted, uninstalled ceremony requires new public
-preparation and fresh randomness. It has no process-resumable secret snapshot.
+Each process exclusively claims `attempt-<attempt-id>-seat-N` under an existing
+owner-private `--attempt-root` before drawing its one dealer polynomial and
+recipient secret. A crash consumes that attempt; missing local state is not
+recreated under the same root. The process writes a signed public publication,
+then one encrypted private share for every recipient, then one signed
+acceptance for every received edge. No share scalar or dealer secret is
+published. The supervisor relays only complete canonical public snapshots on
+`--public-fd` and a separate contiguous authenticated h2–h4 finality chain on
+`--finality-fd`. Both are FIFOs with four-byte big-endian frame lengths. Each
+recipient verifies its encrypted edge against that dealer's exact signed
+commitment before accepting it. Missing, duplicate, malformed or replayed
+edges abort; a frozen roster is not shrunk or rerolled.
 
-The new output directory and seat subdirectories are mode 0700. Each `seat-N`
-contains the existing mode-0600
-`iroha-global-beacon-partial-signer-v1.norito` credential. Directory descriptors
-bind writes, existing paths are never overwritten, and path replacements fail.
-`sharing-snapshot.json` is public; `public-bundle.json` is published after all
-four credentials. Success requires both that final bundle and exit zero.
-The bundle schema `iroha.global-beacon.bootstrap.bundle.v1` contains the request,
-complete public genesis proof, finalized public DKG record, unsigned installation
-certificate, and each seat's public handle/revision/inventory digest.
+After every seat accepts every edge, its owner-private attempt directory
+contains `iroha-global-beacon-partial-signer-v1.norito` and
+`pending-share.bin`. Public `provider.json` and `public-session.norito` bind
+that one seat to the exact finalized transcript. `assemble-genesis-dkg` takes
+all four provider manifests, the public session and the h2–h4 proof files,
+revalidates the complete chain and writes a public bundle with an unsigned
+`FinalizeGlobalBeaconKey` draft. `sign-genesis-install` independently checks
+that bundle and signs with one zero-based genesis voting index. Three distinct
+current voters must sign. `assemble-genesis-install` verifies the exact quorum
+and writes only the lifecycle instruction for ordinary fee-paying admission.
+The certificate's effective height must follow finalization and precede the
+first signed NPoS mandatory pulse.
 
-`sign-install --bundle ... --signer-index N --key-fd 198 --output ...` independently
-checks that public bundle and uses the existing owner-private, single-link,
-71-byte canonical BLS key record. The inherited temporary copy is consumed,
-zeroed, and truncated by the shared native loader; the persistent supervisor
-original is not passed. Authorization indices are zero-based. The output is one
-public native lifecycle signature, not an account transaction.
+For a rotation, `provision-rotation-seat` instead pins signed frozen-selection
+evidence, the current context and height anchor, target epoch, transition ID,
+exact target seat and authority generation. The same one-owner DKG process
+emits pending custody. `assemble-rotation-dkg`, `sign-rotation` and
+`assemble-rotation` verify the complete authenticated phase chain and require
+the current exact quorum for the draft. `beacon-prepare-custody` retains an
+incumbent's current credential while preparing the pending one from the
+independently verified provisioning evidence. Only certified boundary finality
+can activate the prepared committee; a missing target seat causes certified
+retention or a safety halt, never an implicit roster change.
 
-Alternatively, `--config-fd 198` consumes an owner-private copy of the native
-validator TOML (at most 1 MiB). The two descriptor options are mutually exclusive.
-The native configuration reader projects only explicit inline chain, discriminant,
-BLS public/private key and `genesis.expected_hash`; these must match the bundle
-and selected zero-based authorization seat. It rejects `extends` and external
-consensus-key/genesis-identity selectors. Unrelated onboarding, faucet, streaming
-and registry paths are neither opened nor treated as signing authority. The
-persistent validator config stays with the supervisor; only the disposable
-inherited copy is scrubbed and truncated.
+The public-reset Taira controller currently holds four validator configuration
+copies on one administrative host while spawning separate per-seat DKG
+processes. That tests signed all-edge protocol behavior but is not
+operator-isolated custody. Disposable-network 4→7→4 activation and live
+phase-time qualification remain open; a staged credential or completed public
+transcript alone is not evidence of activation.
 
-`assemble-install --bundle ... --signature ... --signature ... --signature ...
---output ...` requires exactly three valid, ordered, distinct authorization
-signatures. It emits a native instruction array containing
-`ApplyThresholdKeyLifecycleCertificateV1`. The certificate's effective height
-is the final observed height plus one, strictly before the first signed NPoS
-mandatory pulse, with no active predecessor; the normal
-on-chain lifecycle verifier remains authoritative. The maintained once-only
-transaction workflow owns submission and its durable journal. Actual required
-bootstrap operations must advance the DKG phases; empty blocks, fabricated
-observations, and no-op carrier transactions are not part of this contract.
-
-Before readiness can become true, each validator's exact public provider binding
-and matching retained credential must be installed through the existing
-supervisor credential lifecycle (FD200 launch copy). Initial setup can run with
-beacon readiness false so the real installation transaction can commit. This
-command does not weaken mandatory beacon pulses or provide a retained-network
-missing-session bypass.
-
-The adjacent native tests cover fresh four-seat provisioning, native custody
-import and signatures, lifecycle quorum, malformed public inputs, phase/deadline
-failure, descriptor/path custody, and consumed authorization keys. Runtime and
-end-to-end qualification remain separate from source review.
+Ordinary `iroha3d` nodes with mint-finality duties set
+`[sumeragi] mint_finality_seed_fd = 199` and receive one owner-private exact
+32-byte seed file on inherited FD 199 for each startup. The daemon consumes
+that launch copy before starting consensus. A genesis voter must match its
+signed generation-zero Pasta keys and startup rejects a seated validator with
+no exact held seed. A future candidate retains its seed without
+genesis voting power and can sign only when an authenticated later authority
+seats that same peer with matching keys. The supervisor must retain its private
+source across restart and stage a fresh consumable launch copy each time.

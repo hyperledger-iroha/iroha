@@ -466,12 +466,15 @@ fn canonical_observed_jobs_reject_consumed_and_mismatched_descriptors() {
         .prefix
         .last_field_stream_at(observed.index, &[], observed.body.len())
         .unwrap();
-    assert!(Digest384LastFieldJob::new(stream, &observed.body[..observed.body.len() - 1]).is_err());
+    assert!(
+        Digest384LastFieldJob::new(stream.clone(), &observed.body[..observed.body.len() - 1])
+            .is_err()
+    );
     let mut oversized = observed.body.clone();
     oversized.push(0);
-    assert!(Digest384LastFieldJob::new(stream, &oversized).is_err());
+    assert!(Digest384LastFieldJob::new(stream.clone(), &oversized).is_err());
     for count in [1, 6, 7, 8, observed.body.len()] {
-        let mut consumed = stream;
+        let mut consumed = stream.clone();
         consumed.update(&observed.body[..count]).unwrap();
         assert!(Digest384LastFieldJob::new(consumed, &observed.body).is_err());
     }

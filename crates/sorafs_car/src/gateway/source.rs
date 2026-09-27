@@ -1,12 +1,12 @@
 //! Bounded complete native plan and payload acquisition over the existing gateway protocol.
 use super::*;
-use crate::{CarBuildPlan, CarChunk, CarStreamingWriter, FilePlan};
-use std::io;
+use crate::{CarBuildPlan, CarChunk, FilePlan};
+use std::{io::Write, sync::Mutex};
 
 /// Immutable resource limits for one authenticated provider source fetch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GatewaySourceLimitsV1 {
-    /// Maximum retained unchunked payload; at most 64 MiB.
+    /// Maximum complete payload admitted to the private spool; at most 8 GiB.
     pub max_payload_bytes: u64,
     /// Maximum complete file inventory; at most 4096 entries.
     pub max_files: usize,
@@ -23,7 +23,7 @@ impl GatewaySourceLimitsV1 {
     /// Reject zero, excessive or internally inconsistent configured bounds.
     pub fn validate(self) -> Result<(), GatewaySourceErrorV1> {
         if self.max_payload_bytes == 0
-            || self.max_payload_bytes > 64 * 1024 * 1024
+            || self.max_payload_bytes > 8 * 1024 * 1024 * 1024
             || self.max_files == 0
             || self.max_files > 4096
             || self.max_chunks == 0
@@ -57,13 +57,14 @@ pub enum GatewaySourceErrorV1 {
 }
 /// Complete native source bytes, verified before any caller can read them.
 ///
-/// Retains one bounded payload buffer, never a second complete CAR buffer. Acquisition consumes
-/// every HTTP response through exact EOF; the native writer then reproduces the complete CAR
-/// commitment and PoR. The caller remains responsible for current governed source authorization.
+/// Owns a private temporary file and bounded plan metadata. Acquisition consumes every response
+/// through exact EOF; bounded native verification reproduces the complete CAR commitment and PoR.
+/// Dropping the value or its reader deletes the spool. The caller remains responsible for current
+/// governed source authorization and for admission of the configured aggregate disk quota.
 pub struct GatewayVerifiedPayloadV1 {
     manifest: ManifestV1,
     plan: CarBuildPlan,
-    payload: Vec<u8>,
+    payload: tempfile::NamedTempFile,
 }
 impl fmt::Debug for GatewayVerifiedPayloadV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -74,9 +75,9 @@ impl fmt::Debug for GatewayVerifiedPayloadV1 {
     }
 }
 impl GatewayVerifiedPayloadV1 {
-    /// Transfer the verified manifest, exact complete plan and retained public payload.
+    /// Transfer the verified manifest, complete plan, and temporary payload reader at byte zero.
     #[must_use]
-    pub fn into_parts(self) -> (ManifestV1, CarBuildPlan, Vec<u8>) {
+    pub fn into_parts(self) -> (ManifestV1, CarBuildPlan, tempfile::NamedTempFile) {
         (self.manifest, self.plan, self.payload)
     }
 }
@@ -288,8 +289,9 @@ impl GatewayFetchContext {
     }
     /// Acquire one exact native payload with complete HTTP EOF and all manifest commitments checked.
     ///
-    /// This intentionally retains a bounded payload before exposing it. No completion may rely
-    /// merely on metadata or successful HTTP status. The outer runtime supplies an absolute deadline.
+    /// Payload chunks use the consuming scheduler and a private disk spool; only configured
+    /// metadata and reorder windows remain resident. No completion relies merely on metadata or
+    /// HTTP status. The outer runtime supplies the complete operation deadline.
     pub async fn fetch_verified_payload_v1(
         &self,
         expected_manifest: &ManifestV1,
@@ -315,60 +317,62 @@ impl GatewayFetchContext {
         {
             return Err(rejected);
         }
-        let capacity =
-            usize::try_from(plan.content_length).map_err(|_| GatewaySourceErrorV1::Bounds)?;
-        let mut payload = Vec::new();
-        payload
-            .try_reserve_exact(capacity)
-            .map_err(|_| GatewaySourceErrorV1::Bounds)?;
-        let provider = Arc::new(self.providers.first().ok_or(rejected)?.clone());
-        for spec in plan.try_chunk_fetch_specs().map_err(|_| rejected)? {
-            let response = self
-                .fetcher
-                .fetch(FetchRequest {
-                    provider: Arc::clone(&provider),
-                    spec: spec.clone(),
-                    attempt: 1,
-                })
-                .await
-                .map_err(|_| GatewaySourceErrorV1::Unavailable)?;
-            if response.bytes.len() != spec.length as usize
-                || blake3::hash(&response.bytes).as_bytes() != &spec.digest
-            {
-                return Err(rejected);
-            }
-            if payload
-                .len()
-                .checked_add(response.bytes.len())
-                .filter(|len| *len <= capacity)
-                .is_none()
-            {
-                return Err(rejected);
-            }
-            payload.extend_from_slice(&response.bytes);
-        }
-        if payload.len() != capacity
-            || blake3::hash(&payload) != plan.payload_digest
-            || crate::compute_por_root(&payload, &plan).map_err(|_| rejected)?
-                != expected_manifest.por_root
-        {
-            return Err(rejected);
-        }
-        let stats = CarStreamingWriter::new(&plan)
-            .write_from_reader(&mut payload.as_slice(), &mut io::sink())
+        plan.verify_manifest_metadata(expected_manifest)
             .map_err(|_| rejected)?;
-        if stats.root_cids.as_slice() != [expected_manifest.root_cid.clone()]
-            || stats.dag_codec != expected_manifest.dag_codec.0
-            || stats.car_size != expected_manifest.car_size
-            || stats.car_archive_digest.as_bytes() != &expected_manifest.car_digest
-        {
-            return Err(rejected);
-        }
+        let spool =
+            tempfile::NamedTempFile::new().map_err(|_| GatewaySourceErrorV1::Unavailable)?;
+        let shared = Arc::new(Mutex::new(spool));
+        let writer = Arc::clone(&shared);
+        let fetcher = self.fetcher();
+        crate::multi_fetch::fetch_plan_parallel_with_observer(
+            &plan,
+            self.providers(),
+            fetcher.as_closure(),
+            FetchOptions {
+                max_payload_bytes: limits.max_payload_bytes,
+                max_metadata_entries: crate::CAR_PLAN_MAX_CHUNKS,
+                ..FetchOptions::default()
+            },
+            move |delivery: crate::multi_fetch::ChunkDelivery<'_>| {
+                writer
+                    .lock()
+                    .map_err(|_| {
+                        crate::multi_fetch::ObserverError::new("source spool lock poisoned")
+                    })?
+                    .write_all(delivery.bytes)
+                    .map_err(|error| crate::multi_fetch::ObserverError::new(error.to_string()))
+            },
+        )
+        .await
+        .map_err(source_fetch_error)?;
+        let mut payload = Arc::try_unwrap(shared)
+            .map_err(|_| GatewaySourceErrorV1::Unavailable)?
+            .into_inner()
+            .map_err(|_| GatewaySourceErrorV1::Unavailable)?;
+        payload
+            .flush()
+            .map_err(|_| GatewaySourceErrorV1::Unavailable)?;
+        crate::payload_verifier::verify_payload_reader(expected_manifest, &plan, &mut payload)
+            .map_err(|_| rejected)?;
         Ok(GatewayVerifiedPayloadV1 {
             manifest: fetched.manifest,
             plan,
             payload,
         })
+    }
+}
+fn source_fetch_error(error: MultiSourceError) -> GatewaySourceErrorV1 {
+    match error {
+        MultiSourceError::ResourceLimit(_) => GatewaySourceErrorV1::Bounds,
+        MultiSourceError::InvalidPlan(_) | MultiSourceError::InternalInvariant(_) => {
+            GatewaySourceErrorV1::ContentRejected
+        }
+        MultiSourceError::ExhaustedRetries { last_error, .. }
+            if matches!(last_error.failure, AttemptFailure::InvalidChunk(_)) =>
+        {
+            GatewaySourceErrorV1::ContentRejected
+        }
+        _ => GatewaySourceErrorV1::Unavailable,
     }
 }
 fn exact_fields(value: &Value, fields: &[&str]) -> Result<(), GatewaySourceErrorV1> {

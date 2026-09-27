@@ -934,7 +934,11 @@ fn install_exact_merge_beacon_fixture(
     let height = parent.header().height().get() + 1;
     let (key, pulses) = crate::beacon::signed_pulses_fixture_for_roster_and_anchors(
         *state.network_id_ref(),
-        &roster,
+        &{
+            let mut signing_keys = validators.to_vec();
+            signing_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            signing_keys
+        },
         &[
             GlobalThresholdBeaconChainAnchorV1 {
                 height: parent.header().height().get() - 1,

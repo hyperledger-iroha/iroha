@@ -187,6 +187,8 @@ pub mod torii_proxy;
 pub mod tx;
 /// Validation-fee admission enforcement.
 pub mod validation_fee;
+/// Independently anchored evidence for pending committee signer custody.
+pub mod validator_committee_evidence;
 /// Zero-knowledge verification helpers (backend dispatch + envelope validation).
 pub mod zk;
 /// Native STARK/FRI verifier under `zk-stark` (`stark/fri/*`).

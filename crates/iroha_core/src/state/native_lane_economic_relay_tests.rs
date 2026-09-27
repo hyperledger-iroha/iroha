@@ -258,7 +258,11 @@ fn native_recorded_economic_relay_success(atomic_group: bool) {
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            &[],
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .unwrap()
     else {
         panic!("actual first-carrier admission and signed Decisions");
@@ -408,7 +412,11 @@ fn native_recorded_economic_relay_missing_manifest(atomic_group: bool) {
         before
     );
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
-        .prepare_proposed_native_lane_batch_source(&carrier, &[])
+        .prepare_proposed_native_lane_batch_source(
+            carrier.clone(),
+            &[],
+            crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier),
+        )
         .unwrap()
     else {
         panic!("the complete source remains authentic without a relay policy root");

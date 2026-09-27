@@ -8,9 +8,12 @@ use concread::bptree::{
     AllocationDemand, ClonePlanning, MapAdmissionError, NodeCloning, NodeFunding, PlanningError,
 };
 
-/// Local admission for the two original committed-history owners.
+/// Local admission for original State storage and committed-history owners.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateAdmissionError {
+    /// Original finite-credit refusal from an admitted World index.
+    #[error(transparent)]
+    Storage(#[from] StateStorageAdmissionError),
     /// Original block-hash history admission.
     #[error(transparent)]
     History(#[from] BlockHashAdmissionError),
@@ -22,6 +25,7 @@ impl StateAdmissionError {
     /// Original resource release, when releasing retained custody can help.
     pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
         match self {
+            Self::Storage(e) => e.release_wait(),
             Self::History(e) => e.release_wait(),
             Self::Membership(e) => e.release_wait(),
         }
@@ -30,6 +34,7 @@ impl StateAdmissionError {
 impl From<StateAdmissionError> for MergeLedgerCommitError {
     fn from(error: StateAdmissionError) -> Self {
         match error {
+            StateAdmissionError::Storage(e) => Self::StateStorageAdmission(e),
             StateAdmissionError::History(e) => Self::BlockHashAdmission(e),
             StateAdmissionError::Membership(e) => Self::MembershipAdmission(e),
         }
@@ -39,6 +44,9 @@ impl From<StateAdmissionError> for MergeLedgerCommitError {
 /// Separate local acquisition refusal from the caller's deterministic start stage.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum StateBlockStartError<E: std::fmt::Debug> {
+    /// No World owner or start effect was acquired before this local refusal.
+    #[error(transparent)]
+    Storage(#[from] StateStorageAdmissionError),
     /// No World owner or start effect was acquired before this local refusal.
     #[error(transparent)]
     History(#[from] BlockHashAdmissionError),
@@ -52,6 +60,7 @@ pub enum StateBlockStartError<E: std::fmt::Debug> {
 impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitError {
     fn from(error: StateBlockStartError<MergeLedgerCommitError>) -> Self {
         match error {
+            StateBlockStartError::Storage(error) => Self::StateStorageAdmission(error),
             StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
             StateBlockStartError::Membership(error) => Self::MembershipAdmission(error),
             StateBlockStartError::Stage(error) => error,
@@ -59,7 +68,24 @@ impl From<StateBlockStartError<MergeLedgerCommitError>> for MergeLedgerCommitErr
     }
 }
 
-/// Local history acquisition failure; never a verdict on a block or transaction.
+/// Local World storage acquisition or mutation failure; never a verdict on consensus data.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum StateStorageAdmissionError {
+    /// Original finite-credit refusal from an admitted World index.
+    #[error(transparent)]
+    World(#[from] mv::storage::AdmittedStorageError),
+}
+
+impl StateStorageAdmissionError {
+    /// The original release observation, only when releasing another owner can help.
+    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
+        match self {
+            Self::World(error) => error.release_wait(),
+        }
+    }
+}
+
+/// Local canonical hash-history acquisition failure; never a verdict on consensus data.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum BlockHashAdmissionError {
     /// Another physical owner must release the original history lock.
@@ -97,15 +123,17 @@ impl BlockHashAdmissionError {
 impl<E: std::fmt::Debug> From<StateAdmissionError> for StateBlockStartError<E> {
     fn from(error: StateAdmissionError) -> Self {
         match error {
+            StateAdmissionError::Storage(e) => Self::Storage(e),
             StateAdmissionError::History(e) => Self::History(e),
             StateAdmissionError::Membership(e) => Self::Membership(e),
         }
     }
 }
 impl<E: std::fmt::Debug> StateBlockStartError<E> {
-    /// Preserve the original history release without retrying a deterministic stage failure.
+    /// Preserve the original storage release without retrying a deterministic stage failure.
     pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {
         match self {
+            Self::Storage(error) => error.release_wait(),
             Self::History(error) => error.release_wait(),
             Self::Membership(error) => error.release_wait(),
             Self::Stage(_) => None,
@@ -185,6 +213,13 @@ impl BlockHashes {
         budget: mv::allocation::AllocationBudget,
     ) -> Result<Self, BlockHashAdmissionError> {
         budget.with_deferred_refund_notifications(|_| {
+            let control_layout = ChargedBlockHashMap::layout();
+            let mut control_reservation = budget
+                .try_reserve(control_layout)
+                .map_err(BlockHashAdmissionError::Capacity)?;
+            let control_charge = control_reservation
+                .try_split(control_layout)
+                .expect("exact prepaid history owner layout");
             let map = BlockHashMap::try_new_with_node_custody(|demand| {
                 budget
                     .try_reserve_bytes(demand.bytes())
@@ -192,7 +227,7 @@ impl BlockHashes {
             })
             .map_err(BlockHashAdmissionError::Capacity)?;
             let owner = Self {
-                inner: BlockHashStorage::Owned(map),
+                inner: BlockHashStorage::Owned(ChargedBlockHashMap::new(map, control_charge)),
                 budget: budget.clone(),
                 released: concread::release::ReleaseNotification::default(),
                 committed_height: AtomicUsize::new(0),

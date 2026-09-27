@@ -2754,7 +2754,7 @@ pub(crate) fn start_worker(
 mod tests {
     use super::*;
     use crate::test_utils::TestDataDirGuard;
-    use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_execution_envelope};
+    use iroha_core::zk::test_utils::{FixtureEnvelope, halo2_ivm_replay_binding_envelope};
     use iroha_data_model::proof::{ProofAttachment, ProofBox};
     const TEST_SCAN_BUDGET_MARGIN_BYTES: u64 = 1024;
 
@@ -3281,7 +3281,7 @@ mod tests {
             "stark/fri/poseidon2-goldilocks/extra",
             "stark/fri-v2",
             "halo2/unknown-native-v1",
-            "halo2/ipa:ivm-execution-v1",
+            "halo2/ipa:ivm-replay-binding-v1",
             "halo2/ipa:tiny-add-public",
             "halo2/pasta/tiny-add",
             "halo2/pasta/ivm-execution-v2",
@@ -3298,7 +3298,7 @@ mod tests {
         }
         for backend in [
             "halo2/ipa",
-            "halo2/pasta/ivm-execution-v1",
+            "halo2/pasta/ivm-replay-binding-v1",
             "stark/fri/poseidon-x7-goldilocks-6x64-v1",
         ] {
             assert!(
@@ -3315,7 +3315,7 @@ mod tests {
         static FIXTURE: OnceLock<FixtureEnvelope> = OnceLock::new();
         FIXTURE
             .get_or_init(|| {
-                halo2_ivm_execution_envelope(
+                halo2_ivm_replay_binding_envelope(
                     Hash::new(b"torii-prover-fixture/code"),
                     Hash::new(b"torii-prover-fixture/overlay"),
                     Hash::new(b"torii-prover-fixture/events"),
@@ -3329,7 +3329,10 @@ mod tests {
         let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
         let vk_commitment = hash_vk(&vk);
         let proof = fixture.proof_box("halo2/ipa");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID);
+        let vk_id = VerifyingKeyId::new(
+            "halo2/ipa",
+            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+        );
         let mut attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
         attachment.vk_commitment = Some(vk_commitment);
         attachment
@@ -3487,16 +3490,19 @@ mod tests {
     ) -> Arc<CoreState> {
         let fixture = fixture_envelope();
         let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
-        let vk_id = VerifyingKeyId::new("halo2/ipa", iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID);
+        let vk_id = VerifyingKeyId::new(
+            "halo2/ipa",
+            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
+        );
         let vk_commitment = hash_vk(&vk);
         let mut record = iroha_data_model::proof::VerifyingKeyRecord::new_with_owner(
             1,
-            iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             None,
             "test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
-            iroha_core::zk::ivm_execution_public_inputs_schema_hash(),
+            iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash(),
             vk_commitment,
         );
         record.vk_len = u32::try_from(vk.bytes.len()).expect("fixture vk length fits");
@@ -3510,7 +3516,7 @@ mod tests {
             .verifying_keys_mut_for_testing()
             .insert(vk_id.clone(), record);
         world.verifying_keys_by_circuit_mut_for_testing().insert(
-            (iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID.into(), 1),
+            (iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID.into(), 1),
             vk_id,
         );
         let mut state = iroha_core::state::State::new_for_testing(

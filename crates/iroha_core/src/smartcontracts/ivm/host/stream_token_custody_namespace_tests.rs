@@ -11,6 +11,13 @@ fn custody_namespace_paths() -> Vec<StatePath> {
         key_path(provider, true, ALICE_KEYPAIR.public_key()).expect("signer first-use key"),
         key_path(provider, false, BOB_KEYPAIR.public_key()).expect("attester first-use key"),
     ];
+    // Admission policy, counters, immutable revisions and revocation tombstones are native-only.
+    for subject in [None, Some(provider)] {
+        for suffix in ["head", "history/1", "history/1024", "provider_count", "history_bytes", "revocation_bytes"] {
+            paths.push(crate::query::provider_admission::path(subject, suffix));
+        }
+    }
+    paths.push("sorafs/provider_admission".parse().unwrap());
     // Exercise the same real syscall/overlay boundaries for deployment custody and operations.
     use crate::query::final_promotion_authority as promotion;
     use crate::query::signer_custody_history::{

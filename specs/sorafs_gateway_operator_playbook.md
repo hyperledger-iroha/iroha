@@ -35,8 +35,8 @@ summary: Operational guidance for chunk-range endpoints, stream tokens, and tele
    consumers. Provider and consumer must also share the exact genesis-derived
    `NetworkId`; an equal operator-selected chain label is insufficient.
 2. Configure distinct proof-outcome, repair, reserve, and orderbook entries under
-   `sorafs.storage.native_transaction_signers`, and inject all four matching
-   live providers. Storage startup requires them even when the corresponding
+   `sorafs.storage.native_transaction_signers`. For each role, select an explicit
+   owner-only `software_credential` or inject its matching external provider. Storage startup requires them even when the corresponding
    new-work generation flags are disabled.
 3. Inject separate opaque signer and independently signed observer clients plus
    the independently approved full custody anchor. Software and optional hardware

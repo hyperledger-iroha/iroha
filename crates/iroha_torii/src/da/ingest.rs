@@ -1733,7 +1733,7 @@ pub async fn handler_post_da_ingest(
                     &app.sorafs_alias_cache_policy,
                     app.sorafs_admission
                         .as_deref()
-                        .and_then(crate::sorafs::AdmissionRegistry::council_policy),
+                        .and_then(crate::sorafs::AdmissionRegistry::council_policy).as_deref(),
                     &telemetry,
                 )
                 .map_err(|(status, message)| {

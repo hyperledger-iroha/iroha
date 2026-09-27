@@ -620,13 +620,42 @@ The persisted storage boundary is fail-closed in v1:
 - each stored manifest carries a shared I/O lease: fetch, PoR, and manifest
   reads hold a read lease, while metadata mutation and eviction require the
   exclusive lease, preventing deletion or rewrite from racing an active read;
+- payload reads retain an immutable `Arc` descriptor and update only an atomic
+  process-local access sequence. They never serialize, write, or sync the global
+  index or manifest metadata. Access recency can reset after restart; it is
+  advisory and cannot authorize deletion. Admission and eviction publish index
+  mutations in the order established by the storage-state write lock;
+- chunk files belong to individual manifest directories. Expired manifests can
+  retire even if their digests occur in another manifest or repeat within the
+  same manifest. GC decrements every occurrence, deletes only the retiring
+  directory, and retains finalized repair/deal protections and durable audit
+  admission. Identical content does not create a permanent retention exemption;
 - pin, fetch, and PoR admission is fail-fast at the configured concurrency and
   byte-rate ceilings. Saturated Torii requests receive `429` with
   `Retry-After`; no request thread sleeps or waits on an unbounded scheduler
   queue;
 - startup rejects unsupported index versions, duplicate or noncanonical
   manifest IDs, traversal-bearing chunk/file names, inconsistent index,
-  manifest, file-layout, chunk, or PoR geometry, and corrupt chunk digests;
+  manifest, file-layout, chunk-plan commitment, or PoR geometry. Missing,
+  truncated, changed, or unreadable payload chunks quarantine only their own
+  manifest after its metadata has passed those checks. Metadata remains
+  available to finalized native repair; quarantined payload reads, PoR trees,
+  PoR samples, and PDP witnesses are unavailable. Other manifests remain usable;
+- finalized native repair restores exact digest-bound chunk bytes under the
+  lifecycle lease. Local discovery retains source locators, remote retrieval
+  calls a consuming per-chunk sink, and each returned chunk is checked and
+  installed before the next one is delivered. Discovery walks manifest keys
+  without cloning the complete store. Chunk metadata remains bounded by the
+  canonical CAR inventory ceiling; there is no aggregate 1 GiB payload buffer.
+  Repair then
+  rebuilds both PoR and PDP trees, checks their retained
+  commitments, and reconstructs the complete canonical CAR before publishing a
+  new available runtime descriptor. A stale unavailable descriptor stays
+  unavailable, and failed verification cannot publish repair completion.
+  Startup still scrubs payloads and rebuilds proof indexes before readiness;
+  startup time therefore scales with retained bytes. The PDP memory reservation
+  remains charged while a manifest is quarantined so its repaired index can be
+  installed without overcommitting the configured budget;
 - ingest rejects empty inventories, duplicate or non-portable logical paths,
   overflowing or out-of-bounds file/chunk ranges, and layouts whose file bytes
   do not align exactly with the canonical chunk plan;
@@ -689,3 +718,129 @@ giving operators the knobs they need to participate in the SoraFS data
 availability layer. Outstanding rollout evidence is operational hardening:
 hosted deployment captures, governance policy tuning, and SDK management
 ergonomics.
+
+## Publisher bootstrap and publication evidence
+
+`/v1/sorafs/publish/source` accepts canonical account-authenticated
+`PublisherSourceRequestV1::Metadata(header)` once per reservation, followed by
+`Chunk(PublisherSourceChunkRequestV1)` requests carrying only the exact provider,
+order, assignment revision, manifest digest, canonical header digest and one
+chunk ordinal with its bytes. Each request is capped at 4 MiB plus 4 KiB of
+framing. Chunk requests cannot create a reservation and never repeat the full
+file/chunk inventory. The receiver authenticates the pin submitter and exact provider/order/assignment
+revision against one native State view with matching durable revision-4 finality.
+The current approved pin, canonical replication order and inclusive ingestion
+deadline must agree. Both finalized consensus time and local UTC must still be
+within the deadline. The canonical header binds the complete native file/chunk
+plan to the manifest root and CAR geometry; each upload is at most one canonical
+chunk (4 MiB protocol maximum).
+
+Sources persist under `.publisher-sources`, outside the serving index. The
+configured `max_capacity_bytes` separately bounds reserved source payload plus
+metadata, and `max_pins` bounds session count. Reservations survive restart;
+expired reservations are reclaimed when another reservation is admitted. A new
+finalized assignment revision removes the previous revision's staged chunks.
+A metadata cache retains at most 32 verified sessions and 16 MiB of canonical
+metadata, further limited by the configured session and capacity quotas. Decoded
+plans remain bounded by these limits and the per-header decoder limits; the byte
+counter is not an RSS measurement. It checks the durable metadata file identity
+before reuse; a changed file invalidates the cache. Cache eviction
+or restart requires one canonical metadata reload, not a reload for every chunk.
+Publisher requests cannot mark local storage complete. The native ingest worker
+first checks admitted storage, then consumes a complete staged source under its
+independently finalized authorization. It checks the current exact assignment
+revision, durable finality, provider admission, pin owner and retention before
+consumption, on every read (including buffered reads and EOF), immediately
+before serialized storage publication, and before success. The prepublication
+callback releases its native State view before storage performs its commit;
+refusal leaves the transaction in staging for cleanup and releases its quota
+reservations. Failures remain terminal for that reader. Ordinary ingest still verifies every
+chunk, full payload digest, PoR and reconstructed CAR before publishing storage;
+only the existing durable completion path submits provider completion.
+
+`AssertSorafsPublicationV1` succeeds only for the transaction authority's active
+paid pin, exact automatic assignment revision and canonical order digest, with
+an independently selected historical block floor and fresh challenge. Its
+completion phase additionally requires every assigned provider's accepted native
+completion. The publisher verifies the exact signed assertion's successful
+execution with `TrustedBlockProofAnchor`, the canonical executed `SignedBlockWire`
+and a contiguous revision-4 finality lineage. `verify_finality_successor` checks
+committee/epoch transitions; a returned height, hash or HTTP success alone is
+insufficient.
+
+`sorafs_cli deploy` requires `--finality-checkpoint=PATH`, an independently trusted
+canonical `V2FinalityArtifact` for the configured genesis-derived `network_id`.
+The checkpoint must be within 1,023 blocks of each assertion. The proof route
+retains `CanReadAllLedgerData` because the existing authenticated carrier includes
+a full executed block. Discovery supplies candidate provider Torii origins;
+repeatable `--provider-url=HTTPS_ORIGIN` arguments add explicit candidates.
+Publication has a ten-minute monotonic deadline and a 32 MiB proof-response bound.
+Assignment/completion proof files and the verified next checkpoint are retained
+in the deploy output directory. Success requires both native finalized completion
+and digest/length verification of every packaged gateway asset. The default
+retention deadline is UTC packaging time plus one day.
+
+### Native software provider ingest
+
+`sorafs.storage.provider_ingest_runtime.native_completion_credential` selects
+the stock producer with an absolute owner-only canonical private-key file. Its
+public key must match the explicit completion binding and the current native
+provider owner/completion policy. The key is separate from validator custody and
+the proof-outcome, repair, reserve and orderbook roles. Startup validates custody
+and public qualification before opening the ingest outbox; signing rechecks the
+same immutable State view, durable finalized ancestry, admission, permission,
+assignment revision and exact completion payload. Expiration checks use both
+finalized consensus time and local UTC; completion epochs remain consensus-bound.
+
+Complete publisher staging is the initial source. Optional
+`native_source_origins` maps canonical provider-id hex to explicit HTTPS origins;
+only numeric loopback HTTP origins are permitted for local networks. Redirects,
+environment proxies and encoded HTTP response bodies are disabled.
+`POST /v1/sorafs/provider/source` accepts at most 4 KiB of canonical
+`SorafsAssignedSourceRequestV1`. It authenticates the assigned target's owner and
+completion permission, both native admissions, exact pending assignment and
+unexpired approved pin against current durable finality and the request's floor.
+The source repeats authorization after reading. Its sole canonical response is
+`ProviderSourceResponseV1::Metadata(header)` for a metadata request or
+`ProviderSourceResponseV1::Chunk(upload)` for an exact ordinal request, bounded to
+4 MiB plus 4 KiB of framing. Metadata is authenticated once; subsequent chunk
+responses carry only the ordinal and bytes. Indexed storage reads retain the
+manifest lifecycle lease without cloning or scanning its full plan. The receiver
+checks each chunk against the retained ordinal, length and digest, buffers one
+verified chunk, rechecks authority before and after every read including EOF, and makes
+deadline, revocation and read failures terminal for that ingest stream. Final
+admission still rebuilds the complete CAR, PoR and PDP commitments.
+
+The native checkpoint adapter retains a process lock and serializes exact
+predecessor CAS under an owner-only directory, bounded canonical records,
+`O_NOFOLLOW`, file fsync, atomic rename and directory fsync. It protects concurrent
+writers and process crashes. Restored state must still reconcile with authenticated
+finalized ledger replay; filesystem persistence is not a hardware rollback seal.
+
+
+### Authenticated remote repair sources
+
+The native worker consumes one verified replacement chunk at a time. Its remote
+reader is selected explicitly with `sorafs.repair.source`: `authority`, an
+absolute owner-only `credential` path, a bounded `timeout_ms` (default 60,000),
+and `origins`, a map of canonical provider-id hex to HTTPS origins. Explicit
+numeric loopback HTTP origins are allowed for local networks; HTTP hostnames
+and non-loopback addresses are rejected. The origin allowlist is also matched
+against the live, admitted, signed Torii advert. Redirects and environment proxy
+configuration are disabled.
+Credentials use canonical Ed25519 or ML-DSA private-key multihash text followed by one
+newline; their bytes are runtime-only and never belong in config or fixtures.
+
+`POST /v1/sorafs/repair/source` accepts a canonical network-account-signed
+`RepairSourceRequestV1`, capped at 4 KiB, and returns at most one 4 MiB chunk.
+The source and receiving daemon both require an exact current task revision and
+lease generation, current worker permission, admitted target/source providers,
+an approved unexpired pin, and authenticated finalized ancestry. They repeat
+these checks after payload I/O. Missing/corrupt payload, expiry, revocation and
+stale leases refuse the request. The ordinary source read verifies the chunk
+commitment; the receiving worker verifies it again before atomic replacement,
+and only full CAR/PoR verification can clear quarantine. This source capability
+authorizes repair only; initial replication has its own assignment authority.
+
+The UTC checks describe configured software clock assumptions. The remote
+reader provides no hardware custody or hardware rollback guarantee.

@@ -10,7 +10,7 @@
 //! surrounding P-256 value bus must bind every external limb to its arithmetic SSA value, and the
 //! scalar-bit copy bus must bind the four repeated bits to the scalar arithmetic trace. The
 //! aggregate adapter supplies both bindings; this AIR has no standalone activation path.
-use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
+use crate::privacy_engines::transparent_stark::{GoldilocksFieldV1 as F, PolynomialAirFieldV1};
 use thiserror::Error;
 /// Stable aggregate layout for all selectors in one ECDSA equation.
 #[cfg(test)]
@@ -380,18 +380,18 @@ pub(crate) fn p256_window_external_limb_v1(
 /// Unlike the native trace accessor, this projection also applies to an LDE
 /// opening. The aggregate cross-trace product must consume these returned
 /// fields directly rather than copying them into an unbound bridge trace.
-pub(crate) const fn p256_window_opened_external_cells_v1(
-    base: &[F; P256_WINDOW_BASE_WIDTH_V1],
-) -> [F; P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1] {
+pub(crate) const fn p256_window_opened_external_cells_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_WINDOW_BASE_WIDTH_V1],
+) -> [A; P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1] {
     [base[EXTERNAL], base[EXTERNAL + 1], base[EXTERNAL + 2]]
 }
 /// Project the four committed selector bits from one opened window row.
 ///
 /// Scalar source products select one of these cells with verifier-fixed
 /// numeric columns; this projection itself never decodes a native row kind.
-pub(crate) const fn p256_window_opened_scalar_bits_v1(
-    base: &[F; P256_WINDOW_BASE_WIDTH_V1],
-) -> [F; 4] {
+pub(crate) const fn p256_window_opened_scalar_bits_v1<A: PolynomialAirFieldV1>(
+    base: &[A; P256_WINDOW_BASE_WIDTH_V1],
+) -> [A; 4] {
     [base[BITS], base[BITS + 1], base[BITS + 2], base[BITS + 3]]
 }
 /// Evaluate one fixed selector row.
@@ -666,15 +666,16 @@ pub(crate) fn build_p256_window_batch_stark_trace_v1(
         vec![[F::ZERO; P256_WINDOW_STARK_AUX_WIDTH_V1]; P256_WINDOW_BATCH_STARK_TRACE_SIZE_V1];
     Ok(P256WindowBatchStarkTraceV1 { base, aux })
 }
-fn stark_window_matching_bit_v1(bit: F, expected: F) -> F {
+fn stark_window_matching_bit_v1<A: PolynomialAirFieldV1>(bit: A, expected: A) -> A {
     expected
         .mul(bit)
-        .add(F::ONE.sub(expected).mul(F::ONE.sub(bit)))
+        .add(A::ONE.sub(expected).mul(A::ONE.sub(bit)))
 }
 /// Evaluate one window row as a fixed-width extension-domain polynomial vector.
 ///
 /// All row roles, candidate bits, chunk positions, and boundaries are numeric verifier
 /// preprocessing. The evaluator never decodes a proof-controlled enum or index.
+#[cfg(test)]
 pub(crate) fn evaluate_p256_window_stark_residues_v1(
     current: &[F; P256_WINDOW_BASE_WIDTH_V1],
     next: &[F; P256_WINDOW_BASE_WIDTH_V1],
@@ -682,13 +683,23 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
     next_aux: &[F; P256_WINDOW_STARK_AUX_WIDTH_V1],
     fixed: &[F; P256_WINDOW_STARK_FIXED_WIDTH_V1],
 ) -> Result<Vec<F>, P256WindowAirErrorV1> {
+    evaluate_p256_window_stark_residues_over_field_v1(current, next, current_aux, next_aux, fixed)
+}
+/// Shared numeric window polynomial over the base or extension field.
+pub(crate) fn evaluate_p256_window_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
+    current: &[A; P256_WINDOW_BASE_WIDTH_V1],
+    next: &[A; P256_WINDOW_BASE_WIDTH_V1],
+    current_aux: &[A; P256_WINDOW_STARK_AUX_WIDTH_V1],
+    next_aux: &[A; P256_WINDOW_STARK_AUX_WIDTH_V1],
+    fixed: &[A; P256_WINDOW_STARK_FIXED_WIDTH_V1],
+) -> Result<Vec<A>, P256WindowAirErrorV1> {
     if current
         .iter()
         .chain(next)
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .any(|value| F::canonical(value.0).is_none())
+        .any(|value| !value.is_canonical())
     {
         return Err(P256WindowAirErrorV1::Constraint);
     }
@@ -742,7 +753,7 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
     residues.push(output.mul(current[SELECTOR]));
     for slot in 0..P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1 {
         let selected =
-            (0..P256_WINDOW_ROWS_PER_POINT_V1).fold(F::ZERO, |sum, chunk| {
+            (0..P256_WINDOW_ROWS_PER_POINT_V1).fold(A::ZERO, |sum, chunk| {
                 sum.add(fixed[STARK_CHUNK_SELECTORS + chunk].mul(
                     current[ACCUMULATOR + chunk * P256_WINDOW_EXTERNAL_LIMBS_PER_ROW_V1 + slot],
                 ))
@@ -757,7 +768,7 @@ pub(crate) fn evaluate_p256_window_stark_residues_v1(
         );
     }
     residues.push(output_continue.mul(next[SELECTED_COUNT].sub(current[SELECTED_COUNT])));
-    residues.push(fixed[STARK_ACTIVE_FINAL].mul(current[SELECTED_COUNT].sub(F::ONE)));
+    residues.push(fixed[STARK_ACTIVE_FINAL].mul(current[SELECTED_COUNT].sub(A::ONE)));
     for bit in 0..4 {
         residues.push(fixed[STARK_ACTIVE_CONTINUE].mul(next[BITS + bit].sub(current[BITS + bit])));
     }
@@ -836,8 +847,8 @@ fn limbs_le_to_bytes_be_v1(limbs: [u16; P256_WINDOW_COORDINATE_LIMBS_V1]) -> [u8
     }
     bytes
 }
-fn boolean_residue_v1(value: F) -> F {
-    value.mul(value.sub(F::ONE))
+fn boolean_residue_v1<A: PolynomialAirFieldV1>(value: A) -> A {
+    value.mul(value.sub(A::ONE))
 }
 #[cfg(test)]
 mod tests {

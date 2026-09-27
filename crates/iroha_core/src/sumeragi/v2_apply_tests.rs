@@ -712,6 +712,34 @@ pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
 
 #[cfg(feature = "bls")]
 #[test]
+fn retained_carrier_shells_are_charged_before_execution_and_refunded_once() {
+    let mut fixture = ApplyFixture::new_with_lane_lifecycle();
+    let budget = fixture.service.carrier_shell_budget_for_test();
+    let shell = fixture
+        .service
+        .reserve_carrier_shells()
+        .expect("admit original Native journal shells");
+    let charged = budget.reserved_bytes();
+    assert!(charged > 0);
+    assert_eq!(fixture.service.candidate_executions_for_test(), 0);
+    drop(shell);
+    assert_eq!(budget.reserved_bytes(), 0);
+
+    fixture.service.carrier_shell_budget = mv::allocation::AllocationBudget::new(charged - 1);
+    let refusal = fixture
+        .service
+        .reserve_carrier_shells()
+        .err()
+        .expect("a smaller finite pool refuses before execution");
+    assert!(matches!(
+        refusal.local_refusal(),
+        Some(super::super::v2_body_store::LocalValidationRefusal::PhysicalBusy(_))
+    ));
+    assert_eq!(fixture.service.candidate_executions_for_test(), 0);
+}
+
+#[cfg(feature = "bls")]
+#[test]
 fn current_carrier_accepts_signed_direct_ordinary_route_without_local_queue() {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let mut store = fixture.reopen_body_store();

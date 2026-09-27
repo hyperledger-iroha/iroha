@@ -1055,11 +1055,11 @@ mod tests {
     #[test]
     fn exact_maximum_envelope_includes_the_single_authoritative_outer_frame() {
         assert_eq!(ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1, 92);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 19_156_074);
-        assert_eq!(ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, 6_740_870);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 9_204_362);
+        assert_eq!(ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, 7_936_966);
         assert_eq!(
-            ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 - ZK_X509_MAX_PROOF_BYTES_V1,
-            9_718_890
+            ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
+            232_822
         );
         let maximum_inner = ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1
             + ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1
@@ -1077,11 +1077,11 @@ mod tests {
             ),
             Some(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize)
         );
-        assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 > ZK_X509_MAX_PROOF_BYTES_V1);
+        assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 < ZK_X509_MAX_PROOF_BYTES_V1);
         let main_bytes = ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1;
         assert!(
-            main_bytes < maximum_inner as usize - ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1,
-            "the full opening schedule must remain unavailable within the consensus budget"
+            maximum_inner as usize - ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1 <= main_bytes,
+            "the complete MAIN opening schedule fits its reserved envelope allowance"
         );
         let mut main = vec![0_u8; main_bytes];
         let mut ca = vec![0_u8; ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1];

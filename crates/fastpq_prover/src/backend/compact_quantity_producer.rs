@@ -18,17 +18,16 @@ use super::{
     compact_axt_context::preflight_context,
     compact_bundle::{self, AxtBundleWire, BundleWire},
     compact_model_statement::with_prepared_quantity_statement,
-    compact_prover_resources::{check_segment_charge, quotient_payload_ceiling},
+    compact_prover_resources::check_segment_charge,
     compact_public_batch::{BatchContextLimits, PublicTransferBatch, preflight_prepared},
-    deep_coefficients::{DeepCoefficientLimits, DeepTraceCoefficients},
     deep_engine,
-    deep_geometry::QUERY_COUNT,
     deep_proof::MAX_FRAME_BYTES,
-    deep_prover::{self, ProverLimits as DeepProverLimits},
-    deep_quotient::DeepQuotientLimits,
+    deep_prover::{ConstructionLimits, ProducerPlan},
     deep_relation::DeepRelation,
     offline_compact::{
-        ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits, VerificationLimits,
+        ExpectedAxtContext, ExpectedStatement, ProvingError, ProvingLimits,
+        QUANTITY_SHARED_FRAME_BOUND as SHARED_FRAME_BOUND, VerificationLimits,
+        quantity_artifact_resources,
     },
     secret_polynomial::SecretPolynomial,
 };
@@ -44,9 +43,6 @@ use crate::{
     },
 };
 
-// The sole fixed profile owns its canonical maximum; the producer and verifier
-// independently enforce this bound before allocating full-domain buffers.
-const SHARED_FRAME_BOUND: usize = MAX_FRAME_BYTES;
 static PRODUCER: Mutex<()> = Mutex::new(());
 
 #[path = "compact_quantity_producer/decode_policy.rs"]
@@ -73,6 +69,7 @@ fn add(left: usize, right: usize) -> Result<usize> {
         .ok_or_else(|| invalid("producer byte count overflows"))
 }
 
+#[cfg(test)]
 fn mul(left: usize, right: usize) -> Result<usize> {
     left.checked_mul(right)
         .ok_or_else(|| invalid("producer work count overflows"))
@@ -111,36 +108,9 @@ fn check_statement(
             "quantity producer requires a nonempty complete bundle",
         ));
     }
-    let bundle = verification.bundle;
-    check("max_bundle_segments", count, bundle.max_segments)?;
-    check("max_queries", QUERY_COUNT, bundle.segment.max_queries)?;
-    check(
-        "max_bundle_queries",
-        mul(count, QUERY_COUNT)?,
-        bundle.max_total_queries,
-    )?;
-    check(
-        "max_proof_bytes",
-        SHARED_FRAME_BOUND,
-        bundle.segment.max_proof_bytes,
-    )?;
-    check(
-        "max_bundle_segment_bytes",
-        mul(count, SHARED_FRAME_BOUND)?,
-        bundle.max_total_segment_bytes,
-    )?;
-    check(
-        "max_compact_prover_trace_cells",
-        mul(count, mul(COLUMN_COUNT, PHYSICAL_ROW_COUNT)?)?,
-        proving.max_total_trace_cells,
-    )?;
-    check_segment_charge(0, SHARED_FRAME_BOUND, proving.max_segment_charge_bytes)?;
-    let conversion = DeepTraceCoefficients::required_resources()?;
-    check(
-        "max_compact_prover_segment_work_units",
-        conversion.work_units,
-        proving.max_segment_work_units,
-    )?;
+    // Reject every known fixed-geometry/carrier deficit before canonical
+    // statement encoding, public preparation or private-tree construction.
+    quantity_artifact_resources(count, 0)?.check_proving_limits(proving, verification)?;
     decode_policy::preflight_decode_policy(count, verification)?;
     // Canonical framing is measured before allocating an encoded statement.
     // Public preparation below separately charges keys, paths, rows and claims.
@@ -192,13 +162,7 @@ impl Artifact {
         // Each scalar/sequence field has at most ten compact prefix bytes.
         // These deliberately conservative framing allowances avoid allocating
         // dummy proof frames while retaining the exact final codec checks.
-        let roots = count
-            .checked_sub(1)
-            .ok_or_else(|| invalid("quantity producer requires a nonempty complete bundle"))?;
-        let carrier = add(
-            1024,
-            add(mul(roots, 64)?, mul(count, SHARED_FRAME_BOUND + 32)?)?,
-        )?;
+        let carrier = quantity_artifact_resources(count, 0)?.maximum_bundle_frame_bytes;
         check(
             "max_bundle_wire_bytes",
             carrier,
@@ -283,6 +247,19 @@ fn columns(
     Ok(columns)
 }
 
+fn construction_limits(
+    proving: ProvingLimits,
+    verification: VerificationLimits,
+) -> ConstructionLimits {
+    ConstructionLimits {
+        digest_execution: proving.digest_execution,
+        max_payload_bytes: proving.max_segment_charge_bytes,
+        max_work_units: proving.max_segment_work_units,
+        max_hash_calls: proving.max_segment_work_units,
+        max_proof_bytes: verification.bundle.segment.max_proof_bytes,
+    }
+}
+
 fn segments<R: DeepRelation>(
     statements: &[PublicStatement],
     private: &[[TransferSmtWitness; 2]],
@@ -299,6 +276,7 @@ fn segments<R: DeepRelation>(
     for ordinal in 0..statements.len() {
         let relation = relation(ordinal)?;
         deep_engine::preflight(&relation, MAX_FRAME_BYTES, verification.bundle.segment)?;
+        ProducerPlan::new(&relation, construction_limits(proving, verification))?;
         check_segment_charge(
             relation.statement_bytes().len(),
             SHARED_FRAME_BOUND,
@@ -311,30 +289,10 @@ fn segments<R: DeepRelation>(
         let relation = relation(ordinal)?;
         let columns = columns(statement, private)?;
         let borrowed = columns.iter().map(|column| &column[..]).collect::<Vec<_>>();
-        let coefficients = DeepTraceCoefficients::from_columns(
-            &borrowed,
-            DeepCoefficientLimits {
-                max_payload_bytes: proving.max_segment_charge_bytes,
-                max_work_units: proving.max_segment_work_units,
-            },
-        )?;
+        let proof = ProducerPlan::new(&relation, construction_limits(proving, verification))?
+            .build(&borrowed, &mut rand::rngs::OsRng)?;
         drop(borrowed);
         drop(columns);
-        let proof = deep_prover::prove(
-            &relation,
-            &coefficients.coefficients(),
-            DeepProverLimits {
-                digest_execution: proving.digest_execution,
-                max_payload_bytes: proving.max_segment_charge_bytes,
-                quotient: DeepQuotientLimits {
-                    max_payload_bytes: quotient_payload_ceiling()?
-                        .min(proving.max_segment_charge_bytes),
-                    max_work_units: proving.max_segment_work_units,
-                },
-                max_proof_bytes: verification.bundle.segment.max_proof_bytes,
-            },
-        )?;
-        drop(coefficients);
         let length = proof.len();
         check(
             "max_proof_bytes",
@@ -467,6 +425,7 @@ pub(super) fn prove(
     let _exclusive = acquire(&PRODUCER)?;
     let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     check_statement(statement, expected, proving, verification)?;
+    crate::digest384_batch::preflight_last_fields_execution(proving.digest_execution)?;
     let semantics = if axt.is_some() {
         ProofSemantics::AxtTransferClaim
     } else {

@@ -69,6 +69,22 @@ type StateTelemetry = crate::telemetry::StateTelemetry;
 type StateTelemetry = ();
 type NexusDataSpaceId = iroha_model_base::topology::DataSpaceId;
 type NexusLaneId = iroha_model_base::topology::LaneId;
+/// Recovered lane execution distinguishes malformed input from local admission.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum LaneExecutionInputError {
+    /// Authenticated lane input is invalid.
+    #[error("{0}")]
+    Invalid(&'static str),
+    /// Original local State storage pool refused this attempt.
+    #[error(transparent)]
+    Storage(#[from] crate::state::StateStorageAdmissionError),
+}
+
+impl From<&'static str> for LaneExecutionInputError {
+    fn from(reason: &'static str) -> Self {
+        Self::Invalid(reason)
+    }
+}
 /// Decode one canonical Norito-framed [`TransactionEntrypoint`] and return its identity.
 ///
 /// The identity is derived from the decoded signed intent rather than the transport frame. This
@@ -3215,8 +3231,9 @@ impl StateBlock<'_> {
         ivm_cache: &mut IvmCache,
     ) -> core::result::Result<
         Vec<(u64, HashOf<TransactionEntrypoint>, TransactionResultInner)>,
-        &'static str,
+        LaneExecutionInputError,
     > {
+        self.require_storage_admission()?;
         Self::validate_lane_block_execution_input_unique_entrypoints(artifact)?;
         crate::kura::Kura::validate_lane_block_execution_input_artifact(artifact)?;
         let descriptor = &artifact.proposal.descriptor;
@@ -3248,7 +3265,9 @@ impl StateBlock<'_> {
                 .map_err(|_| "execution input routing cannot be resolved")?
             };
             if plan.coordinator_route() != routing {
-                return Err("execution input route does not match recomputed coordinator route");
+                return Err(LaneExecutionInputError::Invalid(
+                    "execution input route does not match recomputed coordinator route",
+                ));
             }
             let (entrypoint_hash, result) = self
                 .validate_transaction_at_entrypoint_index_and_routing(
@@ -3257,6 +3276,7 @@ impl StateBlock<'_> {
                     Some(raw_entrypoint_index),
                     Some(routing),
                 );
+            self.require_storage_admission()?;
             results.push((raw_entrypoint_index, entrypoint_hash, result));
         }
         Ok(results)
@@ -12964,7 +12984,7 @@ pub mod tests {
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect_err("forged execution input hashes must be rejected");
         assert_eq!(
-            err,
+            err.to_string(),
             "execution input entrypoint hashes do not match proposal descriptor"
         );
     }
@@ -13005,7 +13025,10 @@ pub mod tests {
         let err = block
             .validate_lane_block_execution_input_with_routing_context(&artifact, &mut ivm_cache)
             .expect_err("duplicate lane execution entrypoints must be rejected");
-        assert_eq!(err, "execution input contains duplicate entrypoints");
+        assert_eq!(
+            err.to_string(),
+            "execution input contains duplicate entrypoints"
+        );
     }
     #[test]
     fn lane_block_execution_input_preserves_full_width_entrypoint_indices() {
@@ -13209,6 +13232,7 @@ pub mod tests {
         );
         let snapshot = norito::json::to_value(&state).expect("serialize marker-bearing state");
         let restarted = crate::state::deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: state.lane_manifests.read().clone(),
             kura: Kura::blank_kura_for_testing(),
             query_handle: LiveQueryStore::start_test(),

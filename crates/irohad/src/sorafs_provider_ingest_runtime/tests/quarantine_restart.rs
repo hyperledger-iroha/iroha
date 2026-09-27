@@ -502,8 +502,24 @@ async fn post_admission_quarantine_survives_restart_with_shared_chunks() {
     });
     let storage = Arc::new(NativeProviderIngestLocalStorageV1::new(
         node.clone(),
+        Arc::new(
+            iroha_core::state::State::new_with_chain_and_network_id_for_testing(
+                iroha_core::state::World::new(),
+                iroha_core::kura::Kura::blank_kura_for_testing(),
+                iroha_core::query::store::LiveQueryStore::start_test(),
+                "publisher-quarantine-restart".parse().unwrap(),
+                network_id,
+            ),
+        ),
         Duration::from_secs(1),
     ));
+    assert!(
+        matches!(
+            current_staged_publisher_assignment_v1(&storage.state, &authorization, None),
+            Err(StorageError::Io(error)) if error.kind() == std::io::ErrorKind::PermissionDenied
+        ),
+        "historical authorization cannot admit staging without current durable native finality"
+    );
     let mut runtime = node
         .build_provider_ingest_runtime(
             network_id,

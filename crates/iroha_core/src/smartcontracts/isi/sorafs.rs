@@ -1,7 +1,8 @@
 use super::*;
+mod publication;
 use crate::{
     smartcontracts::ValidSingularQuery,
-    state::{StateBlock, StateTransaction},
+    state::{StateBlock, StateStorageAdmissionError, StateTransaction},
 };
 use blake3::hash as blake3_hash;
 use core::convert::TryFrom;
@@ -653,10 +654,19 @@ fn parse_pin_expiry_key(
 /// The expiry index is part of authenticated world state. All due retirements
 /// are staged in one state transaction so a corrupt marker or accounting
 /// summary rejects the complete block effect without a partial release.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum PinExpiryMaintenanceError {
+    /// A local World owner or finite pool refused the original transaction.
+    #[error(transparent)]
+    Storage(#[from] StateStorageAdmissionError),
+    /// Authenticated pin accounting or retirement was invalid.
+    #[error(transparent)]
+    Instruction(#[from] InstructionExecutionError),
+}
 pub(crate) fn expire_pin_manifests_at_consensus_time(
     state_block: &mut StateBlock<'_>,
-) -> Result<usize, InstructionExecutionError> {
-    let mut state_transaction = state_block.transaction();
+) -> Result<usize, PinExpiryMaintenanceError> {
+    let mut state_transaction = state_block.try_transaction()?;
     let consensus_epoch = state_transaction.block_unix_timestamp_ms() / 1_000;
     let prefix = StatePath::from_str(PIN_EXPIRY_STATE_KEY_PREFIX_V1)
         .expect("static pin expiry prefix is valid");
@@ -670,7 +680,8 @@ pub(crate) fn expire_pin_manifests_at_consensus_time(
         if !marker.is_empty() {
             return Err(pin_accounting_corruption(format!(
                 "expiry marker `{key}` must have an empty value"
-            )));
+            ))
+            .into());
         }
         let (retention_epoch, digest) = parse_pin_expiry_key(key)?;
         if retention_epoch > consensus_epoch {
@@ -679,7 +690,8 @@ pub(crate) fn expire_pin_manifests_at_consensus_time(
         if due.len() >= maximum {
             return Err(pin_accounting_corruption(format!(
                 "due expiry marker count exceeds configured global manifest ceiling {maximum}"
-            )));
+            ))
+            .into());
         }
         due.push((retention_epoch, digest));
     }
@@ -701,7 +713,8 @@ pub(crate) fn expire_pin_manifests_at_consensus_time(
             return Err(pin_accounting_corruption(format!(
                 "expiry marker for {} disagrees with its live manifest record",
                 manifest_hex(digest)
-            )));
+            ))
+            .into());
         }
         let authority = record.submitted_by.clone();
         iroha_data_model::isi::sorafs::RetirePinManifest {
@@ -1084,6 +1097,9 @@ pub(super) fn apply_governed_provider_owner_action(
         ))
     })?;
     match action {
+        SorafsProviderGovernanceActionV1::Admission(action) => {
+            return super::sorafs_provider_admission::apply(action, state_transaction);
+        }
         SorafsProviderGovernanceActionV1::Establish(action) => {
             if state_transaction
                 .world
@@ -3224,15 +3240,12 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let mut record: CapacityDeclarationRecord = self.record;
-        let provider_id = record.provider_id;
-        let provider_hex = hex::encode(provider_id.as_bytes());
         let declaration =
-            decode_capacity_declaration_payload(&record.declaration).map_err(|err| {
-                invalid_parameter(format!(
-                    "invalid capacity declaration payload for provider {provider_hex}: {err}"
-                ))
+            decode_capacity_declaration_payload(&self.declaration).map_err(|err| {
+                invalid_parameter(format!("invalid capacity declaration payload: {err}"))
             })?;
+        let provider_id = ProviderId::new(declaration.provider_id);
+        let provider_hex = hex::encode(provider_id.as_bytes());
         declaration.validate().map_err(|err| {
             invalid_parameter(format!(
                 "capacity declaration validation failed for provider {provider_hex}: {err}"
@@ -3257,38 +3270,16 @@ impl Execute for iroha_data_model::isi::sorafs::RegisterCapacityDeclaration {
                 "capacity declaration for provider {provider_hex} must explicitly declare metadata `{PROVIDER_OWNER_METADATA_KEY}` in its canonical payload"
             )));
         }
-        let payload_provider = ProviderId::new(declaration.provider_id);
-        if payload_provider != provider_id {
-            return Err(invalid_parameter(format!(
-                "capacity declaration provider mismatch: record {provider_hex}, payload {}",
-                hex::encode(payload_provider.as_bytes())
-            )));
-        }
-        if declaration.committed_capacity_gib != record.committed_capacity_gib {
-            return Err(invalid_parameter(format!(
-                "capacity declaration committed capacity mismatch for provider {provider_hex}: \
-                 summary {} GiB vs payload {} GiB",
-                record.committed_capacity_gib, declaration.committed_capacity_gib
-            )));
-        }
-        if declaration.valid_from != record.valid_from_epoch
-            || declaration.valid_until != record.valid_until_epoch
-        {
-            return Err(invalid_parameter(format!(
-                "capacity declaration validity mismatch for provider {provider_hex}: record {}..={}, payload {}..={}",
-                record.valid_from_epoch,
-                record.valid_until_epoch,
-                declaration.valid_from,
-                declaration.valid_until
-            )));
-        }
         let consensus_epoch = pin_consensus_epoch(state_transaction);
-        if record.registered_epoch != consensus_epoch {
-            return Err(invalid_parameter(format!(
-                "capacity declaration registered epoch {} for provider {provider_hex} must exactly equal consensus Unix second {consensus_epoch}",
-                record.registered_epoch
-            )));
-        }
+        let mut record = CapacityDeclarationRecord::new(
+            provider_id,
+            self.declaration,
+            declaration.committed_capacity_gib,
+            consensus_epoch,
+            declaration.valid_from,
+            declaration.valid_until,
+            Metadata::default(),
+        );
         if consensus_epoch > record.valid_until_epoch {
             return Err(invalid_parameter(format!(
                 "capacity declaration for provider {provider_hex} expired at Unix second {} before registration at {consensus_epoch}",
@@ -7832,6 +7823,7 @@ mod sorafs_tests {
     include!("sorafs_fixture_and_admission_tests.rs");
     include!("sorafs/initial_executor_tests.rs");
     include!("sorafs/pin_lifecycle_fixture.rs");
+    include!("sorafs/publication_tests.rs");
     fn insert_pin_record_with_accounting(
         stx: &mut crate::state::StateTransaction<'_, '_>,
         record: PinManifestRecord,
@@ -8500,49 +8492,48 @@ mod sorafs_tests {
         let (provider, declaration) = sample_capacity_record();
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let err = RegisterCapacityDeclaration {
-            record: declaration,
+            declaration: declaration.declaration,
         }
         .execute(&alice(), &mut stx);
         assert!(err.is_ok(), "ordinary provider owner should be allowed");
     }
     #[test]
-    fn capacity_declaration_rejects_unbound_summary_epochs_atomically() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
+    fn capacity_declaration_derives_registration_time_and_projection_at_execution() {
         let (provider, record) = capacity_record_with_owner(&alice());
-        seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
-
-        let mut mismatched_validity = record.clone();
-        mismatched_validity.valid_from_epoch += 1;
-        let error = RegisterCapacityDeclaration {
-            record: mismatched_validity,
+        let payload = decode_capacity_declaration_payload(&record.declaration).expect("fixture");
+        for consensus_epoch in [5_u64, 17] {
+            let state = make_state();
+            let header = iroha_data_model::block::BlockHeader::new(
+                nonzero!(1_u64),
+                None,
+                None,
+                consensus_epoch * 1000,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            seed_test_call_hash(&mut stx);
+            seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
+            RegisterCapacityDeclaration::new(record.declaration.clone())
+                .execute(&alice(), &mut stx)
+                .expect("submission need not predict commit timestamp");
+            let stored = stx
+                .world
+                .capacity_declarations
+                .get(&provider)
+                .expect("stored declaration");
+            assert_eq!(stored.registered_epoch, consensus_epoch);
+            assert_eq!(stored.provider_id, provider);
+            assert_eq!(
+                stored.committed_capacity_gib,
+                payload.committed_capacity_gib
+            );
+            assert_eq!(stored.valid_from_epoch, payload.valid_from);
+            assert_eq!(stored.valid_until_epoch, payload.valid_until);
+            assert_eq!(stored.declaration, record.declaration);
+            validate_stored_capacity_declaration(stored, "consensus projection")
+                .expect("exact projection");
         }
-        .execute(&alice(), &mut stx)
-        .expect_err("record validity must exactly match its canonical payload");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("validity mismatch")
-        ));
-        assert!(stx.world.capacity_declarations.get(&provider).is_none());
-
-        let mut forged_registration_time = record;
-        forged_registration_time.registered_epoch = 4;
-        let error = RegisterCapacityDeclaration {
-            record: forged_registration_time,
-        }
-        .execute(&alice(), &mut stx)
-        .expect_err("registration time must be the consensus Unix second");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("must exactly equal consensus Unix second 5")
-        ));
-        assert!(stx.world.capacity_declarations.get(&provider).is_none());
     }
     #[test]
     fn capacity_telemetry_is_permissionless_for_provider_owner() {
@@ -8609,7 +8600,7 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
         let (provider, declaration) = capacity_record_with_owner(&alice());
         let error = RegisterCapacityDeclaration {
-            record: declaration,
+            declaration: declaration.declaration,
         }
         .execute(&alice(), &mut stx)
         .expect_err("capacity declaration must not self-register an unknown provider");
@@ -8641,7 +8632,7 @@ mod sorafs_tests {
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let instruction = InstructionBox::from(RegisterCapacityDeclaration {
-            record: declaration,
+            declaration: declaration.declaration,
         });
         instruction
             .execute(&alice(), &mut stx)
@@ -8662,9 +8653,11 @@ mod sorafs_tests {
         let (provider, _declaration) = capacity_record_with_owner(&alice());
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let (_provider, second) = capacity_record_with_owner(&bob());
-        let err = RegisterCapacityDeclaration { record: second }
-            .execute(&bob(), &mut stx)
-            .expect_err("rebind to different owner must fail");
+        let err = RegisterCapacityDeclaration {
+            declaration: second.declaration,
+        }
+        .execute(&bob(), &mut stx)
+        .expect_err("rebind to different owner must fail");
         assert!(matches!(
             err,
             InstructionExecutionError::InvalidParameter(
@@ -8684,7 +8677,7 @@ mod sorafs_tests {
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let error = RegisterCapacityDeclaration {
-            record: declaration,
+            declaration: declaration.declaration,
         }
         .execute(&bob(), &mut stx)
         .expect_err("an account other than the exact governed owner must fail");
@@ -8712,7 +8705,7 @@ mod sorafs_tests {
         let (provider, declaration) = capacity_record_with_owner(&alice());
         seed_provider_owners(&mut stx, &[provider], &alice());
         let missing_record_error = RegisterCapacityDeclaration {
-            record: declaration.clone(),
+            declaration: declaration.clone().declaration,
         }
         .execute(&alice(), &mut stx)
         .expect_err("a governed owner without an owner-funded reserve must fail");
@@ -8727,7 +8720,7 @@ mod sorafs_tests {
         );
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::zero());
         let error = RegisterCapacityDeclaration {
-            record: declaration,
+            declaration: declaration.declaration,
         }
         .execute(&alice(), &mut stx)
         .expect_err("a governed owner without the declared bonded stake must fail");
@@ -8837,12 +8830,16 @@ mod sorafs_tests {
         seed_test_call_hash(&mut stx);
         let (provider, mut declaration) = sample_capacity_record();
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
-        let key = Name::from_str(PROVIDER_OWNER_METADATA_KEY).expect("metadata key");
-        declaration
+        let mut payload = decode_capacity_declaration_payload(&declaration.declaration).unwrap();
+        let entry = payload
             .metadata
-            .insert(key.clone(), Json::new(account_literal(&bob())));
+            .iter_mut()
+            .find(|entry| entry.key == PROVIDER_OWNER_METADATA_KEY)
+            .unwrap();
+        entry.value = account_literal(&bob());
+        declaration.declaration = norito::encode_canonical(&payload).unwrap();
         let err = RegisterCapacityDeclaration {
-            record: declaration.clone(),
+            declaration: declaration.clone().declaration,
         }
         .execute(&alice(), &mut stx)
         .expect_err("owner mismatch must fail");
@@ -8852,12 +8849,15 @@ mod sorafs_tests {
                 InvalidParameterError::SmartContract(message)
             ) if message.contains(PROVIDER_OWNER_METADATA_KEY)
         ));
-        // Align owner with authority and succeed
-        declaration
+        payload
             .metadata
-            .insert(key, Json::new(account_literal(&alice())));
+            .iter_mut()
+            .find(|entry| entry.key == PROVIDER_OWNER_METADATA_KEY)
+            .unwrap()
+            .value = account_literal(&alice());
+        declaration.declaration = norito::encode_canonical(&payload).unwrap();
         RegisterCapacityDeclaration {
-            record: declaration,
+            declaration: declaration.declaration,
         }
         .execute(&alice(), &mut stx)
         .expect("owner-aligned declaration must succeed");
@@ -13274,7 +13274,7 @@ mod sorafs_tests {
         let (provider, record) = sample_capacity_record();
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::from(1_u32));
         let instruction = RegisterCapacityDeclaration {
-            record: record.clone(),
+            declaration: record.clone().declaration,
         };
         instruction
             .execute(&alice(), &mut stx)
@@ -14814,41 +14814,17 @@ mod sorafs_tests {
         assert_eq!(ledger.storage_fee, xor_quantity_nanos(100_000_000));
     }
     #[test]
-    fn register_capacity_declaration_rejects_metadata_conflict() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        let mut declaration = sample_capacity_declaration();
-        set_capacity_storage_class(&mut declaration, "cold");
-        let canonical_bytes = norito::to_bytes(&declaration).expect("serialize declaration");
-        let provider = ProviderId::new(declaration.provider_id);
-        let mut metadata = Metadata::default();
-        let key: Name = STORAGE_CLASS_METADATA_KEY
-            .parse()
-            .expect("metadata key parses");
-        metadata.insert(key, Json::new("hot"));
-        let record = CapacityDeclarationRecord::new(
-            provider,
-            canonical_bytes,
-            declaration.committed_capacity_gib,
-            5,
-            declaration.valid_from,
-            declaration.valid_until,
-            metadata,
+    fn stored_capacity_declaration_rejects_metadata_conflict() {
+        let (_, mut record) = capacity_record_with_owner(&alice());
+        record.metadata.insert(
+            STORAGE_CLASS_METADATA_KEY.parse::<Name>().unwrap(),
+            Json::new("cold"),
         );
-        let err = RegisterCapacityDeclaration { record }
-            .execute(&alice(), &mut stx)
-            .expect_err("conflicting metadata must be rejected");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error variant: {other:?}"),
-        };
+        let error = validate_stored_capacity_declaration(&record, "conflicting metadata")
+            .expect_err("stored metadata must exactly reflect its canonical payload");
         assert!(
-            message.contains("metadata conflict"),
-            "unexpected error message: {message}"
+            matches!(error, InstructionExecutionError::InvariantViolation(message)
+            if message.contains("metadata conflict"))
         );
     }
     #[test]
@@ -14887,9 +14863,14 @@ mod sorafs_tests {
                 record.metadata.insert(key, Json::new(retained));
             }
 
-            RegisterCapacityDeclaration { record }
-                .execute(&alice(), &mut stx)
-                .expect_err("metadata whitespace must never be normalized");
+            if case == "record_storage" {
+                validate_stored_capacity_declaration(&record, case)
+                    .expect_err("stored metadata whitespace must never be normalized");
+            } else {
+                RegisterCapacityDeclaration::new(record.declaration)
+                    .execute(&alice(), &mut stx)
+                    .expect_err("payload metadata whitespace must never be normalized");
+            }
             assert!(
                 stx.world.capacity_declarations.get(&provider).is_none(),
                 "rejected {case} metadata must not mutate capacity state"
@@ -14911,9 +14892,11 @@ mod sorafs_tests {
             .retain(|entry| entry.key != STORAGE_CLASS_METADATA_KEY);
         record.declaration =
             norito::encode_canonical(&declaration).expect("encode declaration without class");
-        let error = RegisterCapacityDeclaration { record }
-            .execute(&alice(), &mut stx)
-            .expect_err("record-only storage class must reject registration");
+        let error = RegisterCapacityDeclaration {
+            declaration: record.declaration,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("record-only storage class must reject registration");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
@@ -14936,9 +14919,11 @@ mod sorafs_tests {
             .retain(|entry| entry.key != PROVIDER_OWNER_METADATA_KEY);
         record.declaration =
             norito::encode_canonical(&declaration).expect("encode declaration without owner");
-        let error = RegisterCapacityDeclaration { record }
-            .execute(&alice(), &mut stx)
-            .expect_err("record-only owner must reject registration");
+        let error = RegisterCapacityDeclaration {
+            declaration: record.declaration,
+        }
+        .execute(&alice(), &mut stx)
+        .expect_err("record-only owner must reject registration");
         assert!(matches!(
             error,
             InstructionExecutionError::InvalidParameter(
@@ -15138,49 +15123,25 @@ mod sorafs_tests {
         );
     }
     #[test]
-    fn register_capacity_declaration_rejects_provider_mismatch() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        let (_provider, mut record) = sample_capacity_record();
+    fn stored_capacity_declaration_rejects_provider_mismatch() {
+        let (_, mut record) = capacity_record_with_owner(&alice());
         record.provider_id = ProviderId::new([0x33; 32]);
-        let instruction = RegisterCapacityDeclaration { record };
-        let err = instruction
-            .execute(&alice(), &mut stx)
-            .expect_err("payload/provider mismatch must be rejected");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
+        let error = validate_stored_capacity_declaration(&record, "corrupt summary")
+            .expect_err("stored projection must match canonical payload");
         assert!(
-            message.contains("provider mismatch"),
-            "unexpected error message: {message}"
+            matches!(error, InstructionExecutionError::InvariantViolation(message)
+            if message.contains("payload provider does not match"))
         );
     }
     #[test]
-    fn register_capacity_declaration_rejects_committed_capacity_mismatch() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        let (_provider, mut record) = sample_capacity_record();
-        record.committed_capacity_gib += 1;
-        let instruction = RegisterCapacityDeclaration { record };
-        let err = instruction
-            .execute(&alice(), &mut stx)
-            .expect_err("committed capacity mismatch must be rejected");
-        let message = match err {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                message,
-            )) => message,
-            other => panic!("unexpected error: {other:?}"),
-        };
+    fn stored_capacity_declaration_rejects_committed_capacity_mismatch() {
+        let (_, mut record) = capacity_record_with_owner(&alice());
+        record.committed_capacity_gib = record.committed_capacity_gib + 1;
+        let error = validate_stored_capacity_declaration(&record, "corrupt summary")
+            .expect_err("stored projection must match canonical payload");
         assert!(
-            message.contains("committed capacity mismatch"),
-            "unexpected error message: {message}"
+            matches!(error, InstructionExecutionError::InvariantViolation(message)
+            if message.contains("payload capacity does not match"))
         );
     }
     #[test]
@@ -15216,9 +15177,11 @@ mod sorafs_tests {
         ] {
             let mut record = base_record.clone();
             record.declaration = payload;
-            let err = RegisterCapacityDeclaration { record }
-                .execute(&alice(), &mut stx)
-                .expect_err("invalid capacity declaration payload must be rejected");
+            let err = RegisterCapacityDeclaration {
+                declaration: record.declaration,
+            }
+            .execute(&alice(), &mut stx)
+            .expect_err("invalid capacity declaration payload must be rejected");
             let message = match err {
                 InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract(message),

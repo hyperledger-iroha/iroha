@@ -31,7 +31,18 @@ fn merge_beacon_takes_original_prepared_npos_allocations() {
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"merge beacon owner network")),
     );
     let parent_surface = Hash::new(b"merge beacon owner parent");
+    let state = State::new_for_testing(
+        World::default(),
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
     let prepared = PreparedPristineConsensusEffects {
+        penalty_index: ValidatedNposPenaltyIndex {
+            state: &state,
+            generation: state.state_view_generation(),
+            header,
+            index: None,
+        },
         header,
         effects,
         prune_keys,

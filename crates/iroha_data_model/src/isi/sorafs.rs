@@ -2,8 +2,8 @@ use super::*;
 use crate::musubi::ArchiveId;
 use crate::sorafs::{
     capacity::{
-        CapacityDeclarationRecord, CapacityDisputeId, CapacityDisputeOutcome,
-        CapacityDisputeRecord, CapacityTelemetryRecord, ProviderId,
+        CapacityDisputeId, CapacityDisputeOutcome, CapacityDisputeRecord, CapacityTelemetryRecord,
+        ProviderId,
     },
     moderation_ledger::{
         ModerationAppealIntakeV1, ModerationChallengeDecisionV1, ModerationChallengeKindV1,
@@ -27,6 +27,19 @@ use crate::sorafs::{
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use sorafs_manifest::{capacity::ReplicationAssignmentV1, deal::XorQuantity};
 isi! {
+    /// Initialize the sole provider admission authority from signed genesis.
+    /// All later admission changes require an exact enacted Parliament certificate.
+    #[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1")]
+    pub struct InitializeSorafsProviderAdmissionV1 {
+        /// Network-independent council template authenticated by signed genesis.
+        pub council: crate::sorafs::provider_admission::governance::InitialProviderAdmissionCouncilV1,
+        /// At most 64 initial providers, strictly ordered by the enclosed provider id.
+        pub providers: Vec<crate::sorafs::provider_admission::governance::InitialProviderAdmissionV1>,
+    }
+}
+impl crate::seal::Instruction for InitializeSorafsProviderAdmissionV1 {}
+isi! {
     /// Register a canonical `SoraFS` manifest with the paid pin registry.
     #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterPinManifest")]
@@ -41,6 +54,30 @@ isi! {
     }
 }
 impl crate::seal::Instruction for RegisterPinManifest {}
+isi! {
+    /// Assert the publisher's exact active paid pin and replication assignment at execution.
+    /// A successful signed execution requires native block finality and execution proof verification.
+    #[norito_schema(name = "iroha_data_model::isi::sorafs::AssertSorafsPublicationV1")]
+    pub struct AssertSorafsPublicationV1 {
+        /// Exact manifest registered by the transaction authority.
+        pub manifest_digest: ManifestDigest,
+        /// Exact automatic replication order derived from the manifest digest.
+        pub order_id: ReplicationOrderId,
+        /// Current assignment revision expected by the publisher.
+        pub assignment_revision: u64,
+        /// BLAKE3 of the complete canonical replication order bytes.
+        pub canonical_order_digest: [u8; 32],
+        /// Require every assigned provider completion, instead of a live assigned order.
+        pub require_complete: bool,
+        /// Fresh non-zero challenge retained independently by the publisher.
+        pub challenge: [u8; 32],
+        /// Independently trusted finalized floor preceding this assertion.
+        pub minimum_height: u64,
+        /// Exact block hash at that floor.
+        pub minimum_block_hash: [u8; 32],
+    }
+}
+impl crate::seal::Instruction for AssertSorafsPublicationV1 {}
 isi! {
     /// Approve a previously registered manifest digest.
 #[norito_schema(name = "iroha_data_model::isi::sorafs::ApprovePinManifest")]
@@ -90,8 +127,9 @@ isi! {
     /// instruction never creates or changes a provider-owner binding.
 #[norito_schema(name = "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration")]
 pub struct RegisterCapacityDeclaration {
-    /// Declaration record persisted by the capacity registry.
-    pub record: CapacityDeclarationRecord,
+    /// Canonical Norito `CapacityDeclarationV1`; registration time and registry summaries are derived by consensus.
+    #[norito(json = "crate::json_helpers::base64_vec")]
+    pub declaration: Vec<u8>,
     }
 }
 impl crate::seal::Instruction for RegisterCapacityDeclaration {}
@@ -297,6 +335,9 @@ pub enum SorafsProviderGovernanceActionV1 {
     /// Remove the exact current owner.
     #[codec(index = 2)]
     Remove(RemoveSorafsProviderOwnerV1),
+    /// Enact an exact council-policy or provider-admission transition.
+    #[codec(index = 3)]
+    Admission(crate::sorafs::provider_admission::governance::ProviderAdmissionGovernanceActionV1),
 }
 impl SorafsProviderGovernanceActionV1 {
     /// Validate the closed action before proposal admission or enactment.
@@ -305,6 +346,13 @@ impl SorafsProviderGovernanceActionV1 {
     ///
     /// Returns an error for a zero provider identifier or a no-op rebind.
     pub fn validate(&self) -> Result<(), iroha_model_base::error::ParseError> {
+        if let Self::Admission(action) = self {
+            return action.provider_id().map(|_| ()).map_err(|_| {
+                iroha_model_base::error::ParseError::new(
+                    "invalid canonical provider admission effect",
+                )
+            });
+        }
         let provider_id = match self {
             Self::Establish(action) => action.provider_id,
             Self::Rebind(action) => {
@@ -316,6 +364,7 @@ impl SorafsProviderGovernanceActionV1 {
                 action.provider_id
             }
             Self::Remove(action) => action.provider_id,
+            Self::Admission(_) => unreachable!("admission validated above"),
         };
         if provider_id == ProviderId::default() {
             return Err(iroha_model_base::error::ParseError::new(
@@ -326,11 +375,12 @@ impl SorafsProviderGovernanceActionV1 {
     }
     /// Provider identifier affected by this transition.
     #[must_use]
-    pub const fn provider_id(&self) -> ProviderId {
+    pub fn provider_id(&self) -> Option<ProviderId> {
         match self {
-            Self::Establish(action) => action.provider_id,
-            Self::Rebind(action) => action.provider_id,
-            Self::Remove(action) => action.provider_id,
+            Self::Establish(action) => Some(action.provider_id),
+            Self::Rebind(action) => Some(action.provider_id),
+            Self::Remove(action) => Some(action.provider_id),
+            Self::Admission(action) => action.provider_id().ok().flatten(),
         }
     }
 }
@@ -1229,8 +1279,8 @@ impl BindManifestAlias {
 impl RegisterCapacityDeclaration {
     /// Create a new `RegisterCapacityDeclaration` instruction.
     #[must_use]
-    pub fn new(record: CapacityDeclarationRecord) -> Self {
-        Self { record }
+    pub fn new(declaration: Vec<u8>) -> Self {
+        Self { declaration }
     }
 }
 impl RecordCapacityTelemetry {
@@ -1887,6 +1937,20 @@ impl_sorafs_decode_from_slice!(RegisterPinManifest {
     alias: Option<ManifestAliasBinding>,
     successor_of: Option<ManifestDigest>,
 });
+impl_sorafs_decode_from_slice!(InitializeSorafsProviderAdmissionV1 {
+    council: crate::sorafs::provider_admission::governance::InitialProviderAdmissionCouncilV1,
+    providers: Vec<crate::sorafs::provider_admission::governance::InitialProviderAdmissionV1>,
+});
+impl_sorafs_decode_from_slice!(AssertSorafsPublicationV1 {
+    manifest_digest: ManifestDigest,
+    order_id: ReplicationOrderId,
+    assignment_revision: u64,
+    canonical_order_digest: [u8; 32],
+    require_complete: bool,
+    challenge: [u8; 32],
+    minimum_height: u64,
+    minimum_block_hash: [u8; 32],
+});
 impl_sorafs_decode_from_slice!(ApprovePinManifest {
     digest: ManifestDigest,
     council_envelope: Option<Vec<u8>>,
@@ -1903,7 +1967,7 @@ impl_sorafs_decode_from_slice!(BindManifestAlias {
     expiry_epoch: u64,
 });
 impl_sorafs_decode_from_slice!(RegisterCapacityDeclaration {
-    record: CapacityDeclarationRecord,
+    declaration: Vec<u8>,
 });
 impl_sorafs_decode_from_slice!(RecordCapacityTelemetry {
     record: CapacityTelemetryRecord,
@@ -2250,7 +2314,8 @@ mod tests {
             proof: vec![0xAA, 0xBB],
         }
     }
-    fn capacity_declaration() -> CapacityDeclarationRecord {
+    fn capacity_declaration() -> crate::sorafs::capacity::CapacityDeclarationRecord {
+        use crate::sorafs::capacity::CapacityDeclarationRecord;
         CapacityDeclarationRecord::new(
             provider(0x31),
             vec![0x01, 0x02, 0x03],
@@ -2703,7 +2768,9 @@ mod tests {
             Some("superseded".to_owned()),
         ));
         assert_slice_roundtrip(BindManifestAlias::new(digest(0x11), alias(), 65, 365));
-        assert_slice_roundtrip(RegisterCapacityDeclaration::new(capacity_declaration()));
+        assert_slice_roundtrip(RegisterCapacityDeclaration::new(
+            capacity_declaration().declaration,
+        ));
         assert_slice_roundtrip(RecordCapacityTelemetry::new(capacity_telemetry()));
         assert_slice_roundtrip(RegisterCapacityDispute::new(capacity_dispute()));
         assert_slice_roundtrip(IssueReplicationOrder::new(
@@ -2968,7 +3035,7 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            RegisterCapacityDeclaration::new(capacity_declaration()),
+            RegisterCapacityDeclaration::new(capacity_declaration().declaration),
         );
         assert_registry_decodes(
             &registry,

@@ -82,6 +82,7 @@ staking_codec!(
     BondPublicLaneStake,
     SchedulePublicLaneUnbond,
     FinalizePublicLaneUnbond,
+    SlashPublicLaneValidator,
     ClaimPublicLaneRewards,
     RecordPublicLaneRewards,
 );
@@ -131,7 +132,7 @@ mod tests {
             LaneId::new(42),
             owner.clone(),
             PeerId::new(peer_key.public_key().clone()),
-            owner,
+            owner.clone(),
             Quantity::from(1000_u64),
             Metadata::default(),
             monetary_plan,

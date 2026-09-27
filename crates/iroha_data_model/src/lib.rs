@@ -58,6 +58,7 @@ pub use asset::{AssetDefinitionId, AssetId};
 pub mod block;
 /// Bridge-related data types.
 pub mod bridge;
+pub mod sccp;
 /// Application-owned upgraded racing replay and state types; no custody authority.
 pub mod classed_race_v1;
 /// Shared primitives reused across data model modules.

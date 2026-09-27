@@ -31,8 +31,7 @@ use toml::{Table, Value as TomlValue};
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
 const ROUTE_VALIDATOR_STAKE: u32 = 2_000;
 pub(super) const ROUTE_VALIDATOR_FEE_SEED_AMOUNT: u32 = 1_000_000;
-const ROUTE_STAKE_ASSET_NAME: &str = "Route Stake";
-const ROUTE_FEE_ASSET_NAME: &str = "Route Fee";
+const ROUTE_XOR_ASSET_NAME: &str = "XOR";
 
 fn route_lane_validator_account(index: usize) -> AccountId {
     let key_pair = checked_localnet_smoke_keypair(
@@ -57,16 +56,10 @@ fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPai
     KeyPair::try_from_seed(seed, algorithm).expect("derive localnet smoke fixture key")
 }
 fn route_stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    route_fee_asset_definition_id()
 }
 pub(super) fn route_fee_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("universal", "universal").expect("fee asset domain"),
-        "xor".parse().expect("fee asset name"),
-    )
+    iroha_data_model::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id
 }
 fn route_multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_count = std::num::NonZeroU32::new(3).expect("lane count");
@@ -120,19 +113,8 @@ fn route_multilane_genesis_post_topology_transactions(
         Register::asset_definition(
             AssetDefinition::new(
                 stake_asset_id.clone(),
-                ROUTE_STAKE_ASSET_NAME.to_owned(),
-                Default::default(),
-                iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
-            )
-            .with_metadata(Metadata::default()),
-        )
-        .into(),
-        Register::asset_definition(
-            AssetDefinition::new(
-                fee_asset_id.clone(),
-                ROUTE_FEE_ASSET_NAME.to_owned(),
-                Default::default(),
+                ROUTE_XOR_ASSET_NAME.to_owned(),
+                iroha_primitives::numeric::NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )

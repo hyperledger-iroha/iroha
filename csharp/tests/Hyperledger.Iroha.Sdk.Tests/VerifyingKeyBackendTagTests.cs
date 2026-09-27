@@ -108,7 +108,7 @@ public sealed class VerifyingKeyBackendTagTests
     [InlineData("halo2/ipa")]
     [InlineData("halo2/pasta/kaigi-authorization-v1")]
     [InlineData("halo2/pasta/kaigi-usage-v1")]
-    [InlineData("halo2/pasta/ivm-execution-v1")]
+    [InlineData("halo2/pasta/ivm-replay-binding-v1")]
     [InlineData("halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-full-merkle16-axiom-poseidon-v3")]
     [InlineData("halo2/pasta/confidential-unshield-change-merkle16-axiom-poseidon-v4")]
@@ -127,7 +127,8 @@ public sealed class VerifyingKeyBackendTagTests
     public void VerifierRegistryRejectsAliasesAndRetiredProfiles(string? label)
     {
         Assert.False(VerifierBackendRegistryLabels.IsSupportedLabel(label));
-        if (label is "halo2/pasta/kaigi-roster-v1"
+        if (label is "halo2/pasta/ivm-execution-v1"
+            or "halo2/pasta/kaigi-roster-v1"
             or "halo2/pasta/kagemusha-v1-mint-fold-merkle16-axiom-poseidon-v1")
         {
             Assert.False(VerifyingKeyBackendTags.IsProductionVerifyBackendLabel(label));
@@ -156,9 +157,10 @@ public sealed class VerifyingKeyBackendTagTests
             "halo2-ipa-pasta",
             "halo2/pasta",
             "halo2/ipa-pasta-cycle-v1",
-            "halo2/pasta/ipa/ivm-execution-v1",
-            "halo2/ipa:ivm-execution-v1",
-            "halo2/ipa::ivm-execution-v1",
+            "halo2/pasta/ipa/ivm-replay-binding-v1",
+            "halo2/ipa:ivm-replay-binding-v1",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
             "halo2/pasta/ivm-overlay-bind",
             "halo2/pasta/kagemusha-v1-invalid-eq",
             "halo2/pasta/kagemusha-v1-invalid-ep",
@@ -287,7 +289,8 @@ public sealed class VerifyingKeyBackendTagTests
             "halo2/ipa\0",
             "HALO2/IPA",
             "stark/FRI",
-            "halo2/ipa::ivm-execution-v1",
+            "halo2/pasta/ivm-execution-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
             "stark/fri/sha256..goldilocks",
             "halo2\uFF0Fipa",
             "halo2/\u200Bipa",

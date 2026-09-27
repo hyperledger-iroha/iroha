@@ -953,10 +953,10 @@ fn strict_init_rejects_conflicting_sidecar_hash_without_rewriting_chain() {
             .into();
         let conflicting_hash = conflicting.hash();
         assert_ne!(canonical_hash, conflicting_hash);
-        let (frame, _versioned) = conflicting
+        let frame = conflicting
             .canonical_wire()
             .expect("encode conflicting sidecar")
-            .into_parts();
+            .into_vec();
         let da_path = {
             let store = kura.block_store.lock();
             store

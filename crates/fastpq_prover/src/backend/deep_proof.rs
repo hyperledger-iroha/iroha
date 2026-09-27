@@ -1,13 +1,13 @@
-//! Canonical bounded wire owner for the inactive DEEP compact candidate.
+//! Canonical bounded wire owner for the masked DEEP compact protocol.
 //!
-//! This DTO fixes 301 retained columns, 64 initial queries, a paired quotient,
+//! This DTO fixes 301 retained columns, 64 initial queries, a paired quotient plus composition mask,
 //! five folds [16,16,8,8,4], fixed raw FRI fibers, and all 128 terminal values. Minimal frontiers derive
 //! from sorted unique positions; a distinct frame admits no legacy fallback.
 //! Decoding checks bytes and cumulative resource budgets before shape preflight.
 //!
-//! The offline engine binds this DTO to its transcript, public statement,
-//! OOD/AIR checks and authenticated openings. TODO: Qualify the integrated
-//! protocol and authenticate ledger context before production admission.
+//! The verifier binds this DTO to its transcript, public statement, OOD/AIR
+//! checks and authenticated openings. TODO: Independently qualify the integrated
+//! protocol and source-context authentication.
 //! Successful decode or shape preflight is not proof verification. In particular,
 //! the verifier must compare the positions to its own final transcript challenge.
 
@@ -43,9 +43,8 @@ pub(super) const GROUP_LEAVES: [usize; 5] = [
 /// Full terminal vector, checked by the eventual verifier rather than sampled.
 pub(super) const TERMINAL_VALUES: usize = FRI_LENGTHS[5];
 /// Exact serialized upper envelope for the fixed canonical DTO.
-pub(super) const MAX_FRAME_BYTES: usize = 500_783;
+pub(super) const MAX_FRAME_BYTES: usize = 502_895;
 /// Existing production-sized single-proof byte target; this is not admission.
-#[cfg(test)]
 pub(super) const PROOF_BYTE_TARGET: usize = 512 * 1024;
 /// Fixed maximum cumulative Norito allocation charges for one proof decode.
 pub(super) const MAX_ALLOCATION_CHARGES: usize = 8 * 1024 * 1024;
@@ -57,7 +56,7 @@ const MAX_DECODE_DEPTH: usize = 16;
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::deep_proof::DeepProof",
-    frame = "fastpq_prover::deep_compact::ProofV1"
+    frame = "fastpq_prover::deep_compact::MaskedCompositionProofV1"
 )]
 pub(super) struct DeepProof {
     pub(super) row_root: Digest,
@@ -65,7 +64,7 @@ pub(super) struct DeepProof {
     pub(super) fri_roots: Vec<Digest>,
     pub(super) ood: OodAnswers,
     pub(super) rows: Vec<RowOpening>,
-    pub(super) quotients: Vec<QuotientOpening>,
+    pub(super) quotients: Vec<QuotientMaskOpening>,
     pub(super) row_siblings: Vec<Digest>,
     pub(super) quotient_siblings: Vec<Digest>,
     pub(super) rounds: Vec<FriRound>,
@@ -87,12 +86,13 @@ pub(super) struct RowOpening {
     pub(super) values: RowValues,
 }
 
-/// Both quotient halves authenticated together at one initial query position.
+/// Both quotient chunks and the composition mask authenticated at one query.
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub(super) struct QuotientOpening {
+pub(super) struct QuotientMaskOpening {
     pub(super) index: u32,
     pub(super) low: Fp4,
     pub(super) high: Fp4,
+    pub(super) composition_mask: Fp4,
 }
 
 /// Complete selected fibers and their canonical minimal Merkle frontier.
@@ -247,6 +247,8 @@ pub(super) fn preflight(proof: &DeepProof, queries: &[usize]) -> Result<OpeningP
             .validate("deep_quotient_low", &[row.index as usize])?;
         row.high
             .validate("deep_quotient_high", &[row.index as usize])?;
+        row.composition_mask
+            .validate("deep_composition_mask", &[row.index as usize])?;
     }
     if proof.row_siblings.len() != plans.initial.work().siblings
         || proof.quotient_siblings.len() != plans.initial.work().siblings
@@ -284,7 +286,7 @@ fn decode_limits_with_allocation(frame_bytes: usize, allocation_charges: usize) 
     )
 }
 
-/// Decode a canonical candidate inside the fixed profile and caller byte ceiling.
+/// Decode the canonical masked frame inside the fixed profile and caller byte ceiling.
 ///
 /// The byte check precedes header/checksum parsing. Sequence/allocation/depth
 /// budgets remain active through canonical re-encoding. The proof's positions
@@ -331,7 +333,7 @@ pub(super) fn maximum_frame_bytes() -> usize {
     };
     let vector = |count, payload| 8 + count * field(payload);
     let row = field(4) + field(RowValues::BYTES);
-    let quotient = field(4) + 2 * field(Fp4::BYTES);
+    let quotient = field(4) + 3 * field(Fp4::BYTES);
     let ood = 2 * field(vector(COMMITTED_COLUMN_COUNT, Fp4::BYTES)) + field(vector(2, Fp4::BYTES));
     let rounds = 8 + ARITIES
         .iter()

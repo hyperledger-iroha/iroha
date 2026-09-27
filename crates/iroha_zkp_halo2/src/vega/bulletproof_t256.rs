@@ -140,6 +140,14 @@ impl Drop for SecretT256PointEncodingV1 {
 std::thread_local! {
     static T256_SCALAR_ENCODING_CLEARS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
     static T256_POINT_ENCODING_CLEARS_V1: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static T256_SECRET_MSM_OBSERVATIONS_V1: core::cell::Cell<(usize, usize)> = const {
+        core::cell::Cell::new((0, 0))
+    };
+}
+/// Observe actual scalar erasures and point selections in this test thread.
+#[cfg(test)]
+pub(super) fn secret_msm_test_observations_v1() -> (usize, usize) {
+    T256_SECRET_MSM_OBSERVATIONS_V1.with(core::cell::Cell::get)
 }
 /// Best-effort erased named copy of a T256 prover secret.
 ///
@@ -646,6 +654,12 @@ impl ProofScalar for Scalar {
     }
     fn clear_secret(&mut self) {
         Scalar::clear_secret(self);
+        #[cfg(test)]
+        T256_SECRET_MSM_OBSERVATIONS_V1.with(|observations| {
+            assert!(self.is_zero(), "the retained scalar must be erased");
+            let (clears, selections) = observations.get();
+            observations.set((clears.saturating_add(1), selections));
+        });
     }
 }
 impl Neg for Point {
@@ -681,6 +695,11 @@ impl ProofPoint for Point {
         self.mul_scalar(scalar)
     }
     fn conditional_select(a: &Self, b: &Self, choice: u8) -> Self {
+        #[cfg(test)]
+        T256_SECRET_MSM_OBSERVATIONS_V1.with(|observations| {
+            let (clears, selections) = observations.get();
+            observations.set((clears, selections.saturating_add(1)));
+        });
         Point::conditional_select(a, b, choice)
     }
     fn clear_secret(&mut self) {

@@ -562,3 +562,29 @@ fn bundle_level_unknown_roles_and_secret_material_are_rejected() {
         );
     }
 }
+
+#[test]
+fn explicit_native_credential_path_is_parsed_without_reading_a_secret() {
+    let fixtures = complete_role_fixtures();
+    let source = complete_source(&fixtures)
+        + "\nsoftware_credential = \"/run/iroha/nonexistent-orderbook-key\"\n";
+    let actual = parse_overlay(&source).expect("config only validates the path shape");
+    assert_eq!(
+        actual
+            .torii
+            .sorafs_storage
+            .native_transaction_signers
+            .orderbook
+            .unwrap()
+            .software_credential,
+        Some(PathBuf::from("/run/iroha/nonexistent-orderbook-key"))
+    );
+    for path in ["relative/key", "/run/../key"] {
+        let invalid = complete_source(&fixtures) + &format!("\nsoftware_credential = {path:?}\n");
+        assert!(parse_overlay(&invalid).is_err());
+    }
+    let mut external = fixtures;
+    external[3].handle = "provider://sorafs/orderbook/primary".into();
+    let invalid = complete_source(&external) + "\nsoftware_credential = \"/run/iroha/key\"\n";
+    assert!(parse_overlay(&invalid).is_err());
+}

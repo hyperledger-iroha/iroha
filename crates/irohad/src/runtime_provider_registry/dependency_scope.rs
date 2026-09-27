@@ -130,21 +130,27 @@ pub(super) fn has_unrequested_dependency(
     bindings: &IrohaRuntimeProviderBindingsV1,
     dependencies: &IrohaRuntimeDeps,
 ) -> bool {
-    dependency_is_unrequested(
-        bindings,
-        IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
-        dependencies.sumeragi_global_beacon_partial_signer.is_some(),
-    ) || dependency_is_unrequested(
-        bindings,
-        IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
-        dependencies.parliament_tle_partial_release_signer.is_some(),
-    ) || dependency_is_unrequested(
-        bindings,
-        IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
-        dependencies
-            .bootle_lantern_issuance_provider_registry
-            .is_some(),
-    ) || has_unrequested_storage_security_dependency(bindings, dependencies)
+    // Pasta seed custody is deliberately not a catalog provider slot: only the
+    // consumed private descriptor or exact deployment launcher may install it.
+    dependencies.kagemusha_mint_finality_authority.is_some()
+        || dependency_is_unrequested(
+            bindings,
+            IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner,
+            dependencies.sumeragi_global_beacon_partial_signer.is_some(),
+        )
+        || dependency_is_unrequested(
+            bindings,
+            IrohaRuntimeProviderSlotV1::ParliamentTlePartialReleaseSigner,
+            dependencies.parliament_tle_partial_release_signer.is_some(),
+        )
+        || dependency_is_unrequested(
+            bindings,
+            IrohaRuntimeProviderSlotV1::BootleLanternIssuanceProviderRegistry,
+            dependencies
+                .bootle_lantern_issuance_provider_registry
+                .is_some(),
+        )
+        || has_unrequested_storage_security_dependency(bindings, dependencies)
         || has_unrequested_finance_native_dependency(bindings, dependencies)
         || has_unrequested_moderation_viewer_dependency(bindings, dependencies)
         || has_unrequested_pop_potr_gateway_dependency(bindings, dependencies)

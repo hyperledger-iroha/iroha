@@ -1,4 +1,4 @@
-//! Bounded offline model artifact adapters for the fixed six-lane DEEP profile.
+//! Bounded model artifact adapters for the fixed masked six-lane DEEP profile.
 //!
 //! Public expectations and all AXT context come from the caller. Transport facts
 //! are exact-compared before any child proof is decoded. One enclosing Norito
@@ -141,7 +141,7 @@ fn finish_artifact<V: CompactTransferValue>(
     Ok(VerifiedArtifact { bundle, identity })
 }
 
-/// Offline candidate identity only; the production qualification registry stays empty.
+/// Test-only predecessor identity for rejection and diagnostic fixtures.
 #[cfg(test)]
 pub(in crate::backend) fn diagnostic_profile_id() -> FastpqCompactProfileIdV1 {
     profile_id_for::<u64>()
@@ -245,7 +245,7 @@ impl DeepQuantityArtifactProfile {
     }
 }
 
-/// Full-domain offline identity only; it confers no production qualification.
+/// Canonical masked Quantity profile identity; identity alone grants no authority.
 pub(in crate::backend) fn quantity_diagnostic_profile_id() -> FastpqCompactProfileIdV1 {
     DeepQuantityArtifactProfile::fixed().profile_id()
 }

@@ -370,6 +370,7 @@ impl NativeCustodyFixture {
             floor,
             &[HistoricalFinalityV1::Custody(self.approval)],
             observation,
+            None,
         )
     }
 }
@@ -438,6 +439,7 @@ fn actual_native_custody_rejects_same_height_forged_control_digests() {
                 HistoricalFinalityV1::Custody(fixture.approval),
             ],
             &observation,
+            None,
         )
         .expect("matching two-item historical custody control");
     assert!(matches!(
@@ -449,7 +451,8 @@ fn actual_native_custody_rejects_same_height_forged_control_digests() {
                 HistoricalFinalityV1::Custody(fixture.approval),
                 HistoricalFinalityV1::Custody(forged_approval),
             ],
-            &observation
+            &observation,
+            None,
         ),
         Err(StreamTokenIssuerError::SignerFinalityUnavailable)
     ));

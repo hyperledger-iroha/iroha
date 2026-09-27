@@ -1,45 +1,43 @@
-//! Conservative per-segment charges for the sole bounded DEEP producer.
+//! Witness-free structural payload floor for one masked DEEP proof segment.
 //!
-//! The shared producer charge covers its fixed LDE, commitment trees, quotient,
-//! extension arrays and encoded openings. This outer boundary additionally
-//! charges physical witness expansion, conversion and caller context before any
-//! private witness is expanded. Charges sum lifetimes, are local policy, and do
-//! not reserve process RSS. Private SMT construction and retained child frames
-//! retain their separate request-level limits.
+//! This floor covers physical witness expansion, bounded masked replay, and
+//! caller framing before private trees are constructed. It is not the complete
+//! relation-dependent producer charge or an RSS reservation. Each segment must
+//! additionally pass the exact `deep_prover::ProducerPlan` before trace expansion;
+//! that plan includes quotient, commitment, FRI and codec workspace.
 
-use super::deep_prover;
+use super::deep_masked_replay::{MaskedReplayPlan, ReplayLimits};
 use crate::{
     Error, Result,
     gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT},
 };
 
-/// Fixed conservative payload ceiling of the exact quotient phase.
-///
-/// The exact plan must fit this ceiling before any full-domain LDE is allocated.
-/// Charging the entire ceiling here keeps witness preflight independent of
-/// witness coefficients and the later source-derived exact quotient plan.
-pub(super) fn quotient_payload_ceiling() -> Result<usize> {
-    usize::try_from(8_u64 << 30).map_err(|_| overflow())
+/// Derive the fixed replay requirements without a witness, entropy or transforms.
+pub(super) fn replay_plan() -> Result<MaskedReplayPlan> {
+    MaskedReplayPlan::new(ReplayLimits {
+        max_payload_bytes: usize::MAX,
+        max_work_units: usize::MAX,
+        max_full_passes: 3,
+    })
 }
 
-/// Charge the complete producer plus conversion and independently bound context.
+/// Charge a necessary structural floor plus complete bound context and framing.
 pub(super) fn segment_charge(statement_bytes: usize, child_frame_bytes: usize) -> Result<usize> {
-    let mut charge = deep_prover::payload_charge(quotient_payload_ceiling()?)?;
-    // Logical/physical witness growth, full base rows and guarded projected
-    // coefficients fit within five complete base matrices. The source matrix
-    // is released before the producer retains its 301 full-domain LDE columns.
+    let mut charge = replay_plan()?.payload_bytes;
+    // Logical/physical witness growth and guarded source columns. The exact
+    // producer plan separately counts its borrowed physical source matrix.
     add(&mut charge, &[5, COLUMN_COUNT, PHYSICAL_ROW_COUNT, 8])?;
     add(&mut charge, &[8, statement_bytes])?;
     add(&mut charge, &[8, child_frame_bytes])?;
     Ok(charge)
 }
 
-/// Reject an insufficient complete segment policy before private row allocation.
+/// Reject insufficient outer structural policy before witness expansion.
 pub(super) fn check_segment_charge(
     statement_bytes: usize,
     child_frame_bytes: usize,
     maximum: usize,
-) -> Result<usize> {
+) -> Result<()> {
     let actual = segment_charge(statement_bytes, child_frame_bytes)?;
     if actual > maximum {
         return Err(Error::VerifierLimitExceeded {
@@ -48,79 +46,57 @@ pub(super) fn check_segment_charge(
             max: maximum,
         });
     }
-    Ok(actual)
+    Ok(())
 }
 
-fn product(factors: &[usize]) -> Result<usize> {
-    factors.iter().try_fold(1usize, |value, factor| {
-        value.checked_mul(*factor).ok_or_else(overflow)
-    })
-}
-
-fn add(total: &mut usize, factors: &[usize]) -> Result<()> {
-    *total = total.checked_add(product(factors)?).ok_or_else(overflow)?;
+fn add(charge: &mut usize, factors: &[usize]) -> Result<()> {
+    let amount = factors
+        .iter()
+        .try_fold(1usize, |n, &factor| n.checked_mul(factor))
+        .ok_or_else(overflow)?;
+    *charge = charge.checked_add(amount).ok_or_else(overflow)?;
     Ok(())
 }
 
 fn overflow() -> Error {
-    Error::InvalidTraceShape {
-        details: "compact prover segment charge overflow".to_owned(),
+    Error::TransferInvariant {
+        details: "compact prover structural charge overflows".to_owned(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{
-        compact_public_columns::COMMITTED_COLUMN_COUNT,
-        deep_geometry::{LDE_ROWS, TRACE_ROWS},
-        deep_proof::MAX_FRAME_BYTES,
-    };
 
     #[test]
-    fn charge_covers_the_shared_producer_quotient_and_source_conversion() {
+    fn charge_covers_source_conversion_and_masked_replay() {
+        let replay = replay_plan().unwrap();
         let source = 5 * COLUMN_COUNT * PHYSICAL_ROW_COUNT * 8;
-        let producer = deep_prover::payload_charge(quotient_payload_ceiling().unwrap()).unwrap();
-        assert_eq!(segment_charge(0, 0).unwrap(), source + producer);
-        assert!(producer > COMMITTED_COLUMN_COUNT * LDE_ROWS * 8);
+        assert_eq!(segment_charge(0, 0).unwrap(), source + replay.payload_bytes);
+        assert_eq!(replay.stripes(), 128);
+        assert_eq!(replay.maximum_column_transforms, 301 * (1 + 3 * 128));
         assert_eq!(
-            quotient_payload_ceiling().unwrap(),
-            usize::try_from(8_u64 << 30).unwrap()
+            PHYSICAL_ROW_COUNT,
+            crate::backend::deep_geometry::TRACE_ROWS
         );
-        assert_eq!(PHYSICAL_ROW_COUNT, TRACE_ROWS);
-        assert_eq!(COMMITTED_COLUMN_COUNT, 301);
+        assert_eq!(
+            size_of::<crate::gadgets::compact_smt_air::SmtRow<u64>>(),
+            COLUMN_COUNT * 8
+        );
     }
 
     #[test]
-    fn variable_context_and_frame_charges_reject_overflow() {
-        let base = segment_charge(0, 0).unwrap();
-        assert_eq!(segment_charge(3, 7).unwrap(), base + 8 * (3 + 7));
+    fn charge_enforces_inclusive_limits_and_context() {
+        let charge = segment_charge(256, 1024).unwrap();
+        assert_eq!(charge, segment_charge(0, 0).unwrap() + 8 * (256 + 1024));
+        check_segment_charge(256, 1024, charge).unwrap();
+        assert!(matches!(
+            check_segment_charge(256, 1024, charge - 1),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_compact_prover_segment_charge_bytes", actual, max
+            }) if actual == charge && max == charge - 1
+        ));
         assert!(segment_charge(usize::MAX, 0).is_err());
         assert!(segment_charge(0, usize::MAX).is_err());
-    }
-
-    #[test]
-    fn exact_policy_boundary_is_inclusive() {
-        let actual = segment_charge(256 * 1024, MAX_FRAME_BYTES).unwrap();
-        assert_eq!(
-            check_segment_charge(256 * 1024, MAX_FRAME_BYTES, actual).unwrap(),
-            actual
-        );
-        assert!(matches!(
-            check_segment_charge(256 * 1024, MAX_FRAME_BYTES, actual - 1),
-            Err(Error::VerifierLimitExceeded {
-                limit: "max_compact_prover_segment_charge_bytes", actual: measured, max,
-            }) if measured == actual && max == actual - 1
-        ));
-        assert!(check_segment_charge(0, 0, 0).is_err());
-    }
-
-    #[test]
-    fn checked_products_and_sums_do_not_wrap() {
-        assert_eq!(product(&[3, 5, 7]).unwrap(), 105);
-        assert!(product(&[usize::MAX, 2]).is_err());
-        let mut total = usize::MAX - 1;
-        assert!(add(&mut total, &[2]).is_err());
-        assert_eq!(total, usize::MAX - 1);
     }
 }

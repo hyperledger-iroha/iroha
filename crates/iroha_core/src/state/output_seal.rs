@@ -18,6 +18,8 @@ pub(crate) struct ExecutionOutputSealMetadata {
 /// Keep source-specific validation errors intact across State's consuming seal.
 #[derive(Debug)]
 pub(crate) enum ExecutionOutputSealError<E> {
+    /// Original local storage admission refused; the carrier is retryable.
+    Storage(crate::state::StateStorageAdmissionError),
     /// The State owner, retained source or canonical attachment was inconsistent.
     Owner(String),
     /// The block finalizer rejected its actual deterministic effects.
@@ -344,7 +346,10 @@ impl StateBlock<'_> {
         ) -> Result<ExecutionOutputSealMetadata, E>,
     ) -> Result<(), ExecutionOutputSealError<E>> {
         self.reserve_ordinary_execution_outputs(block)?;
-        self.execute_ordinary_output_plan(block, genesis)?;
+        let execution = self.execute_ordinary_output_plan(block, genesis);
+        self.require_storage_admission()
+            .map_err(ExecutionOutputSealError::Storage)?;
+        execution?;
         self.seal_execution_outputs(block, finalize)
     }
 
@@ -361,6 +366,8 @@ impl StateBlock<'_> {
             &[RoutingDecision],
         ) -> Result<ExecutionOutputSealMetadata, E>,
     ) -> Result<(), ExecutionOutputSealError<E>> {
+        self.require_storage_admission()
+            .map_err(ExecutionOutputSealError::Storage)?;
         let Some(ExecutionOutputPlanState::Retained(retained)) = self
             .execution_output_plan
             .replace(ExecutionOutputPlanState::Sealing)
@@ -488,6 +495,7 @@ impl StateBlock<'_> {
                 wire_hash: Hash::new(&wire),
                 wire_bytes: u64::try_from(wire.len())
                     .map_err(|_| "sealed wire length exceeds u64")?,
+                _row_slots_charge: retained.row_slots_charge,
             })
         })();
         match result {

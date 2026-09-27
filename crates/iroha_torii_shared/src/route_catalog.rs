@@ -1547,6 +1547,30 @@ pub mod core {
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Read one frozen validator committee attempt and its finality attachments.
+    pub const NEXUS_VALIDATOR_COMMITTEE_GET: RouteDescriptor = RouteDescriptor::new(
+        "nexus.validator_committee.read",
+        HttpMethod::Get,
+        "/v1/nexus/validator-committee",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Prepare exact staking monetary inputs without submitting a transaction.
+    pub const NEXUS_STAKING_PREPARATION_POST: RouteDescriptor = RouteDescriptor::new(
+        "nexus.staking.prepare",
+        HttpMethod::Post,
+        "/v1/nexus/staking/prepare",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Read newest ledger headers.
     pub const LEDGER_HEADERS: RouteDescriptor = RouteDescriptor::new(
         "ledger.headers",
@@ -1813,6 +1837,8 @@ pub mod core {
         READYZ,
         CONFIGURATION_GET,
         NEXUS_LIFECYCLE_GET,
+        NEXUS_VALIDATOR_COMMITTEE_GET,
+        NEXUS_STAKING_PREPARATION_POST,
         LEDGER_HEADERS,
         LEDGER_STATE_ROOT,
         LEDGER_STATE_PROOF,
@@ -3509,6 +3535,36 @@ pub mod sorafs {
             .with_authentication(AuthenticationPolicy::CanonicalSignedBody)
             .with_effect(RouteEffect::Mutation)
             .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Read one chunk under an exact finalized native repair lease.
+    pub const REPAIR_SOURCE: RouteDescriptor =
+        documented_post("sorafs.repair.source", "/v1/sorafs/repair/source")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Read bounded source metadata or one chunk under a current native replication assignment.
+    pub const PROVIDER_SOURCE: RouteDescriptor =
+        documented_post("sorafs.provider.source", "/v1/sorafs/provider/source")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Stage publisher-authenticated chunks for an exact finalized provider assignment.
+    pub const PUBLISH_SOURCE: RouteDescriptor =
+        documented_post("sorafs.publish_source.stage", "/v1/sorafs/publish/source")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::Mutation)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Prepare exact current publication assertion inputs for their authenticated publisher.
+    pub const PUBLISH_PREPARE: RouteDescriptor =
+        documented_post("sorafs.publication.prepare", "/v1/sorafs/publish/prepare")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
+    /// Return native publication execution evidence to an authorized full-ledger reader.
+    pub const PUBLISH_PROOF: RouteDescriptor =
+        documented_post("sorafs.publication.proof", "/v1/sorafs/publish/proof")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+            .with_effect(RouteEffect::ExpensiveCompute)
+            .with_admission(AdmissionPolicy::AuthenticatedAccount);
     /// List `SoraFS` aliases after exact canonical-account authentication.
     pub const ALIASES: RouteDescriptor =
         authenticated_documented_get("sorafs.alias.list", "/v1/sorafs/aliases")
@@ -3684,6 +3740,11 @@ pub mod sorafs {
         CID_LOOKUP,
         STORAGE_MANIFEST,
         STORAGE_PLAN,
+        REPAIR_SOURCE,
+        PROVIDER_SOURCE,
+        PUBLISH_SOURCE,
+        PUBLISH_PREPARE,
+        PUBLISH_PROOF,
         STORAGE_TOKEN,
         STORAGE_CAR,
         STORAGE_CHUNK,

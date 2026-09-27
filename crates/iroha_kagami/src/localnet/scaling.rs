@@ -119,7 +119,7 @@ impl ScalingLayout {
     ) -> Result<RawGenesisTransaction> {
         self.validate_accounts(accounts)?;
         let existing = BootstrapRegistrations::from_manifest(&genesis);
-        let fee_asset = localnet_fee_asset_definition_id();
+        let fee_asset = localnet_xor_asset_definition_id();
         ensure!(
             existing.asset_defs.contains(&fee_asset),
             "fixed scaling fee asset must already be registered"

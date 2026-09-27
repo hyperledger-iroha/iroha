@@ -2761,11 +2761,11 @@ impl Numeric {
 
 impl SerializePayload for Numeric {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
-        let helper = scale_::NumericScaleHelper {
-            mantissa: self.mantissa.clone(),
+        scale_::NumericScaleHelperView {
+            mantissa: scale_::BigIntView(&self.mantissa),
             scale: self.scale(),
-        };
-        helper.serialize(writer)
+        }
+        .serialize(writer)
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         scale_::NumericScaleHelperView {
@@ -3114,7 +3114,7 @@ mod scale_ {
     }
     #[allow(unexpected_cfgs)]
     #[derive(norito::Encode)]
-    /// Borrowed wire-compatible view used to size a canonical numeric.
+    /// Borrowed wire-compatible view used to serialize and size a canonical numeric.
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_primitives::numeric::scale_::NumericScaleHelperView")]
     pub(super) struct NumericScaleHelperView<'a> {
@@ -3407,6 +3407,47 @@ mod tests {
             assert_eq!(value.scale(), MAX_DECIMAL_SCALE);
             assert_eq!(value.mantissa.twos_byte_len(), MAX_MANTISSA_BYTES);
             assert_exact_length(&value);
+        }
+    }
+    #[test]
+    fn streamed_numeric_matches_owned_helper_for_extrema_and_scales() {
+        let limit = ReferenceInt::one() << (MAX_MANTISSA_BITS - 1);
+        for raw in [
+            ReferenceInt::zero(),
+            ReferenceInt::from(-129),
+            ReferenceInt::from(128),
+            -limit.clone(),
+            limit - 1_u8,
+        ] {
+            for scale in [0, 1, MAX_DECIMAL_SCALE] {
+                let value =
+                    Numeric::try_new(BigInt::from_inner(raw.clone()).unwrap(), scale).unwrap();
+                let owned = scale_::NumericScaleHelper {
+                    mantissa: value.mantissa.clone(),
+                    scale: value.scale(),
+                };
+                let expected = norito::codec::Encode::encode(&owned);
+                let mut storage = [0_u8; 256];
+                let actual_len = {
+                    let mut output = std::io::Cursor::new(storage.as_mut_slice());
+                    value
+                        .serialize(&mut norito::core::Encoder::new(&mut output))
+                        .unwrap();
+                    usize::try_from(output.position()).unwrap()
+                };
+                assert_eq!(&storage[..actual_len], expected.as_slice());
+                assert_eq!(
+                    norito::core::encoded_payload_len(&value).unwrap(),
+                    actual_len
+                );
+                let (decoded, used) =
+                    <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(
+                        &storage[..actual_len],
+                    )
+                    .unwrap();
+                assert_eq!(decoded, value);
+                assert_eq!(used, actual_len);
+            }
         }
     }
     #[test]

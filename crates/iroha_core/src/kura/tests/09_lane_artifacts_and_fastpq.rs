@@ -1021,23 +1021,77 @@ fn sample_fastpq_snapshot(
     block_hash: HashOf<BlockHeader>,
     proof_len: usize,
 ) -> FastpqProofSnapshot {
+    use iroha_data_model::fastpq::{
+        FastpqArtifactIdentityDescriptionV1, FastpqCommitmentDescriptionV1,
+        FastpqOrderedCompactAirCommitmentsV1, FastpqProofKindV1,
+    };
     let proof = vec![0x7a; proof_len];
     FastpqProofSnapshot {
         height,
         block_hash,
         entry_hash: Hash::new(format!("fastpq-entry-{height}-{proof_len}").into_bytes()),
         batch_index: 0,
-        parameter: "fastpq-state-transition-stark-v1".to_string(),
         transition_count: 0,
-        trace_commitment: GoldilocksDigest384V1::new([0x41; 6])
-            .expect("canonical test FASTPQ trace commitment"),
-        proof_digest: Hash::new(&proof),
-        batch: fastpq_prover::TransitionBatch::new(
-            "fastpq-state-transition-stark-v1",
-            fastpq_prover::PublicInputs::default(),
-        ),
-        proof,
+        public_inputs: iroha_data_model::fastpq::FastpqPublicInputs {
+            dsid: [0; 16],
+            slot: 0,
+            old_root: [0; 32],
+            new_root: [0; 32],
+            perm_root: [0; 32],
+            tx_set_hash: [0; 32],
+        },
+        ordering_hash: [0; 32],
+        artifact_identity: FastpqArtifactIdentityDescriptionV1 {
+            proof_kind: FastpqProofKindV1::OrdinaryCompact,
+            profile_id: fastpq_prover::offline_compact::quantity_profile_id(),
+            public_statement_digest: Hash::new(b"snapshot public statement").into(),
+            artifact_digest: Hash::new(&proof).into(),
+            inner_bundle_digest: Hash::new(b"snapshot inner bundle").into(),
+            artifact_bytes: proof_len as u64,
+            commitments: FastpqCommitmentDescriptionV1::OrderedCompactAir(
+                FastpqOrderedCompactAirCommitmentsV1 {
+                    segment_count: 1,
+                    segment_air_row_roots: vec![
+                        iroha_data_model::privacy::GoldilocksDigest384V1::new([0x41; 6]).unwrap(),
+                    ],
+                },
+            ),
+        },
     }
+}
+#[test]
+fn fastpq_snapshot_from_statement_retains_identity_without_statement_payload() {
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"canonical snapshot constructor"));
+    let expected = sample_fastpq_snapshot(1, block_hash, 128 * 1024);
+    let statement = iroha_data_model::fastpq::FastpqPublicTransferStatementV1 {
+        public_inputs: expected.public_inputs,
+        ordering_hash: [0x39; 32],
+        transitions: vec![iroha_data_model::fastpq::FastpqStateTransition {
+            key: b"source-key".to_vec(),
+            pre_value: vec![1; 32 * 1024],
+            post_value: vec![2; 32 * 1024],
+            operation: iroha_data_model::fastpq::FastpqOperationKind::Transfer,
+        }],
+        transcripts: Vec::new(),
+    };
+    let actual = FastpqProofSnapshot::from_statement(
+        1,
+        block_hash,
+        expected.entry_hash,
+        0,
+        &statement,
+        expected.artifact_identity.clone(),
+    );
+    assert_eq!(actual.public_inputs, statement.public_inputs);
+    assert_eq!(actual.ordering_hash, statement.ordering_hash);
+    assert_eq!(actual.transition_count, 1);
+    assert_eq!(actual.artifact_identity, expected.artifact_identity);
+    assert!(norito::encode_canonical(&actual).unwrap().len() < 2048);
+    assert!(actual.same_attachment(&expected));
+    let mut other = expected;
+    other.artifact_identity.artifact_digest[0] ^= 1;
+    assert!(!actual.same_attachment(&other));
 }
 #[test]
 fn consensus_sidecar_enqueues_do_not_wait_for_unrelated_prune_lock_holder() {
@@ -1089,19 +1143,12 @@ fn consensus_sidecar_enqueues_do_not_wait_for_unrelated_prune_lock_holder() {
     assert_eq!(kura.fastpq_proof_queue.lock().len(), 1);
 }
 #[test]
-fn fastpq_snapshot_json_batch_is_canonical_under_every_ambient_layout() {
+fn fastpq_snapshot_json_identity_is_canonical_under_every_ambient_layout() {
     use base64::Engine as _;
-
     let block_hash =
         HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"codec-only snapshot"));
-    let mut snapshot = sample_fastpq_snapshot(1, block_hash, 8);
-    snapshot.batch.push(fastpq_prover::StateTransition::new(
-        b"metadata/key".to_vec(),
-        b"before".to_vec(),
-        b"after".to_vec(),
-        fastpq_prover::OperationKind::MetaSet,
-    ));
-    let canonical = norito::encode_canonical(&snapshot.batch).unwrap();
+    let snapshot = sample_fastpq_snapshot(1, block_hash, 8);
+    let canonical = norito::encode_canonical(&snapshot.artifact_identity).unwrap();
     let expected_base64 = base64::engine::general_purpose::STANDARD.encode(&canonical);
     let expected = snapshot.to_json_value();
     for flags in
@@ -1111,45 +1158,34 @@ fn fastpq_snapshot_json_batch_is_canonical_under_every_ambient_layout() {
         let json = snapshot.to_json_value();
         assert_eq!(json, expected);
         assert_eq!(
-            json.get("batch").and_then(|value| value.as_str()),
+            json.get("artifact_identity")
+                .and_then(|value| value.as_str()),
             Some(expected_base64.as_str())
         );
         assert_eq!(norito::core::effective_decode_flags(), Some(flags));
     }
-    assert_eq!(snapshot.proof_digest, Hash::new(&snapshot.proof));
+    assert!(expected.get("batch").is_none());
+    assert!(expected.get("proof").is_none());
+    assert!(expected.get("trace_commitment").is_none());
 }
 #[test]
 fn fastpq_proof_snapshot_merges_into_pipeline_sidecar() {
     let (_temp_dir, _config, kura, block_hash, sidecar) = default_pipeline_sidecar_fixture();
     kura.write_pipeline_metadata(&sidecar);
-    let proof = b"fastpq-proof".to_vec();
-    let snapshot = FastpqProofSnapshot {
-        height: 1,
-        block_hash,
-        entry_hash: Hash::prehashed([0x11; 32]),
-        batch_index: 0,
-        parameter: "fastpq-state-transition-stark-v1".to_string(),
-        transition_count: 0,
-        trace_commitment: GoldilocksDigest384V1::new([0x41; 6])
-            .expect("canonical test FASTPQ trace commitment"),
-        proof_digest: Hash::new(&proof),
-        batch: fastpq_prover::TransitionBatch::new(
-            "fastpq-state-transition-stark-v1",
-            fastpq_prover::PublicInputs::default(),
-        ),
-        proof,
-    };
+    let mut snapshot = sample_fastpq_snapshot(1, block_hash, 12);
+    snapshot.entry_hash = Hash::prehashed([0x11; 32]);
     assert!(matches!(
         kura.enqueue_fastpq_proof_snapshot(snapshot.clone()),
         FastpqProofEnqueueResult::Enqueued { .. }
     ));
     assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
-    let compact = snapshot.compact_for_sidecar();
+    let compact = snapshot.clone();
     assert_eq!(got.fastpq_proofs, vec![compact.clone()]);
-    assert!(got.fastpq_proofs[0].proof.is_empty());
-    assert!(got.fastpq_proofs[0].batch.transitions.is_empty());
-    assert!(got.fastpq_proofs[0].decode_proof().is_err());
+    assert_eq!(
+        got.fastpq_proofs[0].artifact_identity,
+        snapshot.artifact_identity
+    );
     assert_eq!(kura.fastpq_proofs_for_block(1), vec![compact]);
     let duplicate = got.fastpq_proofs[0].clone();
     assert!(matches!(
@@ -1174,13 +1210,7 @@ fn fastpq_proof_snapshot_persists_compact_metadata_only() {
         Vec::new(),
     ));
     let mut snapshot = sample_fastpq_snapshot(1, block_hash, 128 * 1024);
-    snapshot.batch.push(fastpq_prover::StateTransition::new(
-        b"state-key".to_vec(),
-        vec![0x01; 1024],
-        vec![0x02; 1024],
-        fastpq_prover::OperationKind::Transfer,
-    ));
-    snapshot.transition_count = u32::try_from(snapshot.batch.transitions.len()).unwrap();
+    snapshot.transition_count = 1;
     assert!(matches!(
         kura.enqueue_fastpq_proof_snapshot(snapshot.clone()),
         FastpqProofEnqueueResult::Enqueued { .. }
@@ -1188,13 +1218,21 @@ fn fastpq_proof_snapshot_persists_compact_metadata_only() {
     assert_eq!(kura.flush_fastpq_proof_snapshots(), 1);
     let got = kura.read_pipeline_metadata(1).expect("sidecar exists");
     let persisted = got.fastpq_proofs.first().expect("proof summary persisted");
-    assert_eq!(persisted.proof_digest, snapshot.proof_digest);
-    assert_eq!(persisted.trace_commitment, snapshot.trace_commitment);
+    assert_eq!(persisted.artifact_identity, snapshot.artifact_identity);
     assert_eq!(persisted.transition_count, 1);
-    assert!(persisted.proof.is_empty());
-    assert!(persisted.batch.transitions.is_empty());
-    assert!(persisted.batch.metadata.is_empty());
-    assert_eq!(persisted.batch.public_inputs, snapshot.batch.public_inputs);
+    assert_eq!(persisted.public_inputs, snapshot.public_inputs);
+    assert_eq!(persisted.ordering_hash, snapshot.ordering_hash);
+    let bytes = norito::encode_canonical(persisted).unwrap();
+    assert!(
+        bytes.len() < 2048,
+        "artifact contents are never stored in recovery metadata"
+    );
+    let mut different_size = persisted.clone();
+    different_size.artifact_identity.artifact_bytes = 8;
+    assert_eq!(
+        bytes.len(),
+        norito::encode_canonical(&different_size).unwrap().len()
+    );
 }
 #[test]
 fn fastpq_proof_snapshots_for_same_block_flush_as_single_sidecar_update() {

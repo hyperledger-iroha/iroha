@@ -5,13 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 ARTIFACT_DIR_INPUT="${1:-${SCRIPT_DIR}/artifacts}"
-AUTHORITY="${AUTHORITY:-simulation@operator}"
-PRIVATE_KEY="${PRIVATE_KEY:-ed25519:simulation00000000000000000000000000000000000000000000000000000000000000}"
 
 mkdir -p "${ARTIFACT_DIR_INPUT}"
 ARTIFACT_DIR="$(cd "${ARTIFACT_DIR_INPUT}" && pwd)"
 
-declare -r SCRIPT_DIR REPO_ROOT ARTIFACT_DIR AUTHORITY PRIVATE_KEY
+declare -r SCRIPT_DIR REPO_ROOT ARTIFACT_DIR
 
 log() {
   printf '[capacity-sim] %s\n' "$*" >&2
@@ -38,10 +36,8 @@ for provider in alpha beta gamma; do
     "--json-out=${prefix}_summary.json" \
     "--norito-out=${prefix}.to" \
     "--base64-out=${prefix}.b64" \
-    "--request-out=${prefix}_request.json" \
-    "--authority=${AUTHORITY}" \
-    "--private-key=${PRIVATE_KEY}" \
     --quiet
+  cp "${spec}" "${prefix}_spec.json"
 done
 
 log "Building replication order artefacts..."
@@ -55,9 +51,6 @@ run_capacity replication-order \
   --quiet
 
 log "Capturing telemetry windows for failover scenario..."
-telemetry_authority="${AUTHORITY}"
-telemetry_key="${PRIVATE_KEY}"
-
 telemetry_specs=(
   "alpha_primary:${SCRIPT_DIR}/scenarios/failover/telemetry_alpha_primary.json"
   "alpha_outage:${SCRIPT_DIR}/scenarios/failover/telemetry_alpha_outage.json"
@@ -73,9 +66,6 @@ for entry in "${telemetry_specs[@]}"; do
     "--json-out=${prefix}_summary.json" \
     "--norito-out=${prefix}.to" \
     "--base64-out=${prefix}.b64" \
-    "--request-out=${prefix}_request.json" \
-    "--authority=${telemetry_authority}" \
-    "--private-key=${telemetry_key}" \
     --quiet
 done
 
@@ -87,9 +77,6 @@ run_capacity dispute \
   "--json-out=${dispute_prefix}_summary.json" \
   "--norito-out=${dispute_prefix}.to" \
   "--base64-out=${dispute_prefix}.b64" \
-  "--request-out=${dispute_prefix}_request.json" \
-  "--authority=${AUTHORITY}" \
-  "--private-key=${PRIVATE_KEY}" \
   --quiet
 
 log "Capacity simulation CLI artefacts written to ${ARTIFACT_DIR}"

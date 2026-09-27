@@ -14,14 +14,15 @@ use norito::json;
 use rand::{rand_core::TryCryptoRng, rngs::OsRng};
 use reqwest::{Client, Response, StatusCode, Url, redirect};
 use sorafs_car::{
-    CarBuildPlan, CarVerifier, CarWriteStats, CarWriter,
+    CarBuildPlan, CarWriteStats,
     gateway::{
         GatewayBuildError, GatewayFetchConfig, GatewayFetchContext, GatewayFetchedManifest,
         GatewayManifestError, GatewayProviderInput,
     },
     multi_fetch::{
         self, AttemptFailure, ChunkObserver, ChunkResponse, ChunkVerificationError, FetchOptions,
-        FetchOutcome, FetchProvider, FetchRequest, ProviderMetadata, TransportProtocolKind,
+        FetchOutcome, FetchProvider, FetchRequest, ProviderMetadata, StreamFetchOutcome,
+        TransportProtocolKind,
     },
     scoreboard::{self, Eligibility, Scoreboard, ScoreboardConfig, TelemetrySnapshot},
 };
@@ -32,7 +33,6 @@ use sorafs_manifest::{
 use std::{
     cmp::Ordering as CmpOrdering,
     collections::{HashMap, VecDeque},
-    io::Cursor,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     num::{NonZeroU32, NonZeroUsize},
     sync::{
@@ -50,6 +50,8 @@ use tokio::{
 };
 use tracing::{debug, info, warn};
 use url::Host;
+mod gateway_stream;
+pub use gateway_stream::fetch_via_gateway_to_writer;
 pub mod appeals;
 pub mod compliance;
 pub mod incentives;
@@ -308,7 +310,7 @@ pub mod prelude {
     pub use crate::{
         CircuitRefreshReport, FetchSession, GatewayCarVerification, GatewayOrchestratorError,
         ManifestVerificationContext, ManifestVerificationError, Orchestrator, OrchestratorConfig,
-        PolicyFallback, PolicyReport, PolicyStatus,
+        PolicyFallback, PolicyReport, PolicyStatus, StreamFetchSession,
         appeals::{
             AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementError,
             AppealDisbursementInput, AppealDisbursementPlan, AppealPricingConfig,
@@ -319,7 +321,7 @@ pub mod prelude {
         },
         bindings::{ConfigJsonError, config_from_json, config_to_json},
         compliance::{CompliancePolicy, ComplianceReason},
-        fetch_via_gateway,
+        fetch_via_gateway, fetch_via_gateway_to_writer,
         incentives::{RelayRewardEngine, RewardConfig, RewardConfigError},
         provider_supports_pq, provider_supports_soranet,
         proxy::{
@@ -860,6 +862,22 @@ pub mod bindings {
         root.insert("scoreboard".into(), Value::Object(scoreboard));
         let mut fetch = Map::new();
         fetch.insert(
+            "max_payload_bytes".into(),
+            Value::from(config.fetch.max_payload_bytes),
+        );
+        fetch.insert(
+            "max_metadata_entries".into(),
+            Value::from(config.fetch.max_metadata_entries as u64),
+        );
+        fetch.insert(
+            "max_buffered_bytes".into(),
+            Value::from(config.fetch.max_buffered_bytes as u64),
+        );
+        fetch.insert(
+            "session_timeout_secs".into(),
+            Value::from(config.fetch.session_timeout.as_secs()),
+        );
+        fetch.insert(
             "verify_lengths".into(),
             Value::Bool(config.fetch.verify_lengths),
         );
@@ -1115,6 +1133,46 @@ pub mod bindings {
             let fetch = fetch_value
                 .as_object()
                 .ok_or_else(|| ConfigJsonError::new("fetch must be a JSON object"))?;
+            if let Some(value) = fetch.get("max_payload_bytes") {
+                config.fetch.max_payload_bytes =
+                    value.as_u64().filter(|value| *value != 0).ok_or_else(|| {
+                        ConfigJsonError::new("fetch.max_payload_bytes must be positive")
+                    })?;
+            }
+            if let Some(value) = fetch.get("max_metadata_entries") {
+                config.fetch.max_metadata_entries = value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| (1..=sorafs_car::CAR_PLAN_MAX_CHUNKS).contains(value))
+                    .ok_or_else(|| {
+                        ConfigJsonError::new(
+                            "fetch.max_metadata_entries must be between 1 and 4194304",
+                        )
+                    })?;
+            }
+            if let Some(value) = fetch.get("max_buffered_bytes") {
+                config.fetch.max_buffered_bytes = value
+                    .as_u64()
+                    .and_then(|value| usize::try_from(value).ok())
+                    .filter(|value| *value != 0 && *value <= 256 * 1024 * 1024)
+                    .ok_or_else(|| {
+                        ConfigJsonError::new(
+                            "fetch.max_buffered_bytes must be between 1 and 268435456",
+                        )
+                    })?;
+            }
+            if let Some(value) = fetch.get("session_timeout_secs") {
+                config.fetch.session_timeout = Duration::from_secs(
+                    value
+                        .as_u64()
+                        .filter(|value| (1..=86400).contains(value))
+                        .ok_or_else(|| {
+                            ConfigJsonError::new(
+                                "fetch.session_timeout_secs must be between 1 and 86400",
+                            )
+                        })?,
+                );
+            }
             if let Some(verify_lengths) = fetch.get("verify_lengths") {
                 let verify_lengths = verify_lengths.as_bool().ok_or_else(|| {
                     ConfigJsonError::new("fetch.verify_lengths must be a boolean")
@@ -2066,6 +2124,21 @@ fn validate_provider_metadata_bounds(metadata: &ProviderMetadata) -> Result<(), 
     Ok(())
 }
 fn bounded_fetch_options(options: &FetchOptions) -> Result<FetchOptions, OrchestratorError> {
+    if !options.verify_lengths
+        || !options.verify_digests
+        || options.max_payload_bytes == 0
+        || options.max_metadata_entries == 0
+        || options.max_metadata_entries > sorafs_car::CAR_PLAN_MAX_CHUNKS
+        || options.max_buffered_bytes == 0
+        || options.max_buffered_bytes > 256 * 1024 * 1024
+        || options.session_timeout.is_zero()
+        || options.session_timeout > Duration::from_secs(86400)
+    {
+        return Err(OrchestratorError::UnsafeResourceConfig(
+            "integrity, payload, metadata, buffer, and deadline limits must be finite and enabled",
+        ));
+    }
+
     let retry_limit =
         options
             .per_chunk_retry_limit
@@ -2438,7 +2511,7 @@ impl Orchestrator {
         scoreboard: &Scoreboard,
         fetcher: F,
         observer: O,
-    ) -> Result<FetchSession, OrchestratorError>
+    ) -> Result<StreamFetchSession, OrchestratorError>
     where
         F: Fn(FetchRequest) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<ChunkResponse, E>> + Send + 'static,
@@ -2549,7 +2622,7 @@ impl Orchestrator {
         let session = match result {
             Ok(outcome) => {
                 let proxy_manifest = self.proxy_manifest().await?;
-                ctx.on_success(&outcome);
+                ctx.on_success(&outcome.chunk_receipts, &outcome.provider_reports);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
                 Ok(FetchSession {
@@ -2576,7 +2649,7 @@ impl Orchestrator {
         scoreboard: &Scoreboard,
         fetcher: F,
         observer: O,
-    ) -> Result<FetchSession, OrchestratorError>
+    ) -> Result<StreamFetchSession, OrchestratorError>
     where
         F: Fn(FetchRequest) -> Fut + Send + Sync + 'static,
         Fut: std::future::Future<Output = Result<ChunkResponse, E>> + Send + 'static,
@@ -2678,10 +2751,10 @@ impl Orchestrator {
         let session = match result {
             Ok(outcome) => {
                 let proxy_manifest = self.proxy_manifest().await?;
-                ctx.on_success(&outcome);
+                ctx.on_success(&outcome.chunk_receipts, &outcome.provider_reports);
                 ctx.finish();
                 let policy_report = PolicyReport::from(summary);
-                Ok(FetchSession {
+                Ok(StreamFetchSession {
                     outcome,
                     policy_report,
                     local_proxy_manifest: proxy_manifest.clone(),
@@ -3001,6 +3074,18 @@ pub struct FetchSession {
     /// Optional CAR/manifest verification proof.
     pub car_verification: Option<GatewayCarVerification>,
 }
+/// Completed consuming retrieval; verified bytes live in the caller-owned spool.
+#[derive(Debug, Clone)]
+pub struct StreamFetchSession {
+    /// Receipts and bounded-buffer evidence from the consuming scheduler.
+    pub outcome: StreamFetchOutcome,
+    /// Applied provider anonymity policy.
+    pub policy_report: PolicyReport,
+    /// Optional manifest describing the local QUIC proxy.
+    pub local_proxy_manifest: Option<BrowserExtensionManifest>,
+    /// Reproduced native CAR and PoR commitments, present only after verification succeeds.
+    pub car_verification: Option<GatewayCarVerification>,
+}
 /// Verification artefacts produced after validating manifest + CAR parity.
 #[derive(Debug, Clone)]
 pub struct GatewayCarVerification {
@@ -3117,6 +3202,36 @@ fn verify_fetch_against_manifest(
     outcome: &FetchOutcome,
     context: ManifestVerificationContext<'_>,
 ) -> Result<GatewayCarVerification, ManifestVerificationError> {
+    let mut reader = sorafs_car::payload_verifier::ChunkPayloadReader::new(&outcome.chunks);
+    verify_reader_against_manifest(plan, &mut reader, context)
+}
+fn verify_reader_against_manifest<R: std::io::Read + std::io::Seek>(
+    plan: &CarBuildPlan,
+    reader: &mut R,
+    context: ManifestVerificationContext<'_>,
+) -> Result<GatewayCarVerification, ManifestVerificationError> {
+    validate_gateway_manifest_context(plan, &context)?;
+    let verification =
+        sorafs_car::payload_verifier::verify_payload_reader(context.manifest, plan, reader)
+            .map_err(|error| ManifestVerificationError::Verification(error.to_string()))?;
+    Ok(GatewayCarVerification {
+        manifest_digest: context.manifest_digest,
+        manifest_payload_digest: context.payload_digest,
+        manifest_content_length: context.content_length,
+        manifest_chunk_count: context.chunk_count,
+        manifest_car_digest: context.manifest.car_digest,
+        manifest_governance: context.manifest.governance.clone(),
+        chunk_profile_handle: context.chunk_profile_handle.to_string(),
+        car_stats: verification.stats,
+        por_leaf_count: verification.por_leaf_count,
+    })
+}
+fn validate_gateway_manifest_context(
+    plan: &CarBuildPlan,
+    context: &ManifestVerificationContext<'_>,
+) -> Result<(), ManifestVerificationError> {
+    plan.verify_manifest_metadata(context.manifest)
+        .map_err(|error| ManifestVerificationError::Verification(error.to_string()))?;
     verify_gateway_payload_digest(plan, context.payload_digest)?;
     if context.content_length != plan.content_length {
         return Err(ManifestVerificationError::ContentLengthMismatch {
@@ -3137,30 +3252,9 @@ fn verify_fetch_against_manifest(
     };
     validate_manifest(context.manifest, &constraints)
         .map_err(|err| ManifestVerificationError::ManifestValidation(err.to_string()))?;
-    let payload = outcome.assemble_payload();
-    let mut buffer = Cursor::new(Vec::new());
-    let writer = CarWriter::new(plan, &payload)
-        .map_err(|err| ManifestVerificationError::CarBuild(err.to_string()))?;
-    writer
-        .write_to(&mut buffer)
-        .map_err(|err| ManifestVerificationError::CarBuild(err.to_string()))?;
-    let car_bytes = buffer.into_inner();
-    let verification = CarVerifier::verify_full_car_with_plan(context.manifest, plan, &car_bytes)
-        .map_err(|err| ManifestVerificationError::Verification(err.to_string()))?;
-    let car_stats = verification.stats.clone();
-    let por_leaf_count = verification.chunk_store.por_leaf_count();
-    Ok(GatewayCarVerification {
-        manifest_digest: context.manifest_digest,
-        manifest_payload_digest: context.payload_digest,
-        manifest_content_length: context.content_length,
-        manifest_chunk_count: context.chunk_count,
-        manifest_car_digest: context.manifest.car_digest,
-        manifest_governance: context.manifest.governance.clone(),
-        chunk_profile_handle: context.chunk_profile_handle.to_string(),
-        car_stats,
-        por_leaf_count,
-    })
+    Ok(())
 }
+
 fn verify_gateway_payload_digest(
     plan: &CarBuildPlan,
     actual: blake3::Hash,
@@ -4109,7 +4203,11 @@ impl FetchMetricsCtx {
         })
     }
 
-    fn on_success(&self, outcome: &FetchOutcome) {
+    fn on_success(
+        &self,
+        receipts: &[multi_fetch::ChunkReceipt],
+        reports: &[multi_fetch::ProviderReport],
+    ) {
         let duration_ms = self.start.elapsed().as_secs_f64() * 1_000.0;
         self.metrics.record_sorafs_orchestrator_duration(
             &self.manifest_id,
@@ -4118,7 +4216,7 @@ impl FetchMetricsCtx {
         );
         let mut retry_counts: HashMap<String, u64> = HashMap::new();
         let mut total_retries = 0;
-        for receipt in &outcome.chunk_receipts {
+        for receipt in receipts {
             if receipt.attempts > 1 {
                 let extra = receipt.attempts.saturating_sub(1) as u64;
                 retry_counts
@@ -4142,7 +4240,7 @@ impl FetchMetricsCtx {
             total_retries += count;
         }
         let mut total_provider_failures = 0;
-        for report in &outcome.provider_reports {
+        for report in reports {
             let failures = report.failures as u64;
             if failures > 0 {
                 let provider_id = report.provider.id().as_str();
@@ -4166,9 +4264,9 @@ impl FetchMetricsCtx {
         let mut total_stalls: u64 = 0;
         let mut throughput_samples: u64 = 0;
         let mut throughput_sum_mib_per_s = 0.0;
-        for (receipt, chunk) in outcome.chunk_receipts.iter().zip(&outcome.chunks) {
+        for receipt in receipts {
             let provider_id = receipt.provider.as_str();
-            let chunk_bytes = chunk.len() as u64;
+            let chunk_bytes = u64::from(receipt.bytes);
             let latency_ms = receipt.latency_ms;
             self.metrics.record_sorafs_orchestrator_chunk_latency(
                 &self.manifest_id,
@@ -4207,7 +4305,8 @@ impl FetchMetricsCtx {
             &self.manifest_id,
             &self.region,
             duration_ms,
-            outcome,
+            receipts.len(),
+            reports.len(),
             total_retries,
             total_provider_failures,
             total_bytes,
@@ -4339,7 +4438,8 @@ impl FetchTelemetryCtx {
         manifest_id: &str,
         region: &str,
         duration_ms: f64,
-        outcome: &FetchOutcome,
+        chunk_count: usize,
+        provider_count: usize,
         total_retries: u64,
         provider_failures: u64,
         total_bytes: u64,
@@ -4355,8 +4455,8 @@ impl FetchTelemetryCtx {
             region = region,
             job_id = %self.job_id,
             duration_ms,
-            chunk_count = outcome.chunks.len() as u64,
-            provider_reports = outcome.provider_reports.len() as u64,
+            chunk_count = chunk_count as u64,
+            provider_reports = provider_count as u64,
             retries_total = total_retries,
             provider_failures_total = provider_failures,
             total_bytes,
@@ -5134,6 +5234,8 @@ fn error_reason(error: &multi_fetch::MultiSourceError) -> &'static str {
     match error {
         multi_fetch::MultiSourceError::NoProviders => "no_providers",
         multi_fetch::MultiSourceError::InvalidPlan(_) => "invalid_plan",
+        multi_fetch::MultiSourceError::ResourceLimit(_) => "resource_limit",
+        multi_fetch::MultiSourceError::DeadlineExceeded => "deadline",
         multi_fetch::MultiSourceError::NoHealthyProviders { .. } => "no_healthy_providers",
         multi_fetch::MultiSourceError::NoCompatibleProviders { .. } => "no_compatible_providers",
         multi_fetch::MultiSourceError::NoPolicyEligibleProviders { .. } => {
@@ -5224,13 +5326,70 @@ impl From<ManifestVerificationError> for GatewayOrchestratorError {
 /// scoreboard, or [`GatewayOrchestratorError::Orchestrator`] when the underlying orchestrator
 /// fails (either while building the scoreboard or during the fetch loop).
 pub async fn fetch_via_gateway(
-    mut config: OrchestratorConfig,
+    config: OrchestratorConfig,
     plan: &CarBuildPlan,
     gateway_config: GatewayFetchConfig,
     providers: impl IntoIterator<Item = GatewayProviderInput>,
     telemetry: Option<&TelemetrySnapshot>,
     max_peers: Option<usize>,
 ) -> Result<FetchSession, GatewayOrchestratorError> {
+    if !config.fetch.verify_lengths || !config.fetch.verify_digests {
+        return Err(GatewayOrchestratorError::IntegrityVerificationDisabled);
+    }
+    bounded_fetch_options(&config.fetch)?;
+    let deadline = tokio::time::Instant::now() + config.fetch.session_timeout;
+    if plan.content_length > multi_fetch::MAX_EAGER_PAYLOAD_BYTES {
+        return Err(GatewayOrchestratorError::Orchestrator(
+            OrchestratorError::from(multi_fetch::MultiSourceError::ResourceLimit(
+                "eager payload exceeds 64 MiB; use fetch_via_gateway_to_writer",
+            )),
+        ));
+    }
+    let (context, mut orchestrator, scoreboard) = prepare_gateway_fetch(
+        config,
+        plan,
+        gateway_config,
+        providers,
+        telemetry,
+        max_peers,
+    )?;
+    let gateway_manifest = tokio::time::timeout_at(deadline, context.fetch_manifest())
+        .await
+        .map_err(|_| OrchestratorError::from(multi_fetch::MultiSourceError::DeadlineExceeded))??;
+    validate_gateway_manifest_context(plan, &ManifestVerificationContext::from(&gateway_manifest))?;
+    orchestrator.config.fetch.session_timeout =
+        deadline.saturating_duration_since(tokio::time::Instant::now());
+    if orchestrator.config.fetch.session_timeout.is_zero() {
+        return Err(
+            OrchestratorError::from(multi_fetch::MultiSourceError::DeadlineExceeded).into(),
+        );
+    }
+    let fetcher = context.fetcher();
+    let mut session = orchestrator
+        .fetch_with_scoreboard(plan, &scoreboard, fetcher.as_closure())
+        .await?;
+    session.verify_against_manifest(plan, ManifestVerificationContext::from(&gateway_manifest))?;
+    if tokio::time::Instant::now() >= deadline {
+        return Err(
+            OrchestratorError::from(multi_fetch::MultiSourceError::DeadlineExceeded).into(),
+        );
+    }
+    Ok(session)
+}
+
+fn prepare_gateway_fetch(
+    mut config: OrchestratorConfig,
+    plan: &CarBuildPlan,
+    gateway_config: GatewayFetchConfig,
+    providers: impl IntoIterator<Item = GatewayProviderInput>,
+    telemetry: Option<&TelemetrySnapshot>,
+    max_peers: Option<usize>,
+) -> Result<(GatewayFetchContext, Orchestrator, Scoreboard), GatewayOrchestratorError> {
+    bounded_fetch_options(&config.fetch)?;
+    config
+        .fetch
+        .validate_plan_limits(plan)
+        .map_err(OrchestratorError::from)?;
     let context = GatewayFetchContext::new(gateway_config, providers)?;
     let metadata: Vec<ProviderMetadata> = context
         .providers()
@@ -5300,18 +5459,9 @@ pub async fn fetch_via_gateway(
     {
         return Err(GatewayOrchestratorError::NoEligibleProviders);
     }
-    let fetcher = context.fetcher();
-    let mut session = orchestrator
-        .fetch_with_scoreboard(plan, &scoreboard, fetcher.as_closure())
-        .await
-        .map_err(GatewayOrchestratorError::from)?;
-    let gateway_manifest = context.fetch_manifest().await?;
-    let verification_context = ManifestVerificationContext::from(&gateway_manifest);
-    session
-        .verify_against_manifest(plan, verification_context)
-        .map_err(GatewayOrchestratorError::from)?;
-    Ok(session)
+    Ok((context, orchestrator, scoreboard))
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5720,6 +5870,17 @@ mod tests {
                     }
                     Err(_) => break,
                 };
+                // Accepted sockets can inherit the listener's nonblocking mode on macOS.
+                // The fixture reads a complete request synchronously, within a bounded timeout.
+                stream
+                    .set_nonblocking(false)
+                    .expect("make mock privacy request socket blocking");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound mock privacy request reads");
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound mock privacy response writes");
                 served_requests = served_requests.saturating_add(1);
                 let mut buffer = [0u8; 4096];
                 let mut received = Vec::new();
@@ -8800,6 +8961,46 @@ mod tests {
         }
     }
     #[test]
+    fn config_json_roundtrips_bounded_payload_window_and_deadline() {
+        let mut config = OrchestratorConfig::default();
+        config.fetch.max_payload_bytes = 128 * 1024 * 1024;
+        config.fetch.max_metadata_entries = 8192;
+        config.fetch.max_buffered_bytes = 2 * 1024 * 1024;
+        config.fetch.session_timeout = Duration::from_secs(120);
+        let decoded = config_from_json(&config_to_json(&config)).expect("bounded fetch config");
+        assert_eq!(
+            decoded.fetch.max_payload_bytes,
+            config.fetch.max_payload_bytes
+        );
+        assert_eq!(
+            decoded.fetch.max_buffered_bytes,
+            config.fetch.max_buffered_bytes
+        );
+        assert_eq!(decoded.fetch.session_timeout, config.fetch.session_timeout);
+        assert_eq!(
+            decoded.fetch.max_metadata_entries,
+            config.fetch.max_metadata_entries
+        );
+        for (field, value) in [
+            ("max_payload_bytes", 0),
+            ("max_metadata_entries", 0),
+            ("max_metadata_entries", 4_194_305),
+            ("max_buffered_bytes", 0),
+            ("max_buffered_bytes", 256 * 1024 * 1024 + 1),
+            ("session_timeout_secs", 0),
+            ("session_timeout_secs", 86401),
+        ] {
+            let mut object = Map::new();
+            object.insert(field.into(), Value::from(value as u64));
+            let mut root = Map::new();
+            root.insert("fetch".into(), Value::Object(object));
+            assert!(
+                config_from_json(&Value::Object(root)).is_err(),
+                "accepted {field}={value}"
+            );
+        }
+    }
+    #[test]
     fn config_json_rejects_disabled_fetch_integrity_verification() {
         for field in ["verify_lengths", "verify_digests"] {
             let mut value = bindings::config_to_json(&OrchestratorConfig::default());
@@ -9044,7 +9245,9 @@ mod tests {
             assert_eq!(guard.mode(), ProxyMode::MetadataOnly);
         }
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
@@ -9136,7 +9339,9 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(150)).await;
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
@@ -9237,7 +9442,9 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(150)).await;
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
@@ -9331,7 +9538,9 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(150)).await;
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,

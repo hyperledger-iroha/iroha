@@ -19,11 +19,13 @@ use iroha_data_model::{
     isi::kagemusha_v1::{
         KAGEMUSHA_CHAIN_VERSION_V1, KAGEMUSHA_MINT_FINALITY_TREE_DEPTH_V1,
         KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityGenesisParametersV1,
-        KagemushaMintFinalitySealBundleV1, KagemushaMintFinalitySealMessageV1,
-        KagemushaMintFinalitySealShareV1, KagemushaMintFinalityValidatorKeysV1,
+        KagemushaMintFinalityPairedPossessionProofV1, KagemushaMintFinalitySealBundleV1,
+        KagemushaMintFinalitySealMessageV1, KagemushaMintFinalitySealShareV1,
+        KagemushaMintFinalitySeatReadinessContextV1, KagemushaMintFinalityValidatorKeysV1,
         KagemushaMintFinalityValidatorSealV1, KagemushaOperationKindV1,
         KagemushaPastaSchnorrSignatureV1, KagemushaReserveReceiptV1, KagemushaTopUpLeafV1,
-        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_root_v1,
+        KagemushaTopUpMembershipWitnessV1, kagemusha_mint_finality_candidate_possession_digest_v1,
+        kagemusha_mint_finality_root_v1,
     },
     kagemusha::KagemushaPastaStateCommitmentV1,
 };
@@ -435,6 +437,176 @@ pub fn derive_kagemusha_mint_finality_validator_keys_v1(
     })
 }
 
+/// Prove possession of candidate Pasta keys before a committee or beacon is selected.
+///
+/// # Errors
+/// Rejects malformed public keys, an incorrect independent seed, or invalid challenge identity.
+pub fn prove_kagemusha_mint_finality_candidate_possession_v1(
+    seed: &[u8; 32],
+    network_id: iroha_data_model::NetworkId,
+    generation: u64,
+    keys: &KagemushaMintFinalityValidatorKeysV1,
+) -> Result<KagemushaMintFinalityPairedPossessionProofV1, KagemushaMintFinalityErrorV1> {
+    let digest =
+        kagemusha_mint_finality_candidate_possession_digest_v1(network_id, generation, keys)
+            .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
+    prove_paired_possession(seed, network_id, generation, keys, digest)
+}
+
+/// Verify candidate consent under the exact network, generation, identity, and public keys.
+///
+/// # Errors
+/// Rejects invalid curves or signatures and any replay under a different challenge.
+pub fn verify_kagemusha_mint_finality_candidate_possession_v1(
+    network_id: iroha_data_model::NetworkId,
+    generation: u64,
+    keys: &KagemushaMintFinalityValidatorKeysV1,
+    proof: &KagemushaMintFinalityPairedPossessionProofV1,
+) -> Result<(), KagemushaMintFinalityErrorV1> {
+    let digest =
+        kagemusha_mint_finality_candidate_possession_digest_v1(network_id, generation, keys)
+            .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
+    verify_paired_possession(keys, proof, digest)
+}
+
+/// Prove local possession of both Pasta keys for one exact prepared target seat.
+///
+/// This statement includes the finalized preparation attempt, target epoch and interval, exact
+/// ordered committee commitment, and beacon transcript. It does not attest to beacon share custody.
+///
+/// # Errors
+/// Rejects a mismatched authority, seat, challenge, or independent signing seed.
+pub fn prove_kagemusha_mint_finality_seat_readiness_v1(
+    seed: &[u8; 32],
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    context: &KagemushaMintFinalitySeatReadinessContextV1,
+) -> Result<KagemushaMintFinalityPairedPossessionProofV1, KagemushaMintFinalityErrorV1> {
+    let keys = readiness_keys(authority, context)?;
+    let digest = context
+        .signing_digest(keys)
+        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
+    prove_paired_possession(
+        seed,
+        authority.network_id,
+        authority.generation,
+        keys,
+        digest,
+    )
+}
+
+/// Verify paired-key readiness for one exact seat of an authenticated prepared authority.
+///
+/// # Errors
+/// Rejects missing seats, mismatched authority commitments, malformed keys or signatures, and
+/// replay across target epochs, attempts, intervals, networks, committees, or beacon transcripts.
+pub fn verify_kagemusha_mint_finality_seat_readiness_v1(
+    authority: &KagemushaMintFinalityAuthorityGenerationV1,
+    context: &KagemushaMintFinalitySeatReadinessContextV1,
+    proof: &KagemushaMintFinalityPairedPossessionProofV1,
+) -> Result<(), KagemushaMintFinalityErrorV1> {
+    let keys = readiness_keys(authority, context)?;
+    let digest = context
+        .signing_digest(keys)
+        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
+    verify_paired_possession(keys, proof, digest)
+}
+
+fn readiness_keys<'a>(
+    authority: &'a KagemushaMintFinalityAuthorityGenerationV1,
+    context: &KagemushaMintFinalitySeatReadinessContextV1,
+) -> Result<&'a KagemushaMintFinalityValidatorKeysV1, KagemushaMintFinalityErrorV1> {
+    context
+        .validate()
+        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidStatement(error.to_string()))?;
+    let authority_id = authority.authority_id().map_err(|error| {
+        KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+    })?;
+    if context.network_id != authority.network_id
+        || context.authority_generation != authority.generation
+        || context.authority_id != authority_id
+    {
+        return Err(KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(
+            "readiness challenge does not name the exact target authority".into(),
+        ));
+    }
+    usize::try_from(context.validator_index)
+        .ok()
+        .and_then(|index| authority.validators.get(index))
+        .ok_or_else(|| {
+            KagemushaMintFinalityErrorV1::InvalidSigner(
+                "readiness index is outside the exact target committee".into(),
+            )
+        })
+}
+
+fn prove_paired_possession(
+    seed: &[u8; 32],
+    network_id: iroha_data_model::NetworkId,
+    generation: u64,
+    keys: &KagemushaMintFinalityValidatorKeysV1,
+    digest: [u8; 32],
+) -> Result<KagemushaMintFinalityPairedPossessionProofV1, KagemushaMintFinalityErrorV1> {
+    let derived =
+        derive_kagemusha_mint_finality_validator_keys_v1(seed, generation, keys.validator.clone())?;
+    if &derived != keys {
+        return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
+            "independent seed does not possess the challenged paired public keys".into(),
+        ));
+    }
+    let validator_bytes = keys.validator.encode();
+    let eq_secret =
+        derive_nonzero_key_scalar::<Fq>(EQ_PARITY_TAG, seed, generation, &validator_bytes)?;
+    let ep_secret =
+        derive_nonzero_key_scalar::<Fp>(EP_PARITY_TAG, seed, generation, &validator_bytes)?;
+    Ok(KagemushaMintFinalityPairedPossessionProofV1 {
+        eq_proof_signature: schnorr_sign::<EpAffine>(
+            seed,
+            &network_id,
+            generation,
+            &validator_bytes,
+            0,
+            EQ_PARITY_TAG,
+            &eq_secret,
+            digest,
+        )?,
+        ep_proof_signature: schnorr_sign::<EqAffine>(
+            seed,
+            &network_id,
+            generation,
+            &validator_bytes,
+            0,
+            EP_PARITY_TAG,
+            &ep_secret,
+            digest,
+        )?,
+    })
+}
+
+fn verify_paired_possession(
+    keys: &KagemushaMintFinalityValidatorKeysV1,
+    proof: &KagemushaMintFinalityPairedPossessionProofV1,
+    digest: [u8; 32],
+) -> Result<(), KagemushaMintFinalityErrorV1> {
+    proof
+        .validate()
+        .map_err(|error| KagemushaMintFinalityErrorV1::InvalidSignature(error.to_string()))?;
+    validate_kagemusha_mint_finality_validator_keys_v1(std::slice::from_ref(keys))?;
+    schnorr_verify::<EpAffine>(
+        EQ_PARITY_TAG,
+        0,
+        keys.eq_proof_public_key,
+        &proof.eq_proof_signature,
+        digest,
+    )?;
+    schnorr_verify::<EqAffine>(
+        EP_PARITY_TAG,
+        0,
+        keys.ep_proof_public_key,
+        &proof.ep_proof_signature,
+        digest,
+    )
+}
+
 /// Validator-local holder for separately provisioned mint-finality seed material.
 pub struct KagemushaMintFinalitySignerV1 {
     seed: Zeroizing<[u8; 32]>,
@@ -450,16 +622,29 @@ pub struct KagemushaMintFinalitySignerV1 {
 /// Sumeragi may share this object through `Arc`; no key material is cloned or
 /// exposed by the recursive relation.
 pub struct KagemushaMintFinalityLocalAuthorityV1 {
-    generation: Arc<KagemushaMintFinalityAuthorityGenerationV1>,
-    signer: KagemushaMintFinalitySignerV1,
+    binding: LocalMintFinalityBindingV1,
+}
+
+enum LocalMintFinalityBindingV1 {
+    Seated {
+        generation: Arc<KagemushaMintFinalityAuthorityGenerationV1>,
+        signer: KagemushaMintFinalitySignerV1,
+    },
+    Unseated {
+        network_id: iroha_data_model::NetworkId,
+        validator: iroha_model_base::peer::PeerId,
+        seed: Zeroizing<[u8; 32]>,
+        genesis_generation: u64,
+    },
 }
 
 impl core::fmt::Debug for KagemushaMintFinalityLocalAuthorityV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter
             .debug_struct("KagemushaMintFinalityLocalAuthorityV1")
-            .field("generation", &self.generation)
-            .field("signer", &self.signer)
+            .field("network_id", &self.network_id())
+            .field("validator", &self.validator())
+            .field("seated_at_genesis", &self.authority().is_some())
             .finish()
     }
 }
@@ -478,7 +663,68 @@ impl KagemushaMintFinalityLocalAuthorityV1 {
     ) -> Result<Self, KagemushaMintFinalityErrorV1> {
         let signer =
             KagemushaMintFinalitySignerV1::from_seed(seed, validator_index, generation.as_ref())?;
-        Ok(Self { generation, signer })
+        Ok(Self {
+            binding: LocalMintFinalityBindingV1::Seated { generation, signer },
+        })
+    }
+
+    /// Retain one private seed for a future candidate absent from signed genesis.
+    ///
+    /// This holder has no genesis vote authority. The seed can be used for candidate
+    /// possession and prepared-seat readiness, while consensus derives a signer only
+    /// from a later authenticated height context containing this exact peer and keys.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a malformed genesis authority, a non-genesis generation, or a peer
+    /// already seated in that authority.
+    pub fn new_unseated(
+        genesis: &KagemushaMintFinalityAuthorityGenerationV1,
+        validator: iroha_model_base::peer::PeerId,
+        seed: Zeroizing<[u8; 32]>,
+    ) -> Result<Self, KagemushaMintFinalityErrorV1> {
+        genesis.validate().map_err(|error| {
+            KagemushaMintFinalityErrorV1::InvalidAuthorityGeneration(error.to_string())
+        })?;
+        if genesis.generation != 0
+            || genesis
+                .validators
+                .iter()
+                .any(|entry| entry.validator == validator)
+        {
+            return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
+                "unseated seed owner must be absent from signed genesis".to_owned(),
+            ));
+        }
+        Ok(Self {
+            binding: LocalMintFinalityBindingV1::Unseated {
+                network_id: genesis.network_id,
+                validator,
+                seed,
+                genesis_generation: genesis.generation,
+            },
+        })
+    }
+
+    fn seed(&self) -> &[u8; 32] {
+        match &self.binding {
+            LocalMintFinalityBindingV1::Seated { signer, .. } => &signer.seed,
+            LocalMintFinalityBindingV1::Unseated { seed, .. } => seed,
+        }
+    }
+
+    fn network_id(&self) -> iroha_data_model::NetworkId {
+        match &self.binding {
+            LocalMintFinalityBindingV1::Seated { signer, .. } => signer.network_id,
+            LocalMintFinalityBindingV1::Unseated { network_id, .. } => *network_id,
+        }
+    }
+
+    fn validator(&self) -> &iroha_model_base::peer::PeerId {
+        match &self.binding {
+            LocalMintFinalityBindingV1::Seated { signer, .. } => &signer.validator,
+            LocalMintFinalityBindingV1::Unseated { validator, .. } => validator,
+        }
     }
 
     /// Bind the held private seed to this validator in an authenticated key generation.
@@ -490,42 +736,107 @@ impl KagemushaMintFinalityLocalAuthorityV1 {
     /// # Errors
     ///
     /// Rejects another network, an absent local validator, malformed roster, or changed keys.
-    pub fn signer_for_authority(
+    pub(crate) fn signer_for_authority(
         &self,
         generation: &KagemushaMintFinalityAuthorityGenerationV1,
     ) -> Result<KagemushaMintFinalitySignerV1, KagemushaMintFinalityErrorV1> {
-        if generation.network_id != self.signer.network_id {
+        if generation.network_id != self.network_id() {
             return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
                 "generation does not belong to the signer's admitted network".to_owned(),
+            ));
+        }
+        if matches!(
+            &self.binding,
+            LocalMintFinalityBindingV1::Unseated {
+                genesis_generation,
+                ..
+            } if generation.generation <= *genesis_generation
+        ) {
+            return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
+                "unseated genesis candidate cannot sign its original generation".to_owned(),
             ));
         }
         let index = generation
             .validators
             .iter()
-            .position(|entry| entry.validator == self.signer.validator)
+            .position(|entry| &entry.validator == self.validator())
             .and_then(|index| u32::try_from(index).ok())
             .ok_or_else(|| {
                 KagemushaMintFinalityErrorV1::InvalidSigner(
                     "local validator is absent from the authenticated generation roster".to_owned(),
                 )
             })?;
-        KagemushaMintFinalitySignerV1::from_seed(
-            Zeroizing::new(*self.signer.seed),
-            index,
+        KagemushaMintFinalitySignerV1::from_seed(Zeroizing::new(*self.seed()), index, generation)
+    }
+
+    /// Derive and prove consent to this node's public keys for a proposed generation.
+    ///
+    /// Private seed material remains inside this runtime owner. Candidate publication does not
+    /// authenticate a committee, transition or activation.
+    ///
+    /// # Errors
+    /// Returns an error for invalid derivation or an invalid candidate possession statement.
+    pub fn candidate_possession(
+        &self,
+        generation: u64,
+    ) -> Result<
+        (
+            KagemushaMintFinalityValidatorKeysV1,
+            KagemushaMintFinalityPairedPossessionProofV1,
+        ),
+        KagemushaMintFinalityErrorV1,
+    > {
+        let keys = derive_kagemusha_mint_finality_validator_keys_v1(
+            self.seed(),
             generation,
-        )
+            self.validator().clone(),
+        )?;
+        let proof = prove_kagemusha_mint_finality_candidate_possession_v1(
+            self.seed(),
+            self.network_id(),
+            generation,
+            &keys,
+        )?;
+        Ok((keys, proof))
+    }
+
+    /// Prove readiness of this local peer in an authenticated prepared authority.
+    ///
+    /// This proves both Pasta keys while retaining the private seed in its custody owner. The
+    /// caller must separately obtain the exact beacon-share proof and incumbent authorization.
+    ///
+    /// # Errors
+    /// Rejects a different network or peer, changed published keys, or malformed context.
+    pub fn prove_seat_readiness(
+        &self,
+        authority: &KagemushaMintFinalityAuthorityGenerationV1,
+        context: &KagemushaMintFinalitySeatReadinessContextV1,
+    ) -> Result<KagemushaMintFinalityPairedPossessionProofV1, KagemushaMintFinalityErrorV1> {
+        let keys = readiness_keys(authority, context)?;
+        if authority.network_id != self.network_id() || &keys.validator != self.validator() {
+            return Err(KagemushaMintFinalityErrorV1::InvalidSigner(
+                "prepared seat does not belong to the local authority".to_owned(),
+            ));
+        }
+        prove_kagemusha_mint_finality_seat_readiness_v1(self.seed(), authority, context)
     }
 
     /// Borrow the immutable key generation admitted at startup.
     #[must_use]
-    pub fn authority(&self) -> &KagemushaMintFinalityAuthorityGenerationV1 {
-        self.generation.as_ref()
+    pub fn authority(&self) -> Option<&KagemushaMintFinalityAuthorityGenerationV1> {
+        match &self.binding {
+            LocalMintFinalityBindingV1::Seated { generation, .. } => Some(generation.as_ref()),
+            LocalMintFinalityBindingV1::Unseated { .. } => None,
+        }
     }
 
     /// Borrow the local signer without exposing its private seed.
     #[must_use]
-    pub const fn signer(&self) -> &KagemushaMintFinalitySignerV1 {
-        &self.signer
+    pub fn signer(&self) -> Option<&KagemushaMintFinalitySignerV1> {
+        match &self.binding {
+            LocalMintFinalityBindingV1::Seated { signer, .. } => Some(signer),
+            LocalMintFinalityBindingV1::Unseated { .. } => None,
+        }
     }
 }
 
@@ -1553,85 +1864,294 @@ mod tests {
     }
 
     #[test]
-    fn retained_generation_signs_distinct_epoch_authorizations_with_original_keys() {
-        use iroha_data_model::isi::kagemusha_v1::{
-            BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
-            KagemushaMintFinalityEpochAuthorizationV1, KagemushaMintFinalityEpochDecisionV1,
-        };
-        let generation = runtime_generation_fixture(0);
-        let signer =
-            KagemushaMintFinalitySignerV1::from_seed(Zeroizing::new([0xB1; 32]), 1, &generation)
-                .unwrap();
-        let genesis = KagemushaMintFinalityEpochAuthorizationV1::genesis(&generation, 2).unwrap();
-        let retained = KagemushaMintFinalityEpochAuthorizationV1 {
-            epoch: 1,
-            first_height: 3,
-            last_height: 4,
-            previous_authorization_id: genesis.authorization_id().unwrap(),
-            beacon: BeaconEpochBindingV1::Installed(InstalledBeaconEpochBindingV1 {
-                session_id: [0x31; 32],
-                transcript_hash: [0x32; 32],
-            }),
-            decision: KagemushaMintFinalityEpochDecisionV1::Retain,
-            ..genesis
-        };
-        retained.validate_successor(&genesis).unwrap();
-        let message = |authorization: KagemushaMintFinalityEpochAuthorizationV1| {
-            KagemushaMintFinalitySealMessageV1 {
-                version: KAGEMUSHA_CHAIN_VERSION_V1,
-                epoch_authorization: authorization,
-                validator_count: 4,
-                network_id: generation.network_id,
-                block_height: authorization.first_height,
-                height_context_id: iroha_data_model::block::consensus_v2::HeightContextId(
-                    HashOf::from_untyped_unchecked(Hash::new(b"retained signer context")),
-                ),
-                subject_digest: [0x41; 32],
-                execution_commitment_digest: [0x42; 32],
-                kagemusha_top_up_root: Hash::new(b"retained signer top-up root"),
-                kagemusha_top_up_count: 1,
-                next_epoch_authorization: None,
-            }
-        };
-        let before = message(genesis);
-        let after = message(retained);
-        let before_seal = signer.sign(&before).unwrap();
-        let after_seal = signer.sign(&after).unwrap();
-        assert_ne!(before_seal, after_seal);
-        assert_ne!(
-            before.signing_digest().unwrap(),
-            after.signing_digest().unwrap()
+    fn unseated_seed_waits_for_exact_authenticated_seven_seat_generation() {
+        let genesis = runtime_generation_fixture(0);
+        let candidate = peer(7);
+        let seed = [0xC7; 32];
+        let holder = KagemushaMintFinalityLocalAuthorityV1::new_unseated(
+            &genesis,
+            candidate.clone(),
+            Zeroizing::new(seed),
+        )
+        .expect("retain an unseated candidate seed");
+        assert!(holder.authority().is_none());
+        assert!(holder.signer().is_none());
+        assert!(holder.signer_for_authority(&genesis).is_err());
+        assert!(
+            KagemushaMintFinalityLocalAuthorityV1::new_unseated(
+                &genesis,
+                genesis.validators[0].validator.clone(),
+                Zeroizing::new([0xB0; 32]),
+            )
+            .is_err()
         );
-        for (statement, seal) in [(&before, &before_seal), (&after, &after_seal)] {
-            let digest = statement.signing_digest().unwrap();
-            let keys = &generation.validators[1];
-            schnorr_verify::<EpAffine>(
-                EQ_PARITY_TAG,
-                1,
-                keys.eq_proof_public_key,
-                &seal.eq_proof_signature,
-                digest,
-            )
-            .unwrap();
-            schnorr_verify::<EqAffine>(
-                EP_PARITY_TAG,
-                1,
-                keys.ep_proof_public_key,
-                &seal.ep_proof_signature,
-                digest,
-            )
-            .unwrap();
-        }
-        let mut relabeled = after;
-        relabeled.epoch_authorization.authority_generation += 1;
-        assert!(signer.sign(&relabeled).is_err());
+
+        let mut peers = (1_u8..=7).map(peer).collect::<Vec<_>>();
+        peers.sort();
+        let next = KagemushaMintFinalityAuthorityGenerationV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: genesis.network_id,
+            generation: 1,
+            validators: peers
+                .into_iter()
+                .map(|validator| {
+                    let original = genesis
+                        .validators
+                        .iter()
+                        .position(|entry| entry.validator == validator);
+                    let seed = original
+                        .map(|index| 0xB0 + u8::try_from(index).expect("four seats"))
+                        .unwrap_or_else(|| {
+                            if validator == peer(5) {
+                                0xC5
+                            } else if validator == peer(6) {
+                                0xC6
+                            } else {
+                                0xC7
+                            }
+                        });
+                    derive_kagemusha_mint_finality_validator_keys_v1(&[seed; 32], 1, validator)
+                        .expect("derive exact candidate keys")
+                })
+                .collect(),
+        };
+        next.validate().expect("seven-seat authority");
+        let signer = holder
+            .signer_for_authority(&next)
+            .expect("authenticated activation seats this seed");
+        assert_eq!(signer.validator, candidate);
+        assert_eq!(signer.generation, 1);
+        let resumed = KagemushaMintFinalityLocalAuthorityV1::new_unseated(
+            &genesis,
+            candidate.clone(),
+            Zeroizing::new(seed),
+        )
+        .expect("restart retains the same seed");
+        assert_eq!(
+            resumed
+                .signer_for_authority(&next)
+                .expect("restart rebinds exact active generation")
+                .authority_id,
+            signer.authority_id
+        );
+        let wrong_seed = KagemushaMintFinalityLocalAuthorityV1::new_unseated(
+            &genesis,
+            candidate.clone(),
+            Zeroizing::new([0xEE; 32]),
+        )
+        .expect("unseated seed is retained until authorization exists");
+        assert!(wrong_seed.signer_for_authority(&next).is_err());
+        let wrong_peer = KagemushaMintFinalityLocalAuthorityV1::new_unseated(
+            &genesis,
+            peer(8),
+            Zeroizing::new(seed),
+        )
+        .expect("another unseated peer");
+        assert!(wrong_peer.signer_for_authority(&next).is_err());
+        let mut forged = next.clone();
+        forged
+            .validators
+            .iter_mut()
+            .find(|entry| entry.validator == candidate)
+            .expect("candidate seat")
+            .eq_proof_public_key[0] ^= 1;
+        assert!(holder.signer_for_authority(&forged).is_err());
+        let mut original_generation = next;
+        original_generation.generation = 0;
+        assert!(holder.signer_for_authority(&original_generation).is_err());
     }
 
     #[test]
-    fn runtime_generation_rebinding_rejects_network_keys_generation_and_missing_validator() {
-        let generation_zero = runtime_generation_fixture(0);
+    fn candidate_and_prepared_seat_possession_are_distinct_and_replay_bound() {
+        use iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1;
+        let authority = runtime_generation_fixture(1);
+        let keys = &authority.validators[1];
+        let seed = [0xB1; 32];
+        let candidate = prove_kagemusha_mint_finality_candidate_possession_v1(
+            &seed,
+            authority.network_id,
+            1,
+            keys,
+        )
+        .unwrap();
+        verify_kagemusha_mint_finality_candidate_possession_v1(
+            authority.network_id,
+            1,
+            keys,
+            &candidate,
+        )
+        .unwrap();
+        assert!(
+            prove_kagemusha_mint_finality_candidate_possession_v1(
+                &[0xCC; 32],
+                authority.network_id,
+                1,
+                keys
+            )
+            .is_err()
+        );
+        assert!(
+            verify_kagemusha_mint_finality_candidate_possession_v1(
+                authority.network_id,
+                2,
+                keys,
+                &candidate
+            )
+            .is_err()
+        );
+        let context = KagemushaMintFinalitySeatReadinessContextV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id: authority.network_id,
+            transition_id: [0x21; 32],
+            target_epoch: 2,
+            authority_generation: 1,
+            authority_id: authority.authority_id().unwrap(),
+            first_height: 11,
+            last_height: 20,
+            validator_index: 1,
+            beacon: BeaconEpochBindingV1::Installed(
+                iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                    session_id: [0x22; 32],
+                    transcript_hash: [0x23; 32],
+                },
+            ),
+        };
+        let readiness =
+            prove_kagemusha_mint_finality_seat_readiness_v1(&seed, &authority, &context).unwrap();
+        let owner = KagemushaMintFinalityLocalAuthorityV1::new(
+            Arc::new(runtime_generation_fixture(0)),
+            Zeroizing::new(seed),
+            1,
+        )
+        .unwrap();
+        let (owned_keys, owned_candidate) = owner.candidate_possession(1).unwrap();
+        assert_eq!(&owned_keys, keys);
+        assert_eq!(owned_candidate, candidate);
+        assert_eq!(
+            owner.prove_seat_readiness(&authority, &context).unwrap(),
+            readiness
+        );
+        let mut other_seat = context;
+        other_seat.validator_index = 2;
+        assert!(owner.prove_seat_readiness(&authority, &other_seat).is_err());
+        verify_kagemusha_mint_finality_seat_readiness_v1(&authority, &context, &readiness).unwrap();
+        assert!(
+            verify_kagemusha_mint_finality_seat_readiness_v1(&authority, &context, &candidate)
+                .is_err()
+        );
+        assert!(
+            verify_kagemusha_mint_finality_candidate_possession_v1(
+                authority.network_id,
+                1,
+                keys,
+                &readiness
+            )
+            .is_err()
+        );
+        for coordinate in 0..9 {
+            let mut changed = context;
+            match coordinate {
+                0 => changed.transition_id[0] ^= 1,
+                1 => changed.target_epoch += 1,
+                2 => changed.first_height += 1,
+                3 => changed.last_height += 1,
+                4 => changed.authority_generation += 1,
+                5 => changed.authority_id[0] ^= 1,
+                6 => changed.validator_index = 2,
+                7 => {
+                    changed.beacon = BeaconEpochBindingV1::Installed(
+                        iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                            session_id: [0x22; 32],
+                            transcript_hash: [0x24; 32],
+                        },
+                    )
+                }
+                _ => {
+                    changed.network_id =
+                        NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+                            Hash::new(b"foreign readiness network"),
+                        ))
+                }
+            }
+            assert!(
+                verify_kagemusha_mint_finality_seat_readiness_v1(&authority, &changed, &readiness)
+                    .is_err(),
+                "coordinate {coordinate}"
+            );
+        }
+        let mut malformed = readiness;
+        malformed.ep_proof_signature.response = [0; 32];
+        assert!(
+            verify_kagemusha_mint_finality_seat_readiness_v1(&authority, &context, &malformed)
+                .is_err()
+        );
+        let mut uninstalled = context;
+        uninstalled.beacon = BeaconEpochBindingV1::Bootstrap;
+        assert!(
+            prove_kagemusha_mint_finality_seat_readiness_v1(&seed, &authority, &uninstalled)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn retained_generation_signs_new_epoch_with_distinct_nonce_and_rejects_replay() {
+        use iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1;
+        let authority = runtime_generation_fixture(0);
+        let signer =
+            KagemushaMintFinalitySignerV1::from_seed(Zeroizing::new([0xB1; 32]), 1, &authority)
+                .unwrap();
+        let initial =
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(&authority, 10);
+        let retained = crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
+            &initial,
+            &authority,
+            20,
+            crate::kagemusha_v1_test_fixtures::fixture_installed_beacon(),
+            KagemushaMintFinalityEpochDecisionV1::Retain,
+            [0; 32],
+        );
+        let message = KagemushaMintFinalitySealMessageV1 {
+            version: KAGEMUSHA_CHAIN_VERSION_V1,
+            epoch_authorization: initial,
+            validator_count: 4,
+            network_id: authority.network_id,
+            block_height: 1,
+            height_context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                HashOf::from_untyped_unchecked(Hash::new(b"generation retained epoch context")),
+            ),
+            subject_digest: [0x31; 32],
+            execution_commitment_digest: [0x32; 32],
+            kagemusha_top_up_root: Hash::new(b"generation retained top-up root"),
+            kagemusha_top_up_count: 1,
+            next_epoch_authorization: None,
+        };
+        let initial_seal = signer.sign(&message).unwrap();
+        let retained_message = KagemushaMintFinalitySealMessageV1 {
+            epoch_authorization: retained,
+            block_height: 11,
+            ..message
+        };
+        let retained_seal = signer.sign(&retained_message).unwrap();
+        assert_ne!(
+            initial_seal.eq_proof_signature.nonce_commitment,
+            retained_seal.eq_proof_signature.nonce_commitment
+        );
+        assert_ne!(
+            initial_seal.ep_proof_signature.nonce_commitment,
+            retained_seal.ep_proof_signature.nonce_commitment
+        );
+        verify_validator_seal(&authority, &retained_message, &retained_seal).unwrap();
+        assert!(verify_validator_seal(&authority, &retained_message, &initial_seal).is_err());
+        let mut wrong_generation = retained_message;
+        wrong_generation.epoch_authorization.authority_generation = 1;
+        assert!(signer.sign(&wrong_generation).is_err());
+    }
+
+    #[test]
+    fn runtime_epoch_rebinding_rejects_network_keys_epoch_and_missing_validator() {
+        let epoch_zero = runtime_generation_fixture(0);
         let authority = KagemushaMintFinalityLocalAuthorityV1::new(
-            Arc::new(generation_zero.clone()),
+            Arc::new(epoch_zero.clone()),
             Zeroizing::new([0xB1; 32]),
             1,
         )
@@ -1641,9 +2161,9 @@ mod tests {
             HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"foreign runtime generation")),
         );
         assert!(authority.signer_for_authority(&foreign).is_err());
-        let mut wrong_generation = generation_zero.clone();
-        wrong_generation.generation = 1;
-        assert!(authority.signer_for_authority(&wrong_generation).is_err());
+        let mut wrong_epoch = epoch_zero.clone();
+        wrong_epoch.generation = 1;
+        assert!(authority.signer_for_authority(&wrong_epoch).is_err());
         let mut wrong_key = runtime_generation_fixture(1);
         wrong_key.validators[1] = derive_kagemusha_mint_finality_validator_keys_v1(
             &[0xDD; 32],
@@ -1726,12 +2246,12 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        let generation_zero_keys = derive_keys(0, 0xC0);
+        let epoch_zero_keys = derive_keys(0, 0xC0);
         let mut parameters = KagemushaMintFinalityGenesisParametersV1 {
             authority_generation: KagemushaMintFinalityAuthorityGenerationTemplateV1 {
                 version: KAGEMUSHA_CHAIN_VERSION_V1,
                 generation: 0,
-                validators: generation_zero_keys.clone(),
+                validators: epoch_zero_keys.clone(),
             },
         };
         validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
@@ -1741,7 +2261,7 @@ mod tests {
             .expect_err("non-canonical Pallas point must fail closed");
         assert!(error.to_string().contains("Pallas point"));
 
-        parameters.authority_generation.validators = generation_zero_keys;
+        parameters.authority_generation.validators = epoch_zero_keys;
         parameters.authority_generation.validators[0].ep_proof_public_key = [0xFF; 32];
         let error = validate_kagemusha_mint_finality_genesis_parameter_keys_v1(&parameters)
             .expect_err("non-canonical Vesta point must fail closed");

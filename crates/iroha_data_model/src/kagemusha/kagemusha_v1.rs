@@ -50,7 +50,7 @@ pub const KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V1: usize = 65;
 pub const KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1: usize = 64;
 /// Maximum canonical aggregate-state metadata bytes.
 pub const KAGEMUSHA_AGGREGATE_STATE_MAX_BYTES_V1: usize = 768;
-/// Maximum canonical receiver-request bytes.
+/// Maximum canonical receiver-request bytes, including the governed app-policy binding.
 pub const KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1: usize = 1_024;
 /// Maximum canonical sender-response bytes.
 pub const KAGEMUSHA_PAYMENT_MAX_BYTES_V1: usize = 7_552;

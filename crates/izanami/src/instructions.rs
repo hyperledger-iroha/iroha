@@ -835,8 +835,7 @@ const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
     RecipeKind::ExpireSpaceDirectoryManifest,
 ];
 const NEXUS_RECIPES_STABLE: &[RecipeKind] = &[];
-// Replication completion is deliberately absent from offline recipe generation:
-// the V1 instruction must bind a fresh committed anchor and the exact
+// Replication completion requires a fresh committed anchor and the exact
 // chain-authoritative owner, assignment revision, and signer-policy tuple.
 // TODO: Add live Nexus staking recipes after the workload can authenticate the
 // current height, validator tenure, stake custody, and reward authority.
@@ -2739,7 +2738,15 @@ mod tests {
                     u64::try_from(profile.bootstrap_public_lanes.len()).unwrap_or(u64::MAX),
                 )
                 .expect("bootstrap stake total must fit Izanami workload accounting");
-        let minted_stake_accounts: HashMap<AccountId, u64> = genesis
+        let expected_validator_total = expected_stake
+            .checked_add(if setup.fee_asset == setup.stake_asset {
+                quantity_to_u64_exact(&nexus_fee_seed_amount())
+                    .expect("fee seed must fit Izanami workload accounting")
+            } else {
+                0
+            })
+            .expect("validator genesis funding must fit Izanami workload accounting");
+        let minted_stake_accounts = genesis
             .iter()
             .flatten()
             .filter_map(|instruction| {
@@ -2759,11 +2766,20 @@ mod tests {
                         _ => None,
                     })
             })
-            .collect();
+            .fold(
+                HashMap::<AccountId, u64>::new(),
+                |mut totals, (account, amount)| {
+                    let total = totals.entry(account).or_default();
+                    *total = total
+                        .checked_add(amount)
+                        .expect("validator genesis mint total must fit u64");
+                    totals
+                },
+            );
         for validator in &setup.validator_accounts {
             assert_eq!(
                 minted_stake_accounts.get(&validator.id).copied(),
-                Some(expected_stake),
+                Some(expected_validator_total),
                 "validator {} should be prefunded for every bootstrap lane",
                 validator.id
             );

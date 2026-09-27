@@ -132,8 +132,9 @@ qualification is not inferred from its build profile or the ephemeral test keys.
 
 ## Scope limits
 
-All eight current circuit definitions are recompiled and hashed in
-[`constraint-counts-final-v1.json`](../../circuits/sccp/manifests/constraint-counts-final-v1.json).
+All eight circuit definitions current at audit time were recompiled and hashed
+in the Go circuit manifest `constraint-counts-final-v1.json`; those Groth16
+circuits have since been retired and removed from the repository.
 Dependent keys/proofs/verifiers require regeneration
 under the existing signed release corridor. Local tests do not qualify a
 deployed TON contract or a production ceremony.

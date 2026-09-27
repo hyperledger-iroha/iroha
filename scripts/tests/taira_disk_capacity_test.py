@@ -92,8 +92,14 @@ class CapacityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             expected = os.statvfs(root)
-            result = capacity.inspect_filesystem(root)
-            self.assertGreaterEqual(result['available_bytes'], 0)
+            # Other build/test processes may allocate between live observations.
+            # Capture one real statvfs sample and assert the projection of that sample.
+            with mock.patch.object(capacity.os, 'fstatvfs', return_value=expected) as observed:
+                result = capacity.inspect_filesystem(root)
+            observed.assert_called_once()
+            self.assertIsInstance(observed.call_args.args[0], int)
+            self.assertEqual(result['available_bytes'],
+                             expected.f_bavail * (expected.f_frsize or expected.f_bsize))
             self.assertEqual(result['available_inodes'], expected.f_favail)
             self.assertEqual(result['fragment_bytes'], expected.f_frsize or expected.f_bsize)
 

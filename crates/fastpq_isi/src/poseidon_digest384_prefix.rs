@@ -7,6 +7,7 @@
 //! field delimiter, or integer byte encoding is changed.
 
 use std::sync::{Arc, OnceLock};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     poseidon::{FIELD_MODULUS, MDS, RATE, STATE_WIDTH},
@@ -318,6 +319,37 @@ struct OwnedDomainPrefix {
 }
 
 impl GoldilocksDigest384OwnedDomainPrefixV1 {
+    /// Exact allocation payload for one newly owned prefix, excluding its shared profile.
+    ///
+    /// This counts the private inner layout and Arc counters, plus fresh catalog,
+    /// protocol, role and phase byte allocations and their Arc counters. The
+    /// caller counts the shared profile allocation once. Allocator metadata and
+    /// global public permutation constants are outside this per-prefix payload.
+    /// Returns `None` on the same field-length refusal as construction or overflow.
+    #[must_use]
+    pub fn allocation_bytes_excluding_profile(
+        domain: GoldilocksDigestDomainV1<'_>,
+    ) -> Option<usize> {
+        if [
+            domain.catalog,
+            domain.protocol,
+            domain.profile,
+            domain.role,
+            domain.phase,
+        ]
+        .iter()
+        .any(|field| field.len() > MAX_FRAMED_FIELD_BYTES_V1)
+        {
+            return None;
+        }
+        let arc_counters = 2 * core::mem::size_of::<usize>();
+        let mut bytes = core::mem::size_of::<OwnedDomainPrefix>().checked_add(arc_counters)?;
+        for field in [domain.catalog, domain.protocol, domain.role, domain.phase] {
+            bytes = bytes.checked_add(field.len())?.checked_add(arc_counters)?;
+        }
+        Some(bytes)
+    }
+
     /// Absorb the complete owned domain through tag 7 using the canonical owner.
     ///
     /// Returns `None` for the same oversized domain fields as the borrowed owner.
@@ -392,6 +424,31 @@ struct CachedLane {
     constants: &'static LaneRoundConstants,
 }
 
+impl Drop for CachedLane {
+    fn drop(&mut self) {
+        self.state.zeroize();
+        self.pending.zeroize();
+        #[cfg(test)]
+        CACHED_LANE_ERASURES.with(|observed| {
+            let (cleared, uncleared) = observed.get();
+            let clean = self
+                .state
+                .iter()
+                .chain(&self.pending)
+                .all(|word| *word == 0);
+            observed.set((
+                cleared + usize::from(clean),
+                uncleared + usize::from(!clean),
+            ));
+        });
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CACHED_LANE_ERASURES: core::cell::Cell<(usize, usize)> = const { core::cell::Cell::new((0, 0)) };
+}
+
 impl CachedLane {
     fn new(lane: usize) -> Self {
         Self {
@@ -413,11 +470,11 @@ impl CachedLane {
     }
 
     fn flush(&mut self) {
-        for (state, value) in self.state.iter_mut().zip(self.pending) {
-            *state = add(*state, value);
+        for (state, value) in self.state.iter_mut().zip(&self.pending) {
+            *state = add(*state, *value);
         }
         permute(&mut self.state, self.constants);
-        self.pending = [0; RATE];
+        self.pending.zeroize();
         self.pending_len = 0;
     }
 
@@ -435,15 +492,15 @@ impl CachedLane {
         self.absorb(u64::try_from(bytes.len()).expect("bounded field length fits u64"));
         let mut chunks = bytes.chunks_exact(7);
         for chunk in &mut chunks {
-            let mut word = [0; 8];
+            let mut word = Zeroizing::new([0; 8]);
             word[..7].copy_from_slice(chunk);
-            self.absorb(u64::from_le_bytes(word));
+            self.absorb(u64::from_le_bytes(*word));
         }
         let remainder = chunks.remainder();
-        let mut terminal = [0; 8];
+        let mut terminal = Zeroizing::new([0; 8]);
         terminal[..remainder.len()].copy_from_slice(remainder);
         terminal[remainder.len()] = 1;
-        self.absorb(u64::from_le_bytes(terminal));
+        self.absorb(u64::from_le_bytes(*terminal));
     }
 }
 
@@ -536,9 +593,9 @@ fn permute(state: &mut [u64; STATE_WIDTH], constants: &LaneRoundConstants) {
                 *word = pow7(*word);
             }
         }
-        let prior = *state;
+        let prior = Zeroizing::new(*state);
         for (result, row) in state.iter_mut().zip(MDS) {
-            *result = mds_dot3(row, prior);
+            *result = mds_dot3(row, *prior);
         }
     }
 }
@@ -560,6 +617,30 @@ fn framed_field_count(
 mod tests {
     use super::*;
     use crate::{poseidon::FIELD_MODULUS, poseidon_digest384::hash_bytes_384_v1};
+
+    #[test]
+    fn cached_private_lanes_erase_on_return_and_unwind() {
+        let cache = GoldilocksDigest384DomainPrefixV1::new(domain()).unwrap();
+        CACHED_LANE_ERASURES.with(|observed| observed.set((0, 0)));
+        assert_eq!(
+            cache.hash(&[b"private witness"]),
+            hash_bytes_384_v1(domain(), &[b"private witness"])
+        );
+        assert_eq!(CACHED_LANE_ERASURES.with(core::cell::Cell::get), (6, 0));
+        let unwind = std::panic::catch_unwind(|| {
+            let mut lane = CachedLane::new(0);
+            lane.absorb_byte_field(12, b"private witness");
+            assert!(
+                lane.state
+                    .iter()
+                    .chain(&lane.pending)
+                    .any(|word| *word != 0)
+            );
+            panic!("test cached lane cleanup");
+        });
+        assert!(unwind.is_err());
+        assert_eq!(CACHED_LANE_ERASURES.with(core::cell::Cell::get), (7, 0));
+    }
 
     fn domain() -> GoldilocksDigestDomainV1<'static> {
         GoldilocksDigestDomainV1 {
@@ -611,6 +692,53 @@ mod tests {
             index: domain.index,
             counter: domain.counter,
         }
+    }
+
+    #[test]
+    fn owned_prefix_allocation_accounting_counts_layout_and_shared_profile_once() {
+        let domain = GoldilocksDigestDomainV1 {
+            catalog: b"catalog",
+            protocol: b"protocol",
+            profile: b"shared profile",
+            role: b"role",
+            phase: b"phase",
+            level: 3,
+            index: 7,
+            counter: 11,
+        };
+        let counted =
+            GoldilocksDigest384OwnedDomainPrefixV1::allocation_bytes_excluding_profile(domain)
+                .unwrap();
+        assert_eq!(
+            counted,
+            core::mem::size_of::<OwnedDomainPrefix>()
+                + 10 * core::mem::size_of::<usize>()
+                + domain.catalog.len()
+                + domain.protocol.len()
+                + domain.role.len()
+                + domain.phase.len()
+        );
+        let large = vec![0; 4096];
+        assert_eq!(
+            counted,
+            GoldilocksDigest384OwnedDomainPrefixV1::allocation_bytes_excluding_profile(
+                GoldilocksDigestDomainV1 {
+                    profile: &large,
+                    ..domain
+                }
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            counted + 4096 - domain.role.len(),
+            GoldilocksDigest384OwnedDomainPrefixV1::allocation_bytes_excluding_profile(
+                GoldilocksDigestDomainV1 {
+                    role: &large,
+                    ..domain
+                }
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -777,7 +905,7 @@ mod tests {
     fn owned_prefix_stream_errors_preserve_snapshot_and_preallocation_bounds() {
         let cache = GoldilocksDigest384OwnedDomainPrefixV1::new(owned_domain(domain())).unwrap();
         let mut stream = cache.last_field_stream_at(u64::MAX, &[b""], 8).unwrap();
-        let pristine = stream;
+        let pristine = stream.clone();
         assert_eq!(
             stream.update(&[0; 9]),
             Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
@@ -788,7 +916,7 @@ mod tests {
         );
         assert_stream_eq(&stream, &pristine);
         stream.update(b"123456").unwrap();
-        let partial = stream;
+        let partial = stream.clone();
         assert_eq!(
             stream.update(b"789"),
             Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
@@ -799,7 +927,7 @@ mod tests {
         );
         assert_stream_eq(&stream, &partial);
         assert_eq!(
-            stream.finalize(),
+            stream.clone().finalize(),
             Err(GoldilocksDigest384LastFieldStreamErrorV1::InputUnderrun {
                 expected: 8,
                 received: 6
@@ -1393,7 +1521,7 @@ mod tests {
         assert_eq!(cache.domain.phase.as_ptr(), domain().phase.as_ptr());
         let original = cache;
         let mut stream = cache.last_field_stream_at(99, &[b"prefix"], 8).unwrap();
-        let pristine = stream;
+        let pristine = stream.clone();
         assert_eq!(
             stream.update(&[0; 9]),
             Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
@@ -1404,7 +1532,7 @@ mod tests {
         );
         assert_stream_eq(&stream, &pristine);
         stream.update(b"123456").unwrap();
-        let partial = stream;
+        let partial = stream.clone();
         assert_eq!(
             stream.update(b"789"),
             Err(GoldilocksDigest384LastFieldStreamErrorV1::InputOverrun {
@@ -1415,7 +1543,7 @@ mod tests {
         );
         assert_stream_eq(&stream, &partial);
         assert_eq!(
-            stream.finalize(),
+            stream.clone().finalize(),
             Err(GoldilocksDigest384LastFieldStreamErrorV1::InputUnderrun {
                 expected: 8,
                 received: 6,
@@ -1427,7 +1555,7 @@ mod tests {
         recovered.update(b"78").unwrap();
         // Public snapshots do not expose a partial seven-byte chunk; matching
         // the recovered final digest also checks that hidden buffered content.
-        assert_eq!(stream.finalize(), recovered.finalize());
+        assert_eq!(stream.clone().finalize(), recovered.finalize());
         assert_eq!(
             Some(stream.finalize().unwrap()),
             cache.hash_at(99, &[b"prefix", b"12345678"])

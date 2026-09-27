@@ -204,6 +204,10 @@ impl KagemushaMintFinalityGenesisParametersV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1"
+)]
 pub struct KagemushaMintFinalityAuthorityGenerationV1 {
     /// Sole first-release layout version.
     pub version: u16,
@@ -374,6 +378,10 @@ pub enum KagemushaMintFinalityEpochDecisionV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1"
+)]
 pub struct KagemushaMintFinalityEpochAuthorizationV1 {
     /// Sole first-release layout version.
     pub version: u16,
@@ -1855,6 +1863,200 @@ impl KagemushaPastaSchnorrSignatureV1 {
         )?;
         require_nonzero("mint_finality.signature.response", self.response)
     }
+}
+
+/// Proof of possession of both independently provisioned Pasta keys.
+///
+/// Candidate consent and prepared-seat readiness use distinct typed signing domains. This
+/// evidence is neither a consensus vote nor a monetary finality seal.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityPairedPossessionProofV1"
+)]
+pub struct KagemushaMintFinalityPairedPossessionProofV1 {
+    /// Eq/Fp proof under the exact Pallas public key.
+    pub eq_proof_signature: KagemushaPastaSchnorrSignatureV1,
+    /// Ep/Fq proof under the exact Vesta public key.
+    pub ep_proof_signature: KagemushaPastaSchnorrSignatureV1,
+}
+
+impl KagemushaMintFinalityPairedPossessionProofV1 {
+    /// Validate the non-zero signature encodings before cryptographic verification.
+    ///
+    /// # Errors
+    /// Returns an error for a zero nonce point or response; Core also enforces canonical curves.
+    pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
+        self.eq_proof_signature.validate()?;
+        self.ep_proof_signature.validate()
+    }
+}
+
+/// Exact preparation attempt and target interval acknowledged by one prospective seat.
+///
+/// The incumbent certificate must additionally authenticate the frozen transition, and separate
+/// beacon custody evidence must establish possession of that seat's exact threshold share.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySeatReadinessContextV1"
+)]
+pub struct KagemushaMintFinalitySeatReadinessContextV1 {
+    /// Sole first-release layout version.
+    pub version: u16,
+    /// Exact genesis-derived network identity.
+    pub network_id: NetworkId,
+    /// Unique frozen preparation attempt, including its finalized election context.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub transition_id: [u8; 32],
+    /// Scheduling epoch in which the prepared authority may first activate.
+    pub target_epoch: u64,
+    /// Immutable generation whose keys this seat proves it possesses.
+    pub authority_generation: u64,
+    /// Exact ordered target committee and paired-public-key commitment.
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
+    pub authority_id: [u8; 32],
+    /// First target height, inclusive.
+    pub first_height: u64,
+    /// Last target height, inclusive.
+    pub last_height: u64,
+    /// Exact zero-based position in the target generation.
+    pub validator_index: u32,
+    /// Exact installed target beacon session and complete transcript.
+    pub beacon: BeaconEpochBindingV1,
+}
+
+impl KagemushaMintFinalitySeatReadinessContextV1 {
+    /// Validate a complete prospective-seat challenge without granting activation authority.
+    ///
+    /// # Errors
+    /// Rejects empty identities, bootstrap beacon state, invalid intervals, or an oversized index.
+    pub fn validate(&self) -> Result<(), KagemushaIsiValidationErrorV1> {
+        require_chain_version(self.version)?;
+        if self.network_id.as_bytes() == &[0; 32]
+            || self.transition_id == [0; 32]
+            || self.authority_id == [0; 32]
+            || self.target_epoch == 0
+            || self.first_height <= 1
+            || self.last_height < self.first_height
+            || usize::try_from(self.validator_index)
+                .ok()
+                .is_none_or(|index| index >= MAX_VALIDATORS_PER_HEIGHT)
+        {
+            return Err(invalid("mint_finality.seat_readiness"));
+        }
+        match self.beacon {
+            BeaconEpochBindingV1::Installed(
+                crate::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                    session_id,
+                    transcript_hash,
+                },
+            ) if session_id != [0; 32] && transcript_hash != [0; 32] => Ok(()),
+            _ => Err(invalid("mint_finality.seat_readiness.beacon")),
+        }
+    }
+
+    /// Derive the independently domain-separated possession challenge for an exact seat.
+    ///
+    /// # Errors
+    /// Rejects malformed context or public-key encodings. The caller verifies exact roster index.
+    pub fn signing_digest(
+        &self,
+        keys: &KagemushaMintFinalityValidatorKeysV1,
+    ) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
+        self.validate()?;
+        require_nonzero(
+            "mint_finality.seat_readiness.eq_key",
+            keys.eq_proof_public_key,
+        )?;
+        require_nonzero(
+            "mint_finality.seat_readiness.ep_key",
+            keys.ep_proof_public_key,
+        )?;
+        let mut hasher = Sha256::new();
+        hasher.update(b"iroha:kagemusha:v1:mint-finality-seat-readiness");
+        hasher.update([0]);
+        hasher.update(self.version.to_le_bytes());
+        hasher.update(self.network_id.as_bytes());
+        hasher.update(self.transition_id);
+        hasher.update(self.target_epoch.to_le_bytes());
+        hasher.update(self.authority_generation.to_le_bytes());
+        hasher.update(self.authority_id);
+        hasher.update(self.first_height.to_le_bytes());
+        hasher.update(self.last_height.to_le_bytes());
+        hasher.update(self.validator_index.to_le_bytes());
+        if let BeaconEpochBindingV1::Installed(
+            crate::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
+                session_id,
+                transcript_hash,
+            },
+        ) = self.beacon
+        {
+            hasher.update(session_id);
+            hasher.update(transcript_hash);
+        }
+        hasher.update(kagemusha_mint_finality_peer_id_digest_v1(&keys.validator)?);
+        hasher.update(keys.eq_proof_public_key);
+        hasher.update(keys.ep_proof_public_key);
+        Ok(hasher.finalize().into())
+    }
+}
+
+/// Derive the candidate-consent challenge before an election or beacon ceremony exists.
+///
+/// # Errors
+/// Rejects empty network or keys and non-canonical peer identities. Curve validity and possession
+/// are verified by Core; this digest grants no committee seat or permission by itself.
+pub fn kagemusha_mint_finality_candidate_possession_digest_v1(
+    network_id: NetworkId,
+    generation: u64,
+    keys: &KagemushaMintFinalityValidatorKeysV1,
+) -> Result<[u8; 32], KagemushaIsiValidationErrorV1> {
+    if network_id.as_bytes() == &[0; 32] {
+        return Err(invalid("mint_finality.candidate_possession.network"));
+    }
+    require_nonzero(
+        "mint_finality.candidate_possession.eq_key",
+        keys.eq_proof_public_key,
+    )?;
+    require_nonzero(
+        "mint_finality.candidate_possession.ep_key",
+        keys.ep_proof_public_key,
+    )?;
+    let mut hasher = Sha256::new();
+    hasher.update(b"iroha:kagemusha:v1:mint-finality-candidate-possession");
+    hasher.update([0]);
+    hasher.update(KAGEMUSHA_CHAIN_VERSION_V1.to_le_bytes());
+    hasher.update(network_id.as_bytes());
+    hasher.update(generation.to_le_bytes());
+    hasher.update(kagemusha_mint_finality_peer_id_digest_v1(&keys.validator)?);
+    hasher.update(keys.eq_proof_public_key);
+    hasher.update(keys.ep_proof_public_key);
+    Ok(hasher.finalize().into())
 }
 
 /// Paired signatures from one fixed roster position.

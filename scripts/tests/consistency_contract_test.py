@@ -28,6 +28,7 @@ def _fixture(
     schema = tmp_path / "specs" / "references" / "schema.json"
     schema.parent.mkdir(parents=True)
     schema.write_bytes(target)
+    (schema.parent / "genesis_schema.json").write_bytes(b'{"retained":"genesis"}\n')
 
     fake = tmp_path / "kagami-generator"
     fake.write_text(generator, encoding="utf-8")
@@ -54,7 +55,9 @@ def test_schema_uses_active_advanced_command() -> None:
 
     assert 'cmd_schema="${bin_kagami[@]} advanced schema"' in source
     assert 'cmd_schema="${bin_kagami[@]} schema"' not in source
-    assert 'do_check "$cmd_schema" "specs/references/schema.json"' in source
+    assert 'check_schema' in source
+    assert 'cmd_schema --genesis-out' in source
+    assert 'staged_genesis="$(mktemp "specs/references/.genesis_schema.json.XXXXXX")"' in source
     assert "docs/source/references/schema.json" not in source
     assert "bash scripts/tests/consistency.sh --update schema" in hook.splitlines()
     assert "cargo run --bin kagami -- schema" not in hook
@@ -95,7 +98,9 @@ def test_failed_generator_cannot_truncate_checked_in_schema(tmp_path: Path) -> N
     assert result.returncode != 0
     assert "generator command failed" in result.stdout
     assert schema.read_bytes() == original
+    assert (schema.parent / "genesis_schema.json").read_bytes() == b'{"retained":"genesis"}\n'
     assert not list(schema.parent.glob(".schema.json.*"))
+    assert not list(schema.parent.glob(".genesis_schema.json.*"))
 
 
 def test_empty_generator_cannot_replace_checked_in_schema(tmp_path: Path) -> None:
@@ -105,12 +110,31 @@ def test_empty_generator_cannot_replace_checked_in_schema(tmp_path: Path) -> Non
     result = _run(tmp_path, fake, "--update", "schema")
 
     assert result.returncode != 0
-    assert "generator produced empty output" in result.stdout
+    assert "generator produced an empty output" in result.stdout
     assert schema.read_bytes() == original
+    assert (schema.parent / "genesis_schema.json").read_bytes() == b'{"retained":"genesis"}\n'
     assert not list(schema.parent.glob(".schema.json.*"))
+    assert not list(schema.parent.glob(".genesis_schema.json.*"))
 
 
-def test_successful_update_atomically_replaces_schema_with_public_mode(
+def test_missing_genesis_output_cannot_replace_checked_in_schema(tmp_path: Path) -> None:
+    schema, fake = _fixture(
+        tmp_path,
+        "#!/bin/sh\nprintf '%s\\n' '{\"generated\":\"schema\"}'\n",
+    )
+    genesis = schema.parent / "genesis_schema.json"
+
+    result = _run(tmp_path, fake, "--update", "schema")
+
+    assert result.returncode != 0
+    assert "generator produced an empty output" in result.stdout
+    assert schema.read_bytes() == b'{"retained":"schema"}\n'
+    assert genesis.read_bytes() == b'{"retained":"genesis"}\n'
+    assert not list(schema.parent.glob(".schema.json.*"))
+    assert not list(schema.parent.glob(".genesis_schema.json.*"))
+
+
+def test_successful_update_replaces_both_schemas_with_public_mode(
     tmp_path: Path,
 ) -> None:
     schema, fake = _fixture(
@@ -119,6 +143,8 @@ def test_successful_update_atomically_replaces_schema_with_public_mode(
             "#!/bin/sh\n"
             'test "$1" = advanced\n'
             'test "$2" = schema\n'
+            'test "$3" = --genesis-out\n'
+            "printf '%s\\n' '{\"generated\":\"genesis\"}' > \"$4\"\n"
             "printf '%s\\n' '{\"generated\":\"schema\"}'\n"
         ),
     )
@@ -127,5 +153,26 @@ def test_successful_update_atomically_replaces_schema_with_public_mode(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert schema.read_bytes() == b'{"generated":"schema"}\n'
+    genesis = schema.parent / "genesis_schema.json"
+    assert genesis.read_bytes() == b'{"generated":"genesis"}\n'
     assert stat.S_IMODE(schema.stat().st_mode) == 0o644
+    assert stat.S_IMODE(genesis.stat().st_mode) == 0o644
     assert not list(schema.parent.glob(".schema.json.*"))
+    assert not list(schema.parent.glob(".genesis_schema.json.*"))
+
+
+def test_schema_check_reports_stale_genesis_without_changing_either_file(tmp_path: Path) -> None:
+    schema, fake = _fixture(
+        tmp_path,
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"generated":"genesis"}\' > "$4"\n'
+        "printf '%s\\n' '{\"retained\":\"schema\"}'\n",
+    )
+    genesis = schema.parent / "genesis_schema.json"
+
+    result = _run(tmp_path, fake, "schema")
+
+    assert result.returncode != 0
+    assert "[OK] specs/references/schema.json" in result.stdout
+    assert "[DIFF] specs/references/genesis_schema.json" in result.stdout
+    assert schema.read_bytes() == b'{"retained":"schema"}\n'
+    assert genesis.read_bytes() == b'{"retained":"genesis"}\n'

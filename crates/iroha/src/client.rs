@@ -24,11 +24,13 @@ mod repair;
 mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
+mod staking_preparation;
 pub mod status;
 #[cfg(test)]
 mod status_http_tests;
 pub(crate) mod subscriptions;
 mod transaction_wait;
+mod validator_committee;
 pub use transaction_wait::TransactionFinalityFailure;
 #[cfg(test)]
 mod transaction_wait_tests;
@@ -14124,6 +14126,7 @@ mod evidence_http_tests {
         }
     }
     include!("client/activation_evidence_tests.rs");
+    include!("client/validator_committee_tests.rs");
     include!("client/activation_attestation_tests.rs");
     fn transaction_hash(seed: u8) -> HashOf<SignedTransaction> {
         HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))

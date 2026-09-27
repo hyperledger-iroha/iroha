@@ -416,6 +416,7 @@ fn boundary_context_rejects_missing_invalid_and_foreign_future_pops_before_votin
             [0; 32],
         );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation: None,
         epoch: next_epoch,
         kagemusha_mint_finality_authorization,
         kagemusha_mint_finality_authority,

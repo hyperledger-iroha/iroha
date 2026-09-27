@@ -56,7 +56,7 @@ fn native_rollover_gate(
 }
 
 #[test]
-fn native_ingress_rollover_preserves_original_physical_owner_through_both_cuts() {
+fn native_ingress_rollover_preserves_original_fair_owner() {
     let (_handle, ingress, _relay) = test_sumeragi_handle_with_source_geometry(40, Some(2));
     let validators = validator_peers(4);
     let mut proposal = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 4);
@@ -165,15 +165,19 @@ fn native_ingress_rollover_preserves_original_physical_owner_through_both_cuts()
         ingress.try_push(inbound()),
         Ok(super::FairV2IngressPushDisposition::Coalesced)
     ));
-    let mut delivered = ingress
+    let delivered = ingress
         .try_recv_if(|message| message.message().is_native_lane())
         .unwrap();
-    let evidence = delivered.take_ingress_ownership().unwrap();
+    let evidence = delivered.ingress_ownership().unwrap();
     assert!(evidence.validate_exact());
+    assert!(evidence.matches_message(delivered.message()));
+    assert!(evidence.matches_native_authenticated_hop(&hop));
     assert_eq!(evidence.physical_admission_ordinal(), Some(ordinal));
     assert_eq!(evidence.runtime_lifecycle_ordinal(), None);
     assert_eq!(delivered.message().encode(), native.encode());
-    assert!(!ingress.state.lock().lanes.contains_key(&source));
+    // The fair ingress owner keeps the exact authenticated hop and canonical
+    // bytes across roster rollover; the Native process owns subsequent retry.
+    assert_eq!(evidence.process_local_projection_hash(), projection);
     ingress.close();
     ingress.ensure_closed_drained_cut().unwrap();
     ingress.ensure_closed_global_drained_cut().unwrap();

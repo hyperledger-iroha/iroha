@@ -1887,137 +1887,82 @@ fn main_composition_and_opened_evaluator_share_one_exact_checked_path() {
         );
 }
 #[test]
-fn main_base_commitment_session_mints_pre_aux_only_after_canonical_six_group_chronology() {
-    fn root(group: usize) -> PrivacyOuterDigestV1 {
-        test_stark_digest_v1(u8::try_from(0x41 + group).expect("six groups"))
-    }
+fn main_base_commitment_session_mints_pre_aux_only_after_joined_commitment() {
+    let root = test_stark_digest_v1(0x41);
     let mut session = main_base_commitment_session_fixture_v1();
+    assert_eq!(session.root, None);
     let streamed = aggregate::StreamingRowCommitmentResultV1 {
         commitment: aggregate::StreamingMerkleCommitmentV1 {
-            root: root(0),
+            root,
             frontier: Vec::new(),
         },
-        opened_rows: std::collections::BTreeMap::new(),
+        opened_rows: BTreeMap::new(),
     };
     session
-        .accept_streaming_base_commitment_v1(0, &streamed)
-        .expect("derive log5 root from streamed commitment");
-    for (group, native_log) in MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1
-        .into_iter()
-        .enumerate()
-        .skip(1)
-    {
-        session
-            .accept_base_root_v1(group, native_log, root(group))
-            .expect("canonical ordered base root");
-    }
-    assert_eq!(session.next_group, FULL_PROFILE_TRACE_GROUPS_V1);
+        .accept_streaming_base_commitment_v1(&streamed)
+        .expect("one streamed commitment binds all native MAIN columns");
+    assert_eq!(session.root, Some(root));
     let pre_aux = session
         .finish_pre_aux_v1()
-        .expect("completed session mints pre-aux state");
+        .expect("complete joined base phase");
     assert_eq!(pre_aux.consensus_context_digest_for_test_v1(), [0xB1; 32]);
     assert_eq!(
         pre_aux.main_profile_digest_for_test_v1(),
         TEST_COMPILED_PROFILE_DIGEST_V1
     );
-    assert_eq!(
-        pre_aux.main_base_roots_for_test_v1(),
-        core::array::from_fn(|index| root(index))
-    );
+    assert_eq!(pre_aux.main_base_roots_for_test_v1(), [root]);
     derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
         test_stark_digest_v1(0xC1),
         test_stark_digest_v1(0xD1),
         test_stark_digest_v1(0xE1),
     )
-    .expect("X5B1 begins only from session-minted MAIN pre-aux");
+    .expect("X5B1 begins only from the completed MAIN phase");
 }
 #[test]
-fn main_base_commitment_session_rejects_omission_reorder_duplicate_wrong_log_zero_and_excess() {
-    fn root(group: usize) -> PrivacyOuterDigestV1 {
-        test_stark_digest_v1(u8::try_from(group + 1).expect("six groups"))
-    }
-    for omitted_after in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
-        let mut session = main_base_commitment_session_fixture_v1();
-        for (group, native_log) in MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1
-            .into_iter()
-            .enumerate()
-            .take(omitted_after)
-        {
-            session
-                .accept_base_root_v1(group, native_log, root(group))
-                .expect("canonical prefix");
-        }
-        assert!(
-            session.complete_v1().is_err(),
-            "a {omitted_after}-root prefix must not complete"
-        );
-    }
-    let mut zero = main_base_commitment_session_fixture_v1();
+fn main_base_commitment_session_rejects_omission_duplicate_zero_and_excess() {
     assert!(matches!(
-        zero.accept_base_root_v1(0, 5, PrivacyOuterDigestV1::default()),
+        main_base_commitment_session_fixture_v1().complete_v1(),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
-    assert_eq!(zero.next_group, 0);
-    assert_eq!(
-        zero.roots,
-        [PrivacyOuterDigestV1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1]
-    );
-    assert_eq!(
-        zero.recorded,
-        [false; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1]
-    );
+    let mut session = main_base_commitment_session_fixture_v1();
+    assert!(matches!(
+        session.accept_joined_base_root_v1(PrivacyOuterDigestV1::default()),
+        Err(ZkX509StarkErrorV1::TranscriptMismatch)
+    ));
+    assert_eq!(session.root, None, "a rejected sentinel is transactional");
     let zero_streamed = aggregate::StreamingRowCommitmentResultV1 {
         commitment: aggregate::StreamingMerkleCommitmentV1 {
             root: PrivacyOuterDigestV1::default(),
             frontier: Vec::new(),
         },
-        opened_rows: std::collections::BTreeMap::new(),
+        opened_rows: BTreeMap::new(),
     };
     assert!(matches!(
-        zero.accept_streaming_base_commitment_v1(0, &zero_streamed),
+        session.accept_streaming_base_commitment_v1(&zero_streamed),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
-    assert_eq!(zero.next_group, 0);
-    let mut session = main_base_commitment_session_fixture_v1();
-    assert!(matches!(
-        session.accept_base_root_v1(1, 8, root(1)),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert_eq!(session.next_group, 0);
-    assert!(matches!(
-        session.accept_base_root_v1(0, 8, root(0)),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert_eq!(session.next_group, 0);
+    assert_eq!(session.root, None);
+    let root = test_stark_digest_v1(1);
     session
-        .accept_base_root_v1(0, 5, root(0))
-        .expect("canonical log5 root");
-    assert!(matches!(
-        session.accept_base_root_v1(0, 5, root(0)),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert!(matches!(
-        session.accept_base_root_v1(2, 15, root(2)),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert_eq!(session.next_group, 1);
-    for (group, native_log) in MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1
-        .into_iter()
-        .enumerate()
-        .skip(1)
-    {
-        session
-            .accept_base_root_v1(group, native_log, root(group))
-            .expect("remaining canonical roots");
+        .accept_joined_base_root_v1(root)
+        .expect("joined root");
+    for duplicate_or_excess in [
+        root,
+        test_stark_digest_v1(2),
+        PrivacyOuterDigestV1::default(),
+    ] {
+        assert!(matches!(
+            session.accept_joined_base_root_v1(duplicate_or_excess),
+            Err(ZkX509StarkErrorV1::TranscriptMismatch)
+        ));
+        assert_eq!(
+            session.root,
+            Some(root),
+            "rejected replacement must preserve the committed root"
+        );
     }
-    assert!(matches!(
-        session.accept_base_root_v1(FULL_PROFILE_TRACE_GROUPS_V1, 20, test_stark_digest_v1(0xFF),),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    session
-        .complete_v1()
-        .expect("exactly six roots complete once");
+    session.complete_v1().expect("one root completes once");
 }
 #[test]
 fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_state_tampering() {
@@ -2072,17 +2017,8 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
         ),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
-    let canonical_groups = (0..FULL_PROFILE_TRACE_GROUPS_V1)
-        .map(|index| {
-            group(test_stark_digest_v1(
-                u8::try_from(index + 1).expect("six groups"),
-            ))
-        })
-        .collect::<Vec<_>>();
-    for wrong_count in [
-        FULL_PROFILE_TRACE_GROUPS_V1 - 1,
-        FULL_PROFILE_TRACE_GROUPS_V1 + 1,
-    ] {
+    let canonical_groups = vec![group(test_stark_digest_v1(1))];
+    for wrong_count in [0, 2, FULL_PROFILE_TRACE_GROUPS_V1] {
         let mut groups = canonical_groups.clone();
         groups.resize(wrong_count, group(test_stark_digest_v1(0xFF)));
         let mut session = main_base_commitment_session_fixture_v1();
@@ -2090,206 +2026,165 @@ fn main_base_commitment_session_rejects_wrong_layout_profile_count_and_internal_
             session.accept_decoded_base_groups_v1(&groups),
             Err(ZkX509StarkErrorV1::TranscriptMismatch)
         ));
-        assert_eq!(session.next_group, 0);
+        assert_eq!(session.root, None);
     }
-    for zero_at in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
-        let mut groups = canonical_groups.clone();
-        groups[zero_at].base_root = PrivacyOuterDigestV1::default();
-        let mut session = main_base_commitment_session_fixture_v1();
-        assert!(matches!(
-            session.accept_decoded_base_groups_v1(&groups),
-            Err(ZkX509StarkErrorV1::TranscriptMismatch)
-        ));
-        assert_eq!(session.next_group, 0);
-        assert_eq!(
-            session.roots,
-            [PrivacyOuterDigestV1::default(); ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
-            "decoded zero sentinel at group {zero_at} must fail transactionally"
-        );
-    }
+    let mut zero = main_base_commitment_session_fixture_v1();
+    assert!(matches!(
+        zero.accept_decoded_base_groups_v1(&[group(PrivacyOuterDigestV1::default())]),
+        Err(ZkX509StarkErrorV1::TranscriptMismatch)
+    ));
+    assert_eq!(
+        zero.root, None,
+        "decoded zero root must fail transactionally"
+    );
     let mut session = main_base_commitment_session_fixture_v1();
     session
         .accept_decoded_base_groups_v1(&canonical_groups)
-        .expect("exact decoded six-group roots");
-    session
-        .finish_pre_aux_v1()
-        .expect("decoded canonical roots mint pre-aux");
-    let mut partial = main_base_commitment_session_fixture_v1();
-    partial
-        .accept_base_root_v1(0, 5, test_stark_digest_v1(0x11))
-        .expect("first root");
+        .expect("one decoded joined root");
     assert!(matches!(
-        partial.accept_decoded_base_groups_v1(&canonical_groups),
+        session.accept_decoded_base_groups_v1(&canonical_groups),
         Err(ZkX509StarkErrorV1::TranscriptMismatch)
     ));
-    let mut corrupted = main_base_commitment_session_fixture_v1();
-    corrupted.recorded[0] = true;
+    session
+        .finish_pre_aux_v1()
+        .expect("decoded canonical root mints pre-aux");
+    let mut already_streamed = main_base_commitment_session_fixture_v1();
+    already_streamed
+        .accept_joined_base_root_v1(test_stark_digest_v1(0x11))
+        .unwrap();
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
+        already_streamed.accept_decoded_base_groups_v1(&canonical_groups),
+        Err(ZkX509StarkErrorV1::TranscriptMismatch)
+    ));
+    assert_eq!(already_streamed.root, Some(test_stark_digest_v1(0x11)));
+    let mut corrupted = main_base_commitment_session_fixture_v1();
+    corrupted.root = Some(PrivacyOuterDigestV1::default());
+    assert!(matches!(
+        corrupted.accept_joined_base_root_v1(test_stark_digest_v1(0x22)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
-    let mut corrupted = main_base_commitment_session_fixture_v1();
-    corrupted.roots[0] = test_stark_digest_v1(0x11);
-    assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x22)),
-        Err(ZkX509StarkErrorV1::ProfileMismatch)
-    ));
-    let mut corrupted = main_base_commitment_session_fixture_v1();
-    corrupted.next_group = 1;
     assert!(matches!(
         corrupted.complete_v1(),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let mut corrupted = main_base_commitment_session_fixture_v1();
-    corrupted.recorded[0] = true;
-    corrupted.next_group = 1;
+    corrupted.consensus_context_digest = [0; 32];
     assert!(matches!(
-        corrupted.complete_v1(),
+        corrupted.accept_joined_base_root_v1(test_stark_digest_v1(0x11)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let mut corrupted = main_base_commitment_session_fixture_v1();
-    corrupted.consensus_context_digest = [0_u8; 32];
+    corrupted.main_profile_digest = [0; 32];
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
-        Err(ZkX509StarkErrorV1::ProfileMismatch)
-    ));
-    let mut corrupted = main_base_commitment_session_fixture_v1();
-    corrupted.main_profile_digest = [0_u8; 32];
-    assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
+        corrupted.accept_joined_base_root_v1(test_stark_digest_v1(0x11)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
     let mut corrupted = main_base_commitment_session_fixture_v1();
     corrupted.layout.trace_groups.swap(0, 1);
     assert!(matches!(
-        corrupted.accept_base_root_v1(0, 5, test_stark_digest_v1(0x11)),
+        corrupted.accept_joined_base_root_v1(test_stark_digest_v1(0x11)),
         Err(ZkX509StarkErrorV1::ProfileMismatch)
     ));
+    for group in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
+        let mut corrupted = main_base_commitment_session_fixture_v1();
+        corrupted.layout.trace_groups[group].native_trace_log2 += 1;
+        assert!(
+            corrupted
+                .accept_joined_base_root_v1(test_stark_digest_v1(0x11))
+                .is_err(),
+            "native domain substitution at group {group}"
+        );
+    }
 }
 #[test]
-fn main_trace_phase_root_recorder_rejects_every_reorder_duplicate_omission_zero_and_excess() {
-    fn commitment(seed: u8) -> aggregate::StreamingRowCommitmentResultV1 {
-        aggregate::StreamingRowCommitmentResultV1 {
-            commitment: aggregate::StreamingMerkleCommitmentV1 {
-                root: if seed == 0 {
-                    PrivacyOuterDigestV1::default()
-                } else {
-                    test_stark_digest_v1(seed)
-                },
-                frontier: Vec::new(),
-            },
-            opened_rows: BTreeMap::new(),
-        }
-    }
-    let mut groups = Vec::new();
-    assert!(matches!(
-        record_main_group_commitment_v1(
-            1,
-            MainTraceColumnKindV1::Base,
-            &commitment(2),
-            &mut groups,
-        ),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert!(
-        groups.is_empty(),
-        "a rejected base reorder is transactional"
-    );
-    assert!(matches!(
-        record_main_group_commitment_v1(
-            0,
-            MainTraceColumnKindV1::Base,
-            &commitment(0),
-            &mut groups,
-        ),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert!(
-        groups.is_empty(),
-        "the zero-root sentinel cannot mutate state"
-    );
-    record_main_group_commitment_v1(0, MainTraceColumnKindV1::Base, &commitment(1), &mut groups)
-        .expect("first canonical base root");
-    assert!(matches!(
-        record_main_group_commitment_v1(
-            0,
-            MainTraceColumnKindV1::Base,
-            &commitment(7),
-            &mut groups,
-        ),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert!(matches!(
-        record_main_group_commitment_v1(
-            0,
-            MainTraceColumnKindV1::Aux,
-            &commitment(0x41),
-            &mut groups,
-        ),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert_eq!(groups.len(), 1, "aux cannot start before all six bases");
-    assert_eq!(groups[0].aux_root, PrivacyOuterDigestV1::default());
-    for group in 1..FULL_PROFILE_TRACE_GROUPS_V1 {
-        record_main_group_commitment_v1(
-            group,
-            MainTraceColumnKindV1::Base,
-            &commitment(u8::try_from(group + 1).expect("six roots")),
-            &mut groups,
+fn main_joined_row_order_and_base_aux_phase_are_domain_bound() {
+    use aggregate::joined_trace::{JoinedTraceColumnKindV1, JoinedTraceCommitmentPlanV1};
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let shared = layout.as_shared().unwrap();
+    let plan = JoinedTraceCommitmentPlanV1::new_v1(
+        AGGREGATE_PARAMETERS_V1,
+        &shared,
+        JoinedTraceColumnKindV1::Base,
+    )
+    .unwrap();
+    let mut rows = layout
+        .trace_groups
+        .iter()
+        .enumerate()
+        .map(|(group, shape)| {
+            (0..shape.base_width)
+                .map(|column| F((1 + group * 10_000 + column) as u64))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    let hash = |rows: &[Vec<F>]| {
+        plan.leaf_hash_v1(
+            AGGREGATE_DOMAINS_V1,
+            7,
+            &rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
-        .expect("remaining canonical base roots");
-    }
-    let base_snapshot = groups.clone();
-    assert!(matches!(
-        record_main_group_commitment_v1(
-            1,
-            MainTraceColumnKindV1::Aux,
-            &commitment(0x42),
-            &mut groups,
-        ),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert_eq!(
-        groups, base_snapshot,
-        "a rejected aux reorder is transactional"
+    };
+    let canonical = hash(&rows).unwrap();
+    rows[0].swap(0, 1);
+    assert_ne!(
+        hash(&rows).unwrap(),
+        canonical,
+        "native column order is committed"
     );
-    assert!(matches!(
-        record_main_group_commitment_v1(0, MainTraceColumnKindV1::Aux, &commitment(0), &mut groups,),
-        Err(ZkX509StarkErrorV1::TranscriptMismatch)
-    ));
-    assert_eq!(groups, base_snapshot, "a zero aux root is transactional");
+    rows[0].swap(0, 1);
     for group in 0..FULL_PROFILE_TRACE_GROUPS_V1 {
-        record_main_group_commitment_v1(
-            group,
-            MainTraceColumnKindV1::Aux,
-            &commitment(u8::try_from(0x41 + group).expect("six aux roots")),
-            &mut groups,
+        let value = rows[group][0];
+        rows[group][0] = value.add(F::ONE);
+        assert_ne!(
+            hash(&rows).unwrap(),
+            canonical,
+            "every logical native group is committed"
+        );
+        rows[group][0] = value;
+    }
+    let omitted = &rows[..rows.len() - 1];
+    assert!(hash(omitted).is_err());
+    let mut duplicated = rows.clone();
+    duplicated.push(rows[0].clone());
+    assert!(hash(&duplicated).is_err());
+    let aux = JoinedTraceCommitmentPlanV1::new_v1(
+        AGGREGATE_PARAMETERS_V1,
+        &shared,
+        JoinedTraceColumnKindV1::Aux,
+    )
+    .unwrap();
+    let aux_rows = layout
+        .trace_groups
+        .iter()
+        .map(|shape| vec![F::ONE; shape.aux_width])
+        .collect::<Vec<_>>();
+    let auxiliary = aux
+        .leaf_hash_v1(
+            AGGREGATE_DOMAINS_V1,
+            7,
+            &aux_rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
         )
-        .expect("canonical auxiliary root");
-        assert!(
-            groups[..=group]
-                .iter()
-                .all(|recorded| recorded.aux_root != PrivacyOuterDigestV1::default())
-        );
-        assert!(
-            groups[group + 1..]
-                .iter()
-                .all(|pending| pending.aux_root == PrivacyOuterDigestV1::default())
-        );
-    }
-    let complete = groups.clone();
-    for hostile_group in [0, FULL_PROFILE_TRACE_GROUPS_V1] {
-        assert!(matches!(
-            record_main_group_commitment_v1(
-                hostile_group,
-                MainTraceColumnKindV1::Aux,
-                &commitment(0xF1),
-                &mut groups,
-            ),
-            Err(ZkX509StarkErrorV1::TranscriptMismatch)
-        ));
-        assert_eq!(groups, complete);
-    }
+        .unwrap();
+    assert_ne!(
+        auxiliary, canonical,
+        "base and auxiliary commitments have distinct phase domains"
+    );
+    let bind = |root| {
+        let mut session = main_base_commitment_session_fixture_v1();
+        session.accept_joined_base_root_v1(root).unwrap();
+        derive_zk_x509_credential_pre_aux_binding_v1(
+            session.finish_pre_aux_v1().unwrap(),
+            test_stark_digest_v1(0xC1),
+            test_stark_digest_v1(0xD1),
+            test_stark_digest_v1(0xE1),
+        )
+        .unwrap()
+    };
+    assert_ne!(
+        bind(canonical),
+        bind(auxiliary),
+        "a root from the wrong phase changes X5B1"
+    );
 }
 fn tiny_authenticated_main_polynomial_fixture_v1(
     seed: u8,
@@ -2359,7 +2254,7 @@ fn main_polynomial_set_fails_closed_on_count_shape_and_phase_lifecycle() {
 fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
     let source = include_str!("main_aggregate.rs");
     let helper_start = source
-        .find("fn commit_main_trace_group_v1")
+        .find("fn sample_main_trace_group_v1")
         .expect("MAIN commitment helper");
     let helper_end = source[helper_start..]
         .find("fn main_trace_group_root_v1")
@@ -2367,8 +2262,8 @@ fn main_phase_source_has_no_root_only_or_reconstruction_commit_path() {
         .expect("MAIN commitment helper end");
     let helper = &source[helper_start..helper_end];
     assert!(
-        helper.contains("commit_masked_trace_polynomial_columns_v1"),
-        "MAIN commitments must retain the authenticated masked polynomials"
+        helper.contains("MaskedTracePolynomialSetV1::sample_columns_v1"),
+        "MAIN sampling must retain all masked native polynomials for the joined commitment"
     );
     assert!(
         !helper.contains("commit_masked_trace_columns_v1(")
@@ -2511,13 +2406,13 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         .map(|offset| finish_start + offset)
         .expect("MAIN finish end");
     let finish = &source[finish_start..finish_end];
-    assert!(finish.contains("replay_masked_trace_polynomial_columns_v1"));
+    assert!(finish.contains("commit_joined_v1"));
     assert!(finish.contains("self.composition_material_v1()"));
     let material_start = source
         .find("fn composition_material_v1(&self)")
         .expect("retained composition material");
     let material_end = source[material_start..]
-        .find("pub(super) fn record_main_group_commitment_v1")
+        .find("pub(crate) fn commit_zk_x509_main_base_phase_v1_with_rng")
         .map(|offset| material_start + offset)
         .expect("retained composition material end");
     assert!(
@@ -2548,14 +2443,21 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         .find("let expected_indices = query_indices_v1")
         .expect("post-grinding queries");
     let fixed = verifier
-        .find("derive_zk_x509_main_fixed_openings_after_grinding_v1")
+        .find("prepare_complete_oods_fixed_v1")
         .expect("verifier-derived fixed openings");
-    assert!(grinding < queries && queries < fixed);
-    assert_eq!(
-        verifier.matches("MainOpenedGroupProviderV1::").count(),
-        FULL_PROFILE_TRACE_GROUPS_V1
+    let constraints = verifier
+        .find("main_oods::verify_main_deep_constraints_v1")
+        .expect("complete MAIN out-of-domain relation");
+    let authenticated_queries = verifier
+        .find("verify_opened_query_relations_after_complete_oods_v1")
+        .expect("current-row DEEP/FRI verification");
+    assert!(
+        grinding < queries
+            && queries < fixed
+            && fixed < constraints
+            && constraints < authenticated_queries
     );
-    assert!(verifier.contains("verify_opened_query_relations_with_deep_v1"));
+    assert!(!verifier.contains("verify_opened_query_relations_with_deep_v1"));
     let engine = include_str!("../engine.rs");
     let engine_production = &engine[..engine
         .find("#[cfg(test)]")
@@ -2568,10 +2470,10 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
 #[test]
 fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer_root() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
-    let base_roots = (0..FULL_PROFILE_TRACE_GROUPS_V1)
+    let base_roots = (0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1)
         .map(|index| TraceGroupProofV1 {
-            base_root: test_stark_digest_v1(u8::try_from(index + 1).expect("six roots")),
-            aux_root: test_stark_digest_v1(u8::try_from(index + 0x41).expect("six roots")),
+            base_root: test_stark_digest_v1(u8::try_from(index + 1).expect("root fixture byte")),
+            aux_root: test_stark_digest_v1(u8::try_from(index + 0x41).expect("root fixture byte")),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         })
@@ -2584,7 +2486,7 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
             .map(|group| group.base_root)
             .collect::<Vec<_>>()
             .try_into()
-            .expect("exact six MAIN roots"),
+            .expect("one joined MAIN root"),
     );
     let binding = derive_zk_x509_credential_pre_aux_binding_v1(
         pre_aux,
@@ -2594,14 +2496,14 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
     )
     .expect("canonical outer binding");
     let mut changed_pre_aux = pre_aux;
-    mutate_stark_digest_v1(&mut changed_pre_aux.main_base_roots_mut_for_test_v1()[5]);
+    mutate_stark_digest_v1(&mut changed_pre_aux.main_base_roots_mut_for_test_v1()[0]);
     let changed_binding = derive_zk_x509_credential_pre_aux_binding_v1(
         changed_pre_aux,
         test_stark_digest_v1(0x91),
         test_stark_digest_v1(0xA1),
         test_stark_digest_v1(0xB1),
     )
-    .expect("binding under a hostile log19 root");
+    .expect("binding under a hostile joined MAIN root");
     let claims = main_log19_terminal_claims_fixture_v1();
     let alpha = |order: u8, binding: ZkX509CredentialPreAuxBindingV1| {
         let mut transcript = new_main_transcript_after_profile_validation_v1(
@@ -2708,10 +2610,11 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
         usize::try_from(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1)
             .expect("profile proof bound fits usize")
     );
+    assert_eq!(maximum_encoded_bytes, 7_692_192);
     assert!(
         maximum_encoded_bytes
-            > usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize"),
-        "the canonical registration remains inspectable while its full proof exceeds the release cap"
+            < usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize"),
+        "the complete joined MAIN opening schedule fits the unchanged release cap"
     );
     for signature in 0..P256_SIGNATURE_COUNT_V1 {
         let arithmetic = layout

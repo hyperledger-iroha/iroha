@@ -91,7 +91,12 @@ pub(crate) fn publish_governance_fixture(
     let verified = VerifiedV2FinalityArtifact::verify(artifact)
         .expect("verify exact three-of-four fixture CommitQC");
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap_or_else(|error| panic!("capture original governance journals: {error}"));
     let checkpoint_hash = journals.checkpoint;
     let decision = journals

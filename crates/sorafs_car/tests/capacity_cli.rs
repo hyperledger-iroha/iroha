@@ -1,3 +1,4 @@
+//! Capacity producer CLI contracts and canonical signed-payload parity.
 #![cfg(feature = "cli")]
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
@@ -83,24 +84,17 @@ fn capacity_declaration_cli_produces_canonical_outputs() {
     assert_eq!(declaration.chunker_commitments.len(), 1);
     assert_eq!(declaration.lane_commitments.len(), 1);
     assert_eq!(declaration.metadata.len(), 1);
+    assert_eq!(declaration.valid_from, 1_700_000_000);
+    assert_eq!(declaration.valid_until, 1_700_086_400);
     let summary_bytes = fs::read(&json_out).expect("read summary");
     let summary_value: Value = json::from_slice(&summary_bytes).expect("parse summary json");
     let summary_obj = summary_value
         .as_object()
         .expect("summary must be an object");
     assert_eq!(
-        summary_obj
-            .get("provider_id_hex")
-            .and_then(Value::as_str)
-            .unwrap(),
-        "1111111111111111111111111111111111111111111111111111111111111111"
-    );
-    assert_eq!(
-        summary_obj
-            .get("committed_capacity_gib")
-            .and_then(Value::as_u64)
-            .unwrap(),
-        500
+        summary_obj.len(),
+        1,
+        "only the canonical declaration is submitted"
     );
     assert_eq!(
         summary_obj
@@ -119,6 +113,9 @@ fn capacity_declaration_cli_rejects_retired_request_and_key_options() {
         "--authority=authority@capacity",
         "--private-key=ed25519:retired",
         "--private-key-file=retired.key",
+        "--registered-epoch=1700000000",
+        "--valid-from-epoch=1700000000",
+        "--valid-until-epoch=1700086400",
     ] {
         let output = run_capacity_command([
             "declaration".to_owned(),
@@ -138,26 +135,35 @@ fn capacity_declaration_cli_rejects_retired_request_and_key_options() {
     }
 }
 #[test]
-fn capacity_declaration_cli_rejects_noncanonical_epoch_overrides() {
+fn capacity_declaration_cli_rejects_independent_record_projection() {
     let temp = tempdir().expect("tempdir");
-    let spec_path = write_spec(&temp, "declaration_spec.json", SPEC_JSON);
-    for (flag, value, expected) in [
-        ("--registered-epoch", "01700000000", "leading zeros"),
-        ("--valid-from-epoch", "+1700000000", "canonical unsigned"),
-        ("--valid-until-epoch", "1700086400 ", "whitespace"),
+    for field in [
+        "record_window",
+        "registered_epoch",
+        "valid_from_epoch",
+        "valid_until_epoch",
     ] {
-        let json_out = temp.path().join(format!(
-            "{}.json",
-            flag.trim_start_matches("--").replace('-', "_")
-        ));
+        let mut spec: Value = json::from_str(SPEC_JSON).unwrap();
+        spec.as_object_mut()
+            .unwrap()
+            .insert(field.into(), Value::from(1_u64));
+        let spec_path = write_spec(
+            &temp,
+            "declaration_spec.json",
+            &json::to_string(&spec).unwrap(),
+        );
+        let json_out = temp.path().join(format!("{field}.json"));
         let output = run_capacity_command([
             "declaration".to_owned(),
             format!("--spec={}", spec_path.display()),
-            format!("{flag}={value}"),
             format!("--json-out={}", json_out.display()),
             "--quiet".to_owned(),
         ]);
-        assert_capacity_failure(output, expected, &json_out);
+        assert_capacity_failure(
+            output,
+            &format!("unknown capacity declaration field `{field}`"),
+            &json_out,
+        );
     }
 }
 #[test]
@@ -176,7 +182,7 @@ fn capacity_specs_reject_noncanonical_public_fields() {
             "declaration",
             "declaration_padded_stake.json",
             SPEC_JSON.replace("\"stake_amount\": \"5000\"", "\"stake_amount\": \"05000\""),
-            "leading zeros",
+            "canonical decimal spelling",
         ),
         (
             "declaration",
@@ -206,8 +212,8 @@ fn capacity_specs_reject_noncanonical_public_fields() {
             "replication-order",
             "replication_upper_cid.json",
             REPLICATION_JSON.replace(
-                "\"manifest_cid_hex\": \"aabbccdd\"",
-                "\"manifest_cid_hex\": \"AABBCCDD\"",
+                &format!("01711f20{}", "ab".repeat(32)),
+                &format!("01711F20{}", "AB".repeat(32)),
             ),
             "lowercase hex",
         ),

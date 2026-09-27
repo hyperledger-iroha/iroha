@@ -42,7 +42,7 @@ configuration:
 
 - `iroha_cli app zk vk register --json path/to/register.json`
 - `iroha_cli app zk vk update --json path/to/update.json`
-- `iroha_cli app zk vk get --backend halo2/ipa --name ivm-execution-v1`
+- `iroha_cli app zk vk get --backend halo2/ipa --name ivm-replay-binding-v1`
 
 The CLI JSON files contain public VK record data only and reject embedded authorities, private keys,
 and unknown fields. Embedded VK record bytes remain base64-encoded, while commitments are lowercase
@@ -67,17 +67,17 @@ payload, payload hash, chain, authority, single instruction, key id, and record 
   - Optional `vk_ref` and `vk_commitment`
 - ZK1/TLV envelopes are inspected at verification time. Recognised 4-byte tags are recorded lazily to power tag-based queries.
 
-### IVM execution prove statement (`ivm-execution-v1`)
+### IVM execution prove statement (`ivm-replay-binding-v1`)
 
 - `POST /v1/zk/ivm/derive` and `POST /v1/zk/ivm/prove` execute the supplied IVM bytecode on-node using request context (`authority`, `metadata`, `bytecode`; metadata must include `gas_limit`).
-- The proof statement for `ivm-execution-v1` binds four commitments as public inputs:
+- The proof statement for `ivm-replay-binding-v1` binds four commitments as public inputs:
   - `code_hash`
   - `overlay_hash`
   - `events_commitment`
   - `gas_policy_commitment`
 - Torii derives the authoritative `IvmProved` payload from deterministic execution before proving. If clients supply an optional `proved` object, Torii treats it as a strict consistency check and rejects mismatches.
 - Witness inputs are node-local execution artefacts (program body, tx context, deterministic execution trace/host effects needed to derive the commitments). Plaintext `gas_used` is not exposed by the app API.
-- Admission verifies proof bindings and backend proof validity, then always performs deterministic ABI V1 execution replay. The active on-chain `ivm-execution-v1` verifier-key record is the sole circuit admission policy; its activation/withdrawal window and `max_proof_bytes` limit are enforced. There is no node-local enable, circuit allowlist, or replay-bypass switch.
+- Admission verifies proof bindings and backend proof validity, then always performs deterministic ABI V1 execution replay. The active on-chain `ivm-replay-binding-v1` verifier-key record is the sole circuit admission policy; its activation/withdrawal window and `max_proof_bytes` limit are enforced. There is no node-local enable, circuit allowlist, or replay-bypass switch.
 
 ### Query surface
 

@@ -5,7 +5,9 @@
 //! no FFT, LDE, commitment, transcript step or proof construction. Every plan
 //! carries a typed refusal: zero masks disclose private rows, extension-field
 //! masks cannot use the base-field row wire, and base-field masks still lack
-//! independent entropy, quotient blinding and a committed composition mask.
+//! independent entropy and a complete reviewed hiding/composition producer.
+//! The separate validation arithmetic and authenticated R opening do not yet
+//! provide a full masked producer or qualify its transcript/FRI reduction.
 //!
 //! TODO: Replace the mask/opening design with a reviewed hiding construction,
 //! then account for its complete AIR, quotient, DEEP, FRI and external-memory

@@ -21,7 +21,7 @@ state_test! { sync native_recorded_execution_retains_sources_results_aliases_and
         let original_signatures = carrier.signatures().cloned().collect::<Vec<_>>();
         let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
         let files = exact_test_tree_fingerprint(&state.kura.store_root());
-        let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+        let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("original signed sources"); };
         let pointers = source.groups_for_test().iter().map(|group| (
             group.body().canonical_bytes().as_ptr(), group.body().source().canonical_control_bytes().as_ptr(),
@@ -75,7 +75,8 @@ state_test! { sync native_recorded_execution_captures_due_start_hook_and_native_
     let carrier = native_consumer_stage_carrier(&fixture);
     let groups = native_economic_groups(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
-    let recorded = state.record_native_lane_decision_batch(carrier, groups, applying).unwrap();
+    let admission = crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier);
+    let recorded = state.record_native_lane_decision_batch(carrier, groups, admission, applying).unwrap();
     let overlay = recorded.prepared_for_test().overlay();
     assert_native_scratch_unlock_applied(overlay, &fixture);
     let witness = overlay.exec_witness.as_ref().unwrap();
@@ -93,7 +94,7 @@ state_test! { sync native_recorded_execution_nested_recorder_refuses_without_mut
     let state = &fixture.native.state;
     let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
-    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("original source"); };
     let guard = crate::exec_witness::begin_exec_witness_capture().unwrap();
     crate::exec_witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
@@ -154,7 +155,8 @@ state_test! { sync native_recorded_execution_captures_pipeline_and_time_without_
     let groups = native_economic_groups(&fixture);
     let carrier = native_consumer_stage_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
-    let recorded = state.record_native_lane_decision_batch(carrier, groups, applying).unwrap();
+    let admission = crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier);
+    let recorded = state.record_native_lane_decision_batch(carrier, groups, admission, applying).unwrap();
     let overlay = recorded.prepared_for_test().overlay();
     use iroha_data_model::block::execution_output::ExecutionOutputV1;
     let rows = recorded.carrier().execution_outputs();
@@ -191,7 +193,8 @@ state_test! { sync native_recorded_execution_late_failure_discards_hook_effects_
     let carrier = native_consumer_stage_carrier(&fixture);
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
-    let error = state.record_native_lane_decision_batch(carrier, groups, applying).err().expect("actual late marker collision");
+    let admission = crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier);
+    let error = state.record_native_lane_decision_batch(carrier, groups, admission, applying).err().expect("actual late marker collision");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
@@ -207,7 +210,7 @@ state_test! { sync native_recorded_execution_nested_owner_refuses_before_waiting
     let (fixture, carrier) = proposed_native_batch_fixture(&[NativeEconomicCase::Transfer(25)]);
     let state = &fixture.native.state;
     let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
-    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
+    let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("original source"); };
     let header = carrier.header();
     let guard = crate::exec_witness::begin_exec_witness_capture().unwrap();
@@ -297,7 +300,8 @@ state_test! { sync native_recorded_direct_entry_rejects_missing_or_foreign_da_po
         let mut carrier = original.clone();
         carrier.set_da_proof_policies(policy);
         native_control_resign_carrier(&mut carrier);
-        let error = state.record_native_lane_decision_batch(carrier, groups.clone(), applying.clone())
+        let admission = crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier);
+        let error = state.record_native_lane_decision_batch(carrier, groups.clone(), admission, applying.clone())
             .err().expect("direct recording has the same active policy boundary as source preparation");
         assert!(error.to_string().contains("active pre-State policy"), "{error}");
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);

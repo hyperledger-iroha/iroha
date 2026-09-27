@@ -19,7 +19,7 @@ import fcntl
 from urllib.parse import urlsplit
 import taira_retry as retry
 from taira_update_guest import (COHORT_MAX_TIMEOUT_SECONDS, MAX_FAILED_START_ATTEMPTS,
-                                validate_update_plan_shape)
+                                reject_retired_worker_plan, validate_update_plan_shape)
 import base64
 import hashlib
 import importlib.util
@@ -206,6 +206,7 @@ def failed_start_inputs(reference, deployment, prior, guest, operation, candidat
 
 
 def make_plan(build, deployment, prior, guest, operation, failed_start=None):
+    reject_retired_worker_plan(prior)
     commit = build['commit']
     artifacts = validate_build(build, commit)
     current = deployment['current']
@@ -292,6 +293,8 @@ s=os.fstat(lock);assert stat.S_ISREG(s.st_mode) and s.st_uid==s.st_gid==0 and s.
 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
 t=lock_path.lstat();assert (s.st_dev,s.st_ino)==(t.st_dev,t.st_ino)
 assert not os.path.lexists(state/'.reset-owner.json')
+assert not os.path.lexists('/var/lib/taira-epoch-supervisor'),'retired epoch worker state must be reconciled before update'
+assert not os.path.lexists('/etc/systemd/system/iroha-taira-epoch-supervisor.service'),'retired epoch worker service must be reconciled before update'
 capacity_source=base64.b64decode({base64.b64encode(source).decode()!r},validate=True)
 assert hashlib.sha256(capacity_source).hexdigest()=={plan['capacity_sha256']!r}
 capacity={{'__name__':'taira_update_capacity'}}
@@ -445,6 +448,7 @@ def apply_plan(args):
     raw = read_public(args.plan)
     need(sha(raw) == args.plan_sha256, 'reviewed plan digest differs')
     plan = json.loads(raw)
+    reject_retired_worker_plan(plan)
     validate_update_plan_shape(plan)
     validate_deployment(plan['deployment'])
     build_raw = read_public(Path(plan['build_result_path']))

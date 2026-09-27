@@ -10322,7 +10322,11 @@ mod accel_tests {
         let retired_shield_parameter = ["vk_", "shield"].concat();
         assert!(!header.contains(&retired_shield_parameter));
         assert!(!source.contains(&retired_shield_parameter));
-        assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
+        assert_eq!(
+            crate::confidential_note_ffi::connect_norito_confidential_note_derivation_revision_v3(),
+            1,
+            "the retained mobile boundary exposes note derivation, not proof construction"
+        );
     }
     #[test]
     fn transfer_encoder_invalid_quantity() {

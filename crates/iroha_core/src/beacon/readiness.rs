@@ -354,7 +354,10 @@ mod tests {
             GlobalThresholdBeaconCapabilityErrorV1, GlobalThresholdBeaconPartialSignatureV1,
             GlobalThresholdBeaconPartialSigningCapabilityV1,
             ValidatedGlobalThresholdBeaconSessionV1,
-            fixtures::{adaptive_beacon_fixture_for_session, adaptive_dkg_session_fixture},
+            fixtures::{
+                adaptive_beacon_fixture_for_session, adaptive_beacon_fixture_for_session_and_keys,
+                adaptive_dkg_session_fixture,
+            },
             global_threshold_beacon_roster_hash_v1,
         },
         kura::Kura,
@@ -377,7 +380,8 @@ mod tests {
                 .collect::<Vec<_>>();
             let mut dkg = adaptive_dkg_session_fixture();
             dkg.roster_hash = global_threshold_beacon_roster_hash_v1(&roster);
-            (keys, adaptive_beacon_fixture_for_session(dkg).session)
+            let session = adaptive_beacon_fixture_for_session_and_keys(dkg, &keys).session;
+            (keys, session)
         });
 
     struct CapabilityProvider {

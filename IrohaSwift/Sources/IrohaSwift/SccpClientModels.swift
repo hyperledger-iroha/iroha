@@ -260,7 +260,7 @@ struct SccpBridgeSubmitResponse: Equatable, Sendable {
                 "ton-groth16-bls12381-v1",
                 "bridge/sccp/native/ton-masterchain-v1",
             ]
-        case 3:
+        case 5:
             backendsForDomain = [
                 "tron-groth16-bn254-v1",
                 "bridge/sccp/native/tron-dpos-v1",

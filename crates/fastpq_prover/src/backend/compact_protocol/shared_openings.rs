@@ -1359,6 +1359,17 @@ mod tests {
         let geometry = Geometry::new(&air).unwrap();
         let bound = shared_prover_wire_bound(&geometry).unwrap();
         assert_eq!(bound, 4_017_376);
+        let resources = crate::offline_compact::quantity_artifact_resources(1, 0).unwrap();
+        assert_eq!(resources.maximum_segment_frame_bytes, bound);
+        assert_eq!(resources.queries_per_segment, profile::QUERY_COUNT);
+        assert_eq!(
+            resources.trace_cells_per_segment,
+            geometry.schema.trace_rows * geometry.schema.width
+        );
+        assert_eq!(
+            resources.minimum_segment_row_bytes,
+            profile::QUERY_COUNT * geometry.schema.width * size_of::<u64>()
+        );
         assert_eq!(repeated_wire_bytes(&geometry).unwrap(), 7_791_716);
         assert!(bound < repeated_wire_bytes(&geometry).unwrap());
         let digest = WireDigest::new([0; 6]).unwrap();
@@ -2026,10 +2037,11 @@ mod tests {
                                  intended_index,
                                  mapped_index| {
                         *values = prepared
-                            .columns
-                            .iter()
-                            .map(|column| column[mapped_index])
-                            .collect();
+                            .replay
+                            .selected_rows(&[mapped_index])
+                            .unwrap()
+                            .pop()
+                            .unwrap();
                         *path = prepared.rows.path(mapped_index).unwrap();
                         let native_path = path
                             .iter()

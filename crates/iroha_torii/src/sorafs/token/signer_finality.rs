@@ -1,6 +1,10 @@
 //! Local committed-history authority for signer stream-token observations.
 
 use super::{StreamTokenIssuerError, StreamTokenSignerPinsV1};
+use super::{
+    StreamTokenStateObserverClientV1,
+    signer_completed_finality::{CompletedFinalityV1, PendingCompletedFinalityV1},
+};
 use iroha_core::query::{
     signer_finality::verify_signer_finality_v1,
     stream_token_custody::read_stream_token_custody_control_at_v1,
@@ -9,6 +13,7 @@ use iroha_core::state::{State, StateReadOnly, WorldReadOnly};
 use iroha_data_model::sorafs::capacity::ProviderId;
 use mv::storage::StorageReadOnly;
 use sorafs_manifest::signer::custody::SignerCustodyAnchorV1;
+use sorafs_manifest::signer::stream_token::SignerStreamTokenReceiptV1;
 use sorafs_manifest::signer::{
     custody_control::SignerCustodyControlStateV1,
     protocol::SignerPurposeBindingV1,
@@ -47,6 +52,12 @@ impl HistoricalFinalityV1 {
 // constructor always derives its implementation from the same Core State used by Torii.
 pub(super) trait SignerFinalityV1: Send + Sync {
     fn require_completed_proof_source(&self) -> Result<(), StreamTokenIssuerError>;
+    fn prepare_completed_check(
+        &self,
+        receipt: &SignerStreamTokenReceiptV1,
+        phase: SignerStreamTokenObservationPhaseV1,
+        observer: &dyn StreamTokenStateObserverClientV1,
+    ) -> Result<PendingCompletedFinalityV1, StreamTokenIssuerError>;
     fn capture(
         &self,
         minimum: SignerCustodyAnchorV1,
@@ -58,12 +69,13 @@ pub(super) trait SignerFinalityV1: Send + Sync {
         floor: FinalityFloorV1,
         historical: &[HistoricalFinalityV1],
         observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError>;
 }
 
 pub(super) struct CoreFinalityV1 {
-    state: Arc<State>,
-    pins: StreamTokenSignerPinsV1,
+    pub(super) state: Arc<State>,
+    pub(super) pins: StreamTokenSignerPinsV1,
 }
 impl CoreFinalityV1 {
     pub(super) fn new(state: Arc<State>, pins: StreamTokenSignerPinsV1) -> Self {
@@ -72,9 +84,25 @@ impl CoreFinalityV1 {
 }
 impl SignerFinalityV1 for CoreFinalityV1 {
     fn require_completed_proof_source(&self) -> Result<(), StreamTokenIssuerError> {
-        // TODO: Open this only when the production same-State Reserve/Complete and finalized
-        // challenged Check proof source is available to authenticate completed observations.
-        Err(unavailable())
+        let snapshot = iroha_core::query::stream_token_authority::observation::capture_stream_token_authority_v1(
+            &self.state.view(), self.pins.binding(), [0; 32],
+        ).map_err(|_| unavailable())?;
+        check_control_pins(&snapshot.control, &self.pins)?;
+        if snapshot.control.active_head.is_none()
+            || snapshot.control.signer_revoked
+            || snapshot.control.attester_revoked
+        {
+            return Err(unavailable());
+        }
+        Ok(())
+    }
+    fn prepare_completed_check(
+        &self,
+        receipt: &SignerStreamTokenReceiptV1,
+        phase: SignerStreamTokenObservationPhaseV1,
+        observer: &dyn StreamTokenStateObserverClientV1,
+    ) -> Result<PendingCompletedFinalityV1, StreamTokenIssuerError> {
+        self.prepare_native_completed_check(receipt, phase, observer)
     }
     fn capture(
         &self,
@@ -109,8 +137,13 @@ impl SignerFinalityV1 for CoreFinalityV1 {
         floor: FinalityFloorV1,
         historical: &[HistoricalFinalityV1],
         observation: &SignerStreamTokenStateObservationBodyV1,
+        completed: Option<&CompletedFinalityV1>,
     ) -> Result<(), StreamTokenIssuerError> {
-        reject_unproved_completion(observation)?;
+        if let Some(proof) = completed {
+            proof.validate(observation)?;
+        } else {
+            reject_unproved_completion(observation)?;
+        }
         let view = self.state.view();
         check_registered_provider(&view, &self.pins)?;
         // All endpoints belong to one immutable committed history; a larger unsigned height or a
@@ -150,9 +183,8 @@ impl SignerFinalityV1 for CoreFinalityV1 {
 pub(super) fn reject_unproved_completion(
     observation: &SignerStreamTokenStateObservationBodyV1,
 ) -> Result<(), StreamTokenIssuerError> {
-    // TODO: Admit completed phases only after a purpose-owned same-State reader proves the
-    // native Reserve/Complete pair and finalized challenged Check with its private receipt.
-    // A signed observer's completed-row claim and a certified block are not that proof.
+    // A signed observer's completed-row claim and a certified block alone cannot replace the
+    // purpose-owned same-State Reserve/Complete and challenged Check proof.
     if matches!(
         observation.phase,
         SignerStreamTokenObservationPhaseV1::AfterCommit

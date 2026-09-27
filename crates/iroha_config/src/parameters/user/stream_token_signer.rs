@@ -10,6 +10,11 @@ const MAX_OBSERVER_AGE_MS: u64 = 300_000;
 /// Complete public signer inputs; every leaf is required when issuance is enabled.
 #[derive(Debug, Default, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStreamTokenSignerConfig {
+    /// UTC uncertainty around each fresh host clock sample, in milliseconds (default 250).
+    pub clock_uncertainty_ms: Option<u64>,
+    /// Optional concrete local native runtime, never a fallback after external adapter failure.
+    #[config(nested)]
+    pub native: SorafsStreamTokenNativeConfig,
     /// Opaque software, signer, HSM, KMS or PKCS#11 runtime handle, without credentials.
     pub runtime_handle: Option<String>,
     /// Opaque key-generation handle for the configured provider, without credentials.
@@ -87,7 +92,9 @@ pub struct SorafsStreamTokenObserverConfig {
 impl SorafsStreamTokenSignerConfig {
     /// Whether any signer or trust leaf was explicitly configured.
     pub(super) fn is_configured(&self) -> bool {
-        self.runtime_handle.is_some()
+        self.clock_uncertainty_ms.is_some()
+            || self.native.is_configured()
+            || self.runtime_handle.is_some()
             || self.key_handle.is_some()
             || self.service_id.is_some()
             || self.administrator_id.is_some()
@@ -147,7 +154,20 @@ impl SorafsStreamTokenSignerConfig {
         );
         let attester = self.attester.parse(&mut parser);
         let observer = self.observer.parse(&mut parser);
+        let clock_uncertainty_ms = self
+            .clock_uncertainty_ms
+            .unwrap_or(defaults::sorafs::storage::tokens::CLOCK_UNCERTAINTY_MS);
+        if clock_uncertainty_ms > 5000 {
+            parser.error(
+                &path("clock_uncertainty_ms"),
+                "must not exceed 5000 milliseconds",
+            );
+            return None;
+        }
+        let native = self.native.parse(&mut parser);
         let candidate = actual::SorafsStreamTokenSignerConfig {
+            clock_uncertainty_ms,
+            native,
             runtime_handle: runtime_handle?,
             key_handle: key_handle?,
             service_id: service_id?,
@@ -475,4 +495,119 @@ fn signer_handle(value: &str) -> bool {
 
 fn observer_handle(value: &str) -> bool {
     is_production_runtime_handle(value)
+}
+
+/// Explicit local native software runtime credential locations and transaction limits.
+#[derive(Debug, Default, ReadConfig, Clone, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsStreamTokenNativeConfig {
+    /// Owner-only canonical private role credential.
+    pub signer_credential: Option<PathBuf>,
+    /// Bounded signed custody record material.
+    pub custody_record: Option<PathBuf>,
+    /// Existing owner-only completed receipt journal directory.
+    pub receipt_journal: Option<PathBuf>,
+    /// Exact registered provider-owner transaction account.
+    pub operator: Option<AccountId>,
+    /// Owner-only canonical operator private credential.
+    pub operator_credential: Option<PathBuf>,
+    /// Owner-only canonical observer private credential.
+    pub observer_credential: Option<PathBuf>,
+    /// Exact Norito JSON fee-payment intent authorized for native transactions.
+    pub fee_payment_json: Option<String>,
+    /// Bounded full native transaction observation timeout, in milliseconds.
+    pub timeout_ms: Option<u64>,
+}
+impl SorafsStreamTokenNativeConfig {
+    fn is_configured(&self) -> bool {
+        self.signer_credential.is_some()
+            || self.custody_record.is_some()
+            || self.receipt_journal.is_some()
+            || self.operator.is_some()
+            || self.operator_credential.is_some()
+            || self.observer_credential.is_some()
+            || self.fee_payment_json.is_some()
+            || self.timeout_ms.is_some()
+    }
+    fn parse(&self, parser: &mut Parser<'_>) -> Option<actual::SorafsStreamTokenNativeConfig> {
+        if !self.is_configured() {
+            return None;
+        }
+        let valid = || {
+            let paths = [
+                self.signer_credential.as_ref()?,
+                self.custody_record.as_ref()?,
+                self.receipt_journal.as_ref()?,
+                self.operator_credential.as_ref()?,
+                self.observer_credential.as_ref()?,
+            ];
+            if paths.iter().any(|path| !path.is_absolute())
+                || paths
+                    .iter()
+                    .enumerate()
+                    .any(|(i, path)| paths[..i].contains(path))
+            {
+                return None;
+            }
+            let operator = self.operator.clone()?;
+            operator.try_signatory()?;
+            let fee_payment: iroha_data_model::transaction::FeePaymentIntent =
+                norito::json::from_str(self.fee_payment_json.as_deref()?).ok()?;
+            fee_payment.validate().ok()?;
+            let timeout_ms = self
+                .timeout_ms
+                .unwrap_or(defaults::sorafs::storage::tokens::NATIVE_TRANSACTION_TIMEOUT_MS);
+            if !(100..=60_000).contains(&timeout_ms) {
+                return None;
+            }
+            Some(actual::SorafsStreamTokenNativeConfig {
+                signer_credential: paths[0].clone(),
+                custody_record: paths[1].clone(),
+                receipt_journal: paths[2].clone(),
+                operator,
+                operator_credential: paths[3].clone(),
+                observer_credential: paths[4].clone(),
+                fee_payment,
+                timeout_ms,
+            })
+        };
+        let result = valid();
+        if result.is_none() {
+            parser.error(&path("native"), "requires distinct absolute credential/journal paths, a direct operator, explicit valid fee intent, and timeout 100..=60000 milliseconds");
+        }
+        result
+    }
+}
+
+#[cfg(test)]
+mod native_runtime_tests {
+    use super::*;
+    #[test]
+    fn native_runtime_requires_complete_explicit_credential_and_fee_inputs() {
+        let mut emitter = Emitter::new();
+        let config = SorafsStreamTokenNativeConfig {
+            timeout_ms: Some(1000),
+            ..Default::default()
+        };
+        assert!(
+            config
+                .parse(&mut Parser {
+                    emitter: &mut emitter
+                })
+                .is_none()
+        );
+        assert!(emitter.into_result().is_err());
+    }
+    #[test]
+    fn absent_native_runtime_preserves_explicit_external_selection() {
+        let mut emitter = Emitter::new();
+        assert!(
+            SorafsStreamTokenNativeConfig::default()
+                .parse(&mut Parser {
+                    emitter: &mut emitter
+                })
+                .is_none()
+        );
+        assert!(emitter.into_result().is_ok());
+    }
 }

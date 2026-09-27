@@ -16570,10 +16570,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
     }
 
     func testPipelineTransactionEventDecodesNumericDataspaceId() throws {
+        let transactionHash = String(repeating: "b", count: 64)
         let payload = """
         {
             "event": "Transaction",
-            "hash": "abc123",
+            "hash": "\(transactionHash)",
             "status": "Applied",
             "dataspace_id": 9
         }

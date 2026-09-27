@@ -115,6 +115,8 @@ pub(super) const OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1: u16 = 125;
 pub(super) const OPERATION_STREAM_TOKEN_RECOVER_V1: u16 = 126;
 pub(super) const OPERATION_STREAM_TOKEN_OBSERVE_V1: u16 = 127;
 pub(super) const OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1: u16 = 128;
+pub(super) const OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1: u16 = 129;
+pub(super) const OPERATION_STREAM_TOKEN_CHECK_V1: u16 = 130;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
@@ -135,6 +137,11 @@ define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protoco
     pub(super) session: iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
     pub(super) height: u64,
     pub(super) finalized_chain_anchor: iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
+});
+define_broker_wire_struct!(owned frame "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconSeatReadinessRequestWireV1"; pub(super) GlobalBeaconSeatReadinessRequestWireV1 {
+    pub(super) session: iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
+    pub(super) authority: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    pub(super) context: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalitySeatReadinessContextV1,
 });
 define_broker_wire_struct!(copy frame "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconPartialSignResultWireV1"; pub(super) GlobalBeaconPartialSignResultWireV1 {
     pub(super) partial: iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
@@ -454,6 +461,8 @@ mod operation_ordinal_tests {
             (OPERATION_STREAM_TOKEN_RECOVER_V1, 126),
             (OPERATION_STREAM_TOKEN_OBSERVE_V1, 127),
             (OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1, 128),
+            (OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1, 129),
+            (OPERATION_STREAM_TOKEN_CHECK_V1, 130),
         ];
         for (index, (operation, expected)) in exact.into_iter().enumerate() {
             assert_eq!(operation, expected);
@@ -463,7 +472,7 @@ mod operation_ordinal_tests {
         assert!(super::super::operation_is_known(
             OPERATION_POP_RUNTIME_OPEN_V1
         ));
-        assert!(!super::super::operation_is_known(129));
+        assert!(!super::super::operation_is_known(130));
     }
 }
 

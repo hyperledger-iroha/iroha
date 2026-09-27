@@ -9,13 +9,13 @@
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use thiserror::Error;
 /// Stable digest input for the implemented components.
-pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-proof-cap";
+pub(crate) const ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1: &[u8] = b"byte-memory-permutation=complete|strict-der-segment=complete|projection-segment=complete|shared-current-next-deep-ali=complete|rfc5280-base-row-provider=complete|rfc5280-aggregate-and-eighteen-independent-output-role-products=complete|rfc5280-x5r1-and-der-terminal-validator=complete|sha-call-witness-assembly-and-terminal-binding=complete|p256-witness-assembly-and-terminal-binding=complete|compact-ca-subproof=complete|full-49-registration-prover-and-verifier=complete|combined-main-ca-envelope=complete|consensus-verifier-integration=complete|release-evidence-schema=deterministic-X5S1-KAT+public-binding-mutations+wire-corruption-and-truncation+maximum-shape-process-measurement|activation=unavailable-qualification";
 /// SHA-256 of the dedicated compact-CA prover/verifier descriptor.
 ///
 /// The pin binds the exact X5C1/X5C2 proof system rather than only its component name.
 pub(crate) const ZK_X509_COMPACT_CA_SUBPROOF_DESCRIPTOR_SHA256_V1: [u8; 32] = [
-    0x4a, 0x4d, 0x7b, 0x00, 0xd1, 0x33, 0x99, 0xf8, 0x87, 0xbd, 0xcd, 0x06, 0xf4, 0x08, 0x25, 0x82,
-    0xac, 0x2e, 0x62, 0x26, 0xe4, 0x98, 0x04, 0x41, 0xb8, 0x64, 0xba, 0x90, 0x27, 0x85, 0xb8, 0x36,
+    0x9a, 0x34, 0xa7, 0x2f, 0x02, 0x05, 0x51, 0xe6, 0x54, 0x42, 0xc2, 0x4b, 0x58, 0xee, 0x07, 0x5f,
+    0x6c, 0x48, 0x5e, 0x36, 0xe0, 0xdf, 0x7c, 0x57, 0x9b, 0x24, 0x6b, 0x19, 0xd0, 0x19, 0x5b, 0x9a,
 ];
 /// Failure of an implemented zk-X509 AIR primitive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
@@ -310,12 +310,12 @@ mod tests {
         assert_eq!(changed.validate(), Err(ZkX509AirErrorV1::BitGate));
     }
     #[test]
-    fn component_manifest_is_complete_and_activation_requires_a_supported_proof_cap() {
+    fn component_manifest_is_complete_and_activation_requires_qualification() {
         let descriptor = String::from_utf8_lossy(ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1);
         assert_eq!(descriptor.matches("=complete").count(), 13);
         assert_eq!(descriptor.matches("=pending").count(), 0);
         assert!(
-            descriptor.ends_with("activation=unavailable-proof-cap"),
+            descriptor.ends_with("activation=unavailable-qualification"),
             "{descriptor}"
         );
     }
@@ -359,8 +359,8 @@ mod tests {
         assert_eq!(ZK_X509_GRINDING_BITS_V1, 20);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_CLAIM_ENVELOPE_BYTES_V1, 1_310);
         assert_eq!(ZK_X509_CA_ACCUMULATOR_DEEP_OPENING_BYTES_V1, 52_800);
-        assert_eq!(ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1, 2_694_912);
-        assert_eq!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1, 2_696_222);
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_INNER_MAX_PROOF_BYTES_V1, 1_498_816);
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1, 1_500_126);
         let _prover: fn(
             &ZkX509CaAccumulatorTraceV1,
             &ZkX509ShaCallScheduleV1,

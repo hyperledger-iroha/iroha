@@ -997,10 +997,24 @@ fn supported_genesis_templates_fit_frozen_source_bootstrap() {
         ("../../configs/soranexus/nexus/genesis.template.json", 5),
         ("../../configs/soranexus/taira/genesis.template.json", 5),
     ] {
+        // Public Nexus forbids the Taira XOR definition; its operator provisions a mainnet one.
+        let xor = if path.contains("nexus/") {
+            iroha_data_model::asset::AssetDefinitionId::derive_from_components(
+                DomainId::parse_fully_qualified(
+                    "mainnet-fixture.universal",
+                )
+                .expect("fixture domain"),
+                "xor".parse().expect("fixture asset"),
+            )
+        } else {
+            iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                .xor_asset_definition_id
+        };
         let manifest = super::super::GenesisSourceTemplate::from_path(root.join(path))
             .unwrap_or_else(|error| panic!("{path}: {error:?}"))
             .materialize(
                 super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+                Some(xor),
             )
             .unwrap_or_else(|error| panic!("{path}: {error:?}"));
         let sources = manifest

@@ -213,17 +213,17 @@ pub struct RebindArgs {
     #[arg(long, value_name = "PEER_ID")]
     pub peer_id: String,
     /// Genesis-derived network id for replacement-peer consent
-    #[arg(long, value_name = "NETWORK_ID", requires_all = ["peer_private_key_file", "activation_height", "previous_peer_id"])]
-    pub network_id: Option<NetworkId>,
-    /// Absolute owner-only mode-0600 replacement peer key file; required with --network-id
-    #[arg(long, value_name = "PATH", requires = "network_id")]
-    pub peer_private_key_file: Option<PathBuf>,
+    #[arg(long, value_name = "NETWORK_ID")]
+    pub network_id: NetworkId,
+    /// Absolute owner-only mode-0600 replacement peer key file
+    #[arg(long, value_name = "PATH")]
+    pub peer_private_key_file: PathBuf,
     /// Stored pending validator activation height bound to the replacement consent
-    #[arg(long, value_name = "HEIGHT", requires = "network_id")]
-    pub activation_height: Option<u64>,
+    #[arg(long, value_name = "HEIGHT")]
+    pub activation_height: u64,
     /// Stored current peer binding being replaced
-    #[arg(long, value_name = "PEER_ID", requires = "network_id")]
-    pub previous_peer_id: Option<PeerId>,
+    #[arg(long, value_name = "PEER_ID")]
+    pub previous_peer_id: PeerId,
 }
 impl Run for RebindArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
@@ -233,38 +233,27 @@ impl Run for RebindArgs {
             .peer_id
             .parse::<PeerId>()
             .wrap_err("--peer-id must be a valid peer id")?;
-        let mut instruction =
-            RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), peer_id.clone());
-        match (
+        eyre::ensure!(
+            self.network_id == context.config().network_id,
+            "--network-id must match the configured submission network"
+        );
+        let key_pair = crate::operator_key::load_operator_key_pair(&self.peer_private_key_file)
+            .wrap_err("failed to load --peer-private-key-file")?;
+        eyre::ensure!(
+            peer_id.public_key() == key_pair.public_key(),
+            "--peer-id does not match --peer-private-key-file"
+        );
+        let authorization = PublicLanePeerBindingAuthorization::new(
             self.network_id,
-            self.peer_private_key_file,
+            lane_id,
+            validator.clone(),
+            peer_id.clone(),
             self.activation_height,
             self.previous_peer_id,
-        ) {
-            (Some(network_id), Some(path), Some(activation_height), Some(previous_peer_id)) => {
-                let key_pair = crate::operator_key::load_operator_key_pair(&path)
-                    .wrap_err("failed to load --peer-private-key-file")?;
-                eyre::ensure!(
-                    peer_id.public_key() == key_pair.public_key(),
-                    "--peer-id does not match --peer-private-key-file"
-                );
-                let authorization = PublicLanePeerBindingAuthorization::new(
-                    network_id,
-                    lane_id,
-                    validator,
-                    peer_id,
-                    activation_height,
-                    previous_peer_id,
-                );
-                let signature = SignatureOf::try_new(key_pair.private_key(), &authorization)
-                    .wrap_err("failed to sign validator binding with the replacement peer key")?;
-                instruction = instruction.with_peer_signature(signature);
-            }
-            (None, None, None, None) => {}
-            _ => eyre::bail!(
-                "peer consent requires --network-id, --peer-private-key-file, --activation-height, and --previous-peer-id together"
-            ),
-        }
+        );
+        let signature = SignatureOf::try_new(key_pair.private_key(), &authorization)
+            .wrap_err("failed to sign validator binding with the replacement peer key")?;
+        let instruction = RebindPublicLaneValidatorPeer::new(lane_id, validator, peer_id, signature);
         context.finish(vec![InstructionBox::from(instruction)])
     }
 }
@@ -1308,6 +1297,7 @@ mod tests {
         ])
         .expect("signed rebind should parse");
         let mut context = TestContext::new();
+        context.cfg.network_id = network_id;
         command
             .run(&mut context)
             .expect("signed rebind should succeed");
@@ -1327,13 +1317,11 @@ mod tests {
         );
         instruction
             .peer_signature
-            .as_ref()
-            .expect("replacement peer consent")
             .verify(key_pair.public_key(), &expected)
             .expect("consent binds exact network, lane, validator, and peer");
     }
     #[test]
-    fn rebind_signing_flags_must_be_paired() {
+    fn rebind_requires_replacement_peer_consent() {
         let network_id = NetworkId::from_genesis_hash(
             iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"staking-cli-network")),
         )
@@ -1361,7 +1349,7 @@ mod tests {
                 flag,
                 value,
             ])
-            .expect_err("partial peer consent input must fail");
+            .expect_err("incomplete peer consent input must fail");
             assert_eq!(
                 error.kind(),
                 clap::error::ErrorKind::MissingRequiredArgument
@@ -1396,8 +1384,8 @@ mod tests {
         );
     }
     #[test]
-    fn rebind_submits_instruction_with_valid_peer_id() {
-        let command = parse_command(&[
+    fn rebind_requires_peer_consent_when_all_flags_are_absent() {
+        let error = parse_command(&[
             "rebind",
             "--lane-id",
             "1",
@@ -1406,14 +1394,19 @@ mod tests {
             "--peer-id",
             &valid_peer_id_literal(),
         ])
-        .expect("rebind command should parse");
-        let mut context = TestContext::new();
-        command.run(&mut context).expect("rebind should succeed");
+        .expect_err("rebind without peer consent must fail");
         assert_eq!(
-            context.submitted.as_ref().map(Vec::len),
-            Some(1),
-            "rebind should submit exactly one instruction"
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
         );
+        for flag in [
+            "--network-id",
+            "--peer-private-key-file",
+            "--activation-height",
+            "--previous-peer-id",
+        ] {
+            assert!(error.to_string().contains(flag));
+        }
     }
     #[test]
     fn register_rejects_invalid_peer_id_during_run() {
@@ -1442,10 +1435,10 @@ mod tests {
             lane_id: 1,
             validator: alice_literal(),
             peer_id: "not-a-peer-id".to_owned(),
-            network_id: None,
-            peer_private_key_file: None,
-            activation_height: None,
-            previous_peer_id: None,
+            network_id: crate::fallback_config().network_id,
+            peer_private_key_file: PathBuf::from("/unused/peer.key"),
+            activation_height: 1,
+            previous_peer_id: valid_peer_id_literal().parse().expect("previous peer"),
         };
         let mut context = TestContext::new();
         let err = args
@@ -1454,6 +1447,28 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("--peer-id must be a valid peer id")
+        );
+        assert!(context.submitted.is_none());
+    }
+    #[test]
+    fn rebind_rejects_mismatched_submission_network() {
+        let args = RebindArgs {
+            lane_id: 1,
+            validator: alice_literal(),
+            peer_id: valid_peer_id_literal(),
+            network_id: NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"other-network")),
+            ),
+            peer_private_key_file: PathBuf::from("/unused/peer.key"),
+            activation_height: 1,
+            previous_peer_id: valid_peer_id_literal().parse().expect("previous peer"),
+        };
+        let mut context = TestContext::new();
+        let error = args.run(&mut context).expect_err("wrong network must fail");
+        assert!(
+            error
+                .to_string()
+                .contains("--network-id must match the configured submission network")
         );
         assert!(context.submitted.is_none());
     }

@@ -15,11 +15,18 @@ use crate::{
 };
 use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
 
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("write hexadecimal fixture");
+    }
+    output
 }
 
-pub(crate) fn record_encode<T: NoritoSchema + NoritoSerialize>(
+/// Capture the canonical frame and exact declared encoding identity.
+pub fn record_encode<T: NoritoSchema + NoritoSerialize>(
     value: &T,
     frame_name: &str,
 ) -> json::Value {
@@ -36,12 +43,12 @@ pub(crate) fn record_encode<T: NoritoSchema + NoritoSerialize>(
     })
 }
 
-pub(crate) fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
-    value: T,
+fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
+    value: &T,
     frame_name: &str,
 ) -> json::Value {
-    let mut record = record_encode(&value, frame_name);
-    let frame = norito::to_bytes(&value).unwrap();
+    let mut record = record_encode(value, frame_name);
+    let frame = norito::to_bytes(value).unwrap();
     let decoded: T = norito::decode_from_bytes(&frame).unwrap();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), frame);
     record.as_object_mut().unwrap().insert(
@@ -51,41 +58,42 @@ pub(crate) fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeseriali
     record
 }
 
-pub(crate) fn record_nominal<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
-    value: T,
+/// Capture the canonical frame using its nominal type identity.
+pub fn record_nominal<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
+    value: &T,
 ) -> json::Value {
     record(value, std::any::type_name::<T>())
 }
 
 fn current_frames() -> Vec<json::Value> {
     let mut records = vec![
-        record_nominal(ConstVec::from(vec![7_u32, 11])),
-        record_nominal([7_u32, 11, 7].into_iter().collect::<UniqueVec<_>>()),
-        record_nominal(SmallStr::from_str("schema")),
-        record_nominal(SmallVec::<[u32; 2]>::from(vec![7, 11])),
-        record_nominal(SmallVec::<[u32; 8]>::from(vec![7, 11])),
-        record_nominal(ConstString::from("schema")),
-        record_nominal(Json::new(norito::json!({"a": 7, "b": [true, false]}))),
-        record_nominal(BigInt::from_i128(-129)),
-        record_nominal(Numeric::new(-129_i64, 2)),
-        record_nominal(Quantity::try_from_numeric(Numeric::new(129_i64, 2)).unwrap()),
-        record_nominal("1.29".parse::<XorQuantity>().unwrap()),
-        record_nominal(NumericSpec::try_fractional(2).unwrap()),
+        record_nominal(&ConstVec::from(vec![7_u32, 11])),
+        record_nominal(&[7_u32, 11, 7].into_iter().collect::<UniqueVec<_>>()),
+        record_nominal(&SmallStr::from_str("schema")),
+        record_nominal(&SmallVec::<[u32; 2]>::from(vec![7, 11])),
+        record_nominal(&SmallVec::<[u32; 8]>::from(vec![7, 11])),
+        record_nominal(&ConstString::from("schema")),
+        record_nominal(&Json::new(norito::json!({"a": 7, "b": [true, false]}))),
+        record_nominal(&BigInt::from_i128(-129)),
+        record_nominal(&Numeric::new(-129_i64, 2)),
+        record_nominal(&Quantity::try_from_numeric(Numeric::new(129_i64, 2)).unwrap()),
+        record_nominal(&"1.29".parse::<XorQuantity>().unwrap()),
+        record_nominal(&NumericSpec::try_fractional(2).unwrap()),
         record(
-            IntValueV1::try_new(BigInt::from_i128(-129)).unwrap(),
+            &IntValueV1::try_new(BigInt::from_i128(-129)).unwrap(),
             INT_SCHEMA_NAME_V1,
         ),
         record(
-            DecimalValueV1::new(Numeric::new(-129_i64, 2)),
+            &DecimalValueV1::new(Numeric::new(-129_i64, 2)),
             DECIMAL_SCHEMA_NAME_V1,
         ),
         record(
-            QuantityValueV1::new("1.29".parse().unwrap()),
+            &QuantityValueV1::new("1.29".parse().unwrap()),
             QUANTITY_SCHEMA_NAME_V1,
         ),
-        record_nominal(vec![SmallStr::from_str("schema")]),
-        record_nominal(Some(DecimalValueV1::new(Numeric::new(-129_i64, 2)))),
-        record_nominal(vec![ConstVec::from(vec![7_u32, 11])]),
+        record_nominal(&vec![SmallStr::from_str("schema")]),
+        record_nominal(&Some(DecimalValueV1::new(Numeric::new(-129_i64, 2)))),
+        record_nominal(&vec![ConstVec::from(vec![7_u32, 11])]),
     ];
     records.extend(crate::json::schema_identity::records());
     records.extend(crate::numeric::schema_identity::records());

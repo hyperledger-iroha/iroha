@@ -71,6 +71,7 @@ fn world_constructor_and_snapshot_restore_preserve_history_on_default_stack() {
         assert_eq!(std::ptr::from_ref(&*state.world), storage_owner);
         let snapshot = json::to_json(&state).expect("serialize canonical State snapshot");
         let restored = deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: state.lane_manifests.read().clone(),
             kura,
             query_handle: LiveQueryStore::start_test(),

@@ -53,6 +53,10 @@ pub mod local_fetch;
 pub mod multi_fetch;
 #[cfg(feature = "manifest")]
 pub mod musubi;
+#[cfg(feature = "manifest")]
+pub mod payload_verifier;
+#[cfg(feature = "manifest")]
+pub mod publisher;
 pub mod policy;
 #[cfg(feature = "manifest")]
 #[path = "proof_stream.rs"]
@@ -189,6 +193,12 @@ pub enum CarWriteError {
     RootTooLarge,
     #[error("expected roots do not match computed roots")]
     RootMismatch,
+    /// A payload-independent plan field disagrees with its canonical manifest.
+    #[error("CAR plan does not match manifest field {field}")]
+    ManifestMetadataMismatch {
+        /// Canonical manifest field that failed validation.
+        field: &'static str,
+    },
     #[error("CAR DAG invariant failed while computing {context}")]
     DagInvariant { context: &'static str },
     #[error("logical file paths conflict while building the directory DAG")]
@@ -6249,6 +6259,62 @@ fn append_file_chunks(
     Ok(())
 }
 impl CarBuildPlan {
+    /// Bind the complete file/chunk layout, profile, root CID, codec and archive size to a
+    /// canonical manifest without reading payload bytes. Payload/PoR/archive digest validation
+    /// remains mandatory before admitting or serving the payload.
+    #[cfg(feature = "manifest")]
+    pub fn verify_manifest_metadata(
+        &self,
+        manifest: &sorafs_manifest::ManifestV1,
+    ) -> Result<(), CarWriteError> {
+        self.validate()?;
+        let mismatch = |field| CarWriteError::ManifestMetadataMismatch { field };
+        if manifest.version != sorafs_manifest::MANIFEST_VERSION_V1 {
+            return Err(mismatch("version"));
+        }
+        if manifest.content_length != self.content_length {
+            return Err(mismatch("content_length"));
+        }
+        if u64::from(manifest.chunking.min_size) != self.chunk_profile.min_size as u64
+            || u64::from(manifest.chunking.target_size) != self.chunk_profile.target_size as u64
+            || u64::from(manifest.chunking.max_size) != self.chunk_profile.max_size as u64
+            || u64::from(manifest.chunking.break_mask) != self.chunk_profile.break_mask
+            || manifest.chunking.multihash_code != sorafs_manifest::BLAKE3_256_MULTIHASH_CODE
+        {
+            return Err(mismatch("chunking"));
+        }
+        if manifest.chunk_digest_sha3_256 != compute_chunk_plan_digest_sha3(&self.chunks) {
+            return Err(mismatch("chunk_digest_sha3_256"));
+        }
+        if manifest.dag_codec.0 != DAG_CBOR_CODEC {
+            return Err(mismatch("dag_codec"));
+        }
+        let layout = CarLayout::new(self)?;
+        if layout.root_cids.len() != 1
+            || layout.root_cids.first().map(Vec::as_slice) != Some(manifest.root_cid.as_slice())
+        {
+            return Err(CarWriteError::RootMismatch);
+        }
+        let data_offset = u64::from_le_bytes(
+            layout.header_bytes[16..24]
+                .try_into()
+                .map_err(|_| mismatch("car_size"))?,
+        );
+        let payload_len = u64::from_le_bytes(
+            layout.header_bytes[24..32]
+                .try_into()
+                .map_err(|_| mismatch("car_size"))?,
+        );
+        let index_len = layout.index_bytes.as_ref().map_or(0, Vec::len) as u64;
+        let car_size = data_offset
+            .checked_add(payload_len)
+            .and_then(|size| size.checked_add(index_len))
+            .ok_or_else(|| mismatch("car_size"))?;
+        if manifest.car_size != car_size {
+            return Err(mismatch("car_size"));
+        }
+        Ok(())
+    }
     /// Validate the complete chunk/file plan and return checked allocation geometry.
     ///
     /// This method performs no allocation or I/O. It validates the chunking profile,
@@ -6488,6 +6554,9 @@ impl CarBuildPlan {
         Ok(specs)
     }
 }
+#[cfg(all(test, feature = "manifest"))]
+#[path = "lib/manifest_metadata_tests.rs"]
+mod manifest_metadata_tests;
 fn validate_path(path: &[String]) -> Result<(), CarPlanError> {
     if path.is_empty() {
         return Err(CarPlanError::InvalidPath("".into()));

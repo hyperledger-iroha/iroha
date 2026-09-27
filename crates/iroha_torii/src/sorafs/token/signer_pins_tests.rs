@@ -45,6 +45,7 @@ fn every_immutable_signer_attester_observer_pin_changes_the_catalog_digest() {
     let fixture = SignedFixture::new(3, TestSignerMode::Sign);
     let baseline = fixture.pins.config_digest();
     let mutations: &[ConfigMutation] = &[
+        |h| h.clock_uncertainty_ms += 1,
         |h| h.runtime_handle.push_str("-other"),
         |h| h.key_handle.push_str("-other"),
         |h| h.service_id.push_str("-other"),
@@ -128,6 +129,7 @@ fn every_immutable_signer_attester_observer_pin_changes_the_catalog_digest() {
 fn programmatic_signer_config_cannot_bypass_independence_or_bounded_eligibility() {
     let fixture = SignedFixture::new(3, TestSignerMode::Sign);
     let mutations: &[ConfigMutation] = &[
+        |h| h.clock_uncertainty_ms = 5_001,
         |h| h.key_revision = u64::from(u32::MAX) + 1,
         |h| h.observer.runtime_handle = h.runtime_handle.clone(),
         |h| h.observer.runtime_handle = "software:prod/user:secret@observer".into(),

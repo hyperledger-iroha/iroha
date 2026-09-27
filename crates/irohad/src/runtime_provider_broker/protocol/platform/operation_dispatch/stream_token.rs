@@ -2,6 +2,23 @@
 
 use super::*;
 
+pub(super) fn stream_token_check(
+    state: &BrokerServerStateV1,
+    request: &OperationRequestV1,
+) -> Result<Vec<u8>, BrokerError> {
+    let instruction = decode_stream_token_check_request(&request.binding, &request.payload)?;
+    let observer = broker_backend!(state, stream_token_state_observer);
+    let signed = observer
+        .finalize_check(&instruction)
+        .map_err(|error| stream_token_backend_error(error, true))?;
+    let bytes = encode_canonical(&signed, 32 * 1024).map_err(|_| BrokerError::Ambiguous)?;
+    decode_stream_token_check_result(&request.binding, &request.payload, &bytes)
+        .map_err(|_| BrokerError::Ambiguous)?;
+    qualify_server_binding(state, &request.binding, request.provider_metadata_digest)
+        .map_err(|_| BrokerError::Ambiguous)?;
+    Ok(bytes)
+}
+
 pub(super) fn stream_token_sign_or_recover(
     state: &BrokerServerStateV1,
     request: &OperationRequestV1,

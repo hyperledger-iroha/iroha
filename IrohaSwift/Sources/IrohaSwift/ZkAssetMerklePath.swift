@@ -74,9 +74,9 @@ public struct LocalZkAssetMerklePathProvider: ZkAssetMerklePathProvider {
         return out
     }
 
-    /// Derive the padded path at the current frontier. This helper is intended
-    /// for deterministic local testing; production wallets consume Torii's
-    /// independently validated `next_zero_path` instead.
+    /// Derive the padded path at the current insertion frontier. This helper is
+    /// intended for deterministic local testing; production wallets authenticate
+    /// Torii's `next_zero_path`. Absent proof inputs require no frontier path.
     public func nextZeroPath(asset: String) throws -> ZkAssetMerklePath {
         try validateAsset(asset)
         guard commitments.count < Self.confidentialTreeCapacityV2 else {
@@ -209,9 +209,9 @@ public struct ZkAssetMerklePath: Equatable, Sendable {
 
     /// Derive the padded-zero path immediately after inserting `commitment`
     /// at this authoritative frontier path. The returned path authenticates
-    /// leaf `leafIndex + 1` against the exact post-insertion root and is the
-    /// dummy path consumed by the fixed two-slot circuit layout. The
-    /// current contract permits one real input and binds the second slot to zero.
+    /// leaf `leafIndex + 1` against the exact post-insertion root for a subsequent
+    /// insertion. Confidential proof builders pad absent input slots internally;
+    /// callers supply membership paths only for actual notes.
     public func nextZeroPathAfterInsertion(
         commitment: Data,
         expectedRoot: Data

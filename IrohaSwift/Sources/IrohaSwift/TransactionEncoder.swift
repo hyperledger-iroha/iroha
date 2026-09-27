@@ -147,6 +147,8 @@ struct TransactionInputValidator {
                 throw TransactionInputError.malformedAccountId(field: field, value: checked)
             }
             return canonical
+        } catch AccountAddressError.nativeBridgeUnavailable {
+            throw SwiftTransactionEncoderError.nativeBridgeUnavailable
         } catch {
             throw TransactionInputError.malformedAccountId(field: field, value: checked)
         }

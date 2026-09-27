@@ -1,9 +1,9 @@
-use url::Url;
 use super::{
     ZkProofsFilter, is_verifier_backend_registry_label_v1, join_torii_url,
     join_torii_url_with_path_segments, normalize_hex32_lower,
     require_verifier_backend_registry_label_v1, validate_zk_proofs_filter,
 };
+use url::Url;
 #[test]
 fn join_vote_tally_path() {
     let base = Url::parse("http://localhost:8080/api/").unwrap();
@@ -57,14 +57,14 @@ fn zk_client_backend_guard_rejects_protocol_trusted_setup_and_path_labels() {
         "halo2/ipa\0",
         "HALO2/IPA",
         "stark/FRI",
-        "halo2/ipa:ivm-execution-v1",
-        "halo2/ipa::ivm-execution-v1",
-        "halo2/ipa/ivm-execution-v1",
-        "halo2/pasta/ipa/ivm-execution-v1",
+        "halo2/ipa:ivm-replay-binding-v1",
+        "halo2/ipa::ivm-replay-binding-v1",
+        "halo2/ipa/ivm-replay-binding-v1",
+        "halo2/pasta/ipa/ivm-replay-binding-v1",
         "halo2//ipa",
         "halo2/ipa:",
         "halo2/ipa.",
-        "halo2/ipa/.ivm-execution-v1",
+        "halo2/ipa/.ivm-replay-binding-v1",
         "halo2/ipa:ivm..execution-v1",
         "../halo2/ipa",
         "halo2/ipa/../tiny-add",

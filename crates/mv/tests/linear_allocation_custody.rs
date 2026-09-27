@@ -250,6 +250,7 @@ fn initial_charges(budget: &AllocationBudget, layouts: InitialLayouts) -> Initia
         ]);
     });
     InitialCharges {
+        notification: concread::release::ReleaseNotification::default(),
         root: Charge {
             id: ROOT_ID,
             credit: prepaid.try_split(layouts.root).unwrap(),

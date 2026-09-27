@@ -30,7 +30,12 @@ fn native_checkpoint_fixture() -> Box<NativeCheckpointFixture> {
     let prepared = fixture.prepare();
     let finality = fixture.finality(prepared.block(), prepared.execution_prefix_commitment());
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let checkpoint = journals.checkpoint;
     let state = fixture.into_shared_state();

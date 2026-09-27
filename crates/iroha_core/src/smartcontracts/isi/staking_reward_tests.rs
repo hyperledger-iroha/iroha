@@ -435,7 +435,7 @@ fn reward_reserve_checks_aggregate_batch_debits() {
 }
 
 #[test]
-fn reward_failed_second_asset_rolls_back_the_enclosing_transaction() {
+fn reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback() {
     let state = setup_state();
     let block = new_block();
     let mut state_block = state.block(block.as_ref().header());
@@ -447,25 +447,17 @@ fn reward_failed_second_asset_rolls_back_the_enclosing_transaction() {
         reward_distribution(lane, 0, &first_asset, &validator, 25)
             .execute(&sink, &mut stx)
             .unwrap();
-        let second_definition = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").unwrap(),
-            "other-reward".parse().unwrap(),
-        );
-        Register::asset_definition(AssetDefinition::numeric(
-            second_definition.clone(),
-            "Other reward",
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))
-        .execute(&ALICE_ID, &mut stx)
-        .unwrap();
-        let second_asset = AssetId::new(second_definition.clone(), sink.clone());
+        let second_sink = gen_account_in("wonderland").0;
+        Register::account(Account::new(second_sink.clone()))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+        let second_asset = AssetId::new(first_asset.definition().clone(), second_sink.clone());
         Mint::asset_quantity(100_u64, second_asset.clone())
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        stx.nexus.fees.fee_asset_id = second_definition.to_string();
+        stx.nexus.fees.fee_sink_account_id = second_sink.to_string();
         reward_distribution(lane, 1, &second_asset, &validator, 25)
-            .execute(&sink, &mut stx)
+            .execute(&second_sink, &mut stx)
             .unwrap();
         let mut assets = vec![first_asset, second_asset];
         assets.sort();
