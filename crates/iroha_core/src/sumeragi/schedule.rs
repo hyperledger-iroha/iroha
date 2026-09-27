@@ -78,7 +78,7 @@ pub const CHAIN_TRANSPORT_FRAME_LIMIT: u64 = 16 * 1024 * 1024 + FRAME_OVERHEAD a
 pub struct ChainParamsRecord {
     /// Target block time in milliseconds (`block_cadence_ms`).
     pub block_time_ms: u64,
-    /// Heartbeat interval of an idle chain in milliseconds.
+    /// Bounded payload rebuild retry interval in milliseconds.
     pub payload_retry_interval_ms: u64,
     /// Execution budget `E_max` in milliseconds.
     pub exec_budget_ms: u64,
@@ -86,8 +86,6 @@ pub struct ChainParamsRecord {
     pub apply_budget_ms: u64,
     /// Largest block payload in bytes.
     pub max_block_bytes: u32,
-    /// Fresh blocks from this view on are `EMPTY`.
-    pub empty_after_views: u64,
     /// Epoch length in heights.
     pub epoch_length_blocks: u64,
 }
@@ -102,7 +100,6 @@ impl ChainParamsRecord {
             exec_budget_ms: params.exec_budget_ms.get(),
             apply_budget_ms: params.apply_budget_ms.get(),
             max_block_bytes: params.max_block_bytes.get(),
-            empty_after_views: params.empty_after_views.get(),
             epoch_length_blocks: params.epoch_length_blocks.get(),
         }
     }
@@ -116,7 +113,6 @@ impl ChainParamsRecord {
             e_max: self.exec_budget_ms,
             a_max: self.apply_budget_ms,
             max_block_bytes: self.max_block_bytes,
-            empty_after_views: self.empty_after_views,
             epoch_length: self.epoch_length_blocks,
         }
     }
@@ -130,7 +126,6 @@ impl ChainParamsRecord {
             exec_budget_ms: params.e_max,
             apply_budget_ms: params.a_max,
             max_block_bytes: params.max_block_bytes,
-            empty_after_views: params.empty_after_views,
             epoch_length_blocks: params.epoch_length,
         }
     }
@@ -566,7 +561,6 @@ pub fn validate_parameter_change(
         SumeragiParameter::ExecBudgetMs(value) => candidate.exec_budget_ms = value,
         SumeragiParameter::ApplyBudgetMs(value) => candidate.apply_budget_ms = value,
         SumeragiParameter::MaxBlockBytes(value) => candidate.max_block_bytes = value,
-        SumeragiParameter::EmptyAfterViews(value) => candidate.empty_after_views = value,
         SumeragiParameter::EpochLengthBlocks(value) => candidate.epoch_length_blocks = value,
         SumeragiParameter::MaxClockDriftMs(_) | SumeragiParameter::DemotionWindow(_) => {}
     }
@@ -831,7 +825,7 @@ mod tests {
             Err(ScheduleError::Committee(CommitteeError::Empty))
         );
         let mut bad = entry;
-        bad.params.empty_after_views = 0;
+        bad.params.payload_retry_interval_ms = 0;
         assert!(matches!(bad.height_config(), Err(ScheduleError::Params(_))));
     }
 
@@ -1024,7 +1018,6 @@ mod tests {
             SumeragiParameter::ExecBudgetMs(NonZeroU64::new(3_000).unwrap()),
             SumeragiParameter::ApplyBudgetMs(NonZeroU64::new(500).unwrap()),
             SumeragiParameter::MaxBlockBytes(NonZeroU32::new(1 << 20).unwrap()),
-            SumeragiParameter::EmptyAfterViews(NonZeroU64::new(3).unwrap()),
             SumeragiParameter::EpochLengthBlocks(NonZeroU64::new(7_200).unwrap()),
         ] {
             validate_parameter_change(&current, &ok, false).expect("valid change");

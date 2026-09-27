@@ -21444,7 +21444,6 @@ pub mod isi {
                 Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
                 Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
                 Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
-                Sumeragi(sumeragi.empty_after_views) => SumeragiParameter::EmptyAfterViews,
                 Sumeragi(sumeragi.epoch_length_blocks) => SumeragiParameter::EpochLengthBlocks,
                 Sumeragi(sumeragi.demotion_window) => SumeragiParameter::DemotionWindow,
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,

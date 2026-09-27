@@ -99,12 +99,8 @@ fn build_at(
         .collect::<Vec<_>>();
     let nexus = state.nexus_snapshot();
     let view = state.view();
-    let confidential = compute_confidential_feature_digest(
-        view.world(),
-        view.zk(),
-        view.sccp_registry(),
-        height,
-    );
+    let confidential =
+        compute_confidential_feature_digest(view.world(), view.zk(), view.sccp_registry(), height);
     drop(view);
     let contexts = transactions
         .iter()
@@ -155,7 +151,9 @@ pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
         ));
     }
     if block.signatures().next().is_some() {
-        return Err(PayloadError::NotCanonical("carries a block signature".into()));
+        return Err(PayloadError::NotCanonical(
+            "carries a block signature".into(),
+        ));
     }
     let reencoded = block
         .encode_wire()
@@ -198,7 +196,8 @@ pub fn select(
             break;
         }
         // TODO(WP8a): QueuePlanSynced is deleted with the lane machinery.
-        if transaction.entrypoint().admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
+        if transaction.entrypoint().admission_intent()
+            == TransactionAdmissionIntent::QueuePlanSynced
         {
             continue;
         }
@@ -240,21 +239,67 @@ mod tests {
     #[test]
     fn canonical_wire_cannot_hide_a_zero_transaction_block() {
         let block = WireBlockBuilder::new(BlockHeader::new(
-            NonZeroU64::new(2).unwrap(), None, None, 1, 0,
-        )).build(BTreeSet::new());
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            1,
+            0,
+        ))
+        .build(BTreeSet::new());
         let bytes = block.encode_wire().expect("canonical empty proposal");
-        assert!(!bytes.is_empty(), "the transport payload itself is nonempty");
-        assert_eq!(decode(&bytes), Err(PayloadError::EmptyBlock));
+        assert!(
+            !bytes.is_empty(),
+            "the transport payload itself is nonempty"
+        );
+        assert!(matches!(decode(&bytes), Err(PayloadError::EmptyBlock)));
         assert_eq!(encode(&block), Err(PayloadError::EmptyBlock));
+    }
+
+    #[test]
+    fn assembly_refuses_empty_work_before_reading_state() {
+        let state = State::new_for_testing(
+            crate::state::World::new(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        );
+        let parent = WireBlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(1).unwrap(),
+            None,
+            None,
+            1,
+            0,
+        ))
+        .build(BTreeSet::new());
+        assert!(matches!(
+            assemble(
+                &state,
+                Assembly {
+                    parent: &parent,
+                    view: 10,
+                    cadence: Duration::from_millis(100),
+                },
+                &[]
+            ),
+            Err(PayloadError::EmptyBlock)
+        ));
+        assert_eq!(state.view().height(), 0);
     }
 
     #[test]
     fn canonical_nonempty_proposal_roundtrips_without_synthesized_work() {
         let mut builder = WireBlockBuilder::new(BlockHeader::new(
-            NonZeroU64::new(2).unwrap(), None, None, 1, 0,
+            NonZeroU64::new(2).unwrap(),
+            None,
+            None,
+            1,
+            0,
         ));
         let transaction = TransactionBuilder::new(
-            iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"payload-test-network"))),
+            iroha_data_model::NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+                    b"payload-test-network",
+                )),
+            ),
             ALICE_ID.clone(),
             FeePaymentIntent::authority(Vec::new(), None),
         )

@@ -32,7 +32,8 @@ use super::{
     bodies::{BodyLimits, FileBodyStore},
     crypto::{BlsCrypto, KeyPairSigner, core_key, iroha_key},
     driver::{
-        Driver, DriverConfig, DriverHandle, DriverStart, RunningDriver, SharedCrypto, assemble_init,
+        Driver, DriverConfig, DriverHandle, DriverStart, RunningDriver, SharedCrypto,
+        assemble_init,
         traits::{BlockStore, Net, Observer, SystemClock},
     },
     executor::{ExecutorContext, StateExecutor},
@@ -514,7 +515,10 @@ impl Prepared {
                 .consensus_schedule()
                 .init_configs(GENESIS_HEIGHT)
                 .map_err(|error| NodeError::Input(error.to_string()))?;
-            (configs, view.world().parameters().sumeragi().demotion_window.get())
+            (
+                configs,
+                view.world().parameters().sumeragi().demotion_window.get(),
+            )
         };
         let n = configs
             .first()
@@ -593,7 +597,9 @@ impl Prepared {
             Ok(thread) => thread,
             Err(error) => {
                 node.driver.shutdown();
-                return Err(NodeError::Driver(format!("sumeragi ingress thread: {error}")));
+                return Err(NodeError::Driver(format!(
+                    "sumeragi ingress thread: {error}"
+                )));
             }
         };
         Ok(NetworkedNode {
@@ -626,7 +632,6 @@ impl NetworkedNode {
         drop(self.ingress_thread);
     }
 }
-
 
 /// Reports of the instance in the node's log. Evidence is logged for the operator; the
 /// status endpoint reads [`super::driver::DriverHandle::status`].
@@ -678,7 +683,9 @@ fn local_params(n: usize, overrides: &SumeragiLocalOverrides) -> LocalParams {
         status_keepalive: overrides
             .status_keepalive
             .map_or(defaults.status_keepalive, millis),
-        build_timeout: overrides.build_timeout.map_or(defaults.build_timeout, millis),
+        build_timeout: overrides
+            .build_timeout
+            .map_or(defaults.build_timeout, millis),
         fetch_retry: overrides.fetch_retry.map_or(defaults.fetch_retry, millis),
         sync_batch: overrides.sync_batch.unwrap_or(defaults.sync_batch),
         sync_retry: overrides.sync_retry.map_or(defaults.sync_retry, millis),
@@ -712,6 +719,7 @@ fn startup_nonce() -> u64 {
 mod tests {
     use std::{collections::HashMap, num::NonZeroU64, time::Duration};
 
+    use iroha_crypto::HashOf;
     use iroha_crypto::{Algorithm, bls_normal_pop_prove};
     use iroha_data_model::{
         NetworkId,
@@ -719,27 +727,23 @@ mod tests {
         parameter::{Parameter, system::SumeragiParameter},
         prelude::*,
     };
-    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
-    use iroha_model_base::{chain::ChainId, peer::PeerId};
-    use iroha_primitives::time::TimeSource;
     use iroha_data_model::{
         isi::Log,
         transaction::{FeePaymentIntent, TransactionEntrypoint},
     };
-    use iroha_crypto::HashOf;
+    use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry};
+    use iroha_model_base::{chain::ChainId, peer::PeerId};
+    use iroha_primitives::time::TimeSource;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
     };
 
     use super::*;
-    use iroha_sumeragi::types::PublicKey as CoreKey;
     use crate::{
-        governance::manifest::LaneManifestRegistry,
-        query::store::LiveQueryStore,
-        state::World,
-        sumeragi::driver::traits::Frame,
-        tx::AcceptedTransaction,
+        governance::manifest::LaneManifestRegistry, query::store::LiveQueryStore, state::World,
+        sumeragi::driver::traits::Frame, tx::AcceptedTransaction,
     };
+    use iroha_sumeragi::types::PublicKey as CoreKey;
 
     /// The in-memory transport: every node's handle, filled once the nodes started (frames
     /// sent before are dropped, and the core rebroadcasts).
@@ -790,8 +794,7 @@ mod tests {
         let chain_id = ChainId::from("sumeragi-node-test");
         let mut keys = (0..validators)
             .map(|index| {
-                KeyPair::try_from_seed(vec![0xC0 + index; 32], Algorithm::BlsNormal)
-                    .expect("key")
+                KeyPair::try_from_seed(vec![0xC0 + index; 32], Algorithm::BlsNormal).expect("key")
             })
             .collect::<Vec<_>>();
         keys.sort_by_key(|key| PeerId::new(key.public_key().clone()));
@@ -813,9 +816,11 @@ mod tests {
             .collect::<Vec<_>>();
         // TODO(WP9): the genesis builder drops its v2 context requirement.
         let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-            .append_parameter(Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
-                NonZeroU64::new(payload_retry_interval_ms).expect("non-zero"),
-            )))
+            .append_parameter(Parameter::Sumeragi(
+                SumeragiParameter::PayloadRetryIntervalMs(
+                    NonZeroU64::new(payload_retry_interval_ms).expect("non-zero"),
+                ),
+            ))
             .with_block_cadence_ms(NonZeroU64::new(100).expect("non-zero"))
             .set_topology(entries)
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
@@ -994,7 +999,11 @@ mod tests {
         let baseline = committed_heights(validators);
         let started = std::time::Instant::now();
         while started.elapsed() < duration {
-            assert_eq!(committed_heights(validators), baseline, "idle chain advanced");
+            assert_eq!(
+                committed_heights(validators),
+                baseline,
+                "idle chain advanced"
+            );
             for validator in validators {
                 assert!(validator.node.driver.handle().halted().is_none());
                 assert_eq!(validator.queue.queued_len(), 0);
@@ -1005,7 +1014,11 @@ mod tests {
 
     /// Submit a transaction to every validator's queue (the transaction gossip's job in the
     /// node) and tell the drivers.
-    fn submit(chain: &Chain, validators: &[Validator], message: &str) -> HashOf<TransactionEntrypoint> {
+    fn submit(
+        chain: &Chain,
+        validators: &[Validator],
+        message: &str,
+    ) -> HashOf<TransactionEntrypoint> {
         let network_id = NetworkId::from_genesis_hash(chain.genesis.hash());
         let signed = TransactionBuilder::new(
             network_id,
@@ -1034,9 +1047,18 @@ mod tests {
     }
 
     fn committed_everywhere(validators: &[Validator], hash: HashOf<TransactionEntrypoint>) -> bool {
-        validators
-            .iter()
-            .all(|validator| validator.state.has_committed_entrypoint(hash))
+        validators.iter().all(|validator| {
+            validator.state.has_committed_entrypoint(hash)
+                && validator
+                    .node
+                    .driver
+                    .handle()
+                    .status()
+                    .is_some_and(|status| {
+                        status.applied_height
+                            == u64::try_from(validator.state.view().height()).unwrap()
+                    })
+        })
     }
 
     /// Every validator stored the same blocks up to `height`, each with its commit certificate
@@ -1051,7 +1073,10 @@ mod tests {
             for block in &blocks {
                 assert!(block.commit_certificate().is_some(), "height {height}");
                 assert_eq!(block.hash(), blocks[0].hash(), "height {height}");
-                assert!(block.network_entrypoint_count() > 0, "empty block at {height}");
+                assert!(
+                    block.network_entrypoint_count() > 0,
+                    "empty block at {height}"
+                );
             }
         }
     }
@@ -1064,9 +1089,12 @@ mod tests {
         assert_eq!(committed_heights(&validators), vec![GENESIS_HEIGHT; 4]);
         assert_idle_height_unchanged(&validators, Duration::from_millis(750));
         let hash = submit(&chain, &validators, "after idle");
-        wait_until(&validators, Duration::from_secs(30), "real work after idle", || {
-            committed_everywhere(&validators, hash)
-        });
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "real work after idle",
+            || committed_everywhere(&validators, hash),
+        );
         assert_idle_height_unchanged(&validators, Duration::from_millis(750));
         shutdown(validators);
         let committed = disks
@@ -1080,9 +1108,12 @@ mod tests {
         let validators = start_all(&chain, &disks, false);
         assert_idle_height_unchanged(&validators, Duration::from_millis(750));
         let hash = submit(&chain, &validators, "after idle restart");
-        wait_until(&validators, Duration::from_secs(30), "real work after restart", || {
-            committed_everywhere(&validators, hash)
-        });
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "real work after restart",
+            || committed_everywhere(&validators, hash),
+        );
         assert_eq!(committed_heights(&validators), vec![3; 4]);
         shutdown(validators);
         assert_same_certified_blocks(&disks, 3);
@@ -1096,9 +1127,12 @@ mod tests {
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
         let hash = submit(&chain, &validators, "certified replay input");
-        wait_until(&validators, Duration::from_secs(30), "replay input committed", || {
-            committed_everywhere(&validators, hash)
-        });
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "replay input committed",
+            || committed_everywhere(&validators, hash),
+        );
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
@@ -1150,18 +1184,26 @@ mod tests {
         let validators = start_all(&chain, &disks, true);
         for index in 0..3 {
             let hash = submit(&chain, &validators, &format!("before restart {index}"));
-            wait_until(&validators, Duration::from_secs(30), "transaction committed", || {
-                committed_everywhere(&validators, hash)
-            });
+            wait_until(
+                &validators,
+                Duration::from_secs(30),
+                "transaction committed",
+                || committed_everywhere(&validators, hash),
+            );
         }
         let heights = committed_heights(&validators);
         assert_eq!(heights, vec![4; 4]);
         // Applied transactions leave every queue.
-        wait_until(&validators, Duration::from_secs(10), "queues drained", || {
-            validators
-                .iter()
-                .all(|validator| validator.queue.queued_len() == 0)
-        });
+        wait_until(
+            &validators,
+            Duration::from_secs(10),
+            "queues drained",
+            || {
+                validators
+                    .iter()
+                    .all(|validator| validator.queue.queued_len() == 0)
+            },
+        );
         shutdown(validators);
         let committed = disks
             .iter()
@@ -1171,9 +1213,12 @@ mod tests {
         assert_same_certified_blocks(&disks, committed);
         let validators = start_all(&chain, &disks, false);
         let hash = submit(&chain, &validators, "after restart");
-        wait_until(&validators, Duration::from_secs(30), "transaction committed", || {
-            committed_everywhere(&validators, hash)
-        });
+        wait_until(
+            &validators,
+            Duration::from_secs(30),
+            "transaction committed",
+            || committed_everywhere(&validators, hash),
+        );
         shutdown(validators);
         assert_same_certified_blocks(&disks, 5);
     }

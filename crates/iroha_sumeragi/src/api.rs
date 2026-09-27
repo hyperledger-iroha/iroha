@@ -103,8 +103,8 @@ pub enum ConfigError {
     ZeroInterval(&'static str),
     /// Chain parameters: `block_time > payload_retry_interval`.
     BlockTimeAbovePayloadRetry,
-    /// Chain parameters: `empty_after_views < 1`.
-    EmptyAfterViewsZero,
+    /// Chain parameters: payload rebuild polling must not busy-loop.
+    PayloadRetryIntervalZero,
     /// `Init.demotion_window < 1` (`W` is a genesis constant, §9.4).
     DemotionWindowZero,
     /// Chain parameters: `max_block_bytes` above the transport frame limit.

@@ -1112,7 +1112,7 @@ mod tests {
             Defect::OriginView,
             Defect::Proposer,
             Defect::SkippedLeaders,
-            Defect::NonEmptyPayload,
+            Defect::EmptyPayload,
         ];
         for defect in defects {
             round_trip(&Evidence::InvalidProposal {

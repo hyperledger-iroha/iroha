@@ -477,10 +477,6 @@ mod tests {
                 ..params
             },
             ChainParams {
-                empty_after_views: params.empty_after_views + 1,
-                ..params
-            },
-            ChainParams {
                 epoch_length: params.epoch_length + 1,
                 ..params
             },

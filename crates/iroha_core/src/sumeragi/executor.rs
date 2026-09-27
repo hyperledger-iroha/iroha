@@ -30,8 +30,7 @@ use iroha_data_model::{
     block::{BlockHeader as IrohaHeader, CommitCertificate, SignedBlock},
     events::EventBox,
     parameter::system::ConsensusMode,
-
-    transaction::{TransactionEntrypoint, TransactionAdmissionIntent},
+    transaction::{TransactionAdmissionIntent, TransactionEntrypoint},
 };
 use iroha_model_base::peer::PeerId;
 use iroha_sumeragi::{
@@ -174,7 +173,9 @@ impl Executor for StateExecutor {
     }
 
     fn reject(&mut self, height: u64, view: u64, block_hash: &Hash32) {
-        let _ = self.requests.send(Request::Reject(height, view, *block_hash));
+        let _ = self
+            .requests
+            .send(Request::Reject(height, view, *block_hash));
     }
 }
 
@@ -308,10 +309,16 @@ impl Worker<'_> {
         };
         let cadence = Duration::from_millis(scheduled.params.block_time_ms);
         if !proposal_matches_header(iroha_block.header(), block) {
-            return invalid(height, &"the payload's height or view differs from the header");
+            return invalid(
+                height,
+                &"the payload's height or view differs from the header",
+            );
         }
         if block.header.attest != attestation_required(&iroha_block) {
-            return invalid(height, &"the attestation flag differs from the payload's rule");
+            return invalid(
+                height,
+                &"the attestation flag differs from the payload's rule",
+            );
         }
         let topology = Topology::new(scheduled.committee.clone());
         let validated = catch_unwind(AssertUnwindSafe(|| {
@@ -342,11 +349,11 @@ impl Worker<'_> {
         let Some(witness) = overlay.take_exec_witness() else {
             return ExecOutcome::Failed("the execution witness was not captured".into());
         };
-        let (commitment, preimage, result) =
-            match execution_result(&witness, valid.as_ref(), &next) {
-                Ok(computed) => computed,
-                Err(error) => return invalid(height, &error),
-            };
+        let (commitment, preimage, result) = match execution_result(&witness, valid.as_ref(), &next)
+        {
+            Ok(computed) => computed,
+            Err(error) => return invalid(height, &error),
+        };
         if top_ups_without_flag(&commitment, block.header.attest) {
             return invalid(height, &"executed top-ups without the attestation flag");
         }
@@ -622,12 +629,15 @@ pub fn attestation_required(block: &SignedBlock) -> bool {
             return false;
         };
         tx.admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
-            && tx.instructions().explicit_instructions().any(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
-                    .is_some()
-            })
+            && tx
+                .instructions()
+                .explicit_instructions()
+                .any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1>()
+                        .is_some()
+                })
     })
 }
 
@@ -670,6 +680,63 @@ fn local_failure(error: &BlockValidationError) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_and_encoded_zero_transaction_payloads_are_invalid_without_state_work() {
+        use iroha_sumeragi::message::BlockHeader;
+        use std::{collections::BTreeSet, num::NonZeroU64};
+
+        let state = Arc::new(State::new_for_testing(
+            crate::state::World::new(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+        ));
+        let parent_hash = Hash32([1; 32]);
+        let mut executor = StateExecutor::spawn(ExecutorContext {
+            state: Arc::clone(&state),
+            queue: None,
+            staging: Staging::new(),
+            events: tokio::sync::broadcast::channel(16).0,
+            genesis_account: iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            consensus_mode: ConsensusMode::Permissioned,
+            applied: (1, parent_hash),
+            crypto: None,
+        })
+        .expect("state executor");
+        let zero_transaction_wire = iroha_data_model::block::builder::BlockBuilder::new(
+            IrohaHeader::new(NonZeroU64::new(2).unwrap(), None, None, 1, 0),
+        )
+        .build(BTreeSet::new())
+        .encode_wire()
+        .unwrap();
+        for (index, payload) in [Vec::new(), zero_transaction_wire].into_iter().enumerate() {
+            let block = Block {
+                header: BlockHeader {
+                    instance: Hash32([2; 32]),
+                    height: 2,
+                    origin_view: 0,
+                    parent_hash,
+                    parent_result: Hash32([3; 32]),
+                    payload_hash: Hash32([4; 32]),
+                    payload_len: u32::try_from(payload.len()).unwrap(),
+                    proposer: 0,
+                    skipped_leaders: Vec::new(),
+                    attest: false,
+                },
+                payload,
+            };
+            let hash = Hash32([u8::try_from(index + 5).unwrap(); 32]);
+            assert!(matches!(
+                executor.execute(&block, &hash),
+                Some(ExecOutcome::Invalid)
+            ));
+            assert_eq!(
+                state.view().height(),
+                0,
+                "no synthesized block or overlay committed"
+            );
+        }
+    }
 
     /// Local conditions are retried (`Failed`); a property of the block is `Invalid`.
     #[test]

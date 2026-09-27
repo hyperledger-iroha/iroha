@@ -170,8 +170,8 @@ pub fn validate_chain(chain: &ChainParams, transport_limit: u64) -> Result<(), C
     if chain.block_time > chain.payload_retry_interval {
         return Err(ConfigError::BlockTimeAbovePayloadRetry);
     }
-    if chain.empty_after_views < 1 {
-        return Err(ConfigError::EmptyAfterViewsZero);
+    if chain.payload_retry_interval == 0 {
+        return Err(ConfigError::PayloadRetryIntervalZero);
     }
     if u64::from(chain.max_block_bytes) + u64::from(FRAME_OVERHEAD) > transport_limit {
         return Err(ConfigError::MaxBlockBytesAboveTransport);
@@ -921,12 +921,13 @@ mod tests {
         assert_eq!(
             validate_chain(
                 &ChainParams {
-                    empty_after_views: 0,
+                    payload_retry_interval: 0,
+                    block_time: 0,
                     ..chain
                 },
                 limit
             ),
-            Err(ConfigError::EmptyAfterViewsZero)
+            Err(ConfigError::PayloadRetryIntervalZero)
         );
     }
 

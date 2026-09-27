@@ -576,7 +576,6 @@ mod tests {
         assert_eq!(params.block_time, 1_000);
         assert_eq!(params.payload_retry_interval, 5_000);
         assert_eq!(params.max_block_bytes, 4 << 20);
-        assert_eq!(params.empty_after_views, 2);
         assert_eq!((params.e_max, params.a_max), (4_000, 1_000));
     }
 
