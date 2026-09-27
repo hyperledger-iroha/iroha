@@ -108,7 +108,7 @@ fn production_equivocation_bridge_rejects_invalid_or_unanchored_evidence() {
 
     let (mut foreign_context_service, foreign_keys) = fixture();
     foreign_context_service.context.network_id =
-        crate::sumeragi::synthetic_network_id("foreign-evidence-chain");
+        crate::unit_test_support::synthetic_network_id("foreign-evidence-chain");
     let foreign_evidence = exact_vote_equivocation(&foreign_context_service, &foreign_keys);
     assert!(
         foreign_context_service

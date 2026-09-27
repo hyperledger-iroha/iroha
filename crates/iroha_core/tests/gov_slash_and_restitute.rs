@@ -310,7 +310,6 @@ fn prepare_retained_governance_candidate<'state>(
         state.sumeragi_block_cadence(),
         crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
         state,
-        &mut None,
     )
     .unwrap_or_else(|(_, error)| panic!("prepare original governance candidate: {error}"))
 }

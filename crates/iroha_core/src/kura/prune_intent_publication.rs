@@ -1,3 +1,37 @@
+// Serializes destructive canonical-chain transitions process-wide. A poisoned
+// gate means a transition unwound mid-mutation, so it fails closed.
+static CONSENSUS_TRANSITION_GATE: std::sync::OnceLock<std::sync::Mutex<()>> =
+    std::sync::OnceLock::new();
+/// Guard serializing destructive canonical-chain transitions.
+pub(crate) struct ConsensusTransitionGuard {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+/// Serialize a Kura canonical-chain mutation with other canonical-chain transitions.
+pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
+    let guard = CONSENSUS_TRANSITION_GATE
+        .get_or_init(|| std::sync::Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|_| fail_closed_after_consensus_transition_poison());
+    ConsensusTransitionGuard { _guard: guard }
+}
+/// Clear poison left by an intentionally caught canonical-transition panic.
+///
+/// Production treats transition-gate poison as process-fatal. Kura fault
+/// injection tests emulate a crash with `catch_unwind`, so they must explicitly
+/// reset only this process-global test latch before exercising restart recovery.
+#[cfg(test)]
+pub(crate) fn clear_consensus_transition_poison_for_tests() {
+    if let Some(gate) = CONSENSUS_TRANSITION_GATE.get() {
+        gate.clear_poison();
+    }
+}
+fn fail_closed_after_consensus_transition_poison() -> ! {
+    iroha_logger::error!("consensus transition gate was poisoned; refusing canonical mutation");
+    #[cfg(not(test))]
+    std::process::abort();
+    #[cfg(test)]
+    panic!("consensus transition gate poisoned; refusing canonical mutation");
+}
 // No current root-level publication owns the generic atomic-temporary
 // namespace. Rejecting it here prevents an unbound artifact from evading exact
 // prune-intent recovery and disk accounting.

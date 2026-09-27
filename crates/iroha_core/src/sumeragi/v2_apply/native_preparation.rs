@@ -138,7 +138,6 @@ impl V2ApplyService {
                 .iter()
                 .map(|entry| entry.validator.clone()),
         );
-        let mut voting_block = None;
         #[cfg(test)]
         self.test_failures
             .candidate_executions
@@ -154,7 +153,6 @@ impl V2ApplyService {
                     context.context(),
                 ),
                 self.state.as_ref(),
-                &mut voting_block,
             )
             .map_err(|(failed, error)| {
                 self.classify_validation_failure(None, failed.as_ref(), error.as_ref())

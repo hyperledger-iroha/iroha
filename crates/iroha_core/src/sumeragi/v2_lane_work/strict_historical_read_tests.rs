@@ -38,7 +38,7 @@ fn remote_only_carrier_validates_retained_network_and_state_before_waiting() {
         if foreign_network {
             let mut context = finality.height_context.clone();
             context.network_id =
-                crate::sumeragi::synthetic_network_id("foreign-remote-only-carrier");
+                crate::unit_test_support::synthetic_network_id("foreign-remote-only-carrier");
             (
                 context.kagemusha_mint_finality_authorization,
                 context.kagemusha_mint_finality_authority,

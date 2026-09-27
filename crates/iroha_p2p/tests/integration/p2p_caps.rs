@@ -39,19 +39,6 @@ impl ClassifyTopic for BigMsg {
         // replay has no stateful effect in this synthetic receiver.
         ProgressReconstruction::Retransmit
     }
-    // This explicit synthetic payload has no Availability or sidecar variants.
-    // A positive bound for each empty variant set funds mandatory geometry;
-    // no production payload owner uses these fixture-only declarations.
-    fn availability_frame_maximum(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<usize, norito::core::Error> {
-        Ok(1)
-    }
-    fn recovery_frame_maxima(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<[usize; 2], norito::core::Error> {
-        Ok([1, 1])
-    }
 
     fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
         use norito::core;

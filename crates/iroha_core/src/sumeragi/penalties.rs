@@ -122,7 +122,7 @@ impl<'a> PenaltyApplier<'a> {
             ));
         }
         let world = view.world();
-        let slashing_delay = crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(world)
+        let slashing_delay = crate::sumeragi::v2_npos::resolve_npos_slashing_delay_blocks_from_world(world)
             .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
         let due = |record: &EvidenceRecord| {
             !record.penalty_status.is_terminal()

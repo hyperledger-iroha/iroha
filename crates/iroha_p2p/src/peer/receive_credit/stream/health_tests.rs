@@ -14,7 +14,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let pool = pool(6);
+        let pool = pool(3);
         let local = peer(80);
         let remote = peer(81);
         let cipher = crypto();

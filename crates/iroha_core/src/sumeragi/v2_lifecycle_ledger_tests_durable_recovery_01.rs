@@ -90,7 +90,7 @@ impl RecoveryFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let network_id = crate::sumeragi::synthetic_network_id(network);
+        let network_id = crate::unit_test_support::synthetic_network_id(network);
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 network_id, 100, &roster,
@@ -3415,7 +3415,7 @@ fn complete_tip_post_settlement_reauthentication_refreezes_exact_successor() {
 
 #[test]
 fn complete_tip_nonempty_successor_consumes_only_the_exact_owner_open_witness() {
-    let result = crate::sumeragi::sumeragi_thread_builder("complete-tip-nonempty-owner-open")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("complete-tip-nonempty-owner-open")
         .spawn(complete_tip_nonempty_successor_owner_open_fixture)
         .expect("spawn nonempty owner-open recovery with the Sumeragi stack budget")
         .join();
@@ -4021,7 +4021,7 @@ fn complete_tip_terminal_apply_store_join_is_not_an_all_row_retirement() {
 
 #[test]
 fn complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain() {
-    let result = crate::sumeragi::sumeragi_thread_builder("complete-tip-decision-owner-open")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("complete-tip-decision-owner-open")
         .spawn(|| {
             let _guard = crate::status::rbc_status_test_guard();
             for validated_body in [false, true] {

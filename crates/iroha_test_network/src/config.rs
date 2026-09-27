@@ -1253,16 +1253,14 @@ pub(crate) fn preexecute_genesis_with_runtime_config(
     }
     install_preexec_lane_manifests(&state, runtime_config)?;
     let core_topology = CoreTopology::new(topology.to_vec());
-    let mut voting_block = None;
     let time_source = TimeSource::new_system();
     let consensus_mode = signed_genesis_consensus_mode(block)?;
-    let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let validation = ValidBlock::validate_signed_genesis(
         block.0.clone(),
         &core_topology,
         &effective_genesis_account,
         &time_source,
         &state,
-        &mut voting_block,
         consensus_mode,
     )
     .unpack(|_| {});

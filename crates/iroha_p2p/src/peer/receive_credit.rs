@@ -10,8 +10,6 @@
 //! with the native retention, malformed-frame and real peer lifecycle controls.
 
 pub(super) mod negotiation;
-#[cfg(any(test, feature = "test-fixtures"))]
-pub mod progress_fixture;
 pub(super) mod record;
 pub(super) mod stream;
 #[cfg(test)]
@@ -128,20 +126,16 @@ impl Pool {
                 return Err(Error::FrameTooLarge);
             }
         }
-        // Fund every required protected-class maximum completely first. All
-        // other high classes retain a positive minimal private rank. Distribute
-        // only the checked residual; a large Safety declaration cannot silently
-        // consume another mandatory recovery minimum.
+        // Fund the protected Safety maximum completely first. All other high
+        // classes retain a positive minimal private rank. Distribute only the
+        // checked residual.
         let available = frames
             .progress_reserve_bytes_per_peer
             .checked_sub(CONTROL_BYTES)
             .ok_or(Error::Format)?;
         let mut required = 0usize;
         for class in Class::HIGH {
-            let payload = if matches!(
-                class,
-                Class::Safety | Class::Availability | Class::RecoveryControl | Class::RecoveryData
-            ) {
+            let payload = if class == Class::Safety {
                 max_plaintext[class.index()]
             } else {
                 1
@@ -161,26 +155,15 @@ impl Pool {
                 .checked_add(partition(residual, i, Class::HIGH.len()))
                 .ok_or(Error::FrameTooLarge)?;
         }
-        // The required safety/recovery semantic maximum must fit the private
-        // corridor. A broad Topic cap is not a semantic frame-size witness.
-        // In particular, callers must derive the canonical 64 KiB sidecar chunk
-        // envelope; accepting an ordinary ~17 MiB chunk cap here would lie about
-        // adversarial same-class progress.
-        for class in [
-            Class::Safety,
-            Class::Availability,
-            Class::RecoveryControl,
-            Class::RecoveryData,
-        ] {
-            let maximum = (fallback[class.index()] / 3)
-                .checked_sub(ENVELOPE_BYTES)
-                .ok_or(Error::FrameTooLarge)?;
-            if max_plaintext[class.index()] > maximum {
-                return Err(Error::FrameTooLarge);
-            }
+        // The Safety maximum must fit its private corridor.
+        let safety_private_maximum = (fallback[Class::Safety.index()] / 3)
+            .checked_sub(ENVELOPE_BYTES)
+            .ok_or(Error::FrameTooLarge)?;
+        if max_plaintext[Class::Safety.index()] > safety_private_maximum {
+            return Err(Error::FrameTooLarge);
         }
         // The existing dispatch safety reserve is part of its total, not extra
-        // capacity. Six ordinary-high shares must fit its ordinary ceiling.
+        // capacity. The ordinary-high shares must fit its ordinary ceiling.
         let ordinary = byte_caps[1..Class::HIGH.len()]
             .iter()
             .try_fold(0usize, |a, b| a.checked_add(*b))
@@ -472,8 +455,8 @@ impl Ledger {
     }
     fn next_grant(&mut self) -> Result<Option<Header>, Error> {
         // Every class has one bounded pending request and one round-robin rank.
-        // Blocked ordinary requests do not block recovery, and a continuous
-        // recovery source cannot skip a ready ordinary request indefinitely.
+        // A blocked request of one class does not block another, and a continuous
+        // source of one class cannot skip a ready request of another indefinitely.
         for offset in 0..Class::SCHEDULE.len() {
             let rank = (self.cursor + offset) % Class::SCHEDULE.len();
             let i = Class::SCHEDULE[rank].index();

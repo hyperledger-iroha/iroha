@@ -1501,7 +1501,7 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
             let generation = fixture.state.state_view_generation();
             std::thread::scope(|scope| {
                 let release = ReleaseSuccessfulApply(Arc::clone(&pause));
-                let worker = crate::sumeragi::sumeragi_thread_builder("successful-apply-frontier")
+                let worker = crate::sumeragi::threads::sumeragi_thread_builder("successful-apply-frontier")
                     .spawn_scoped(scope, || {
                         let _finished = NotifySuccessfulApplyExit(Arc::clone(&pause));
                         service

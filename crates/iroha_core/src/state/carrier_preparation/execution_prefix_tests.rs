@@ -21,7 +21,6 @@ fn validated<'state>(
         state.sumeragi_block_cadence(),
         SumeragiV2ValidationContext::from_height_context(context),
         state,
-        &mut None,
     )
     .unpack(|_| {})
     .unwrap_or_else(|(_, error)| panic!("real candidate execution: {error}"))

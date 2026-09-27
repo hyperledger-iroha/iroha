@@ -50,8 +50,8 @@ async fn crossed_authenticated_candidates_complete_same_geometry_after_exact_rea
     use iroha_crypto::encryption::ChaCha20Poly1305;
     let a = peer(61);
     let b = peer(62);
-    let pa = pool(6);
-    let pb = pool(6);
+    let pa = pool(3);
+    let pb = pool(3);
     let mut ca = Owner::default();
     let mut cb = Owner::default();
     let first = Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[61; 32]).unwrap();
@@ -149,17 +149,17 @@ async fn replacement_reuses_peer_partition_while_old_delivered_guard_keeps_exact
     };
     use futures::FutureExt;
     let peer = peer(63);
-    let pool = pool(6);
+    let pool = pool(3);
     let mut owner = Owner::default();
     let (candidate, mut permission, cancelled) = authenticated_candidate(&peer, 1, [1; 32]);
     assert!(owner.admit(candidate));
     let permit = permission.try_recv().unwrap();
     let source = pool.bind(peer.id()).unwrap();
     let partition = Arc::clone(&source.partition);
-    assert_eq!(pool.counts[Class::Availability.index()], 1);
-    let delivered = source.reserve(Class::Availability, 200).unwrap().delivered(
+    assert_eq!(pool.counts[Class::Payload.index()], 1);
+    let delivered = source.reserve(Class::Payload, 200).unwrap().delivered(
         peer.clone(),
-        Fixture::Availability(1),
+        Fixture::Payload(1),
         1,
     );
     let (_, _, _, _, _, retained) = delivered.into_parts_with_reply_route();
@@ -181,9 +181,9 @@ async fn replacement_reuses_peer_partition_while_old_delivered_guard_keeps_exact
         "same strong PeerId registry owner"
     );
     assert!(
-        successor.reserve(Class::Availability, 200).is_none(),
+        successor.reserve(Class::Payload, 200).is_none(),
         "old delivered count is not replenished"
     );
     drop(retained);
-    assert!(successor.reserve(Class::Availability, 200).is_some());
+    assert!(successor.reserve(Class::Payload, 200).is_some());
 }

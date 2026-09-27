@@ -1440,11 +1440,6 @@ fn register_public_lane_validator(
             state_transaction.block_height(),
             "register_public_lane_validator",
         )?;
-        ensure_no_pending_evidence_for_validator(
-            state_transaction,
-            existing,
-            "register_public_lane_validator",
-        )?;
         if !existing.total_stake.is_zero()
             || !existing.self_stake.is_zero()
             || state_transaction.world.public_lane_stake_shares.iter().any(
@@ -1744,11 +1739,6 @@ impl Execute for RebindPublicLaneValidatorPeer {
                 "validator peer binding is already frozen for its activation height".into(),
             ));
         }
-        ensure_no_pending_evidence_for_validator(
-            state_transaction,
-            &record,
-            "rebind_public_lane_validator_peer",
-        )?;
         match record.status {
             PublicLaneValidatorStatus::PendingActivation(_) => {}
             PublicLaneValidatorStatus::Active
@@ -1852,11 +1842,6 @@ impl Execute for ExitPublicLaneValidator {
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
         ensure_public_lane_validator_record_matches_key(&validator_key, &record)?;
-        ensure_no_pending_evidence_for_validator(
-            state_transaction,
-            &record,
-            "exit_public_lane_validator",
-        )?;
         let deactivation_height = scheduled_validator_deactivation_height(state_transaction)?;
         #[cfg(feature = "telemetry")]
         let previous_status = record.status.clone();
@@ -1947,11 +1932,6 @@ impl Execute for BondPublicLaneStake {
                 "validator status does not accept new stake".into(),
             ));
         }
-        ensure_no_pending_evidence_for_validator(
-            state_transaction,
-            &validator_record,
-            "bond_public_lane_stake",
-        )?;
         let amount = self.amount.clone();
         let available = state_transaction
             .world
@@ -2109,11 +2089,6 @@ impl Execute for SchedulePublicLaneUnbond {
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
         ensure_public_lane_validator_record_matches_key(&validator_key, &validator_snapshot)?;
-        ensure_no_pending_evidence_for_validator(
-            state_transaction,
-            &validator_snapshot,
-            "schedule_public_lane_unbond",
-        )?;
         let slashable_through_height = scheduled_validator_deactivation_height(state_transaction)?
             .checked_sub(1)
             .ok_or_else(|| {
@@ -2236,11 +2211,6 @@ impl Execute for FinalizePublicLaneUnbond {
             .cloned()
             .ok_or_else(|| Error::InvariantViolation("validator not registered".into()))?;
         ensure_public_lane_validator_record_matches_key(&validator_key, &validator_record)?;
-        ensure_no_pending_evidence_for_validator(
-            state_transaction,
-            &validator_record,
-            "finalize_public_lane_unbond",
-        )?;
         let share_key = stake_key(self.lane_id, &self.validator, &self.staker);
         let mut share = state_transaction
             .world
@@ -2520,10 +2490,6 @@ fn prune_zero_custody_exited_validators(state_transaction: &mut StateTransaction
                     && record.self_stake.is_zero()
                     && !state_transaction.world.public_lane_stake_shares.iter().any(
                         |((lane_id, validator, _), _)| *lane_id == key.0 && validator == &key.1,
-                    )
-                    && !crate::sumeragi::v2_evidence::has_pending_v2_evidence_for_validator_tenure(
-                        &state_transaction.world,
-                        record,
                     )
             })
             .map(|(key, _)| key.clone())
@@ -3214,24 +3180,6 @@ fn ensure_validator_peer_registered(
     {
         return Err(Error::InvariantViolation(
             "global validator peer must be present in the commit topology; a prepared epoch key transition is required for a fresh peer".into(),
-        ));
-    }
-    Ok(())
-}
-fn ensure_no_pending_evidence_for_validator(
-    state_transaction: &StateTransaction<'_, '_>,
-    record: &PublicLaneValidatorRecord,
-    operation: &str,
-) -> Result<(), Error> {
-    if crate::sumeragi::v2_evidence::has_pending_v2_evidence_for_validator_tenure(
-        &state_transaction.world,
-        record,
-    ) {
-        return Err(Error::InvariantViolation(
-            format!(
-                "{operation} rejected while unresolved consensus evidence liens this validator"
-            )
-            .into(),
         ));
     }
     Ok(())

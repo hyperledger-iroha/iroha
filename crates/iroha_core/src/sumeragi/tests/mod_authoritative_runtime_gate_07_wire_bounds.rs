@@ -89,7 +89,7 @@ fn fair_v2_ingress_minimal_layout_enforces_exact_block_sync_frame_boundary() {
         "minimal DA geometry must retain the layout-neutral 64-KiB sidecar requirement"
     );
     let validator = validator_peers(1).pop().expect("validator fixture");
-    let network_id = crate::sumeragi::synthetic_network_id("minimal-sidecar-frame-test");
+    let network_id = crate::unit_test_support::synthetic_network_id("minimal-sidecar-frame-test");
     let required_control_message = super::fair_v2_ingress_required_proposal_bytes(layout, 1)
         .max(super::fair_v2_ingress_required_commit_certificate_response_bytes(1));
     let required_consensus = super::fair_v2_ingress_required_p2p_frame_bytes(

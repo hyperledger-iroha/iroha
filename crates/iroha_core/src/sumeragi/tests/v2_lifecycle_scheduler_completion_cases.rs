@@ -551,7 +551,7 @@ mod recovered_sign_capacity_tests {
         ($name:ident, $body:block) => {
             #[test]
             fn $name() {
-                let handle = crate::sumeragi::sumeragi_thread_builder(concat!(
+                let handle = crate::sumeragi::threads::sumeragi_thread_builder(concat!(
                     "sumeragi-v2-scheduler-test-",
                     stringify!($name)
                 ))
@@ -576,7 +576,7 @@ mod recovered_sign_capacity_tests {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
+        let network_id = crate::unit_test_support::synthetic_network_id("v2-worker-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
         let context = wire::HeightContext {

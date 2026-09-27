@@ -3179,7 +3179,7 @@ fn same_round_timeout_cancellation_uses_exact_durable_proposal_intent() {
 #[cfg(feature = "bls")]
 fn run_same_round_timeout_recovery_test_on_stack(body: impl FnOnce() + Send + 'static) {
     // Cold recovery uses the same bounded stack policy as the production consensus owner.
-    let result = crate::sumeragi::sumeragi_thread_builder("same-round-timeout-cold-owner")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("same-round-timeout-cold-owner")
         .spawn(body)
         .expect("spawn cold Timeout recovery with the Sumeragi stack budget")
         .join();
@@ -3354,7 +3354,7 @@ fn same_round_timeout_retained_proposal_recovery_fixture() {
 fn same_round_timeout_cold_owner_reconciles_standalone_broadcast() {
     // This fixture launches the real lifecycle services, whose debug stack
     // requires the same budget as the production Sumeragi thread.
-    let handle = crate::sumeragi::sumeragi_thread_builder("standalone-timeout-cold-owner")
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder("standalone-timeout-cold-owner")
         .spawn(|| {
             terminal_standalone_timeout_recovery_fixture(0);
             terminal_standalone_timeout_recovery_fixture(3);

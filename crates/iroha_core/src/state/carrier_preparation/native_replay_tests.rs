@@ -230,7 +230,7 @@ fn exercise_native_replay(atomic: bool, mismatch_checkpoint: bool) {
 }
 
 fn run_native_replay(name: &'static str, atomic: bool, mismatch_checkpoint: bool) {
-    let worker = crate::sumeragi::sumeragi_thread_builder(name)
+    let worker = crate::sumeragi::threads::sumeragi_thread_builder(name)
         .spawn(move || exercise_native_replay(atomic, mismatch_checkpoint))
         .expect("spawn Native replay on the consensus stack");
     if let Err(error) = worker.join() {

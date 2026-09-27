@@ -1808,7 +1808,7 @@ mod tests {
         let foreign_directory = TempDir::new().expect("foreign temporary directory");
         let mut foreign_context = context;
         foreign_context.network_id =
-            crate::sumeragi::synthetic_network_id("foreign-sumeragi-v2-body-store");
+            crate::unit_test_support::synthetic_network_id("foreign-sumeragi-v2-body-store");
         (
             foreign_context.kagemusha_mint_finality_authorization,
             foreign_context.kagemusha_mint_finality_authority,

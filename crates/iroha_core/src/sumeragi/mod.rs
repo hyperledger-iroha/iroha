@@ -8,12 +8,9 @@ use crate::{
 use eyre::Result;
 use iroha_config::parameters::{
     actual::{Common as CommonConfig, Sumeragi as SumeragiConfig},
-    defaults::{
-        concurrency as concurrency_defaults,
-        sumeragi::{
-            BODY_ENVELOPE_HEADROOM_BYTES, CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
-            TIMEOUT_VOTE_RESERVE_BYTES,
-        },
+    defaults::sumeragi::{
+        BODY_ENVELOPE_HEADROOM_BYTES, CERTIFIED_FENCE_ESCAPE_RESERVE_BYTES,
+        TIMEOUT_VOTE_RESERVE_BYTES,
     },
 };
 use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
@@ -48,12 +45,11 @@ use std::{
     pin::Pin,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, Ordering},
         mpsc,
     },
     time::{Duration, Instant},
 };
-static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
 // The timeout-vote envelope contains its own signature plus the highest
 // PrepareQC aggregate. Reserve both current signature ceilings separately from
@@ -74,275 +70,6 @@ type SumeragiThreadWork = Box<dyn FnOnce() + Send + 'static>;
 type SumeragiThreadCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
 type SumeragiThreadSpawner =
     fn(std::thread::Builder, SumeragiThreadWork) -> std::io::Result<SumeragiThreadCompletion>;
-fn normalized_sumeragi_stack_size_bytes(bytes: usize) -> Option<usize> {
-    (concurrency_defaults::SUMERAGI_STACK_BYTES_MIN
-        ..=concurrency_defaults::SUMERAGI_STACK_BYTES_MAX)
-        .contains(&bytes)
-        .then_some(bytes)
-}
-/// Override the stack size used for Sumeragi helper threads.
-///
-/// `irohad` applies this from the validated `concurrency.sumeragi_stack_bytes`
-/// configuration before spawning consensus workers. Embedders that do not call
-/// this setter receive the same deterministic configuration default.
-pub fn set_sumeragi_stack_size_bytes(bytes: usize) {
-    let bytes = normalized_sumeragi_stack_size_bytes(bytes)
-        .unwrap_or(concurrency_defaults::SUMERAGI_STACK_BYTES);
-    CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.store(bytes, Ordering::Relaxed);
-}
-fn sumeragi_stack_size_bytes() -> usize {
-    let configured = CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.load(Ordering::Relaxed);
-    normalized_sumeragi_stack_size_bytes(configured)
-        .unwrap_or(concurrency_defaults::SUMERAGI_STACK_BYTES)
-}
-/// Build a named Sumeragi thread with an explicit stack-size budget.
-///
-/// Consensus execution must not rely on platform default stack sizing because
-/// deep recovery and validation paths can exceed small default thread stacks.
-pub(crate) fn sumeragi_thread_builder(name: impl Into<String>) -> std::thread::Builder {
-    std::thread::Builder::new()
-        .name(name.into())
-        .stack_size(sumeragi_stack_size_bytes())
-}
-#[cfg(test)]
-/// Build a deterministic exact network identity for protocol fixtures.
-pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
-    NetworkId::from_genesis_hash(
-        HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(CryptoHash::new(
-            seed.as_bytes(),
-        )),
-    )
-}
-#[cfg(test)]
-mod thread_builder_tests {
-    use super::{
-        CONFIGURED_SUMERAGI_STACK_SIZE_BYTES, concurrency_defaults,
-        normalized_sumeragi_stack_size_bytes, set_sumeragi_stack_size_bytes,
-        sumeragi_stack_size_bytes, sumeragi_thread_builder,
-    };
-    use std::sync::{Mutex, atomic::Ordering, mpsc};
-    static STACK_CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
-    struct RestoreSumeragiStackSize(usize);
-    impl Drop for RestoreSumeragiStackSize {
-        fn drop(&mut self) {
-            CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.store(self.0, Ordering::Relaxed);
-        }
-    }
-    #[test]
-    fn sumeragi_thread_builder_applies_requested_thread_name() {
-        let (name_tx, name_rx) = mpsc::sync_channel::<String>(1);
-        let join = sumeragi_thread_builder("sumeragi-thread-builder-test")
-            .spawn(move || {
-                let thread_name = std::thread::current()
-                    .name()
-                    .expect("test thread name should be set")
-                    .to_owned();
-                let _ = name_tx.send(thread_name);
-            })
-            .expect("spawn test thread");
-        let observed = name_rx.recv().expect("thread name message");
-        join.join().expect("join test thread");
-        assert_eq!(observed, "sumeragi-thread-builder-test");
-    }
-    #[test]
-    fn sumeragi_stack_size_is_bounded() {
-        assert_eq!(
-            normalized_sumeragi_stack_size_bytes(concurrency_defaults::SUMERAGI_STACK_BYTES_MIN),
-            Some(concurrency_defaults::SUMERAGI_STACK_BYTES_MIN)
-        );
-        assert_eq!(
-            normalized_sumeragi_stack_size_bytes(concurrency_defaults::SUMERAGI_STACK_BYTES_MAX),
-            Some(concurrency_defaults::SUMERAGI_STACK_BYTES_MAX)
-        );
-        assert_eq!(
-            normalized_sumeragi_stack_size_bytes(
-                concurrency_defaults::SUMERAGI_STACK_BYTES_MIN - 1
-            ),
-            None
-        );
-        assert_eq!(
-            normalized_sumeragi_stack_size_bytes(
-                concurrency_defaults::SUMERAGI_STACK_BYTES_MAX + 1
-            ),
-            None
-        );
-    }
-    #[test]
-    fn sumeragi_stack_size_uses_configured_value() {
-        let _guard = STACK_CONFIG_TEST_LOCK.lock().expect("stack test lock");
-        let previous = CONFIGURED_SUMERAGI_STACK_SIZE_BYTES.swap(0, Ordering::Relaxed);
-        let _restore = RestoreSumeragiStackSize(previous);
-        set_sumeragi_stack_size_bytes(concurrency_defaults::SUMERAGI_STACK_BYTES_MIN);
-        assert_eq!(
-            sumeragi_stack_size_bytes(),
-            concurrency_defaults::SUMERAGI_STACK_BYTES_MIN
-        );
-        set_sumeragi_stack_size_bytes(usize::MAX);
-        assert_eq!(
-            sumeragi_stack_size_bytes(),
-            concurrency_defaults::SUMERAGI_STACK_BYTES
-        );
-    }
-}
-/// Build the initial validator topology as the authenticated subset of trusted peers.
-///
-/// Every returned validator is a trusted peer with a BLS-normal key and an
-/// explicit, valid proof of possession. An empty PoP map therefore yields an
-/// empty validator roster, while PoPs for keys outside the trusted-peer set are
-/// ignored. The result is deduplicated and canonically ordered by [`PeerId`].
-pub fn filter_validators_from_trusted(
-    tp: &iroha_config::parameters::actual::TrustedPeers,
-) -> Vec<PeerId> {
-    let mut baseline: BTreeSet<PeerId> = BTreeSet::new();
-    let iter = std::iter::once(tp.myself.clone()).chain(tp.others.clone());
-    for peer in iter {
-        let pk = peer.id().public_key();
-        if !crate::crypto_util::is_bls_normal_public_key(pk) {
-            iroha_logger::warn!(?pk, "excluding peer: validator identity must be BLS-normal");
-            continue;
-        }
-        baseline.insert(PeerId::new(pk.clone()));
-    }
-    let mut validators = BTreeSet::new();
-    let mut missing = 0usize;
-    for peer_id in &baseline {
-        let pk = peer_id.public_key();
-        let Some(pop) = tp.pops.get(pk) else {
-            missing = missing.saturating_add(1);
-            continue;
-        };
-        if let Err(error) = iroha_crypto::bls_normal_pop_verify(pk, pop) {
-            iroha_logger::warn!(?pk, ?error, "invalid PoP; excluding peer from consensus");
-            continue;
-        }
-        validators.insert(peer_id.clone());
-    }
-    if missing > 0 {
-        iroha_logger::info!(
-            missing,
-            baseline = baseline.len(),
-            pops = tp.pops.len(),
-            validators = validators.len(),
-            "excluding trusted peers without validator PoPs from consensus roster"
-        );
-    }
-    iroha_logger::info!(
-        validators = validators.len(),
-        configured_peers = tp.others.len().saturating_add(1),
-        pops = tp.pops.len(),
-        "resolved validator roster from trusted peers"
-    );
-    validators.into_iter().collect()
-}
-
-#[cfg(test)]
-mod validator_pop_filter_tests {
-    use super::filter_validators_from_trusted;
-    use iroha_config::parameters::actual::TrustedPeers;
-    use iroha_crypto::{Algorithm, KeyPair, PublicKey, bls_normal_pop_prove};
-    use iroha_data_model::peer::Peer;
-    use iroha_model_base::peer::PeerId;
-    use std::collections::BTreeMap;
-
-    fn bls_key(seed: &[u8]) -> KeyPair {
-        KeyPair::try_from_seed(seed.to_vec(), Algorithm::BlsNormal)
-            .expect("derive BLS validator fixture")
-    }
-
-    fn peer(key: &KeyPair, port: u16) -> Peer {
-        Peer::new(
-            format!("127.0.0.1:{port}")
-                .parse()
-                .expect("fixture peer address"),
-            key.public_key().clone(),
-        )
-    }
-
-    fn trusted_peers(
-        myself: &KeyPair,
-        others: &[&KeyPair],
-        pops: BTreeMap<PublicKey, Vec<u8>>,
-    ) -> TrustedPeers {
-        TrustedPeers {
-            myself: peer(myself, 21_000),
-            others: others
-                .iter()
-                .enumerate()
-                .map(|(index, key)| {
-                    peer(
-                        key,
-                        21_001_u16
-                            .checked_add(u16::try_from(index).expect("fixture peer index"))
-                            .expect("fixture peer port"),
-                    )
-                })
-                .collect(),
-            pops,
-        }
-    }
-
-    #[test]
-    fn validator_filter_requires_explicit_pops_even_when_map_is_empty() {
-        let local = bls_key(b"validator-filter-empty-local");
-        let other = bls_key(b"validator-filter-empty-other");
-        let trusted = trusted_peers(&local, &[&other], BTreeMap::new());
-
-        assert!(filter_validators_from_trusted(&trusted).is_empty());
-    }
-
-    #[test]
-    fn validator_filter_returns_only_trusted_bls_peers_with_valid_pops() {
-        let local = bls_key(b"validator-filter-valid-local");
-        let eligible = bls_key(b"validator-filter-valid-other");
-        let missing = bls_key(b"validator-filter-missing-pop");
-        let invalid = bls_key(b"validator-filter-invalid-pop");
-        let observer = KeyPair::try_from_seed(
-            b"validator-filter-ed25519-observer".to_vec(),
-            Algorithm::Ed25519,
-        )
-        .expect("derive non-validator fixture");
-        let pop_only = bls_key(b"validator-filter-pop-only");
-        let pops = BTreeMap::from([
-            (
-                local.public_key().clone(),
-                bls_normal_pop_prove(local.private_key()).expect("local validator PoP"),
-            ),
-            (
-                eligible.public_key().clone(),
-                bls_normal_pop_prove(eligible.private_key()).expect("other validator PoP"),
-            ),
-            (invalid.public_key().clone(), Vec::new()),
-            (
-                pop_only.public_key().clone(),
-                bls_normal_pop_prove(pop_only.private_key()).expect("untrusted key PoP"),
-            ),
-        ]);
-        let trusted = trusted_peers(&local, &[&eligible, &missing, &invalid, &observer], pops);
-        let mut expected = vec![
-            PeerId::new(local.public_key().clone()),
-            PeerId::new(eligible.public_key().clone()),
-        ];
-        expected.sort();
-
-        assert_eq!(filter_validators_from_trusted(&trusted), expected);
-    }
-
-    #[test]
-    fn validator_filter_never_synthesizes_pop_only_keys() {
-        let local = bls_key(b"validator-filter-uncredentialed-local");
-        let pop_only = bls_key(b"validator-filter-untrusted-pop");
-        let trusted = trusted_peers(
-            &local,
-            &[],
-            BTreeMap::from([(
-                pop_only.public_key().clone(),
-                bls_normal_pop_prove(pop_only.private_key()).expect("untrusted key PoP"),
-            )]),
-        );
-
-        assert!(filter_validators_from_trusted(&trusted).is_empty());
-    }
-}
 /// Return the caller's genesis/height-context selected mode for a height.
 pub fn effective_consensus_mode_for_height(
     view: &StateView<'_>,
@@ -367,112 +94,6 @@ pub fn effective_consensus_mode_for_height_from_world(
 pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode) -> ConsensusMode {
     let height = u64::try_from(view.height()).unwrap_or(0);
     effective_consensus_mode_for_height(view, height, frozen_mode)
-}
-/// Resolve the signed on-chain delay before consensus-evidence penalties apply.
-pub(crate) fn resolve_npos_slashing_delay_blocks_from_world(
-    world: &impl WorldReadOnly,
-) -> Option<u64> {
-    world
-        .sumeragi_npos_parameters()
-        .map(|params| params.slashing_delay_blocks())
-}
-/// Resolve the epoch index for a height under an authenticated frozen mode.
-///
-/// Permissioned consensus has one unbounded epoch and does not require NPoS
-/// parameters. NPoS must derive its schedule from committed parameters; their
-/// absence or invalidity is a consensus error rather than a default schedule.
-pub(crate) fn epoch_for_height_from_world(
-    world: &impl WorldReadOnly,
-    height: u64,
-    frozen_mode: ConsensusMode,
-) -> Result<u64, v2_npos::V2NposError> {
-    match frozen_mode {
-        ConsensusMode::Permissioned => Ok(0),
-        ConsensusMode::Npos => {
-            let epoch_length = v2_npos::committed_epoch_length_blocks(world)?;
-            Ok(height.saturating_sub(1) / epoch_length)
-        }
-    }
-}
-#[cfg(test)]
-mod epoch_schedule_tests {
-    use super::*;
-    use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
-    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
-    use std::num::NonZeroU64;
-
-    #[test]
-    fn npos_epoch_schedule_uses_committed_epoch_length() {
-        let state = State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let mut parameters = SumeragiNposParameters::default();
-        parameters.epoch_length_blocks = NonZeroU64::new(7).expect("non-zero epoch length");
-        parameters.evidence_horizon_blocks = 14;
-        parameters.slashing_delay_blocks = 7;
-        parameters
-            .validate()
-            .expect("test NPoS parameters must be internally consistent");
-        {
-            let mut block = state.world.parameters.block();
-            block.set_parameter(Parameter::Custom(parameters.into_custom_parameter()));
-            block.commit();
-        }
-        let world = state.world_view();
-        assert_eq!(
-            epoch_for_height_from_world(&world, 0, ConsensusMode::Npos).expect("valid schedule"),
-            0
-        );
-        assert_eq!(
-            epoch_for_height_from_world(&world, 1, ConsensusMode::Npos).expect("valid schedule"),
-            0
-        );
-        assert_eq!(
-            epoch_for_height_from_world(&world, 7, ConsensusMode::Npos).expect("valid schedule"),
-            0
-        );
-        assert_eq!(
-            epoch_for_height_from_world(&world, 8, ConsensusMode::Npos).expect("valid schedule"),
-            1
-        );
-        assert_eq!(
-            epoch_for_height_from_world(&world, 15, ConsensusMode::Npos).expect("valid schedule"),
-            2
-        );
-    }
-
-    #[test]
-    fn permissioned_epoch_is_zero_without_npos_parameters_at_all_boundaries() {
-        let state = State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let world = state.world_view();
-        for height in [0, 1, 3_600, 3_601, u64::MAX] {
-            assert_eq!(
-                epoch_for_height_from_world(&world, height, ConsensusMode::Permissioned)
-                    .expect("permissioned mode does not require an NPoS schedule"),
-                0
-            );
-        }
-    }
-
-    #[test]
-    fn npos_epoch_rejects_missing_committed_parameters() {
-        let state = State::new_for_testing(
-            World::new(),
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        );
-        let world = state.world_view();
-        assert!(matches!(
-            epoch_for_height_from_world(&world, 1, ConsensusMode::Npos),
-            Err(v2_npos::V2NposError::MissingCommittedParameters)
-        ));
-    }
 }
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
 pub mod block_store;
@@ -510,6 +131,15 @@ pub mod records;
 pub(crate) mod safety_wal;
 /// The lag-2 height-configuration schedule and the genesis committee (`specs/sumeragi.md` §10).
 pub mod schedule;
+/// Genesis-bound consensus metadata derived from the staged genesis state.
+pub mod genesis_meta;
+pub use genesis_meta::{staged_genesis_execution_policy_hash, staged_genesis_nexus_amx_context_hash};
+/// The initial validator roster: the authenticated subset of the configured trusted peers.
+pub mod roster;
+pub use roster::filter_validators_from_trusted;
+/// Named Sumeragi threads with an explicit, configured stack-size budget.
+pub(crate) mod threads;
+pub use threads::set_sumeragi_stack_size_bytes;
 pub(crate) mod serviced_candidate_store;
 pub(crate) mod stake_snapshot;
 pub(crate) mod v2;
@@ -527,9 +157,7 @@ pub(crate) mod v2_context_store;
 pub(crate) mod v2_core;
 pub use v2_context::{
     GenesisMergeAuthority, GenesisMergeAuthorityError, GenesisV2Bootstrap, V2GenesisBootstrapError,
-    freeze_genesis_merge_authority, freeze_staged_genesis_v2, signed_genesis_validator_pops,
-    signed_genesis_voting_peers, staged_genesis_execution_policy_hash,
-    staged_genesis_nexus_amx_context_hash, validate_signed_genesis_v2_authority,
+    freeze_genesis_merge_authority, freeze_staged_genesis_v2, validate_signed_genesis_v2_authority,
 };
 pub use v2_core::{
     CheckedProductionTransition, ProductionTwoStageRelayRetryTraceProjection,
@@ -622,9 +250,6 @@ pub fn validate_evidence(
 ) -> Result<(), v2_evidence::EvidenceValidationError> {
     v2_evidence::validate_evidence(evidence, context)
 }
-/// Placeholder for in-flight voting block state tracked by consensus.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct VotingBlock;
 #[cfg(not(test))]
 use self::output_guard::process_consensus_output_guard;
 use self::{message::*, output_guard::ConsensusOutputGuard};
@@ -6971,9 +6596,7 @@ pub use admission_capacity::{
     AdmissionCapacityUnavailableV1, AuthenticatedAdmissionCapacityV1, Rs16PayloadGeometryV1,
 };
 pub use admission_input::QueuePlanInputCapacityErrorV1;
-mod startup_recovery;
-pub use startup_recovery::StartupRecovery;
-use startup_recovery::StartupRecoveryPublisher;
+use crate::snapshot::{StartupRecovery, StartupRecoveryPublisher, startup_recovery_channel};
 
 /// Bounded ingress handle for the serialized Sumeragi v2 runner.
 ///
@@ -7534,7 +7157,7 @@ fn launch_sumeragi_thread(
             work();
         }
     });
-    let completion = spawn(sumeragi_thread_builder("sumeragi"), gated_work)
+    let completion = spawn(threads::sumeragi_thread_builder("sumeragi"), gated_work)
         .map_err(|error| eyre::eyre!("failed to spawn authoritative Sumeragi worker: {error}"))?;
     let join_handle = tokio::task::spawn(completion);
     let child = Child::new(join_handle, OnShutdown::Wait(Duration::from_secs(5)));
@@ -7656,7 +7279,7 @@ impl SumeragiStartArgs {
         let queue_wake_tx = wake_tx.clone();
         let ingress_ready = Arc::new(AtomicBool::new(false));
         let pending_queue_plan_admission_dirty = Arc::new(AtomicBool::new(true));
-        let (startup_recovery_owner, startup_recovery) = startup_recovery::channel();
+        let (startup_recovery_owner, startup_recovery) = startup_recovery_channel();
         let handle = SumeragiHandle::new(
             Arc::clone(&block),
             lane_relay_tx,
@@ -9237,7 +8860,7 @@ mod authoritative_runtime_gate_tests {
             .public_key()
             .try_to_bytes()
             .expect("fixture public key is canonical");
-        let recovery_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+        let recovery_network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
         let (body_request, commit_request, commit_response) =
             v2_maximum_recovery_wires(&recovery_network_id, minimal_peer, 1);
         assert_eq!(
@@ -9292,7 +8915,7 @@ mod authoritative_runtime_gate_tests {
         ingress
             .configure_roster_for_context(
                 validator_peers(4),
-                &crate::sumeragi::synthetic_network_id("fair-v2-ingress-test"),
+                &crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test"),
                 layout,
             )
             .expect("recommended four-validator genesis context fits default ingress bytes");
@@ -9361,7 +8984,7 @@ mod authoritative_runtime_gate_tests {
         );
         assert!(protocol_maximum_response_frame >= actual_response_frame);
         assert!(protocol_maximum_response_frame >= actual_direct_response_frame);
-        let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+        let network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
         let roster_len = 1;
         let certified_bytes =
             super::fair_v2_ingress_required_certified_fence_escape_bytes(roster_len);
@@ -9445,7 +9068,7 @@ mod authoritative_runtime_gate_tests {
             .and_then(|bytes| bytes.checked_add(required))
             .expect("test source bound fits usize");
         let other_network_id =
-            crate::sumeragi::synthetic_network_id("fair-v2-ingress-other-genesis");
+            crate::unit_test_support::synthetic_network_id("fair-v2-ingress-other-genesis");
         let other_network_request_bytes =
             super::fair_v2_ingress_required_recovery_request_bytes(&other_network_id, roster_len);
         assert_eq!(
@@ -9607,7 +9230,7 @@ mod authoritative_runtime_gate_tests {
         let error = ingress
             .configure_roster_for_context(
                 validator_peers(1),
-                &crate::sumeragi::synthetic_network_id("overflow-test"),
+                &crate::unit_test_support::synthetic_network_id("overflow-test"),
                 layout,
             )
             .expect_err(

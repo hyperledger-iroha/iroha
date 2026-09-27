@@ -169,3 +169,98 @@ pub fn genesis_committee_peers(genesis: &SignedBlock) -> Result<Vec<PeerId>, Sta
 pub fn applied_height(state: &State) -> u64 {
     state.view().height() as u64
 }
+
+#[cfg(test)]
+mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        isi::{
+            InstructionBox, RegisterBox,
+            register::{RegisterCommitteePeerWithPop, RegisterPeerWithPop},
+        },
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    use iroha_genesis::GenesisBlock;
+
+    use super::*;
+
+    fn bls(seed: u8) -> KeyPair {
+        KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).expect("BLS fixture key")
+    }
+
+    fn peer(pair: &KeyPair) -> PeerId {
+        PeerId::new(pair.public_key().clone())
+    }
+
+    fn pop(pair: &KeyPair) -> Vec<u8> {
+        iroha_crypto::bls_normal_pop_prove(pair.private_key()).expect("PoP fixture")
+    }
+
+    fn genesis_with(instructions: Vec<InstructionBox>) -> SignedBlock {
+        let genesis_key = KeyPair::random();
+        let account = AccountId::new(genesis_key.public_key().clone());
+        let transaction =
+            TransactionBuilder::new_genesis(account, FeePaymentIntent::authority(Vec::new(), None))
+                .with_instructions(instructions)
+                .sign(genesis_key.private_key());
+        SignedBlock::genesis(vec![transaction], genesis_key.private_key(), None, None)
+    }
+
+    /// Every caller of the removed v2 `signed_genesis_voting_peers` (kagami, irohad, the test
+    /// network, the beacon tools) now reads `schedule::genesis_validators` or
+    /// `genesis_committee_peers`; both must yield the exact order it did: the signed validators in
+    /// canonical `PeerId` order, independent of registration order, without committee-only peers.
+    #[test]
+    fn genesis_roster_order_is_canonical_and_identical_for_every_reader() {
+        let validators = [7_u8, 3, 5, 1, 6, 2, 4].map(bls);
+        let committee_only = bls(9);
+        let mut instructions: Vec<InstructionBox> = validators
+            .iter()
+            .map(|pair| {
+                InstructionBox::from(RegisterBox::Peer(RegisterPeerWithPop::new(
+                    peer(pair),
+                    pop(pair),
+                )))
+            })
+            .collect();
+        instructions.push(InstructionBox::from(RegisterCommitteePeerWithPop::new(
+            peer(&committee_only),
+            pop(&committee_only),
+        )));
+        let genesis = genesis_with(instructions);
+
+        let mut expected = validators.iter().map(peer).collect::<Vec<_>>();
+        expected.sort();
+        let signed = schedule::genesis_validators(&GenesisBlock(genesis.clone()))
+            .expect("signed validators")
+            .into_keys()
+            .collect::<Vec<_>>();
+        assert_eq!(signed, expected, "signed validators in canonical PeerId order");
+        assert!(!signed.contains(&peer(&committee_only)));
+
+        let committee_peers = genesis_committee_peers(&genesis).expect("genesis committee");
+        assert_eq!(
+            committee_peers, signed,
+            "the node's committee order equals the signed-genesis roster order"
+        );
+        let committee =
+            schedule::genesis_committee(&GenesisBlock(genesis)).expect("core committee");
+        for (position, member) in committee_peers.iter().enumerate() {
+            let key = schedule::consensus_key(member).expect("BLS consensus key");
+            assert_eq!(
+                committee.index_of(&key).map(|index| index as usize),
+                Some(position),
+                "the core committee indexes the roster in the same order"
+            );
+        }
+    }
+
+    #[test]
+    fn genesis_committee_peers_reject_a_genesis_without_validators() {
+        let genesis = genesis_with(Vec::new());
+        assert!(matches!(
+            genesis_committee_peers(&genesis),
+            Err(StartupError::Schedule(_))
+        ));
+    }
+}

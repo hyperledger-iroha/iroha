@@ -5762,7 +5762,7 @@ mod tests {
                 version: 1,
                 intent: LaneDrainIntentV1 {
                     version: 1,
-                    network_id: crate::sumeragi::synthetic_network_id("lane-drain-genesis"),
+                    network_id: crate::unit_test_support::synthetic_network_id("lane-drain-genesis"),
                     lane_id: LaneId::new(7),
                     dataspace_id: DataSpaceId::new(9),
                     lane_incarnation: Hash::new(b"lane-drain-incarnation"),
@@ -6094,7 +6094,7 @@ mod tests {
         let mut forged_bodies = Vec::new();
         let mut forged = certificate.clone();
         forged.body.intent.network_id =
-            crate::sumeragi::synthetic_network_id("foreign-drain-genesis");
+            crate::unit_test_support::synthetic_network_id("foreign-drain-genesis");
         forged_bodies.push(forged);
         let mut forged = certificate.clone();
         forged.body.intent.lane_id = LaneId::new(8);

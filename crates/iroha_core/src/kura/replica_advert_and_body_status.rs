@@ -28,7 +28,7 @@ impl KuraReplicaAdvertSourceV1 {
             Hash::new(preimage)
         };
         Self {
-            network_id: crate::sumeragi::synthetic_network_id("kura-replica-refresh-owner-test"),
+            network_id: crate::unit_test_support::synthetic_network_id("kura-replica-refresh-owner-test"),
             height,
             block_hash: HashOf::from_untyped_unchecked(test_hash(b"kura-replica-refresh-block")),
             executed_block_wire_len: 1,

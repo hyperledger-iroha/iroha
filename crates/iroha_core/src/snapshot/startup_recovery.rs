@@ -1,4 +1,5 @@
-//! Success-only startup recovery authorization for background storage writers.
+//! Snapshot readiness gate: success-only startup recovery authorization for background
+//! storage writers.
 
 use iroha_futures::supervisor::ShutdownSignal;
 use tokio::sync::watch;
@@ -70,27 +71,27 @@ impl StartupRecovery {
         }
     }
 
-    pub(super) fn unavailable() -> Self {
+    pub(crate) fn unavailable() -> Self {
         let (owner, receiver) = channel();
         drop(owner);
         receiver
     }
 }
 
-/// Only the Sumeragi worker owns the ability to publish successful recovery.
+/// Only the consensus worker owns the ability to publish successful recovery.
 /// Its outer run guard distinguishes normal completion from failure/unwind.
-pub(super) struct StartupRecoveryPublisher {
+pub(crate) struct StartupRecoveryPublisher {
     sender: watch::Sender<Phase>,
     finished: bool,
 }
 
 impl StartupRecoveryPublisher {
-    pub(super) fn ready(&self) {
+    pub(crate) fn ready(&self) {
         debug_assert_eq!(*self.sender.borrow(), Phase::Pending);
         self.sender.send_replace(Phase::Ready);
     }
 
-    pub(super) fn finish(&mut self) {
+    pub(crate) fn finish(&mut self) {
         if *self.sender.borrow() == Phase::Pending {
             self.sender.send_replace(Phase::Failed);
         }
@@ -106,7 +107,8 @@ impl Drop for StartupRecoveryPublisher {
     }
 }
 
-pub(super) fn channel() -> (StartupRecoveryPublisher, StartupRecovery) {
+/// A fresh pending readiness gate and its only publisher.
+pub(crate) fn channel() -> (StartupRecoveryPublisher, StartupRecovery) {
     let (sender, receiver) = watch::channel(Phase::Pending);
     (
         StartupRecoveryPublisher {

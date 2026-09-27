@@ -114,7 +114,7 @@ fn verified_context_for_policy_state(
 }
 fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
     let keys = verified_keys();
-    let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-recovery-test");
+    let network_id = crate::unit_test_support::synthetic_network_id("sumeragi-v2-recovery-test");
     let policy_kura = Kura::blank_kura_for_testing();
     let policy_state = state_for(&policy_kura, network_id);
     (

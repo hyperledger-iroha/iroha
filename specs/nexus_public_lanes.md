@@ -106,10 +106,9 @@ finalised.
 `slashable_through_height` is inclusive. At schedule time the canonical
 liability high-water is
 `slashable_through_height + evidence_horizon_blocks + slashing_delay_blocks`.
-Consensus effects run before ordinary transactions at the equality height, so
-finalization may release custody there only after every pending evidence lien
-for the exact validator tenure has become terminal. Snapshot restore rejects a
-stored liability height below this signed formula.
+Snapshot restore rejects a stored liability height below this signed formula.
+Consensus evidence places no lien on stake: evidence is logged and reported to
+telemetry only, and evidence-driven penalties are future work.
 
 Lifecycle hooks (runtime enforced):
 
@@ -382,7 +381,7 @@ account migration and entity deletion preserve these obligations.
   must wait until the current height reaches `deactivation_height`. Exiting and
   peer unregistration preserve all stake custody. The retained record is
   canonically pruned only after every bonded and pending-unbond position is
-  finalised and no pending evidence lien remains; that pruning alone frees
+  finalised; that pruning alone frees
   capacity and the peer for reuse. Capacity checks use
   `nexus.staking.max_validators` and count every retained record.
 - **Lane retirement:** lifecycle and scale-in transitions fail closed while a

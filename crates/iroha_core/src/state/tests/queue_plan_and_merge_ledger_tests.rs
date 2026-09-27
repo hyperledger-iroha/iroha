@@ -2770,7 +2770,7 @@ state_test! { sync commit_merge_entry_rejects_invalid_aggregate_signature
 state_test! { sync commit_merge_entry_rejects_qc_for_another_network
     setup_merge_qc_test!(kura, query, state, keypairs, candidate);
     let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
-    qc.network_id = crate::sumeragi::synthetic_network_id("foreign-merge-qc-genesis");
+    qc.network_id = crate::unit_test_support::synthetic_network_id("foreign-merge-qc-genesis");
     let_row! { err = state .commit_merge_entry(merge_entry_from_candidate(candidate, qc)) .expect_err("cross-network QC must fail closed") };
     assert!(matches!(
         err,

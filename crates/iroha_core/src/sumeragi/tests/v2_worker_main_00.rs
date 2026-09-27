@@ -768,7 +768,7 @@ pub(in crate::sumeragi) fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
             power: 1,
         })
         .collect::<Vec<_>>();
-    let network_id = crate::sumeragi::synthetic_network_id("v2-worker-test");
+    let network_id = crate::unit_test_support::synthetic_network_id("v2-worker-test");
     let kagemusha_mint_finality_authority =
         fixture_kagemusha_mint_finality_authority(network_id, 0, &roster, 0xA0);
     let kagemusha_mint_finality_authorization =
@@ -1236,7 +1236,7 @@ fn non_retireable_lane_transport_messages(validator: PeerId) -> Vec<BlockMessage
     let payload_hash = Hash::new(b"non-retireable lane transport payload");
     let payload = crate::lane_consensus::LaneExecutablePayloadV1 {
         version: crate::lane_consensus::LANE_EXECUTABLE_PAYLOAD_VERSION_V1,
-        network_id: crate::sumeragi::synthetic_network_id("non-retireable-lane-transport"),
+        network_id: crate::unit_test_support::synthetic_network_id("non-retireable-lane-transport"),
         epoch: 0,
         origin_proposal: proposal,
         entrypoint_hashes: Vec::new(),
@@ -1323,7 +1323,7 @@ fn lane_drain_vote(keypair: &KeyPair) -> LaneDrainVoteV1 {
             version: 1,
             intent: LaneDrainIntentV1 {
                 version: 1,
-                network_id: crate::sumeragi::synthetic_network_id("v2-worker-drain"),
+                network_id: crate::unit_test_support::synthetic_network_id("v2-worker-drain"),
                 lane_id: LaneId::new(3),
                 dataspace_id: DataSpaceId::new(5),
                 lane_incarnation: Hash::new(b"v2-worker-drain-incarnation"),

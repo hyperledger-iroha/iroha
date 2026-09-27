@@ -342,7 +342,7 @@ mod certified_body_fence_supersession {
 
     #[test]
     fn admitted_certified_persistence_survives_current_view_transition() {
-        let result = crate::sumeragi::sumeragi_thread_builder(
+        let result = crate::sumeragi::threads::sumeragi_thread_builder(
             "admitted_certified_persistence_survives_current_view_transition",
         )
         .spawn(assert_admitted_persistence_survives_current_view_transition)
@@ -405,7 +405,7 @@ mod certified_body_fence_supersession {
 
     #[test]
     fn admitted_certified_persistence_releases_capacity_only_after_exact_acknowledgement() {
-        let result = crate::sumeragi::sumeragi_thread_builder(
+        let result = crate::sumeragi::threads::sumeragi_thread_builder(
             "admitted_certified_persistence_releases_capacity_only_after_exact_acknowledgement",
         )
         .spawn(|| {
@@ -476,7 +476,7 @@ mod certified_body_fence_supersession {
 
     #[test]
     fn admitted_certified_persistence_keeps_request_authority_when_reconstruction_finishes() {
-        let result = crate::sumeragi::sumeragi_thread_builder(
+        let result = crate::sumeragi::threads::sumeragi_thread_builder(
             "admitted_certified_persistence_keeps_request_authority_when_reconstruction_finishes",
         )
         .spawn(|| {
@@ -1718,7 +1718,7 @@ mod certified_body_fence_supersession {
         ($name:ident, $stage:expr, $protected:expr, $order:expr, $failure:expr, $recovery:expr) => {
             #[test]
             fn $name() {
-                let result = crate::sumeragi::sumeragi_thread_builder(stringify!($name))
+                let result = crate::sumeragi::threads::sumeragi_thread_builder(stringify!($name))
                     .spawn(|| {
                         retry_body_after_timeout($stage, $protected, $order, $failure, $recovery)
                     })

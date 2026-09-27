@@ -2107,7 +2107,7 @@ fn signed_historical_requests_cross_retained_control_owner_without_retiring_it()
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
         let requester_key = KeyPair::random();
         let requester = PeerId::new(requester_key.public_key().clone());
-        let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+        let network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
         let (_directory, owner_message) =
             queue_retained_history_control_owner(&ingress, &requester, &network_id);
         let request_message = signed_history_serve_request(kind, &requester_key, network_id, 1);
@@ -2155,7 +2155,7 @@ fn signed_historical_requests_cross_retained_chunk_owner_without_retiring_it() {
             PeerId::new(requester_key.public_key().clone()),
         ];
         let requester = roster[1].clone();
-        let network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+        let network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
         let (_directory, chunk_message, owner_height) =
             queue_retained_history_chunk_owner(&ingress, &roster, &network_id);
         assert!(1 < owner_height);
@@ -2193,7 +2193,7 @@ fn signed_historical_requests_cross_retained_chunk_owner_without_retiring_it() {
 
 #[test]
 fn historical_request_cache_fails_closed_on_identity_binding_and_network() {
-    let configured_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+    let configured_network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
     for kind in [
         HistoryServeRequestKind::CommitCertificate,
         HistoryServeRequestKind::CertifiedBody,
@@ -2278,7 +2278,7 @@ fn historical_request_cache_fails_closed_on_identity_binding_and_network() {
 
     let requester_key = KeyPair::random();
     let requester = PeerId::new(requester_key.public_key().clone());
-    let wrong_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-wrong-network");
+    let wrong_network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-wrong-network");
     let request = signed_history_serve_request(
         HistoryServeRequestKind::CommitCertificate,
         &requester_key,
@@ -2303,7 +2303,7 @@ fn historical_request_cache_fails_closed_on_identity_binding_and_network() {
 
 #[test]
 fn historical_request_dependency_fails_closed_on_height_and_reply_route() {
-    let configured_network_id = crate::sumeragi::synthetic_network_id("fair-v2-ingress-test");
+    let configured_network_id = crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test");
     for kind in [
         HistoryServeRequestKind::CommitCertificate,
         HistoryServeRequestKind::CertifiedBody,
@@ -3620,7 +3620,7 @@ fn kura_replica_advert_requires_exact_signed_direct_keeper_ownership() {
     let keeper = PeerId::new(keeper_key.public_key().clone());
     let mut advert = super::message::KuraReplicaAdvertV1 {
         version: super::message::KURA_REPLICA_ADVERT_VERSION_V1,
-        network_id: crate::sumeragi::synthetic_network_id("fair-ingress-kura-advert"),
+        network_id: crate::unit_test_support::synthetic_network_id("fair-ingress-kura-advert"),
         height: 13,
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
         executed_block_wire_len: 4096,

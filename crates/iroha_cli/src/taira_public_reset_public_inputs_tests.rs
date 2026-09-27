@@ -286,16 +286,15 @@ fn execute_fixture_genesis(
         .set_nexus_from_config(nexus)
         .expect("install the exact configured genesis Nexus baseline");
     state.set_crypto(actual::Crypto::default());
-    let topology =
-        Topology::new(iroha_core::sumeragi::signed_genesis_voting_peers(&provisional).unwrap());
-    let mut voting = None;
-    let (valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let topology = Topology::new(
+        iroha_core::sumeragi::startup::genesis_committee_peers(&provisional.0).unwrap(),
+    );
+    let (valid, staged) = ValidBlock::validate_signed_genesis(
         provisional.0,
         &topology,
         &authority,
         &iroha_primitives::time::TimeSource::new_system(),
         &state,
-        &mut voting,
         iroha_data_model::block::consensus_v2::ConsensusMode::Npos,
     )
     .unpack(|_| {})
@@ -669,10 +668,8 @@ fn beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install() {
         let _profile = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT);
         let fixture = Fixture::build_with_epoch(epoch);
         let mut inventory = sample_inventory_fixture();
-        let roster = iroha_core::sumeragi::signed_genesis_voting_peers(
-            &iroha_genesis::GenesisBlock(fixture.block.clone()),
-        )
-        .unwrap();
+        let roster =
+            iroha_core::sumeragi::startup::genesis_committee_peers(&fixture.block).unwrap();
         for (client, peer) in inventory.validator_clients.iter_mut().zip(roster) {
             client.peer_id = peer.to_string();
         }
@@ -700,10 +697,8 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
     let wire = fixture.block.encode_wire().unwrap();
     let manifest = json_line(&fixture.manifest).unwrap();
     let mut inventory = sample_inventory_fixture();
-    let mut ordered = iroha_core::sumeragi::signed_genesis_voting_peers(
-        &iroha_genesis::GenesisBlock(fixture.block.clone()),
-    )
-    .unwrap();
+    let mut ordered =
+        iroha_core::sumeragi::startup::genesis_committee_peers(&fixture.block).unwrap();
     ordered.reverse(); // Role order must not be mistaken for native signing order.
     for (client, peer) in inventory.validator_clients.iter_mut().zip(&ordered) {
         client.peer_id = peer.to_string();
@@ -739,10 +734,7 @@ fn beacon_public_preparation_derives_native_nonce_bound_seats_and_rejects_substi
         value
     );
     let units = value.get("final_units").unwrap().as_array().unwrap();
-    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&iroha_genesis::GenesisBlock(
-        fixture.block.clone(),
-    ))
-    .unwrap();
+    let roster = iroha_core::sumeragi::startup::genesis_committee_peers(&fixture.block).unwrap();
     for (index, unit) in units.iter().enumerate() {
         let seat = roster
             .iter()

@@ -4460,7 +4460,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id =
-            crate::sumeragi::synthetic_network_id("certified-serve-payload-store-test");
+            crate::unit_test_support::synthetic_network_id("certified-serve-payload-store-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 network_id, 100, &roster,
@@ -4618,7 +4618,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let network_id =
-            crate::sumeragi::synthetic_network_id("certified-serve-payload-recovery-test");
+            crate::unit_test_support::synthetic_network_id("certified-serve-payload-recovery-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                 network_id, 100, &roster,

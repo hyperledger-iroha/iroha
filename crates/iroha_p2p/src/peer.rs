@@ -1740,14 +1740,14 @@ impl SharedByteBudget {
             released.await;
         }
     }
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     fn retained(&self) -> SharedRetainedBytes {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retained
     }
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub(crate) fn retained_total(&self) -> usize {
         self.retained().total
     }
@@ -1941,10 +1941,6 @@ impl OutboundPostByteBudgets {
         })
     }
 
-    #[cfg(any(test, feature = "test-fixtures"))]
-    fn shared_high(&self) -> Arc<SharedByteBudget> {
-        Arc::clone(&self.high)
-    }
     #[cfg(test)]
     fn low(&self) -> Arc<SharedByteBudget> {
         Arc::clone(&self.low)
@@ -3845,13 +3841,13 @@ pub mod handles {
             ));
         }
         #[test]
-        fn consensus_chunk_routes_to_high_queue() {
+        fn consensus_chunk_routes_to_payload_queue() {
             let (handle, mut receivers) = test_peer_handle::<ConsensusChunkMsg>(1);
             handle
                 .post(ConsensusChunkMsg)
                 .expect("post preserves semantic classification");
             assert!(matches!(
-                receivers.classes[crate::TransportAdmissionClass::Availability.index()]
+                receivers.classes[crate::TransportAdmissionClass::Payload.index()]
                     .try_recv()
                     .map(RetainedPost::into_inner),
                 Ok(ConsensusChunkMsg)
@@ -6655,13 +6651,6 @@ mod run {
         Ok(u32::from_le_bytes(bytes))
     }
     impl<T: ClassifyTopic> ClassifyTopic for Message<T> {
-        fn availability_frame_maximum(local_peer: &PeerId) -> Result<usize, ncore::Error> {
-            T::availability_frame_maximum(local_peer)
-        }
-        fn recovery_frame_maxima(local_peer: &PeerId) -> Result<[usize; 2], ncore::Error> {
-            T::recovery_frame_maxima(local_peer)
-        }
-
         const HAS_INBOUND_DECODE_LIMITS: bool = T::HAS_INBOUND_DECODE_LIMITS;
         fn topic(&self) -> Topic {
             match self {
@@ -7199,10 +7188,7 @@ mod run {
             let (low, _low_rx) = mpsc::channel(1);
             let senders = PeerMessageSenders {
                 payload: mpsc::channel(1).0,
-                availability: mpsc::channel(1).0,
                 block_sync: mpsc::channel(1).0,
-                recovery_control: mpsc::channel(1).0,
-                recovery_data: mpsc::channel(1).0,
                 control: mpsc::channel(1).0,
                 safety,
                 high,
@@ -7287,10 +7273,7 @@ mod run {
             let source_credit_probe = source_credits.clone();
             let senders = PeerMessageSenders {
                 payload: mpsc::channel(1).0,
-                availability: mpsc::channel(1).0,
                 block_sync: mpsc::channel(1).0,
-                recovery_control: mpsc::channel(1).0,
-                recovery_data: mpsc::channel(1).0,
                 control: mpsc::channel(1).0,
                 safety,
                 high,
@@ -7402,10 +7385,7 @@ mod run {
             let delivery_drain = Arc::new(InboundDeliveryDrain::new());
             let senders = PeerMessageSenders {
                 payload: mpsc::channel(1).0,
-                availability: mpsc::channel(1).0,
                 block_sync: mpsc::channel(1).0,
-                recovery_control: mpsc::channel(1).0,
-                recovery_data: mpsc::channel(1).0,
                 control: mpsc::channel(1).0,
                 safety,
                 high,
@@ -7596,10 +7576,7 @@ mod run {
                 drop(low_rx);
                 let senders = PeerMessageSenders {
                     payload: mpsc::channel(1).0,
-                    availability: mpsc::channel(1).0,
                     block_sync: mpsc::channel(1).0,
-                    recovery_control: mpsc::channel(1).0,
-                    recovery_data: mpsc::channel(1).0,
                     control: mpsc::channel(1).0,
                     safety,
                     high,
@@ -7659,10 +7636,7 @@ mod run {
             let (low, _low_rx) = mpsc::channel(2);
             let senders = PeerMessageSenders {
                 payload: mpsc::channel(1).0,
-                availability: mpsc::channel(1).0,
                 block_sync: mpsc::channel(1).0,
-                recovery_control: mpsc::channel(1).0,
-                recovery_data: mpsc::channel(1).0,
                 control: mpsc::channel(1).0,
                 safety,
                 high,
@@ -10301,8 +10275,8 @@ mod run {
                 [
                     RoutedMsg::Consensus(2),
                     RoutedMsg::ConsensusPayload(3),
-                    RoutedMsg::ConsensusChunk(4),
                     RoutedMsg::Control(1),
+                    RoutedMsg::ConsensusChunk(4),
                     RoutedMsg::TxGossip(5),
                 ]
             );
@@ -13432,16 +13406,10 @@ pub mod message {
         pub high: mpsc::Sender<PeerMessage<T>>,
         /// Sender for low-priority inbound peer messages.
         pub low: mpsc::Sender<PeerMessage<T>>,
-        /// Ordinary body/chunk FIFO, independent from sidecar recovery.
+        /// Ordinary body/chunk FIFO.
         pub(crate) payload: mpsc::Sender<PeerMessage<T>>,
-        /// Ordinary RS16 availability FIFO, independent from large payloads.
-        pub(crate) availability: mpsc::Sender<PeerMessage<T>>,
         /// Reliable `BlockSync` FIFO charged to the low lane.
         pub(crate) block_sync: mpsc::Sender<PeerMessage<T>>,
-        /// Exact sidecar request/close/ack/hint FIFO.
-        pub(crate) recovery_control: mpsc::Sender<PeerMessage<T>>,
-        /// Exact sidecar bounded chunk FIFO.
-        pub(crate) recovery_data: mpsc::Sender<PeerMessage<T>>,
         /// Ordinary application control FIFO.
         pub(crate) control: mpsc::Sender<PeerMessage<T>>,
         /// Classified downstream owner shared by every peer producer.
@@ -14092,8 +14060,8 @@ mod cryptographer {
             compact.copy_from_slice(&session_binding[..COMPACT_LEN]);
             u64::from_be_bytes(compact)
         }
-        /// Construct from raw key bytes for deterministic unit and cross-crate fixtures.
-        #[cfg(any(test, feature = "test-fixtures"))]
+        /// Construct from raw key bytes for deterministic unit fixtures.
+        #[cfg(test)]
         pub fn new_with_raw_key_bytes(key_bytes: &[u8]) -> Result<Self, Error> {
             let session_binding = Self::session_binding(key_bytes);
             let disambiguator = Self::disambiguator(&session_binding);

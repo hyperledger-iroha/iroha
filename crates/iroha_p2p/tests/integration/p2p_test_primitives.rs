@@ -3,18 +3,6 @@
 #[derive(Clone, Debug, Decode, Encode)]
 struct ConsensusMessage(u32);
 impl iroha_p2p::network::message::ClassifyTopic for ConsensusMessage {
-    // This synthetic type has no availability or recovery variants. Positive
-    // empty-class bounds fund mandatory transport geometry only for this fixture.
-    fn availability_frame_maximum(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<usize, norito::core::Error> {
-        Ok(1)
-    }
-    fn recovery_frame_maxima(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<[usize; 2], norito::core::Error> {
-        Ok([1, 1])
-    }
     fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
         fixed_fixture_topic::<Self>(payload, flags)
     }

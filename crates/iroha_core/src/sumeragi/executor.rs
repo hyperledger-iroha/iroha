@@ -106,7 +106,7 @@ impl StateExecutor {
     /// The thread could not be spawned.
     pub fn spawn(context: ExecutorContext) -> std::io::Result<Self> {
         let (requests, rx) = mpsc::channel();
-        let thread = super::sumeragi_thread_builder("sumeragi-state-exec")
+        let thread = super::threads::sumeragi_thread_builder("sumeragi-state-exec")
             .spawn(move || run(&context, &rx))?;
         Ok(Self {
             requests,

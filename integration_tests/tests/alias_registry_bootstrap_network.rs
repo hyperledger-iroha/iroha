@@ -2217,7 +2217,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .collect::<Result<BTreeMap<_, _>>>()?;
     ensure!(
         original_voters.len() == VALIDATOR_COUNT
-            && iroha_core::sumeragi::signed_genesis_validator_pops(&genesis)? == original_voters,
+            && iroha_core::sumeragi::schedule::genesis_validators(&genesis)? == original_voters,
         "signed genesis must contain exactly the original four voters"
     );
     let expected_validator_peers = original_voters.keys().cloned().collect::<Vec<_>>();

@@ -988,7 +988,7 @@ where
             );
             let tx = inputs.clone();
             threads.push(
-                super::sumeragi_thread_builder("sumeragi-persist").spawn(move || {
+                super::threads::sumeragi_thread_builder("sumeragi-persist").spawn(move || {
                     let _exit = ExitGuard {
                         worker: Worker::Persist,
                         tx: tx.clone(),
@@ -1010,7 +1010,7 @@ where
             let (mut executor, blocks) = (self.executor, Arc::clone(&self.blocks));
             let tx = inputs.clone();
             threads.push(
-                super::sumeragi_thread_builder("sumeragi-exec").spawn(move || {
+                super::threads::sumeragi_thread_builder("sumeragi-exec").spawn(move || {
                     let _exit = ExitGuard {
                         worker: Worker::Exec,
                         tx: tx.clone(),
@@ -1029,7 +1029,7 @@ where
             let (bodies, blocks, net) = (self.bodies, self.blocks, Arc::clone(&self.net));
             let tx = inputs.clone();
             threads.push(
-                super::sumeragi_thread_builder("sumeragi-serve").spawn(move || {
+                super::threads::sumeragi_thread_builder("sumeragi-serve").spawn(move || {
                     let _exit = ExitGuard {
                         worker: Worker::Serve,
                         tx: tx.clone(),
@@ -1054,7 +1054,7 @@ where
             let (clock, net, observer) = (self.clock, self.net, self.observer);
             let shared = Arc::clone(&shared);
             threads.push(
-                super::sumeragi_thread_builder("sumeragi-loop").spawn(move || {
+                super::threads::sumeragi_thread_builder("sumeragi-loop").spawn(move || {
                     let _guard = LoopGuard {
                         shared: Arc::clone(&shared),
                         observer: Arc::clone(&observer),

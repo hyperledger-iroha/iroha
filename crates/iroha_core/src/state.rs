@@ -35642,7 +35642,7 @@ impl State {
             .kura
             .read_certified_lane_block_artifact(lane_id, lane_block_height)
         {
-            let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+            let expected_epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
                 world,
                 certified.proposal.descriptor.proposal_height,
                 frozen_mode,
@@ -35677,7 +35677,7 @@ impl State {
             return Ok(None);
         };
         let payload = source.bundle.executable_payload();
-        let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+        let expected_epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
             world,
             source.bundle.certified.proposal.descriptor.proposal_height,
             frozen_mode,
@@ -39804,7 +39804,7 @@ impl State {
                             "autonomous diagnostics lack a signed consensus mode at committed height {authority_height}"
                         )
                     })?;
-                    crate::sumeragi::epoch_for_height_from_world(
+                    crate::sumeragi::v2_npos::epoch_for_height_from_world(
                         &authority.world,
                         proposal_height,
                         frozen_mode,
@@ -39870,7 +39870,7 @@ impl State {
                         "autonomous diagnostics lack a signed consensus mode at committed height {authority_height}"
                     )
                 })?;
-                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                let expected_epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
                     &authority.world,
                     certified.proposal.descriptor.proposal_height,
                     frozen_mode,
@@ -39973,7 +39973,7 @@ impl State {
                         "autonomous diagnostics lack a signed consensus mode at committed height {authority_height}"
                     )
                 })?;
-                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                let expected_epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
                     &authority.world,
                     bundle.certified.proposal.descriptor.proposal_height,
                     frozen_mode,
@@ -45218,7 +45218,7 @@ impl State {
                             .to_owned(),
                     )
                 })?;
-                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                let expected_epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
                     world,
                     descriptor.proposal_height,
                     frozen_mode,
@@ -64377,7 +64377,6 @@ fn replay_blocks_from_kura_range_inner(
                 ));
             }
         }
-        let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
         let validation = ValidBlock::validate_sumeragi_v2_replay_keep_voting_block(
             signed_block.clone(),
             finality,
@@ -64387,7 +64386,6 @@ fn replay_blocks_from_kura_range_inner(
             time_source,
             state.sumeragi_block_cadence(),
             state,
-            &mut voting_block,
         );
         replay_timing.validation += validation_start.elapsed();
         let mut replay = match validation {

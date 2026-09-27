@@ -798,7 +798,7 @@ mod tests {
                 9,
                 round.height,
                 parent,
-                crate::sumeragi::synthetic_network_id("lifecycle-validate-sidecar"),
+                crate::unit_test_support::synthetic_network_id("lifecycle-validate-sidecar"),
                 1,
                 HashOf::new(&Vec::<PeerId>::new()),
                 Vec::new(),

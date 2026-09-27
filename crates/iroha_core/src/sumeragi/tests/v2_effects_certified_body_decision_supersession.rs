@@ -2,7 +2,7 @@
 
 #[test]
 fn admitted_certified_persistence_cancels_after_competing_durable_decision() {
-    let result = crate::sumeragi::sumeragi_thread_builder(
+    let result = crate::sumeragi::threads::sumeragi_thread_builder(
         "admitted_certified_persistence_cancels_after_competing_durable_decision",
     )
     .spawn(|| {
@@ -95,7 +95,7 @@ fn admitted_certified_persistence_cancels_after_competing_durable_decision() {
 
 #[test]
 fn admitted_certified_persistence_retains_production_completion_claim_until_ack() {
-    let result = crate::sumeragi::sumeragi_thread_builder(
+    let result = crate::sumeragi::threads::sumeragi_thread_builder(
         "admitted_certified_persistence_retains_production_completion_claim_until_ack",
     )
     .spawn(|| {

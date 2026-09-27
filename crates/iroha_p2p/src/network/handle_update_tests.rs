@@ -283,18 +283,15 @@ mod handle_update_tests {
                 safety: 1,
                 lane: 2,
                 bulk: 4,
-                availability: 8,
-                recovery_control: 16,
-                recovery_data: 32,
             },
             2,
             390,
         )
         .expect("small classed geometry must fit");
-        assert_eq!(classed.max_sources, 12);
+        assert_eq!(classed.max_sources, 6);
         assert_eq!(classed.max_sources_per_class, 2);
-        assert_eq!(classed.max_total_bytes, 126);
-        assert_eq!(classed.max_waiters_per_source, [26, 65, 26, 26, 26, 26]);
+        assert_eq!(classed.max_total_bytes, 14);
+        assert_eq!(classed.max_waiters_per_source, [65, 65, 65]);
         let budget = NetworkActorProgressBudget::new(10, 1, 1).expect("small progress budget");
         let shape = ProgressTicketShape {
             topic: message::Topic::BlockSync,

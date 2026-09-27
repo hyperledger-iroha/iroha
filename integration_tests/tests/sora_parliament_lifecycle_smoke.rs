@@ -671,7 +671,7 @@ async fn ordered_validator_roster(
     client: &Client,
 ) -> Result<Vec<PeerId>> {
     let signed_genesis_roster =
-        iroha_core::sumeragi::signed_genesis_voting_peers(&network.genesis())
+        iroha_core::sumeragi::startup::genesis_committee_peers(&network.genesis().0)
             .wrap_err("read exact signed genesis voting roster")?;
     if signed_genesis_roster.len() != VALIDATOR_COUNT {
         return Err(eyre!("expected exactly four signed validators"));

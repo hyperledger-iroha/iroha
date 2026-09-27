@@ -974,7 +974,7 @@ fn native_ordinary_native_chain_applies_real_effects_and_preserves_sparse_native
     // Exercise Apply on the same bounded worker stack used by the live runtime.
     // Calling the complete execution pipeline directly on libtest's smaller
     // worker bypasses that production boundary and overflows in debug builds.
-    let handle = crate::sumeragi::sumeragi_thread_builder("native-ordinary-native-apply")
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder("native-ordinary-native-apply")
         .spawn(native_ordinary_native_chain_applies_real_effects_impl)
         .expect("spawn production-budgeted Apply worker");
     if let Err(payload) = handle.join() {

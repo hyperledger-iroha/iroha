@@ -23,7 +23,7 @@ use std::sync::Arc;
 fn run_replay_validation_test_on_stack(name: &'static str, test: fn()) {
     // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
     // platform-default worker stack for these integration-heavy scenarios.
-    let handle = crate::sumeragi::sumeragi_thread_builder(name)
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder(name)
         .spawn(test)
         .expect("spawn replay validation test");
     if let Err(payload) = handle.join() {
@@ -273,7 +273,7 @@ pub(super) fn seed_space_directory_manifest_for_retired_checkpoint_test(
 fn replay_missing_checkpoint_fixture(
     checkpoint_exists_only_at_later_height: bool,
 ) -> (eyre::Report, usize) {
-    crate::sumeragi::sumeragi_thread_builder("missing-checkpoint-production-fixture")
+    crate::sumeragi::threads::sumeragi_thread_builder("missing-checkpoint-production-fixture")
         .spawn(move || {
             let mut fixture = super::strict_replay_tests::StrictReplayFixture::new();
             let block_count = if checkpoint_exists_only_at_later_height {
@@ -687,7 +687,6 @@ fn replay_exact_execution_fixture_block(
         .map(|entry| entry.validator.clone())
         .collect::<Vec<_>>();
     let topology = crate::sumeragi::network_topology::Topology::new(roster.clone());
-    let mut voting_block = None;
     let (valid, _state_block) = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
         signed.canonical_resultless_proposal(),
         &topology,
@@ -696,7 +695,6 @@ fn replay_exact_execution_fixture_block(
         Duration::from_secs(1),
         crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
         state,
-        &mut voting_block,
     )
     .unpack(|_| {})
     .map_err(|(_block, error)| eyre!(error))

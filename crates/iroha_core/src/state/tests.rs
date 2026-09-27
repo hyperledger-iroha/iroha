@@ -152,7 +152,7 @@ macro_rules! state_test {
     (consensus_stack $name:ident $($body:tt)*) => {
         #[test]
         fn $name() {
-            let handle = crate::sumeragi::sumeragi_thread_builder(concat!(
+            let handle = crate::sumeragi::threads::sumeragi_thread_builder(concat!(
                 "state-consensus-", stringify!($name),
             ))
             .spawn(move || { $($body)* })
@@ -36311,7 +36311,7 @@ state_test! { sync direct_execution_identity_is_unchanged_by_canonical_output_at
     let state = blank_test_state();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 42, 0);
     let mut transaction = TransactionBuilder::new(
-        crate::sumeragi::synthetic_network_id("direct-execution-output-attachment"),
+        crate::unit_test_support::synthetic_network_id("direct-execution-output-attachment"),
         ALICE_ID.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     );
@@ -47128,10 +47128,9 @@ state_test! { large_stack genesis_merge_authority_owns_exact_signed_stage_and_ty
     let topology = crate::sumeragi::network_topology::Topology::new(
         fixture.context.roster.iter().map(|entry| entry.validator.clone()),
     );
-    let mut voting_block = None;
-    let (_valid, mut staged) = crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (_valid, mut staged) = crate::block::ValidBlock::validate_signed_genesis(
         fixture.genesis.0.clone(), &topology, &fixture.genesis_account,
-        &iroha_primitives::time::TimeSource::new_system(), &state, &mut voting_block,
+        &iroha_primitives::time::TimeSource::new_system(), &state,
         ConsensusMode::Permissioned,
     ).unpack(|_| {}).unwrap_or_else(|(_, error)| panic!("restage exact fixture genesis: {error}"));
     let ordinary = freeze_staged_genesis_v2(&fixture.genesis, &staged, ConsensusMode::Permissioned)
@@ -47156,7 +47155,7 @@ state_test! { large_stack genesis_merge_authority_owns_exact_signed_stage_and_ty
     staged._curr_block = original_header;
 
     let original_network = staged.network_id;
-    staged.network_id = crate::sumeragi::synthetic_network_id("different-staged-network");
+    staged.network_id = crate::unit_test_support::synthetic_network_id("different-staged-network");
     assert!(matches!(freeze_genesis_merge_authority(&fixture.genesis, &staged, ConsensusMode::Permissioned),
         Err(GenesisMergeAuthorityError::Bootstrap(V2GenesisBootstrapError::StagedNetworkIdMismatch))));
     staged.network_id = original_network;

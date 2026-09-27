@@ -256,9 +256,7 @@ fn derive_public_beacon_inputs_from_slots(
             "required operations and installation must precede the first mandatory beacon pulse after height 7"
         ));
     }
-    let roster = iroha_core::sumeragi::signed_genesis_voting_peers(&iroha_genesis::GenesisBlock(
-        genesis.block().clone(),
-    ))?;
+    let roster = iroha_core::sumeragi::startup::genesis_committee_peers(genesis.block())?;
     if roster.len() != 4 || roster.iter().collect::<BTreeSet<_>>().len() != 4 {
         return Err(eyre!(
             "beacon preparation requires four exact native voting seats"
@@ -810,9 +808,7 @@ fn plan_genesis(
             "beacon bootstrap requires the exact prepared NPoS genesis roster"
         ));
     }
-    let ordered = iroha_core::sumeragi::signed_genesis_voting_peers(&iroha_genesis::GenesisBlock(
-        validated.block().clone(),
-    ))?;
+    let ordered = iroha_core::sumeragi::startup::genesis_committee_peers(validated.block())?;
     if ordered != plan.request.target_roster || ordered != plan.request.authorization_roster {
         return Err(eyre!(
             "beacon request indices differ from the native signed-genesis voting order"

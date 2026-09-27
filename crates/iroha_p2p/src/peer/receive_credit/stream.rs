@@ -176,8 +176,8 @@ impl Reading {
 /// replace both old `MessageSender` and `MessageReader`; it must not wrap only one.
 /// There is no legacy frame parser or optional protocol switch in this owner.
 ///
-/// Readiness is defined per semantic class, so an ungranted Bulk post does not
-/// prevent enqueuing `RecoveryData` or emitting the bounded grant-control path.
+/// Readiness is defined per semantic class, so an ungranted Payload post does not
+/// prevent enqueuing another class or emitting the bounded grant-control path.
 pub(in crate::peer) struct CreditStream<E: Enc, T: Pload + ClassifyTopic> {
     // Field order matters: the read half is dropped before the unspent ledger.
     read: Box<dyn AsyncRead + Send + Unpin>,
@@ -272,10 +272,6 @@ impl<E: Enc, T: Pload + ClassifyTopic> CreditStream<E, T> {
             self.ping = Some((Header::ping(self.binding.outgoing, self.next_ping)?, false));
         }
         Ok(())
-    }
-    #[cfg(any(test, feature = "test-fixtures"))]
-    pub(super) fn request_waits_without_grant(&self, class: Class) -> bool {
-        self.ledger.requests[class.index()].is_some() && self.ledger.grants[class.index()].is_none()
     }
     pub(in crate::peer) fn can_enqueue(&self, class: Class) -> bool {
         !self.failed
@@ -512,7 +508,7 @@ async fn malformed_tag_fences_reader_without_delivery_or_unspent_grant_reuse() {
     use super::tests::{crypto, peer, pool, used};
     use crate::network::admission_class_tests::AdmissionFixture as Fixture;
     use iroha_crypto::encryption::ChaCha20Poly1305;
-    let p = pool(6);
+    let p = pool(3);
     let remote = peer(31);
     let local = peer(32);
     let cipher = crypto();
@@ -550,13 +546,13 @@ async fn malformed_tag_fences_reader_without_delivery_or_unspent_grant_reuse() {
     )
     .unwrap();
     let mut plaintext = Vec::new();
-    run::receive_credit_encode(&Fixture::RecoveryData(1), &mut plaintext).unwrap();
-    let request = Header::request(incoming, Class::RecoveryData, 1, plaintext.len()).unwrap();
+    run::receive_credit_encode(&Fixture::Payload(1), &mut plaintext).unwrap();
+    let request = Header::request(incoming, Class::Payload, 1, plaintext.len()).unwrap();
     stream.ledger.request(request).unwrap();
     let grant = stream.ledger.next_grant().unwrap().unwrap();
     stream
         .ledger
-        .request(Header::request(incoming, Class::RecoveryControl, 1, 200).unwrap())
+        .request(Header::request(incoming, Class::Lane, 1, 200).unwrap())
         .unwrap();
     stream.ledger.next_grant().unwrap().unwrap();
     let (header, mut ciphertext) =
@@ -595,13 +591,13 @@ async fn malformed_tag_fences_reader_without_delivery_or_unspent_grant_reuse() {
         "failed but unclosed reader still owns its control tenure"
     );
     assert_eq!(
-        used(&stream.ledger.source.partition.counts[Class::RecoveryControl.index()]),
+        used(&stream.ledger.source.partition.counts[Class::Lane.index()]),
         1,
         "unspent grant remains owned until reader close"
     );
     drop(stream);
     let next = p.bind(remote.id()).unwrap();
-    assert!(next.reserve(Class::RecoveryControl, 200).is_some());
+    assert!(next.reserve(Class::Lane, 200).is_some());
 }
 
 #[cfg(test)]
@@ -610,7 +606,7 @@ async fn authenticated_health_burst_keeps_original_limit_and_cannot_refresh_idle
     use super::tests::{crypto, peer, pool};
     use crate::network::admission_class_tests::AdmissionFixture as Fixture;
     use iroha_crypto::encryption::ChaCha20Poly1305;
-    let p = pool(6);
+    let p = pool(3);
     let remote = peer(33);
     let local = peer(34);
     let cipher = crypto();

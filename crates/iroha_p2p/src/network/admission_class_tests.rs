@@ -15,9 +15,6 @@ pub enum AdmissionFixture {
     Safety(u8),
     Lane(u8),
     Payload(u8),
-    Availability(u8),
-    RecoveryControl(u8),
-    RecoveryData(u8),
     Control(u8),
     BlockSync(u8),
     Low(u8),
@@ -28,12 +25,9 @@ impl AdmissionFixture {
             Self::Safety(1),
             Self::Lane(2),
             Self::Payload(3),
-            Self::Availability(4),
-            Self::RecoveryControl(5),
-            Self::RecoveryData(6),
-            Self::Control(7),
-            Self::BlockSync(8),
-            Self::Low(9),
+            Self::Control(4),
+            Self::BlockSync(5),
+            Self::Low(6),
         ]
     }
 }
@@ -41,9 +35,8 @@ impl ClassifyTopic for AdmissionFixture {
     fn topic(&self) -> Topic {
         match self {
             Self::Safety(_) => Topic::ConsensusSafety,
-            Self::Lane(_) | Self::RecoveryControl(_) => Topic::Consensus,
+            Self::Lane(_) => Topic::Consensus,
             Self::Payload(_) => Topic::ConsensusPayload,
-            Self::Availability(_) | Self::RecoveryData(_) => Topic::ConsensusChunk,
             Self::Control(_) => Topic::Control,
             Self::BlockSync(_) => Topic::BlockSync,
             Self::Low(_) => Topic::Health,
@@ -52,26 +45,12 @@ impl ClassifyTopic for AdmissionFixture {
     fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, ncore::Error> {
         Ok(Some(match Self::inbound_admission_class(payload, flags)? {
             A::Safety => Topic::ConsensusSafety,
-            A::Lane | A::RecoveryControl => Topic::Consensus,
+            A::Lane => Topic::Consensus,
             A::Payload => Topic::ConsensusPayload,
-            A::Availability | A::RecoveryData => Topic::ConsensusChunk,
             A::Control => Topic::Control,
             A::BlockSync => Topic::BlockSync,
             A::Low => Topic::Health,
         }))
-    }
-    fn admission_class(&self) -> A {
-        match self {
-            Self::Safety(_) => A::Safety,
-            Self::Lane(_) => A::Lane,
-            Self::Payload(_) => A::Payload,
-            Self::Availability(_) => A::Availability,
-            Self::RecoveryControl(_) => A::RecoveryControl,
-            Self::RecoveryData(_) => A::RecoveryData,
-            Self::Control(_) => A::Control,
-            Self::BlockSync(_) => A::BlockSync,
-            Self::Low(_) => A::Low,
-        }
     }
     fn inbound_admission_class(payload: &[u8], flags: u8) -> Result<A, ncore::Error> {
         ncore::validate_header_flags(flags)?;
@@ -149,7 +128,7 @@ fn admission_class_indices_and_ordinary_topics_are_total() {
     let topics = [
         (Topic::ConsensusSafety, A::Safety),
         (Topic::Consensus, A::Lane),
-        (Topic::ConsensusChunk, A::Availability),
+        (Topic::ConsensusChunk, A::Payload),
         (Topic::ConsensusPayload, A::Payload),
         (Topic::BlockSync, A::BlockSync),
         (Topic::Control, A::Control),
@@ -170,7 +149,6 @@ fn admission_class_indices_and_ordinary_topics_are_total() {
     for (topic, expected) in topics {
         assert_eq!(A::ordinary_for_topic(topic), expected);
         assert_eq!(Ordinary(topic).admission_class(), expected);
-        assert!(!matches!(expected, A::RecoveryControl | A::RecoveryData));
     }
     assert!(
         Ordinary::inbound_admission_class(&[], 0).is_err(),
@@ -193,7 +171,7 @@ fn ordinary_raw_admission_uses_only_the_raw_topic_owner() {
     }
     assert_eq!(
         Ordinary::inbound_admission_class(&[0], 0).unwrap(),
-        A::Availability
+        A::Payload
     );
     assert_eq!(Ordinary::inbound_admission_class(&[1], 0).unwrap(), A::Lane);
     assert!(Ordinary::inbound_admission_class(&[2], 0).is_err());
@@ -322,7 +300,7 @@ fn relay_envelope_preserves_admission_classes_and_rejects_malformed_fields() {
 }
 
 #[test]
-fn semantic_subscribers_separate_recovery_from_shared_topics_and_reject_overlap() {
+fn semantic_subscribers_separate_classes_and_reject_overlap() {
     use super::SubscriberFilter;
     use super::message::SubscriberRoute;
     for expected in A::ALL {
@@ -349,12 +327,11 @@ fn semantic_subscribers_separate_recovery_from_shared_topics_and_reject_overlap(
         }
     }
     let broad_chunk = SubscriberFilter::topics([Topic::ConsensusChunk]);
-    assert!(broad_chunk.overlaps_reliable(&SubscriberFilter::semantic_class(A::Availability)));
-    assert!(broad_chunk.overlaps_reliable(&SubscriberFilter::semantic_class(A::RecoveryData)));
+    assert!(broad_chunk.overlaps_reliable(&SubscriberFilter::semantic_class(A::Payload)));
     assert!(!broad_chunk.overlaps_reliable(&SubscriberFilter::semantic_class(A::Safety)));
     assert!(
         SubscriberFilter::topics([Topic::Consensus])
-            .overlaps_reliable(&SubscriberFilter::semantic_class(A::RecoveryControl))
+            .overlaps_reliable(&SubscriberFilter::semantic_class(A::Lane))
     );
 }
 
@@ -373,20 +350,16 @@ fn admission_schedule_preserves_low_priority_without_starving_low_service() {
         Topic::BlockSync.scheduling_priority(),
         super::message::Priority::Low
     );
-    assert!(!A::Availability.is_low());
-    assert_ne!(A::Availability, A::RecoveryData);
+    assert!(!A::Payload.is_low());
 }
 
 #[test]
-fn actor_semantic_sources_do_not_collapse_availability_or_recovery_into_body() {
+fn actor_semantic_sources_map_every_admission_class() {
     use super::ActorProgressClass as C;
     let expected = [
         Some(C::Safety),
         Some(C::Lane),
         Some(C::Bulk),
-        Some(C::Availability),
-        Some(C::RecoveryControl),
-        Some(C::RecoveryData),
         None,
         Some(C::Bulk),
         None,
@@ -397,7 +370,7 @@ fn actor_semantic_sources_do_not_collapse_availability_or_recovery_into_body() {
 }
 
 #[test]
-fn actor_waiters_preserve_lane_producers_and_the_original_total() {
+fn actor_waiters_give_every_class_the_full_per_source_envelope() {
     use super::{
         ActorProgressByteLimits, ActorProgressClass as C, NetworkActorProgressBudget,
         RELIABLE_PROGRESS_WAITERS_PER_SOURCE, actor_waiter_limits,
@@ -414,8 +387,7 @@ fn actor_waiters_preserve_lane_producers_and_the_original_total() {
     assert!(
         C::ALL
             .into_iter()
-            .filter(|class| *class != C::Lane)
-            .all(|class| limits[class.index()] == 26)
+            .all(|class| limits[class.index()] == RELIABLE_PROGRESS_WAITERS_PER_SOURCE)
     );
     let total = 4 * 3 * RELIABLE_PROGRESS_WAITERS_PER_SOURCE;
     assert!(
@@ -432,48 +404,93 @@ fn actor_waiters_preserve_lane_producers_and_the_original_total() {
     );
 }
 
+/// The shipping default configuration funds every admission class: topic geometry, the
+/// classed actor budget, the receive-credit pool, the semantic post pool and the writer
+/// partitions all construct from the default maxima.
 #[test]
-fn actor_semantic_reserves_transfer_exact_bytes_and_counts_without_expansion() {
-    use super::{ActorProgressByteLimits, semantic_actor_geometry};
-    use iroha_crypto::encryption::ChaCha20Poly1305;
-    let old = ActorProgressByteLimits {
-        safety: 100,
-        lane: 200,
-        bulk: 300,
-        availability: 0,
-        recovery_control: 0,
-        recovery_data: 0,
+fn shipping_default_geometry_funds_every_admission_class() {
+    use super::{
+        NetworkActorProgressBudget, OutboundFrameQueueLimits, TopicFrameCaps,
+        inbound_source_credit_capacity, network_actor_progress_target_capacity,
+        network_actor_progress_waiter_capacity, validate_transport_queue_geometry,
     };
-    let maxima = [100; A::COUNT];
-    let targets = 8;
-    let high = 8192;
-    let count = 128;
-    let new =
-        semantic_actor_geometry::<ChaCha20Poly1305>(old, maxima, targets, high, count).unwrap();
-    assert_eq!(
-        new.ordinary_high_bytes + new.progress.checked_per_target_total().unwrap() * targets,
-        high + old.checked_per_target_total().unwrap() * targets
-    );
-    assert_eq!(new.ordinary_high_count + 6 * targets, count + 3 * targets);
-    assert!(semantic_actor_geometry::<ChaCha20Poly1305>(old, maxima, targets, 300, count).is_err());
-    assert!(
-        semantic_actor_geometry::<ChaCha20Poly1305>(old, maxima, targets, high, 3 * targets)
-            .is_err()
-    );
-    assert!(
-        semantic_actor_geometry::<ChaCha20Poly1305>(old, maxima, usize::MAX, high, count).is_err()
-    );
-}
-
-#[tokio::test]
-async fn semantic_actor_and_partial_record_owners_bypass_blocked_payload_then_service_it() {
-    let key = KeyPair::try_from_seed(vec![69; 32], Algorithm::BlsNormal).unwrap();
-    super::assert_payload_availability_progress_for_test(
-        &key,
-        AdmissionFixture::Payload(3),
-        AdmissionFixture::Availability(4),
+    use iroha_config::parameters::defaults::network as d;
+    use iroha_crypto::encryption::ChaCha20Poly1305 as Cipher;
+    let caps = TopicFrameCaps {
+        consensus: d::MAX_FRAME_BYTES_CONSENSUS.get(),
+        control: d::MAX_FRAME_BYTES_CONTROL.get(),
+        block_sync: d::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
+        tx_gossip: d::MAX_FRAME_BYTES_TX_GOSSIP.get(),
+        peer_gossip: d::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
+        health: d::MAX_FRAME_BYTES_HEALTH.get(),
+        connect: d::MAX_FRAME_BYTES_CONNECT.get(),
+        other: d::MAX_FRAME_BYTES_OTHER.get(),
+    };
+    let high = d::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES.get();
+    let low = d::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES.get();
+    let connections = d::lane_profile::CORE_MAX_TOTAL_CONNECTIONS;
+    let geometry = validate_transport_queue_geometry::<Cipher>(
+        d::MAX_FRAME_BYTES.get(),
+        caps,
+        high,
+        low,
+        d::DEFERRED_SEND_MAX_BYTES_TOTAL,
+        d::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        d::DEFERRED_SEND_MAX_PER_PEER,
+        d::P2P_QUEUE_CAP_HIGH.get(),
+        d::P2P_QUEUE_CAP_LOW.get(),
+        d::P2P_POST_QUEUE_CAP.get(),
+        d::P2P_SUBSCRIBER_QUEUE_CAP.get(),
     )
-    .await;
+    .unwrap();
+    let maxima = caps
+        .admission_maxima(crate::frame_plaintext_cap_for::<Cipher>(d::MAX_FRAME_BYTES.get()))
+        .unwrap();
+    assert_eq!(maxima[A::Safety.index()], caps.control);
+    assert_eq!(maxima[A::Lane.index()], caps.consensus);
+    assert_eq!(maxima[A::Payload.index()], caps.block_sync);
+    assert_eq!(maxima[A::BlockSync.index()], caps.block_sync);
+    let targets = network_actor_progress_target_capacity(connections).unwrap();
+    NetworkActorProgressBudget::new_classed(
+        geometry.actor_progress_bytes,
+        targets,
+        network_actor_progress_waiter_capacity(connections).unwrap(),
+    )
+    .unwrap();
+    let source_geometry = crate::peer::AuthenticatedSourceGeometry::new(connections);
+    let source = crate::peer::InboundFrameByteBudgets::new_with_source_geometry(
+        high,
+        low,
+        geometry.progress_reserve_bytes,
+        source_geometry.clone(),
+    )
+    .unwrap();
+    let dispatch =
+        crate::peer::InboundDispatchByteBudgets::new(high, low, geometry.safety_reserve_bytes)
+            .unwrap();
+    crate::peer::receive_credit::Pool::new(
+        source,
+        dispatch,
+        inbound_source_credit_capacity(d::P2P_SUBSCRIBER_QUEUE_CAP.get(), connections).unwrap(),
+        maxima,
+    )
+    .unwrap();
+    let posts = crate::peer::OutboundPostByteBudgets::new_with_source_geometry(
+        high,
+        low,
+        geometry.progress_reserve_bytes,
+        source_geometry,
+    )
+    .unwrap();
+    posts.install_semantic(maxima).unwrap();
+    let writer = OutboundFrameQueueLimits::new_with_progress_reserve(
+        high,
+        low,
+        geometry.progress_reserve_bytes,
+        d::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES.get(),
+        d::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES.get(),
+    );
+    crate::peer::receive_credit::writer_partitions(maxima, writer).unwrap();
 }
 
 #[test]
@@ -482,12 +499,9 @@ fn admission_class_codes_bind_geometry_and_record_order() {
         (A::Safety, 0_u8),
         (A::Lane, 1),
         (A::Payload, 2),
-        (A::Availability, 3),
-        (A::RecoveryControl, 4),
-        (A::RecoveryData, 5),
-        (A::Control, 6),
-        (A::BlockSync, 7),
-        (A::Low, 8),
+        (A::Control, 3),
+        (A::BlockSync, 4),
+        (A::Low, 5),
     ];
     assert_eq!(A::ALL, expected.map(|(class, _)| class));
     for (class, code) in expected {

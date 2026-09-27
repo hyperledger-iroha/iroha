@@ -2,7 +2,7 @@
 
 use color_eyre::eyre::{Result, WrapErr as _, ensure, eyre};
 use iroha_core::{
-    beacon::global_threshold_beacon_roster_hash_v1, sumeragi::signed_genesis_voting_peers,
+    beacon::global_threshold_beacon_roster_hash_v1, sumeragi::startup::genesis_committee_peers,
 };
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
@@ -17,7 +17,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanDelegateAccountAliasResolution,
 };
-use iroha_genesis::{GenesisBlock, RawGenesisTransaction, validate_prepared_genesis_bundle};
+use iroha_genesis::{RawGenesisTransaction, validate_prepared_genesis_bundle};
 use iroha_model_base::peer::PeerId;
 use norito::{derive::JsonSerialize, json};
 use rand::{TryRngCore as _, rngs::OsRng};
@@ -465,7 +465,7 @@ pub(super) async fn prepare(
         &genesis_public_key,
         network_id.into_genesis_hash(),
     )?;
-    let roster = signed_genesis_voting_peers(&GenesisBlock(bundle.block().clone()))?;
+    let roster = genesis_committee_peers(bundle.block())?;
     ensure!(
         roster.len() == 4,
         "native genesis did not authenticate four voters"

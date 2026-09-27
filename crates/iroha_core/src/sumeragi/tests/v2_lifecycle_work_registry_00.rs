@@ -1552,7 +1552,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
 #[cfg(feature = "bls")]
 #[test]
 fn production_completion_dispatch_publishes_all_ready_validate_outcomes() {
-    let handle = crate::sumeragi::sumeragi_thread_builder(
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder(
         "sumeragi-v2-production-ready-validate-dispatch-matrix",
     )
     .spawn(production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture)

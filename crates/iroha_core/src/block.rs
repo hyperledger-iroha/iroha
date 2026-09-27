@@ -17,33 +17,20 @@
 //!    validation before execution to transition to [`ValidBlock`].
 //! 3. [`ValidBlock`] pairs with [`crate::state::StateBlock`] containing applied state changes and
 //!    transaction errors.
-//! 4. Voting block ([`VotingBlock`]). Valid block might not have sufficient signatures to be committed.
-//!    Voting block is a wrappper around [`ValidBlock`] and its [`crate::state::StateBlock`] intended to
-//!    collect the signatures in order to transition to [`CommittedBlock`]
-//! 5. Block is committed ([`CommittedBlock`]). Created from [`ValidBlock`], ensuring the
-//!    signatures meet the conditions for commit (e.g. quorum across Set A + Set B validators).
+//! 4. Block is committed ([`CommittedBlock`]). Created from [`ValidBlock`] once the consensus core
+//!    has certified it; the certificate travels beside the block, never inside it.
 //!
-//! ### Scenario: this node creates a block
+//! ### Scenario: a block ordered by the Sumeragi core
 //!
-//! Flow: [`BlockBuilder::new`], [`BlockBuilder::chain`], [`BlockBuilder::sign`],
-//! [`NewBlock::validate_and_record_transactions`] (infallible), [`VotingBlock::new`], [`ValidBlock::commit`]
-//!
-//! ### Scenario: receive a created block
-//!
-//! Flow: authenticate the Sumeragi-v2 height context and exact proposal body, then call
-//! [`ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block`], [`VotingBlock::new`], and
-//! [`ValidBlock::commit_with_verified_v2_artifact`].
-//!
-//! ### Scenario: receive a block via block sync
-//!
-//! Flow: authenticate the archived Sumeragi-v2 height context and finality artifact, execute the
-//! exact body with [`ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block`], then commit it
-//! with [`ValidBlock::commit_with_verified_v2_artifact`].
+//! Flow: the leader builds the payload with [`BlockBuilder`] (`sumeragi::payload`); every node
+//! executes the ordered payload with [`ValidBlock::validate_sumeragi_block`] against its
+//! committed parent and commits it with [`ValidBlock::commit_unchecked`] after the core's
+//! `CommitBlock` (`sumeragi::executor`).
 //!
 //! ### Scenario: genesis (init or receive)
 //!
 //! Flow: authenticate the signed genesis handshake mode, call
-//! [`ValidBlock::validate_signed_genesis_keep_voting_block`], then [`ValidBlock::commit`].
+//! [`ValidBlock::validate_signed_genesis`], then [`ValidBlock::commit`].
 //!
 //! ### Scenario: plain block execution
 //!
@@ -1595,9 +1582,7 @@ use crate::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
     },
-    sumeragi::{
-        VotingBlock, network_topology::Topology, v2_candidate::candidate_block_has_proposal_work,
-    },
+    sumeragi::{network_topology::Topology, v2_candidate::candidate_block_has_proposal_work},
     tx::{AcceptTransactionFail, SignatureRejectionCode, SignatureVerificationFail},
 };
 use std::sync::Arc;
@@ -3193,7 +3178,7 @@ mod input_clock_tests {
     fn timed_input(milliseconds: u64) -> (SignedTransaction, KeyPair) {
         let key = KeyPair::from_seed(vec![0x91; 32], iroha_crypto::Algorithm::Ed25519);
         let mut builder = TransactionBuilder::new(
-            crate::sumeragi::synthetic_network_id("input-clock"),
+            crate::unit_test_support::synthetic_network_id("input-clock"),
             AccountId::new(key.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -6948,13 +6933,12 @@ pub(crate) mod valid {
         /// The mode must come from the canonical signed genesis handshake metadata. It is threaded
         /// explicitly because the pre-execution world cannot yet contain genesis parameters.
         #[allow(clippy::too_many_arguments)]
-        pub fn validate_signed_genesis_keep_voting_block<'state>(
+        pub fn validate_signed_genesis<'state>(
             block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             if !block.header().is_genesis() {
@@ -6971,7 +6955,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 None,
                 false,
@@ -6980,7 +6963,7 @@ pub(crate) mod valid {
                 None,
             )
         }
-        /// Validate the signed genesis of a Sumeragi chain: [`Self::validate_signed_genesis_keep_voting_block`]
+        /// Validate the signed genesis of a Sumeragi chain: [`Self::validate_signed_genesis`]
         /// that also installs the consensus schedule (`specs/sumeragi.md` §10).
         pub(crate) fn validate_sumeragi_genesis<'state>(
             block: SignedBlock,
@@ -6998,14 +6981,12 @@ pub(crate) mod valid {
                     )),
                 )));
             }
-            let mut voting_block = None;
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
                 genesis_account,
                 time_source,
                 state,
-                &mut voting_block,
                 false,
                 None,
                 false,
@@ -7028,7 +7009,6 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             block_cadence: Duration,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
             validation_context: SumeragiV2ValidationContext,
@@ -7043,7 +7023,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 soft_fork,
                 None,
                 skip_block_signatures,
@@ -7083,7 +7062,6 @@ pub(crate) mod valid {
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            let mut voting_block = None;
             let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
             Self::validate_keep_voting_block_inner(
                 block,
@@ -7091,7 +7069,6 @@ pub(crate) mod valid {
                 genesis_account,
                 &time_source,
                 state,
-                &mut voting_block,
                 false,
                 None,
                 true,
@@ -7112,7 +7089,6 @@ pub(crate) mod valid {
             block_cadence: Duration,
             validation_context: SumeragiV2ValidationContext,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -7120,7 +7096,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 None,
                 true,
@@ -7145,7 +7120,6 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             block_cadence: Duration,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
         ) -> Result<ValidatedReplayExecution<'state>, Error> {
             let authority = match VerifiedReplayProposal::new(&executed, verified, merge_entry) {
                 Ok(authority) => authority,
@@ -7228,7 +7202,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 None,
                 true,
@@ -7266,7 +7239,6 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             block_cadence: Duration,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             validation_context: SumeragiV2ValidationContext,
             timings: &mut ValidationTimings,
             mut send_events: F,
@@ -7281,7 +7253,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 Some(timings),
                 true,
@@ -7781,7 +7752,6 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
@@ -8006,7 +7976,6 @@ pub(crate) mod valid {
             let stateless_elapsed = stateless_start.elapsed();
             let execution_start = Instant::now();
             // Release block writer before creating new one
-            let _ = voting_block.take();
             let da_indexes_start = Instant::now();
             if let Err(error) = state.ensure_da_indexes_hydrated() {
                 if let Some(timings) = timings.as_deref_mut() {
@@ -8184,7 +8153,6 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             validation_context: SumeragiV2ValidationContext,
             timings: &mut ValidationTimings,
@@ -8200,7 +8168,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 soft_fork,
                 Some(timings),
                 false,
@@ -12611,7 +12578,7 @@ pub(crate) mod valid {
             };
         }
         macro_rules! validate_voting_test_block {
-            ($block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr, $keys:expr, $cadence:expr) => {{
+            ($block:expr, $topology:expr, $time_source:expr, $state:expr, $keys:expr, $cadence:expr) => {{
                 let context = authenticated_permissioned_successor_context($state, $keys);
                 ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
                     $block,
@@ -12620,13 +12587,12 @@ pub(crate) mod valid {
                     $time_source,
                     $cadence,
                     $state,
-                    $voting_block,
                     false,
                     false,
                     SumeragiV2ValidationContext::from_height_context(&context),
                 )
             }};
-            (without_authenticated_context; $block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr, $cadence:expr) => {{
+            (without_authenticated_context; $block:expr, $topology:expr, $time_source:expr, $state:expr, $cadence:expr) => {{
                 let block = $block;
                 let context =
                     SumeragiV2ValidationContext::for_body_without_context_bound_attachments(&block);
@@ -12637,7 +12603,6 @@ pub(crate) mod valid {
                     $time_source,
                     $cadence,
                     $state,
-                    $voting_block,
                     false,
                     false,
                     context,
@@ -12675,8 +12640,7 @@ pub(crate) mod valid {
             };
         }
         macro_rules! validate_signed_voting_test_block {
-            ($signed:ident, $topology:ident, $state:ident, $voting_block:ident, $time_source:ident, $result:ident, $keys:ident, $cadence:expr) => {
-                let mut $voting_block = None;
+            ($signed:ident, $topology:ident, $state:ident, $time_source:ident, $result:ident, $keys:ident, $cadence:expr) => {
                 let (_handle, $time_source) =
                     TimeSource::new_mock($signed.header().creation_time());
                 let $result = validate_voting_test_block!(
@@ -12684,7 +12648,6 @@ pub(crate) mod valid {
                     &$topology,
                     &$time_source,
                     &$state,
-                    &mut $voting_block,
                     &$keys,
                     $cadence
                 )
@@ -15503,7 +15466,7 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
-            let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
+            let network_id = crate::unit_test_support::synthetic_network_id("v2-artifact-bound-commit");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
@@ -18722,7 +18685,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18795,7 +18757,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18857,7 +18818,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18927,7 +18887,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18978,7 +18937,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19029,7 +18987,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19081,7 +19038,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19142,7 +19098,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19199,7 +19154,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19266,7 +19220,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19349,14 +19302,12 @@ pub(crate) mod valid {
                         .sign(leader.private_key())
                         .unpack(|_| {})
                         .into();
-                let mut voting_block = None;
                 let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
                 let result = validate_voting_test_block!(
                     signed,
                     &topology,
                     &time_source,
                     &state,
-                    &mut voting_block,
                     &validator_keys,
                     now
                 )
@@ -19437,7 +19388,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19515,7 +19465,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19592,13 +19541,11 @@ pub(crate) mod valid {
                 ))
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 0);
-            let mut voting_block = None;
             let result = validate_voting_test_block!(
                 signed,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(2)
             )
@@ -19698,13 +19645,11 @@ pub(crate) mod valid {
                 ))
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 1);
-            let mut voting_block = None;
             let result = validate_voting_test_block!(
                 signed,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(2)
             )
@@ -19763,13 +19708,11 @@ pub(crate) mod valid {
                 &[(0, leader.private_key()), (1, proxy_tail.private_key())],
             );
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
-            let mut voting_block = None;
             let result = validate_voting_test_block!(
                 signed,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(1)
             )
@@ -20032,7 +19975,6 @@ pub(crate) mod valid {
                     )
                 }));
             }
-            let mut v2_voting_block: Option<super::super::VotingBlock> = None;
             let v2_cadence = Duration::from_millis(1);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate_block.clone(),
@@ -20044,7 +19986,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let error = match v2_result {
@@ -20052,13 +19993,11 @@ pub(crate) mod valid {
                 Err(error) => error,
             };
             assert!(matches!(error.1.as_ref(), BlockValidationError::EmptyBlock));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 candidate_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(1)
             )
@@ -20112,7 +20051,6 @@ pub(crate) mod valid {
             };
             let candidate: SignedBlock = candidate_at(1_000_000, "v2-wall-clock-work");
             let (_clock, local_time) = TimeSource::new_mock(Duration::ZERO);
-            let mut v2_voting_block = None;
             let v2 = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate.clone(),
                 &topology,
@@ -20123,7 +20061,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let (valid, staged) = v2.expect(
@@ -20138,7 +20075,6 @@ pub(crate) mod valid {
             );
             drop(staged);
             let noncanonical: SignedBlock = candidate_at(1_000_001, "v2-noncanonical-time-work");
-            let mut noncanonical_voting_block = None;
             let rejected = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 noncanonical.clone(),
                 &topology,
@@ -20149,7 +20085,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut noncanonical_voting_block,
             )
             .unpack(|_| {});
             let error = match rejected {
@@ -20265,7 +20200,6 @@ pub(crate) mod valid {
                 .into()
             };
             let validate = |candidate: SignedBlock, context: &consensus_v2::HeightContext| {
-                let mut voting_block = None;
                 ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                     candidate,
                     &topology,
@@ -20274,7 +20208,6 @@ pub(crate) mod valid {
                     Duration::from_millis(10),
                     SumeragiV2ValidationContext::from_height_context(context),
                     &state,
-                    &mut voting_block,
                 )
                 .unpack(|_| {})
             };
@@ -20376,13 +20309,11 @@ pub(crate) mod valid {
                 assert!(events.borrow().is_empty(), "no rejection events expected");
             }
             {
-                let mut voting_block: Option<super::super::VotingBlock> = None;
                 validate_voting_test_block!(
                     signed_block.clone(),
                     &topology,
                     &validation_time_source,
                     &state,
-                    &mut voting_block,
                     &validator_keys,
                     Duration::from_millis(1)
                 )
@@ -20412,13 +20343,11 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -20487,13 +20416,11 @@ pub(crate) mod valid {
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("fixture result roots match external entrypoint");
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -20564,13 +20491,11 @@ pub(crate) mod valid {
                 )
                 .expect("fixture result roots match external entrypoint");
             assert_eq!(signed_block.committed_fragment_count(), Some(0));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -20804,14 +20729,12 @@ pub(crate) mod valid {
         fn validate_queue_plan_ttl_fixture(
             fixture: &QueuePlanTtlFixture,
         ) -> Result<(ValidBlock, Box<StateBlock<'_>>), Error> {
-            let mut voting_block = None;
             // External QueuePlan roles are rejected before height-context validation.
             validate_voting_test_block!(without_authenticated_context;
                 fixture.block.clone(),
                 &fixture.topology,
                 &fixture.block_time_source,
                 &fixture.state,
-                &mut voting_block,
                 Duration::from_millis(1)
             )
             .unpack(|_| {})
@@ -20986,13 +20909,11 @@ pub(crate) mod valid {
             let signed_block: SignedBlock = SignedBlock::from(new_block);
             // Validate using a clock far in the future; TTL should be evaluated at block time.
             let (_handle, validation_time_source) = TimeSource::new_mock(Duration::from_secs(10));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &validation_time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(50)
             )
@@ -21014,13 +20935,11 @@ pub(crate) mod valid {
                 block_time_source,
                 signed_block
             );
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &block_time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(1)
             )
@@ -21059,13 +20978,11 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let valid_signed_block: SignedBlock = valid_block.into();
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             validate_voting_test_block!(
                 valid_signed_block,
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -21093,7 +21010,6 @@ pub(crate) mod valid {
                     "test setup should present the invalid transaction as cache-warmed",
                 );
             }
-            let mut v2_voting_block: Option<super::super::VotingBlock> = None;
             let v2_cadence = Duration::from_millis(20);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 invalid_signed_block.clone(),
@@ -21105,7 +21021,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let Err(v2_error) = v2_result else {
@@ -21117,13 +21032,11 @@ pub(crate) mod valid {
                     AcceptTransactionFail::SignatureVerification(_)
                 )
             ));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 invalid_signed_block,
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(20)
             )
@@ -21187,7 +21100,6 @@ pub(crate) mod valid {
                 block_time_source,
                 signed_block
             );
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
             let height_context =
@@ -21198,7 +21110,6 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &block_time_source,
                 &state,
-                &mut voting_block,
                 false,
                 SumeragiV2ValidationContext::from_height_context(&height_context),
                 &mut timings,
@@ -21245,14 +21156,13 @@ pub(crate) mod valid {
                     &[(0, &leader_private)],
                 );
                 for prevalidated in [false, true] {
-                    let mut voting_block = None;
                     let mut timings = ValidationTimings::new();
                     let validation_context =
                         SumeragiV2ValidationContext::from_height_context(&context);
                     let result = if prevalidated {
                         ValidBlock::validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing(
                             candidate.clone(), &topology, &ALICE_ID, &block_time_source,
-                            Duration::from_millis(1), &state, &mut voting_block,
+                            Duration::from_millis(1), &state,
                             validation_context, &mut timings, |_| {},
                         ).unpack(|_| {})
                     } else {
@@ -21263,7 +21173,6 @@ pub(crate) mod valid {
                             &block_time_source,
                             Duration::from_millis(1),
                             &state,
-                            &mut voting_block,
                             false,
                             false,
                             validation_context,
@@ -21311,13 +21220,11 @@ pub(crate) mod valid {
                 .sign(wrong_leader.private_key())
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let mut full_voting_block: Option<super::super::VotingBlock> = None;
             let full_result = validate_voting_test_block!(
                 signed_block.clone(),
                 &topology,
                 &block_time_source,
                 &state,
-                &mut full_voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -21326,7 +21233,6 @@ pub(crate) mod valid {
                 full_result.is_err(),
                 "ordinary validation should reject the intentionally wrong leader signature"
             );
-            let mut v2_voting_block: Option<super::super::VotingBlock> = None;
             let v2_cadence = Duration::from_millis(10);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 signed_block.clone(),
@@ -21338,14 +21244,12 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let (_validated, staged_state) = v2_result.expect(
                 "v2 candidate validation trusts only the separately checked origin block signature",
             );
             drop(staged_state);
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
             let result =
@@ -21356,7 +21260,6 @@ pub(crate) mod valid {
                     &block_time_source,
                     Duration::from_millis(10),
                     &state,
-                    &mut voting_block,
                     SumeragiV2ValidationContext::from_height_context(
                         &authenticated_permissioned_successor_context(&state, &validator_keys),
                     ),
@@ -21394,7 +21297,6 @@ pub(crate) mod valid {
             let invalid_block = with_current_state_da_sidecars(invalid_builder, &state)
                 .sign(wrong_leader.private_key())
                 .unpack(|_| {});
-            let mut invalid_voting_block: Option<super::super::VotingBlock> = None;
             let mut invalid_events = Vec::new();
             let mut invalid_timings = ValidationTimings::new();
             let invalid_result =
@@ -21405,7 +21307,6 @@ pub(crate) mod valid {
                     &block_time_source,
                     Duration::from_millis(10),
                     &state,
-                    &mut invalid_voting_block,
                     SumeragiV2ValidationContext::from_height_context(
                         &authenticated_permissioned_successor_context(&state, &validator_keys),
                     ),
@@ -21547,13 +21448,11 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block = SignedBlock::from(new_block);
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let (valid_block, _) = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -21749,7 +21648,7 @@ pub(crate) mod valid {
                 .build_and_sign(&genesis_keypair)
                 .expect("ordered genesis parameters should build");
             let topology = Topology::new(
-                crate::sumeragi::signed_genesis_voting_peers(&genesis)
+                crate::sumeragi::startup::genesis_committee_peers(&genesis.0)
                     .expect("signed genesis must expose its exact voting roster"),
             );
             let genesis_domain =
@@ -21773,14 +21672,12 @@ pub(crate) mod valid {
                 &[(0, genesis_keypair.private_key())],
             );
             let time_source = TimeSource::new_system();
-            let mut voting_block = None;
-            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis(
                 genesis_block,
                 &topology,
                 &genesis_account,
                 &time_source,
                 &state,
-                &mut voting_block,
                 ConsensusMode::Permissioned,
             )
             .unpack(|_| {});

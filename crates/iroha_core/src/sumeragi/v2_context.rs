@@ -4,6 +4,7 @@
 //! epoch snapshots enter here once, and every non-boundary successor carries
 //! the previous frozen election inputs unchanged.
 use super::{
+    genesis_meta::{staged_genesis_execution_policy_hash, staged_genesis_nexus_amx_context_hash},
     stake_snapshot::{StrictV2StakeSnapshotError, strict_v2_voting_roster},
     v2::VerifiedHeightContext,
 };
@@ -16,10 +17,9 @@ use crate::{
         validate_persisted_global_threshold_beacon_pulse_v1,
         verify_finalized_global_threshold_beacon_pulse_v1,
     },
-    smartcontracts::isi::staking::validator_election_eligible_at_height,
     state::{
         GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateBlock, StateReadOnly, WorldReadOnly,
-        live_consensus_key_pop_for_peer_with_role, public_lane_validator_record_matches_key,
+        live_consensus_key_pop_for_peer_with_role,
     },
 };
 use iroha_crypto::{Algorithm, Hash};
@@ -228,17 +228,6 @@ pub fn freeze_genesis_merge_authority(
     })
 }
 
-/// Extract the only voting roster source accepted at fresh genesis: signed
-/// `RegisterPeerWithPop` instructions in the genesis body.
-///
-/// Plain peer registrations are observers and are intentionally absent.
-pub fn signed_genesis_voting_peers(
-    genesis: &GenesisBlock,
-) -> Result<Vec<PeerId>, V2GenesisBootstrapError> {
-    Ok(signed_genesis_validator_pops(genesis)?
-        .into_keys()
-        .collect())
-}
 /// Verify that persisted height-one finality consumes the exact voting
 /// authority signed into canonical genesis.
 ///
@@ -523,42 +512,6 @@ pub fn signed_genesis_validator_pops(
     }
     Ok(validators)
 }
-/// Compute the canonical Nexus/AMX commitment from a validated genesis state
-/// block without committing that block. The projection binds every Nexus and
-/// deterministic AMX input used by proposal assembly or validation, plus the
-/// canonically ordered public-lane validator records whose retained tenure
-/// contains height one, and the complete retained lane-incarnation lineage,
-/// including retired lane identifiers.
-#[must_use]
-pub fn staged_genesis_nexus_amx_context_hash(staged: &StateBlock<'_>) -> Hash {
-    const GENESIS_CONTEXT_HEIGHT: wire::Height = 1;
-    let eligible_validators = staged
-        .world()
-        .public_lane_validators()
-        .iter()
-        .filter(|(key, record)| public_lane_validator_record_matches_key(key, record))
-        .filter(|(_, record)| validator_election_eligible_at_height(record, GENESIS_CONTEXT_HEIGHT))
-        .map(|(key, record)| (key.clone(), record.clone()))
-        .collect::<Vec<_>>();
-    let retained_lane_lineage = staged
-        .lane_incarnation_lineage_for_snapshot()
-        .iter()
-        .map(
-            |(&lane_id, lineage)| iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry {
-                lane_id,
-                generation: lineage.generation,
-                incarnation: lineage.incarnation,
-                activation_height: lineage.activation_height,
-            },
-        )
-        .collect::<Vec<_>>();
-    iroha_config::parameters::actual::sumeragi_v2_nexus_amx_context_hash(
-        &staged.nexus,
-        &staged.pipeline,
-        &eligible_validators,
-        &retained_lane_lineage,
-    )
-}
 fn verify_staged_nexus_amx_context_hash(
     staged: &StateBlock<'_>,
     signed_hash: [u8; 32],
@@ -570,24 +523,12 @@ fn verify_staged_nexus_amx_context_hash(
     }
     Ok(signed)
 }
-/// Compute the canonical V1 execution policy from a validated, uncommitted genesis block.
-///
-/// # Errors
-///
-/// Returns an error if the Nexus policy has no authenticated runtime policy set.
-pub fn staged_genesis_execution_policy_hash(
-    staged: &StateBlock<'_>,
-) -> Result<Hash, V2GenesisBootstrapError> {
-    staged
-        .execution_policy_digest_v1()
-        .map(Hash::prehashed)
-        .map_err(|error| V2GenesisBootstrapError::ExecutionPolicy(error.to_string()))
-}
 fn verify_staged_execution_policy_hash(
     staged: &StateBlock<'_>,
     signed_hash: [u8; 32],
 ) -> Result<Hash, V2GenesisBootstrapError> {
-    let staged = staged_genesis_execution_policy_hash(staged)?;
+    let staged = staged_genesis_execution_policy_hash(staged)
+        .map_err(|error| V2GenesisBootstrapError::ExecutionPolicy(error.to_string()))?;
     let signed = Hash::prehashed(signed_hash);
     if staged != signed {
         return Err(V2GenesisBootstrapError::ExecutionPolicyHashMismatch { signed, staged });
@@ -1240,6 +1181,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         state::{State, World},
+        sumeragi::genesis_meta::tests::{genesis_header, lane_hash_world},
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
@@ -1247,11 +1189,7 @@ mod tests {
         account::AccountId,
         block::{BlockHeader, SignedBlock},
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
-        isi::{RegisterCommitteePeerWithPop, RegisterPeerWithPop, SetParameter},
-        nexus::{
-            DataSpaceCatalog, DataSpaceMetadata, PublicLaneStakeShare, PublicLaneValidatorRecord,
-            PublicLaneValidatorStatus,
-        },
+        isi::{RegisterPeerWithPop, SetParameter},
         parameter::{
             Parameter,
             custom::CustomParameter,
@@ -1264,10 +1202,9 @@ mod tests {
     };
     use iroha_genesis::GenesisBlock;
     use iroha_model_base::chain::ChainId;
-    use iroha_model_base::metadata::Metadata;
     use iroha_model_base::peer::PeerId;
-    use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    use iroha_primitives::{json::Json, numeric::Quantity};
+    use iroha_model_base::topology::LaneId;
+    use iroha_primitives::json::Json;
     use std::num::NonZeroU64;
     fn test_network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -1482,79 +1419,6 @@ mod tests {
         assert!(!authenticated.authorizes(foreign.public_key()));
     }
     #[test]
-    fn signed_genesis_roster_is_canonical_and_excludes_non_voters() {
-        let voters = [3_u8, 1, 2].map(|seed| {
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("deterministic BLS voter")
-        });
-        let genesis = signed_roster_genesis(&voters, false, false);
-        let observed = signed_genesis_voting_peers(&genesis).expect("signed roster");
-        let mut expected = voters
-            .iter()
-            .map(|key| PeerId::new(key.public_key().clone()))
-            .collect::<Vec<_>>();
-        expected.sort();
-        assert_eq!(observed, expected);
-        assert_eq!(observed.len(), voters.len());
-    }
-    #[test]
-    fn signed_genesis_roster_ignores_proof_bound_committee_peers() {
-        let voters = [0x61_u8, 0x62, 0x63, 0x64].map(|seed| {
-            KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                .expect("deterministic BLS voter")
-        });
-        let committee = KeyPair::try_from_seed(vec![0x65; 32], Algorithm::BlsNormal)
-            .expect("deterministic BLS committee peer");
-        let committee_peer = PeerId::new(committee.public_key().clone());
-        let committee_pop = iroha_crypto::bls_normal_pop_prove(committee.private_key())
-            .expect("committee PoP fixture");
-        let genesis = signed_roster_genesis_with_extra(
-            &voters,
-            false,
-            false,
-            vec![InstructionBox::from(RegisterCommitteePeerWithPop::new(
-                committee_peer.clone(),
-                committee_pop,
-            ))],
-        );
-
-        let observed = signed_genesis_voting_peers(&genesis).expect("signed global roster");
-        let mut expected = voters
-            .iter()
-            .map(|key| PeerId::new(key.public_key().clone()))
-            .collect::<Vec<_>>();
-        expected.sort();
-        assert_eq!(observed, expected);
-        assert!(!observed.contains(&committee_peer));
-        assert!(
-            !signed_genesis_validator_pops(&genesis)
-                .expect("signed validator PoPs")
-                .contains_key(&committee_peer),
-            "committee peer registrations must never widen the signed global voter roster"
-        );
-    }
-    #[test]
-    fn signed_genesis_roster_rejects_duplicate_or_invalid_pop() {
-        let voter = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::BlsNormal)
-            .expect("deterministic BLS voter");
-        assert!(matches!(
-            signed_genesis_voting_peers(&signed_roster_genesis(
-                std::slice::from_ref(&voter),
-                true,
-                false,
-            )),
-            Err(V2GenesisBootstrapError::DuplicateValidator)
-        ));
-        assert!(matches!(
-            signed_genesis_voting_peers(&signed_roster_genesis(
-                std::slice::from_ref(&voter),
-                false,
-                true,
-            )),
-            Err(V2GenesisBootstrapError::InvalidProofOfPossession)
-        ));
-    }
-    #[test]
     fn persisted_genesis_finality_authority_is_rooted_in_signed_genesis() {
         let voters = (1_u8..=4)
             .map(|seed| {
@@ -1638,7 +1502,7 @@ mod tests {
         iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
             .expect("the empty-voter negative carries valid signed metadata");
         assert!(
-            signed_genesis_voting_peers(&genesis)
+            signed_genesis_validator_pops(&genesis)
                 .expect("the signed voting roster is independently readable")
                 .is_empty()
         );
@@ -1655,110 +1519,21 @@ mod tests {
             Err(V2GenesisBootstrapError::EmptyVotingRoster)
         ));
     }
-    fn lane_record(peer: &PeerId, lane: LaneId, stake: u64) -> PublicLaneValidatorRecord {
-        let validator = AccountId::new(peer.public_key().clone());
-        PublicLaneValidatorRecord {
-            lane_id: lane,
-            validator: validator.clone(),
-            peer_id: peer.clone(),
-            stake_account: validator,
-            total_stake: Quantity::from(stake),
-            self_stake: Quantity::from(stake),
-            metadata: Metadata::default(),
-            status: PublicLaneValidatorStatus::Active,
-            activation_height: 1,
-            deactivation_height: None,
-            last_reward_epoch: None,
-        }
-    }
-    fn lane_hash_world(records: &[(LaneId, PeerId, u64)]) -> State {
-        let world = World::default();
-        {
-            let mut block = world.block();
-            for (lane, peer, stake) in records {
-                let record = lane_record(peer, *lane, *stake);
-                let validator = record.validator.clone();
-                block
-                    .public_lane_validators
-                    .insert((*lane, validator.clone()), record);
-                block.public_lane_stake_shares.insert(
-                    (*lane, validator.clone(), validator.clone()),
-                    PublicLaneStakeShare {
-                        lane_id: *lane,
-                        validator: validator.clone(),
-                        staker: validator,
-                        bonded: Quantity::from(*stake),
-                        pending_unbonds: Default::default(),
-                        metadata: Metadata::default(),
-                    },
-                );
-            }
-            block.commit();
-        }
-        State::new_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-        )
-    }
     fn staged_context_hash(state: &State) -> Hash {
-        let block = state.block(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero test height"),
-            None,
-            None,
-            0,
-            0,
-        ));
-        staged_genesis_nexus_amx_context_hash(&block)
-    }
-    fn staged_context_hash_with_record(record: PublicLaneValidatorRecord) -> Hash {
-        let state = lane_hash_world(&[]);
-        let mut block = state.block(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero test height"),
-            None,
-            None,
-            0,
-            0,
-        ));
-        block
-            .world
-            .public_lane_validators
-            .insert((record.lane_id, record.validator.clone()), record);
+        let block = state.block(genesis_header());
         staged_genesis_nexus_amx_context_hash(&block)
     }
     #[test]
-    fn staged_lane_hash_is_order_independent_and_change_sensitive() {
-        let peer_a = PeerId::new(
+    fn staged_lane_hash_verification_accepts_only_the_signed_hash() {
+        let peer = PeerId::new(
             KeyPair::try_from_seed(vec![0x61; 32], Algorithm::BlsNormal)
-                .expect("peer a")
+                .expect("peer")
                 .public_key()
                 .clone(),
         );
-        let peer_b = PeerId::new(
-            KeyPair::try_from_seed(vec![0x62; 32], Algorithm::BlsNormal)
-                .expect("peer b")
-                .public_key()
-                .clone(),
-        );
-        let state_ab = lane_hash_world(&[
-            (LaneId::new(1), peer_a.clone(), 7),
-            (LaneId::new(2), peer_b.clone(), 5),
-        ]);
-        let state_ba = lane_hash_world(&[
-            (LaneId::new(2), peer_b.clone(), 5),
-            (LaneId::new(1), peer_a.clone(), 7),
-        ]);
-        let changed = lane_hash_world(&[(LaneId::new(1), peer_a, 8), (LaneId::new(2), peer_b, 5)]);
-        let hash = staged_context_hash(&state_ab);
-        assert_eq!(hash, staged_context_hash(&state_ba));
-        assert_ne!(hash, staged_context_hash(&changed));
-        let staged = state_ab.block(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero test height"),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let state = lane_hash_world(&[(LaneId::new(1), peer, 7)]);
+        let hash = staged_context_hash(&state);
+        let staged = state.block(genesis_header());
         assert_eq!(
             verify_staged_nexus_amx_context_hash(&staged, hash.into())
                 .expect("signed canonical hash"),
@@ -1770,57 +1545,9 @@ mod tests {
         ));
     }
     #[test]
-    fn staged_genesis_hash_uses_height_one_half_open_validator_tenure() {
-        let peer = PeerId::new(
-            KeyPair::try_from_seed(vec![0x64; 32], Algorithm::BlsNormal)
-                .expect("validator")
-                .public_key()
-                .clone(),
-        );
-        let lane = LaneId::new(3);
-        let empty_hash = staged_context_hash(&lane_hash_world(&[]));
-        let mut record = lane_record(&peer, lane, 7);
-
-        record.status = PublicLaneValidatorStatus::PendingActivation(1);
-        assert_ne!(
-            staged_context_hash_with_record(record.clone()),
-            empty_hash,
-            "a due pending label cannot suppress height-one tenure"
-        );
-
-        record.status = PublicLaneValidatorStatus::Exiting(u64::MAX);
-        record.deactivation_height = Some(2);
-        assert_ne!(
-            staged_context_hash_with_record(record.clone()),
-            empty_hash,
-            "an exiting label cannot suppress retained height-one tenure"
-        );
-
-        record.status = PublicLaneValidatorStatus::Slashed(Hash::new(b"height-one slash"));
-        assert_ne!(
-            staged_context_hash_with_record(record.clone()),
-            empty_hash,
-            "a slashed label cannot suppress retained height-one tenure"
-        );
-
-        record.status = PublicLaneValidatorStatus::Exiting(u64::MAX);
-        record.deactivation_height = Some(1);
-        assert_eq!(
-            staged_context_hash_with_record(record),
-            empty_hash,
-            "the deactivation boundary is exclusive"
-        );
-    }
-    #[test]
     fn staged_execution_policy_hash_rejects_process_local_drift() {
         let baseline = lane_hash_world(&[]);
-        let staged = baseline.block(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero test height"),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let staged = baseline.block(genesis_header());
         let expected =
             staged_genesis_execution_policy_hash(&staged).expect("derive baseline policy");
         assert_eq!(
@@ -1833,58 +1560,11 @@ mod tests {
         let mut pipeline = drifted.pipeline_snapshot();
         pipeline.overlay_max_bytes = pipeline.overlay_max_bytes.saturating_add(1);
         drifted.set_pipeline(pipeline);
-        let staged = drifted.block(BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero test height"),
-            None,
-            None,
-            0,
-            0,
-        ));
+        let staged = drifted.block(genesis_header());
         assert!(matches!(
             verify_staged_execution_policy_hash(&staged, expected.into()),
             Err(V2GenesisBootstrapError::ExecutionPolicyHashMismatch { .. })
         ));
-    }
-    #[test]
-    fn staged_lane_hash_binds_catalog_routing_and_amx_policy() {
-        let peer = PeerId::new(
-            KeyPair::try_from_seed(vec![0x63; 32], Algorithm::BlsNormal)
-                .expect("peer")
-                .public_key()
-                .clone(),
-        );
-        let records = [(LaneId::SINGLE, peer, 9)];
-        let baseline = lane_hash_world(&records);
-        let mut changed_catalog = lane_hash_world(&records);
-        let catalog = DataSpaceCatalog::new(vec![
-            DataSpaceMetadata::default(),
-            DataSpaceMetadata {
-                id: DataSpaceId::new(7),
-                alias: "runtime-only-extra".to_owned(),
-                description: None,
-                fault_tolerance: 1,
-            },
-        ])
-        .expect("valid runtime catalog");
-        changed_catalog.set_dataspace_catalog_for_testing(catalog);
-        assert_ne!(
-            baseline.view().world().dataspace_catalog(),
-            changed_catalog.view().world().dataspace_catalog(),
-        );
-        assert_ne!(
-            staged_context_hash(&baseline),
-            staged_context_hash(&changed_catalog),
-            "dataspace catalog changes must alter the signed height context",
-        );
-        let mut changed_amx = lane_hash_world(&records);
-        let mut pipeline = changed_amx.pipeline_snapshot();
-        pipeline.amx_group_budget_ms = pipeline.amx_group_budget_ms.saturating_add(1);
-        changed_amx.set_pipeline(pipeline);
-        assert_ne!(
-            staged_context_hash(&baseline),
-            staged_context_hash(&changed_amx),
-            "AMX policy changes must alter the signed height context",
-        );
     }
     fn artifact(
         mut context: wire::HeightContext,

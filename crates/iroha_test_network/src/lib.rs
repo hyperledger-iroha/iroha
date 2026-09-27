@@ -35,7 +35,7 @@ use iroha_core::sumeragi::{
     consensus::{
         NPOS_TAG, PERMISSIONED_TAG, PROTO_VERSION, compute_consensus_parameters_fingerprint,
     },
-    signed_genesis_voting_peers,
+    startup::genesis_committee_peers,
 };
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey, sha256,
@@ -524,7 +524,7 @@ fn revision4_committee_at_least(min_peers: usize) -> Option<usize> {
         .find(|peers| *peers >= min_peers)
 }
 fn assert_genesis_voting_roster_matches_network(genesis: &GenesisBlock, expected_peers: &[PeerId]) {
-    let actual = signed_genesis_voting_peers(genesis)
+    let actual = genesis_committee_peers(&genesis.0)
         .unwrap_or_else(|error| {
             panic!("test-network genesis has an invalid voting roster: {error}")
         })
@@ -16751,7 +16751,7 @@ mod tests {
             "peer-specific restart layers must preserve the non-voting observer role"
         );
         assert_eq!(
-            signed_genesis_voting_peers(&network.genesis())
+            genesis_committee_peers(&network.genesis().0)
                 .expect("custom genesis voting roster")
                 .into_iter()
                 .collect::<BTreeSet<_>>(),
@@ -16849,7 +16849,7 @@ mod tests {
             .map(NetworkPeer::id)
             .collect::<BTreeSet<_>>();
         assert_eq!(
-            signed_genesis_voting_peers(&network.genesis())
+            genesis_committee_peers(&network.genesis().0)
                 .expect("custom genesis voting roster")
                 .into_iter()
                 .collect::<BTreeSet<_>>(),

@@ -88,7 +88,7 @@ fn successful_apply_frontier_rendezvous_observes_both_gates_before_worker_comple
         let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
         let (completed, observed) = std::sync::mpsc::channel();
-        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-both-gates")
+        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-both-gates")
             .spawn_scoped(scope, move || {
                 let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
                 worker_pause.before_store.arrive_and_wait();
@@ -134,7 +134,7 @@ fn successful_apply_frontier_worker_exit_before_arrival_notifies_both_gates() {
         std::thread::scope(|scope| {
             let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
             let worker_pause = Arc::clone(&pause);
-            let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-early-exit")
+            let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-early-exit")
                 .spawn_scoped(scope, move || {
                     let _finished = NotifySuccessfulApplyExit(worker_pause);
                     match disposition {
@@ -181,7 +181,7 @@ fn successful_apply_frontier_worker_exit_between_gates_preserves_first_arrival()
     std::thread::scope(|scope| {
         let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
-        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-between-gates")
+        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-between-gates")
             .spawn_scoped(scope, move || {
                 let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
                 worker_pause.before_store.arrive_and_wait();
@@ -215,7 +215,7 @@ fn successful_apply_frontier_observer_unwind_releases_and_joins_worker() {
     std::thread::scope(|scope| {
         let release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
-        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-observer-unwind")
+        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-observer-unwind")
             .spawn_scoped(scope, move || {
                 let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
                 worker_pause.before_store.arrive_and_wait();
@@ -760,7 +760,7 @@ fn current_carrier_accepts_signed_direct_ordinary_route_without_local_queue() {
 #[test]
 fn retained_current_genesis_executes_once_and_publishes_original_owner() {
     let handle =
-        crate::sumeragi::sumeragi_thread_builder("retained-current-genesis-original-owner")
+        crate::sumeragi::threads::sumeragi_thread_builder("retained-current-genesis-original-owner")
             .spawn(retained_current_genesis_on_consensus_stack)
             .expect("spawn retained genesis test on the production consensus stack");
     if let Err(payload) = handle.join() {

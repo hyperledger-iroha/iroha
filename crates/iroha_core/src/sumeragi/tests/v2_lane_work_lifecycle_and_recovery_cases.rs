@@ -766,7 +766,7 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
         .collect::<Vec<_>>();
     let current_epoch = {
         let world = adapter.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(
+        crate::sumeragi::v2_npos::epoch_for_height_from_world(
             &world,
             adapter.context.height,
             adapter.context.mode,
@@ -1281,7 +1281,7 @@ fn autonomous_payload_and_new_view_ingress_are_exact_and_contiguous() {
     .expect("derive successor exclusively from the authenticated boundary snapshot");
     let committed_successor_epoch = {
         let world = adapter.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(&world, context.height, context.mode)
+        crate::sumeragi::v2_npos::epoch_for_height_from_world(&world, context.height, context.mode)
             .expect("fixture has a valid committed epoch schedule")
     };
     assert_eq!(context.epoch, committed_successor_epoch);

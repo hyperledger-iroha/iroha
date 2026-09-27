@@ -451,10 +451,8 @@ fn validate_genesis(request: &Request, proof: &GenesisProof) -> Result<()> {
     .map_err(|_| Error::Crypto)?;
     // Use the exact native height-context owner. Topology insertion order and
     // caller ordering cannot select authorization indices.
-    let ordered = iroha_core::sumeragi::signed_genesis_voting_peers(&iroha_genesis::GenesisBlock(
-        validated.block().clone(),
-    ))
-    .map_err(|_| Error::Crypto)?;
+    let ordered = iroha_core::sumeragi::startup::genesis_committee_peers(validated.block())
+        .map_err(|_| Error::Crypto)?;
     let required_pulse = first_required_pulse_height(proof)?;
     if ordered != request.target_roster
         || ordered != request.authorization_roster

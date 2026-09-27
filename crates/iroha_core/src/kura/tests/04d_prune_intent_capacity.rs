@@ -660,7 +660,7 @@ fn empty_current_tip_cleanup_authenticates_header_only_retained_index() {
         let _ = kura.prune_to_height(0);
     }));
     assert!(crash.is_err());
-    crate::sumeragi::v2_status::clear_consensus_transition_poison_for_tests();
+    crate::kura::clear_consensus_transition_poison_for_tests();
     let intent = Kura::read_prune_intent(temp_dir.path())
         .expect("read empty current-tip intent")
         .expect("empty current-tip intent is durable");
@@ -761,7 +761,7 @@ fn current_tip_sidecar_rewrite_uses_v3_intent_and_exact_peak_capacity() {
         crash.is_err(),
         "intent failpoint must stop before sidecar allocation"
     );
-    crate::sumeragi::v2_status::clear_consensus_transition_poison_for_tests();
+    crate::kura::clear_consensus_transition_poison_for_tests();
     let intent = Kura::read_prune_intent(temp_dir.path())
         .expect("read exact current-tip intent")
         .expect("current-tip intent is durable");

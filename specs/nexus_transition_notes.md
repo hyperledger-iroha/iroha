@@ -524,7 +524,7 @@ deactivation so an already frozen committee cannot be rewritten. Ended tenures
 remain available for lifecycle audit and offence attribution but cannot enter a
 later recovery or active topology. Lane reset, rebind, and autoscale scale-in
 wait for every reset-owned tenure to reach deactivation, all stake-share and
-pending-unbond custody to drain, and pending evidence liens to clear before
+pending-unbond custody to drain before
 terminal records and economic indexes may be removed. Reset ownership matches
 either the storage key lane or embedded record lane, preventing a recreated
 lane id from inheriting stale authority without erasing live committee or slash

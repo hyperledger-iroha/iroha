@@ -1794,7 +1794,7 @@ pub(crate) fn plan_lane_reservation_ownership(
     let evidence_epochs = evidence_inputs
         .iter()
         .map(|group| {
-            crate::sumeragi::epoch_for_height_from_world(
+            crate::sumeragi::v2_npos::epoch_for_height_from_world(
                 &world,
                 group.identity.proposal_height,
                 active_context.mode,
@@ -1835,7 +1835,7 @@ pub(crate) fn plan_lane_reservation_ownership(
             });
             continue;
         }
-        let epoch = crate::sumeragi::epoch_for_height_from_world(
+        let epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
             &world,
             input.group.identity.proposal_height,
             active_context.mode,
@@ -5316,7 +5316,6 @@ impl V2ApplyService {
             .execution_context()
             .and_then(|bundle| bundle.merge_entry.as_ref());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
-        let mut voting_block = None;
         #[cfg(test)]
         self.test_failures
             .candidate_executions
@@ -5330,7 +5329,6 @@ impl V2ApplyService {
                 self.block_cadence,
                 crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
                 self.state.as_ref(),
-                &mut voting_block,
             )
             .map_err(|(failed_block, error)| {
                 self.classify_validation_failure(
@@ -5501,7 +5499,6 @@ impl V2ApplyService {
             .is_some_and(|reference| reference.execution_batch_hash.is_some());
         let autonomous_apply_started = Instant::now();
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
-        let mut voting_block = None;
         let mut pipeline_events = Vec::new();
         #[cfg(test)]
         self.test_failures
@@ -5516,7 +5513,6 @@ impl V2ApplyService {
                 self.block_cadence,
                 crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
                 self.state.as_ref(),
-                &mut voting_block,
             )
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(failed_block, error)| {

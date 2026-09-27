@@ -431,7 +431,7 @@ state_test! { sync native_candidate_proof_rejects_foreign_state_and_network
     assert!(fixture.work.is_current(&fixture.state, context.context()));
     assert!(!fixture.work.is_current(&foreign.state, context.context()));
     let mut wrong_network = context.context().clone();
-    wrong_network.network_id = crate::sumeragi::synthetic_network_id("foreign-native-candidate");
+    wrong_network.network_id = crate::unit_test_support::synthetic_network_id("foreign-native-candidate");
     assert!(!fixture.work.is_current(&fixture.state, &wrong_network));
     let mut wrong_height = context.context().clone();
     wrong_height.height += 1;

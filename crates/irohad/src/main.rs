@@ -92,7 +92,7 @@ use iroha_core::{
     snapshot::{TryReadError as TryReadSnapshotError, try_read_snapshot_with_bootstrap_policy},
     state::{State, World, WorldReadOnly as _},
     streaming::{ManifestPublisher, run_ticket_event_listener},
-    sumeragi::{VotingBlock, filter_validators_from_trusted, network_topology::Topology},
+    sumeragi::{filter_validators_from_trusted, network_topology::Topology},
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
@@ -3155,25 +3155,11 @@ impl Iroha {
                     "Genesis manifest crypto settings do not match node configuration: {err}"
                 )));
             }
-            let expected = match signed_consensus_mode {
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
-                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG
-                }
-                iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
-                    iroha_core::sumeragi::consensus::NPOS_TAG
-                }
-            };
-            let got = match manifest.consensus_mode() {
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG
-                }
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => {
-                    iroha_core::sumeragi::consensus::NPOS_TAG
-                }
-            };
-            if got != expected {
+            let got =
+                iroha_data_model::parameter::system::ConsensusMode::from(manifest.consensus_mode());
+            if got != signed_consensus_mode {
                 return Err(Report::new(StartError::InitKura).attach(format!(
-                    "Genesis manifest consensus_mode mismatch: manifest `{got}`, expected `{expected}`"
+                    "Genesis manifest consensus_mode mismatch: manifest `{got:?}`, expected `{signed_consensus_mode:?}`"
                 )));
             }
         }
@@ -8753,21 +8739,18 @@ fn validate_genesis_execution_offline(
             .change_context(MainError::Config)?;
     apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
         .change_context(MainError::Config)?;
-    let signed_voters =
-        iroha_core::sumeragi::signed_genesis_voting_peers(genesis).map_err(|error| {
-            Report::new(MainError::Config).attach(format!(
-                "invalid signed Sumeragi v2 genesis roster: {error}"
-            ))
+    let signed_voters = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis.0)
+        .map_err(|error| {
+            Report::new(MainError::Config)
+                .attach(format!("invalid signed Sumeragi genesis roster: {error}"))
         })?;
     let topology = Topology::new(signed_voters);
-    let mut voting_block: Option<VotingBlock> = None;
-    let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (_valid, staged) = ValidBlock::validate_signed_genesis(
         genesis.0.clone(),
         &topology,
         genesis_authority,
         &TimeSource::new_system(),
         &state,
-        &mut voting_block,
         signed_mode,
     )
     .unpack(|_| {})
@@ -8918,7 +8901,7 @@ fn consensus_caps_from_genesis(
                 == iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned =>
         {
             (
-                iroha_core::sumeragi::signed_genesis_voting_peers(genesis)
+                iroha_core::sumeragi::schedule::genesis_validators(genesis)
                     .ok()?
                     .len(),
                 None,
@@ -11221,21 +11204,19 @@ mod tests {
             let provisional =
                 sign_configured_genesis_for_test(genesis.clone(), genesis_authority, config);
             let authority = AccountId::new(genesis_authority.public_key().clone());
-            let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
+            let voters = iroha_core::sumeragi::startup::genesis_committee_peers(&provisional.0)
                 .expect("provisional fixture voting roster");
             let topology = Topology::new(voters);
             let (mode, _) =
                 signed_v2_genesis_context_metadata(&provisional).expect("signed v2 metadata");
             let (_validation_root, state, _kura) =
                 genesis_staging_state_for_test(config, &provisional);
-            let mut voting_block = None;
-            let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let (_valid, staged) = ValidBlock::validate_signed_genesis(
                 provisional.0,
                 &topology,
                 &authority,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 mode,
             )
             .unpack(|_| {})
@@ -11464,14 +11445,12 @@ mod tests {
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
             )]);
             let time_source = TimeSource::new_system();
-            let mut voting_block = None;
-            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis(
                 block,
                 &topology,
                 &genesis_account_id,
                 &time_source,
                 &state,
-                &mut voting_block,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             )
             .unpack(|_| {});
@@ -11533,21 +11512,19 @@ mod tests {
             let genesis = bind_staged_context_for_test(raw_genesis, &genesis_authority, &config);
             let (_validation_root, state, _kura) =
                 genesis_staging_state_for_test(&config, &genesis);
-            let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&genesis)
+            let voters = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis.0)
                 .expect("signed voting roster");
             let topology = Topology::new(voters);
             let before_height = state.committed_height();
             let before_hashes = state.committed_block_hashes_snapshot();
-            let mut voting_block = None;
             let (mode, _signed_parameters) =
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
-            let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let (_valid, staged) = ValidBlock::validate_signed_genesis(
                 genesis.0.clone(),
                 &topology,
                 &authority_id,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 mode,
             )
             .unpack(|_| {})

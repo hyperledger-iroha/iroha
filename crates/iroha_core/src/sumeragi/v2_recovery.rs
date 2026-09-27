@@ -3037,7 +3037,7 @@ mod tests {
     ) -> Hash {
         let keys = verified_keys();
         let network_id =
-            crate::sumeragi::synthetic_network_id("committed-nexus-tenure-boundary-test");
+            crate::unit_test_support::synthetic_network_id("committed-nexus-tenure-boundary-test");
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_consensus_keys(&kura, network_id, &keys);
         let context = verified_context_for_policy_state(&state, network_id, &keys);

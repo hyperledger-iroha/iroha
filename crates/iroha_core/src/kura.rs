@@ -22099,7 +22099,7 @@ impl Kura {
     /// intent is durable, any storage failure is fail-stop and startup completes the prune forward.
     /// A suffix containing durable v2 finality cannot be pruned.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
-        let _transition_guard = crate::sumeragi::v2_status::consensus_transition_guard();
+        let _transition_guard = consensus_transition_guard();
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.ensure_no_retired_rollback_intents()?;

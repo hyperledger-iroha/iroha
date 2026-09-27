@@ -958,7 +958,7 @@ impl CertifiedServeReplayFixture {
             })
             .collect::<Vec<_>>();
         let network_id =
-            crate::sumeragi::synthetic_network_id("certified-serve-replay-authority-test");
+            crate::unit_test_support::synthetic_network_id("certified-serve-replay-authority-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
         let context = wire::HeightContext {
@@ -1079,7 +1079,7 @@ impl CertifiedServeRecoveredReplayFixture {
             })
             .collect::<Vec<_>>();
         let network_id =
-            crate::sumeragi::synthetic_network_id("recovered-certified-serve-replay-test");
+            crate::unit_test_support::synthetic_network_id("recovered-certified-serve-replay-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
         let context = wire::HeightContext {

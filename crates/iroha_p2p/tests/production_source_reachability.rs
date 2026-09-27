@@ -29,6 +29,7 @@ const PRODUCTION_SOURCES: &[&str] = &[
 
 const TEST_ONLY_SOURCES: &[&str] = &[
     "src/frame_identity_tests.rs",
+    "src/network/actor_admission_fixture.rs",
     "src/network/admission_class_tests.rs",
     "src/network/connection_arbitration/tests.rs",
     "src/network/connection_lifecycle_tests.rs",
@@ -39,9 +40,9 @@ const TEST_ONLY_SOURCES: &[&str] = &[
     "src/network/runtime_tests.rs",
     "src/network/tcp_listener_bind_tests.rs",
     "src/payload_codec_tests.rs",
-    "src/peer/receive_credit/progress_fixture.rs",
     "src/peer/receive_credit/tests.rs",
     "src/peer/receive_credit/arbitration_tests.rs",
+    "src/peer/receive_credit/stream/health_tests.rs",
     "src/peer/run/admission_class_tests.rs",
     "src/peer/run/payload_codec_tests.rs",
     "src/peer_consensus_mode_test.rs",

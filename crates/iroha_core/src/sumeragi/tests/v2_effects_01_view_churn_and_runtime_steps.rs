@@ -910,7 +910,7 @@ fn production_transport_adversarial_matrix_still_finalizes_three_of_four() {
         };
         let mut foreign_context = fixture.context.clone();
         foreign_context.network_id =
-            crate::sumeragi::synthetic_network_id("delayed-gst-foreign-context");
+            crate::unit_test_support::synthetic_network_id("delayed-gst-foreign-context");
         let mut wrong_context = canonical_prepare.clone();
         wrong_context.round.context_id = foreign_context.id();
         wrong_context.proposal_round.context_id = foreign_context.id();

@@ -40,19 +40,16 @@ class and Topic are separate owners:
 
 | Class | Payload family | Scheduling resource |
 | --- | --- | --- |
-| Safety | V2 safety messages | protected high |
-| Lane | ordinary consensus control | high |
-| Payload | certified bodies | high |
-| Availability | ordinary signed RS16 PayloadChunk | protected high |
-| RecoveryControl | sidecar Request/Close/CloseAck/GenerationHint | protected high |
-| RecoveryData | sidecar Chunk, at most 64 KiB data | protected high |
+| Safety | consensus safety messages (`ConsensusSafety` topic) | protected high |
+| Lane | ordinary consensus control (`Consensus` topic) | high |
+| Payload | consensus bodies and chunks (`ConsensusPayload`/`ConsensusChunk`) | high |
 | Control | application control/proxy messages | high |
 | BlockSync | ordinary block synchronization | low |
 | Low | remaining gossip/health/application traffic | low |
 
-Existing Topic caps remain authoritative. Native Core witnesses calculate
-complete signed relay/peer envelope maxima from the RS16 chunk/signature bounds
-and sidecar shapes; a broad Topic cap is not a recovery size witness. Reader
+The class is a function of the Topic. Existing Topic caps remain authoritative and
+are the class maxima: Safety and Control use the control cap, Lane the consensus cap,
+Payload and BlockSync the block-sync cap, Low the largest remaining low cap. Reader
 admission requires declared, bounded raw and fully decoded classes to agree.
 The connected-peer authentication does not replace relay-origin or consensus
 signature/authority validation by the existing consumers.
@@ -82,8 +79,8 @@ Let `H`/`L` be configured high/low byte budgets, `P` the existing per-PeerId
 progress reserve and `N` the admitted connection/source bound. Each owner keeps
 its existing physical ceiling. High class sublimits partition `H`, and
 BlockSync/other Low partition `L`. Private `P` first funds all three physical
-allocations for full Safety, Availability and both recovery maxima plus fixed
-control cells, then deterministically divides the residual. Shared class/scratch
+allocations for the full Safety maximum plus fixed control cells, then
+deterministically divides the residual. Shared class/scratch
 saturation does not spend another admitted PeerId's private protected reserve.
 Startup rejects insufficient geometry; no extra pool is created to make it fit.
 Large ordinary bodies have no claim to a full private protected maximum.
@@ -94,21 +91,17 @@ only its unspent grants after I/O closes. Old delivered work keeps its original
 reservations until physical consumption. Outbound posts likewise reserve
 semantic `H`/`L`/`P` bytes before joining a peer FIFO and keep them through flush.
 
-The network actor has six protected classes: Safety, Lane, body Bulk,
-Availability, RecoveryControl and RecoveryData. Its public exact-output API
-keeps three producer classes; the transport actor class derives from the actual
-payload, never caller priority. For each of `T = 2N` authorized target slots,
-Lane retains 65 FIFO metadata ranks and each other class has 26: the original
-195 total. Extra small-frame source bytes and three source counts per target
-are transferred from ordinary actor capacity, not added. Algebraically,
-`H_new + T*(S+Lane+Bulk+Availability+RecoveryControl+RecoveryData)` equals
-`H_old + T*(S+Lane+Bulk)`; the independent safety and low owners are unchanged.
+The network actor has three protected classes: Safety, Lane and Bulk (Payload
+and BlockSync). The transport actor class derives from the actual payload, never
+caller priority. For each of `T = 2N` authorized target slots, every class
+retains 65 FIFO metadata ranks (195 total). The independent safety and low
+owners are unchanged.
 
 Physical inbound and daemon subscriber queues partition their existing count
 budgets across the semantic classes. Default high count is 8192, low count
 32768, post count 2048, and subscriber count 8192. Default byte budgets are
-128 MiB high and 64 MiB low. Validated nonzero partitions, checked arithmetic
-and native maximum witnesses are mandatory. These are retained-owner bounds,
+128 MiB high and 64 MiB low. Validated nonzero partitions and checked
+arithmetic are mandatory. These are retained-owner bounds,
 not measured process RSS; kernel/TLS state, fixed parser storage and application
 execution graphs have separate owners and qualification obligations.
 

@@ -409,7 +409,7 @@ fn fixed_view_zero_genesis_binds_under_a_later_proposal_lock() {
     let genesis_key = KeyPair::try_from_seed(vec![0xE1; 32], Algorithm::Ed25519)
         .expect("deterministic genesis key");
     let genesis_transaction = TransactionBuilder::new(
-        crate::sumeragi::synthetic_network_id("fixed-view-zero-genesis"),
+        crate::unit_test_support::synthetic_network_id("fixed-view-zero-genesis"),
         AccountId::new(genesis_key.public_key().clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
@@ -2558,7 +2558,7 @@ fn finalized_sidecar_server_fixture_with_lane_committee(
         HistoricalSidecarFinality::Exact | HistoricalSidecarFinality::Missing => {}
         HistoricalSidecarFinality::WrongNetwork => {
             finality_context.network_id =
-                crate::sumeragi::synthetic_network_id("wrong-historical-sidecar-network");
+                crate::unit_test_support::synthetic_network_id("wrong-historical-sidecar-network");
         }
         HistoricalSidecarFinality::WrongRoster => {
             finality_keys = (11_u8..=14)

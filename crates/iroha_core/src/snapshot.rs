@@ -50,6 +50,9 @@ use std::{
     time::{Duration, Instant},
 };
 mod errors;
+mod startup_recovery;
+pub use startup_recovery::StartupRecovery;
+pub(crate) use startup_recovery::{StartupRecoveryPublisher, channel as startup_recovery_channel};
 
 pub use errors::TryReadError;
 use errors::TryWriteError;
@@ -841,7 +844,7 @@ impl SnapshotMaker {
     pub fn start(
         snapshot_maker: Option<Self>,
         state: Arc<State>,
-        startup_recovery: crate::sumeragi::StartupRecovery,
+        startup_recovery: StartupRecovery,
         shutdown_signal: ShutdownSignal,
     ) -> Child {
         Child::new(
@@ -875,13 +878,13 @@ impl SnapshotMaker {
     }
 
     pub(crate) async fn run_startup_maintenance<B, W, F>(
-        mut startup_recovery: crate::sumeragi::StartupRecovery,
+        mut startup_recovery: StartupRecovery,
         shutdown_signal: ShutdownSignal,
         budget: B,
         writers: W,
     ) where
         B: FnOnce(),
-        W: FnOnce(crate::sumeragi::StartupRecovery, ShutdownSignal) -> F,
+        W: FnOnce(StartupRecovery, ShutdownSignal) -> F,
         F: std::future::Future<Output = ()>,
     {
         if !startup_recovery.wait_for_success(&shutdown_signal).await
@@ -898,7 +901,7 @@ impl SnapshotMaker {
 
     pub(crate) async fn run_snapshot_loop<W: FnMut()>(
         create_every: Duration,
-        mut startup_recovery: crate::sumeragi::StartupRecovery,
+        mut startup_recovery: StartupRecovery,
         shutdown_signal: ShutdownSignal,
         mut write_snapshot: W,
     ) {

@@ -228,10 +228,12 @@ impl State {
             .ok_or("execution publication requires actual captured casting bindings")?;
         let keys = keys()?;
         let context = if block.header().is_genesis() {
-            let signed_peers = v2_context::signed_genesis_voting_peers(
+            let signed_peers = crate::sumeragi::schedule::genesis_validators(
                 &iroha_genesis::GenesisBlock(block.clone()),
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| error.to_string())?
+            .into_keys()
+            .collect::<Vec<_>>();
             let roster = keys
                 .iter()
                 .map(|key| wire::ValidatorPower {
@@ -273,10 +275,10 @@ impl State {
                     leader_seed: [0xD2; 32],
                 },
                 next_epoch_snapshot: None,
-                nexus_amx_context_hash: v2_context::staged_genesis_nexus_amx_context_hash(
+                nexus_amx_context_hash: crate::sumeragi::genesis_meta::staged_genesis_nexus_amx_context_hash(
                     &state_block,
                 ),
-                execution_policy_hash: v2_context::staged_genesis_execution_policy_hash(
+                execution_policy_hash: crate::sumeragi::genesis_meta::staged_genesis_execution_policy_hash(
                     &state_block,
                 )
                 .map_err(|error| error.to_string())?,

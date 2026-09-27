@@ -2110,7 +2110,7 @@ fn native_amx_all_manifest_barrier_does_not_promote_another_routes_receipt_temp(
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lane_config, &catalog)
         .expect("initialize multi-route Native barrier Kura");
-    kura.bind_lane_storage_network(crate::sumeragi::synthetic_network_id(
+    kura.bind_lane_storage_network(crate::unit_test_support::synthetic_network_id(
         "native-manifest-exec-test",
     ))
     .expect("bind the real Native manifest fixture network");
@@ -2732,7 +2732,7 @@ fn native_amx_prepublication_token_rejects_every_state_frontier_drift_and_order_
             power: 1,
         })
         .collect::<Vec<_>>();
-    let network_id = crate::sumeragi::synthetic_network_id("native-frontier-token-test");
+    let network_id = crate::unit_test_support::synthetic_network_id("native-frontier-token-test");
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
         crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, block.header().height().get(), &roster);
     let context = HeightContext {

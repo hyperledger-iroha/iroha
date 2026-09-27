@@ -50,7 +50,6 @@ impl ValidBlock {
         block_cadence: Duration,
         validation_context: SumeragiV2ValidationContext,
         state: &'state State,
-        voting_block: &mut Option<VotingBlock>,
     ) -> Result<crate::state::PreparedCarrier<'state>, Error> {
         let Some(context) = validation_context.authenticated_height_context.clone() else {
             return Err((
@@ -83,7 +82,6 @@ impl ValidBlock {
             block_cadence,
             validation_context,
             state,
-            voting_block,
         )
         .unpack(|_| {})?;
         crate::state::PreparedCarrier::prepare(ValidatedCarrierPreparationInput {

@@ -1500,7 +1500,7 @@ fn readers_blocked_behind_inflight_prune_fail_closed_after_durable_intent() {
         "a reader that passed its precheck must not expose an above-target cached block after fail-stop"
     );
     pruner.join().expect("pruner");
-    crate::sumeragi::v2_status::clear_consensus_transition_poison_for_tests();
+    crate::kura::clear_consensus_transition_poison_for_tests();
     hash_reader.join().expect("hash reader");
     block_reader.join().expect("block reader");
     assert!(kura.prune_recovery_is_required());
@@ -1534,7 +1534,7 @@ fn prune_crash_boundaries_recover_forward_and_poison_live_kura() {
             kura.prune_to_height(2).expect("injected prune must panic")
         }));
         assert!(crash.is_err(), "stage {stage} must inject a crash");
-        crate::sumeragi::v2_status::clear_consensus_transition_poison_for_tests();
+        crate::kura::clear_consensus_transition_poison_for_tests();
         assert!(
             !kura.prune_in_progress.load(Ordering::Acquire),
             "stage {stage} must clear the in-process gate during unwind"
@@ -1693,7 +1693,7 @@ fn prune_indexed_sidecar_promotion_failures_preserve_recovery_and_reject_stale_t
             let _ = kura.prune_to_height(2);
         }));
         assert!(crash.is_err(), "promotion stage {promotion_stage}");
-        crate::sumeragi::v2_status::clear_consensus_transition_poison_for_tests();
+        crate::kura::clear_consensus_transition_poison_for_tests();
         let pipeline_dir = primary_blocks_dir(&temp_dir).join(PIPELINE_DIR_NAME);
         let data_path = pipeline_dir.join(PIPELINE_SIDECARS_DATA_FILE);
         let index_path = pipeline_dir.join(PIPELINE_SIDECARS_INDEX_FILE);

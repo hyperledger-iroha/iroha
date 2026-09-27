@@ -280,11 +280,10 @@ fn fresh_four_seat_bootstrap_roundtrips_native_custody_and_lifecycle_quorum() {
 fn bootstrap_rejects_foreign_genesis_rosters_transcripts_and_lifecycle_substitution() {
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
     let (request, genesis, keys) = request_and_genesis();
-    let core_roster =
-        iroha_core::sumeragi::signed_genesis_voting_peers(&iroha_genesis::GenesisBlock(
-            iroha_genesis::decode_signed_genesis(&genesis.signed_wire).expect("native wire"),
-        ))
-        .expect("native height-context roster");
+    let core_roster = iroha_core::sumeragi::startup::genesis_committee_peers(
+        &iroha_genesis::decode_signed_genesis(&genesis.signed_wire).expect("native wire"),
+    )
+    .expect("native height-context roster");
     assert_eq!(request.authorization_roster, core_roster);
     // A valid signed manifest may list its topology in another insertion order;
     // only the native context's sorted voting identities own seat numbering.

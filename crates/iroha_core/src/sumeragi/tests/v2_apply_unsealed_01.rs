@@ -2,7 +2,7 @@ macro_rules! v2_apply_test {
     ($name:ident, $body:block) => {
         #[test]
         fn $name() {
-            let handle = crate::sumeragi::sumeragi_thread_builder(concat!(
+            let handle = crate::sumeragi::threads::sumeragi_thread_builder(concat!(
                 "sumeragi-v2-apply-test-",
                 stringify!($name)
             ))

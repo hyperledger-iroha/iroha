@@ -18,7 +18,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::isi::Registrable as _,
     state::{State, World},
-    sumeragi::{VotingBlock, network_topology::Topology},
+    sumeragi::network_topology::Topology,
 };
 use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
 use iroha_data_model::{
@@ -1142,22 +1142,20 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
     configure_staged_genesis_state(&mut state, genesis, config, nexus)?;
-    let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
-        .map_err(|error| eyre!("invalid signed Sumeragi v2 genesis roster: {error}"))?;
+    let voters = iroha_core::sumeragi::schedule::genesis_validators(&provisional)
+        .map_err(|error| eyre!("invalid signed Sumeragi genesis roster: {error}"))?;
     if voters.is_empty() {
         return Err(eyre!(
-            "Sumeragi v2 genesis roster is empty; inject BLS topology entries and PoPs before signing"
+            "Sumeragi genesis roster is empty; inject BLS topology entries and PoPs before signing"
         ));
     }
-    let topology = Topology::new(voters);
-    let mut voting_block: Option<VotingBlock> = None;
-    let (valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let topology = Topology::new(voters.into_keys());
+    let (valid, staged) = ValidBlock::validate_signed_genesis(
         provisional.0,
         &topology,
         &authority,
         &TimeSource::new_system(),
         &state,
-        &mut voting_block,
         consensus_mode,
     )
     .unpack(|_| {})
