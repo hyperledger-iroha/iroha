@@ -223,6 +223,7 @@ def measured_inputs():
         for role in (
             "iroha3d",
             "iroha_cli",
+            "kagami",
             "sorafs_node",
             "config",
             "genesis",
@@ -770,10 +771,11 @@ class RetryTests(unittest.TestCase):
         next(row for row in build["artifacts"] if row["name"] == "iroha")["size"] += (
             2048
         )
+        next(row for row in build["artifacts"] if row["name"] == "kagami")["size"] += 4096
         new = derived_capacity(build=build)
         self.assertEqual(
             new["derivation"]["required_bytes"] - old["derivation"]["required_bytes"],
-            3 * (4 * 1024 + 5 * 2048),
+            3 * (4 * 1024 + 5 * 2048 + 4 * 4096),
         )
         configs = [
             row

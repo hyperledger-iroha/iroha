@@ -347,7 +347,7 @@ fn authorization_cannot_extend_the_bounded_plan() {
         )
         .expect_err("even the trusted owner cannot sign a longer execution lease")
         .to_string(),
-        "authorization execution lease does not exactly cover the bounded execution plan",
+        "authorization execution lease does not cover admission within its finite bound",
     );
 
     inventory.timeouts.preseed_secs += 1;

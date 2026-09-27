@@ -38,7 +38,7 @@ use super::{
 fn params() -> ChainParams {
     ChainParams {
         block_time: 10,
-        idle_block_interval: 30,
+        payload_retry_interval: 30,
         ..ChainParams::default()
     }
 }

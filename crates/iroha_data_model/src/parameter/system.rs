@@ -394,10 +394,10 @@ mod model {
         /// Allowed algorithms for consensus/committee keys.
         #[norito(default = "defaults::sumeragi::key_allowed_algorithms")]
         pub key_allowed_algorithms: Vec<iroha_crypto::Algorithm>,
-        /// Heartbeat interval of an idle chain in milliseconds, `ChainParams.idle_block_interval`
+        /// Heartbeat interval of an idle chain in milliseconds, `ChainParams.payload_retry_interval`
         /// (default 5000). Must not be below [`Self::block_cadence_ms`] (§9.4).
-        #[norito(default = "defaults::sumeragi::idle_block_interval_ms")]
-        pub idle_block_interval_ms: NonZeroU64,
+        #[norito(default = "defaults::sumeragi::payload_retry_interval_ms")]
+        pub payload_retry_interval_ms: NonZeroU64,
         /// Execution budget `E_max` in milliseconds, `ChainParams.e_max` (default 4000).
         #[norito(default = "defaults::sumeragi::exec_budget_ms")]
         pub exec_budget_ms: NonZeroU64,
@@ -648,7 +648,7 @@ mod model {
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
     ///
-    /// The Sumeragi chain parameters (`IdleBlockIntervalMs` .. `EpochLengthBlocks`) are
+    /// The Sumeragi chain parameters (`PayloadRetryIntervalMs` .. `EpochLengthBlocks`) are
     /// committed in the state after height `h` and take effect at `h + 2` (§10.1 of
     /// `specs/sumeragi.md`). `DemotionWindow` is a genesis constant: it is accepted only in the
     /// genesis block ([`Self::is_genesis_only`]).
@@ -659,8 +659,8 @@ mod model {
         /// Maximum admitted clock drift. Block cadence is frozen in genesis and
         /// therefore deliberately has no mutable parameter variant.
         MaxClockDriftMs(u64),
-        /// [`SumeragiParameters::idle_block_interval_ms`].
-        IdleBlockIntervalMs(NonZeroU64),
+        /// [`SumeragiParameters::payload_retry_interval_ms`].
+        PayloadRetryIntervalMs(NonZeroU64),
         /// [`SumeragiParameters::exec_budget_ms`].
         ExecBudgetMs(NonZeroU64),
         /// [`SumeragiParameters::apply_budget_ms`].
@@ -1237,7 +1237,7 @@ impl SumeragiParameter {
     pub const fn json_tag(&self) -> &'static str {
         match self {
             Self::MaxClockDriftMs(_) => "MaxClockDriftMs",
-            Self::IdleBlockIntervalMs(_) => "IdleBlockIntervalMs",
+            Self::PayloadRetryIntervalMs(_) => "PayloadRetryIntervalMs",
             Self::ExecBudgetMs(_) => "ExecBudgetMs",
             Self::ApplyBudgetMs(_) => "ApplyBudgetMs",
             Self::MaxBlockBytes(_) => "MaxBlockBytes",
@@ -1252,7 +1252,7 @@ impl SumeragiParameter {
     pub fn value_u64(&self) -> u64 {
         match self {
             Self::MaxClockDriftMs(value) => *value,
-            Self::IdleBlockIntervalMs(value)
+            Self::PayloadRetryIntervalMs(value)
             | Self::ExecBudgetMs(value)
             | Self::ApplyBudgetMs(value)
             | Self::EmptyAfterViews(value)
@@ -1311,7 +1311,7 @@ impl JsonDeserialize for SumeragiParameter {
                 &payload,
                 "MaxClockDriftMs",
             )?)),
-            "IdleBlockIntervalMs" => Ok(Self::IdleBlockIntervalMs(nonzero(&field)?)),
+            "PayloadRetryIntervalMs" => Ok(Self::PayloadRetryIntervalMs(nonzero(&field)?)),
             "ExecBudgetMs" => Ok(Self::ExecBudgetMs(nonzero(&field)?)),
             "ApplyBudgetMs" => Ok(Self::ApplyBudgetMs(nonzero(&field)?)),
             "MaxBlockBytes" => Ok(Self::MaxBlockBytes(json_support::expect_nonzero_u32(
@@ -1365,8 +1365,8 @@ impl JsonSerialize for SumeragiParameters {
         json_support::write_field(
             out,
             &mut first,
-            "idle_block_interval_ms",
-            &self.idle_block_interval_ms,
+            "payload_retry_interval_ms",
+            &self.payload_retry_interval_ms,
         );
         json_support::write_field(out, &mut first, "exec_budget_ms", &self.exec_budget_ms);
         json_support::write_field(out, &mut first, "apply_budget_ms", &self.apply_budget_ms);
@@ -1427,8 +1427,8 @@ impl JsonSerialize for SumeragiParameters {
         json_support::write_field_to(
             out,
             &mut first,
-            "idle_block_interval_ms",
-            &self.idle_block_interval_ms,
+            "payload_retry_interval_ms",
+            &self.payload_retry_interval_ms,
         )?;
         json_support::write_field_to(out, &mut first, "exec_budget_ms", &self.exec_budget_ms)?;
         json_support::write_field_to(out, &mut first, "apply_budget_ms", &self.apply_budget_ms)?;
@@ -1492,9 +1492,9 @@ impl JsonDeserialize for SumeragiParameters {
                 .transpose()
                 .map(|value| value.unwrap_or_else(default))
         };
-        let idle_block_interval_ms = nonzero(
-            "idle_block_interval_ms",
-            defaults::sumeragi::idle_block_interval_ms,
+        let payload_retry_interval_ms = nonzero(
+            "payload_retry_interval_ms",
+            defaults::sumeragi::payload_retry_interval_ms,
         )?;
         let exec_budget_ms = nonzero("exec_budget_ms", defaults::sumeragi::exec_budget_ms)?;
         let apply_budget_ms = nonzero("apply_budget_ms", defaults::sumeragi::apply_budget_ms)?;
@@ -1518,7 +1518,7 @@ impl JsonDeserialize for SumeragiParameters {
             key_overlap_grace_blocks,
             key_expiry_grace_blocks,
             key_allowed_algorithms,
-            idle_block_interval_ms,
+            payload_retry_interval_ms,
             exec_budget_ms,
             apply_budget_ms,
             max_block_bytes,
@@ -1538,7 +1538,7 @@ mod defaults {
             nonzero_ext::nonzero!(1_000_u64)
         }
         /// §9.3 default idle heartbeat interval.
-        pub const fn idle_block_interval_ms() -> NonZeroU64 {
+        pub const fn payload_retry_interval_ms() -> NonZeroU64 {
             nonzero_ext::nonzero!(5_000_u64)
         }
         /// §9.3 default execution budget `E_max`.
@@ -1687,7 +1687,7 @@ impl Default for SumeragiParameters {
             key_overlap_grace_blocks: key_overlap_grace_blocks(),
             key_expiry_grace_blocks: key_expiry_grace_blocks(),
             key_allowed_algorithms: key_allowed_algorithms(),
-            idle_block_interval_ms: idle_block_interval_ms(),
+            payload_retry_interval_ms: payload_retry_interval_ms(),
             exec_budget_ms: exec_budget_ms(),
             apply_budget_ms: apply_budget_ms(),
             max_block_bytes: max_block_bytes(),
@@ -1837,7 +1837,7 @@ impl Parameters {
         }
         apply_parameter!(
             Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
-            Sumeragi(sumeragi.idle_block_interval_ms) => SumeragiParameter::IdleBlockIntervalMs,
+            Sumeragi(sumeragi.payload_retry_interval_ms) => SumeragiParameter::PayloadRetryIntervalMs,
             Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
             Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
             Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
@@ -2031,7 +2031,7 @@ impl SumeragiParameters {
             key_overlap_grace_blocks: defaults::sumeragi::key_overlap_grace_blocks(),
             key_expiry_grace_blocks: defaults::sumeragi::key_expiry_grace_blocks(),
             key_allowed_algorithms: defaults::sumeragi::key_allowed_algorithms(),
-            idle_block_interval_ms: defaults::sumeragi::idle_block_interval_ms(),
+            payload_retry_interval_ms: defaults::sumeragi::payload_retry_interval_ms(),
             exec_budget_ms: defaults::sumeragi::exec_budget_ms(),
             apply_budget_ms: defaults::sumeragi::apply_budget_ms(),
             max_block_bytes: defaults::sumeragi::max_block_bytes(),
@@ -2044,7 +2044,7 @@ impl SumeragiParameters {
     pub fn parameters(&self) -> impl Iterator<Item = SumeragiParameter> {
         [
             SumeragiParameter::MaxClockDriftMs(self.max_clock_drift_ms),
-            SumeragiParameter::IdleBlockIntervalMs(self.idle_block_interval_ms),
+            SumeragiParameter::PayloadRetryIntervalMs(self.payload_retry_interval_ms),
             SumeragiParameter::ExecBudgetMs(self.exec_budget_ms),
             SumeragiParameter::ApplyBudgetMs(self.apply_budget_ms),
             SumeragiParameter::MaxBlockBytes(self.max_block_bytes),
@@ -2848,7 +2848,7 @@ mod tests {
     fn every_sumeragi_parameter_variant() -> [SumeragiParameter; 8] {
         [
             SumeragiParameter::MaxClockDriftMs(1_500),
-            SumeragiParameter::IdleBlockIntervalMs(NonZeroU64::new(7_000).unwrap()),
+            SumeragiParameter::PayloadRetryIntervalMs(NonZeroU64::new(7_000).unwrap()),
             SumeragiParameter::ExecBudgetMs(NonZeroU64::new(3_000).unwrap()),
             SumeragiParameter::ApplyBudgetMs(NonZeroU64::new(900).unwrap()),
             SumeragiParameter::MaxBlockBytes(NonZeroU32::new(2 * 1024 * 1024).unwrap()),
@@ -2862,7 +2862,7 @@ mod tests {
     fn sumeragi_parameter_defaults_match_the_consensus_core() {
         let params = SumeragiParameters::default();
         assert_eq!(params.block_cadence_ms.get(), 1_000);
-        assert_eq!(params.idle_block_interval_ms.get(), 5_000);
+        assert_eq!(params.payload_retry_interval_ms.get(), 5_000);
         assert_eq!(params.exec_budget_ms.get(), 4_000);
         assert_eq!(params.apply_budget_ms.get(), 1_000);
         assert_eq!(params.max_block_bytes.get(), 4 * 1024 * 1024);
@@ -2872,7 +2872,7 @@ mod tests {
         // The on-chain defaults are the core's §9.3 defaults and pass its §9.4 validation.
         let chain = iroha_sumeragi::types::ChainParams {
             block_time: params.block_cadence_ms.get(),
-            idle_block_interval: params.idle_block_interval_ms.get(),
+            payload_retry_interval: params.payload_retry_interval_ms.get(),
             e_max: params.exec_budget_ms.get(),
             a_max: params.apply_budget_ms.get(),
             max_block_bytes: params.max_block_bytes.get(),
@@ -2913,7 +2913,7 @@ mod tests {
     #[test]
     fn sumeragi_parameter_json_rejects_zero_and_out_of_range_values() {
         for tag in [
-            "IdleBlockIntervalMs",
+            "PayloadRetryIntervalMs",
             "ExecBudgetMs",
             "ApplyBudgetMs",
             "MaxBlockBytes",
@@ -2958,7 +2958,7 @@ mod tests {
         }
         let sumeragi = params.sumeragi();
         assert_eq!(sumeragi.max_clock_drift_ms, 1_500);
-        assert_eq!(sumeragi.idle_block_interval_ms.get(), 7_000);
+        assert_eq!(sumeragi.payload_retry_interval_ms.get(), 7_000);
         assert_eq!(sumeragi.exec_budget_ms.get(), 3_000);
         assert_eq!(sumeragi.apply_budget_ms.get(), 900);
         assert_eq!(sumeragi.max_block_bytes.get(), 2 * 1024 * 1024);
@@ -2983,20 +2983,20 @@ mod tests {
             norito::json::from_str(r#"{"block_cadence_ms":500}"#).expect("json de");
         assert_eq!(parsed.block_cadence_ms.get(), 500);
         assert_eq!(
-            parsed.idle_block_interval_ms,
-            defaults::sumeragi::idle_block_interval_ms()
+            parsed.payload_retry_interval_ms,
+            defaults::sumeragi::payload_retry_interval_ms()
         );
         assert_eq!(
             parsed.demotion_window,
             defaults::sumeragi::demotion_window()
         );
         let mut custom = SumeragiParameters::default();
-        custom.idle_block_interval_ms = NonZeroU64::new(9_000).unwrap();
+        custom.payload_retry_interval_ms = NonZeroU64::new(9_000).unwrap();
         custom.max_block_bytes = NonZeroU32::new(1_024).unwrap();
         custom.demotion_window = NonZeroU64::new(512).unwrap();
         let json = norito::json::to_json(&custom).expect("json");
         for field in [
-            "\"idle_block_interval_ms\":9000",
+            "\"payload_retry_interval_ms\":9000",
             "\"exec_budget_ms\":4000",
             "\"apply_budget_ms\":1000",
             "\"max_block_bytes\":1024",
@@ -3012,7 +3012,7 @@ mod tests {
         let decoded = SumeragiParameters::decode_all(&mut bytes.as_slice()).expect("decode");
         assert_eq!(decoded, custom);
         for field in [
-            "idle_block_interval_ms",
+            "payload_retry_interval_ms",
             "exec_budget_ms",
             "apply_budget_ms",
             "max_block_bytes",

@@ -219,7 +219,7 @@ test("browser account admission has no structural validation fallback", async ()
   ]) assert.throws(call, { code: "ERR_IROHA_NATIVE_BINDING", nativeStatus: "browser_unavailable" });
 });
 
-test("controller snapshots cannot mutate canonical single-key or multisig ownership", () => {
+nativeTest("controller snapshots cannot mutate canonical single-key or multisig ownership", () => {
   const single = AccountAddress.fromAccount({ publicKey: Buffer.from(VALID_KEY_HEX, "hex") });
   const member = single.controllerInfo();
   const multi = new AccountAddress(
@@ -231,14 +231,14 @@ test("controller snapshots cannot mutate canonical single-key or multisig owners
     const snapshot = address.controllerInfo();
     if (snapshot.tag === 1) {
       snapshot.members[0].publicKey.fill(0);
-      snapshot.members[0].weight = 0;
-      snapshot.threshold = 0;
-      snapshot.members.length = 0;
+      assert.throws(() => { snapshot.members[0].weight = 0; }, TypeError);
+      assert.throws(() => { snapshot.threshold = 0; }, TypeError);
+      assert.throws(() => { snapshot.members.length = 0; }, TypeError);
     } else {
       snapshot.publicKey.fill(0);
-      snapshot.curve = 0;
+      assert.throws(() => { snapshot.curve = 0; }, TypeError);
     }
-    snapshot.tag = 99;
+    assert.throws(() => { snapshot.tag = 99; }, TypeError);
     assert.equal(address.canonicalHex(), original);
     assert.notEqual(address.controllerInfo().tag, 99);
   }

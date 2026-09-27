@@ -656,8 +656,8 @@ fn observe_new(
     }
 }
 
-/// Keep the account signer from each client config separate from the dedicated
-/// operator signer required by the authenticated-height status read.
+/// Keep the transaction account signer separate from the dedicated operator
+/// signer required by the authenticated-height status read.
 fn retained_beacon_operator_key(
     input: Option<&reset::PinnedInput>,
     inventory: &InventoryV1,
@@ -682,28 +682,45 @@ fn signed_beacon_client(
     Ok(builder.build()?.with_request_deadline(deadline))
 }
 
+/// Read the installation as its submitting account at every independent peer.
+/// A validator service account is neither the transaction sender nor a ledger
+/// reader; the dedicated HTTP operator credential does not authorize queries.
+fn beacon_observation_clients(
+    config: &ClientConfig,
+    inventory: &InventoryV1,
+    operator_key: &KeyPair,
+    deadline: Instant,
+) -> Result<[Client; 4]> {
+    if config.account.to_string() != inventory.canary_onboarding_request.account_id {
+        return Err(eyre!(
+            "beacon observation account must be the retained installation signer"
+        ));
+    }
+    inventory
+        .validator_clients
+        .iter()
+        .map(|selected| {
+            let mut peer = config.clone();
+            peer.torii_api_url = selected.probe_origin.parse()?;
+            signed_beacon_client(peer, operator_key, deadline)
+        })
+        .collect::<Result<Vec<_>>>()?
+        .try_into()
+        .map_err(|_| eyre!("beacon bootstrap needs exactly four independent client contexts"))
+}
+
 impl<R: ProcessRunner> OpenSshTransport<'_, R> {
     fn beacon_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
         let operator_key = retained_beacon_operator_key(
             self.runtime.validator_operator_key.as_ref(),
             &self.admitted.inventory,
         )?;
-        self.runtime
-            .validator_client_configs
-            .iter()
-            .zip(&self.admitted.inventory.validator_clients)
-            .map(|(input, selected)| {
-                let mut config = load_client_config_for_inventory(
-                    input,
-                    "beacon observation client",
-                    &self.admitted.inventory,
-                )?;
-                config.torii_api_url = selected.probe_origin.parse()?;
-                signed_beacon_client(config, &operator_key, deadline)
-            })
-            .collect::<Result<Vec<_>>>()?
-            .try_into()
-            .map_err(|_| eyre!("beacon bootstrap needs exactly four independent client contexts"))
+        let config = load_client_config_for_inventory(
+            &self.runtime.client_config,
+            "beacon installation signer",
+            &self.admitted.inventory,
+        )?;
+        beacon_observation_clients(&config, &self.admitted.inventory, &operator_key, deadline)
     }
 
     fn beacon_daemon(&self) -> Result<PathBuf> {
@@ -2421,9 +2438,32 @@ mod tests {
         )
         .unwrap();
         assert_ne!(config.key_pair.public_key(), admitted.public_key());
+        inventory.canary_onboarding_request.account_id = config.account.to_string();
+        assert!(
+            inventory
+                .validator_clients
+                .iter()
+                .all(|peer| peer.account_id != config.account.to_string())
+        );
+        let mut wrong_account = config.clone();
+        wrong_account.account =
+            iroha_data_model::account::AccountId::new(admitted.public_key().clone());
+        wrong_account.key_pair = admitted.clone();
+        assert!(
+            beacon_observation_clients(
+                &wrong_account,
+                &inventory,
+                &admitted,
+                Instant::now() + Duration::from_secs(3),
+            )
+            .is_err()
+        );
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let origin = format!("http://{}/", listener.local_addr().unwrap());
+        for peer in &mut inventory.validator_clients {
+            peer.probe_origin = origin.clone();
+        }
         let expected_key = admitted.public_key().to_string().to_ascii_lowercase();
         let server = std::thread::spawn(move || {
             for _ in 0..4 {
@@ -2449,12 +2489,18 @@ mod tests {
                     .unwrap();
             }
         });
-        for _ in 0..4 {
-            let mut peer = config.clone();
-            peer.torii_api_url = origin.parse().unwrap();
-            let client =
-                signed_beacon_client(peer, &admitted, Instant::now() + Duration::from_secs(3))
-                    .unwrap();
+        for client in beacon_observation_clients(
+            &config,
+            &inventory,
+            &admitted,
+            Instant::now() + Duration::from_secs(3),
+        )
+        .unwrap()
+        {
+            assert_eq!(
+                client.account_client().unwrap().authority(),
+                &config.account
+            );
             assert_eq!(
                 client.operator_key_pair().unwrap().public_key(),
                 admitted.public_key()

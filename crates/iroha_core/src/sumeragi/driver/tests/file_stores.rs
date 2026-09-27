@@ -137,7 +137,7 @@ fn file_stores_survive_disk_errors() {
         committee: Committee::new(vec![key.clone()]).unwrap(),
         params: ChainParams {
             block_time: 10,
-            idle_block_interval: 30,
+            payload_retry_interval: 30,
             ..ChainParams::default()
         },
     };

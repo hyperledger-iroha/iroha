@@ -245,15 +245,13 @@ enum Build {
     Idle,
     /// The view-0 build is due at `t_propose`.
     Scheduled(Millis),
-    /// `BuildPayload{req}` is outstanding. `second`: no idle wait follows (heartbeat retry or
-    /// view > 0); `ready`: a `PayloadReady{req}` arrived before the answer.
+    /// `BuildPayload{req}` is outstanding; `ready` arrived before its answer.
     Requested {
         req: u64,
         deadline: Millis,
-        second: bool,
         ready: bool,
     },
-    /// Request `req` was answered `EMPTY`: wait for `until` or `PayloadReady{req}` (heartbeat).
+    /// Request `req` had no usable payload: wait for a bounded retry or new work.
     IdleWait {
         req: u64,
         until: Millis,

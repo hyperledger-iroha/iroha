@@ -167,8 +167,8 @@ pub fn validate_local(local: &LocalParams, configs: &[&HeightConfig]) -> Result<
 /// # Errors
 /// The first violated rule.
 pub fn validate_chain(chain: &ChainParams, transport_limit: u64) -> Result<(), ConfigError> {
-    if chain.block_time > chain.idle_block_interval {
-        return Err(ConfigError::BlockTimeAboveIdle);
+    if chain.block_time > chain.payload_retry_interval {
+        return Err(ConfigError::BlockTimeAbovePayloadRetry);
     }
     if chain.empty_after_views < 1 {
         return Err(ConfigError::EmptyAfterViewsZero);
@@ -179,10 +179,10 @@ pub fn validate_chain(chain: &ChainParams, transport_limit: u64) -> Result<(), C
     Ok(())
 }
 
-/// `P(0) = idle_block_interval + build_timeout`; `P(v > 0) = build_timeout`.
+/// `P(0) = payload_retry_interval + build_timeout`; `P(v > 0) = build_timeout`.
 pub fn propose_allowance(view: u64, chain: &ChainParams, build_timeout: Millis) -> Millis {
     if view == 0 {
-        chain.idle_block_interval.saturating_add(build_timeout)
+        chain.payload_retry_interval.saturating_add(build_timeout)
     } else {
         build_timeout
     }
@@ -916,7 +916,7 @@ mod tests {
                 },
                 limit
             ),
-            Err(ConfigError::BlockTimeAboveIdle)
+            Err(ConfigError::BlockTimeAbovePayloadRetry)
         );
         assert_eq!(
             validate_chain(

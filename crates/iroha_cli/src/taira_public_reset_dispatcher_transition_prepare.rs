@@ -247,7 +247,8 @@ fn validate_rolled_back_inventory(
     runtime: &CurrentRuntime,
     plan: &Plan,
 ) -> Result<()> {
-    let inventory: super::super::super::InventoryV1 = json::from_slice(bytes)?;
+    let (inventory, _chain_guard) =
+        super::super::super::history::decode(bytes, "rolled-back inventory")?;
     let predecessor = &plan.predecessor;
     need(
         inventory.schema == super::super::super::INVENTORY_SCHEMA_V1

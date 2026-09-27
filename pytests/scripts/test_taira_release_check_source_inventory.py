@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import unittest
@@ -93,6 +94,45 @@ class SelectedSourceInventoryTests(unittest.TestCase):
                              ("second", ("tests::duplicate",)))}
         with self.assertRaisesRegex(gate.CheckError, "repeats a test in torii"):
             gate.validate_selected_source_test_inventory(self.root, stages)
+
+    def test_missing_inventory_reports_every_case_in_one_preflight(self):
+        self.source("iroha_torii", "src/lib.rs", "#[test] fn unrelated() {}")
+        missing = tuple(f"tests::absent_{index}" for index in range(28))
+        with self.assertRaises(gate.CheckError) as failure:
+            gate.validate_selected_source_test_inventory(
+                self.root, {"torii-unit": (("current handlers", missing),)})
+        diagnostic = str(failure.exception)
+        self.assertIn("28 selected test declarations absent", diagnostic)
+        for name in missing:
+            self.assertIn("torii-unit: " + name, diagnostic)
+
+    def test_current_checkout_census_has_real_source_declarations_in_both_scopes(self):
+        # Exercise the actual checkout, not a second list of expected strings.
+        # Refactors must update the release census before source capture or Cargo.
+        for scope in gate.QUALIFICATION_SCOPES:
+            with self.subTest(scope=scope):
+                gate.validate_selected_source_test_inventory(
+                    SCRIPT.parents[1], gate.qualification_stages(scope))
+
+    def test_current_per_seat_bootstrap_suite_is_selected_once_with_real_test_bodies(self):
+        root = SCRIPT.parents[1]
+        module = root / "crates/irohad/src/beacon_bootstrap.rs"
+        source = root / "crates/irohad/src/beacon_bootstrap_tests.rs"
+        self.assertRegex(module.read_text(),
+                         r'#\[path = "beacon_bootstrap_tests\.rs"\]\s*mod tests;')
+        declared = tuple(re.findall(r"#\[test\]\s*fn\s+([A-Za-z_]\w*)\s*\(",
+                                    source.read_text()))
+        self.assertEqual(len(declared), 10)
+        for scope in gate.QUALIFICATION_SCOPES:
+            selected = tuple(name for _, tests in gate.qualification_stages(scope)["daemon"]
+                             for name in tests)
+            for leaf in declared:
+                name = "beacon_bootstrap::tests::" + leaf
+                with self.subTest(scope=scope, test=name):
+                    self.assertEqual(selected.count(name), 1)
+                    without_case = "\n".join(case + ": test" for case in selected if case != name)
+                    with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                        gate.require_tests(without_case, gate.qualification_stages(scope)["daemon"])
 
 
 if __name__ == "__main__":

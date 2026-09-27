@@ -794,10 +794,8 @@ pub enum Defect {
     Proposer,
     /// Fresh block with wrong `skipped_leaders`.
     SkippedLeaders,
-    /// Fresh block at `view ≥ empty_after_views(h)` with a non-empty payload.
-    NonEmptyPayload,
-    /// Fresh block at `view ≥ empty_after_views(h)` with the attestation flag (§3.7 A1).
-    FlaggedEmpty,
+    /// A block without work, forbidden in every view including re-proposals.
+    EmptyPayload,
 }
 
 /// Evidence of signed misbehaviour (§3.6). Self-verifying from its content.

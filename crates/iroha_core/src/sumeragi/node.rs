@@ -785,7 +785,7 @@ mod tests {
     }
 
     /// A chain of `validators` with a 100 ms block time and the given idle interval.
-    fn chain(validators: u8, idle_block_interval_ms: u64) -> Chain {
+    fn chain(validators: u8, payload_retry_interval_ms: u64) -> Chain {
         iroha_genesis::init_instruction_registry();
         let chain_id = ChainId::from("sumeragi-node-test");
         let mut keys = (0..validators)
@@ -813,8 +813,8 @@ mod tests {
             .collect::<Vec<_>>();
         // TODO(WP9): the genesis builder drops its v2 context requirement.
         let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
-            .append_parameter(Parameter::Sumeragi(SumeragiParameter::IdleBlockIntervalMs(
-                NonZeroU64::new(idle_block_interval_ms).expect("non-zero"),
+            .append_parameter(Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
+                NonZeroU64::new(payload_retry_interval_ms).expect("non-zero"),
             )))
             .with_block_cadence_ms(NonZeroU64::new(100).expect("non-zero"))
             .set_topology(entries)
@@ -990,10 +990,17 @@ mod tests {
         }
     }
 
-    fn wait_for_height(validators: &[Validator], height: u64, limit: Duration) {
-        wait_until(validators, limit, &format!("height {height}"), || {
-            committed_heights(validators).iter().all(|&h| h >= height)
-        });
+    fn assert_idle_height_unchanged(validators: &[Validator], duration: Duration) {
+        let baseline = committed_heights(validators);
+        let started = std::time::Instant::now();
+        while started.elapsed() < duration {
+            assert_eq!(committed_heights(validators), baseline, "idle chain advanced");
+            for validator in validators {
+                assert!(validator.node.driver.handle().halted().is_none());
+                assert_eq!(validator.queue.queued_len(), 0);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     /// Submit a transaction to every validator's queue (the transaction gossip's job in the
@@ -1044,30 +1051,41 @@ mod tests {
             for block in &blocks {
                 assert!(block.commit_certificate().is_some(), "height {height}");
                 assert_eq!(block.hash(), blocks[0].hash(), "height {height}");
+                assert!(block.network_entrypoint_count() > 0, "empty block at {height}");
             }
         }
     }
 
     #[test]
-    fn idle_chain_commits_heartbeats_and_restarts() {
+    fn idle_chain_never_advances_and_real_work_survives_restart() {
         let chain = chain(4, 200);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
-        wait_for_height(&validators, 5, Duration::from_secs(30));
+        assert_eq!(committed_heights(&validators), vec![GENESIS_HEIGHT; 4]);
+        assert_idle_height_unchanged(&validators, Duration::from_millis(750));
+        let hash = submit(&chain, &validators, "after idle");
+        wait_until(&validators, Duration::from_secs(30), "real work after idle", || {
+            committed_everywhere(&validators, hash)
+        });
+        assert_idle_height_unchanged(&validators, Duration::from_millis(750));
         shutdown(validators);
         let committed = disks
             .iter()
             .map(|disk| disk.kura.blocks_count())
             .min()
             .expect("validators");
-        assert!(committed >= 5, "Kura holds {committed} blocks");
+        assert_eq!(committed, 2, "only genesis and the submitted transaction");
         assert_same_certified_blocks(&disks, committed);
-        // Restart over the same Kura and records: genesis and every block replay, and the
-        // chain goes on.
+        // Replay the exact retained history, remain idle, then accept new work.
         let validators = start_all(&chain, &disks, false);
-        let resumed = u64::try_from(committed).expect("fits");
-        wait_for_height(&validators, resumed + 2, Duration::from_secs(30));
+        assert_idle_height_unchanged(&validators, Duration::from_millis(750));
+        let hash = submit(&chain, &validators, "after idle restart");
+        wait_until(&validators, Duration::from_secs(30), "real work after restart", || {
+            committed_everywhere(&validators, hash)
+        });
+        assert_eq!(committed_heights(&validators), vec![3; 4]);
         shutdown(validators);
+        assert_same_certified_blocks(&disks, 3);
     }
 
     /// Replay checks every stored block against its certified result (§12.1): a certificate
@@ -1077,7 +1095,10 @@ mod tests {
         let chain = chain(4, 200);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
-        wait_for_height(&validators, 3, Duration::from_secs(30));
+        let hash = submit(&chain, &validators, "certified replay input");
+        wait_until(&validators, Duration::from_secs(30), "replay input committed", || {
+            committed_everywhere(&validators, hash)
+        });
         shutdown(validators);
         let kura = Arc::clone(&disks[0].kura);
         let state = empty_state(&chain.chain_id, &chain.genesis, &kura);
@@ -1122,8 +1143,8 @@ mod tests {
     }
 
     #[test]
-    fn transactions_commit_at_once_without_heartbeats_and_after_restart() {
-        // The idle interval is far beyond the test: every block carries a transaction.
+    fn every_committed_block_contains_work_before_and_after_restart() {
+        // Explicit queue notifications must bypass even a long rebuild retry interval.
         let chain = chain(4, 600_000);
         let disks = disks(&chain);
         let validators = start_all(&chain, &disks, true);
@@ -1133,10 +1154,8 @@ mod tests {
                 committed_everywhere(&validators, hash)
             });
         }
-        // One block per transaction and no heartbeat; a view change under load may commit an
-        // extra `EMPTY` block.
         let heights = committed_heights(&validators);
-        assert!(heights.iter().all(|&h| h >= 4), "{heights:?}");
+        assert_eq!(heights, vec![4; 4]);
         // Applied transactions leave every queue.
         wait_until(&validators, Duration::from_secs(10), "queues drained", || {
             validators
@@ -1156,5 +1175,6 @@ mod tests {
             committed_everywhere(&validators, hash)
         });
         shutdown(validators);
+        assert_same_certified_blocks(&disks, 5);
     }
 }

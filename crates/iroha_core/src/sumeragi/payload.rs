@@ -1,10 +1,9 @@
 //! Block payloads of the Sumeragi driver (`specs/sumeragi.md` §3.2, §6.10).
 //!
 //! A payload is the exact wire of an *unsigned, resultless* iroha block proposal: the certified
-//! core header binds its bytes, so it needs no block signature. `EMPTY = []` stands for the
-//! block every node synthesizes deterministically from the committed parent with the same
-//! builder and no transactions, so it is byte-identical everywhere (`R` commits to the
-//! executed block's wire).
+//! core header binds its bytes, so it needs no block signature. Every proposal must carry
+//! at least one transaction. An empty builder result means there is no includable work;
+//! it never authorizes a block, including at later views or during replay.
 //!
 //! The leader's builder peeks at the queue (it never removes transactions), keeps the queue's
 //! FIFO order, and fills the block up to the payload byte cap and the on-chain transaction cap.
@@ -28,6 +27,9 @@ pub const MAX_QUEUE_SCAN: NonZeroUsize = NonZeroUsize::new(4096).expect("non-zer
 /// Why a payload could not be built or decoded.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PayloadError {
+    /// No transaction can justify creating a block.
+    #[error("block proposal must contain at least one transaction")]
+    EmptyBlock,
     /// The canonical block time overflows.
     #[error("canonical block time overflows")]
     TimeOverflow,
@@ -39,7 +41,7 @@ pub enum PayloadError {
     NotCanonical(String),
 }
 
-/// Inputs of one block assembly shared by the builder and `EMPTY` synthesis.
+/// Inputs of one nonempty block assembly.
 #[derive(Clone, Copy, Debug)]
 pub struct Assembly<'a> {
     /// The committed parent block.
@@ -57,12 +59,15 @@ pub struct Assembly<'a> {
 /// strictly after every timed input), not the local clock.
 ///
 /// # Errors
-/// The canonical block time overflows.
+/// There are no transactions, or the canonical block time overflows.
 pub fn assemble(
     state: &State,
     assembly: Assembly<'_>,
     transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
 ) -> Result<SignedBlock, PayloadError> {
+    if transactions.is_empty() {
+        return Err(PayloadError::EmptyBlock);
+    }
     let parent_time = assembly.parent.header().creation_time();
     let minimum = parent_time
         .checked_add(assembly.cadence)
@@ -118,19 +123,14 @@ fn build_at(
     Ok(builder.into_unsigned_proposal())
 }
 
-/// The block `EMPTY` stands for at `(parent height + 1, view)`.
-///
-/// # Errors
-/// The canonical block time overflows.
-pub fn empty_block(state: &State, assembly: Assembly<'_>) -> Result<SignedBlock, PayloadError> {
-    assemble(state, assembly, &[])
-}
-
 /// The payload bytes of `block`: its canonical resultless proposal wire.
 ///
 /// # Errors
-/// The block cannot be encoded.
+/// The block contains no transactions or cannot be encoded.
 pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
+    if block.network_entrypoint_count() == 0 {
+        return Err(PayloadError::EmptyBlock);
+    }
     block
         .canonical_resultless_proposal()
         .encode_wire()
@@ -141,10 +141,14 @@ pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
 /// a certificate (re-encoding must reproduce the bytes exactly).
 ///
 /// # Errors
-/// The bytes do not decode, are not canonical, carry a result, a certificate or a signature.
+/// The bytes do not decode, are not canonical, carry a result, a certificate or a signature,
+/// or the decoded block has no transactions.
 pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
     let block = iroha_data_model::block::decode_versioned_signed_block(payload)
         .map_err(|error| PayloadError::NotCanonical(error.to_string()))?;
+    if block.network_entrypoint_count() == 0 {
+        return Err(PayloadError::EmptyBlock);
+    }
     if !block.is_resultless_proposal() {
         return Err(PayloadError::NotCanonical(
             "carries a result or a commit certificate".into(),
@@ -214,6 +218,15 @@ pub fn select(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::BTreeSet, num::NonZeroU64};
+
+    use iroha_data_model::{
+        block::{BlockHeader, builder::BlockBuilder as WireBlockBuilder},
+        isi::Log,
+        level::Level,
+        transaction::{FeePaymentIntent, TransactionBuilder},
+    };
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
     #[test]
     fn decode_rejects_garbage_and_empty() {
@@ -222,5 +235,36 @@ mod tests {
             decode(&[1, 2, 3, 4]),
             Err(PayloadError::NotCanonical(_))
         ));
+    }
+
+    #[test]
+    fn canonical_wire_cannot_hide_a_zero_transaction_block() {
+        let block = WireBlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(), None, None, 1, 0,
+        )).build(BTreeSet::new());
+        let bytes = block.encode_wire().expect("canonical empty proposal");
+        assert!(!bytes.is_empty(), "the transport payload itself is nonempty");
+        assert_eq!(decode(&bytes), Err(PayloadError::EmptyBlock));
+        assert_eq!(encode(&block), Err(PayloadError::EmptyBlock));
+    }
+
+    #[test]
+    fn canonical_nonempty_proposal_roundtrips_without_synthesized_work() {
+        let mut builder = WireBlockBuilder::new(BlockHeader::new(
+            NonZeroU64::new(2).unwrap(), None, None, 1, 0,
+        ));
+        let transaction = TransactionBuilder::new(
+            iroha_data_model::NetworkId::from_genesis_hash(iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"payload-test-network"))),
+            ALICE_ID.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "payload transaction".to_owned())])
+        .sign(ALICE_KEYPAIR.private_key());
+        builder.push_transaction(transaction);
+        let block = builder.build(BTreeSet::new());
+        let bytes = encode(&block).expect("nonempty proposal");
+        let decoded = decode(&bytes).expect("canonical nonempty proposal");
+        assert_eq!(decoded.network_entrypoint_count(), 1);
+        assert_eq!(decoded.encode_wire().unwrap(), bytes);
     }
 }

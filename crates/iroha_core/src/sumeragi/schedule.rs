@@ -79,7 +79,7 @@ pub struct ChainParamsRecord {
     /// Target block time in milliseconds (`block_cadence_ms`).
     pub block_time_ms: u64,
     /// Heartbeat interval of an idle chain in milliseconds.
-    pub idle_block_interval_ms: u64,
+    pub payload_retry_interval_ms: u64,
     /// Execution budget `E_max` in milliseconds.
     pub exec_budget_ms: u64,
     /// Apply budget `A_max` in milliseconds.
@@ -98,7 +98,7 @@ impl ChainParamsRecord {
     pub fn from_parameters(params: &SumeragiParameters) -> Self {
         Self {
             block_time_ms: params.block_cadence_ms.get(),
-            idle_block_interval_ms: params.idle_block_interval_ms.get(),
+            payload_retry_interval_ms: params.payload_retry_interval_ms.get(),
             exec_budget_ms: params.exec_budget_ms.get(),
             apply_budget_ms: params.apply_budget_ms.get(),
             max_block_bytes: params.max_block_bytes.get(),
@@ -112,7 +112,7 @@ impl ChainParamsRecord {
     pub fn to_core(&self) -> ChainParams {
         ChainParams {
             block_time: self.block_time_ms,
-            idle_block_interval: self.idle_block_interval_ms,
+            payload_retry_interval: self.payload_retry_interval_ms,
             e_max: self.exec_budget_ms,
             a_max: self.apply_budget_ms,
             max_block_bytes: self.max_block_bytes,
@@ -126,7 +126,7 @@ impl ChainParamsRecord {
     pub fn from_core(params: &ChainParams) -> Self {
         Self {
             block_time_ms: params.block_time,
-            idle_block_interval_ms: params.idle_block_interval,
+            payload_retry_interval_ms: params.payload_retry_interval,
             exec_budget_ms: params.e_max,
             apply_budget_ms: params.a_max,
             max_block_bytes: params.max_block_bytes,
@@ -562,7 +562,7 @@ pub fn validate_parameter_change(
     }
     let mut candidate = current.clone();
     match *change {
-        SumeragiParameter::IdleBlockIntervalMs(value) => candidate.idle_block_interval_ms = value,
+        SumeragiParameter::PayloadRetryIntervalMs(value) => candidate.payload_retry_interval_ms = value,
         SumeragiParameter::ExecBudgetMs(value) => candidate.exec_budget_ms = value,
         SumeragiParameter::ApplyBudgetMs(value) => candidate.apply_budget_ms = value,
         SumeragiParameter::MaxBlockBytes(value) => candidate.max_block_bytes = value,
@@ -775,8 +775,8 @@ mod tests {
             Err(ConfigError::MaxBlockBytesAboveTransport)
         );
         let mut record = params();
-        record.block_time_ms = record.idle_block_interval_ms + 1;
-        assert_eq!(record.validate(), Err(ConfigError::BlockTimeAboveIdle));
+        record.block_time_ms = record.payload_retry_interval_ms + 1;
+        assert_eq!(record.validate(), Err(ConfigError::BlockTimeAbovePayloadRetry));
         assert_eq!(
             CHAIN_TRANSPORT_FRAME_LIMIT,
             crate::sumeragi::driver::DriverConfig::default().frame_limit
@@ -1004,10 +1004,10 @@ mod tests {
             validate_parameter_change(&current, &window, false),
             Err(ScheduleError::GenesisOnly)
         );
-        let too_fast_idle = SumeragiParameter::IdleBlockIntervalMs(NonZeroU64::new(999).unwrap());
+        let too_fast_idle = SumeragiParameter::PayloadRetryIntervalMs(NonZeroU64::new(999).unwrap());
         assert_eq!(
             validate_parameter_change(&current, &too_fast_idle, false),
-            Err(ScheduleError::Params(ConfigError::BlockTimeAboveIdle))
+            Err(ScheduleError::Params(ConfigError::BlockTimeAbovePayloadRetry))
         );
         // In genesis the combination is checked when the schedule is installed.
         validate_parameter_change(&current, &too_fast_idle, true).expect("genesis defers");
@@ -1020,7 +1020,7 @@ mod tests {
         ));
         for ok in [
             SumeragiParameter::MaxClockDriftMs(5),
-            SumeragiParameter::IdleBlockIntervalMs(NonZeroU64::new(6_000).unwrap()),
+            SumeragiParameter::PayloadRetryIntervalMs(NonZeroU64::new(6_000).unwrap()),
             SumeragiParameter::ExecBudgetMs(NonZeroU64::new(3_000).unwrap()),
             SumeragiParameter::ApplyBudgetMs(NonZeroU64::new(500).unwrap()),
             SumeragiParameter::MaxBlockBytes(NonZeroU32::new(1 << 20).unwrap()),

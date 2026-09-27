@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.util
+import io
 import os
 from pathlib import Path
 import shutil
@@ -18,6 +19,97 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 import taira_source_capture as source
+
+
+class BufferedSourceReaderTests(unittest.TestCase):
+    def test_object_reader_preserves_coalesced_headers_payloads_and_delimiters(self):
+        payloads = [b"source\0bytes\n", b"second object"]
+        rows = [(hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest(), payload)
+                for payload in payloads]
+        wire = b"".join(f"{oid} blob {len(payload)}\n".encode() + payload + b"\n"
+                        for oid, payload in rows)
+        process = mock.Mock()
+        process.stdin = io.BytesIO()
+        process.wait.return_value = 0
+        process.poll.return_value = 0
+        with mock.patch.object(source.subprocess, "Popen", return_value=process), \
+             mock.patch.object(source, "_git_argv", return_value=["git"]), \
+             mock.patch.object(source, "_read_pipe", return_value=wire) as read_pipe:
+            with source._object_reader(Path("/unused")) as read:
+                for oid, payload in rows:
+                    record, observed = read(oid, "blob", payload=True)
+                    self.assertEqual(observed, payload)
+                    self.assertEqual(record, {"object": oid, "type": "blob", "size": len(payload),
+                                              "sha256": hashlib.sha256(payload).hexdigest()})
+                    if payload == payloads[0]:
+                        expired = source.time.monotonic() + source.GIT_TIMEOUT_SECONDS + 1
+                        with mock.patch.object(source.time, "monotonic", return_value=expired), \
+                             self.assertRaisesRegex(source.SourceCaptureError, "deadline"):
+                            read(rows[1][0], "blob", payload=True)
+            read_pipe.assert_called_once()
+            self.assertEqual(read_pipe.call_args.args[1], source.CHUNK)
+
+    def test_buffered_header_bound_and_short_reads_preserve_protocol_boundaries(self):
+        chunks = iter([b"he", b"ader\nbody", b"\n", b""])
+        reader = source._BufferedSourceReader(lambda _maximum, _position: next(chunks))
+        self.assertEqual(reader.readline(128), b"header\n")
+        self.assertEqual(reader.read(4), b"body")
+        self.assertEqual(reader.read(1), b"\n")
+        self.assertEqual(reader.position, 12)
+        for wire in (b"x" * 128 + b"\n", b"no newline"):
+            parts = iter([wire, b""])
+            reader = source._BufferedSourceReader(lambda _maximum, _position: next(parts))
+            with self.subTest(wire=wire), self.assertRaisesRegex(source.SourceCaptureError, "Git object response"):
+                reader.readline(128)
+
+    @staticmethod
+    def pack(payloads):
+        body = bytearray(b"PACK" + source.struct.pack(">II", 2, len(payloads)))
+        objects = []
+        for payload in payloads:
+            length = len(payload)
+            first, remaining = 0x30 | (length & 15), length >> 4
+            body.append(first | (128 if remaining else 0))
+            while remaining:
+                value, remaining = remaining & 127, remaining >> 7
+                body.append(value | (128 if remaining else 0))
+            body.extend(source.zlib.compress(payload))
+            objects.append({"object": hashlib.sha1(f"blob {length}\0".encode() + payload).hexdigest(),
+                            "type": "blob", "size": length, "sha256": hashlib.sha256(payload).hexdigest()})
+        raw = bytes(body) + hashlib.sha1(body).digest()
+        return raw, {"pack": {"size": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}, "objects": objects}
+
+    def test_pack_reads_each_byte_once_per_validation_pass_for_many_small_objects(self):
+        raw, manifest = self.pack([f"file-{i}".encode() for i in range(2000)])
+        original_pread = os.pread
+        sizes = []
+        def measured_pread(fd, size, offset):
+            result = original_pread(fd, size, offset)
+            sizes.append(len(result))
+            return result
+        with tempfile.TemporaryFile() as pack:
+            pack.write(raw)
+            pack.flush()
+            with mock.patch.object(source.os, "pread", side_effect=measured_pread):
+                source._validate_pack(pack.fileno(), manifest)
+        # The object pass excludes the trailer; the independent checksum pass
+        # rereads the body and its trailer. Object count cannot multiply reads.
+        self.assertEqual(sum(sizes), 2 * len(raw) - 20)
+        self.assertLessEqual(len(sizes), 2 * ((len(raw) + source.CHUNK - 1) // source.CHUNK) + 1)
+
+    def test_pack_header_inflater_tail_and_checksum_survive_small_buffer_boundaries(self):
+        raw, manifest = self.pack([b"", b"x", bytes(range(256)) * 32, b"trailer-adjacent"])
+        with tempfile.TemporaryFile() as pack:
+            pack.write(raw)
+            pack.flush()
+            with mock.patch.object(source, "CHUNK", 17):
+                source._validate_pack(pack.fileno(), manifest)
+            pack.seek(-1, os.SEEK_END)
+            pack.write(bytes([raw[-1] ^ 1]))
+            pack.flush()
+            with mock.patch.object(source, "CHUNK", 17), \
+                 self.assertRaisesRegex(source.SourceCaptureError, "checksum differs"):
+                source._validate_pack(pack.fileno(), manifest)
 
 
 @unittest.skipUnless(shutil.which("git") and shutil.which("gpg"), "Git and GnuPG are required")

@@ -741,7 +741,7 @@ impl World {
                         let half = self.late_half_timeout(inst);
                         match late {
                             Late::Proposal => {
-                                let p0 = self.instances[inst].params.idle_block_interval
+                                let p0 = self.instances[inst].params.payload_retry_interval
                                     + self.instances[inst].local.build_timeout;
                                 // `t_enter` is on this machine's clock.
                                 let clock = self.machines[self.replicas[r].machine].clock;

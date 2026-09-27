@@ -366,16 +366,14 @@ impl std::error::Error for CommitteeError {}
 pub struct ChainParams {
     /// Target block time under load.
     pub block_time: Millis,
-    /// Heartbeat interval of an idle chain.
-    pub idle_block_interval: Millis,
+    /// Bounded retry interval when the payload builder has no usable work.
+    pub payload_retry_interval: Millis,
     /// Execution budget `E_max`.
     pub e_max: Millis,
     /// Apply budget `A_max`.
     pub a_max: Millis,
     /// Largest payload a block may carry.
     pub max_block_bytes: u32,
-    /// Fresh blocks from this view on must be `EMPTY` (§6.2 step 6).
-    pub empty_after_views: u64,
     /// Epoch length in heights (§11.7).
     pub epoch_length: u64,
 }
@@ -387,11 +385,10 @@ impl Default for ChainParams {
     fn default() -> Self {
         Self {
             block_time: 1_000,
-            idle_block_interval: 5_000,
+            payload_retry_interval: 5_000,
             e_max: 4_000,
             a_max: 1_000,
             max_block_bytes: 4 * 1024 * 1024,
-            empty_after_views: 2,
             epoch_length: 3_600,
         }
     }
@@ -577,7 +574,7 @@ mod tests {
     fn chain_params_defaults() {
         let params = ChainParams::default();
         assert_eq!(params.block_time, 1_000);
-        assert_eq!(params.idle_block_interval, 5_000);
+        assert_eq!(params.payload_retry_interval, 5_000);
         assert_eq!(params.max_block_bytes, 4 << 20);
         assert_eq!(params.empty_after_views, 2);
         assert_eq!((params.e_max, params.a_max), (4_000, 1_000));

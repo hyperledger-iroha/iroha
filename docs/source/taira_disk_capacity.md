@@ -14,8 +14,8 @@ The helper resolves existing path components without following symlinks; missing
 destination directories use their nearest existing directory's filesystem.
 
 The native inventory requires an explicit `qualification_scope`. For
-`core_testnet`, the fresh topology is **3A + explicit headroom**. All 30 artifact
-roles are included: seven per validator (including its unit), plus two edge
+`core_testnet`, the fresh topology is **3A + explicit headroom**. All 34 artifact
+roles are included: eight per validator (including Kagami and its unit), plus two edge
 roles. Core requires the stage/SF1 inputs to be explicit null, stage lists empty,
 and store/runtime path lists empty. It never needs an Inrou preparation.
 
@@ -73,8 +73,11 @@ observation and current stage. It checks the three
 small manifest hashes against native SF1 admission before using the 64 KiB chunk
 minimum; it never decodes Norito in Python or rereads large payloads for hashing.
 
-The derivation charges four daemon, four SoraFS and five CLI role copies; each
-config uses the native 1 MiB output bound, and all four unit files are charged.
+The derivation charges four daemon, four SoraFS, four Kagami and five CLI role
+copies using their actual built sizes; each config uses the native 1 MiB output
+bound, and all four unit files are charged. File-block slack and inode counts
+use the complete validated role census. Missing, duplicate and unknown roles
+fail admission; the retired inventory without Kagami is rejected.
 For `full_inrou`, it includes all four guest hydration,
 writable root/data leases, ephemeral storage and bundle publication footprints.
 Unknown stage or service-artifact layouts reject rather than produce a partial
