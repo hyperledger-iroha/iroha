@@ -2541,7 +2541,8 @@ every transaction binds). The reader offers two reads over one State view:
    `CommitQC`, which must be a Commit certificate of this height, block hash, `R`, `attest` flag
    and instance `I`, and verify under `C_height`. `C_height` is authenticated against
    `next_committee_digest` in the preimage of `R_{height−2}` (cross-checked against the header of
-   `height − 1`, which binds `R_{height−2}` as `parent_result`); `C_{g+1}` is the committee the
+   `height − 1`, whose hash the certified header of `height` binds as `parent_hash` and which
+   binds `R_{height−2}` as `parent_result`); `C_{g+1}` is the committee the
    signed genesis registers. Candidate committees are the genesis committee and the World
    schedule window (§10.1), each member admitted by its proof of possession. Verification is
    pluggable: by default the commit-only signature check (`verify_qc_signatures`); a caller that
