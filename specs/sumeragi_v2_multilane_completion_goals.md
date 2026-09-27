@@ -1,5 +1,11 @@
 # Production multilane implementation goals
 
+> **Status (2026-09-27): retired.** The node runs only the new Sumeragi
+> ([`sumeragi.md`](sumeragi.md)). The v2 release gates, release bootstrap,
+> formal runners and SDK/multilane inventory scripts this document names were
+> removed with the v2 consensus tooling. This document is deleted together with
+> the v2 runtime.
+
 Set: 2026-09-06. Overall goal: **Active**. No milestone is complete.
 
 Implement and qualify the Production Multilane Completion Plan as Iroha 3's

@@ -65,7 +65,7 @@
     "crates/iroha_core/src/sumeragi/v2_lane_work.rs": 26861,
     "crates/iroha_core/src/sumeragi/v2_lifecycle_replay_authority.rs": 5135,
     "crates/iroha_core/src/sumeragi/v2_runtime.rs": 17217,
-    "crates/iroha_core/src/telemetry.rs": 12174,
+    "crates/iroha_core/src/telemetry.rs": 12027,
     "crates/iroha_core/src/tx.rs": 11875,
     "crates/iroha_core/src/zk.rs": 12588,
     "crates/iroha_core/src/zk/confidential_v2.rs": 5264,

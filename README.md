@@ -311,17 +311,13 @@ artifacts, and the current [`status.md`](./status.md) and
 [`roadmap.md`](./roadmap.md). Building or testing Iroha does not require a
 sibling `iroha-docs` checkout.
 
-The canonical 54-obligation release ledger records 44 `tlaps_proved`, 3
-`cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`, with no
-`specified_unproved` rows and `machine_checked_completion: true`. This closes
-the checker-mandated legacy/revision-3-rooted deductive and cross-tool status
-inventory; the checked-in flag is not proof evidence by itself and does not
-turn the compact revision-4 TLC models into deductive TLAPS proofs. Release
-still requires fresh exact-source strict TLAPS, pinned Verus, derived
-cross-tool and production-trace evidence, the mandatory revision-4
-TLC/mutation corridor, and same-source signed receipts. See
-[`formal/sumeragi_v2/README.md`](./formal/sumeragi_v2/README.md) for the exact
-mechanization boundary.
+Consensus is the sans-IO Sumeragi core in
+[`crates/iroha_sumeragi`](./crates/iroha_sumeragi), specified with its safety
+and liveness argument in [`specs/sumeragi.md`](./specs/sumeragi.md). Its
+deterministic simulator tests run with `cargo test -p iroha_sumeragi`, and
+`scripts/sumeragi_mutation_gate.py` checks that every protocol mutation listed
+in the spec is killed by a named test. The retired Sumeragi v2 TLAPS, Verus and
+release-ledger corridor was removed with the v2 consensus tooling.
 
 ## Translations
 

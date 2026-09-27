@@ -6,6 +6,12 @@ description: Source-bound implementation, test, formal, and release obligations 
 
 # Sumeragi V2 multilane closure ledger
 
+> **Status (2026-09-27): retired.** The node runs only the new Sumeragi
+> ([`sumeragi.md`](sumeragi.md)). The v2 release gates, release bootstrap,
+> formal runners and SDK/multilane inventory scripts this document names were
+> removed with the v2 consensus tooling. This document is deleted together with
+> the v2 runtime.
+
 This ledger is the release-closure record for Sumeragi V2 multilane execution.
 It complements the protocol description in [Sumeragi V2](sumeragi_v2.md), the
 activation contract in [Nexus cross-lane execution](nexus_cross_lane.md), and
