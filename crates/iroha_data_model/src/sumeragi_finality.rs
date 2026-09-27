@@ -23,7 +23,7 @@ use iroha_sumeragi::{
     types::{AggregateSignature, Committee, Hash32, PublicKey as CoreKey, Signature},
 };
 use norito::{
-    Decode, Encode,
+    codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
 };
 
