@@ -108,6 +108,7 @@ impl Error {
         backpressure: Option<queue::BackpressureState>,
     ) -> ErrorEnvelope {
         let (code, message) = Self::queue_error_summary(err);
+        iroha_logger::debug!(error = %err, "the queue rejected a transaction");
         let retry_after_seconds = match err {
             queue::Error::Full
             | queue::Error::LatencySaturated

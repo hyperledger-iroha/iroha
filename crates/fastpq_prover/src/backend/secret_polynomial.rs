@@ -40,7 +40,6 @@ impl<T: Zeroize + Default> SecretPolynomial<T> {
     }
 }
 
-#[cfg(test)]
 impl<T: Zeroize + Default + Copy> SecretPolynomial<T> {
     /// Copy a caller-owned slice into a separately guarded fixed allocation.
     pub(super) fn from_slice(values: &[T]) -> Result<Self> {

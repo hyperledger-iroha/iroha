@@ -2,28 +2,10 @@
 //! Grouped integration harness for revision-4 consensus, DA, and localnet scenarios.
 #[path = "da.rs"]
 mod da;
-#[path = "sumeragi_da.rs"]
-mod sumeragi_da;
 #[path = "sumeragi_kagami_localnet.rs"]
 mod sumeragi_kagami_localnet;
 #[path = "sumeragi_localnet_smoke.rs"]
 mod sumeragi_localnet_smoke;
-#[path = "sumeragi_lock_convergence.rs"]
-mod sumeragi_lock_convergence;
-#[path = "sumeragi_npos_candidate.rs"]
-mod sumeragi_npos_candidate;
-#[path = "sumeragi_npos_happy_path.rs"]
-mod sumeragi_npos_happy_path;
-#[path = "sumeragi_npos_liveness.rs"]
-mod sumeragi_npos_liveness;
-#[path = "sumeragi_npos_pacemaker_latency.rs"]
-mod sumeragi_npos_pacemaker_latency;
-#[path = "sumeragi_npos_performance.rs"]
-mod sumeragi_npos_performance;
-#[path = "sumeragi_npos_stake_activation.rs"]
-mod sumeragi_npos_stake_activation;
-#[path = "sumeragi_vote_qc_commit.rs"]
-mod sumeragi_vote_qc_commit;
 #[path = "taikai_da.rs"]
 mod taikai_da;
 #[path = "zk_confidential_localnet.rs"]

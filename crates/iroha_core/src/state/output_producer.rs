@@ -82,6 +82,9 @@ struct ExecutionOutputProducer<'owner, 'state, 'source> {
     state: &'owner mut StateBlock<'state>,
     source: ExecutionSource<'source>,
     budget: Option<ExecutionOutputBudget>,
+    prefix_count: u32,
+    prefix_bytes: u64,
+    unused_time: u32,
     // Allocate the complete row vector before work. Network placeholders are
     // private fallback values, never evidence of execution. The separate bit
     // for each source must be resolved before finish can expose the collection.
@@ -175,9 +178,11 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
         };
         if let ExecutionSource::Ordinary(block) = &source {
             block.validate_proposal_commitments()?;
-            if block.execution_context().is_some_and(|context| {
-                context.native_lane_decisions.is_some() || context.merge_entry.is_some()
-            }) {
+            state.verify_merge_prefix_carrier(block)?;
+            if block
+                .execution_context()
+                .is_some_and(|context| context.native_lane_decisions.is_some())
+            {
                 return Err("ordinary output source contains a competing native owner".into());
             }
         }
@@ -200,6 +205,9 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
             state,
             source,
             budget: Some(plan.budget),
+            prefix_count: plan.prefix_count,
+            prefix_bytes: plan.prefix_bytes,
+            unused_time: plan.unused_time,
             rows: Vec::new(),
             network_resolved: Vec::new(),
             network_sources: None,
@@ -222,13 +230,21 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
         producer
             .source_entries
             .try_reserve_exact(
-                usize::try_from(plan.maximum_rows)
-                    .map_err(|_| "source capacity exceeds host width")?,
+                usize::try_from(
+                    plan.maximum_rows
+                        .checked_add(plan.prefix_count)
+                        .ok_or("complete source count overflows u32")?,
+                )
+                .map_err(|_| "source capacity exceeds host width")?,
             )
             .map_err(|_| "host cannot reserve actual source inventory")?;
         producer
             .source_routes
-            .try_reserve_exact(network_count)
+            .try_reserve_exact(
+                network_count
+                    .checked_add(plan.prefix_count as usize)
+                    .ok_or("complete route count overflows host width")?,
+            )
             .map_err(|_| "host cannot reserve frozen route inventory")?;
         producer
             .network_resolved
@@ -249,7 +265,7 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
 /// An interruption during apply invalidates the whole still-gated StateBlock.
 struct OutputTransaction<'block, 'state> {
     transaction: Option<StateTransaction<'block, 'state>>,
-    witness: Option<crate::sumeragi::witness::ExecWitnessOverlay>,
+    witness: Option<crate::exec_witness::ExecWitnessOverlay>,
     #[cfg(feature = "zk-preverify")]
     zk_checkpoint: Option<crate::zk::DedupCache>,
 }
@@ -258,7 +274,7 @@ impl<'block, 'state> OutputTransaction<'block, 'state> {
     fn new(state: &'block mut StateBlock<'state>) -> Self {
         #[cfg(feature = "zk-preverify")]
         let zk_checkpoint = Some(state.zk_dedup.clone());
-        let witness = Some(crate::sumeragi::witness::begin_exec_witness_overlay());
+        let witness = Some(crate::exec_witness::begin_exec_witness_overlay());
         Self {
             transaction: Some(state.transaction()),
             witness,
@@ -347,6 +363,7 @@ mod time;
 
 #[path = "output_network.rs"]
 mod network;
+pub(in crate::state) use network::execute_network_attempt;
 
 #[path = "output_native.rs"]
 mod native;
@@ -391,6 +408,8 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .begin(ExecutionOutputV1::network_output_limit_rejection(
                     input_index,
                 ))?;
+            self.state
+                .retain_fastpq_source_invocation(Hash::from(input.execution_call_hash()))?;
             let mut attempt = OutputTransaction::new(self.state);
             let transaction = attempt
                 .transaction
@@ -554,11 +573,25 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .take()
             .ok_or("output budget already consumed")?
             .finish()?;
-        if usize::try_from(count).ok() != Some(self.rows.len()) {
+        if usize::try_from(count).ok() != self.rows.len().checked_add(self.prefix_count as usize) {
             return Err("retained output count differs from its resolved budget".into());
         }
+        let row_bytes = row_bytes
+            .checked_sub(self.prefix_bytes)
+            .ok_or("merge prefix row accounting exceeds the consumed budget")?;
         let sources =
             if self.network_sources.is_some() && self.pipeline_started && self.time_started {
+                let merge_prefix = self.state.merge_prefix_seal().cloned();
+                if let Some(prefix) = &merge_prefix {
+                    for (input, route) in prefix.inputs().iter().zip(prefix.routes()) {
+                        self.source_entries.push(OwnedExecutionSource {
+                            call: Hash::from(input.execution_call_hash()),
+                            lane: Some(route.lane_id),
+                            dataspace: route.dataspace_id,
+                        });
+                        self.source_routes.push(*route);
+                    }
+                }
                 for index in 0..self.source.network_entrypoint_count() {
                     let route = self
                         .network_route(index)
@@ -576,7 +609,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                                 .ok_or("retained Network source is absent")?;
                             let route = self
                                 .source_routes
-                                .get(index)
+                                .get(index + self.prefix_count as usize)
                                 .ok_or("retained Network route is absent")?;
                             (
                                 Hash::from(entry.execution_call_hash()),
@@ -610,6 +643,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     },
                     entries: core::mem::take(&mut self.source_entries),
                     network_routes: core::mem::take(&mut self.source_routes),
+                    merge_prefix,
                 })
             } else {
                 // The closure-only controls exercise pre-apply fitting, not a complete
@@ -617,6 +651,14 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 None
             };
         if let Some(sources) = &sources {
+            self.state.verify_merge_owned_sources(sources)?;
+            self.state
+                .fastpq_source_quota
+                .as_ref()
+                .ok_or("source capacity was not frozen")?
+                .as_ref()
+                .map_err(|error| error.clone())?
+                .verify_ordinary_entries(sources.entries().iter().map(|source| source.call()))?;
             if sources.is_native() {
                 self.state.complete_native_output_tail(sources)?;
             }

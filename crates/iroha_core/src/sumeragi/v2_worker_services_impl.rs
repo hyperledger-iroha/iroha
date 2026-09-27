@@ -1242,7 +1242,7 @@ impl ProductionV2Services {
             .io
             .as_ref()
             .ok_or_else(|| "Sumeragi v2 completion observer lost its live worker".to_owned())?;
-        super::status::set_v2_effect_completion_observer(
+        super::v2_status::set_v2_effect_completion_observer(
             self.context.id(),
             self.context.height,
             &io.admission,
@@ -1635,7 +1635,7 @@ impl ProductionV2Services {
         // Terminal diagnostics do not enter the Ready-output scheduler again.
         // Rebuild their bounded local custody before starting worker I/O, using
         // this service's already validated context and complete roster PoPs.
-        super::evidence::recover_context_lifecycle_equivocations(
+        super::v2_evidence::recover_context_lifecycle_equivocations(
             state.as_ref(),
             &context,
             &validator_set_pops,

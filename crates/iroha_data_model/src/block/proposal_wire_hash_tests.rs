@@ -23,6 +23,7 @@ fn plain_signed_block() -> SignedBlock {
             npos_consensus_effects: None,
         },
         result: None,
+        commit_certificate: None,
     }
 }
 
@@ -37,6 +38,7 @@ fn assert_exact_borrowed_proposal_wire(block: &SignedBlock) {
         signatures: OutputFieldRef(&block.signatures),
         payload: OutputFieldRef(&block.payload),
         result: None,
+        commit_certificate: None,
     };
     assert_eq!(
         borrowed, reference,

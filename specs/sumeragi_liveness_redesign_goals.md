@@ -1,5 +1,7 @@
 # Sumeragi liveness redesign goals
 
+Superseded on 2026-09-25 by [Sumeragi goals](sumeragi_goals.md). Goals L1–L6 are retired unfinished: the rewrite removes the v2 lifecycle owners they were reconciling. This record is kept for history.
+
 The async proposal contract is the refactor target: at each height the leader
 samples a bounded subset of locally available signed transactions against one
 committed parent and signs their chosen order in a proposal. Followers validate
@@ -18,8 +20,9 @@ peer shutdown, the other three validators continued committing global blocks
 past height 14, but all three retained the same close intent with no drain
 certificate or retirement. The test now reaches this phase without requiring
 a prior lane block: an expanded lane with no work must also retire. The
-production `NativeRunnerProcess` owns the active lane reducer but has no
-drain-vote, drain-certificate, or certified-merge producer;
+production `NativeRunnerProcess` owns the active lane reducer and an
+authenticated remote drain-vote collector, but has no connected local vote
+issuance, retained fanout, or drain-certificate carrier producer;
 the old `V2LaneWorkAdapter` contains those operations but is not constructed by
 the runner. Complete the drain protocol under the sole process-lived lane
 owner, including retained signed output and exact carrier attachment, then
@@ -40,6 +43,18 @@ leader may use local FIFO for fair sampling, but block validity and forward
 progress must depend on the signed proposal and committed parent, not the
 local position of an unselected transaction. Preserve the reservation's exact
 ownership and fee capacity while qualifying this change.
+
+Ordinary durable admission still captures `QueuePlanAdmissionContextV1`, which
+requires a live lane committee before the leader can sample the signed input.
+The seven-validator DA fixture exposed the circular bootstrap: it registered
+seven lane validators under the default `f=1` dataspace, so selecting four
+requires a threshold-beacon pulse, while the first routed work cannot obtain
+that pulse. The fixture must use `f=2` for its exact seven-validator pool, but
+that configuration correction does not remove the production coupling.
+Replace Ordinary's QueuePlan-specific journal claim with durable signed-input
+custody and a routing hint; derive its route against the committed parent at
+leader selection, and let followers validate the proposal from that parent.
+Keep the complete committee-bound context only for `QueuePlanSynced` work.
 
 The leader now rechecks the chosen Ordinary subset's aggregate fee reservations
 against the same committed parent used for individual admission. A selected
@@ -2771,3 +2786,111 @@ Exact terminal Queue reconciliation, committee-bound receipt carry/closure,
 prepared Validate-to-Apply custody and production shared-lane cutover remain open.
 Full workspace and unchanged real four/seven-validator campaigns remain required;
 L1–L6 are not complete.
+
+### 2026-09-25: asynchronous leader sampling and exact-output retry
+
+The leader samples a bounded set of locally available Ordinary transactions
+against the committed parent. A peer's Queue arrival order is not a consensus
+order: an autonomous QueuePlan reservation or pending claim cannot fence an
+independent Ordinary transaction, and advancing the parent cannot reset the
+bounded scan cursor before it reaches later local arrivals. The proposal and
+parent carry the follower's deterministic validation inputs; followers do not
+reconstruct the leader's Queue. The mixed four- and seven-validator tests submit
+different Ordinary queues and a QueuePlan input while checking canonical
+commitment of each input.
+
+Native transport now keeps one fanout for an identical authenticated control
+while any recipient or actor ticket is pending. A timer retry re-arms previously
+actor-admitted recipients at most once per fanout; it cannot overwrite a
+backpressured returned post or multiply work ahead of newer timeout votes.
+Distinct signed controls still receive separate capacity decisions. Seven
+native transport controls passed. The seven-validator async queue test passed
+twice on the same optimized daemon
+(`5f3746f94be9349b43dbbcae254d0042754a6c3b393247cc36b2f78417478bff`),
+in 129.61s and 118.04s. These are evidence for that transport candidate, not
+for the later lifecycle change.
+
+An exact recovered signed Broadcast is now recognized while an unrelated
+scheduler lease runs, using its authenticated effect, installed durable row,
+recovery wait, physical geometry and indexes. That duplicate stutters without
+acquiring service or retirement authority; a changed signed source remains a
+conflict. The new active-lease overlap regression, the existing Ready/Waiting
+retransmit regression, and the durable-restart negative case pass. The formal
+multilane source/model checker passes but does not claim production trace
+extraction. The optimized daemon build passes on commit `941e811f0d`; its
+SHA-256 is `918b3385fc4bb4e1a4569096f658465607428a6c5bf23bd281df57aa39e9e94a`.
+The unchanged four-validator mixed-queue case passes in 53.18s and the
+seven-validator case passes in 115.90s on that same daemon. Both retained peer
+logs and encountered transient diagnostic HTTP 503s under local load without
+failing their commit assertions. The isolated production restart harness passes
+on the same daemon: four validators with one offline in 96.48s, and seven
+validators with two offline in 178.10s. Those scenarios commit before and
+during the outage, converge restarted validators, then apply their finite final
+transaction. Authenticated reordering, leader-failure, repeated seeds, and
+broader release gates remain required before L1–L6 can close.
+
+The four-validator authenticated DA loss corridor now passes with the
+feature-isolated `test-network-message-control` debug daemon built from the
+same `941e811f0d` source (`c5ac96484ff8ae22f9e476b30ab672cc60c8c1da9eaa32ec692a7fe53aa5e6ff`)
+and the `consensus_and_da` harness (`8a176fd9f750261ada87a0b5af5bf17ec1574cd072b98776a90b1cb917489e7d`)
+in 340.52s. Its four peers acknowledged authenticated pre-admission chunk and
+finality holds, retained three selected RS16 chunks from a common manifest
+on a receiver quorum, kept the carrier uncommitted before healing, captured
+a matching validated durable body on a quorum, drained the holds with no
+drop/overflow/fatal controller state, then applied the exact 10 MiB signed
+transaction with one final carrier subject and finality proof. The fixture
+now defers genesis pre-execution until its custom stake configuration is
+merged, funds the bounded transport semantic classes, and targets the
+leader's actual height-two local-queue snapshot rather than assuming the
+transaction must wait for height three. Blocking SDK calls in the async test
+run on plain worker threads; focused off-runtime and four-peer genesis
+regressions pass. This is one authenticated hold/heal seed, not an exhaustive
+loss/reordering proof or a full release gate.
+
+The unchanged optimized daemon above and rebuilt `consensus_and_da` harness
+(`ae5ebc6d5ee91f3f4413c18baa609cedfcbbefd8a55f210d2f2cf39825c0d4a9`)
+pass exact 1 MiB Log carrier checks with four validators in 43.72s and seven
+validators in 64.27s. Both tests require the signed transaction to reach
+Applied and quorum Kura carriers to agree on the same v2 subject. The initial
+seven-validator fixture registered seven public-lane candidates while the
+default universal dataspace still had `f=1`: its required four-member lane
+committee could not be selected without a threshold-beacon pulse, and Torii
+returned `PRTRY:ROUTE_UNRESOLVED` through the full 480s retry budget. The
+corrected fixture sets `f=2`, so all seven live candidates form an exact
+`3f+1` committee at genesis. The four-validator configuration remains `f=1`.
+The production Ordinary-admission context dependency described above remains
+open; this fixture correction does not prove general asynchronous ingress
+liveness.
+
+The final DA harness (`88e9552a77a42c9441da1ce3519bef0f97b5e5c6861c3e208ec9180285602603`)
+passes the authenticated four-validator 10 MiB chunk hold/heal corridor in
+97.56s on the unchanged feature-isolated debug daemon above. Its four- and
+seven-validator 1 MiB carrier tests both pass on the unchanged optimized
+daemon above in one 105.68s sequential run. The canonical multilane
+source/model checker and focused diagnostic-retry control pass. This harness
+does not require identical follower mempools before the leader proposes:
+submission acknowledges the leader's signed input, while authenticated RS16
+body evidence, global State Applied, per-peer Kura carriers, CommitQCs and
+finality proofs establish the result. A peer-local transaction-status cache
+may still show `Queued` after canonical State has applied the block, so it is
+not treated as consensus authority. Diagnostic HTTP 503 responses get bounded
+observation-only retries; other errors fail immediately. At that test cut the
+10 MiB DA fixture lengthened whole-transaction gossip resends to avoid relay
+saturation during the held DA body. A later production gossiper candidate
+removes that test override and distinguishes an Ordinary
+send from the first certified promotion for the same signed entrypoint, paces
+large-frame retries by posted bytes, observes outbound TxGossip post overflow,
+and filters recently sent items per peer when a mixed batch contains new work.
+The fixture exercises the default three-tick resend setting. Focused tests and
+an unchanged-daemon network run are required for that later candidate; the
+earlier test evidence does not qualify it. Aggregate outbound burst capacity
+and the Ordinary admission committee dependency remain open liveness work.
+
+The NPoS carrier fixture now uses per-topic plaintext limits below its
+encrypted global frame cap, a signed four-validator capacity matching its four
+peers, and the same bounded transport geometry as the DA fixture. Its blocking
+SDK calls run off the Tokio worker, and an absent per-peer background-depth
+gauge counts as zero. The exact 1 MiB NPoS carrier and four-peer happy-path
+tests pass in 35.87s and 80.58s respectively on the patched optimized daemon
+`402b6329cac68002ecec2023d6ba2531c0807aea2499653d6d4e39fe3d1b3a32`.
+That daemon predates the later per-peer mixed-batch filter.

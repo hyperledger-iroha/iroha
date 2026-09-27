@@ -33,7 +33,6 @@ use iroha::{
 use iroha_core::{
     kura::LaneStorageIdentity,
     merge::{MergeLedgerCandidate, merge_qc_message_digest},
-    sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -2445,7 +2444,7 @@ fn committed_lane_block_has_canonical_quorum_metadata(block: &CommittedLaneBlock
     if validator_count == 0 || validator_count > TOTAL_PEERS || min_quorum == 0 {
         return false;
     }
-    let expected_quorum = commit_quorum_from_len(validator_count).max(1);
+    let expected_quorum = iroha_sumeragi::types::quorum(validator_count).max(1);
     min_quorum == expected_quorum
         && prepare_qc_signer_count == min_quorum
         && commit_qc_signer_count == min_quorum
@@ -3170,7 +3169,7 @@ fn commit_quorum_observation(
             peer_count,
         ) {
             Ok(Some((_validator_set_len, expected_quorum))) => expected_quorum,
-            Ok(None) => commit_quorum_from_len(peer_count).max(1),
+            Ok(None) => iroha_sumeragi::types::quorum(peer_count).max(1),
             Err(observation) => return observation,
         };
         if quorum_required != expected_quorum {
@@ -3222,7 +3221,7 @@ fn expected_commit_quorum_from_validator_set_len_observation(
             peer_count,
         });
     };
-    let quorum_required = commit_quorum_from_len(validator_set_len);
+    let quorum_required = iroha_sumeragi::types::quorum(validator_set_len);
     if validator_set_len > peer_count {
         return Err(CommitQuorumObservation::InvalidValidatorSetLen {
             validator_set_len: max_len,
@@ -3275,7 +3274,7 @@ fn wait_for_commit_quorum_required(
     if let Some(error) = last_observation.timeout_error(context) {
         return Err(eyre!("{error}"));
     }
-    let fallback_quorum = commit_quorum_from_len(network.peers().len());
+    let fallback_quorum = iroha_sumeragi::types::quorum(network.peers().len());
     eprintln!(
         "[autoscale-localnet] commit quorum fallback from peer count: {} (context: {context}; last observation={last_observation:?}; last error={last_error:?})",
         fallback_quorum
@@ -4487,7 +4486,7 @@ fn validate_lane_drain_certificate_evidence(
     );
     ensure!(
         usize::try_from(intent.min_quorum).ok()
-            == Some(commit_quorum_from_len(intent.validator_set.len())),
+            == Some(iroha_sumeragi::types::quorum(intent.validator_set.len())),
         "drain intent quorum does not match its exact committee"
     );
     ensure!(
@@ -5099,7 +5098,7 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
         }
     }
     ensure!(
-        signer_indices.len() == commit_quorum_from_len(qc.validator_set.len()),
+        signer_indices.len() == iroha_sumeragi::types::quorum(qc.validator_set.len()),
         "merge QC cardinality mismatch: signers={}, roster={}",
         signer_indices.len(),
         qc.validator_set.len()
@@ -5430,7 +5429,7 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
         "two-phase drain quorum discovery",
     )?;
     ensure!(
-        quorum_required == commit_quorum_from_len(TOTAL_PEERS)
+        quorum_required == iroha_sumeragi::types::quorum(TOTAL_PEERS)
             && quorum_required <= TOTAL_PEERS - 1,
         "four-peer drain test must retain a three-validator quorum across one restart"
     );

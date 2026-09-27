@@ -1311,7 +1311,7 @@ fn assert_same_block_key_rotation_persists_requested_pulse(parliament_requested_
     );
     let committed_hash = header.hash();
     let evidence_prune_keys =
-        crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
+        crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
             &state,
             context.height,
         )

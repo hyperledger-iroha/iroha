@@ -1260,13 +1260,14 @@ mod tests {
         WireDigest::new(words).unwrap()
     }
 
-    fn rejected_before_hashing(proof: &CompactProof, limits: VerifyLimits) {
+    fn rejected_before_hashing(case: &str, proof: &CompactProof, limits: VerifyLimits) -> Error {
         let relation = FixedColumnsAir {
             public: fixture().digest,
         };
         let mut work = VerificationWork::default();
-        assert!(verify_recorded(&relation, proof, limits, &mut work).is_err());
-        assert_eq!(work, VerificationWork::default());
+        let error = verify_recorded(&relation, proof, limits, &mut work).expect_err(case);
+        assert_eq!(work, VerificationWork::default(), "{case}");
+        error
     }
 
     #[test]
@@ -1309,7 +1310,11 @@ mod tests {
             "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=375; replay_byte_budget_admitted=false; profile_security_qualified=false",
             started.elapsed()
         );
-        rejected_before_hashing(&fixture.compact, byte_limit_policy());
+        rejected_before_hashing(
+            "default replay proof-byte ceiling",
+            &fixture.compact,
+            byte_limit_policy(),
+        );
     }
 
     #[test]
@@ -1545,12 +1550,27 @@ mod tests {
                     proof.queries[0].fri.final_values.pop();
                 }
             }
-            rejected_before_hashing(&proof, diagnostic_limits());
+            rejected_before_hashing(
+                &format!("malformed shape {malformed}"),
+                &proof,
+                diagnostic_limits(),
+            );
         }
-        for column in [0, 31, 80, 272, 300, 309, 310, 341] {
-            let mut proof = base.clone();
-            proof.queries[0].current[column] = GOLDILOCKS_MODULUS;
-            rejected_before_hashing(&proof, diagnostic_limits());
+        for side in 0..2 {
+            for column in [0, 31, 80, 272, 300, 309, 310, 341] {
+                let mut proof = base.clone();
+                let row = if side == 0 {
+                    &mut proof.queries[0].current
+                } else {
+                    &mut proof.queries[0].next
+                };
+                row[column] = GOLDILOCKS_MODULUS;
+                rejected_before_hashing(
+                    &format!("noncanonical row: side={side}, column={column}"),
+                    &proof,
+                    diagnostic_limits(),
+                );
+            }
         }
         for lane in 0..4 {
             let mut coefficients = [0; 4];
@@ -1566,36 +1586,100 @@ mod tests {
                     3 => query.fri.rounds[0].folded_value = bad,
                     _ => query.fri.final_values[0] = bad,
                 }
-                rejected_before_hashing(&proof, diagnostic_limits());
+                rejected_before_hashing(
+                    &format!("noncanonical Fp4: target={target}, lane={lane}"),
+                    &proof,
+                    diagnostic_limits(),
+                );
             }
         }
-        for limits in [
-            VerifyLimits {
-                max_queries: 374,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_air_row_values: 341,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_query_path_len: 18,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_fri_layers: 17,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_fri_round_values: 3,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_batch_bytes: 31,
-                ..diagnostic_limits()
-            },
+        let relation = FixedColumnsAir {
+            public: fixture().digest,
+        };
+        let geometry = Geometry::new(&relation).unwrap();
+        let proof_bytes = preflight(&relation, base, diagnostic_limits(), &geometry).unwrap();
+        let exact = VerifyLimits {
+            max_queries: base.queries.len(),
+            max_air_row_values: relation.schema().width,
+            max_query_path_len: geometry.lde_rows.ilog2() as usize,
+            max_fri_layers: geometry.fri_lengths.len(),
+            max_fri_round_values: *geometry.fri_lengths.last().unwrap(),
+            // The active constant-column fixture binds eight public bytes.
+            // Derive the boundary from the relation so a fixture change cannot
+            // silently turn this rejection case into an admitted statement.
+            max_batch_bytes: relation.statement_bytes().len(),
+            max_proof_bytes: proof_bytes,
+            ..diagnostic_limits()
+        };
+        assert_eq!(
+            preflight(&relation, base, exact, &geometry).unwrap(),
+            proof_bytes,
+            "all exact resource boundaries must admit the valid shape"
+        );
+        for (name, actual, limits) in [
+            (
+                "max_queries",
+                exact.max_queries,
+                VerifyLimits {
+                    max_queries: exact.max_queries - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_air_row_values",
+                exact.max_air_row_values,
+                VerifyLimits {
+                    max_air_row_values: exact.max_air_row_values - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_query_path_len",
+                exact.max_query_path_len,
+                VerifyLimits {
+                    max_query_path_len: exact.max_query_path_len - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_fri_layers",
+                exact.max_fri_layers,
+                VerifyLimits {
+                    max_fri_layers: exact.max_fri_layers - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_fri_round_values",
+                exact.max_fri_round_values,
+                VerifyLimits {
+                    max_fri_round_values: exact.max_fri_round_values - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_compact_statement_bytes",
+                exact.max_batch_bytes,
+                VerifyLimits {
+                    max_batch_bytes: exact.max_batch_bytes - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_proof_bytes",
+                exact.max_proof_bytes,
+                VerifyLimits {
+                    max_proof_bytes: exact.max_proof_bytes - 1,
+                    ..exact
+                },
+            ),
         ] {
-            rejected_before_hashing(base, limits);
+            let error = rejected_before_hashing(name, base, limits);
+            assert!(
+                matches!(error, Error::VerifierLimitExceeded { limit, actual: observed, max }
+                    if limit == name && observed == actual && max == actual - 1),
+                "{name}: expected exact limit error for actual={actual}, got {error:?}"
+            );
         }
     }
 

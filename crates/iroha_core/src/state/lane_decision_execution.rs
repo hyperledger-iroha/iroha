@@ -209,7 +209,7 @@ impl State {
         // start hooks run before native economics and may record real transfers.
         // A caller owning a recorder is refused by the shared constructor before
         // State acquisition; suppression alone cannot prevent lock inversion.
-        let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+        let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
         self.with_native_lane_execution(application_block_header, groups, |_, executions| {
             Ok(executions)
         })
@@ -257,7 +257,7 @@ impl State {
             Scope,
         ) -> Result<Finished, super::MergeLedgerCommitError>,
     ) -> Result<(Box<StateBlock<'state>>, Finished), super::MergeLedgerCommitError> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(super::MergeLedgerCommitError::ExecutionRecorderConflict)?;
         // The constructor acquires a coherent predecessor and retains the
         // actual World, membership, hash and runtime writer guards throughout

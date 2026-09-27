@@ -108,7 +108,7 @@ impl AdapterEquivocationEvidence {
                 second: pair.second.clone(),
             },
         };
-        super::evidence::canonicalize_v2_conflict(&conflict)
+        super::v2_evidence::canonicalize_v2_conflict(&conflict)
     }
     /// Recheck the sealed pair's structural contract against one frozen height
     /// context.

@@ -186,41 +186,7 @@ async fn api_version_negotiates_text_success_and_typed_unavailable() {
         "the successful version representation must still be plain text"
     );
 }
-#[tokio::test]
-async fn readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress() {
-    let ingress = iroha_core::sumeragi::SumeragiIngressTestHarness::new(4);
-    let handle = ingress.handle();
-    assert!(handle.admission_ready());
-    let mut app = Arc::try_unwrap(mk_app_state_for_tests())
-        .unwrap_or_else(|_| panic!("unique readiness app"));
-    app.sumeragi = Some(handle.clone());
-    let response = handler_readyz(State(Arc::new(app))).await;
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-    let body = axum::body::to_bytes(response.into_body(), 4096)
-        .await
-        .expect("readiness body");
-    assert_eq!(
-        body.as_ref(),
-        b"Global beacon readiness is not initialized for the active height"
-    );
-    assert!(
-        handle.admission_ready(),
-        "readiness must not close setup ingress"
-    );
-    assert!(handle.notify_pending_queue_plan_admission());
-}
 
-#[tokio::test]
-async fn readiness_rejects_closed_consensus_ingress() {
-    let mut app = Arc::try_unwrap(mk_app_state_for_tests())
-        .unwrap_or_else(|_| panic!("unique readiness app"));
-    app.sumeragi = Some(iroha_core::sumeragi::SumeragiHandle::emergency_fast_disabled());
-    assert_eq!(
-        handler_readyz(State(Arc::new(app))).await.status(),
-        StatusCode::SERVICE_UNAVAILABLE,
-        "completed Queue startup alone cannot open consensus ingress"
-    );
-}
 
 #[tokio::test]
 async fn readiness_rejects_empty_queue_startup_reconciliation() {
@@ -1050,10 +1016,8 @@ fn pin_autoscale_lane_committee_for_test(
         validator_set_hash: HashOf::new(&validator_set),
         validator_count: u32::try_from(validator_set.len())
             .expect("autoscale fixture committee length fits u32"),
-        min_quorum: u32::try_from(
-            iroha_core::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-        )
-        .expect("autoscale fixture committee quorum fits u32"),
+        min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("autoscale fixture committee quorum fits u32"),
         validator_set: validator_set.clone(),
         validator_pops,
     };

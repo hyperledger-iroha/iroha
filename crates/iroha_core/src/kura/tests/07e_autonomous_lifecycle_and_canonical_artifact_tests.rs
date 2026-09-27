@@ -645,10 +645,8 @@ fn autonomous_payload_duplicate_requires_exact_producer_authenticated_bytes() {
     ];
     validator_set.sort();
     let validator_count = u32::try_from(validator_set.len()).expect("validator count fits u32");
-    let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-        validator_set.len(),
-    ))
-    .expect("validator quorum fits u32");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+        .expect("validator quorum fits u32");
     proposal.descriptor.validator_set_hash_version = VALIDATOR_SET_HASH_VERSION_V1;
     proposal.descriptor.validator_set = validator_set.clone();
     proposal.descriptor.validator_set_hash = HashOf::new(&validator_set);

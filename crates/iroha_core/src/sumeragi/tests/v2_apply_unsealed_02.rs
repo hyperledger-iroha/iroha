@@ -251,8 +251,7 @@ fn native_amx_receipts_for_apply_fixture(
                 .clone()
         })
         .collect::<Vec<_>>();
-    let min_signers =
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+    let min_signers = iroha_sumeragi::types::quorum(validator_set.len()).max(1);
     let validator_count =
         u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
     let participant_min_quorum =

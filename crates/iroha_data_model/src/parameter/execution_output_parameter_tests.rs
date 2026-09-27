@@ -8,7 +8,8 @@ use norito::{
 };
 
 use crate::parameter::{
-    BlockParameter, BlockParameters, ExecutionOutputPolicyV1, Parameter, Parameters,
+    BlockParameter, BlockParameters, ExecutionOutputPolicyV1, FastpqSourcePolicyV1, Parameter,
+    Parameters,
 };
 
 fn policy() -> ExecutionOutputPolicyV1 {
@@ -31,6 +32,7 @@ fn parameters() -> Parameters {
         BlockParameter::MaxTransactions(NonZeroU64::new(11).unwrap()),
         BlockParameter::MaxTimeTriggerInvocations(NonZeroU32::new(5).unwrap()),
         BlockParameter::ExecutionOutput(policy()),
+        BlockParameter::FastpqSource(FastpqSourcePolicyV1::bootstrap()),
     ] {
         parameters.set_parameter(Parameter::Block(value));
     }
@@ -115,6 +117,7 @@ fn block_parameters_roundtrip_complete_policy_in_all_codec_writers() {
         keys,
         [
             "execution_output",
+            "fastpq_source",
             "max_time_trigger_invocations",
             "max_transactions"
         ]
@@ -124,7 +127,11 @@ fn block_parameters_roundtrip_complete_policy_in_all_codec_writers() {
 #[test]
 fn block_parameters_json_requires_each_new_field_and_rejects_unknowns() {
     let current = json::to_value(&parameters().block()).unwrap();
-    for missing in ["max_time_trigger_invocations", "execution_output"] {
+    for missing in [
+        "max_time_trigger_invocations",
+        "execution_output",
+        "fastpq_source",
+    ] {
         let mut absent = current.clone();
         absent.as_object_mut().unwrap().remove(missing);
         assert!(json::from_value::<BlockParameters>(absent).is_err());
@@ -149,7 +156,7 @@ fn block_parameters_json_requires_each_new_field_and_rejects_unknowns() {
         .insert("local_memory_override".into(), Value::from(1_u64));
     assert!(json::from_value::<BlockParameters>(unknown).is_err());
 
-    // Preserve the pre-existing optional Network cap JSON behavior. Both new
+    // Preserve the pre-existing optional Network cap JSON behavior. The explicit policy
     // fields are still present, explicit and fully decoded in this case.
     let mut no_network_cap = current;
     no_network_cap
@@ -208,11 +215,13 @@ fn block_parameter_variants_roundtrip_and_reject_mixed_or_unknown_tags() {
         BlockParameter::MaxTransactions(NonZeroU64::new(11).unwrap()),
         BlockParameter::MaxTimeTriggerInvocations(NonZeroU32::new(5).unwrap()),
         BlockParameter::ExecutionOutput(policy()),
+        BlockParameter::FastpqSource(FastpqSourcePolicyV1::bootstrap()),
     ];
     for (expected_tag, value) in [
         "MaxTransactions",
         "MaxTimeTriggerInvocations",
         "ExecutionOutput",
+        "FastpqSource",
     ]
     .into_iter()
     .zip(variants)
@@ -234,6 +243,8 @@ fn block_parameter_variants_roundtrip_and_reject_mixed_or_unknown_tags() {
         r#"{"MaxTimeTriggerInvocations":1,"MaxTransactions":1}"#,
         r#"{"ExecutionOutput":null}"#,
         r#"{"ExecutionOutput":{}}"#,
+        r#"{"FastpqSource":null}"#,
+        r#"{"FastpqSource":{}}"#,
         r#"{"LocalOutputOverride":1}"#,
     ] {
         assert!(json::from_str::<BlockParameter>(invalid).is_err());
@@ -241,12 +252,13 @@ fn block_parameter_variants_roundtrip_and_reject_mixed_or_unknown_tags() {
 }
 
 #[test]
-fn parameters_getter_setter_and_enumeration_retain_all_three_block_values() {
+fn parameters_getter_setter_and_enumeration_retain_all_four_block_values() {
     let parameters = parameters();
     let expected = vec![
         BlockParameter::MaxTransactions(NonZeroU64::new(11).unwrap()),
         BlockParameter::MaxTimeTriggerInvocations(NonZeroU32::new(5).unwrap()),
         BlockParameter::ExecutionOutput(policy()),
+        BlockParameter::FastpqSource(FastpqSourcePolicyV1::bootstrap()),
     ];
     assert_eq!(
         parameters.block().parameters().collect::<Vec<_>>(),
@@ -335,4 +347,68 @@ fn atomic_output_policy_requires_every_field_and_has_one_declared_identity() {
         assert!(json::from_value::<ExecutionOutputPolicyV1>(null).is_err());
     }
     assert_complete_codecs(&policy());
+}
+
+#[test]
+fn source_profile_bootstrap_getter_and_atomic_setter_preserve_other_block_values() {
+    let expected = FastpqSourcePolicyV1::bootstrap();
+    let output = ExecutionOutputPolicyV1::bootstrap();
+    expected.validate(output).unwrap();
+    for maximum in [1, 17, u64::MAX] {
+        let block = BlockParameters::new(NonZeroU64::new(maximum).unwrap());
+        assert_eq!(block.fastpq_source(), expected);
+        assert_eq!(block.max_transactions().get(), maximum);
+    }
+    assert_eq!(BlockParameters::default().fastpq_source(), expected);
+    let mut parameters = Parameters::default();
+    let before = parameters.block();
+    let changed =
+        FastpqSourcePolicyV1::from_sizing(output, expected.intrinsic, expected.mandatory, 2)
+            .unwrap();
+    parameters.set_parameter(Parameter::Block(BlockParameter::FastpqSource(changed)));
+    let after = parameters.block();
+    assert_eq!(after.fastpq_source(), changed);
+    assert_eq!(after.max_transactions(), before.max_transactions());
+    assert_eq!(
+        after.max_time_trigger_invocations(),
+        before.max_time_trigger_invocations()
+    );
+    assert_eq!(after.execution_output(), before.execution_output());
+    assert_complete_codecs(&after);
+    assert_complete_codecs(&parameters);
+    assert_complete_codecs(&BlockParameter::FastpqSource(changed));
+    assert_complete_codecs(&Parameter::Block(BlockParameter::FastpqSource(changed)));
+    // This model setter transports values; authenticated genesis-only admission
+    // belongs to Core and must validate the entire profile atomically.
+}
+
+#[test]
+fn retired_three_field_block_parameters_are_not_a_source_policy_fallback() {
+    #[derive(norito::Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::BlockParameters")]
+    struct RetiredBlockParameters {
+        max_transactions: NonZeroU64,
+        max_time_trigger_invocations: NonZeroU32,
+        execution_output: ExecutionOutputPolicyV1,
+    }
+    let retired = RetiredBlockParameters {
+        max_transactions: NonZeroU64::new(17).unwrap(),
+        max_time_trigger_invocations: NonZeroU32::new(512).unwrap(),
+        execution_output: ExecutionOutputPolicyV1::bootstrap(),
+    };
+    assert_eq!(
+        norito::schema::identity::frame_hash::<RetiredBlockParameters>(),
+        norito::schema::identity::frame_hash::<BlockParameters>()
+    );
+    assert!(BlockParameters::decode_all(&mut retired.encode().as_slice()).is_err());
+    assert!(
+        norito::decode_canonical::<BlockParameters>(&norito::encode_canonical(&retired).unwrap())
+            .is_err()
+    );
+    let mut json = json::to_value(&BlockParameters::default()).unwrap();
+    json.as_object_mut().unwrap().remove("fastpq_source");
+    assert!(json::from_value::<BlockParameters>(json.clone()).is_err());
+    let mut parent = json::to_value(&Parameters::default()).unwrap();
+    parent.as_object_mut().unwrap().insert("block".into(), json);
+    assert!(json::from_value::<Parameters>(parent).is_err());
 }

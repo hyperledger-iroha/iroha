@@ -54,6 +54,8 @@ iroha_genesis = { path = "crates/iroha_genesis" }
 iroha_sccp = { path = "crates/iroha_sccp" }
 iroha_sccp_rpc = { path = "crates/iroha_sccp_rpc" }
 iroha_sccp_wallet = { path = "crates/iroha_sccp_wallet" }
+# The sans-IO Sumeragi consensus core; `iroha_core` hosts its node driver.
+iroha_sumeragi = { path = "crates/iroha_sumeragi" }
 norito = { path = "crates/norito", default-features = false }
 norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }
@@ -350,7 +352,6 @@ members = [
 ]
 exclude = [
     "mochi/fixtures",
-    "crates/iroha_sumeragi_core",
     "crates/gpuzstd_metal.ignore"
 ]
 

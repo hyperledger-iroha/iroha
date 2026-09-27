@@ -1068,7 +1068,6 @@ struct ProvisionalSnapshotBootstrap {
 enum SnapshotBootstrapRuntimeState {
     Authenticated,
     Pending(ProvisionalSnapshotBootstrap),
-    Finalizing,
 }
 impl SnapshotBootstrapRuntimeState {
     fn pending_metadata(&self) -> Option<&ProvisionalSnapshotBootstrap> {
@@ -1079,60 +1078,6 @@ impl SnapshotBootstrapRuntimeState {
     }
     fn is_authenticated(&self) -> bool {
         matches!(self, Self::Authenticated)
-    }
-    fn begin_finalization(&mut self, expected: &ProvisionalSnapshotBootstrap) -> bool {
-        if !matches!(self, Self::Pending(current) if current == expected) {
-            return false;
-        }
-        *self = Self::Finalizing;
-        true
-    }
-    #[cfg(test)]
-    fn finish_finalization(&mut self) -> bool {
-        if !matches!(self, Self::Finalizing) {
-            return false;
-        }
-        *self = Self::Authenticated;
-        true
-    }
-}
-/// Non-forgeable, instance-bound authority for the narrow set of deferred
-/// recovery writes performed while snapshot bootstrap is `Finalizing`.
-struct SnapshotFinalizationMutationAuthority<'a> {
-    kura: &'a Kura,
-}
-impl<'a> SnapshotFinalizationMutationAuthority<'a> {
-    fn new(kura: &'a Kura) -> Result<Self> {
-        if !matches!(
-            *kura.provisional_snapshot_bootstrap.lock(),
-            SnapshotBootstrapRuntimeState::Finalizing
-        ) {
-            return Err(Error::SnapshotBootstrapAuthenticationPending);
-        }
-        Ok(Self { kura })
-    }
-    fn validate_for(&self, kura: &Kura) -> Result<()> {
-        if !std::ptr::eq(self.kura, kura)
-            || !matches!(
-                *kura.provisional_snapshot_bootstrap.lock(),
-                SnapshotBootstrapRuntimeState::Finalizing
-            )
-        {
-            return Err(Error::SnapshotBootstrapAuthenticationPending);
-        }
-        kura.ensure_canonical_storage_not_poisoned()
-    }
-}
-enum StartupRecoveryMutationAuthority<'a> {
-    Authenticated,
-    SnapshotFinalization(&'a SnapshotFinalizationMutationAuthority<'a>),
-}
-impl StartupRecoveryMutationAuthority<'_> {
-    fn validate_for(&self, kura: &Kura) -> Result<()> {
-        match self {
-            Self::Authenticated => kura.durable_mutation_authorized(),
-            Self::SnapshotFinalization(authority) => authority.validate_for(kura),
-        }
     }
 }
 #[derive(Debug)]

@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 MODULE_PATH = ROOT / "scripts" / "formal" / "private_settlement_tlc_report.py"
 RUNNER = ROOT / "scripts" / "formal" / "run_atomic_private_settlement_tlc.sh"
-RESULT_CONTRACT = ROOT / "scripts" / "formal" / "sumeragi_v2_tlc_result_contract.sh"
+RESULT_CONTRACT = ROOT / "scripts" / "formal" / "tlc_result_contract.sh"
 SPEC = importlib.util.spec_from_file_location("private_settlement_tlc_report", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -250,7 +250,7 @@ Finished in 00s at (2026-09-07 11:35:01)
             log.write_text(action_property_negative_log(), encoding="utf-8")
             command = (
                 'source "$1"; '
-                'sumeragi_v2_tlc_assert_action_property_violation '
+                'tlc_assert_action_property_violation '
                 '"$2" "$3" "$4" "$5"'
             )
             invocation = [

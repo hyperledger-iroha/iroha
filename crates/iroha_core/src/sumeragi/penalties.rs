@@ -110,7 +110,7 @@ impl<'a> PenaltyApplier<'a> {
         budget: &AllocationBudget,
         stake_budget: &AllocationBudget,
     ) -> Result<ParentPenaltySnapshot> {
-        let evidence_capacity = super::evidence::v2_committed_evidence_capacity(view.world());
+        let evidence_capacity = super::v2_evidence::v2_committed_evidence_capacity(view.world());
         if evidence_capacity.record_capacity_exceeded {
             return Err(eyre!(
                 "committed Sumeragi v2 evidence exceeds the record capacity"
@@ -297,7 +297,7 @@ impl<'a> PenaltyApplier<'a> {
             )
             .and_then(|snapshot| {
                 let admissions = if include_admissions {
-                    super::evidence::pending_v2_evidence_admissions_from_world(
+                    super::v2_evidence::pending_v2_evidence_admissions_from_world(
                         self.state,
                         block_header.height().get(),
                         view.world(),
@@ -331,7 +331,7 @@ impl<'a> PenaltyApplier<'a> {
             .as_mut_slice()
             .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
         let _witness_suppression =
-            crate::sumeragi::witness::suppress_recording_for_current_thread();
+            crate::exec_witness::suppress_recording_for_current_thread();
         let mut scratch = self
             .state
             .consensus_effects_probe_block(block_header.clone())?;
@@ -535,7 +535,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     // These are finality effects, not transaction execution. Suppress the
     // process-global recorder in both commit and rollback-only validation so
     // concurrent in-process State instances cannot contaminate one another.
-    let _witness_suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let mut outcome = PenaltyOutcome::default();
     if let Some(pulse) = effects.finalized_global_beacon_pulse {
         if pulse.network_id != tx.network_id
@@ -603,7 +603,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                 "Sumeragi v2 parent evidence prune target is not terminal"
             ));
         }
-        if !super::evidence::v2_committed_evidence_record_is_prunable(
+        if !super::v2_evidence::v2_committed_evidence_record_is_prunable(
             &tx.world,
             record,
             current_height,
@@ -622,7 +622,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
         .iter()
         .count()
         .saturating_add(effects.v2_evidence_admissions.len())
-        > super::evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS
+        > super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS
     {
         return Err(eyre!(
             "bounded Sumeragi v2 evidence table has no reclaimable capacity"
@@ -630,34 +630,35 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     }
     let mut retained_evidence_bytes = 0_usize;
     for (_, record) in tx.world.consensus_evidence.iter() {
-        let encoded_len = super::evidence::v2_evidence_encoded_len(&record.evidence.equivocation);
-        if encoded_len > super::evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES {
+        let encoded_len =
+            super::v2_evidence::v2_evidence_encoded_len(&record.evidence.equivocation);
+        if encoded_len > super::v2_evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES {
             return Err(eyre!(
                 "committed Sumeragi v2 evidence contains an oversized individual proof"
             ));
         }
-        retained_evidence_bytes = super::evidence::checked_v2_evidence_byte_sum(
+        retained_evidence_bytes = super::v2_evidence::checked_v2_evidence_byte_sum(
             retained_evidence_bytes,
             [encoded_len],
-            super::evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+            super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
         )
         .ok_or_else(|| {
             eyre!("bounded Sumeragi v2 evidence table exceeds its proof-byte capacity")
         })?;
     }
-    let incoming_evidence_bytes = super::evidence::checked_v2_evidence_byte_sum(
+    let incoming_evidence_bytes = super::v2_evidence::checked_v2_evidence_byte_sum(
         0,
         effects
             .v2_evidence_admissions
             .iter()
-            .map(super::evidence::v2_evidence_encoded_len),
-        super::evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES,
+            .map(super::v2_evidence::v2_evidence_encoded_len),
+        super::v2_evidence::MAX_V2_EVIDENCE_ADMISSION_BYTES,
     )
     .ok_or_else(|| eyre!("Sumeragi v2 evidence admission batch exceeds its byte capacity"))?;
-    if super::evidence::checked_v2_evidence_byte_sum(
+    if super::v2_evidence::checked_v2_evidence_byte_sum(
         retained_evidence_bytes,
         [incoming_evidence_bytes],
-        super::evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
+        super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_BYTES,
     )
     .is_none()
     {
@@ -666,8 +667,8 @@ fn apply_npos_consensus_effects_to_transaction_inner(
         ));
     }
     for admission in &effects.v2_evidence_admissions {
-        let evidence = super::evidence::canonical_v2_evidence(admission);
-        let key = super::evidence::v2_evidence_admission_key(admission);
+        let evidence = super::v2_evidence::canonical_v2_evidence(admission);
+        let key = super::v2_evidence::v2_evidence_admission_key(admission);
         if tx.world.consensus_evidence.get(&key).is_some() {
             return Err(eyre::eyre!(
                 "Sumeragi v2 evidence was already admitted by a committed block"
@@ -1018,7 +1019,7 @@ mod tests {
         query::store::LiveQueryStore,
         smartcontracts::isi::staking::apply_slash_to_validator_without_observability,
         state::{State, StateBlock, World},
-        sumeragi::evidence::evidence_key,
+        sumeragi::v2_evidence::evidence_key,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
@@ -2131,7 +2132,7 @@ mod tests {
     fn pending_penalty_backing_refusal_preserves_source_and_retries_after_original_release() {
         use mv::allocation::AllocationRefusal;
 
-        let max_rows = super::super::evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS;
+        let max_rows = super::super::v2_evidence::MAX_V2_COMMITTED_EVIDENCE_RECORDS;
         let max_layout = std::alloc::Layout::array::<PendingPenaltyEvidence>(max_rows)
             .expect("bounded penalty metadata layout");
         assert_eq!(
@@ -2658,7 +2659,7 @@ mod tests {
         )));
 
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
         retire_primary_lane_in_candidate(&mut state_block);
@@ -2709,7 +2710,7 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
         {
@@ -2782,12 +2783,12 @@ mod tests {
         .derive_npos_consensus_effects(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
 
-        let witness_guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let witness_guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         validate_npos_consensus_effects_after_execution(
             &mut state_block,
             &effects,
@@ -2799,7 +2800,7 @@ mod tests {
             2_000,
         )
         .expect("valid penalty effects remain applicable in the rollback-only overlay");
-        let witness = crate::sumeragi::witness::drain_exec_witness();
+        let witness = crate::exec_witness::drain_exec_witness();
         drop(witness_guard);
 
         assert!(witness.reads.is_empty());
@@ -2835,12 +2836,12 @@ mod tests {
             penalty_actions,
         };
         let evidence_prune_keys =
-            crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
+            crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
         let mut state_block = height_two_state_block(&state);
 
-        let witness_guard = crate::sumeragi::witness::exec_witness_guard();
-        crate::sumeragi::witness::start_block();
+        let witness_guard = crate::exec_witness::exec_witness_guard();
+        crate::exec_witness::start_block();
         let mut transaction = state_block.consensus_effects_transaction();
         apply_npos_consensus_effects_to_transaction(
             &mut transaction,
@@ -2855,7 +2856,7 @@ mod tests {
         )
         .expect("valid committed penalty effects apply");
         transaction.apply_consensus_effects();
-        let witness = crate::sumeragi::witness::drain_exec_witness();
+        let witness = crate::exec_witness::drain_exec_witness();
         drop(witness_guard);
 
         assert!(witness.reads.is_empty());

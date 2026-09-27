@@ -106,7 +106,7 @@ fn evidence_fixture_publishes_signed_record_without_finality() {
         recorded_at_ms: 10,
         penalty_status: EvidencePenaltyStatus::Pending,
     };
-    let key = crate::sumeragi::evidence::evidence_key(&record.evidence);
+    let key = crate::sumeragi::v2_evidence::evidence_key(&record.evidence);
     insert_evidence_record_for_test(&mut state, record.clone());
     assert_no_finality(&state);
     let view = state.view();

@@ -1,0 +1,27 @@
+[package]
+name = "iroha_sumeragi"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Sumeragi: sans-IO BFT consensus core with a B-Chain style topology overlay"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# Deterministic fake crypto, test harness helpers and the simulator.
+sim = []
+# Test-only: lets `build.rs` compile in the §13.4 mutation named by `SUMERAGI_MUTATION`
+# (`cfg(sumeragi_mutation = "<ID>")`). Without this feature no build is ever mutated. Used by
+# `scripts/sumeragi_mutation_gate.py`; never enable it in a production build.
+mutation-testing = []
+
+[dependencies]
+norito = { workspace = true, default-features = false, features = ["base-codec"] }

@@ -2606,7 +2606,7 @@
         "required_tokens": [
           "validator_count == 0 || validator_count > 128",
           "HashOf::new(&self.slot.validator_set)",
-          "commit_quorum_from_len(validator_count)",
+          "iroha_sumeragi::types::quorum(validator_count)",
           ".position(|peer| peer == &self.slot.author)",
           "lane_queue_reservation_group_binding_from_ordered_keys(&ordered_keys)",
           "expected_group.identity != expected_identity",

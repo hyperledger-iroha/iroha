@@ -971,6 +971,7 @@ struct RawBlock {
     signatures: BTreeSet<BlockSignature>,
     payload: iroha_data_model::block::BlockPayload,
     result: Option<iroha_data_model::block::BlockResult>,
+    commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
 }
 
 /// An exact ordered SDK response, selected by the test before Client admission.

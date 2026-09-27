@@ -4739,6 +4739,7 @@ dependencies = [
  "iroha_sccp_rpc",
  "iroha_sccp_wallet",
  "iroha_service_model",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_network",
  "iroha_test_samples",
@@ -5013,6 +5014,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_sccp",
  "iroha_schema",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -5149,6 +5151,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_sumeragi",
  "iroha_version",
  "iroha_zkp_halo2",
  "ivm_abi",
@@ -5808,6 +5811,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_sumeragi"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "norito",
+]
+
+[[package]]
 name = "iroha_swarm"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5951,6 +5961,7 @@ dependencies = [
  "iroha_schema",
  "iroha_schema_gen",
  "iroha_service_model",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",

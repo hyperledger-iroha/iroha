@@ -157,6 +157,7 @@ struct MutableReplayBlock {
     signatures: BTreeSet<BlockSignature>,
     payload: BlockPayload,
     result: Option<BlockResult>,
+    commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
 }
 
 fn mutate(block: &SignedBlock, change: impl FnOnce(&mut MutableReplayBlock)) -> SignedBlock {

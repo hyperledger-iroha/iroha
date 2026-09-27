@@ -129,15 +129,10 @@ expiry, elapsed rent collection, and hardware signing remain separate coverage.
   lease charges, so this is not production-fee qualification. Existing-file-only
   Fast Kura inspection verifies finality without starting a writer; only the
   actual Strict daemon restart qualifies replay.
-  This scenario is release-only: the authenticated release bootstrap launches
-  the sealed child in `scripts/run_sumeragi_v2_release_gates.sh --release`, which
-  publishes the source/lock/toolchain-bound prebuilt bundle before re-discovering
-  the exact non-ignored test and running its cooperative gate with one network at
-  a time and one startup attempt. Do not substitute a standalone Cargo command
-  or hand-supplied executable paths; they do not provide the required sealed
-  identity, invocation root, source manifest or prebuilt-binary attestation.
-  Source wiring is not runtime qualification: a clean signed release candidate
-  still has to complete that gate. The scenario neither builds child binaries
+  The scenario requires the sealed release environment (`IROHA_RELEASE_*`) that
+  the retired Sumeragi v2 release-gate runner provided; that runner was removed
+  with the v2 tooling, so the scenario fails closed until it is ported together
+  with the lane storage it inspects. The scenario neither builds child binaries
   nor substitutes a fresh chain/store for retained replay.
 - Pipeline block rejection scaffold lives at `tests/pipeline_block_rejected.rs` inside the `core_api` harness and is `#[ignore]` until a deterministic trigger is available.
 - Canonical Jindo activation, pre-activation rejection, exact replay, and

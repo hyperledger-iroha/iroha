@@ -11,8 +11,8 @@ fn production_complete_tip_activates_recovered_unapplied_decision() {
 
 #[cfg(feature = "bls")]
 fn production_complete_tip_activates_recovered_unapplied_decision_body() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let (kura, state, verified, storage_authority, local_signer, retirement) =
         super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let context = verified.context().clone();
@@ -89,7 +89,7 @@ fn production_complete_tip_activates_recovered_unapplied_decision_body() {
     assert!(records[0].exactly_matches_receipt(receipt));
     assert_eq!(records[0].payload(), payload.as_slice());
     drop(adapter);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let authenticated = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
         wal_path,
         verified.clone(),
@@ -217,7 +217,7 @@ fn production_complete_tip_activates_recovered_unapplied_decision_body() {
     .unwrap_or_else(|error| panic!("launch sealed CompleteTip H+1 owner: {error}"));
     assert_eq!(setup_context, context.id());
 
-    let published = crate::sumeragi::status::v2_status()
+    let published = crate::sumeragi::v2_status::v2_status()
         .expect("CompleteTip Decision publishes actual successor status");
     published
         .validate()

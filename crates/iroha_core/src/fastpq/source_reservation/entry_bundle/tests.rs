@@ -381,7 +381,7 @@ fn remaining_block_capacity_excludes_the_owners_replaced_frame() {
 }
 
 #[test]
-fn malformed_or_wrong_hash_bundles_never_replace_a_live_contribution() {
+fn malformed_shape_or_wrong_hash_bundles_never_replace_a_live_contribution() {
     let hash = Hash::new(b"valid owner");
     let mut ledger = ledger();
     let mut tx = ledger.transaction(context()).unwrap();
@@ -394,7 +394,11 @@ fn malformed_or_wrong_hash_bundles_never_replace_a_live_contribution() {
     for invalid in [
         vec![transcript(Hash::new(b"wrong identity"), 3, 10, 0)],
         vec![missing],
-        vec![transcript(hash, 3, 10, 0), transcript(hash, 2, 9, 3)],
+        vec![TransferTranscript {
+            deltas: Vec::new(),
+            poseidon_preimage_digest: None,
+            ..transcript(hash, 3, 10, 0)
+        }],
     ] {
         let before = norito::encode_canonical(&invalid).unwrap();
         let result = tx.replace_bundle(&owner, &invalid);
@@ -491,7 +495,7 @@ fn zero_entry_ceiling_and_incoherent_policy_remain_errors() {
 }
 
 #[test]
-fn construction_failure_is_distinct_from_consensus_capacity_and_has_context() {
+fn framing_capacity_failure_is_distinct_from_malformed_preparation_and_has_context() {
     let hash = Hash::new(b"construction cap");
     let mut limited = EntryBundleReservationLedger::new(
         context(),
@@ -509,8 +513,12 @@ fn construction_failure_is_distinct_from_consensus_capacity_and_has_context() {
     let owner = tx.open_entry(hash).unwrap();
     let before = tx.usage();
     let error = tx.replace_bundle(&owner, &bundle(hash)).unwrap_err();
-    assert!(error.to_string().contains("complete-entry preparation"));
-    assert!(matches!(error, EntryBundleReservationError::Preparation(_)));
+    assert!(
+        error
+            .to_string()
+            .contains("complete-entry framing capacity")
+    );
+    assert!(matches!(error, EntryBundleReservationError::Capacity(_)));
     assert_eq!(tx.usage(), before);
     let capacity = EntryBundleReservationError::from(ReservationError::Invariant(
         ReservationInvariant::StaleOwner,
@@ -561,4 +569,85 @@ fn conversion_rejects_inconsistent_complete_entry_measurements() {
             ))
         );
     }
+}
+
+#[test]
+fn framing_reservation_accepts_intervening_supply_without_claiming_proof_validity() {
+    let hash = Hash::new(b"transfer-mint-burn-transfer source");
+    // First transfer leaves sender=7 and receiver=3. An intervening mint of
+    // five sender units and burn of one receiver unit precedes the next transfer.
+    let bundle = vec![transcript(hash, 3, 10, 0), transcript(hash, 2, 12, 2)];
+    let before = norito::encode_canonical(&bundle).unwrap();
+    assert!(
+        measure_fastpq_source_statement_usage(
+            1,
+            &BTreeMap::from([(hash, bundle.clone())]),
+            construction(),
+        )
+        .is_err(),
+        "the transfer-only proof producer must still reject incomplete chronology"
+    );
+    let mut ledger = ledger();
+    let mut tx = ledger.transaction(context()).unwrap();
+    let owner = tx.open_entry(hash).unwrap();
+    let measured = measure_fastpq_source_entry_frame_usage(hash, &bundle, construction()).unwrap();
+    let usage = tx.replace_bundle(&owner, &bundle).unwrap();
+    assert_eq!(usage.executed_entries, 1);
+    assert_eq!(usage.transcripts, 2);
+    assert_eq!(usage.deltas, 2);
+    assert_eq!(
+        usage.input_transcript_bytes,
+        measured.input_transcript_bytes as u64
+    );
+    assert_eq!(
+        usage.max_statement_bytes,
+        measured.max_statement_bytes as u64
+    );
+    assert_eq!(usage.total_statement_bytes, usage.max_statement_bytes);
+    assert_eq!(norito::encode_canonical(&bundle).unwrap(), before);
+    drop(tx);
+    assert_eq!(ledger.usage(), SourceUsage::ZERO);
+}
+
+#[test]
+fn borrowed_committed_pending_and_candidate_replace_one_complete_entry() {
+    let hash = Hash::new(b"borrowed physical source fragments");
+    let committed = [transcript(hash, 3, 10, 0)];
+    let pending = [transcript(hash, 2, 7, 3)];
+    let candidate = transcript(hash, 1, 5, 5);
+    let mut all = committed.to_vec();
+    all.extend_from_slice(&pending);
+    all.push(candidate.clone());
+    let expected = reference(hash, &all);
+    let mut ledger = ledger();
+    {
+        let mut tx = ledger.transaction(context()).unwrap();
+        let owner = tx.open_entry(hash).unwrap();
+        tx.replace_bundle(&owner, &committed).unwrap();
+        tx.commit();
+    }
+    let before = ledger.usage();
+    {
+        let mut tx = ledger.transaction(context()).unwrap();
+        let owner = tx.open_entry(hash).unwrap();
+        let savepoint = tx.checkpoint();
+        assert_eq!(
+            tx.replace_bundle(
+                &owner,
+                committed
+                    .iter()
+                    .chain(pending.iter())
+                    .chain(std::iter::once(&candidate)),
+            )
+            .unwrap(),
+            expected,
+        );
+        assert_eq!(tx.usage().executed_entries, 1);
+        assert_eq!(tx.usage().transcripts, 3);
+        assert_consistent(&tx);
+        assert_eq!(tx.rollback(savepoint).unwrap(), before);
+        assert_eq!(tx.owner_usage(&owner).unwrap(), before);
+        tx.commit();
+    }
+    assert_eq!(ledger.usage(), before);
 }

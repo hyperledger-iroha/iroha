@@ -26,10 +26,14 @@ fn state_with_marker() -> State {
 }
 
 fn apply_marker(block: &mut StateBlock<'_>, value: u8, source: Option<Hash>) {
-    let mut tx = block.transaction();
+    // This direct component fixture must retain its bounded invocation before
+    // borrowing the transaction; assigning tx_call_hash alone grants no owner.
+    let mut tx = match source {
+        Some(hash) => block.transaction_for_fastpq_testing(hash),
+        None => block.transaction(),
+    };
     tx.world.smart_contract_state.insert(marker(), vec![value]);
     if let Some(hash) = source {
-        tx.tx_call_hash = Some(hash);
         tx.record_test_transfer_transcripts(&ALICE_ID, hash, vec![delta()]);
     }
     tx.apply();
@@ -71,11 +75,11 @@ fn assert_unpublished(state: &State) {
 
 #[test]
 fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for with_transfer in [false, true] {
         for replay in [false, true] {
             let state = state_with_marker();
-            crate::sumeragi::witness::start_block();
+            crate::exec_witness::start_block();
             let mut block = state.block(header());
             cache_canonical_test_transaction_set(&mut block, &[]);
             let source = with_transfer.then(|| Hash::new(b"committable finalized source"));
@@ -102,12 +106,12 @@ fn intact_finalized_inventory_commits_after_all_cached_outputs_are_taken() {
 
 #[test]
 fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for same_key in [false, true] {
         for drain_late in [false, true] {
             for replay in [false, true] {
                 let state = state_with_marker();
-                crate::sumeragi::witness::start_block();
+                crate::exec_witness::start_block();
                 let mut block = state.block(header());
                 cache_canonical_test_transaction_set(&mut block, &[]);
                 let original = Hash::new(b"captured source before extraction");
@@ -149,10 +153,10 @@ fn late_applied_source_cannot_commit_after_all_cached_outputs_are_taken() {
 
 #[test]
 fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for replay in [false, true] {
         let state = state_with_marker();
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let mut block = state.block(header());
         cache_canonical_test_transaction_set(&mut block, &[]);
         let source = Hash::new(b"failed inventory construction");
@@ -175,13 +179,16 @@ fn failed_inventory_construction_prevents_commit_without_publishing_overlay() {
         );
         assert_eq!(
             block.verified_fastpq_source_inventory_for_capture(),
-            Err(error),
+            Err("FASTPQ witness capture refuses a poisoned carrier".into()),
         );
+        assert_eq!(block.fastpq_source_inventory(), Err(error.as_str()));
         block.authenticated_replay_commit = replay;
         stage_membership(&mut block, Some(source));
+        // Inventory construction poisoned the carrier, so the earlier output
+        // publication guard refuses it before the inventory-specific commit gate.
         assert!(matches!(
             block.commit(),
-            Err(TransactionsBlockError::FastpqSourceInventory)
+            Err(TransactionsBlockError::ExecutionOutputCapacity)
         ));
         assert_unpublished(&state);
     }

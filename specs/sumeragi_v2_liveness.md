@@ -1,5 +1,11 @@
 # Sumeragi v2 liveness contract and release gate
 
+> **Status (2026-09-27): retired.** The node runs only the new Sumeragi
+> ([`sumeragi.md`](sumeragi.md)). The v2 release gates, release bootstrap,
+> formal runners and SDK/multilane inventory scripts this document names were
+> removed with the v2 consensus tooling. This document is deleted together with
+> the v2 runtime.
+
 Sumeragi v2 does not promise unconditional termination. An unbounded network
 partition, the absence of a responsive `2f + 1` equal-vote quorum, or local disk, signing,
 validation, and application work which never completes can prevent progress.

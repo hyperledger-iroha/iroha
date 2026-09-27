@@ -46,9 +46,9 @@ use crate::{
         QueuePlanPendingRouteAuthority, State, StateReadOnly, StateReadOnlyWithTransactions,
         TransactionsReadOnly, WorldReadOnly, queue_plan_admission_registry_match,
     },
+    status,
     sumeragi::{
         lane_planner::AutonomousLaneReservationSelectionAuthorization,
-        status,
         v2_apply::{
             AutonomousLaneQueueCarrierCleanupAuthorization, LaneReservationSnapshotPlannerEvidence,
             LaneReservationSnapshotPlannerProjectionKind, StrictAbsenceDirectReleaseAuthorization,
@@ -6271,6 +6271,14 @@ impl Queue {
         let routing_state_view = state.view();
         self.sync_nexus_routing_with_view(&routing_state_view);
         Self::validate_reservation_scope_against_view(&routing_state_view, scope)?;
+        // Bound the complete producer source from the same pinned State generation
+        // before the reservation journal or FIFO changes. A later carrier may select
+        // fewer whole sources, but cannot split this authenticated reservation group.
+        let source_input_limit = crate::state::autonomous_source_input_capacity(
+            routing_state_view.world().parameters().block(),
+        )
+        .map_err(LaneQueueReservationError::InvalidIdentity)?;
+        let max_transactions = limits.max_transactions.get().min(source_input_limit);
         let queue_guard = self.push_remove_lock.lock();
         if self.lane_reservation_startup_reconciliation_pending() {
             return Err(LaneQueueReservationError::StartupReconciliationPending);
@@ -6309,7 +6317,7 @@ impl Queue {
             crate::torii_proxy::QueuePlanAdmissionBindingV1,
         )>::new();
         for hash in fifo.into_iter().take(limits.max_scan.get()) {
-            if selected.len() >= limits.max_transactions.get() {
+            if selected.len() >= max_transactions {
                 break;
             }
             if live_hashes.contains(&hash) {
@@ -23962,10 +23970,8 @@ pub mod tests {
             .collect::<Vec<_>>();
         let validator_count =
             u32::try_from(validator_set.len()).expect("queue drain validator count fits u32");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validator_set.len(),
-        ))
-        .expect("queue drain quorum fits u32");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("queue drain quorum fits u32");
         let drain_state = LaneDrainStateV1 {
             version: 1,
             intent: LaneDrainIntentV1 {

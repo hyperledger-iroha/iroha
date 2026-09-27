@@ -54,8 +54,8 @@ name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 
 [[test]]
-name = "sumeragi_v2_runner_isolated"
-path = "tests/sumeragi_v2_runner_isolated.rs"
+name = "sumeragi"
+path = "tests/sumeragi.rs"
 
 [[test]]
 name = "nexus_and_streaming"
@@ -136,6 +136,7 @@ nonzero_ext = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_core = { workspace = true, features = ["node", "iroha-core-tests"], default-features = false }
+iroha_sumeragi = { workspace = true }
 iroha_p2p = { workspace = true }
 tracing = { workspace = true }
 sha2 = "0.10.9"

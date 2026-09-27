@@ -120,8 +120,8 @@ fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadenc
     assert_eq!(local_signer.public_key(), &expected);
     assert_eq!(block_cadence, expected_cadence);
 
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let (context, _) = context();
     let ingress_ready = Arc::new(AtomicBool::new(false));
     let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
@@ -137,7 +137,7 @@ fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadenc
         .expect("current-height lifecycle activation opens and publishes exactly once");
     assert!(ingress_ready.load(Ordering::Acquire));
     assert_eq!(
-        super::super::status::v2_status()
+        super::super::v2_status::v2_status()
             .expect("current-height activation publishes status")
             .height_context_id,
         context.id()
@@ -145,7 +145,7 @@ fn recovered_lifecycle_factory_dependency_permit_retains_exact_signer_and_cadenc
     drop(activated);
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!ingress.state.lock().open);
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 
     let exact_ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
     exact_ingress

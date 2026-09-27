@@ -620,11 +620,11 @@ fn install_fresh_queue_plan_authorities_for_test(
     }
     topology.commit();
     install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, bindings)]);
-    app.sumeragi = Some(queue_plan_capacity_handle_for_test(
+    app.sumeragi = queue_plan_capacity_handle_for_test(
         *state.network_id_ref(),
         iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
         signers,
-    ));
+    );
 }
 #[cfg(feature = "connect")]
 async fn fresh_queue_plan_ingress_for_test(

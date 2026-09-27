@@ -1596,6 +1596,38 @@ pub enum ProviderAdmissionRevocationError {
     PolicyLineageMismatch,
 }
 impl ProviderAdmissionRevocationV1 {
+    /// Validate the revocation's structural fields and require signature material.
+    ///
+    /// This check does not authenticate council signers. Admission decisions must
+    /// still use [`verify_revocation_signatures`] with the active trust policy.
+    ///
+    /// # Errors
+    /// Rejects an unsupported version, missing network, policy or event bindings,
+    /// an empty reason, or absent council signatures.
+    pub fn validate(&self) -> Result<(), ProviderAdmissionRevocationError> {
+        if self.version != PROVIDER_ADMISSION_REVOCATION_VERSION_V1 {
+            return Err(ProviderAdmissionRevocationError::UnsupportedVersion {
+                found: self.version,
+            });
+        }
+        if self.network_id == [0; 32] {
+            return Err(ProviderAdmissionRevocationError::InvalidNetworkId);
+        }
+        if self.policy_id == [0; 32] || self.policy_digest == [0; 32] || self.policy_revision == 0 {
+            return Err(ProviderAdmissionRevocationError::InvalidPolicyBinding);
+        }
+        if self.transition_revision == 0 || self.expected_current_event_digest == [0; 32] {
+            return Err(ProviderAdmissionRevocationError::InvalidEventLineage);
+        }
+        if self.reason.trim().is_empty() {
+            return Err(ProviderAdmissionRevocationError::ReasonEmpty);
+        }
+        if self.council_signatures.is_empty() {
+            return Err(ProviderAdmissionRevocationError::MissingSignatures);
+        }
+        Ok(())
+    }
+
     /// Computes the canonical digest signed by council members.
     pub fn digest(&self) -> Result<[u8; 32], NoritoError> {
         #[derive(NoritoSerialize, norito::NoritoSchema)]
@@ -1663,29 +1695,7 @@ fn verify_revocation_signatures_inner<F>(
 where
     F: FnOnce(&[CouncilSignature], &[u8; 32]) -> Result<(), ProviderAdmissionSignatureError>,
 {
-    if revocation.version != PROVIDER_ADMISSION_REVOCATION_VERSION_V1 {
-        return Err(ProviderAdmissionRevocationError::UnsupportedVersion {
-            found: revocation.version,
-        });
-    }
-    if revocation.network_id == [0; 32] {
-        return Err(ProviderAdmissionRevocationError::InvalidNetworkId);
-    }
-    if revocation.policy_id == [0; 32]
-        || revocation.policy_digest == [0; 32]
-        || revocation.policy_revision == 0
-    {
-        return Err(ProviderAdmissionRevocationError::InvalidPolicyBinding);
-    }
-    if revocation.transition_revision == 0 || revocation.expected_current_event_digest == [0; 32] {
-        return Err(ProviderAdmissionRevocationError::InvalidEventLineage);
-    }
-    if revocation.reason.trim().is_empty() {
-        return Err(ProviderAdmissionRevocationError::ReasonEmpty);
-    }
-    if revocation.council_signatures.is_empty() {
-        return Err(ProviderAdmissionRevocationError::MissingSignatures);
-    }
+    revocation.validate()?;
     let digest = revocation.digest()?;
     verify(&revocation.council_signatures, &digest)
         .map_err(ProviderAdmissionRevocationError::Signature)?;
@@ -2891,6 +2901,90 @@ mod tests {
             )
         ));
     }
+    #[test]
+    fn revocation_structural_validation_preserves_signature_verification() {
+        let council_key = SigningKey::from_bytes(&[0x65; 32]);
+        let policy = council_policy(&[&council_key], 1);
+        let mut revocation = ProviderAdmissionRevocationV1 {
+            version: PROVIDER_ADMISSION_REVOCATION_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            transition_revision: 2,
+            expected_current_event_digest: [0xE1; 32],
+            provider_id: [0xF1; 32],
+            envelope_digest: [0xE1; 32],
+            revoked_at: 10,
+            reason: "endpoint compromise".to_owned(),
+            council_signatures: Vec::new(),
+            notes: None,
+        };
+        let digest = revocation.digest().expect("revocation digest");
+        revocation.council_signatures = vec![council_signature_from_key(&council_key, &digest)];
+        revocation
+            .validate()
+            .expect("structurally valid revocation");
+        verify_revocation_signatures(&revocation, &policy).expect("trusted revocation");
+
+        macro_rules! rejects {
+            ($field:ident = $value:expr, $error:pat) => {{
+                let mut invalid = revocation.clone();
+                invalid.$field = $value;
+                assert!(matches!(invalid.validate(), Err($error)));
+                assert!(matches!(
+                    verify_revocation_signatures(&invalid, &policy),
+                    Err($error)
+                ));
+            }};
+        }
+        rejects!(
+            version = 0,
+            ProviderAdmissionRevocationError::UnsupportedVersion { found: 0 }
+        );
+        rejects!(
+            network_id = [0; 32],
+            ProviderAdmissionRevocationError::InvalidNetworkId
+        );
+        rejects!(
+            policy_id = [0; 32],
+            ProviderAdmissionRevocationError::InvalidPolicyBinding
+        );
+        rejects!(
+            policy_digest = [0; 32],
+            ProviderAdmissionRevocationError::InvalidPolicyBinding
+        );
+        rejects!(
+            policy_revision = 0,
+            ProviderAdmissionRevocationError::InvalidPolicyBinding
+        );
+        rejects!(
+            transition_revision = 0,
+            ProviderAdmissionRevocationError::InvalidEventLineage
+        );
+        rejects!(
+            expected_current_event_digest = [0; 32],
+            ProviderAdmissionRevocationError::InvalidEventLineage
+        );
+        rejects!(
+            reason = " \t\n".to_owned(),
+            ProviderAdmissionRevocationError::ReasonEmpty
+        );
+        rejects!(
+            council_signatures = Vec::new(),
+            ProviderAdmissionRevocationError::MissingSignatures
+        );
+
+        revocation.council_signatures[0].signature[0] ^= 1;
+        revocation
+            .validate()
+            .expect("structure does not establish trust");
+        assert!(matches!(
+            verify_revocation_signatures(&revocation, &policy),
+            Err(ProviderAdmissionRevocationError::Signature(_))
+        ));
+    }
+
     #[test]
     fn revocation_signatures_and_registry_checks() {
         let council_key = SigningKey::from_bytes(&[0x65; 32]);

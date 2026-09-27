@@ -409,15 +409,15 @@ fn wait_for_lane_visibility_with_status(
             .client()
             .get_sumeragi_status()
             .map_err(|err| eyre!(err))?;
-        last_height = status.last_committed_height;
+        last_height = status.committed_height;
         match client.client().get_public_lane_validators(lane_id) {
-            Ok(_snapshot) => return Ok(status.last_committed_height),
+            Ok(_snapshot) => return Ok(status.committed_height),
             Err(err) => {
                 last_error = err.to_string();
-                if status.last_committed_height >= min_commit_height
+                if status.committed_height >= min_commit_height
                     && last_error.contains("503 Service Unavailable")
                 {
-                    return Ok(status.last_committed_height);
+                    return Ok(status.committed_height);
                 }
             }
         }
@@ -707,15 +707,19 @@ fn leader_or_highest_height_peer_index(
         return 0;
     }
     if let Ok(status) = status_client.client().get_sumeragi_status() {
-        if let Ok(index) = usize::try_from(status.leader) {
-            if index < peers.len() {
+        if let Some(index) = status
+            .leader
+            .as_ref()
+            .and_then(|leader| peers.iter().position(|peer| peer.id().public_key() == leader))
+        {
+            {
                 let leader_height = peers[index]
                     .client()
                     .client()
                     .get_sumeragi_status()
-                    .map(|status| status.last_committed_height)
+                    .map(|status| status.committed_height)
                     .unwrap_or(0);
-                if leader_height.saturating_add(1) >= status.last_committed_height {
+                if leader_height.saturating_add(1) >= status.committed_height {
                     return index;
                 }
             }
@@ -729,7 +733,7 @@ fn leader_or_highest_height_peer_index(
                 .client()
                 .client()
                 .get_sumeragi_status()
-                .map(|status| status.last_committed_height)
+                .map(|status| status.committed_height)
                 .unwrap_or(0);
             if observed_height >= best.1 {
                 (index, observed_height)
@@ -953,7 +957,7 @@ fn run_registration_iteration(
         .get_sumeragi_status()
         .map_err(|err| eyre!(err))
         .wrap_err("fetch submitter baseline height")?
-        .last_committed_height;
+        .committed_height;
     let baseline_cluster_height = network
         .peers()
         .iter()
@@ -961,7 +965,7 @@ fn run_registration_iteration(
             peer.client()
                 .client()
                 .get_sumeragi_status()
-                .map(|status| status.last_committed_height)
+                .map(|status| status.committed_height)
                 .unwrap_or(0)
         })
         .max()
@@ -999,7 +1003,7 @@ fn run_registration_iteration(
                         submitter_peer_index
                     )
                 })?
-                .last_committed_height
+                .committed_height
         }
     };
     let lane_commit_apply_latency = lane_apply_started.elapsed();
@@ -1020,7 +1024,7 @@ fn run_registration_iteration(
             peer.client()
                 .client()
                 .get_sumeragi_status()
-                .map(|status| status.last_committed_height)
+                .map(|status| status.committed_height)
                 .unwrap_or(0)
         })
         .max()

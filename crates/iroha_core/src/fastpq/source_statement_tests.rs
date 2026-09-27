@@ -62,11 +62,11 @@ fn manifest_write_matches_existing_core_sparse_tree_and_rejects_substitution() {
     .unwrap();
     let encoded = norito::encode_canonical(&manifest).unwrap();
     assert!(encoded.len() < 512);
-    let writes = [crate::sumeragi::smt::KvPair::new(
+    let writes = [crate::exec_witness::smt::KvPair::new(
         FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
         encoded,
     )];
-    let root = crate::sumeragi::smt::compute_post_state_root(&[], &writes);
+    let root = crate::exec_witness::smt::compute_post_state_root(&[], &writes);
     let siblings = [Hash::new([]); 256];
     assert!(verify_fastpq_ordinary_source_statement_manifest_write_v1(
         &manifest,
@@ -144,11 +144,11 @@ fn empty_manifest_write_is_present_and_layout_invariant() {
     let source = leaves()[0].source;
     let manifest =
         build_fastpq_ordinary_source_statement_manifest_v1(source, &entries(), &[], 5, 5).unwrap();
-    let writes = [crate::sumeragi::smt::KvPair::new(
+    let writes = [crate::exec_witness::smt::KvPair::new(
         FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
         norito::encode_canonical(&manifest).unwrap(),
     )];
-    let root = crate::sumeragi::smt::compute_post_state_root(&[], &writes);
+    let root = crate::exec_witness::smt::compute_post_state_root(&[], &writes);
     let siblings = [Hash::new([]); 256];
     for flags in (u8::MIN..=u8::MAX).filter(|&f| norito::core::validate_header_flags(f).is_ok()) {
         let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
@@ -161,7 +161,7 @@ fn empty_manifest_write_is_present_and_layout_invariant() {
         &manifest,
         source,
         &siblings,
-        crate::sumeragi::smt::compute_post_state_root(&[], &[]),
+        crate::exec_witness::smt::compute_post_state_root(&[], &[]),
         5,
         5
     ));
@@ -185,11 +185,11 @@ fn opening_fixture() -> (FastpqOrdinarySourceStatementOpeningV1, Hash) {
         .iter()
         .map(|leaf| fastpq_ordinary_source_statement_leaf_hash_v1(leaf).unwrap())
         .collect();
-    let writes = [crate::sumeragi::smt::KvPair::new(
+    let writes = [crate::exec_witness::smt::KvPair::new(
         FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
         norito::encode_canonical(&manifest).unwrap(),
     )];
-    let root = crate::sumeragi::smt::compute_post_state_root(&[], &writes);
+    let root = crate::exec_witness::smt::compute_post_state_root(&[], &writes);
     (
         FastpqOrdinarySourceStatementOpeningV1 {
             manifest,
@@ -362,9 +362,9 @@ fn source_opening_producer_matches_mixed_write_tree_and_every_ragged_leaf() {
     let ordinary = witness
         .writes
         .iter()
-        .map(|write| crate::sumeragi::smt::KvPair::new(write.key.clone(), write.value.clone()))
+        .map(|write| crate::exec_witness::smt::KvPair::new(write.key.clone(), write.value.clone()))
         .collect::<Vec<_>>();
-    let expected = crate::sumeragi::smt::compute_post_state_root(&[], &ordinary);
+    let expected = crate::exec_witness::smt::compute_post_state_root(&[], &ordinary);
     for index in 0..3 {
         let (opening, root) = fastpq_ordinary_source_statement_opening_v1(
             &witness,
@@ -577,17 +577,17 @@ fn source_opening_producer_rejects_wrong_schema_and_oversized_manifest_values() 
 
 #[test]
 fn ordinary_recorder_cannot_alias_the_protected_source_manifest_key() {
-    use crate::sumeragi::witness;
+    use crate::exec_witness;
     use iroha_data_model::execution_witness::ExecutionWitnessKeyTagV1;
     use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let key: Name = "fastpq_source_statements".parse().unwrap();
     let value = Json::new("iroha:fastpq:ordinary-source-statements:v1");
-    witness::record_write_account_kv(&iroha_test_samples::ALICE_ID, &key, &value);
-    witness::record_read_account_kv(&iroha_test_samples::ALICE_ID, &key, Some(&value));
-    let captured = witness::drain_exec_witness();
+    exec_witness::record_write_account_kv(&iroha_test_samples::ALICE_ID, &key, &value);
+    exec_witness::record_read_account_kv(&iroha_test_samples::ALICE_ID, &key, Some(&value));
+    let captured = exec_witness::drain_exec_witness();
     assert_eq!(captured.reads.len(), 1);
     assert_eq!(captured.writes.len(), 1);
     for entry in captured.reads.iter().chain(&captured.writes) {

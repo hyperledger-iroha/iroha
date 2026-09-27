@@ -1325,10 +1325,7 @@ struct LaneBlockProposalVoteContext {
     min_quorum: u32,
 }
 fn canonical_lane_commit_quorum(validator_set_len: usize) -> Option<u32> {
-    u32::try_from(
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set_len).max(1),
-    )
-    .ok()
+    u32::try_from(iroha_sumeragi::types::quorum(validator_set_len).max(1)).ok()
 }
 /// Derive lane-local vote/QC domains for accepted work in a scheduled batch.
 ///

@@ -17597,7 +17597,8 @@ seiyaku StaleRuntimeBinding {
         .with_executable(Executable::ContractCall(invocation))
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(next_height, None, None, 0, 0));
-        let mut stx = block.transaction();
+        let mut stx =
+            block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
         let result = crate::executor::Executor::Initial
             .execute_transaction(&mut stx, authority, tx, ivm_cache);
         if result.is_ok() {

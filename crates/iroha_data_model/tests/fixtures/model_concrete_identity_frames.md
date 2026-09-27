@@ -6,8 +6,8 @@ those fields describe the fixture provenance.
 
 | Fixture | Scope | SHA-256 |
 | --- | --- | --- |
-| `model_concrete_identity_frames.json` | 13 populated families, each as root, Vec, Some and BTreeMap: 52 frames | `d0b7e7e9881a80cbaf83a26a05247e171d1b7638af22ad8a33a88fc749d0babd` |
-| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `5f376772ed9a5c09691465a82bf62a6c1919054523a5c2b0f396a768bc5777f3` |
+| `model_concrete_identity_frames.json` | 13 populated families, each as root, Vec, Some and BTreeMap: 52 frames | `f98e5af26c89b5f5fe4564a2a949f629aafa301c8e17e3c03613c231bd42a196` |
+| `block_message_send_identity_frame.json` | One encoding-only block-message adapter and its owned decoding projection | `4c6b28ddace04a3227c8c0a90202ad31165e4c241f2ec7a7b27117d1e33d5c46` |
 | `reputation_event_id_identity_frames.json` | Two encoding-only reputation event-ID projections and their owned decoding material | `7a4bdb7eae4c9aca0351bd6549628e185d3e24da0aa03cf54669f9e853c14ae1` |
 
 The seven concrete owners are Action, DataEvent, SmartContractContext,
@@ -69,3 +69,9 @@ The HTTP block fixture was also refreshed through the native signed-block
 constructor. Its bare bytes differ only at the 32-byte policy hash and resulting
 64-byte block signature. All other bytes, entrypoint commitments and result
 commitments are unchanged, and the new signature verifies.
+
+On 2026-09-26, `SignedBlock` gained its trailing `commit_certificate` field
+(Sumeragi finality proof; absent from the fixture block). The native producer
+refreshed only the block-message family and the HTTP block-message adapter: each
+frame gains the encoded `None` field and its length prefixes and checksums follow.
+All other families are unchanged.

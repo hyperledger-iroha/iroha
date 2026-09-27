@@ -497,6 +497,7 @@ mod tests {
         signatures: std::collections::BTreeSet<iroha_data_model::block::BlockSignature>,
         payload: iroha_data_model::block::BlockPayload,
         result: Option<iroha_data_model::block::BlockResult>,
+        commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
     }
 
     #[test]

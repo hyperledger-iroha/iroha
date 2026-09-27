@@ -1,6 +1,6 @@
 //! Public lane staking instruction handlers (NX-9).
 use super::prelude::*;
-use crate::sumeragi::evidence::evidence_key;
+use crate::sumeragi::v2_evidence::evidence_key;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
@@ -8,7 +8,7 @@ use crate::{
         peer_consensus_key_gate_for_lane, public_lane_reward_record_matches_key,
         public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
     },
-    sumeragi::status as sumeragi_status,
+    status,
     telemetry::StateTelemetry,
 };
 use iroha_data_model::{
@@ -1587,7 +1587,7 @@ fn register_public_lane_validator(
         ),
         share,
     );
-    sumeragi_status::record_public_lane_bonded_delta(registration.lane_id, &initial_stake, true);
+    status::record_public_lane_bonded_delta(registration.lane_id, &initial_stake, true);
     #[cfg(feature = "telemetry")]
     {
         state_transaction
@@ -2056,7 +2056,7 @@ impl Execute for BondPublicLaneStake {
             .public_lane_validators
             .insert(validator_key, validator_record);
         persist_share(state_transaction, share_key, share);
-        sumeragi_status::record_public_lane_bonded_delta(self.lane_id, &amount, true);
+        status::record_public_lane_bonded_delta(self.lane_id, &amount, true);
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
@@ -2199,8 +2199,8 @@ impl Execute for SchedulePublicLaneUnbond {
             .public_lane_validators
             .insert(validator_key, validator_snapshot);
         persist_share(state_transaction, share_key, share);
-        sumeragi_status::record_public_lane_bonded_delta(self.lane_id, &amount, false);
-        sumeragi_status::record_public_lane_pending_unbond_delta(self.lane_id, &amount, true);
+        status::record_public_lane_bonded_delta(self.lane_id, &amount, false);
+        status::record_public_lane_pending_unbond_delta(self.lane_id, &amount, true);
         #[cfg(feature = "telemetry")]
         {
             state_transaction
@@ -2313,11 +2313,7 @@ impl Execute for FinalizePublicLaneUnbond {
             pending.amount.clone(),
         )?;
         persist_share(state_transaction, share_key, share);
-        sumeragi_status::record_public_lane_pending_unbond_delta(
-            self.lane_id,
-            &pending.amount,
-            false,
-        );
+        status::record_public_lane_pending_unbond_delta(self.lane_id, &pending.amount, false);
         #[cfg(feature = "telemetry")]
         state_transaction
             .telemetry
@@ -2535,7 +2531,7 @@ fn prune_zero_custody_exited_validators(state_transaction: &mut StateTransaction
                     && !state_transaction.world.public_lane_stake_shares.iter().any(
                         |((lane_id, validator, _), _)| *lane_id == key.0 && validator == &key.1,
                     )
-                    && !crate::sumeragi::evidence::has_pending_v2_evidence_for_validator_tenure(
+                    && !crate::sumeragi::v2_evidence::has_pending_v2_evidence_for_validator_tenure(
                         &state_transaction.world,
                         record,
                     )
@@ -3237,7 +3233,7 @@ fn ensure_no_pending_evidence_for_validator(
     record: &PublicLaneValidatorRecord,
     operation: &str,
 ) -> Result<(), Error> {
-    if crate::sumeragi::evidence::has_pending_v2_evidence_for_validator_tenure(
+    if crate::sumeragi::v2_evidence::has_pending_v2_evidence_for_validator_tenure(
         &state_transaction.world,
         record,
     ) {
@@ -8645,8 +8641,8 @@ mod tests {
     }
     #[test]
     fn validation_only_consensus_slash_rolls_back_every_world_write() {
-        let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        let _status_guard = crate::status::rbc_status_test_guard();
+        crate::status::reset_nexus_economics_for_tests();
         let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
@@ -8681,7 +8677,7 @@ mod tests {
         // exact custody policy for the independent consensus-validation scope.
         state_block.nexus.staking = staking_config;
         state_block.world.take_external_events();
-        let status_before = crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests();
+        let status_before = crate::status::lane_scoped_status_fingerprint_for_tests();
         let record_before = state_block
             .world
             .public_lane_validators
@@ -8790,11 +8786,11 @@ mod tests {
             "discarded consensus validation must not publish world events"
         );
         assert_eq!(
-            crate::sumeragi::status::lane_scoped_status_fingerprint_for_tests(),
+            crate::status::lane_scoped_status_fingerprint_for_tests(),
             status_before,
             "discarded consensus validation must not publish process-global status"
         );
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        crate::status::reset_nexus_economics_for_tests();
     }
     #[test]
     fn slash_public_lane_validator_rejects_mismatched_public_lane_validator_row() {

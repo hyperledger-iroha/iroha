@@ -180,7 +180,7 @@ fn canonical_snapshot_v2_phase_vote_evidence(network_id: NetworkId) -> Evidence 
                 .to_vec();
         vote
     };
-    crate::sumeragi::evidence::canonical_v2_evidence(&SumeragiV2EquivocationEvidence {
+    crate::sumeragi::v2_evidence::canonical_v2_evidence(&SumeragiV2EquivocationEvidence {
         context,
         proofs_of_possession,
         conflict: wire_v2::SumeragiV2Equivocation::PhaseVote {
@@ -1212,7 +1212,7 @@ fn staged_and_committed_wsv_hashes_commit_consensus_evidence() {
     drop(staged);
 
     let evidence = canonical_snapshot_v2_phase_vote_evidence(*state.network_id_ref());
-    let evidence_key = crate::sumeragi::evidence::evidence_key(&evidence);
+    let evidence_key = crate::sumeragi::v2_evidence::evidence_key(&evidence);
     let mut staged = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
     staged.world.consensus_evidence.insert(
         evidence_key,
@@ -1326,7 +1326,7 @@ async fn staged_snapshot_wsv_hash_commits_consensus_evidence() {
         );
         let mut state_block = state.block(header);
         if let Some(evidence) = evidence {
-            let key = crate::sumeragi::evidence::evidence_key(&evidence);
+            let key = crate::sumeragi::v2_evidence::evidence_key(&evidence);
             state_block.world.consensus_evidence.insert(
                 key,
                 EvidenceRecord {

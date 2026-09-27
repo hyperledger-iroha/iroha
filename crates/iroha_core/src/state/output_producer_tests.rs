@@ -3,12 +3,12 @@
 
 use super::*;
 use crate::{
+    exec_witness,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     smartcontracts::isi::triggers::set::SetReadOnly,
     state::{State, TransactionsBlockError, World},
-    sumeragi::witness,
 };
 use iroha_data_model::{
     Registrable,
@@ -94,8 +94,8 @@ fn write_state(transaction: &mut StateTransaction<'_, '_>, count: u64) {
     .execute(&ALICE_ID, transaction)
     .unwrap();
     let key: Name = "output_write".parse().unwrap();
-    witness::record_read_account_kv(&ALICE_ID, &key, Some(&Json::new(1)));
-    witness::record_write_account_kv(&ALICE_ID, &key, &Json::new(count));
+    exec_witness::record_read_account_kv(&ALICE_ID, &key, Some(&Json::new(1)));
+    exec_witness::record_write_account_kv(&ALICE_ID, &key, &Json::new(count));
     #[cfg(feature = "zk-preverify")]
     assert!(transaction.zk_dedup.check_and_insert(&proof()));
 }
@@ -121,8 +121,8 @@ fn retained<'a>(block: &'a StateBlock<'_>) -> &'a RetainedExecutionOutputs {
 
 #[test]
 fn fitting_complete_output_applies_state_and_retains_exact_row_once() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
     let mut block = state.block(source.header());
@@ -169,7 +169,7 @@ fn fitting_complete_output_applies_state_and_retains_exact_row_once() {
         outputs.row_bytes,
         norito::canonical_frame_len(&outputs.rows[0]).unwrap() as u64
     );
-    assert_eq!(witness::snapshot_exec_witness().writes.len(), 1);
+    assert_eq!(exec_witness::snapshot_exec_witness().writes.len(), 1);
     #[cfg(feature = "zk-preverify")]
     assert!(!block.zk_dedup.check_and_insert(&proof()));
     assert!(block.reserve_ordinary_execution_outputs(&source).is_err());
@@ -186,8 +186,8 @@ fn fitting_complete_output_applies_state_and_retains_exact_row_once() {
 
 #[test]
 fn oversized_success_rolls_back_world_events_witness_and_dedup_before_terminal() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
     let mut block = state.block(source.header());
@@ -214,7 +214,7 @@ fn oversized_success_rolls_back_world_events_witness_and_dedup_before_terminal()
         retained(&block).rows,
         [ExecutionOutputV1::network_output_limit_rejection(0)]
     );
-    let witness = witness::snapshot_exec_witness();
+    let witness = exec_witness::snapshot_exec_witness();
     assert!(witness.reads.is_empty());
     assert!(witness.writes.is_empty());
     #[cfg(feature = "zk-preverify")]
@@ -379,8 +379,8 @@ fn unfinished_network_or_callback_obligation_cannot_finish() {
 
 #[test]
 fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
     let mut block = state.block(source.header());
@@ -397,7 +397,7 @@ fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
         .unwrap_err();
     assert_eq!(error, "fixture local serializer refusal");
     assert_eq!(*block.world.parameters.get(), before);
-    assert!(witness::snapshot_exec_witness().writes.is_empty());
+    assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
     assert!(matches!(
         block.execution_output_plan,
         Some(ExecutionOutputPlanState::Poisoned)
@@ -408,8 +408,8 @@ fn local_refusal_rolls_back_and_never_becomes_a_canonical_rejection() {
 
 #[test]
 fn unwind_rolls_back_side_channels_and_cannot_reopen_publication() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state(16_384);
     let source = source(&state, 1);
     let mut block = state.block(source.header());
@@ -426,7 +426,7 @@ fn unwind_rolls_back_side_channels_and_cannot_reopen_publication() {
     }));
     assert!(caught.is_err());
     assert_eq!(*block.world.parameters.get(), before);
-    assert!(witness::snapshot_exec_witness().writes.is_empty());
+    assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
     assert!(matches!(
         block.execution_output_plan,
         Some(ExecutionOutputPlanState::Poisoned)
@@ -606,12 +606,12 @@ fn real_independent_receipts_are_joined_before_exact_row_fit_and_rollback() {
     };
     use iroha_primitives::numeric::Quantity;
 
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let mut exact = None::<ExecutionOutputV1>;
     // First obtain the actual successful row, then test its exact measured
     // boundary and one byte less on fresh independent State overlays.
     for case in 0..3 {
-        witness::start_block();
+        exec_witness::start_block();
         let full_bytes = exact
             .as_ref()
             .map(|row| u64::try_from(norito::canonical_frame_len(row).unwrap()).unwrap());
@@ -626,7 +626,7 @@ fn real_independent_receipts_are_joined_before_exact_row_fit_and_rollback() {
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
         let events = block.world.external_event_buf.len();
-        let before_witness = witness::snapshot_exec_witness();
+        let before_witness = exec_witness::snapshot_exec_witness();
         let mut actual_receipts = None;
         block
             .produce_ordinary_execution_outputs(&source, |producer| {
@@ -732,7 +732,7 @@ fn real_independent_receipts_are_joined_before_exact_row_fit_and_rollback() {
                     .unwrap()
                     .is_empty()
             );
-            assert_eq!(witness::snapshot_exec_witness(), before_witness);
+            assert_eq!(exec_witness::snapshot_exec_witness(), before_witness);
         }
         assert_eq!(
             retained(&block).row_bytes,
@@ -762,9 +762,9 @@ fn unowned_callbacks_or_receipts_refuse_before_real_batch_application() {
     };
     use iroha_primitives::numeric::Quantity;
 
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for case in 0..4 {
-        witness::start_block();
+        exec_witness::start_block();
         let (state, source, source_asset, destination_asset) = receipt_source(65_536);
         let mut block = state.block(source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
@@ -846,7 +846,7 @@ fn unowned_callbacks_or_receipts_refuse_before_real_batch_application() {
                 .unwrap()
                 .is_empty()
         );
-        assert!(witness::snapshot_exec_witness().writes.is_empty());
+        assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
     }
 }
 
@@ -858,11 +858,11 @@ mod scheduled_time;
 
 #[test]
 fn completed_work_survives_healthy_output_overflow_and_bounds_the_next_overlay() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for oversized in [false, true] {
         let state = state(16_384);
         let source = source(&state, 1);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         block.zk.max_confidential_ops_per_block = 1;
         block.reserve_ordinary_execution_outputs(&source).unwrap();
@@ -921,9 +921,9 @@ mod network;
 
 #[test]
 fn refused_output_apply_keeps_state_witness_and_auxiliary_rollback_armed() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for poisoned in [false, true] {
-        witness::start_block();
+        crate::exec_witness::start_block();
         let state = state(16_384);
         let mut block = state.block(source(&state, 1).header());
         let before = block.world.parameters.get().clone();
@@ -947,7 +947,7 @@ fn refused_output_apply_keeps_state_witness_and_auxiliary_rollback_armed() {
             block.execution_output_plan,
             Some(ExecutionOutputPlanState::Poisoned)
         ));
-        let snapshot = witness::snapshot_exec_witness();
+        let snapshot = crate::exec_witness::snapshot_exec_witness();
         assert!(snapshot.reads.is_empty());
         assert!(snapshot.writes.is_empty());
         #[cfg(feature = "zk-preverify")]

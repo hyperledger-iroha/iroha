@@ -458,6 +458,9 @@ impl<'state> PreparedCarrier<'state> {
             pending_autoscale_lifecycle: _,
             staged_merge_entry,
             native_lane_stage: _,
+            // The final prefix owns the same Arc seal and original certified
+            // entry/economic authorization before the State shell is released.
+            merge_execution_prefix: _,
             execution_output_plan: _,
             fastpq_source_inventory: _,
             canonical_wsv_merge_commit_authorization,

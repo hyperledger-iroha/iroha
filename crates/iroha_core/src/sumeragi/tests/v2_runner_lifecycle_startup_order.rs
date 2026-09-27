@@ -224,7 +224,7 @@ fn authenticated_terminal_startup_idles_without_constructing_a_successor() {
     let anchors = [
         "ingress_ready.store(false, Ordering::Release)",
         "block_rx.close()",
-        "super::status::clear_v2_status()",
+        "super::v2_status::clear_v2_status()",
         "while !shutdown_signal.is_sent()",
         "wake_rx.recv_timeout(IDLE_POLL)",
     ];

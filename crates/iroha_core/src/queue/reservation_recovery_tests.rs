@@ -3097,10 +3097,8 @@ fn startup_replica_disposition_payload_fixture(
         "lane height must select the fixture producer"
     );
     let validator_count = u32::try_from(validator_set.len()).expect("bounded validator count");
-    let min_quorum = u32::try_from(
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-    )
-    .expect("bounded validator quorum");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+        .expect("bounded validator quorum");
     let lane_incarnation = state
         .lane_incarnation_at_height(LaneId::SINGLE, proposal_height)
         .expect("active primary-lane incarnation");

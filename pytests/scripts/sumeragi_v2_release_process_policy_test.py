@@ -211,19 +211,8 @@ def test_run_cargo_pins_toolchain_jobs_and_locked_offline_flags(tmp_path: Path) 
         },
     )
     result_argv = argv_path.read_text(encoding="utf-8").splitlines()
-    verus = _run_policy(
-        "run_cargo verus verify --locked --offline -p iroha_sumeragi_core "
-        "--features verus --fwd-verus-args-to roots -- --rlimit 60",
-        fake_bin=fake_bin,
-        environment={
-            "CARGO_ARGV_FILE": str(argv_path),
-            "RUSTUP_POLICY_FILE": str(rustup_policy_path),
-            "AMBIENT_OBSERVATION_FILE": str(ambient_observation_path),
-        },
-    )
-    verus_argv = argv_path.read_text(encoding="utf-8").splitlines()
-    invalid_verus_action = _run_policy(
-        "run_cargo verus build --locked --offline --package iroha_core",
+    unsupported_verus = _run_policy(
+        "run_cargo verus verify --locked --offline --package iroha_core",
         fake_bin=fake_bin,
         environment={
             "CARGO_ARGV_FILE": str(argv_path),
@@ -254,27 +243,10 @@ def test_run_cargo_pins_toolchain_jobs_and_locked_offline_flags(tmp_path: Path) 
         "iroha_core",
         "--lib",
     ]
-    assert verus.returncode == 0, verus.stderr
-    assert verus_argv == [
-        "verus",
-        "verify",
-        "--locked",
-        "--offline",
-        "-p",
-        "iroha_sumeragi_core",
-        "--features",
-        "verus",
-        "--fwd-verus-args-to",
-        "roots",
-        "-j1",
-        "--",
-        "--rlimit",
-        "60",
-    ]
-    assert invalid_verus_action.returncode == 2
+    assert unsupported_verus.returncode == 2
     assert (
-        "run_cargo accepts only the pinned cargo verus verify action"
-        in invalid_verus_action.stderr
+        "run_cargo rejects unsupported Cargo subcommand: verus"
+        in unsupported_verus.stderr
     )
     assert rustup_policy_path.read_text(encoding="utf-8") == "0\n"
     assert not ambient_observation_path.exists()
@@ -896,10 +868,7 @@ def test_policy_source_contains_no_process_control_or_observation_escape_hatch()
     assert 'if ((cargo_prefix)) && [[ "$argument" == "--" ]]; then' in source
     assert "--target-dir|--target-dir=*|--manifest-path|--manifest-path=*|--config|--config=*" in source
     assert 'pinned_arguments=("$subcommand" -j1)' in source
-    assert 'pinned_arguments=("$subcommand" "$2")' in source
-    assert "if ((!verus_job_bound_inserted)); then" in source
     assert 'pinned_arguments+=("$@")' in source
-    assert "run_cargo accepts only the pinned cargo verus verify action" in source
     assert "local status" not in source
-    assert "build|test|run|clippy|verus)" in source
-    assert "build|test|run|clippy|verus|fetch)" not in source
+    assert "build|test|run|clippy)" in source
+    assert "verus" not in source

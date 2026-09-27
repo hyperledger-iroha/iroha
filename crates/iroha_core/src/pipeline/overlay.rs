@@ -6999,7 +6999,8 @@ seiyaku ProtectedProvedOverlay {
         let execute_with_current_local_verifier_config = |state: &crate::state::State| {
             let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
             let mut block = state.block(header);
-            let mut state_transaction = block.transaction();
+            let mut state_transaction = block
+                .transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
             let executor = state_transaction.world.executor.clone();
             let mut execution_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
             executor
@@ -7997,7 +7998,9 @@ seiyaku ProtectedProvedOverlay {
         for block_full in [false, true] {
             let mut block = execution_block(&state);
             let fragments = block.committed_fragment_count();
-            let mut transaction = block.transaction();
+            let mut transaction = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
+                valid_tx.hash_as_entrypoint(),
+            ));
             if block_full {
                 transaction.gas_limit_per_block = 1;
                 transaction.gas_used_in_block_so_far = 1;

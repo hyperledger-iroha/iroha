@@ -145,9 +145,9 @@ fn time_row<'a>(block: &'a StateBlock<'_>) -> &'a TimeExecutionOutputV1 {
 
 #[test]
 fn scheduled_time_owns_actual_root_nested_trace_and_completion_call() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = nested_fixture(65_536);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     let use_before =
@@ -228,7 +228,7 @@ fn scheduled_time_owns_actual_root_nested_trace_and_completion_call() {
 
 #[test]
 fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let mut measured = None;
     let mut measured_gas = None;
     for case in 0..3 {
@@ -238,7 +238,7 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
             _ => measured.unwrap() - 1,
         };
         let (state, source) = nested_fixture(limit);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let fragments = block.committed_fragment_count();
@@ -297,7 +297,7 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
                     .is_none()
             );
             assert_eq!(block.committed_fragment_count(), fragments + 1);
-            assert!(witness::snapshot_exec_witness().writes.is_empty());
+            assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
             assert_eq!(
                 block
                     .world
@@ -321,7 +321,7 @@ fn exact_time_row_applies_and_one_byte_less_preserves_repeats_but_charges_work()
 
 #[test]
 fn time_matching_uses_frozen_count_and_revalidates_later_removed_action() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let later: TriggerId = "b_later".parse().unwrap();
     let registrations = vec![
         time_trigger(
@@ -347,7 +347,7 @@ fn time_matching_uses_frozen_count_and_revalidates_later_removed_action() {
         .into(),
     ];
     let (state, source) = fixture(65_536, 3, registrations, network);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block
@@ -395,7 +395,7 @@ fn time_matching_uses_frozen_count_and_revalidates_later_removed_action() {
 
 #[test]
 fn real_time_failure_retains_rejection_without_retry_or_business_effects() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let bad: TriggerId = "missing_trigger".parse().unwrap();
     let (state, source) = fixture(
         65_536,
@@ -415,7 +415,7 @@ fn real_time_failure_retains_rejection_without_retry_or_business_effects() {
         )],
         plain_network(),
     );
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block
@@ -462,10 +462,10 @@ fn real_time_failure_retains_rejection_without_retry_or_business_effects() {
 
 #[test]
 fn time_phase_cannot_bypass_network_or_run_twice() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for early in [true, false] {
         let (state, source) = nested_fixture(65_536);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         assert!(
@@ -542,7 +542,7 @@ mod retry_and_periodic {
 
     #[test]
     fn real_retry_failure_advances_or_removes_action_even_when_diagnostic_is_omitted() {
-        let _guard = witness::exec_witness_guard();
+        let _guard = exec_witness::exec_witness_guard();
         for prior in [1, 3] {
             let id: TriggerId = "actual_retry_failure".parse().unwrap();
             let original = TimeTriggerRetryState {
@@ -572,7 +572,7 @@ mod retry_and_periodic {
                 plain_network(),
             );
             install_pending_retry(&state, &id, original);
-            witness::start_block();
+            exec_witness::start_block();
             let mut block = state.block(source.header());
             block.reserve_ordinary_execution_outputs(&source).unwrap();
             block
@@ -625,7 +625,7 @@ mod retry_and_periodic {
 
     #[test]
     fn due_retry_is_one_actual_attempt_before_ordinary_matches() {
-        let _guard = witness::exec_witness_guard();
+        let _guard = exec_witness::exec_witness_guard();
         let id: TriggerId = "z_due_retry".parse().unwrap();
         let retry = TimeTriggerRetryState {
             retries_used: 1,
@@ -659,7 +659,7 @@ mod retry_and_periodic {
             plain_network(),
         );
         install_pending_retry(&state, &id, retry);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let expected_use = time_trigger_use_v1(&block.world.triggers, &id, 2).unwrap();
@@ -732,7 +732,7 @@ mod retry_and_periodic {
 
     #[test]
     fn due_retry_output_limit_retains_retry_repeat_and_only_root_failure() {
-        let _guard = witness::exec_witness_guard();
+        let _guard = exec_witness::exec_witness_guard();
         let id: TriggerId = "bounded_due_retry".parse().unwrap();
         let retry = TimeTriggerRetryState {
             retries_used: 2,
@@ -768,7 +768,7 @@ mod retry_and_periodic {
                 plain_network(),
             );
             install_pending_retry(&state, &id, retry);
-            witness::start_block();
+            exec_witness::start_block();
             let mut block = state.block(source.header());
             block.reserve_ordinary_execution_outputs(&source).unwrap();
             let expected_use = time_trigger_use_v1(&block.world.triggers, &id, 2).unwrap();
@@ -829,7 +829,7 @@ mod retry_and_periodic {
                     actual.completions[0].outcome,
                     TriggerCompletedOutcome::Failure(_)
                 ));
-                assert!(witness::snapshot_exec_witness().writes.is_empty());
+                assert!(exec_witness::snapshot_exec_witness().writes.is_empty());
             }
             let call = HashOf::from_untyped_unchecked(
                 actual
@@ -968,10 +968,10 @@ mod retry_and_periodic {
 
     #[test]
     fn repeated_periodic_matches_bind_distinct_positions_and_use_time_actions() {
-        let _guard = witness::exec_witness_guard();
+        let _guard = exec_witness::exec_witness_guard();
         let (state, source, history) = periodic_fixture();
         let id: TriggerId = "periodic_repeat".parse().unwrap();
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         let initial_use = time_trigger_use_v1(&block.world.triggers, &id, 3).unwrap();
         block.reserve_ordinary_execution_outputs(&source).unwrap();
@@ -1058,7 +1058,7 @@ mod retry_and_periodic {
 
     #[test]
     fn retry_callback_self_replacement_keeps_fresh_repeat_policy_and_incarnation() {
-        let _guard = witness::exec_witness_guard();
+        let _guard = exec_witness::exec_witness_guard();
         let id: TriggerId = "retry_self_replace".parse().unwrap();
         let retry = TimeTriggerRetryState {
             retries_used: 1,
@@ -1103,7 +1103,7 @@ mod retry_and_periodic {
         );
         let (state, source) = fixture(65_536, 3, vec![original], plain_network());
         install_pending_retry(&state, &id, retry);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         let expected_use = time_trigger_use_v1(&block.world.triggers, &id, 2).unwrap();

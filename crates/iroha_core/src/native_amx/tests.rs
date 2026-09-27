@@ -1170,10 +1170,9 @@ fn body_for_validator_set(
     body.participant_validator_set_hash = HashOf::new(&validator_set.to_vec());
     body.participant_validator_count =
         u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
-    body.participant_min_quorum = u32::try_from(
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-    )
-    .expect("fixture validator quorum fits u32");
+    body.participant_min_quorum =
+        u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+            .expect("fixture validator quorum fits u32");
     body
 }
 fn aligned_pops(validator_set: &[PeerId], keypairs: &[KeyPair]) -> Vec<Vec<u8>> {
@@ -1201,11 +1200,9 @@ fn full_plan_request(
     body.plan_digest = routing_plan.digest();
     let validator_count = u32::try_from(coordinator_validator_set.len())
         .expect("fixture coordinator validator count fits u32");
-    let min_quorum = u32::try_from(
-        crate::sumeragi::network_topology::commit_quorum_from_len(coordinator_validator_set.len())
-            .max(1),
-    )
-    .expect("fixture coordinator quorum fits u32");
+    let min_quorum =
+        u32::try_from(iroha_sumeragi::types::quorum(coordinator_validator_set.len()).max(1))
+            .expect("fixture coordinator quorum fits u32");
     let participant_validator_set = coordinator_validator_set.clone();
     let mut descriptor = iroha_data_model::block::consensus::LaneBlockDescriptorV1 {
         lane_id: body.coordinator_lane_id,

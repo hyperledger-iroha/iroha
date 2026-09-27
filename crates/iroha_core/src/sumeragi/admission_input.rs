@@ -194,16 +194,24 @@ mod tests {
             da_layout: layout,
             leader_seed: [9; 32],
         };
-        let harness = super::super::SumeragiIngressTestHarness::new(4);
-        harness
-            .authenticate_admission_capacity(
-                context,
-                keys.iter()
-                    .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
-                    .collect(),
-                &iroha_config::parameters::actual::Sumeragi::default(),
-            )
+        let (handle, _, _) = super::super::test_sumeragi_handle(4);
+        let mode = context.mode;
+        let verified = super::super::v2::VerifiedHeightContext::genesis(
+            context,
+            keys.iter()
+                .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
+                .collect(),
+        )
+        .unwrap();
+        let config = iroha_config::parameters::actual::Sumeragi::default()
+            .v2_config(std::time::Duration::from_secs(1), mode)
             .unwrap();
+        super::super::admission_capacity::publish_authenticated_capacity(
+            &handle.admission_capacity,
+            &verified,
+            &config,
+        )
+        .unwrap();
         let signer = KeyPair::from_seed(vec![17; 32], Algorithm::Ed25519);
         let entrypoint = TransactionEntrypoint::External(
             TransactionBuilder::new(
@@ -244,7 +252,7 @@ mod tests {
             73,
         )
         .unwrap();
-        (harness.handle(), network_id, entrypoint, binding)
+        (handle, network_id, entrypoint, binding)
     }
 
     #[test]

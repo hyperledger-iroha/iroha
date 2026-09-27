@@ -164,7 +164,7 @@ struct V2StatusClearGuard {
 
 impl V2StatusClearGuard {
     fn new() -> Self {
-        super::status::clear_v2_status();
+        super::v2_status::clear_v2_status();
         Self {
             clear_on_drop: false,
         }
@@ -178,7 +178,7 @@ impl V2StatusClearGuard {
 impl Drop for V2StatusClearGuard {
     fn drop(&mut self) {
         if self.clear_on_drop {
-            super::status::clear_v2_status();
+            super::v2_status::clear_v2_status();
         }
     }
 }
@@ -584,7 +584,7 @@ struct PendingSuccessorConstruction {
 }
 impl PendingSuccessorConstruction {
     fn begin(predecessor: DurableV2PredecessorIdentity) -> Result<Self, V2RunnerError> {
-        super::status::begin_v2_successor_activation(predecessor)?;
+        super::v2_status::begin_v2_successor_activation(predecessor)?;
         Ok(Self { predecessor })
     }
     fn bind(
@@ -942,7 +942,7 @@ pub(super) fn run(worker: SumeragiWorker, mut startup_recovery: super::StartupRe
         }
         Err(error) => {
             output_guard.activate_restart_required();
-            super::status::mark_v2_restart_required();
+            super::v2_status::mark_v2_restart_required();
             iroha_logger::error!(%error, "authoritative Sumeragi v2 runner stopped fail-closed");
         }
     }
@@ -1021,7 +1021,7 @@ fn wait_for_terminal_shutdown(
     debug_assert_eq!(height, u64::MAX);
     ingress_ready.store(false, Ordering::Release);
     block_rx.close();
-    super::status::clear_v2_status();
+    super::v2_status::clear_v2_status();
     iroha_logger::info!(
         height,
         context_id = ?context_id,
@@ -1233,7 +1233,7 @@ fn run_inner(
         }
         pending_successor_activation
     };
-    let liveness_watchdog = super::status::V2LivenessWatchdog::default();
+    let liveness_watchdog = super::v2_status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
     let kura_replica_advert_refresh = Arc::new(
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
@@ -3637,7 +3637,7 @@ pub(super) enum V2RunnerError {
     Recovery(#[from] super::v2_recovery::V2RecoveryError),
     /// Runner/status activation ownership was inconsistent.
     #[error(transparent)]
-    SuccessorActivation(#[from] super::status::V2SuccessorActivationError),
+    SuccessorActivation(#[from] super::v2_status::V2SuccessorActivationError),
     /// Successor construction returned authority for another same-height predecessor.
     #[error(
         "Sumeragi v2 successor predecessor authority changed during construction: expected {expected:?}, actual {actual:?}"

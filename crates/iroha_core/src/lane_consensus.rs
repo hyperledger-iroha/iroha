@@ -1163,9 +1163,7 @@ fn validate_lane_payload_availability_body_shape(
         || body.min_quorum == 0
         || body.min_quorum > body.validator_count
         || usize::try_from(body.min_quorum).ok()
-            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_count,
-            ))
+            != Some(iroha_sumeragi::types::quorum(validator_count))
         || body.qc_mode_tag.trim().is_empty()
         || body.qc_mode_tag.len() > MAX_LANE_AVAILABILITY_QC_MODE_TAG_BYTES
     {
@@ -1806,9 +1804,7 @@ fn validate_lane_block_new_view_body(
         || body.min_quorum == 0
         || body.min_quorum > body.validator_count
         || usize::try_from(body.min_quorum).ok()
-            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_count,
-            ))
+            != Some(iroha_sumeragi::types::quorum(validator_count))
     {
         return Err(LaneAutonomousArtifactError::InvalidNewViewBody);
     }
@@ -1941,9 +1937,7 @@ pub(crate) fn validate_lane_drain_intent(
         || intent.min_quorum == 0
         || intent.min_quorum > intent.validator_count
         || usize::try_from(intent.min_quorum).ok()
-            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_count,
-            ))
+            != Some(iroha_sumeragi::types::quorum(validator_count))
     {
         return Err(LaneDrainCertificateError::InvalidIntent);
     }
@@ -5639,9 +5633,7 @@ fn validate_lane_block_vote_body_shape(
         || body.min_quorum == 0
         || body.min_quorum > body.validator_count
         || usize::try_from(body.min_quorum).ok()
-            != Some(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_count,
-            ))
+            != Some(iroha_sumeragi::types::quorum(validator_count))
     {
         return Err(LaneBlockVoteIngressError::InvalidBody);
     }
@@ -5677,10 +5669,8 @@ fn validate_lane_block_validator_set_fields(
     if actual_validator_count != validator_count {
         return Err(LaneBlockQcBuildError::ValidatorCountMismatch);
     }
-    let expected_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-        validator_set.len(),
-    ))
-    .map_err(|_| LaneBlockQcBuildError::InvalidBody)?;
+    let expected_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+        .map_err(|_| LaneBlockQcBuildError::InvalidBody)?;
     if min_quorum != expected_quorum {
         return Err(LaneBlockQcBuildError::InvalidBody);
     }
@@ -5765,10 +5755,8 @@ mod tests {
         let mut validator_set = keypairs.iter().map(peer).collect::<Vec<_>>();
         validator_set.sort();
         let validator_count = u32::try_from(validator_set.len()).expect("fixture count fits");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validator_set.len(),
-        ))
-        .expect("fixture quorum fits");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("fixture quorum fits");
         (
             LaneDrainCertificateBodyV1 {
                 version: 1,
@@ -6281,10 +6269,8 @@ mod tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_count: u32::try_from(validator_set.len()).expect("validator count fits"),
-            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_set.len(),
-            ))
-            .expect("fixture quorum fits"),
+            min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
         }
     }
@@ -6310,10 +6296,8 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_set: validator_set.to_vec(),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_set.len(),
-            ))
-            .expect("fixture quorum fits"),
+            min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
             descriptor_hash: Hash::prehashed([0x00; Hash::LENGTH]),
         };
@@ -6363,10 +6347,8 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
             validator_count: u32::try_from(validator_set.len()).expect("validator count"),
-            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_set.len(),
-            ))
-            .expect("fixture quorum"),
+            min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                .expect("fixture quorum"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -7593,10 +7575,8 @@ mod tests {
             validator_set_hash: HashOf::new(&validator_set.to_vec()),
             validator_set: validator_set.to_vec(),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-                validator_set.len(),
-            ))
-            .expect("fixture quorum fits"),
+            min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                .expect("fixture quorum fits"),
             qc_mode_tag: "permissioned:lane:7:dataspace:11".to_string(),
             descriptor_hash: Hash::prehashed([0x00; Hash::LENGTH]),
         };

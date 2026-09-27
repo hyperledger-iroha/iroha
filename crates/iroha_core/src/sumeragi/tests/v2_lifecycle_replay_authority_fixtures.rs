@@ -202,19 +202,19 @@ impl Fixture {
         unsigned_commit.signature.clear();
         let mut unsigned_timeout = self.timeout_vote.clone();
         unsigned_timeout.signature.clear();
-        let proposal_equivocation = crate::sumeragi::evidence::canonicalize_v2_conflict(
+        let proposal_equivocation = crate::sumeragi::v2_evidence::canonicalize_v2_conflict(
             &wire::SumeragiV2Equivocation::Proposal {
                 first: self.proposal.clone(),
                 second: self.conflicting_proposal.clone(),
             },
         );
-        let vote_equivocation = crate::sumeragi::evidence::canonicalize_v2_conflict(
+        let vote_equivocation = crate::sumeragi::v2_evidence::canonicalize_v2_conflict(
             &wire::SumeragiV2Equivocation::PhaseVote {
                 first: self.prepare_vote.clone(),
                 second: self.conflicting_vote.clone(),
             },
         );
-        let timeout_equivocation = crate::sumeragi::evidence::canonicalize_v2_conflict(
+        let timeout_equivocation = crate::sumeragi::v2_evidence::canonicalize_v2_conflict(
             &wire::SumeragiV2Equivocation::TimeoutVote {
                 first: self.timeout_vote.clone(),
                 second: self.conflicting_timeout_vote.clone(),

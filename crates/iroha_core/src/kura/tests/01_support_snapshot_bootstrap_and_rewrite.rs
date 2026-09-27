@@ -21,7 +21,6 @@ use crate::{
     prelude::{AcceptedTransaction, World},
     query::store::LiveQueryStore,
     state::State,
-    sumeragi::network_topology::Topology,
 };
 use iroha_config::{
     base::WithOrigin,
@@ -80,7 +79,7 @@ fn provisional_snapshot_metadata(tag: u8) -> ProvisionalSnapshotBootstrap {
     }
 }
 #[test]
-fn snapshot_bootstrap_state_blocks_until_successful_finalization() {
+fn snapshot_bootstrap_state_blocks_until_authenticated() {
     let kura = Kura::blank_kura_for_testing();
     let pending = provisional_snapshot_metadata(7);
     *kura.provisional_snapshot_bootstrap.lock() =
@@ -97,98 +96,10 @@ fn snapshot_bootstrap_state_blocks_until_successful_finalization() {
         kura.ensure_snapshot_bootstrap_authenticated(),
         Err(Error::SnapshotBootstrapAuthenticationPending)
     ));
-    assert!(
-        kura.provisional_snapshot_bootstrap
-            .lock()
-            .begin_finalization(&pending)
-    );
+    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Authenticated;
     assert_eq!(kura.provisional_snapshot_bootstrap_metadata(), None);
-    assert!(
-        kura.provisional_snapshot_bootstrap_pending(),
-        "finalizing remains unauthenticated and must keep every mutation fail-closed"
-    );
-    assert!(matches!(
-        kura.ensure_snapshot_bootstrap_authenticated(),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(
-        kura.provisional_snapshot_bootstrap
-            .lock()
-            .finish_finalization()
-    );
+    assert!(!kura.provisional_snapshot_bootstrap_pending());
     assert!(kura.ensure_snapshot_bootstrap_authenticated().is_ok());
-    assert!(
-        !kura
-            .provisional_snapshot_bootstrap
-            .lock()
-            .finish_finalization(),
-        "authenticated state cannot be finalized twice"
-    );
-}
-#[test]
-fn snapshot_bootstrap_pending_state_has_one_finalization_claim() {
-    let pending = provisional_snapshot_metadata(11);
-    let state = Arc::new(Mutex::new(SnapshotBootstrapRuntimeState::Pending(
-        pending.clone(),
-    )));
-    let start = Arc::new(std::sync::Barrier::new(3));
-    let mut finalizers = Vec::new();
-    for _ in 0..2 {
-        let state = Arc::clone(&state);
-        let start = Arc::clone(&start);
-        let pending = pending.clone();
-        finalizers.push(thread::spawn(move || {
-            start.wait();
-            state.lock().begin_finalization(&pending)
-        }));
-    }
-    start.wait();
-    let claims = finalizers
-        .into_iter()
-        .map(|finalizer| finalizer.join().expect("finalizer thread must not panic"))
-        .filter(|claimed| *claimed)
-        .count();
-    assert_eq!(claims, 1, "exactly one finalizer may claim recovery");
-    assert!(matches!(
-        *state.lock(),
-        SnapshotBootstrapRuntimeState::Finalizing
-    ));
-    assert!(
-        !state.lock().begin_finalization(&pending),
-        "Finalizing remains fail-closed until recovery succeeds"
-    );
-}
-#[test]
-fn snapshot_finalization_authority_is_instance_bound_and_expires() {
-    let first = Kura::blank_kura_for_testing();
-    let second = Kura::blank_kura_for_testing();
-    let pending = provisional_snapshot_metadata(13);
-    *first.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending.clone());
-    *second.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending.clone());
-    assert!(
-        first
-            .provisional_snapshot_bootstrap
-            .lock()
-            .begin_finalization(&pending)
-    );
-    let authority =
-        SnapshotFinalizationMutationAuthority::new(&first).expect("mint finalization token");
-    assert!(matches!(
-        authority.validate_for(&second),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(
-        first
-            .provisional_snapshot_bootstrap
-            .lock()
-            .finish_finalization()
-    );
-    assert!(matches!(
-        authority.validate_for(&first),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
 }
 #[cfg(unix)]
 #[test]
@@ -202,7 +113,7 @@ fn provisional_snapshot_gate_preserves_tree_across_mutation_families() {
     let before = snapshot_regular_test_tree(&store_root);
     let pending = provisional_snapshot_metadata(5);
     *kura.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending.clone());
+        SnapshotBootstrapRuntimeState::Pending(pending);
     let entry_hash =
         HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
     assert!(matches!(
@@ -230,15 +141,6 @@ fn provisional_snapshot_gate_preserves_tree_across_mutation_families() {
         },
         Vec::new(),
     ));
-    assert!(matches!(
-        kura.purge_retired_segments(),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(
-        kura.provisional_snapshot_bootstrap
-            .lock()
-            .begin_finalization(&pending)
-    );
     assert!(matches!(
         kura.purge_retired_segments(),
         Err(Error::SnapshotBootstrapAuthenticationPending)

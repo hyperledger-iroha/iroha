@@ -20,11 +20,9 @@ use iroha_test_samples::{BOB_ID, gen_account_in};
 
 #[test]
 fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
-    let _guard = witness::exec_witness_guard();
-    let _fee_guard = crate::sumeragi::status::nexus_fee_test_lock()
-        .lock()
-        .unwrap();
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    let _guard = exec_witness::exec_witness_guard();
+    let _fee_guard = crate::status::nexus_fee_test_lock().lock().unwrap();
+    crate::status::reset_nexus_economics_for_tests();
     let asset = AssetDefinitionId::derive_from_components(
         DomainId::try_new("network-fee", "universal").unwrap(),
         "vote".parse().unwrap(),
@@ -115,7 +113,7 @@ fn signed_conflicting_second_ballot_retains_actual_slash_and_rejection_fee() {
             })
             .collect(),
     );
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     let fragments = block.committed_fragment_count();
     execute(&mut block, &source).unwrap();

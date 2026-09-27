@@ -25,7 +25,7 @@ class EarlyCompileGateTests(unittest.TestCase):
     def run_until_codegen(self, scope, metadata_effect, codegen_effect):
         with contextlib.ExitStack() as stack:
             for name in ("require_native_artifact_inspector", "require_network_fixture_prerequisites",
-                         "run_pure_fsm_checks", "run_lifecycle_source_checks"):
+                         "run_lifecycle_source_checks"):
                 stack.enter_context(patch.object(gate, name))
             stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=self.SHIPPING))
             metadata = stack.enter_context(patch.object(

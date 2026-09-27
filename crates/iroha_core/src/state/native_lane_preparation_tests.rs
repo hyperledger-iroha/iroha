@@ -709,7 +709,7 @@ state_test! { sync native_preparation_preserves_local_recorder_conflict
         .prepare_proposed_native_lane_batch_source(&carrier, &[]).unwrap()
         else { panic!("original source"); };
     let (_, clock) = iroha_primitives::time::TimeSource::new_mock(carrier.header().creation_time());
-    let recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+    let recorder = crate::exec_witness::begin_exec_witness_capture().unwrap();
     let error = source.prepare_candidate(
         fixture.applying, &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID,
         &clock, state.sumeragi_block_cadence(),

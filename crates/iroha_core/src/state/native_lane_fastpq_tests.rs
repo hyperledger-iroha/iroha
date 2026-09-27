@@ -72,7 +72,7 @@ fn native_fastpq_apply_real_additional_transfer(
     overlay: &mut StateBlock<'_>,
     fixture: &NativeEconomicFixture,
     call: Option<(Hash, crate::queue::RoutingDecision)>,
-) {
+) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
     use crate::smartcontracts::Execute;
     let mut transaction = overlay.transaction();
     match call {
@@ -85,8 +85,7 @@ fn native_fastpq_apply_real_additional_transfer(
                 1u32,
                 fixture.destination.account().clone(),
             )
-            .execute(fixture.source.account(), &mut transaction)
-            .unwrap();
+            .execute(fixture.source.account(), &mut transaction)?;
         }
         None => {
             assert!(transaction.tx_call_hash.is_none());
@@ -103,11 +102,14 @@ fn native_fastpq_apply_real_additional_transfer(
                 fixture.source.clone(),
                 fixture.destination.clone(),
                 Quantity::from(1u32),
-            )
-            .unwrap();
+            )?;
         }
     }
-    transaction.apply();
+    transaction.prepare_apply().map_err(|error| {
+        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(error.into())
+    })?;
+    transaction.apply_prepared();
+    Ok(())
 }
 
 state_test! { sync native_fastpq_transfer_and_reveal_keep_actual_sources_through_common_inventory
@@ -145,7 +147,7 @@ state_test! { sync native_fastpq_transfer_and_reveal_keep_actual_sources_through
     }
 }
 
-state_test! { sync native_fastpq_common_inventory_retains_due_start_and_actual_protocol_work
+state_test! { sync native_fastpq_common_inventory_retains_due_start_and_refuses_unadmitted_protocol_work
     let fixture = native_economic_fixture_with_world_initializer(
         &[NativeEconomicCase::Transfer(25)], true, None, None, |world| {
             world.governance_referenda.insert("native-source-due-start".into(), GovernanceReferendumRecord {
@@ -167,26 +169,19 @@ state_test! { sync native_fastpq_common_inventory_retains_due_start_and_actual_p
     assert_native_fastpq_retained_for_test(prepared.overlay(), prepared.executions());
     let native_call = Hash::from(groups[0].body().payload().input.entrypoint.execution_call_hash());
     let overlay = prepared.overlay_mut_for_test();
-    native_fastpq_apply_real_additional_transfer(overlay, &fixture, None);
-    assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0, Quantity::from(74u32));
-    assert_eq!(overlay.world.assets.get(&fixture.destination).unwrap().0, Quantity::from(26u32));
-    let captures = overlay.captured_fastpq_transcript_sources().unwrap();
-    assert_eq!(captures.len(), 2);
-    let protocol = *captures.iter().find(|(_, capture)| capture.is_protocol_purpose()).unwrap().0;
-    assert_ne!(native_call, protocol);
+    let before_usage = overlay.fastpq_source_usage_for_testing();
+    let error = native_fastpq_apply_real_additional_transfer(overlay, &fixture, None).unwrap_err();
+    assert!(error.to_string().contains("protocol source has no authenticated mandatory owner"), "{error}");
+    assert_eq!(overlay.world.assets.get(&fixture.source).unwrap().0, Quantity::from(75u32));
+    assert_eq!(overlay.world.assets.get(&fixture.destination).unwrap().0, Quantity::from(25u32));
+    assert_eq!(overlay.fastpq_source_usage_for_testing(), before_usage);
+    assert_eq!(overlay.captured_fastpq_transcript_sources().unwrap().keys().copied().collect::<Vec<_>>(), [native_call]);
+    assert!(matches!(overlay.execution_output_plan, Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)));
     native_fastpq_cache_actual_input_set(overlay, &groups);
-    overlay.finalize_fastpq_source_inventory(&[], &[], &[]).unwrap();
-    let inventory = overlay.fastpq_source_inventory().unwrap().unwrap();
-    assert_eq!(inventory.entries().iter().map(|entry| entry.entry_hash).collect::<Vec<_>>(), [native_call, protocol]);
-    assert_eq!(inventory.entries()[1].execution_kind,
-        iroha_data_model::fastpq::FastpqSourceExecutionKindV1::ProtocolPurpose);
-    assert!(overlay.verified_fastpq_source_inventory_for_capture().is_ok());
-    let actual = overlay.drain_transfer_transcripts_with_pending(None);
-    assert_eq!(actual.len(), 2);
-    assert!(actual.contains_key(&native_call) && actual.contains_key(&protocol));
+    assert!(overlay.finalize_fastpq_source_inventory(&[], &[], &[]).is_err());
     drop(prepared);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot"), before,
-        "native, start transition and additional protocol work all roll back together");
+        "native and start transition roll back; unadmitted protocol work never moves funds");
     assert_eq!(state.world.governance_referenda.view().get("native-source-due-start").unwrap().status,
         GovernanceReferendumStatus::Proposed);
 }
@@ -221,7 +216,7 @@ state_test! { sync native_fastpq_omission_substitution_and_competing_inputs_latc
                 overlay.fastpq_source_captures.take_unsealed_sources(&BTreeSet::from([call])).unwrap();
                 // A real later applied transfer supplies a different capture. Restore
                 // the original rows only: equal public bytes cannot replace custody.
-                native_fastpq_apply_real_additional_transfer(overlay, &fixture, Some((call, route)));
+                native_fastpq_apply_real_additional_transfer(overlay, &fixture, Some((call, route))).unwrap();
                 let replacement = overlay.captured_fastpq_transcript_sources().unwrap()[&call];
                 assert_ne!(replacement.first_fragment_index(), old_capture.first_fragment_index());
                 overlay.fastpq_transcripts = original.clone();
@@ -260,7 +255,7 @@ state_test! { sync native_fastpq_post_prefix_actual_extra_row_cannot_replace_pri
     let route = input.routing_plan().unwrap().coordinator_route();
     let overlay = prepared.overlay_mut_for_test();
     let count = overlay.fastpq_transcripts[&call].len();
-    native_fastpq_apply_real_additional_transfer(overlay, &fixture, Some((call, route)));
+    native_fastpq_apply_real_additional_transfer(overlay, &fixture, Some((call, route))).unwrap();
     assert_eq!(overlay.fastpq_transcripts[&call].len(), count + 1);
     assert_eq!(overlay.captured_fastpq_transcript_sources().unwrap().len(), 1,
         "same-key capture metadata cannot conceal an extra actual occurrence");

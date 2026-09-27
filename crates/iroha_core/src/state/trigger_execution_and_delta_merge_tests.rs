@@ -1954,8 +1954,8 @@ fn execute_data_triggers_dfs_uses_registered_trigger_authority() {
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);
     builder.push_transaction(signed);
     let source = builder.build_with_signature(0, ALICE_KEYPAIR.private_key());
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let mut state_block = state.block(source.header());
     state_block
         .reserve_ordinary_execution_outputs(&source)

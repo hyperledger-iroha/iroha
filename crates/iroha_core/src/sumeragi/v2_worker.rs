@@ -1538,7 +1538,7 @@ impl V2IoAdmission {
         }
     }
 }
-impl super::status::V2IoCompletionQueueObserver for V2IoAdmission {
+impl super::v2_status::V2IoCompletionQueueObserver for V2IoAdmission {
     fn completion_queue_snapshot(&self, now: Instant) -> RuntimeQueueLaneSnapshot {
         self.completion_snapshot(now)
     }

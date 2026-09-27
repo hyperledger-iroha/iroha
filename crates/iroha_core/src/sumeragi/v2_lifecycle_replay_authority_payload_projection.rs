@@ -188,7 +188,7 @@ fn project_equivocation(
     payload: &ReplayPayloadBindingV1,
 ) -> Result<ReplayShape, ReplayAuthorityValidationError> {
     if !payload.is_none()
-        || crate::sumeragi::evidence::canonicalize_v2_conflict(evidence) != *evidence
+        || crate::sumeragi::v2_evidence::canonicalize_v2_conflict(evidence) != *evidence
     {
         return Err(ReplayAuthorityValidationError::InvalidSource);
     }

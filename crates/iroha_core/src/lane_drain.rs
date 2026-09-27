@@ -1065,10 +1065,8 @@ mod tests {
         committee.sort();
         body.intent.validator_count =
             u32::try_from(committee.len()).expect("maximum committee count fits u32");
-        body.intent.min_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(committee.len()),
-        )
-        .expect("maximum committee quorum fits u32");
+        body.intent.min_quorum = u32::try_from(iroha_sumeragi::types::quorum(committee.len()))
+            .expect("maximum committee quorum fits u32");
         body.intent.validator_set_hash = HashOf::new(&committee);
         body.intent.validator_set = committee;
         let record_path = {

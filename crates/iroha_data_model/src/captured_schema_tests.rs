@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 const EXPECTED_CODEC_COUNT: usize = 1_769;
 const CAPTURE_REPORT_SHA256: &str =
     "be82d3661d9e2a79fd1a60d6922f1387d3821a0ad5a65d80d294aca1251caedd";
-const FIXTURE_SHA256: &str = "d3e8f596c5be685b9dc6728c2ebc18ad37754ced1def954e29a7cecc64d2b4a9";
+const FIXTURE_SHA256: &str = "401ab9a98b133209da45719af72fadfd72340e3a7516c04f434803361a3e516b";
 
 fn fixture() -> &'static BTreeMap<String, Value> {
     static FIXTURE: OnceLock<BTreeMap<String, Value>> = OnceLock::new();

@@ -6455,11 +6455,161 @@ impl_default!(SumeragiKeys => {
                 .collect(),
         }
 });
+/// Optional overrides of the Sumeragi core's local parameters (`LocalParams`,
+/// `specs/sumeragi.md` §12.4).
+///
+/// Field names follow `iroha_sumeragi::api::LocalParams`; the node maps them onto
+/// `LocalParams::for_committee_size(n)` once the committee size `n` is known, so `None` keeps the
+/// §9.3 default for that size. This crate does not depend on the consensus core. The complete
+/// set is validated by the core at startup (§9.4); parsing only rejects zero intervals and a
+/// zero `sync_batch`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SumeragiLocalOverrides {
+    /// Base view timeout `T_base`.
+    pub t_base: Option<Duration>,
+    /// Timeout cap `T_max`.
+    pub t_max: Option<Duration>,
+    /// Largest start level.
+    pub start_cap: Option<u32>,
+    /// Fast commits needed to lower the start level by one.
+    pub decay_after: Option<u32>,
+    /// State rebroadcast interval while unsettled.
+    pub rebroadcast_interval: Option<Duration>,
+    /// Status interval while settled.
+    pub status_keepalive: Option<Duration>,
+    /// Payload build timeout.
+    pub build_timeout: Option<Duration>,
+    /// Body fetch retry interval.
+    pub fetch_retry: Option<Duration>,
+    /// Entries per sync request.
+    pub sync_batch: Option<u16>,
+    /// Sync request retry interval.
+    pub sync_retry: Option<Duration>,
+    /// Bytes per sync response.
+    pub sync_max_bytes: Option<u32>,
+    /// Observers kept in the peer table besides the committee.
+    pub max_observers: Option<u32>,
+}
+impl SumeragiLocalOverrides {
+    /// Whether no local parameter is overridden.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+/// Whether `path` equals `base` or lies below it, compared lexically after removing `.`
+/// components and resolving `..` against preceding components (no filesystem access, so
+/// symbolic links are not followed).
+#[must_use]
+pub fn path_is_within(path: &std::path::Path, base: &std::path::Path) -> bool {
+    fn normalize(path: &std::path::Path) -> PathBuf {
+        use std::path::Component;
+        let mut out = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::CurDir => {}
+                Component::ParentDir => match out.components().next_back() {
+                    Some(Component::Normal(_)) => {
+                        out.pop();
+                    }
+                    // `/..` is `/`.
+                    Some(Component::RootDir | Component::Prefix(_)) => {}
+                    // A relative path that climbs above its start keeps the `..`.
+                    None | Some(Component::ParentDir | Component::CurDir) => out.push(".."),
+                },
+                other => out.push(other.as_os_str()),
+            }
+        }
+        out
+    }
+    normalize(path).starts_with(normalize(base))
+}
+#[cfg(test)]
+mod sumeragi_core_config_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn local_overrides_is_empty_only_without_overrides() {
+        assert!(SumeragiLocalOverrides::default().is_empty());
+        let one = SumeragiLocalOverrides {
+            sync_batch: Some(1),
+            ..SumeragiLocalOverrides::default()
+        };
+        assert!(!one.is_empty());
+    }
+
+    #[test]
+    fn path_is_within_compares_normalized_paths() {
+        assert!(path_is_within(
+            Path::new("./storage/x"),
+            Path::new("storage")
+        ));
+        assert!(path_is_within(
+            Path::new("storage"),
+            Path::new("./storage/")
+        ));
+        assert!(path_is_within(Path::new("a/b/../b/c"), Path::new("a/b")));
+        assert!(path_is_within(Path::new("/srv/a"), Path::new("/")));
+        assert!(path_is_within(Path::new("/../srv"), Path::new("/srv")));
+        assert!(!path_is_within(
+            Path::new("storage-sumeragi-records"),
+            Path::new("storage")
+        ));
+        assert!(!path_is_within(Path::new("a/../c"), Path::new("a")));
+        assert!(!path_is_within(
+            Path::new("../storage/x"),
+            Path::new("storage")
+        ));
+        assert!(path_is_within(Path::new("../../x"), Path::new("..")));
+        assert!(!path_is_within(
+            Path::new("/srv"),
+            Path::new("/srv/records")
+        ));
+    }
+
+    #[test]
+    fn default_record_paths_are_store_siblings() {
+        assert_eq!(
+            Sumeragi::default_records_dir(Path::new("./storage")),
+            Some(PathBuf::from("./storage-sumeragi-records"))
+        );
+        assert_eq!(
+            Sumeragi::default_installation_log(Path::new("/data/peer1")),
+            Some(PathBuf::from("/data/peer1-sumeragi-installation.log"))
+        );
+        assert_eq!(
+            Sumeragi::default_records_dir(Path::new("storage/peer0/")),
+            Some(PathBuf::from("storage/peer0-sumeragi-records"))
+        );
+        assert_eq!(Sumeragi::default_records_dir(Path::new("/")), None);
+        assert_eq!(Sumeragi::default_installation_log(Path::new("..")), None);
+        assert_eq!(
+            Sumeragi::store_sibling(Path::new("kura"), ".x"),
+            Some(PathBuf::from("kura.x"))
+        );
+    }
+
+    #[test]
+    fn default_sumeragi_places_records_outside_the_default_store() {
+        let sumeragi = Sumeragi::default();
+        let store = PathBuf::from(defaults::kura::STORE_DIR);
+        assert!(!path_is_within(&sumeragi.records_dir, &store));
+        assert!(!path_is_within(
+            &sumeragi.installation_log,
+            &sumeragi.records_dir
+        ));
+        assert!(sumeragi.local.is_empty());
+        assert!(sumeragi.retired_keys.is_empty());
+    }
+}
 /// First-release Sumeragi v2 node configuration.
 ///
 /// Consensus mode, block cadence, DA layout, leader seed, roster, and quorum
 /// rules are selected by signed genesis/height context rather than mutable
 /// local configuration.
+// TODO(WP9): delete the v2 fields (`global_beacon_*`, `block`, `queues`, `limits`, `storage`,
+// `keys`) with the v2 runtime; `role`, `local`, the record paths and `retired_keys` remain.
 #[derive(Debug, Clone)]
 pub struct Sumeragi {
     /// Node-local participation role.
@@ -6480,8 +6630,18 @@ pub struct Sumeragi {
     pub storage: SumeragiStorage,
     /// Consensus key-rotation and algorithm policy.
     pub keys: SumeragiKeys,
+    /// Optional overrides of the core's local parameters.
+    pub local: SumeragiLocalOverrides,
+    /// Resolved directory of the safety records and the record-store id (§7.4); outside the
+    /// Kura store directory.
+    pub records_dir: PathBuf,
+    /// Resolved path of the key installation log (§7.4); outside `records_dir`.
+    pub installation_log: PathBuf,
+    /// Retired consensus keys: restored like the others, never used to sign (§7.4 Keys).
+    pub retired_keys: Vec<PublicKey>,
 }
 impl_default!(Sumeragi => {
+        let store_dir = PathBuf::from(defaults::kura::STORE_DIR);
         Self {
             role: NodeRole::Validator,
             global_beacon_partial_signer_provider_handle: None,
@@ -6492,8 +6652,35 @@ impl_default!(Sumeragi => {
             limits: SumeragiV2RuntimeLimits::default(),
             storage: SumeragiStorage::default(),
             keys: SumeragiKeys::default(),
+            local: SumeragiLocalOverrides::default(),
+            records_dir: Sumeragi::default_records_dir(&store_dir)
+                .expect("the default Kura store directory has a final component"),
+            installation_log: Sumeragi::default_installation_log(&store_dir)
+                .expect("the default Kura store directory has a final component"),
+            retired_keys: Vec::new(),
         }
 });
+impl Sumeragi {
+    /// Default safety-record directory for a Kura store directory: its sibling
+    /// `<store dir name>-sumeragi-records`. `None` when `store_dir` has no final component.
+    #[must_use]
+    pub fn default_records_dir(store_dir: &std::path::Path) -> Option<PathBuf> {
+        Self::store_sibling(store_dir, defaults::sumeragi::RECORDS_DIR_SUFFIX)
+    }
+    /// Default installation-log file for a Kura store directory: its sibling
+    /// `<store dir name>-sumeragi-installation.log`. `None` when `store_dir` has no final
+    /// component.
+    #[must_use]
+    pub fn default_installation_log(store_dir: &std::path::Path) -> Option<PathBuf> {
+        Self::store_sibling(store_dir, defaults::sumeragi::INSTALLATION_LOG_SUFFIX)
+    }
+    fn store_sibling(store_dir: &std::path::Path, suffix: &str) -> Option<PathBuf> {
+        let name = store_dir.file_name()?;
+        let mut sibling = name.to_os_string();
+        sibling.push(suffix);
+        Some(store_dir.with_file_name(sibling))
+    }
+}
 impl Sumeragi {
     /// Build the canonical shared Sumeragi v2 runtime configuration.
     ///

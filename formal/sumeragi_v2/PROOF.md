@@ -1,5 +1,14 @@
 # Sumeragi v2 safety and liveness argument
 
+> **Status (2026-09-27): retired.** The node runs only the new Sumeragi
+> ([`specs/sumeragi.md`](../../specs/sumeragi.md)). The v2 formal tooling this
+> directory refers to (the TLAPS, TLC, Apalache and mutation runners under
+> `scripts/formal/`, the proof-ledger checker, `ci/check_sumeragi_formal.sh`, the
+> v2 release gates and the Verus crate `crates/iroha_sumeragi_core`) was removed
+> with the v2 consensus tooling. The directory remains only because v2 runtime
+> tests still read `SumeragiV2InFlightFirstRelease.tla`; it is deleted together
+> with the v2 runtime.
+
 ## Current proof-ledger status
 
 The checked-in revision-4 ledger declares 44 `tlaps_proved`, 3

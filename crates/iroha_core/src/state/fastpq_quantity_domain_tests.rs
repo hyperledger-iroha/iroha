@@ -22,7 +22,7 @@ fn ledger_transfers_and_owned_inventory_preserve_quantities_beyond_u64_units() {
 }
 
 fn check_full_quantity_ledger() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     let mut maximum_bytes = [0xff_u8; 64];
     maximum_bytes[63] = 0x7f;
     let maximum = Quantity::from_canonical_numeric(
@@ -142,7 +142,7 @@ fn check_full_quantity_ledger() {
                 &Quantity::one().try_sub(&to_before).unwrap()
             );
         }
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let call = Hash::new(format!("full-quantity-ledger-case-{index}"));
         let from_after = from_before.try_sub(&amount).unwrap();
         let to_after = to_before.try_add(&amount).unwrap();
@@ -305,7 +305,7 @@ fn ledger_supply_changes_between_transfers_preserve_every_source_occurrence() {
 fn check_supply_changes_between_transfers() {
     use iroha_data_model::isi::Burn;
 
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
+    let _guard = crate::exec_witness::exec_witness_guard();
     for mint in [true, false] {
         let domain = DomainId::try_new("wonderland", "universal").unwrap();
         let definition =
@@ -341,7 +341,7 @@ fn check_supply_changes_between_transfers() {
         }
         setup.commit_world_overlay_for_testing().unwrap();
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 7, 0));
-        crate::sumeragi::witness::start_block();
+        crate::exec_witness::start_block();
         let call = Hash::new(if mint {
             b"transfer-mint-transfer".as_slice()
         } else {

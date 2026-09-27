@@ -2042,6 +2042,11 @@ fn effective_output_transaction_limit(
         .execution_output()
         .maximum_terminal_network_inputs()
         .map_err(CandidateError::InvalidOutputCapacity)?;
+    let source_max = parameters
+        .fastpq_source()
+        .maximum_network_inputs(parameters.execution_output())
+        .map_err(CandidateError::InvalidOutputCapacity)?;
+    let terminal_max = terminal_max.min(source_max);
     let terminal_max = usize::try_from(terminal_max).map_err(|_| {
         CandidateError::InvalidOutputCapacity("terminal count exceeds host index width".into())
     })?;
@@ -2737,10 +2742,8 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         validator_set.sort();
         let validator_count = u32::try_from(validator_set.len()).expect("validator count fits u32");
-        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-            validator_set.len(),
-        ))
-        .expect("validator quorum fits u32");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+            .expect("validator quorum fits u32");
         let entrypoint_hash = Hash::from(transaction.hash_as_entrypoint());
         let previous_lane_block_height = lane_block_height.saturating_sub(1);
         let mut descriptor = LaneBlockDescriptorV1 {
@@ -3882,7 +3885,9 @@ pub(super) mod tests {
     fn retained_candidate_evidence(
         state: &State,
     ) -> Vec<iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence> {
-        use super::super::evidence::{retain_sumeragi_v2_equivocation, validate_v2_equivocation};
+        use super::super::v2_evidence::{
+            retain_sumeragi_v2_equivocation, validate_v2_equivocation,
+        };
         let (_, context, _, _) = snapshot_parent_fixture_with_world(1, World::new());
         let mut keys = (0xA7_u8..=0xAA)
             .map(|seed| KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal).unwrap())
@@ -3938,7 +3943,7 @@ pub(super) mod tests {
                     .unwrap()
             );
             evidence.push(
-                super::super::evidence::canonicalize_v2_equivocation_evidence(
+                super::super::v2_evidence::canonicalize_v2_equivocation_evidence(
                     &iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence {
                         context: context.clone(),
                         proofs_of_possession: proofs.clone(),
@@ -3947,7 +3952,7 @@ pub(super) mod tests {
                 ),
             );
         }
-        evidence.sort_by_key(super::super::evidence::v2_evidence_admission_key);
+        evidence.sort_by_key(super::super::v2_evidence::v2_evidence_admission_key);
         assert_eq!(evidence.len(), 4);
         for proof in &evidence {
             validate_v2_equivocation(proof).unwrap();
@@ -4081,7 +4086,7 @@ pub(super) mod tests {
                         .collect::<Vec<_>>(),
                     proofs
                         .iter()
-                        .map(super::super::evidence::v2_evidence_admission_key)
+                        .map(super::super::v2_evidence::v2_evidence_admission_key)
                         .collect::<Vec<_>>()
                 );
                 assert_eq!(
@@ -5813,6 +5818,27 @@ pub(super) mod tests {
             2
         );
     }
+    #[test]
+    fn source_policy_restricts_candidates_before_signing() {
+        use iroha_data_model::parameter::{
+            BlockParameter, FastpqSourcePolicyV1, Parameter, Parameters,
+        };
+        let mut parameters = Parameters::default();
+        let bootstrap = parameters.block().fastpq_source();
+        let one_network = FastpqSourcePolicyV1::from_sizing(
+            parameters.block().execution_output(),
+            bootstrap.intrinsic,
+            bootstrap.mandatory,
+            1,
+        )
+        .unwrap();
+        parameters.set_parameter(Parameter::Block(BlockParameter::FastpqSource(one_network)));
+        assert_eq!(
+            effective_output_transaction_limit(nonzero(512), parameters.block()).unwrap(),
+            1
+        );
+    }
+
     #[test]
     fn candidate_selection_reserves_future_terminal_capacity_before_signing() {
         use iroha_data_model::parameter::{BlockParameter, Parameter, Parameters};

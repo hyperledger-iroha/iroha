@@ -207,7 +207,8 @@ impl<'a> DeepQuotientPlan<'a> {
         for index in 0..self.cycle {
             known.push(public.evaluate(self.domain.point(index)?)?);
         }
-        let mut evaluator = self.air.prepare_polynomial_evaluator(self.domain)?;
+        let prepared = self.air.prepare_polynomial_evaluator(self.domain)?;
+        let mut evaluator = prepared.evaluator()?;
         let mut current = SecretPolynomial::zeroed(COLUMN_COUNT)?;
         let mut next = SecretPolynomial::zeroed(COLUMN_COUNT)?;
         let mut residues = SecretPolynomial::zeroed(SLOT_COUNT)?;

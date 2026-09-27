@@ -18,6 +18,7 @@ fn borrowed_output_candidate_has_exact_canonical_signed_wire_layout() {
         signatures: OutputFieldRef(&block.signatures),
         payload: OutputFieldRef(&block.payload),
         result: block.result.as_ref().map(OutputFieldRef),
+        commit_certificate: block.commit_certificate.as_ref().map(OutputFieldRef),
     };
     assert_eq!(
         norito::encode_canonical(&candidate).unwrap(),
@@ -32,6 +33,30 @@ fn borrowed_output_candidate_has_exact_canonical_signed_wire_layout() {
         <SignedBlockOutputCandidate<'_> as norito::NoritoSchema>::frame_name(),
         <SignedBlock as norito::NoritoSchema>::frame_name()
     );
+}
+#[test]
+fn executed_wire_budget_ignores_an_attached_commit_certificate() {
+    let mut block = fixture::proposal(1);
+    let outputs = rows(&block);
+    fixture::install(&mut block, outputs, 3).unwrap();
+    let executed_hash = block.executed_block_wire_hash().unwrap();
+    let executed_len = block.encode_wire().unwrap().len() as u64;
+    block.set_commit_certificate(Some(CommitCertificate::new(
+        vec![1; 64],
+        vec![2; 256],
+        vec![3; 512],
+    )));
+    assert!(block.encode_wire().unwrap().len() as u64 > executed_len);
+    assert_eq!(block.executed_block_wire_hash().unwrap(), executed_hash);
+    // The applying-policy wire ceiling is checked against the certificate-free executed wire.
+    let mut limits = fixture::limits();
+    for ceiling in [executed_len, executed_len - 1] {
+        limits.max_executed_wire_bytes = ceiling;
+        limits.max_total_output_bytes = ceiling;
+        limits.max_output_bytes = ceiling;
+        let checked = block.validate_execution_outputs(&limits);
+        assert_eq!(checked.is_ok(), ceiling == executed_len, "{checked:?}");
+    }
 }
 #[test]
 fn full_output_setter_rejects_size_shape_and_policy_without_mutation() {

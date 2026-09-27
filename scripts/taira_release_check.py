@@ -4144,13 +4144,6 @@ def require_network_fixture_capacity(directory: Path) -> None:
             f"for bounded storage and scratch space; {available} available at {directory}")
 
 
-def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
-    """Run every production reducer test without Cargo or adapter dependencies."""
-    _run_standalone_checks(root, env, lock_fds,
-        source="crates/iroha_sumeragi_core/src/lib.rs", output_name="sumeragi-core-tests",
-        label="pure FSM", description="pure consensus FSM (exact production reducer)")
-
-
 def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str, tuple]) -> None:
     """Reject absent selected test declarations in captured source before Cargo.
 
@@ -4169,7 +4162,7 @@ def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str,
         selected_by_package.setdefault(package, []).extend((harness, name) for name in names)
 
     try:
-        helper = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        helper = root / "scripts/formal/rust_text.py"
         namespace = {"__name__": "taira_selected_source_text", "__file__": str(helper)}
         exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
         mask = namespace["mask_rust_comments"]
@@ -4238,7 +4231,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
     )
     try:
-        helper = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        helper = root / "scripts/formal/rust_text.py"
         namespace = {"__name__": "taira_mv_source_text", "__file__": str(helper)}
         exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
         mask = namespace["mask_rust_comments"]
@@ -4565,8 +4558,6 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     env.pop("CARGO_BUILD_TARGET", None)
     env.update(VERGEN_GIT_SHA=head, IROHA_GIT_COMMIT_HASH=head)
     print(f"[taira-prequalify] mutable source {head}; {root}; diagnostic only", flush=True)
-    run_pure_fsm_checks(root, env, lock_fds)
-    source_unchanged("lifecycle source checks")
     run_lifecycle_source_checks(root, env, lock_fds)
     shipping = shipping_harnesses(root)
     _, complete_selections, _ = native_harness_plan(scoped, shipping)
@@ -4761,7 +4752,6 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     print(f"[taira-check] source {head}; {root}", flush=True)
     print(f"[taira-check] qualification scope {qualification_scope}; "
           f"{selected_regression_count(qualification_scope)} selected native regressions", flush=True)
-    run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds, scoped_stages)
     shipping = shipping_harnesses(root)
     print(f"[taira-check] shipping source coverage passed ({len(shipping)} binaries)", flush=True)

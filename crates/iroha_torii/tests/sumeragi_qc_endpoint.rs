@@ -3,7 +3,7 @@
 #![cfg(feature = "telemetry")]
 use axum::{Router, body::Body, http::Request, routing::get};
 use http_body_util::BodyExt as _;
-use iroha_core::sumeragi::status;
+use iroha_core::sumeragi::v2_status;
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{
     BlockHeader,
@@ -26,13 +26,13 @@ impl PublishedStatus {
         let guard = QC_ENDPOINT_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        status::set_v2_status(value);
+        v2_status::set_v2_status(value);
         Self { _guard: guard }
     }
 }
 impl Drop for PublishedStatus {
     fn drop(&mut self) {
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
     }
 }
 fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {

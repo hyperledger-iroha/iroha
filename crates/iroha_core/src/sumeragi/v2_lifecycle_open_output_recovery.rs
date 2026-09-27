@@ -1246,7 +1246,7 @@ mod output_recovery_tests {
         let (verified, keys) = verified_fixture();
         let first = signed_vote(&verified, &keys, 0xA3);
         let second = signed_vote(&verified, &keys, 0xA4);
-        let persisted = crate::sumeragi::evidence::canonicalize_v2_conflict(
+        let persisted = crate::sumeragi::v2_evidence::canonicalize_v2_conflict(
             &wire::SumeragiV2Equivocation::PhaseVote { first, second },
         );
         let evidence: AdapterEquivocationEvidence = verified

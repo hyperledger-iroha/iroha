@@ -2337,7 +2337,13 @@ impl RawGenesisTransaction {
         Self::inject_crypto_manifest_param(&mut instructions_list, &manifest.crypto)?;
         let registry = GenesisVkRegistry::build(instructions_list.iter().flatten())?;
         Self::inject_confidential_registry_param(&mut instructions_list, registry.vk_set_hash());
-        Ok(instructions_list)
+        Ok(pack_genesis_batches(
+            instructions_list,
+            usize::try_from(
+                iroha_data_model::parameter::FastpqSourcePolicyV1::BOOTSTRAP_NETWORK_INPUTS,
+            )
+            .expect("the bootstrap input count fits usize"),
+        ))
     }
     fn inject_confidential_registry_param(
         instructions_list: &mut Vec<Vec<InstructionBox>>,
@@ -4128,4 +4134,85 @@ mod tests {
     }
     include!("genesis_block_builder_example_tests.rs");
     include!("genesis_tail_tests.rs");
+}
+
+/// Pack genesis instruction batches into at most `limit` transactions.
+///
+/// Genesis executes under the pre-genesis FASTPQ source policy, which bounds the Network inputs
+/// of every block, genesis included (`specs/fastpq_source_statements.md`, activation
+/// requirements). While there are more batches than `limit`, the smallest adjacent pair is
+/// merged (the earlier one on ties). Instruction order is preserved; a leading executor upgrade
+/// stays a transaction of its own, since it changes the executor for the instructions after it.
+fn pack_genesis_batches(
+    mut batches: Vec<Vec<InstructionBox>>,
+    limit: usize,
+) -> Vec<Vec<InstructionBox>> {
+    let pinned = usize::from(
+        batches
+            .first()
+            .is_some_and(|first| first.iter().any(|instruction| instruction.as_any().is::<Upgrade>())),
+    );
+    let limit = limit.max(pinned.saturating_add(1));
+    while batches.len() > limit {
+        let Some(at) = (pinned..batches.len().saturating_sub(1))
+            .min_by_key(|&index| batches[index].len() + batches[index + 1].len())
+        else {
+            break;
+        };
+        let next = batches.remove(at + 1);
+        batches[at].extend(next);
+    }
+    batches
+}
+
+#[cfg(test)]
+mod pack_genesis_batches_tests {
+    use iroha_data_model::{
+        Level,
+        isi::{InstructionBox, Log},
+        prelude::{Executor, Upgrade},
+        transaction::IvmBytecode,
+    };
+
+    use super::pack_genesis_batches;
+
+    fn log(message: &str) -> InstructionBox {
+        Log::new(Level::INFO, message.to_owned()).into()
+    }
+
+    fn messages(batches: &[Vec<InstructionBox>]) -> Vec<Vec<String>> {
+        batches
+            .iter()
+            .map(|batch| batch.iter().map(|instruction| format!("{instruction:?}")).collect())
+            .collect()
+    }
+
+    #[test]
+    fn packs_to_the_limit_preserving_order() {
+        let batches: Vec<Vec<InstructionBox>> =
+            (0..15).map(|i| vec![log(&i.to_string())]).collect();
+        let flat = messages(&batches).concat();
+        let packed = pack_genesis_batches(batches, 11);
+        assert_eq!(packed.len(), 11);
+        assert_eq!(messages(&packed).concat(), flat, "order is preserved");
+    }
+
+    #[test]
+    fn keeps_a_leading_executor_upgrade_alone() {
+        let mut batches = vec![vec![InstructionBox::from(Upgrade::new(Executor::new(
+            IvmBytecode::from_compiled(vec![1, 2, 3]),
+        )))]];
+        batches.extend((0..5).map(|i| vec![log(&i.to_string())]));
+        let packed = pack_genesis_batches(batches, 2);
+        assert_eq!(packed.len(), 2);
+        assert_eq!(packed[0].len(), 1, "the executor upgrade stays alone");
+        assert_eq!(packed[1].len(), 5);
+    }
+
+    #[test]
+    fn leaves_small_genesis_unchanged() {
+        let batches: Vec<Vec<InstructionBox>> = (0..3).map(|i| vec![log(&i.to_string())]).collect();
+        let before = messages(&batches);
+        assert_eq!(messages(&pack_genesis_batches(batches, 11)), before);
+    }
 }

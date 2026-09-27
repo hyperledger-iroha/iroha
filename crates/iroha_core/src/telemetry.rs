@@ -16,12 +16,7 @@ use crate::{
     nexus::space_directory::SpaceDirectoryManifestSet,
     queue::{Queue, QueueLimits},
     state::{State, WorldReadOnly},
-    sumeragi::{
-        message::BlockMessage,
-        status::{
-            self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind,
-        },
-    },
+    status::{self, DataspaceCommitmentSnapshot, LaneCommitmentSnapshot, SettlementOutcomeKind},
 };
 use http::StatusCode;
 use iroha_config::parameters::actual::{DataspaceGossipFallback, RestrictedPublicPayload};
@@ -116,8 +111,6 @@ use std::{
     },
 };
 use tokio::sync::{RwLock, mpsc, oneshot, watch};
-const PHASE_PREPARE: &str = "prepare";
-const PHASE_COMMIT: &str = "commit";
 const PIPELINE_BUCKET_LABELS: [&str; 8] = ["1", "2", "4", "8", "16", "32", "64", "128"];
 fn quantity_metric_parts(amount: &Quantity) -> (u64, u64) {
     let units = amount
@@ -5118,61 +5111,6 @@ impl Telemetry {
         let version = snapshot.version;
         self.metrics.axt_policy_snapshot_version.set(version);
     }
-    /// Record a consensus message sent over the network (votes and QCs).
-    pub fn note_consensus_message_sent(&self, msg: &BlockMessage) {
-        if self.enabled {
-            self.record_consensus_message(msg, true);
-        }
-    }
-    /// Record a consensus message received from the network (votes and QCs).
-    pub fn note_consensus_message_received(&self, msg: &BlockMessage) {
-        if self.enabled {
-            self.record_consensus_message(msg, false);
-        }
-    }
-    fn record_consensus_message(&self, msg: &BlockMessage, sent: bool) {
-        let BlockMessage::V2(message) = msg else {
-            return;
-        };
-        use iroha_data_model::block::consensus_v2::{ConsensusMessageV2Payload, GlobalPhase};
-        match &message.payload {
-            ConsensusMessageV2Payload::Vote(vote) => {
-                let phase_label = match vote.phase {
-                    GlobalPhase::Prepare => PHASE_PREPARE,
-                    GlobalPhase::Commit => PHASE_COMMIT,
-                };
-                if sent {
-                    self.metrics
-                        .sumeragi_votes_sent_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_votes_received_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                }
-            }
-            ConsensusMessageV2Payload::QuorumCertificate(cert) => {
-                let phase_label = match cert.phase {
-                    GlobalPhase::Prepare => PHASE_PREPARE,
-                    GlobalPhase::Commit => PHASE_COMMIT,
-                };
-                if sent {
-                    self.metrics
-                        .sumeragi_qc_sent_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                } else {
-                    self.metrics
-                        .sumeragi_qc_received_total
-                        .with_label_values(&[phase_label])
-                        .inc();
-                }
-            }
-            _ => {}
-        }
-    }
     telemetry_enabled_metric_methods! {
     /// Update gauges tracking missing-block retry posture.
     [set_missing_block_retry_window_ms(retry_window_ms: u64) =>
@@ -6579,8 +6517,8 @@ impl Actor {
             let world = self.state.world_view();
             !world.peers().iter().any(|peer| peer == &self.local_peer_id)
         };
-        if crate::sumeragi::status::local_peer_removed() != local_removed {
-            crate::sumeragi::status::set_local_removed_from_world(local_removed);
+        if crate::status::local_peer_removed() != local_removed {
+            crate::status::set_local_removed_from_world(local_removed);
         }
         let mut peer_count;
         let mut current_online;
@@ -7140,7 +7078,7 @@ pub fn start(
 /// Project the frozen reducer-owned mode, never a configuration candidate or
 /// the default of an unrelated metrics registry. No owner means unknown mode.
 fn refresh_sumeragi_mode(metrics: &Metrics) {
-    let mode_tag = crate::sumeragi::status::v2_status()
+    let mode_tag = crate::sumeragi::v2_status::v2_status()
         .map(|status| status.height_context.mode.tag())
         .unwrap_or_default();
     metrics.set_sumeragi_mode_tag(mode_tag);
@@ -7160,7 +7098,6 @@ mod tests {
         prelude::World,
         query::store::LiveQueryStore,
         state::StateReadOnly,
-        sumeragi::message::BlockMessage,
         tx::AcceptedTransaction,
     };
     use iroha_config::parameters::actual::ConfidentialGas as ActualConfidentialGas;
@@ -9577,90 +9514,6 @@ mod tests {
         );
     }
     #[test]
-    fn consensus_message_counters_update() {
-        use iroha_data_model::block::consensus_v2 as wire;
-
-        let metrics = Arc::new(Metrics::default());
-        let telemetry = Telemetry::new(metrics.clone(), true);
-        let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-            b"telemetry-v2-context",
-        )));
-        let round = wire::ConsensusRound {
-            context_id,
-            height: 1,
-            view: 1,
-        };
-        let subject = wire::BlockSubject {
-            parent_block_hash: None,
-            block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([0x11; Hash::LENGTH])),
-            payload_hash: Hash::new(b"telemetry-v2-payload"),
-        };
-        let execution_commitment =
-            wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-                Hash::new(b"telemetry-parent-state"),
-                Hash::new(b"telemetry-post-state"),
-                Hash::new(b"telemetry-ordinary-writes"),
-                1,
-                Hash::new(b"telemetry-executed-wire"),
-            );
-        let vote = wire::Vote {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Prepare,
-            subject,
-            execution_commitment,
-            signer: 0,
-            signature: vec![1],
-        };
-        let vote_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::Vote(vote),
-        ));
-        telemetry.note_consensus_message_sent(&vote_msg);
-        telemetry.note_consensus_message_received(&vote_msg);
-        assert_eq!(
-            metrics
-                .sumeragi_votes_sent_total
-                .with_label_values(&[super::PHASE_PREPARE])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_votes_received_total
-                .with_label_values(&[super::PHASE_PREPARE])
-                .get(),
-            1
-        );
-        let qc = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment,
-            signers: vec![0],
-            aggregate_signature: vec![2],
-        };
-        let qc_msg = BlockMessage::V2(wire::ConsensusMessageV2::new(
-            wire::ConsensusMessageV2Payload::QuorumCertificate(qc),
-        ));
-        telemetry.note_consensus_message_sent(&qc_msg);
-        telemetry.note_consensus_message_received(&qc_msg);
-        assert_eq!(
-            metrics
-                .sumeragi_qc_sent_total
-                .with_label_values(&[super::PHASE_COMMIT])
-                .get(),
-            1
-        );
-        assert_eq!(
-            metrics
-                .sumeragi_qc_received_total
-                .with_label_values(&[super::PHASE_COMMIT])
-                .get(),
-            1
-        );
-    }
-    #[test]
     fn nexus_teu_metrics_recorded() {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
@@ -9813,17 +9666,17 @@ mod tests {
     }
     #[test]
     fn public_mode_tracks_frozen_reducer_context_and_clears_without_owner() {
-        use crate::sumeragi::status;
+        use crate::{status, sumeragi::v2_status};
         use iroha_data_model::block::consensus_v2 as wire;
         let _guard = status::rbc_status_test_guard();
         struct ClearStatusOnDrop;
         impl Drop for ClearStatusOnDrop {
             fn drop(&mut self) {
-                status::clear_v2_status();
+                v2_status::clear_v2_status();
             }
         }
         let _cleanup = ClearStatusOnDrop;
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
         let metrics = Metrics::default();
         let exported_mode = || {
             metrics
@@ -9869,11 +9722,11 @@ mod tests {
         };
         for mode in [wire::ConsensusMode::Npos, wire::ConsensusMode::Permissioned] {
             snapshot.height_context.mode = mode;
-            status::set_v2_status(snapshot.clone());
+            v2_status::set_v2_status(snapshot.clone());
             refresh_sumeragi_mode(&metrics);
             assert_eq!(exported_mode(), mode.tag());
         }
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
         refresh_sumeragi_mode(&metrics);
         assert_eq!(
             exported_mode(),
@@ -11924,7 +11777,7 @@ mod tests {
     }
     #[test]
     fn settlement_finality_updates_metrics_and_status() {
-        crate::sumeragi::status::settlement_status_reset_for_tests();
+        crate::status::settlement_status_reset_for_tests();
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(Arc::clone(&metrics), true);
         let dvp_id: SettlementId = "trade-1".parse().expect("settlement id");
@@ -11975,7 +11828,7 @@ mod tests {
                 .get_sample_count(),
             1
         );
-        let snapshot = crate::sumeragi::status::settlement_snapshot();
+        let snapshot = crate::status::settlement_snapshot();
         assert_eq!(snapshot.dvp.success_total, 1);
         let dvp_event = snapshot.dvp.last_event.expect("dvp last event");
         assert_eq!(dvp_event.final_state_label, "delivery_only");

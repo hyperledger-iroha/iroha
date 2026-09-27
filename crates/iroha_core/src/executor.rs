@@ -13,7 +13,7 @@ use crate::{
     state::{
         StateReadOnly, StateTransaction, WorldReadOnly, fee_sponsor_revision_safe_activation_height,
     },
-    sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
+    status::{self, NexusFeeEvent, NexusFeePayer},
 };
 use base64::Engine as _;
 use core::{
@@ -23,6 +23,7 @@ use core::{
 };
 use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees, Pipeline};
+use iroha_crypto::Hash;
 #[cfg(test)]
 use iroha_data_model::prelude::Domain;
 use iroha_data_model::{
@@ -95,6 +96,8 @@ pub(crate) use execution_fee::{ExecutionFeeMeter, ExecutionFeeSettlementError};
 #[path = "executor_execution_effects.rs"]
 mod execution_effects;
 pub(crate) use execution_effects::ExecutionEffects;
+#[path = "executor_fastpq_rejection_tail.rs"]
+mod fastpq_rejection_tail;
 /// One-shot proof that the executor debited one exact sponsored fee charge.
 pub(crate) struct VerifiedFeeSponsorCharge {
     submitting_authority: AccountId,
@@ -103,6 +106,10 @@ pub(crate) struct VerifiedFeeSponsorCharge {
     source_id: AssetId,
     destination: Option<AccountId>,
     amount: Quantity,
+    // Retained only from the original executor invocation after its signed fee
+    // limit and sponsor debit checks. Test-only capability fixtures leave this
+    // absent and cannot establish quantity-source ownership.
+    quantity_source: Option<(Hash, Hash, u64)>,
 }
 impl VerifiedFeeSponsorCharge {
     fn transfer(
@@ -112,6 +119,7 @@ impl VerifiedFeeSponsorCharge {
         source_id: AssetId,
         destination: AccountId,
         amount: Quantity,
+        quantity_source: Option<(Hash, Hash, u64)>,
     ) -> Self {
         Self {
             submitting_authority,
@@ -120,6 +128,7 @@ impl VerifiedFeeSponsorCharge {
             source_id,
             destination: Some(destination),
             amount,
+            quantity_source,
         }
     }
     fn burn(
@@ -128,6 +137,7 @@ impl VerifiedFeeSponsorCharge {
         kind: FeeChargeKind,
         source_id: AssetId,
         amount: Quantity,
+        quantity_source: Option<(Hash, Hash, u64)>,
     ) -> Self {
         Self {
             submitting_authority,
@@ -136,6 +146,7 @@ impl VerifiedFeeSponsorCharge {
             source_id,
             destination: None,
             amount,
+            quantity_source,
         }
     }
     #[cfg(test)]
@@ -153,6 +164,7 @@ impl VerifiedFeeSponsorCharge {
             source_id,
             destination,
             amount,
+            None,
         )
     }
     #[cfg(test)]
@@ -168,6 +180,7 @@ impl VerifiedFeeSponsorCharge {
             FeeChargeKind::Nexus,
             source_id,
             amount,
+            None,
         )
     }
     pub(crate) fn into_parts(
@@ -179,6 +192,7 @@ impl VerifiedFeeSponsorCharge {
         AssetId,
         Option<AccountId>,
         Quantity,
+        Option<(Hash, Hash, u64)>,
     ) {
         (
             self.submitting_authority,
@@ -187,6 +201,7 @@ impl VerifiedFeeSponsorCharge {
             self.source_id,
             self.destination,
             self.amount,
+            self.quantity_source,
         )
     }
 }
@@ -5062,6 +5077,11 @@ impl Executor {
                 payer_asset,
                 tech_account,
                 qty.clone(),
+                state_transaction.tx_call_hash.and_then(|entry| {
+                    transaction.fee_payment_intent().sponsor_program().map(
+                        |(_, revision)| (entry, Hash::from(transaction.hash()), revision),
+                    )
+                }),
             );
             crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_charge(
                 state_transaction,
@@ -5137,7 +5157,7 @@ impl Executor {
             let reason =
                 "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
                     .to_owned();
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
+            status::record_nexus_fee_event(NexusFeeEvent::ConfigInvalid {
                 reason: reason.clone(),
             });
             warn!(target: "economics", "nexus fee rejected: {reason}");
@@ -5266,6 +5286,9 @@ impl Executor {
                 FeeChargeKind::Nexus,
                 payer_asset,
                 fee.clone(),
+                state_transaction.tx_call_hash.and_then(|entry| {
+                    program_revision.map(|revision| (entry, Hash::from(transaction.hash()), revision))
+                }),
             );
             crate::smartcontracts::isi::asset::isi::execute_verified_fee_sponsor_charge(
                 state_transaction,
@@ -5280,7 +5303,7 @@ impl Executor {
         state_transaction.world.current_dataspace_id = previous_world_dataspace_id;
         fee_burn_result.map_err(|err| {
             let reason = format!("nexus fee burn failed to apply: {err}");
-            sumeragi_status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
+            status::record_nexus_fee_event(NexusFeeEvent::TransferFailed {
                 payer_kind,
                 payer_id: payer_id.clone(),
                 amount: fee.clone(),
@@ -6275,7 +6298,6 @@ impl Executor {
         let governance_ballot_binding =
             crate::state::standalone_governance_ballot_instruction_v1(transaction.instructions())
                 .map_err(|message| ValidationFail::NotPermitted(message.to_owned()))?;
-        state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
         let tx_hash = transaction.hash();
@@ -6300,18 +6322,30 @@ impl Executor {
             );
         // Quote against the exact governed gas snapshot execution will charge.
         Self::refresh_gas_from_parameters(state_transaction)?;
-        if !skip_nexus_fee {
-            quote_nexus_fee_admission(
-                &state_transaction.world,
-                &state_transaction.nexus,
-                &state_transaction.pipeline,
-                &transaction,
-                state_transaction.block_unix_timestamp_ms(),
-                state_transaction.block_height(),
-                state_transaction.current_dataspace_id,
+        let fee_quote = if !skip_nexus_fee {
+            Some(
+                quote_nexus_fee_admission(
+                    &state_transaction.world,
+                    &state_transaction.nexus,
+                    &state_transaction.pipeline,
+                    &transaction,
+                    state_transaction.block_unix_timestamp_ms(),
+                    state_transaction.block_height(),
+                    state_transaction.current_dataspace_id,
+                )
+                .map_err(nexus_fee_admission_error_to_validation_fail)?,
             )
-            .map_err(nexus_fee_admission_error_to_validation_fail)?;
-        }
+        } else {
+            None
+        };
+        fastpq_rejection_tail::preflight(
+            state_transaction,
+            authority,
+            &transaction,
+            fee_quote.as_ref(),
+            governance_ballot_binding.as_ref(),
+        )?;
+        state_transaction.bind_governance_ballot_entrypoint_v1(governance_ballot_binding);
         let settlement_source_id = {
             let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
             bytes.copy_from_slice(tx_hash.as_ref());
@@ -9124,7 +9158,8 @@ mod tests {
             .with_executable(executable)
             .sign(ALICE_KEYPAIR.private_key());
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-            let mut transaction = block.transaction();
+            let mut transaction =
+                block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
             let mut cache = IvmCache::new();
             crate::executor::Executor::Initial
                 .execute_transaction(&mut transaction, &ALICE_ID, signed, &mut cache)
@@ -9207,7 +9242,8 @@ mod tests {
             vec![ExecutableBatchItem::Instruction(execute_trigger)].into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut state_tx = block.transaction_for_callback_testing();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .expect("live batch executes its generic IVM trigger");
@@ -9241,10 +9277,6 @@ mod tests {
             .expect("valid failing trigger action"),
         );
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-        let mut state_tx = block.transaction();
-        Register::trigger(trigger)
-            .execute(&ALICE_ID, &mut state_tx)
-            .expect("register failing trigger");
         let execute_trigger = InstructionBox::from(ExecuteTrigger::new(trigger_id));
         let direct_gas = isi_gas::meter_instructions(core::slice::from_ref(&execute_trigger));
         let nested_gas = isi_gas::meter_instructions(&trigger_body);
@@ -9257,6 +9289,11 @@ mod tests {
             vec![ExecutableBatchItem::Instruction(execute_trigger)].into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
+        Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut state_tx)
+            .expect("register failing trigger");
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &ALICE_ID, transaction, &mut IvmCache::new())
             .expect_err("failing trigger rejects its enclosing live batch");
@@ -10513,7 +10550,7 @@ mod tests {
     ) -> Hash {
         use iroha_data_model::block::consensus::{EvidencePenaltyStatus, EvidenceRecord};
 
-        let key = crate::sumeragi::evidence::evidence_key(evidence);
+        let key = crate::sumeragi::v2_evidence::evidence_key(evidence);
         // These authorization unit tests exercise an already-admitted record
         // projection; durable evidence authentication has its own fixture suite.
         state_transaction.world.consensus_evidence.insert(
@@ -13644,7 +13681,8 @@ mod tests {
         )])
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         configure_direct_nexus_fee_snapshot(&mut state_transaction, &fee_asset);
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
@@ -13679,7 +13717,8 @@ mod tests {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let (payer_asset_id, payer_before, supply_before) =
             configure_direct_genesis_ivm_fee_fixture(
                 &mut state_transaction,
@@ -13751,7 +13790,8 @@ mod tests {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program.clone())))
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let (payer_asset_id, payer_before, supply_before) =
             configure_direct_genesis_ivm_fee_fixture(
                 &mut state_transaction,
@@ -15550,14 +15590,16 @@ mod tests {
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         // First transaction preverify accepted
         {
-            let mut state_tx = block.transaction();
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::from(tx1.hash_as_entrypoint()));
             executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx1, &mut ivm_cache)
                 .expect("preverify accepted");
         }
         // Second identical proof should be flagged as duplicate by per-block dedup
         {
-            let mut state_tx = block.transaction();
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::from(tx2.hash_as_entrypoint()));
             let res =
                 executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx2, &mut ivm_cache);
             assert!(res.is_err(), "duplicate proof should be rejected");
@@ -15645,7 +15687,8 @@ mod tests {
                 0,
             );
             let mut block = state.block(block_header);
-            let mut state_tx = block.transaction();
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
             let executor = super::Executor::Initial;
             let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
             executor.execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
@@ -15721,7 +15764,8 @@ mod tests {
                     .expect("one attachment is a valid bounded proof list"),
             )
             .sign(ALICE_KEYPAIR.private_key());
-            let mut state_tx = block.transaction();
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
                 .expect_err("non-production proof backend label must fail before vk lookup");
@@ -15843,7 +15887,8 @@ mod tests {
             .with_executable(Executable::Instructions(Vec::new().into()))
             .with_attachments(attachments)
             .sign(ALICE_KEYPAIR.private_key());
-            let mut state_tx = block.transaction();
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
             let err = executor
                 .execute_transaction(&mut state_tx, &ALICE_ID.clone(), tx, &mut ivm_cache)
                 .expect_err("malformed proof attachment must fail before vk lookup");
@@ -17669,7 +17714,7 @@ mod tests {
         .sign(bob_kp.private_key());
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
         let res = executor.execute_transaction(&mut stx, &bob_id, tx, &mut ivm_cache);
         assert!(
             matches!(res, Err(ValidationFail::NotPermitted(_))),
@@ -17725,7 +17770,7 @@ mod tests {
         let tx = builder.build_with_signature(signature);
         let executor = super::Executor::Initial;
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
-        let mut stx = block.transaction();
+        let mut stx = block.transaction_for_fastpq_testing(Hash::from(tx.hash_as_entrypoint()));
         let res = executor.execute_transaction(&mut stx, &multisig_id, tx, &mut ivm_cache);
         match res {
             Err(ValidationFail::NotPermitted(msg)) => assert!(
@@ -18296,7 +18341,8 @@ seiyaku GuardedValue {
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
         .sign(ALICE_KEYPAIR.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let mut ivm_cache = IvmCache::new();
         ivm::reset_argument_record_decode_count();
         let error = super::Executor::Initial
@@ -18338,7 +18384,8 @@ seiyaku GuardedValue {
             .execute(&authority, &mut state_tx)
             .expect("grant direct-call entrypoint permission");
         state_tx.apply();
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         super::Executor::Initial
             .execute_transaction(
@@ -18405,7 +18452,8 @@ seiyaku GuardedValue {
         )
         .expect("the half-open hold must not deny raw-IVM admission at its expiry height");
         state_tx.apply();
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         let held = super::Executor::Initial
             .execute_transaction(
@@ -18436,7 +18484,8 @@ seiyaku GuardedValue {
             "a held direct call must apply no queued effect"
         );
         drop(state_tx);
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(raw_transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         let held_raw = super::Executor::Initial
             .execute_transaction(
@@ -18487,7 +18536,8 @@ seiyaku GuardedValue {
             .remove(code_hash)
             .expect("remove live bytecode for warm-cache adversarial check");
         state_tx.apply();
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         let missing_code = super::Executor::Initial
             .execute_transaction(
@@ -18518,7 +18568,8 @@ seiyaku GuardedValue {
             .remove(code_hash)
             .expect("remove live manifest for warm-cache adversarial check");
         state_tx.apply();
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         let missing_manifest = super::Executor::Initial
             .execute_transaction(
@@ -18550,7 +18601,8 @@ seiyaku GuardedValue {
             .execute(&authority, &mut state_tx)
             .expect("revoke direct-call entrypoint permission");
         state_tx.apply();
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         let revoked = super::Executor::Initial
             .execute_transaction(
@@ -18619,7 +18671,8 @@ seiyaku GuardedValueRebound {
             binding.lifecycle.revision += 1;
         }
         state_tx.apply();
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         let rebound = super::Executor::Initial
             .execute_transaction(
@@ -18690,7 +18743,8 @@ seiyaku GuardedValueRebound {
             binding.lifecycle.revision += 1;
         }
         state_tx.apply();
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         ivm::reset_argument_record_decode_count();
         let deactivated = super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
@@ -18834,7 +18888,8 @@ seiyaku OrderedBatchGuard {
         ))
         .sign(ALICE_KEYPAIR.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_tx = block.transaction();
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
             .execute_transaction(&mut state_tx, &authority, transaction, &mut ivm_cache)
@@ -18876,7 +18931,8 @@ seiyaku OrderedBatchGuard {
             .into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut instruction_capped_state_tx = block.transaction();
+        let mut instruction_capped_state_tx = block
+            .transaction_for_fastpq_testing(Hash::from(capped_transaction.hash_as_entrypoint()));
         instruction_capped_state_tx
             .pipeline
             .overlay_max_instructions = 1;
@@ -18901,7 +18957,8 @@ seiyaku OrderedBatchGuard {
         drop(instruction_capped_state_tx);
         let explicit_overlay_bytes =
             super::live_batch_overlay_byte_size(&explicit_instructions[..1]);
-        let mut byte_capped_state_tx = block.transaction();
+        let mut byte_capped_state_tx = block
+            .transaction_for_fastpq_testing(Hash::from(capped_transaction.hash_as_entrypoint()));
         byte_capped_state_tx.pipeline.overlay_max_instructions = 0;
         byte_capped_state_tx.pipeline.overlay_max_bytes = explicit_overlay_bytes;
         let byte_cap_error = super::Executor::Initial
@@ -18949,7 +19006,8 @@ seiyaku OrderedBatchGuard {
             .into(),
         ))
         .sign(ALICE_KEYPAIR.private_key());
-        let mut failed_state_tx = block.transaction();
+        let mut failed_state_tx = block
+            .transaction_for_fastpq_testing(Hash::from(failing_transaction.hash_as_entrypoint()));
         let error = super::Executor::Initial
             .execute_transaction(
                 &mut failed_state_tx,
@@ -19159,7 +19217,8 @@ seiyaku IdentityRequired {
         };
         for (label, transaction) in [("raw", raw), ("proved", proved)] {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-            let mut state_tx = block.transaction();
+            let mut state_tx =
+                block.transaction_for_fastpq_testing(Hash::from(transaction.hash_as_entrypoint()));
             let mut ivm_cache = IvmCache::new();
             ivm::reset_argument_record_decode_count();
             let error = super::Executor::Initial
@@ -19656,18 +19715,14 @@ seiyaku ReviewedValue {
         };
         let generic_metadata = Metadata::default();
         let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let signed = transaction(generic_metadata.clone());
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         let mut ivm_cache = IvmCache::new();
         super::Executor::Initial
-            .execute_transaction(
-                &mut state_transaction,
-                &authority,
-                transaction(generic_metadata.clone()),
-                &mut ivm_cache,
-            )
+            .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
             .expect("contract-less generic IVM must execute at pc zero");
         state_transaction.apply();
-        let mut state_transaction = block.transaction();
         let mut reserved_metadata = generic_metadata;
         reserved_metadata.insert(
             "contract_manifest"
@@ -19675,13 +19730,11 @@ seiyaku ReviewedValue {
                 .expect("contract-manifest metadata key"),
             Json::new("malformed-reserved-value"),
         );
+        let signed = transaction(reserved_metadata);
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         let error = super::Executor::Initial
-            .execute_transaction(
-                &mut state_transaction,
-                &authority,
-                transaction(reserved_metadata),
-                &mut ivm_cache,
-            )
+            .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
             .expect_err("generic IVM must not accept contract metadata");
         assert!(
             error.to_string().contains("reserved `contract_manifest`"),
@@ -19708,14 +19761,11 @@ seiyaku ReviewedValue {
             },
         );
         state_transaction.apply();
-        let mut state_transaction = block.transaction();
+        let signed = transaction(Metadata::default());
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         let error = super::Executor::Initial
-            .execute_transaction(
-                &mut state_transaction,
-                &authority,
-                transaction(Metadata::default()),
-                &mut ivm_cache,
-            )
+            .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
             .expect_err("a manifest-bound hash must not execute as generic IVM");
         assert!(error.to_string().contains("contract manifest"));
         drop(state_transaction);
@@ -19725,15 +19775,12 @@ seiyaku ReviewedValue {
             .contract_manifests
             .remove(generic_code_hash);
         state_transaction.apply();
-        let mut state_transaction = block.transaction();
+        let signed = transaction(Metadata::default());
+        let mut state_transaction =
+            block.transaction_for_fastpq_testing(Hash::from(signed.hash_as_entrypoint()));
         state_transaction.pipeline.ivm_max_cycles_upper_bound = nonzero!(50_u64);
         let error = super::Executor::Initial
-            .execute_transaction(
-                &mut state_transaction,
-                &authority,
-                transaction(Metadata::default()),
-                &mut ivm_cache,
-            )
+            .execute_transaction(&mut state_transaction, &authority, signed, &mut ivm_cache)
             .expect_err("direct generic IVM must honor the live cycle ceiling");
         assert!(matches!(
             error,

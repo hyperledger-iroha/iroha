@@ -617,6 +617,49 @@ impl<C: BlsConfiguration + ?Sized> BlsImpl<C> {
         }
         Ok(())
     }
+    /// Verify one pre-aggregated signature over several distinct messages, each signed by a
+    /// group of already parsed public keys: the keys of every group are summed and one
+    /// multi-pairing checks `e(σ, g) = Π_i e(apk_i, H(m_i))`.
+    ///
+    /// The caller guarantees that every key's proof of possession verified (the keys of one
+    /// group sign the same message, so aggregation is rogue-key safe only with `PoPs`), that
+    /// the messages are distinct and that no key repeats inside a group. Rejects an empty
+    /// group list, an empty group and a group whose key sum is the identity element.
+    pub(crate) fn verify_preaggregated_multi_message(
+        groups: &[(&[&PublicKey<C::Engine>], &[u8])],
+        aggregated_signature: &[u8],
+    ) -> Result<(), Error> {
+        use core::ops::AddAssign as _;
+        if groups.is_empty() {
+            return Err(Error::BadSignature);
+        }
+        let signature = parse_canonical_bls_signature::<C::Engine>(aggregated_signature)?;
+        let identity_pk = PublicKey::<C::Engine>(Default::default()).to_bytes();
+        let mut inputs = Vec::with_capacity(groups.len());
+        for (keys, message) in groups {
+            let (first, rest) = keys.split_first().ok_or(Error::BadSignature)?;
+            let mut sum = first.0;
+            for key in rest {
+                sum.add_assign(&key.0);
+            }
+            let aggregate = PublicKey::<C::Engine>(sum);
+            if aggregate.to_bytes() == identity_pk {
+                return Err(Error::BadSignature);
+            }
+            let message = w3f_bls::Message::new(MESSAGE_CONTEXT, message);
+            inputs.push((
+                <C::Engine as EngineBLS>::prepare_public_key(aggregate.0),
+                <C::Engine as EngineBLS>::prepare_signature(
+                    message.hash_to_signature_curve::<C::Engine>(),
+                ),
+            ));
+        }
+        let prepared_signature = <C::Engine as EngineBLS>::prepare_signature(signature.0);
+        if !<C::Engine as EngineBLS>::verify_prepared(prepared_signature, &inputs) {
+            return Err(Error::BadSignature);
+        }
+        Ok(())
+    }
     pub fn parse_public_key(payload: &[u8]) -> Result<PublicKey<C::Engine>, ParseError> {
         if bls_public_key_material_is_all_zero(payload) {
             return Err(ParseError(

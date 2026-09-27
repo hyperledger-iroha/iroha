@@ -143,6 +143,7 @@ impl BlockBuilder {
             signatures,
             payload,
             result: None,
+            commit_certificate: None,
         }
     }
     /// Convenience: fallibly sign the built header hash with a single validator and return the block.

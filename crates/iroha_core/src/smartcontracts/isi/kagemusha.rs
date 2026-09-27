@@ -2223,7 +2223,7 @@ pub mod isi {
             .map(|record| norito::encode_canonical(record.reserve_receipt()))
             .transpose()
             .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
-        crate::sumeragi::witness::record_read_kagemusha_reserve_receipt_v1(
+        crate::exec_witness::record_read_kagemusha_reserve_receipt_v1(
             operation_id,
             encoded.as_deref(),
         );
@@ -2399,10 +2399,8 @@ pub mod isi {
             .world
             .kagemusha_issuance_operations
             .insert(record.issuance_commitment, record.operation_id);
-        crate::sumeragi::witness::record_write_kagemusha_reserve_receipt_v1(
-            &record.reserve_receipt,
-        )
-        .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
+        crate::exec_witness::record_write_kagemusha_reserve_receipt_v1(&record.reserve_receipt)
+            .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
         Ok(())
     }
 
@@ -2563,10 +2561,8 @@ pub mod isi {
             .world
             .kagemusha_terminal_nullifier_operations
             .insert(record.terminal_nullifier, record.operation_id);
-        crate::sumeragi::witness::record_write_kagemusha_reserve_receipt_v1(
-            &record.reserve_receipt,
-        )
-        .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
+        crate::exec_witness::record_write_kagemusha_reserve_receipt_v1(&record.reserve_receipt)
+            .map_err(|error| kagemusha_v1_error("receipt_encoding_failed", error))?;
         Ok(())
     }
 

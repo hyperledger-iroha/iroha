@@ -138,6 +138,7 @@ pub mod isi {
                 &resolved_id,
                 &candidate,
             )?;
+            self.quantity_mutation_observation.changed();
             let asset = self
                 .assets
                 .get_mut(&resolved_id)
@@ -336,6 +337,7 @@ pub mod isi {
                 balance_after,
             )?;
             if source_id == destination_id {
+                self.quantity_mutation_observation.changed();
                 let asset = self
                     .assets
                     .get_mut(source_id)
@@ -353,6 +355,7 @@ pub mod isi {
             if self.assets.get(destination_id).is_none() {
                 self.asset_or_insert_exact(destination_id, Quantity::zero())?;
             }
+            self.quantity_mutation_observation.changed();
             {
                 let asset = self
                     .assets
@@ -422,8 +425,13 @@ pub mod isi {
             id: &AssetId,
             candidate: Quantity,
         ) -> Result<(), Error> {
+            self.asset_or_insert_exact(id, Quantity::zero())?;
+            self.quantity_mutation_observation.changed();
             let is_nonzero = {
-                let dst = self.asset_or_insert_exact(id, Quantity::zero())?;
+                let dst = self
+                    .assets
+                    .get_mut(id)
+                    .expect("prepared credit asset must exist");
                 let quantity: &mut Quantity = &mut *dst;
                 *quantity = candidate;
                 !quantity.is_zero()
@@ -2202,6 +2210,17 @@ pub mod isi {
         control_policy: NumericAssetTransferControlPolicy,
         destination_admission: NumericAssetDestinationAdmissionPolicy,
     }
+    /// Measure before allocation and charge every framed preimage part, including its delimiter.
+    fn bounded_quantity_frame<T: norito::NoritoSerialize>(
+        value: &T,
+        remaining: &mut u64,
+    ) -> Option<Vec<u8>> {
+        let length = u64::try_from(norito::canonical_frame_len(value).ok()?)
+            .ok()?
+            .checked_add(8)?;
+        *remaining = remaining.checked_sub(length)?;
+        norito::encode_canonical(value).ok()
+    }
     impl NumericAssetMovementAuthorization {
         fn transaction_user(authority: &AccountId, context: &'static str) -> Self {
             Self {
@@ -2566,6 +2585,184 @@ pub mod isi {
                 }
             }
         }
+        /// Hash the actual already-checked typed authorization without deriving source ownership.
+        /// Unlike the legacy transcript identity, this retains purpose when a call hash exists.
+        fn quantity_authorization_context(
+            &self,
+            bindings: &[(AssetId, AssetId, Quantity)],
+            limit: u64,
+        ) -> Option<Hash> {
+            let mut remaining = limit.checked_sub(64)?;
+            let (debit, owner) = match &self.debit {
+                NumericMovementDebitAuthorization::ExactUser(owner) => ("user", Some(owner)),
+                NumericMovementDebitAuthorization::InitialGenesisBootstrap(owner) => {
+                    ("genesis", Some(owner))
+                }
+                NumericMovementDebitAuthorization::Protocol => ("protocol", None),
+            };
+            let (requirement, tag, binding) = match &self.transcript {
+                NumericMovementTranscriptRequirement::TransactionRequired(tag) => {
+                    ("transaction", *tag, &[][..])
+                }
+                NumericMovementTranscriptRequirement::TransactionOrTypedPurpose {
+                    tag,
+                    binding,
+                } => ("typed-purpose", *tag, binding.as_slice()),
+            };
+            if u64::try_from(binding.len()).ok()? > remaining {
+                return None;
+            }
+            let (source, detail) = match self.source_policy {
+                NumericAssetTransferSourcePolicy::User => ("User", Vec::new()),
+                NumericAssetTransferSourcePolicy::GameSessionFunding => {
+                    ("GameSessionFunding", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::SccpEscrowDeposit => {
+                    ("SccpEscrowDeposit", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::FxEscrowDeposit => {
+                    ("FxEscrowDeposit", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::NativeEscrowCustody => {
+                    ("NativeEscrowCustody", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
+                    ("SorafsReserveCustody", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::SccpEscrowRelease => {
+                    ("SccpEscrowRelease", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::FxEscrowRelease => {
+                    ("FxEscrowRelease", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::FeeSponsorCustody => {
+                    ("FeeSponsorCustody", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::KagemushaReserveCustody => {
+                    ("KagemushaReserveCustody", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::OracleReward => ("OracleReward", Vec::new()),
+                NumericAssetTransferSourcePolicy::OraclePenalty => ("OraclePenalty", Vec::new()),
+                NumericAssetTransferSourcePolicy::OracleDisputeResolution => {
+                    ("OracleDisputeResolution", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::SocialReward => ("SocialReward", Vec::new()),
+                NumericAssetTransferSourcePolicy::SocialEscrow => ("SocialEscrow", Vec::new()),
+                NumericAssetTransferSourcePolicy::StakingUnbond => ("StakingUnbond", Vec::new()),
+                NumericAssetTransferSourcePolicy::StakingRewardClaim => {
+                    ("StakingRewardClaim", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::StakingSlash => ("StakingSlash", Vec::new()),
+                NumericAssetTransferSourcePolicy::ModerationChallengeRefund => {
+                    ("ModerationChallengeRefund", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::ModerationChallengeSlash => {
+                    ("ModerationChallengeSlash", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::GovernanceSlash => {
+                    ("GovernanceSlash", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::GovernanceRestitution => {
+                    ("GovernanceRestitution", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::GovernanceUnlock => {
+                    ("GovernanceUnlock", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::CitizenshipRelease => {
+                    ("CitizenshipRelease", Vec::new())
+                }
+                NumericAssetTransferSourcePolicy::RetailMonetary(purpose) => {
+                    ("RetailMonetary", norito::encode_canonical(&purpose).ok()?)
+                }
+                NumericAssetTransferSourcePolicy::PrivacyPoolBridge(owner) => {
+                    ("PrivacyPoolBridge", norito::encode_canonical(&owner).ok()?)
+                }
+            };
+            let control = match self.control_policy {
+                NumericAssetTransferControlPolicy::Enforce => "Enforce",
+                NumericAssetTransferControlPolicy::KagemushaRedemption => "KagemushaRedemption",
+                NumericAssetTransferControlPolicy::OraclePenalty => "OraclePenalty",
+                NumericAssetTransferControlPolicy::OracleDisputeResolution => {
+                    "OracleDisputeResolution"
+                }
+                NumericAssetTransferControlPolicy::StakingUnbond => "StakingUnbond",
+                NumericAssetTransferControlPolicy::StakingSlash => "StakingSlash",
+                NumericAssetTransferControlPolicy::ModerationChallengeSettlement => {
+                    "ModerationChallengeSettlement"
+                }
+                NumericAssetTransferControlPolicy::GovernanceSlash => "GovernanceSlash",
+                NumericAssetTransferControlPolicy::GovernanceRestitution => "GovernanceRestitution",
+                NumericAssetTransferControlPolicy::GovernanceUnlock => "GovernanceUnlock",
+                NumericAssetTransferControlPolicy::CitizenshipRelease => "CitizenshipRelease",
+            };
+            let destination = match self.destination_admission {
+                NumericAssetDestinationAdmissionPolicy::ImplicitReceive => "implicit-receive",
+                NumericAssetDestinationAdmissionPolicy::ExistingAccount => "existing-account",
+            };
+            let parts = [
+                bounded_quantity_frame(&(debit.to_owned(), owner.cloned()), &mut remaining)?,
+                bounded_quantity_frame(
+                    &(requirement.to_owned(), tag.to_owned(), binding.to_vec()),
+                    &mut remaining,
+                )?,
+                bounded_quantity_frame(&(source.to_owned(), detail), &mut remaining)?,
+                bounded_quantity_frame(
+                    &(control.to_owned(), destination.to_owned()),
+                    &mut remaining,
+                )?,
+                bounded_quantity_frame(&self.transcript_authority, &mut remaining)?,
+                bounded_quantity_frame(&bindings.to_vec(), &mut remaining)?,
+            ];
+            let mut preimage = b"iroha:fastpq:quantity-authorization:v1\0".to_vec();
+            for part in parts {
+                preimage.extend_from_slice(&u64::try_from(part.len()).ok()?.to_le_bytes());
+                preimage.extend_from_slice(&part);
+            }
+            Some(Hash::new(preimage))
+        }
+        fn apply_with_quantity_candidate<T>(
+            &self,
+            state: &mut StateTransaction<'_, '_>,
+            entry_hash: Hash,
+            legs: &[(AssetId, AssetId, TransferDeltaTranscript)],
+            apply: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, Error>,
+        ) -> Result<T, Error> {
+            let limit = state.quantity_candidate_preimage_limit();
+            let measured = legs
+                .iter()
+                .try_fold(0u64, |sum, (source, destination, delta)| {
+                    let source = u64::try_from(norito::canonical_frame_len(source).ok()?).ok()?;
+                    let destination =
+                        u64::try_from(norito::canonical_frame_len(destination).ok()?).ok()?;
+                    let amount =
+                        u64::try_from(norito::canonical_frame_len(&delta.amount).ok()?).ok()?;
+                    sum.checked_add(source)?
+                        .checked_add(destination)?
+                        .checked_add(amount)?
+                        .checked_add(32)
+                });
+            if measured.is_none_or(|bytes| bytes > limit) {
+                state.poison_quantity_candidate_owner();
+                return apply(state);
+            }
+            let bindings = legs
+                .iter()
+                .map(|(source, destination, delta)| {
+                    (source.clone(), destination.clone(), delta.amount.clone())
+                })
+                .collect::<Vec<_>>();
+            let Some(context) = self.quantity_authorization_context(&bindings, limit) else {
+                state.poison_quantity_candidate_owner();
+                return apply(state);
+            };
+            state.apply_with_quantity_transfer_candidate(
+                &self.transcript_authority,
+                entry_hash,
+                context,
+                legs,
+                apply,
+            )
+        }
         fn resolve_transcript_identity(
             &self,
             state_transaction: &StateTransaction<'_, '_>,
@@ -2724,7 +2921,19 @@ pub mod isi {
                     &self.authorization.transcript_authority,
                     transcript_identity,
                     vec![self.plan.prechecked_delta.clone()],
-                    |state_transaction| self.plan.apply(state_transaction),
+                    |state_transaction| {
+                        let legs = [(
+                            self.plan.source_id.clone(),
+                            self.plan.destination_id.clone(),
+                            self.plan.prechecked_delta.clone(),
+                        )];
+                        self.authorization.apply_with_quantity_candidate(
+                            state_transaction,
+                            transcript_identity,
+                            &legs,
+                            |state_transaction| self.plan.apply(state_transaction),
+                        )
+                    },
                 )?
             } else {
                 self.plan.apply(state_transaction)?
@@ -2934,6 +3143,14 @@ pub mod isi {
         AccountAdmissionFee,
         FeeSponsorCustody,
     }
+    // Created only while consuming the executor's original sponsor-charge
+    // capability. This private value retains the original invocation and signed
+    // revision; arbitrary purpose hashes cannot grant a sponsor burn source.
+    struct FeeSponsorBurnQuantityOwner {
+        authority: AccountId,
+        execution_entry: Hash,
+        binding: Vec<u8>,
+    }
     /// Apply one fully prechecked numeric supply burn through the central policy path.
     fn execute_checked_numeric_asset_burn(
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -2941,6 +3158,7 @@ pub mod isi {
         source_id: AssetId,
         amount: Quantity,
         source_policy: NumericAssetBurnSourcePolicy,
+        sponsor_quantity_owner: Option<FeeSponsorBurnQuantityOwner>,
     ) -> Result<(), Error> {
         ensure_global_asset_write_on_authoritative_route(
             state_transaction,
@@ -3075,24 +3293,58 @@ pub mod isi {
                 "numeric burn state changed between preparation and apply".into(),
             ));
         }
-        state_transaction.world.withdraw_numeric_asset(
-            &state_transaction.network_id,
-            &source_id,
-            &amount,
-        )?;
-        state_transaction
-            .world
-            .decrease_asset_total_amount(source_id.definition(), &amount)?;
-        if let Some(record) = control_update {
-            update_control_record(state_transaction, source_id.account(), record)?;
+        let captured_source = source_id.clone();
+        let captured_amount = amount.clone();
+        let apply = |state_transaction: &mut StateTransaction<'_, '_>| {
+            state_transaction.world.withdraw_numeric_asset(
+                &state_transaction.network_id,
+                &source_id,
+                &amount,
+            )?;
+            state_transaction
+                .world
+                .decrease_asset_total_amount(source_id.definition(), &amount)?;
+            if let Some(record) = control_update {
+                update_control_record(state_transaction, source_id.account(), record)?;
+            }
+            state_transaction
+                .world
+                .emit_asset_event(AssetEvent::Removed(AssetChanged {
+                    asset: source_id,
+                    amount,
+                }));
+            Ok(())
+        };
+        match (source_policy, authority, sponsor_quantity_owner) {
+            (NumericAssetBurnSourcePolicy::AccountAdmissionFee, Some(authority), None) => {
+                apply_with_supply_quantity_candidate(
+                    state_transaction,
+                    authority,
+                    &captured_source,
+                    &captured_amount,
+                    false,
+                    ("account-admission-fee-burn", Some(&[])),
+                    apply,
+                )
+            }
+            (NumericAssetBurnSourcePolicy::FeeSponsorCustody, None, Some(owner))
+                if state_transaction.tx_call_hash == Some(owner.execution_entry) =>
+            {
+                apply_with_supply_quantity_candidate(
+                    state_transaction,
+                    &owner.authority,
+                    &captured_source,
+                    &captured_amount,
+                    false,
+                    ("verified-fee-sponsor-burn", Some(&owner.binding)),
+                    apply,
+                )
+            }
+            _ => {
+                state_transaction.poison_quantity_candidate_owner();
+                apply(state_transaction)
+            }
         }
-        state_transaction
-            .world
-            .emit_asset_event(AssetEvent::Removed(AssetChanged {
-                asset: source_id,
-                amount,
-            }));
-        Ok(())
     }
     /// Charge an exact user while admitting `created_account`.
     pub(crate) fn execute_account_admission_fee_transfer(
@@ -3134,6 +3386,7 @@ pub mod isi {
             source_id,
             amount,
             NumericAssetBurnSourcePolicy::AccountAdmissionFee,
+            None,
         )
     }
     /// Reserve an exact user's Oracle dispute bond.
@@ -5672,26 +5925,44 @@ pub mod isi {
                 transcript_identity,
                 deltas,
                 |state_transaction| {
-                    let mut applied = Vec::with_capacity(self.plans.len());
-                    for plan in self.plans {
-                        applied.push(plan.apply_after_batch_preflight(state_transaction)?);
-                    }
-                    for (account, _, _, after) in self.control_updates {
-                        if let Some(record) = after {
-                            update_control_record(state_transaction, &account, record)?;
-                        }
-                    }
-                    for update in self.retail_usage_updates {
-                        retail_state::put_usage(
-                            &mut state_transaction.world,
-                            update.key,
-                            update.after,
-                        )
-                        .map_err(|reason| {
-                            InstructionExecutionError::InvariantViolation(reason.into())
-                        })?;
-                    }
-                    Ok(applied)
+                    let legs = self
+                        .plans
+                        .iter()
+                        .map(|plan| {
+                            (
+                                plan.source_id.clone(),
+                                plan.destination_id.clone(),
+                                plan.prechecked_delta.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    self.authorization.apply_with_quantity_candidate(
+                        state_transaction,
+                        transcript_identity,
+                        &legs,
+                        |state_transaction| {
+                            let mut applied = Vec::with_capacity(self.plans.len());
+                            for plan in self.plans {
+                                applied.push(plan.apply_after_batch_preflight(state_transaction)?);
+                            }
+                            for (account, _, _, after) in self.control_updates {
+                                if let Some(record) = after {
+                                    update_control_record(state_transaction, &account, record)?;
+                                }
+                            }
+                            for update in self.retail_usage_updates {
+                                retail_state::put_usage(
+                                    &mut state_transaction.world,
+                                    update.key,
+                                    update.after,
+                                )
+                                .map_err(|reason| {
+                                    InstructionExecutionError::InvariantViolation(reason.into())
+                                })?;
+                            }
+                            Ok(applied)
+                        },
+                    )
                 },
             )
         }
@@ -5844,6 +6115,7 @@ pub mod isi {
     struct PreparedNumericTransferPair {
         source: PreparedNumericTransferPlan,
         destination: PreparedNumericTransferPlan,
+        quantity_authorization_context: Option<Hash>,
     }
     impl PreparedNumericTransferPair {
         /// Apply the ordered native FX pair and stage one occurrence after both legs succeed.
@@ -5862,9 +6134,36 @@ pub mod isi {
                 transcript_identity,
                 deltas,
                 |state_transaction| {
-                    let source = self.source.apply(state_transaction)?;
-                    let destination = self.destination.apply(state_transaction)?;
-                    Ok((source, destination))
+                    let legs = [
+                        (
+                            self.source.source_id.clone(),
+                            self.source.destination_id.clone(),
+                            self.source.prechecked_delta.clone(),
+                        ),
+                        (
+                            self.destination.source_id.clone(),
+                            self.destination.destination_id.clone(),
+                            self.destination.prechecked_delta.clone(),
+                        ),
+                    ];
+                    let apply = |state_transaction: &mut StateTransaction<'_, '_>| {
+                        let source = self.source.apply(state_transaction)?;
+                        let destination = self.destination.apply(state_transaction)?;
+                        Ok((source, destination))
+                    };
+                    match self.quantity_authorization_context {
+                        Some(context) => state_transaction.apply_with_quantity_transfer_candidate(
+                            authority,
+                            transcript_identity,
+                            context,
+                            &legs,
+                            apply,
+                        ),
+                        None => {
+                            state_transaction.poison_quantity_candidate_owner();
+                            apply(state_transaction)
+                        }
+                    }
                 },
             )
         }
@@ -5902,6 +6201,7 @@ pub mod isi {
         Ok(PreparedNumericTransferPair {
             source,
             destination,
+            quantity_authorization_context: None,
         })
     }
     #[allow(clippy::too_many_arguments)]
@@ -5990,9 +6290,37 @@ pub mod isi {
             NumericAssetTransferControlPolicy::Enforce,
             NumericAssetDestinationAdmissionPolicy::ExistingAccount,
         )?;
+        let mut remaining = state_transaction.quantity_candidate_preimage_limit();
+        let quantity_authorization_context = (|| {
+            if u64::try_from(norito::canonical_frame_len(policy).ok()?).ok()? > remaining {
+                return None;
+            }
+            bounded_quantity_frame(
+                &(
+                    "iroha:fastpq:native-fx-authorization:v1".to_owned(),
+                    submitting_authority.clone(),
+                    policy.clone(),
+                    vec![
+                        (
+                            source.source_id.clone(),
+                            source.destination_id.clone(),
+                            source.amount.clone(),
+                        ),
+                        (
+                            destination.source_id.clone(),
+                            destination.destination_id.clone(),
+                            destination.amount.clone(),
+                        ),
+                    ],
+                ),
+                &mut remaining,
+            )
+            .map(Hash::new)
+        })();
         Ok(PreparedNumericTransferPair {
             source,
             destination,
+            quantity_authorization_context,
         })
     }
     /// Validate two explicitly authorized bilateral legs through the ordinary
@@ -6564,8 +6892,15 @@ pub mod isi {
         state_transaction: &mut StateTransaction<'_, '_>,
         authorization: crate::executor::VerifiedFeeSponsorCharge,
     ) -> Result<(), Error> {
-        let (submitting_authority, program_id, kind, source_id, destination, amount) =
-            authorization.into_parts();
+        let (
+            submitting_authority,
+            program_id,
+            kind,
+            source_id,
+            destination,
+            amount,
+            quantity_source,
+        ) = authorization.into_parts();
         if source_id.account()
             != &state_transaction
                 .nexus
@@ -6582,6 +6917,7 @@ pub mod isi {
             source_id.clone(),
             destination.clone(),
             amount.clone(),
+            quantity_source,
         ))?;
         match (kind, destination) {
             (iroha_data_model::transaction::FeeChargeKind::PipelineGas, Some(destination)) => {
@@ -6608,6 +6944,11 @@ pub mod isi {
                     source_id,
                     amount,
                     NumericAssetBurnSourcePolicy::FeeSponsorCustody,
+                    quantity_source.map(|(execution_entry, _, _)| FeeSponsorBurnQuantityOwner {
+                        authority: submitting_authority,
+                        execution_entry,
+                        binding,
+                    }),
                 )
             }
             _ => Err(InstructionExecutionError::InvariantViolation(
@@ -6650,6 +6991,7 @@ pub mod isi {
             source_id,
             amount,
             NumericAssetBurnSourcePolicy::FeeSponsorCustody,
+            None,
         )
     }
     /// Apply a test-only aggregate Nexus fee burn to a standalone world overlay.
@@ -6742,6 +7084,48 @@ pub mod isi {
             ),
         )
     }
+    /// Observe supply only under the exact existing invocation; unsupported direct
+    /// protocol supply keeps business semantics and poisons this candidate export.
+    fn apply_with_supply_quantity_candidate<T>(
+        state: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        id: &AssetId,
+        amount: &Quantity,
+        mint: bool,
+        purpose: (&str, Option<&[u8]>),
+        apply: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let mut remaining = state.quantity_candidate_preimage_limit();
+        let context = purpose
+            .1
+            .and_then(|binding| {
+                if u64::try_from(binding.len()).ok()? > remaining {
+                    return None;
+                }
+                bounded_quantity_frame(
+                    &(
+                        "iroha:fastpq:supply-authorization:v1".to_owned(),
+                        mint,
+                        purpose.0.to_owned(),
+                        binding.to_vec(),
+                        authority.clone(),
+                        id.clone(),
+                        amount.clone(),
+                    ),
+                    &mut remaining,
+                )
+            })
+            .map(Hash::new);
+        match (state.tx_call_hash, context) {
+            (Some(entry_hash), Some(context)) => state.apply_with_quantity_supply_candidate(
+                authority, entry_hash, context, id, amount, mint, apply,
+            ),
+            _ => {
+                state.poison_quantity_candidate_owner();
+                apply(state)
+            }
+        }
+    }
     impl Execute for Mint<Quantity, Asset> {
         fn execute(
             self,
@@ -6802,44 +7186,55 @@ pub mod isi {
                 Some(&quantity),
             )?;
             let flipped = assert_can_mint_cached(state_transaction, asset_id.definition())?;
-            // Deposit into destination asset balance, creating if needed
-            #[cfg(feature = "telemetry")]
-            let amount_f64 = quantity.as_numeric().clone().to_f64_lossy();
-            state_transaction
-                .world
-                .deposit_numeric_asset(&asset_id, &quantity)?;
-            #[allow(clippy::float_arithmetic)]
-            {
-                #[cfg(feature = "telemetry")]
-                state_transaction.telemetry.observe_tx_amount(amount_f64);
-                state_transaction
-                    .world
-                    .increase_asset_total_amount(asset_id.definition(), &quantity)?;
-            }
-            state_transaction
-                .world
-                .emit_asset_event(AssetEvent::Added(AssetChanged {
-                    asset: asset_id.clone(),
-                    amount: quantity.clone(),
-                }));
-            if flipped {
-                state_transaction.world.emit_asset_definition_event(
-                    AssetDefinitionEvent::MintabilityChangedDetailed(
-                        AssetDefinitionMintabilityChanged {
-                            asset_definition: asset_id.definition().clone(),
-                            minted_amount: quantity,
-                            authority: authority.clone(),
-                        },
-                    ),
-                );
-            }
-            Ok(())
+            let captured_quantity = quantity.clone();
+            apply_with_supply_quantity_candidate(
+                state_transaction,
+                authority,
+                &resolved_asset_id,
+                &captured_quantity,
+                true,
+                ("ordinary-mint", Some(&[])),
+                |state_transaction| {
+                    // Deposit into destination asset balance, creating if needed
+                    #[cfg(feature = "telemetry")]
+                    let amount_f64 = quantity.as_numeric().clone().to_f64_lossy();
+                    state_transaction
+                        .world
+                        .deposit_numeric_asset(&asset_id, &quantity)?;
+                    #[allow(clippy::float_arithmetic)]
+                    {
+                        #[cfg(feature = "telemetry")]
+                        state_transaction.telemetry.observe_tx_amount(amount_f64);
+                        state_transaction
+                            .world
+                            .increase_asset_total_amount(asset_id.definition(), &quantity)?;
+                    }
+                    state_transaction
+                        .world
+                        .emit_asset_event(AssetEvent::Added(AssetChanged {
+                            asset: asset_id.clone(),
+                            amount: quantity.clone(),
+                        }));
+                    if flipped {
+                        state_transaction.world.emit_asset_definition_event(
+                            AssetDefinitionEvent::MintabilityChangedDetailed(
+                                AssetDefinitionMintabilityChanged {
+                                    asset_definition: asset_id.definition().clone(),
+                                    minted_amount: quantity,
+                                    authority: authority.clone(),
+                                },
+                            ),
+                        );
+                    }
+                    Ok(())
+                },
+            )
         }
     }
     impl Execute for Burn<Quantity, Asset> {
         fn execute(
             self,
-            _authority: &AccountId,
+            authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let asset_id = self.destination().clone();
@@ -6871,29 +7266,40 @@ pub mod isi {
             ensure_not_sccp_custody_source(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sorafs_reserve_custody_source(state_transaction, &resolved_asset_id)?;
-            // Withdraw from source asset balance and remove if it reaches zero
-            state_transaction.world.withdraw_numeric_asset(
-                &state_transaction.network_id,
-                &asset_id,
-                &quantity,
-            )?;
-            #[allow(clippy::float_arithmetic)]
-            {
-                #[cfg(feature = "telemetry")]
-                state_transaction
-                    .telemetry
-                    .observe_tx_amount(quantity.as_numeric().clone().to_f64_lossy());
-                state_transaction
-                    .world
-                    .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
-            }
-            state_transaction
-                .world
-                .emit_asset_event(AssetEvent::Removed(AssetChanged {
-                    asset: asset_id.clone(),
-                    amount: quantity,
-                }));
-            Ok(())
+            let captured_quantity = quantity.clone();
+            apply_with_supply_quantity_candidate(
+                state_transaction,
+                authority,
+                &resolved_asset_id,
+                &captured_quantity,
+                false,
+                ("ordinary-burn", Some(&[])),
+                |state_transaction| {
+                    // Withdraw from source asset balance and remove if it reaches zero
+                    state_transaction.world.withdraw_numeric_asset(
+                        &state_transaction.network_id,
+                        &asset_id,
+                        &quantity,
+                    )?;
+                    #[allow(clippy::float_arithmetic)]
+                    {
+                        #[cfg(feature = "telemetry")]
+                        state_transaction
+                            .telemetry
+                            .observe_tx_amount(quantity.as_numeric().clone().to_f64_lossy());
+                        state_transaction
+                            .world
+                            .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
+                    }
+                    state_transaction
+                        .world
+                        .emit_asset_event(AssetEvent::Removed(AssetChanged {
+                            asset: asset_id.clone(),
+                            amount: quantity,
+                        }));
+                    Ok(())
+                },
+            )
         }
     }
     fn exact_retail_reserve_policy(
@@ -6945,7 +7351,8 @@ pub mod isi {
                 "retail monetary mint amount must be positive".into(),
             ));
         }
-        exact_retail_reserve_policy(state_transaction, authority, &asset_id)?;
+        let authorized_policy =
+            exact_retail_reserve_policy(state_transaction, authority, &asset_id)?;
         ensure_global_asset_write_on_authoritative_route(
             state_transaction,
             asset_id.definition(),
@@ -6981,30 +7388,46 @@ pub mod isi {
             Some(&quantity),
         )?;
         let flipped = assert_can_mint_cached(state_transaction, asset_id.definition())?;
-        state_transaction
-            .world
-            .deposit_numeric_asset(&asset_id, &quantity)?;
-        state_transaction
-            .world
-            .increase_asset_total_amount(asset_id.definition(), &quantity)?;
-        state_transaction
-            .world
-            .emit_asset_event(AssetEvent::Added(AssetChanged {
-                asset: asset_id.clone(),
-                amount: quantity.clone(),
-            }));
-        if flipped {
-            state_transaction.world.emit_asset_definition_event(
-                AssetDefinitionEvent::MintabilityChangedDetailed(
-                    AssetDefinitionMintabilityChanged {
-                        asset_definition: asset_id.definition().clone(),
-                        minted_amount: quantity,
-                        authority: authority.clone(),
-                    },
-                ),
-            );
-        }
-        Ok(())
+        let captured_quantity = quantity.clone();
+        let captured_id = asset_id.clone();
+        let policy_binding = bounded_quantity_frame(
+            &authorized_policy,
+            &mut state_transaction.quantity_candidate_preimage_limit(),
+        );
+        apply_with_supply_quantity_candidate(
+            state_transaction,
+            authority,
+            &captured_id,
+            &captured_quantity,
+            true,
+            ("retail-reserve-mint", policy_binding.as_deref()),
+            |state_transaction| {
+                state_transaction
+                    .world
+                    .deposit_numeric_asset(&asset_id, &quantity)?;
+                state_transaction
+                    .world
+                    .increase_asset_total_amount(asset_id.definition(), &quantity)?;
+                state_transaction
+                    .world
+                    .emit_asset_event(AssetEvent::Added(AssetChanged {
+                        asset: asset_id.clone(),
+                        amount: quantity.clone(),
+                    }));
+                if flipped {
+                    state_transaction.world.emit_asset_definition_event(
+                        AssetDefinitionEvent::MintabilityChangedDetailed(
+                            AssetDefinitionMintabilityChanged {
+                                asset_definition: asset_id.definition().clone(),
+                                minted_amount: quantity,
+                                authority: authority.clone(),
+                            },
+                        ),
+                    );
+                }
+                Ok(())
+            },
+        )
     }
 
     /// Supply retirement is available only to the owner-installed monetary
@@ -7020,7 +7443,8 @@ pub mod isi {
                 "retail monetary burn amount must be positive".into(),
             ));
         }
-        exact_retail_reserve_policy(state_transaction, authority, &asset_id)?;
+        let authorized_policy =
+            exact_retail_reserve_policy(state_transaction, authority, &asset_id)?;
         installed_retail_policy_for_source(state_transaction, &asset_id)?;
         ensure_global_asset_write_on_authoritative_route(
             state_transaction,
@@ -7058,21 +7482,37 @@ pub mod isi {
         ensure_not_sccp_custody_source(state_transaction, &asset_id)?;
         ensure_not_fx_corridor_escrow_source(state_transaction, &asset_id)?;
         ensure_not_sorafs_reserve_custody_source(state_transaction, &asset_id)?;
-        state_transaction.world.withdraw_numeric_asset(
-            &state_transaction.network_id,
-            &asset_id,
-            &quantity,
-        )?;
-        state_transaction
-            .world
-            .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
-        state_transaction
-            .world
-            .emit_asset_event(AssetEvent::Removed(AssetChanged {
-                asset: asset_id,
-                amount: quantity,
-            }));
-        Ok(())
+        let captured_quantity = quantity.clone();
+        let captured_id = asset_id.clone();
+        let policy_binding = bounded_quantity_frame(
+            &authorized_policy,
+            &mut state_transaction.quantity_candidate_preimage_limit(),
+        );
+        apply_with_supply_quantity_candidate(
+            state_transaction,
+            authority,
+            &captured_id,
+            &captured_quantity,
+            false,
+            ("retail-reserve-burn", policy_binding.as_deref()),
+            |state_transaction| {
+                state_transaction.world.withdraw_numeric_asset(
+                    &state_transaction.network_id,
+                    &asset_id,
+                    &quantity,
+                )?;
+                state_transaction
+                    .world
+                    .decrease_asset_total_amount(asset_id.definition(), &quantity)?;
+                state_transaction
+                    .world
+                    .emit_asset_event(AssetEvent::Removed(AssetChanged {
+                        asset: asset_id,
+                        amount: quantity,
+                    }));
+                Ok(())
+            },
+        )
     }
     impl Execute for Transfer<Asset, Quantity, Account> {
         fn execute(
@@ -7606,10 +8046,13 @@ pub mod isi {
         })
     }
     /// Apply a prepared SCCP custody release after its exact native proof succeeds.
-    pub(crate) fn apply_prepared_sccp_inbound_numeric_asset_release(
+    pub(in crate::smartcontracts::isi) fn apply_prepared_sccp_inbound_numeric_asset_release(
         state_transaction: &mut StateTransaction<'_, '_>,
         submitting_authority: &AccountId,
         prepared: PreparedSccpInboundNumericAssetRelease,
+        proof_binding: Option<
+            crate::smartcontracts::isi::world::isi::VerifiedSccpQuantityProofBinding,
+        >,
     ) -> Result<(), Error> {
         if state_transaction
             .world
@@ -7633,6 +8076,22 @@ pub mod isi {
                 transcript_identity,
                 vec![prepared.delta.clone()],
                 |state_transaction| {
+                    let context = proof_binding.and_then(|binding| {
+                        let (entry, proof, envelope) = binding.into_parts();
+                        if entry != Some(transcript_identity) || entry != state_transaction.tx_call_hash {
+                            return None;
+                        }
+                        let mut remaining = state_transaction.quantity_candidate_preimage_limit();
+                        bounded_quantity_frame(&(
+                            "iroha:fastpq:sccp-inbound-authorization:v1".to_owned(),
+                            submitting_authority.clone(), proof, envelope,
+                            prepared.route_key.clone(), prepared.liability_before,
+                            prepared.liability_after,
+                            (prepared.source_id.clone(), prepared.destination_id.clone(), prepared.amount.clone()),
+                        ), &mut remaining).map(Hash::new)
+                    });
+                    let legs = [(prepared.source_id.clone(), prepared.destination_id.clone(), prepared.delta.clone())];
+                    let apply = |state_transaction: &mut StateTransaction<'_, '_>| {
                     state_transaction
                         .world
                         .apply_prechecked_numeric_asset_transfer_delta_exact(
@@ -7681,6 +8140,13 @@ pub mod isi {
                         update_control_record(state_transaction, source_id.account(), record)?;
                     }
                     Ok((source_id, destination_id, amount))
+                    };
+                    match context {
+                        Some(context) => state_transaction.apply_with_quantity_transfer_candidate(
+                            submitting_authority, transcript_identity, context, &legs, apply,
+                        ),
+                        None => { state_transaction.poison_quantity_candidate_owner(); apply(state_transaction) }
+                    }
                 },
             )?;
         emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
@@ -7717,7 +8183,20 @@ pub mod isi {
             authority,
             transcript_identity,
             vec![plan.prechecked_delta.clone()],
-            |state_transaction| plan.apply(state_transaction),
+            |state_transaction| {
+                let legs = [(
+                    plan.source_id.clone(),
+                    plan.destination_id.clone(),
+                    plan.prechecked_delta.clone(),
+                )];
+                NumericAssetMovementAuthorization::transaction_user(authority, "asset transfer")
+                    .apply_with_quantity_candidate(
+                        state_transaction,
+                        transcript_identity,
+                        &legs,
+                        |state_transaction| plan.apply(state_transaction),
+                    )
+            },
         )?;
         #[allow(clippy::float_arithmetic)]
         #[cfg(feature = "telemetry")]
@@ -8049,8 +8528,22 @@ pub mod isi {
                             }
                             Err(error) => return Err(error),
                         };
-                        prepare_delta(plan.prechecked_delta.clone())?;
-                        let applied = plan.apply(state_transaction)?;
+                        prepare_delta(state_transaction, plan.prechecked_delta.clone())?;
+                        let legs = [(
+                            plan.source_id.clone(),
+                            plan.destination_id.clone(),
+                            plan.prechecked_delta.clone(),
+                        )];
+                        let applied = NumericAssetMovementAuthorization::transaction_user(
+                            authority,
+                            "independent asset transfer batch",
+                        )
+                        .apply_with_quantity_candidate(
+                            state_transaction,
+                            batch_hash,
+                            &legs,
+                            |state_transaction| plan.apply(state_transaction),
+                        )?;
                         #[allow(clippy::float_arithmetic)]
                         #[cfg(feature = "telemetry")]
                         state_transaction
@@ -8196,6 +8689,99 @@ pub mod isi {
         use super::*;
         use iroha_model_base::domain::DomainId;
         include!("asset/prepared_source_additional_owner_tests.rs");
+        #[test]
+        fn quantity_preimage_measurement_refuses_before_frame_allocation() {
+            let value = vec![7_u8; 1024];
+            let measured = u64::try_from(norito::canonical_frame_len(&value).unwrap()).unwrap();
+            let mut exact = measured + 8;
+            assert_eq!(
+                bounded_quantity_frame(&value, &mut exact).unwrap(),
+                norito::encode_canonical(&value).unwrap()
+            );
+            assert_eq!(exact, 0);
+            let mut short = measured + 7;
+            assert!(bounded_quantity_frame(&value, &mut short).is_none());
+            assert_eq!(short, measured + 7);
+        }
+        #[test]
+        fn quantity_context_retains_protocol_purpose_inside_same_transaction() {
+            let (state, definition, source) = build_asset_transfer_control_test_state(10);
+            let destination = AssetId::new(definition, BOB_ID.clone());
+            let legs = [(source, destination, Quantity::from(3_u32))];
+            let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+            let mut transaction = block.transaction();
+            transaction.tx_call_hash = Some(Hash::new(b"same authenticated invocation"));
+            let first = NumericAssetMovementAuthorization::retained(
+                &ALICE_ID,
+                RetainedNumericAssetMovementPurpose::GovernanceSlash(vec![1]),
+            );
+            let second = NumericAssetMovementAuthorization::retained(
+                &ALICE_ID,
+                RetainedNumericAssetMovementPurpose::GovernanceSlash(vec![2]),
+            );
+            let other = NumericAssetMovementAuthorization::retained(
+                &ALICE_ID,
+                RetainedNumericAssetMovementPurpose::GovernanceRestitution(vec![1]),
+            );
+            assert_eq!(
+                first
+                    .resolve_transcript_identity(&transaction, &legs)
+                    .unwrap(),
+                second
+                    .resolve_transcript_identity(&transaction, &legs)
+                    .unwrap()
+            );
+            assert_ne!(
+                first.quantity_authorization_context(&legs, u64::MAX),
+                second.quantity_authorization_context(&legs, u64::MAX)
+            );
+            assert_ne!(
+                first.quantity_authorization_context(&legs, u64::MAX),
+                other.quantity_authorization_context(&legs, u64::MAX)
+            );
+            assert!(
+                first
+                    .quantity_authorization_context(&legs, u64::MAX)
+                    .is_some()
+            );
+        }
+        #[test]
+        fn quantity_context_binds_scope_amount_and_debit_authority() {
+            let (_state, definition, source) = build_asset_transfer_control_test_state(10);
+            let destination = AssetId::new(definition.clone(), BOB_ID.clone());
+            let legs = [(source.clone(), destination.clone(), Quantity::from(3_u32))];
+            let authorization =
+                NumericAssetMovementAuthorization::transaction_user(&ALICE_ID, "asset transfer");
+            let original = authorization
+                .quantity_authorization_context(&legs, u64::MAX)
+                .unwrap();
+            let scoped = [(
+                AssetId::with_scope(
+                    definition,
+                    ALICE_ID.clone(),
+                    iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(7)),
+                ),
+                destination.clone(),
+                Quantity::from(3_u32),
+            )];
+            assert_ne!(
+                Some(original),
+                authorization.quantity_authorization_context(&scoped, u64::MAX)
+            );
+            assert_ne!(
+                Some(original),
+                authorization.quantity_authorization_context(
+                    &[(source, destination, Quantity::from(4_u32))],
+                    u64::MAX
+                )
+            );
+            let different =
+                NumericAssetMovementAuthorization::transaction_user(&BOB_ID, "asset transfer");
+            assert_ne!(
+                Some(original),
+                different.quantity_authorization_context(&legs, u64::MAX)
+            );
+        }
         #[test]
         fn prepared_transfer_rechecks_public_lane_reserves_before_consumption() {
             let (state, definition_id, source) = build_asset_transfer_control_test_state(100);

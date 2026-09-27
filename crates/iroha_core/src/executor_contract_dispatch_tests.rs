@@ -442,7 +442,6 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
         ChainId::from("authority-binding"),
     );
     let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut state_transaction = block.transaction();
     let transaction = TransactionBuilder::new(
         state.network_id,
         ALICE_ID.clone(),
@@ -450,6 +449,8 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
     )
     .with_instructions([Log::new(Level::INFO, "authority binding".to_owned())])
     .sign(ALICE_KEYPAIR.private_key());
+    let mut state_transaction = block
+        .transaction_for_fastpq_testing(iroha_crypto::Hash::from(transaction.hash_as_entrypoint()));
     let mut ivm_cache = IvmCache::new();
     let error = super::Executor::Initial
         .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
@@ -481,13 +482,6 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         let state = State::new_with_chain(world, kura, query_handle, ChainId::from("test-chain"));
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(block_header);
-        let mut state_tx = block.transaction();
-        *state_tx.world.executor.get_mut() = executor;
-        let governed_fuel = state_tx.world.parameters.get().executor().fuel.get();
-        assert_eq!(
-            state_tx.executor_fuel_remaining, governed_fuel,
-            "{executor_name} transaction must start with the governed fuel budget"
-        );
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("additional_fuel").expect("static name"),
@@ -501,6 +495,14 @@ fn transaction_metadata_cannot_change_governed_executor_fuel_budget() {
         .with_metadata(metadata)
         .with_executable(Executable::Instructions(Vec::new().into()))
         .sign(ALICE_KEYPAIR.private_key());
+        let mut state_tx =
+            block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(tx.hash_as_entrypoint()));
+        *state_tx.world.executor.get_mut() = executor;
+        let governed_fuel = state_tx.world.parameters.get().executor().fuel.get();
+        assert_eq!(
+            state_tx.executor_fuel_remaining, governed_fuel,
+            "{executor_name} transaction must start with the governed fuel budget"
+        );
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let executor = state_tx.world.executor.clone();
         executor

@@ -1,14 +1,10 @@
 //! Pure persistence-aware Sumeragi v2 reducer embedded in `iroha_core`.
 //!
-//! The package-local modules below are the authoritative dependency-free
-//! transition relation used by production, simulation, and formal refinement.
-//! The excluded `iroha_sumeragi_core` crate is only a verification harness over
-//! these sources, so publishing `iroha_core` never depends on files outside its
-//! own package root.
-// These dependency-free source modules also form the public API of the
-// standalone `iroha_sumeragi_core` verification crate. Some public accessors
-// are not used by the private embedded adapter, so its compilation cannot
-// observe their external consumers.
+//! The package-local modules below are the dependency-free transition relation
+//! of the retired v2 runtime; they are deleted together with that runtime.
+// These dependency-free source modules were also the public API of the deleted
+// standalone verification crate. Some public accessors are not used by the
+// private embedded adapter.
 #[allow(dead_code)]
 mod committee;
 #[allow(dead_code)]
@@ -21,9 +17,9 @@ mod reducer;
 mod scheduler;
 #[allow(dead_code)]
 mod types;
-// The physical WAL framing/append API is also the public surface of the
-// standalone `iroha_sumeragi_core` verification crate. The embedded adapter
-// currently consumes only the logical replay subset.
+// The physical WAL framing/append API was also the public surface of the
+// deleted standalone verification crate. The embedded adapter consumes only
+// the logical replay subset.
 #[allow(dead_code)]
 mod wal;
 // The dependency-free reducer and the configured exact-output geometry must

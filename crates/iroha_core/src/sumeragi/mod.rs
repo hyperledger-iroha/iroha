@@ -16,7 +16,7 @@ use iroha_config::parameters::{
         },
     },
 };
-use iroha_crypto::{Algorithm, Hash as CryptoHash, HashOf, PublicKey};
+use iroha_crypto::{Hash as CryptoHash, HashOf, PublicKey};
 use iroha_data_model::{
     NetworkId,
     block::{
@@ -104,11 +104,6 @@ pub(crate) fn sumeragi_thread_builder(name: impl Into<String>) -> std::thread::B
         .name(name.into())
         .stack_size(sumeragi_stack_size_bytes())
 }
-pub(crate) fn is_bls_normal_public_key(public_key: &PublicKey) -> bool {
-    public_key
-        .try_algorithm()
-        .is_ok_and(|algorithm| algorithm == Algorithm::BlsNormal)
-}
 #[cfg(test)]
 /// Build a deterministic exact network identity for protocol fixtures.
 pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
@@ -121,11 +116,10 @@ pub(crate) fn synthetic_network_id(seed: &str) -> NetworkId {
 #[cfg(test)]
 mod thread_builder_tests {
     use super::{
-        Algorithm, CONFIGURED_SUMERAGI_STACK_SIZE_BYTES, concurrency_defaults,
-        is_bls_normal_public_key, normalized_sumeragi_stack_size_bytes,
-        set_sumeragi_stack_size_bytes, sumeragi_stack_size_bytes, sumeragi_thread_builder,
+        CONFIGURED_SUMERAGI_STACK_SIZE_BYTES, concurrency_defaults,
+        normalized_sumeragi_stack_size_bytes, set_sumeragi_stack_size_bytes,
+        sumeragi_stack_size_bytes, sumeragi_thread_builder,
     };
-    use iroha_crypto::KeyPair;
     use std::sync::{Mutex, atomic::Ordering, mpsc};
     static STACK_CONFIG_TEST_LOCK: Mutex<()> = Mutex::new(());
     struct RestoreSumeragiStackSize(usize);
@@ -189,16 +183,6 @@ mod thread_builder_tests {
             concurrency_defaults::SUMERAGI_STACK_BYTES
         );
     }
-    #[test]
-    fn bls_normal_public_key_check_uses_checked_algorithm_access() {
-        let bls_key = KeyPair::try_from_seed(b"checked-bls-key".to_vec(), Algorithm::BlsNormal)
-            .expect("derive BLS fixture key");
-        let ed25519_key =
-            KeyPair::try_from_seed(b"checked-ed25519-key".to_vec(), Algorithm::Ed25519)
-                .expect("derive Ed25519 fixture key");
-        assert!(is_bls_normal_public_key(bls_key.public_key()));
-        assert!(!is_bls_normal_public_key(ed25519_key.public_key()));
-    }
 }
 /// Build the initial validator topology as the authenticated subset of trusted peers.
 ///
@@ -213,7 +197,7 @@ pub fn filter_validators_from_trusted(
     let iter = std::iter::once(tp.myself.clone()).chain(tp.others.clone());
     for peer in iter {
         let pk = peer.id().public_key();
-        if !is_bls_normal_public_key(pk) {
+        if !crate::crypto_util::is_bls_normal_public_key(pk) {
             iroha_logger::warn!(?pk, "excluding peer: validator identity must be BLS-normal");
             continue;
         }
@@ -490,25 +474,51 @@ mod epoch_schedule_tests {
         ));
     }
 }
+/// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
+pub mod block_store;
+/// The execution result `R` of a block (`specs/sumeragi.md` §4.1).
+pub mod commitment;
+/// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).
+pub mod bodies;
+/// The node's executor: executes, applies and builds blocks on the committed State.
+pub mod executor;
+/// Block payloads: the leader's proposal builder and the deterministic `EMPTY` block.
+pub mod payload;
+/// Startup: genesis apply and replay, and the core's `Init`.
+pub mod startup;
+/// The node's Sumeragi instance: startup, production backends and the driver.
+pub mod node;
 /// QC-based consensus message types and helpers (single-chain).
 pub mod consensus;
-pub(crate) mod evidence;
+/// Production cryptography of the Sumeragi driver: `H = iroha_crypto::Hash`, BLS-normal
+/// signatures with admitted proofs of possession, and the node's signer.
+pub mod crypto;
+/// The node driver of the sans-IO Sumeragi core (`iroha_sumeragi`), not yet started by the
+/// node (the v2 runtime still runs until the cutover).
+pub mod driver;
 pub(crate) mod exec;
 pub(crate) mod lane_planner;
 pub mod message;
+/// The Sumeragi driver's P2P transport: the frame envelope, traffic classes, egress and
+/// ingress.
+pub mod net;
 pub mod network_topology;
 pub(crate) mod output_guard;
 pub(crate) mod penalties;
+/// File-backed safety records, store id and installation log of the Sumeragi driver (§7.4).
+pub mod records;
 pub(crate) mod safety_wal;
+/// The lag-2 height-configuration schedule and the genesis committee (`specs/sumeragi.md` §10).
+pub mod schedule;
 pub(crate) mod serviced_candidate_store;
-pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
-pub mod status;
 pub(crate) mod v2;
 pub(crate) mod v2_apply;
 pub(crate) mod v2_block_sync;
 pub(crate) mod v2_body_store;
 pub(crate) mod v2_candidate;
+pub(crate) mod v2_evidence;
+pub mod v2_status;
 // Certified-Serve durability belongs to the production lifecycle coordinator and ledger.
 pub(crate) mod v2_certified_serve_payload_store;
 pub(crate) mod v2_chunks;
@@ -598,30 +608,23 @@ pub(crate) mod v2_runner;
 pub(crate) mod v2_runtime;
 pub(crate) mod v2_transport;
 pub(crate) mod v2_worker;
-pub mod witness;
-pub use evidence::EvidenceValidationContext;
-pub use evidence::evidence_subject_height_view;
+pub use v2_evidence::EvidenceValidationContext;
+pub use v2_evidence::evidence_subject_height_view;
 /// Validate an evidence payload using the canonical rules.
 ///
 /// # Errors
 ///
-/// Propagates [`EvidenceValidationError`](evidence::EvidenceValidationError) when the payload
+/// Propagates [`EvidenceValidationError`](v2_evidence::EvidenceValidationError) when the payload
 /// fails any of the structural or metadata consistency checks enforced by consensus.
 pub fn validate_evidence(
     evidence: &Evidence,
     context: &EvidenceValidationContext<'_>,
-) -> Result<(), evidence::EvidenceValidationError> {
-    evidence::validate_evidence(evidence, context)
+) -> Result<(), v2_evidence::EvidenceValidationError> {
+    v2_evidence::validate_evidence(evidence, context)
 }
 /// Placeholder for in-flight voting block state tracked by consensus.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct VotingBlock;
-/// Public snapshot of leader index and `HighestQC` tuple for status endpoints.
-pub use status::StatusSnapshot;
-/// Return the latest consensus status snapshot (leader, QCs, drop counters).
-pub fn status_snapshot() -> StatusSnapshot {
-    status::snapshot()
-}
 #[cfg(not(test))]
 use self::output_guard::process_consensus_output_guard;
 use self::{message::*, output_guard::ConsensusOutputGuard};
@@ -4509,11 +4512,7 @@ impl FairV2Ingress {
     /// Global messages retire with their immutable height. Native transport
     /// retains its exact process-lived ownership while the gate is closed. Open
     /// the queue only after context and safety-WAL recovery complete.
-    #[cfg(any(
-        test,
-        feature = "sumeragi-main-loop-tests",
-        feature = "iroha-core-tests"
-    ))]
+    #[cfg(test)]
     pub(crate) fn configure_roster(
         &self,
         roster: impl IntoIterator<Item = PeerId>,
@@ -6372,11 +6371,7 @@ impl FairV2Ingress {
     /// coordinator's executor join. Once a blocked entry becomes admissible,
     /// the head-first search selects it before later entries. When every entry
     /// is rejected, the source order and total length remain unchanged.
-    #[cfg(any(
-        test,
-        feature = "sumeragi-main-loop-tests",
-        feature = "iroha-core-tests"
-    ))]
+    #[cfg(test)]
     pub(crate) fn try_recv_if(
         &self,
         predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -7135,10 +7130,10 @@ impl SumeragiHandle {
             );
             return SumeragiIngressDisposition::Retry(inbound);
         }
-        let queue = status::WorkerQueueKind::Blocks;
+        let queue = crate::status::WorkerQueueKind::Blocks;
         match self.block.try_push(inbound) {
             Ok(FairV2IngressPushDisposition::Enqueued) => {
-                status::record_worker_queue_enqueue(queue);
+                crate::status::record_worker_queue_enqueue(queue);
                 self.wake();
                 SumeragiIngressDisposition::Accepted
             }
@@ -7248,7 +7243,9 @@ impl SumeragiHandle {
         };
         match send {
             Ok(()) => {
-                status::record_worker_queue_enqueue(status::WorkerQueueKind::LaneRelay);
+                crate::status::record_worker_queue_enqueue(
+                    crate::status::WorkerQueueKind::LaneRelay,
+                );
                 self.wake();
                 SumeragiIngressDisposition::Accepted
             }
@@ -7259,7 +7256,7 @@ impl SumeragiHandle {
                 SumeragiIngressDisposition::Retry(message)
             }
             Err(mpsc::TrySendError::Disconnected(message)) => {
-                status::record_worker_queue_drop(status::WorkerQueueKind::LaneRelay);
+                crate::status::record_worker_queue_drop(crate::status::WorkerQueueKind::LaneRelay);
                 iroha_logger::warn!("lane-local ingress queue is disconnected");
                 self.output_guard
                     .activate_restart_required_from_permit(permit);
@@ -7395,11 +7392,7 @@ mod emergency_fast_handle_tests {
         ));
     }
 }
-#[cfg(any(
-    test,
-    feature = "sumeragi-main-loop-tests",
-    feature = "iroha-core-tests"
-))]
+#[cfg(test)]
 fn test_sumeragi_handle(
     block_capacity: usize,
 ) -> (
@@ -7409,11 +7402,7 @@ fn test_sumeragi_handle(
 ) {
     test_sumeragi_handle_with_source_geometry(block_capacity, None)
 }
-#[cfg(any(
-    test,
-    feature = "sumeragi-main-loop-tests",
-    feature = "iroha-core-tests"
-))]
+#[cfg(test)]
 fn test_sumeragi_handle_with_source_geometry(
     block_capacity: usize,
     authenticated_non_validator_source_capacity: Option<usize>,
@@ -7459,7 +7448,6 @@ fn test_sumeragi_handle_with_source_geometry(
     );
     (handle, block, lane_relay_rx)
 }
-include!("tests/queue_plan_admission_handoff.rs");
 /// Spawn configuration for the authoritative serialized Sumeragi v2 worker.
 pub struct SumeragiStartArgs {
     /// Immutable build identity supplied by the executable that owns this worker.
@@ -7610,9 +7598,9 @@ impl SumeragiStartArgs {
         // Restore diagnostic custody before any ingress/readiness publication.
         // This reads only finalized original reports; active-height recovery
         // separately uses the service's authenticated frozen context.
-        evidence::recover_finalized_lifecycle_equivocations(state.as_ref()).map_err(|error| {
-            eyre::eyre!("failed to recover pending equivocation evidence: {error}")
-        })?;
+        v2_evidence::recover_finalized_lifecycle_equivocations(state.as_ref()).map_err(
+            |error| eyre::eyre!("failed to recover pending equivocation evidence: {error}"),
+        )?;
         let block_channel_cap = config.queues.bodies.get();
         let block_byte_cap = config.queues.body_bytes.get();
         let block_source_byte_cap = config.queues.body_source_bytes.get();

@@ -664,7 +664,7 @@ fn double_vote_slashes_plain_lock() {
     let rid = "rid-slash-plain".to_string();
     {
         // The direct ballot fixture publishes native transfer transcripts.
-        let fixture_witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+        let fixture_witness_guard = iroha_core::exec_witness::exec_witness_guard();
         // This is explicit test world setup, not a finalized genesis output.
         // Signed genesis executes separately against the resulting funded world.
         let mut sblock1 = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
@@ -916,7 +916,7 @@ fn double_vote_slashes_plain_lock() {
 #[test]
 fn restitution_restores_slashed_balance() {
     // Direct retained-custody movements share the execution witness recorder.
-    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -1085,7 +1085,7 @@ fn restitution_preflight_leaves_custody_untouched_when_slash_ledger_is_missing()
 #[test]
 fn slash_and_restitution_use_stored_custody_after_governance_config_change() {
     // Direct retained-custody movements share the execution witness recorder.
-    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain");
     let old_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),

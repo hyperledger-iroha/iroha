@@ -445,7 +445,6 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
         "proofs-full",
         "quic",
         "sm-ffi-openssl",
-        "sumeragi-main-loop-tests",
         "test-network-native-amx-fault-injection",
         "test-network-parliament-signers",
         "test-network-private-settlement-evidence",

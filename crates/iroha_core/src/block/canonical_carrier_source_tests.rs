@@ -84,7 +84,7 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
     drop(occupied);
     let penalty_index = ValidBlock::validate_npos_effects_with_state(&carrier, &state, None, None)
         .expect("revalidate the same ordinary carrier for retry");
-    let mut retry = ValidBlock::state_block_for_execution(
+    let (mut retry, guard) = ValidBlock::state_block_for_execution(
         &carrier,
         &state,
         penalty_index,
@@ -104,6 +104,7 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
         .stage_prepaid_ordinary_carrier_membership(&carrier, nonzero!(1_usize))
         .expect("second output tail reuses the exact charged tip");
     assert_eq!(budget.reserved_bytes(), first_stage_bytes);
+    drop(guard);
     drop(retry);
     assert_eq!(budget.reserved_bytes(), baseline);
 }
@@ -128,7 +129,7 @@ fn ordinary_signed_carrier_admits_exact_source_and_block_owner_boundary() {
         .expect("leave exactly the source and acquired block owner demand");
     let penalty_index = ValidBlock::validate_npos_effects_with_state(&carrier, &state, None, None)
         .expect("validate ordinary carrier before exact-boundary source admission");
-    let retry = ValidBlock::state_block_for_execution(
+    let (retry, guard) = ValidBlock::state_block_for_execution(
         &carrier,
         &state,
         penalty_index,
@@ -140,6 +141,7 @@ fn ordinary_signed_carrier_admits_exact_source_and_block_owner_boundary() {
     .expect("exact original history-pool boundary must admit");
     assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
     assert_eq!(retry._curr_block, carrier.header());
+    drop(guard);
     drop(retry);
     drop(occupied);
     assert_eq!(budget.reserved_bytes(), baseline);

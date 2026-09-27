@@ -48,8 +48,7 @@ fn source_records_publish_only_on_apply_and_survive_transcript_drain() {
     let mut block = state.block(header());
     let hash = Hash::new(b"execution call");
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
     }
     assert!(
@@ -61,8 +60,7 @@ fn source_records_publish_only_on_apply_and_survive_transcript_drain() {
     assert!(block.fastpq_transcripts.is_empty());
     let first_fragment = block.committed_fragments as u64;
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         tx.current_lane_id = Some(LaneId::SINGLE);
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
         tx.apply();
@@ -92,8 +90,7 @@ fn source_incarnation_is_frozen_before_block_and_transaction_lane_mutation() {
         .lane_incarnations
         .insert(LaneId::SINGLE, Hash::prehashed(changed));
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         tx.current_lane_id = Some(LaneId::SINGLE);
         tx.current_dataspace_id = Some(DataSpaceId::new(7));
         tx.lane_incarnations
@@ -126,7 +123,7 @@ fn native_protocol_purposes_keep_distinct_keys_and_explicit_absent_lane() {
     ];
     let fragment = block.committed_fragments as u64;
     {
-        let mut tx = block.transaction();
+        let mut tx = block.transaction_for_fastpq_protocol_testing();
         tx.current_dataspace_id = Some(DataSpaceId::new(7));
         for hash in hashes {
             tx.record_test_transfer_transcripts(&ALICE_ID, hash, vec![delta()]);
@@ -152,8 +149,7 @@ fn discarded_conflicts_do_not_poison_block_but_applied_conflicts_hide_partial_ma
     let mut block = state.block(header());
     let hash = Hash::new(b"execution call");
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
         tx.current_dataspace_id = Some(DataSpaceId::new(7));
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
@@ -165,15 +161,13 @@ fn discarded_conflicts_do_not_poison_block_but_applied_conflicts_hide_partial_ma
             .is_empty()
     );
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
         tx.apply();
     }
     assert_eq!(block.captured_fastpq_transcript_sources().unwrap().len(), 1);
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(hash);
+        let mut tx = block.transaction_for_fastpq_testing(hash);
         tx.current_dataspace_id = Some(DataSpaceId::new(7));
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
         tx.apply();
@@ -185,35 +179,47 @@ fn discarded_conflicts_do_not_poison_block_but_applied_conflicts_hide_partial_ma
 }
 
 #[test]
-fn unresolved_applied_lane_remains_error_after_later_valid_capture() {
+fn unresolved_lane_refuses_apply_and_later_valid_capture_cannot_unpoison_carrier() {
     let state = state();
     let mut block = state.merge_preexecution_block(header());
     let missing = LaneId::new(999);
+    let bad = Hash::new(b"bad call");
+    let good = Hash::new(b"good call");
+    block.admit_fastpq_source_for_testing(bad);
+    block.admit_fastpq_source_for_testing(good);
     {
         let mut tx = block.transaction();
-        tx.tx_call_hash = Some(Hash::new(b"bad call"));
+        tx.tx_call_hash = Some(bad);
         tx.current_lane_id = Some(missing);
-        tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
+        let error = tx
+            .record_transfer_transcript(&ALICE_ID, delta())
+            .unwrap_err();
+        assert!(error.to_string().contains(&missing.to_string()));
+        assert!(tx.pending_transfer_transcripts.is_empty());
         tx.apply();
     }
+    assert!(block.fastpq_transcripts.is_empty());
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(output_capacity::ExecutionOutputPlanState::Poisoned)
+    ));
     {
         let mut tx = block.transaction();
-        tx.tx_call_hash = Some(Hash::new(b"good call"));
+        tx.tx_call_hash = Some(good);
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
         tx.apply();
     }
-    assert_eq!(
-        block.captured_fastpq_transcript_sources(),
-        Err(&FastpqSourceCaptureError::MissingLaneIncarnation {
-            lane_id: missing,
-            entry_hash: Hash::new(b"bad call")
-        })
+    assert!(block.fastpq_transcripts.is_empty());
+    assert!(
+        block
+            .captured_fastpq_transcript_sources()
+            .unwrap()
+            .is_empty()
     );
-    assert_eq!(
-        block.fastpq_transcripts.len(),
-        2,
-        "capture status does not change existing ledger execution"
-    );
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(output_capacity::ExecutionOutputPlanState::Poisoned)
+    ));
 }
 
 #[test]
@@ -224,6 +230,9 @@ fn batched_calls_keep_their_captured_context_when_apply_clears_active_call() {
         Hash::new(b"batch first call"),
         Hash::new(b"batch second call"),
     ];
+    for hash in hashes {
+        block.admit_fastpq_source_for_testing(hash);
+    }
     {
         let mut tx = block.transaction();
         for (index, hash) in hashes.iter().enumerate() {
@@ -248,8 +257,7 @@ fn changing_the_apply_bucket_after_recording_invalidates_source_capture() {
     let state = state();
     let mut block = state.block(header());
     {
-        let mut tx = block.transaction();
-        tx.tx_call_hash = Some(Hash::new(b"recorded call"));
+        let mut tx = block.transaction_for_fastpq_testing(Hash::new(b"recorded call"));
         tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
         tx.tx_call_hash = Some(Hash::new(b"different apply bucket"));
         tx.apply();
@@ -285,8 +293,7 @@ fn normal_and_replacement_scopes_freeze_incarnation_before_pristine_stage() {
         };
         let hash = Hash::new(b"staged call");
         {
-            let mut tx = block.transaction();
-            tx.tx_call_hash = Some(hash);
+            let mut tx = block.transaction_for_fastpq_testing(hash);
             tx.current_lane_id = Some(LaneId::SINGLE);
             tx.record_transfer_transcript(&ALICE_ID, delta()).unwrap();
             tx.apply();

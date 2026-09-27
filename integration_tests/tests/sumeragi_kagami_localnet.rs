@@ -309,8 +309,7 @@ async fn wait_for_validator_count_and_reducer(
             if status.peers.saturating_add(1) == expected_peers
                 && let Ok(sumeragi) = client.client().get_sumeragi_status()
             {
-                reducer_available = sumeragi.protocol_version
-                    == iroha_data_model::block::consensus_v2::PROTOCOL_VERSION;
+                reducer_available = sumeragi.halted.is_none();
                 if reducer_available {
                     return Ok(());
                 }

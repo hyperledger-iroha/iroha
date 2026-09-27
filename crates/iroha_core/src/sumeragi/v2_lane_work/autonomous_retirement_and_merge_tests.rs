@@ -1943,7 +1943,7 @@ fn fixture_with_durable_relay_parent() -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         &keys,
         &block,
         execution_commitment,
-        (0..crate::sumeragi::network_topology::commit_quorum_from_len(keys.len()).max(1))
+        (0..iroha_sumeragi::types::quorum(keys.len()).max(1))
             .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
             .collect(),
         [

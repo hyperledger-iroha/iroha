@@ -7475,6 +7475,7 @@ fn parse_world(
     }
     let parameters = take_parameters_cell(&mut map, "parameters")?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
+    let consensus_schedule = take_required(&mut map, "consensus_schedule")?;
     let domain_committees = take_required(&mut map, "domain_committees")?;
     let domain_endorsement_policies = take_required(&mut map, "domain_endorsement_policies")?;
     let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
@@ -8137,6 +8138,7 @@ fn parse_world(
     let mut world = World(Box::new(WorldData {
         parameters,
         peers,
+        consensus_schedule,
         domains,
         domains_by_owner: Storage::default(),
         kaigi_relay_registry: Storage::default(),
@@ -8931,7 +8933,7 @@ fn build_state(
         ))
     })?;
     if !emergency_fast {
-        crate::sumeragi::evidence::validate_persisted_v2_evidence_records(
+        crate::sumeragi::v2_evidence::validate_persisted_v2_evidence_records(
             &world.view(),
             kura.as_ref(),
             &network_id,

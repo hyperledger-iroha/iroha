@@ -5,7 +5,7 @@ use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
 use iroha_config::parameters::defaults;
 use iroha_config_base::toml::WriteExt;
-use iroha_core::sumeragi::network_topology::{Topology, commit_quorum_from_len};
+use iroha_core::sumeragi::network_topology::Topology;
 use iroha_crypto::Hash;
 use iroha_data_model::{
     Level, asset::AssetDefinition, block::consensus_v2::is_valid_committee_size, isi::Register,
@@ -949,7 +949,7 @@ impl UnstableNetwork {
                 self.n_faulty_peers
             ));
         }
-        let commit_quorum = commit_quorum_from_len(self.n_peers);
+        let commit_quorum = iroha_sumeragi::types::quorum(self.n_peers);
         let fault_budget = Self::fault_budget_for_peer_count(self.n_peers);
         if self.n_faulty_peers > fault_budget {
             return Err(eyre!(
@@ -1026,7 +1026,7 @@ impl UnstableNetwork {
         Ok(())
     }
     fn fault_budget_for_peer_count(peer_count: usize) -> usize {
-        peer_count.saturating_sub(commit_quorum_from_len(peer_count))
+        peer_count.saturating_sub(iroha_sumeragi::types::quorum(peer_count))
     }
     fn fault_round_seed(round_index: usize, n_faulty_peers: usize, fault_budget: usize) -> usize {
         if n_faulty_peers >= fault_budget {
@@ -1047,7 +1047,7 @@ impl UnstableNetwork {
             return Vec::new();
         }
         let rotated = topology_for_permissioned_round(peer_ids, chain_id, height, 0);
-        let commit_quorum = commit_quorum_from_len(rotated.len());
+        let commit_quorum = iroha_sumeragi::types::quorum(rotated.len());
         let leader_id = rotated.first();
         let is_safe_fault = |peer: &PeerId| leader_id.is_none_or(|leader| leader != peer);
         let mut candidates = Vec::new();
@@ -1161,7 +1161,7 @@ impl UnstableNetwork {
             .iter()
             .filter(|peer| peer.is_running())
             .count();
-        let commit_quorum = commit_quorum_from_len(running_count);
+        let commit_quorum = iroha_sumeragi::types::quorum(running_count);
         let mut last_ready = 0usize;
         let mut last_lagging = Vec::new();
         loop {
@@ -1828,7 +1828,7 @@ mod tests {
     #[test]
     fn fault_budget_matches_commit_quorum_tail() {
         let peer_count = 10;
-        let commit_quorum = commit_quorum_from_len(peer_count);
+        let commit_quorum = iroha_sumeragi::types::quorum(peer_count);
         let fault_budget = UnstableNetwork::fault_budget_for_peer_count(peer_count);
         assert_eq!(fault_budget, peer_count - commit_quorum);
     }

@@ -47,7 +47,8 @@ mod effect_budget {
             let source = signed(&state, Executable::Instructions(writes().into()));
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
             let result =
@@ -112,7 +113,8 @@ mod effect_budget {
             );
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = 0;
             tx.pipeline.overlay_max_bytes = cap;
             let result =
@@ -230,7 +232,8 @@ seiyaku ActualEffectGroups {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
             let result =
@@ -306,7 +309,8 @@ seiyaku ActualEffectGroups {
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.overlay_max_instructions = cap;
             tx.pipeline.overlay_max_bytes = 0;
             let result =
@@ -383,36 +387,59 @@ seiyaku ActualEffectGroups {
         for case in 0..5 {
             let (state, _program, address, hash) = contract_fixture();
             let call = |entrypoint: &str| ContractInvocation {
-                contract_address: address.clone(), expected_code_hash: hash,
-                entrypoint: entrypoint.to_owned(), arguments: None,
+                contract_address: address.clone(),
+                expected_code_hash: hash,
+                entrypoint: entrypoint.to_owned(),
+                arguments: None,
             };
             let executable = if case < 2 {
                 Executable::ContractCall(call(if case == 0 { "first" } else { "second" }))
             } else {
-                Executable::Batch(vec![
-                    ExecutableBatchItem::Instruction(SetKeyValue::account(
-                        ALICE_ID.clone(), "effect_authored".parse().unwrap(), Json::new(true),
-                    ).into()),
-                    ExecutableBatchItem::ContractCall(call("first")),
-                    ExecutableBatchItem::ContractCall(call("second")),
-                ].into())
+                Executable::Batch(
+                    vec![
+                        ExecutableBatchItem::Instruction(
+                            SetKeyValue::account(
+                                ALICE_ID.clone(),
+                                "effect_authored".parse().unwrap(),
+                                Json::new(true),
+                            )
+                            .into(),
+                        ),
+                        ExecutableBatchItem::ContractCall(call("first")),
+                        ExecutableBatchItem::ContractCall(call("second")),
+                    ]
+                    .into(),
+                )
             };
             let total: u64 = segment_cycles.iter().sum();
-            let cap = match case { 0..=2 => 1_000_000, 3 => total, _ => total - 1 };
+            let cap = match case {
+                0..=2 => 1_000_000,
+                3 => total,
+                _ => total - 1,
+            };
             let mut metadata = iroha_model_base::metadata::Metadata::default();
-            metadata.insert(crate::tx::QUARANTINE_METADATA_KEY.parse().unwrap(), Json::new(true));
+            metadata.insert(
+                crate::tx::QUARANTINE_METADATA_KEY.parse().unwrap(),
+                Json::new(true),
+            );
             let source = TransactionBuilder::new(
-                state.network_id, ALICE_ID.clone(),
+                state.network_id,
+                ALICE_ID.clone(),
                 FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(GAS)),
-            ).with_metadata(metadata).with_executable(executable).sign(ALICE_KEYPAIR.private_key());
+            )
+            .with_metadata(metadata)
+            .with_executable(executable)
+            .sign(ALICE_KEYPAIR.private_key());
             let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
             grant_entrypoints(&mut block, &address);
             let fragments = block.committed_fragment_count();
-            let mut tx = block.transaction();
+            let mut tx =
+                block.transaction_for_fastpq_testing(Hash::from(source.hash_as_entrypoint()));
             tx.pipeline.quarantine_tx_max_cycles = cap;
             tx.pipeline.overlay_max_instructions = 0;
             tx.pipeline.overlay_max_bytes = 0;
-            let result = Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
+            let result =
+                Executor::Initial.execute_transaction(&mut tx, &ALICE_ID, source, &mut cache);
             let cycles = tx.completed_execution_cycles_for_tests().unwrap();
             assert!(!tx.execution_effect_limit_exceeded());
             if case < 2 {
@@ -423,29 +450,70 @@ seiyaku ActualEffectGroups {
                 drop(tx);
                 continue;
             }
-            assert!(tx.world.account(&ALICE_ID).unwrap().metadata().get("effect_authored").is_some());
-            assert!(tx.world.account(&ALICE_ID).unwrap().metadata().get("effect_first").is_some());
+            assert!(
+                tx.world
+                    .account(&ALICE_ID)
+                    .unwrap()
+                    .metadata()
+                    .get("effect_authored")
+                    .is_some()
+            );
+            assert!(
+                tx.world
+                    .account(&ALICE_ID)
+                    .unwrap()
+                    .metadata()
+                    .get("effect_first")
+                    .is_some()
+            );
             if case == 4 {
-                assert_limit(&result.unwrap_err(), &format!("quarantine cycle budget exceeded: {cap}"));
+                assert_limit(
+                    &result.unwrap_err(),
+                    &format!("quarantine cycle budget exceeded: {cap}"),
+                );
                 assert_eq!(cycles, cap);
                 assert!(tx.last_tx_gas_used > segment_gas[0]);
                 // The exhausted cycle allowance refuses the final HALT, whose
                 // canonical gas cost is zero; all metered work is retained.
                 assert_eq!(Some(tx.last_tx_gas_used), successful_batch_gas);
-                assert!(tx.world.account(&ALICE_ID).unwrap().metadata().get("effect_second").is_none());
+                assert!(
+                    tx.world
+                        .account(&ALICE_ID)
+                        .unwrap()
+                        .metadata()
+                        .get("effect_second")
+                        .is_none()
+                );
                 assert!(!tx.execution_effects_allow_apply());
                 drop(tx);
             } else {
                 result.unwrap();
-                assert_eq!(cycles, total, "Batch shares precisely the two actual VM runs");
-                if case == 2 { successful_batch_gas = Some(tx.last_tx_gas_used); }
+                assert_eq!(
+                    cycles, total,
+                    "Batch shares precisely the two actual VM runs"
+                );
+                if case == 2 {
+                    successful_batch_gas = Some(tx.last_tx_gas_used);
+                }
                 assert_eq!(Some(tx.last_tx_gas_used), successful_batch_gas);
                 tx.apply();
             }
-            assert_eq!(block.committed_fragment_count(), fragments + usize::from(case != 4));
+            assert_eq!(
+                block.committed_fragment_count(),
+                fragments + usize::from(case != 4)
+            );
             for key in ["effect_authored", "effect_first", "effect_second"] {
-                assert_eq!(block.world.account(&ALICE_ID).unwrap().metadata().get(key).is_some(), case != 4,
-                    "rejected Batch rolls back its earlier authored and contract effects");
+                assert_eq!(
+                    block
+                        .world
+                        .account(&ALICE_ID)
+                        .unwrap()
+                        .metadata()
+                        .get(key)
+                        .is_some(),
+                    case != 4,
+                    "rejected Batch rolls back its earlier authored and contract effects"
+                );
             }
         }
     }

@@ -66,7 +66,9 @@ fn contract_code_management_manager_sponsors_registration_and_meters_every_instr
         .with_instructions(instructions)
         .sign(keypair.private_key());
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-        let mut state_transaction = block.transaction();
+        let mut state_transaction = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
+            transaction.hash_as_entrypoint(),
+        ));
         executor
             .execute_transaction(
                 &mut state_transaction,
@@ -273,7 +275,9 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
     };
     let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
     let error = {
-        let mut state_transaction = block.transaction();
+        let mut state_transaction = block.transaction_for_fastpq_testing(iroha_crypto::Hash::from(
+            transaction.hash_as_entrypoint(),
+        ));
         let mut ivm_cache = IvmCache::new();
         executor
             .execute_transaction(
@@ -379,7 +383,9 @@ fn default_user_provided_executor_rejects_noncanonical_bootstrap_without_committ
         };
         let (runtime_stats_before, _) = loaded_executor.runtime_pool_snapshot();
         let error = {
-            let mut state_transaction = block.transaction();
+            let mut state_transaction = block.transaction_for_fastpq_testing(
+                iroha_crypto::Hash::from(transaction.hash_as_entrypoint()),
+            );
             let mut ivm_cache = IvmCache::new();
             executor
                 .execute_transaction(
@@ -489,7 +495,8 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
     ))
     .sign(keypair.private_key());
     let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
-    let mut state_transaction = block.transaction();
+    let mut state_transaction = block
+        .transaction_for_fastpq_testing(iroha_crypto::Hash::from(transaction.hash_as_entrypoint()));
     let mut ivm_cache = IvmCache::new();
     assert!(
         !(state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty()),

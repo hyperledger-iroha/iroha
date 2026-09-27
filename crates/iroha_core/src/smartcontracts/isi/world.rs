@@ -284,7 +284,7 @@ pub mod isi {
             },
         },
         state::{derive_committee_key_id, derive_validator_key_id},
-        sumeragi::status::PeerKeyPolicyRejectReason,
+        status::PeerKeyPolicyRejectReason,
         zk::hash_vk,
     };
     #[cfg(test)]
@@ -4845,6 +4845,11 @@ pub mod isi {
                         || governance_lock_custody(&state_transaction.gov),
                         |record| record.custody.clone(),
                     );
+                    state_transaction
+                        .validate_fastpq_governance_lock(&rid, &owner, &custody)
+                        .map_err(|error| {
+                            InstructionExecutionError::InvariantViolation(error.into())
+                        })?;
                     let minimum_bond = state_transaction.gov.min_bond_amount.clone();
                     lock_voting_bond(
                         &amount,
@@ -5294,6 +5299,9 @@ pub mod isi {
             bond_escrow_account: policy.bond_escrow_account.clone(),
             slash_receiver_account: policy.slash_receiver_account.clone(),
         };
+        state_transaction
+            .validate_fastpq_governance_lock(&rid, authority, &custody)
+            .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
         lock_voting_bond(
             &ballot.amount,
             locks.locks.get(authority).map(|rec| &rec.amount),
@@ -13300,10 +13308,26 @@ pub mod isi {
         }
         events
     }
+    /// Local evidence owned by the successful SCCP proof/replay admission path.
+    /// Private fields prevent another mutation caller from supplying a proof hash.
+    pub(in crate::smartcontracts::isi) struct VerifiedSccpQuantityProofBinding {
+        entry: Option<Hash>,
+        proof: iroha_data_model::proof::ProofId,
+        envelope: Hash,
+    }
+    impl VerifiedSccpQuantityProofBinding {
+        /// Consume the admitted proof binding in its original quantity mutation scope.
+        pub(in crate::smartcontracts::isi) fn into_parts(
+            self,
+        ) -> (Option<Hash>, iroha_data_model::proof::ProofId, Hash) {
+            (self.entry, self.proof, self.envelope)
+        }
+    }
     fn execute_sccp_inbound_settlement(
         settlement: SccpInboundSettlementV1,
         submitting_authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
+        binding: VerifiedSccpQuantityProofBinding,
     ) -> Result<(), Error> {
         match settlement {
             SccpInboundSettlementV1::Transfer(prepared) =>
@@ -13311,6 +13335,7 @@ pub mod isi {
                     state_transaction,
                     submitting_authority,
                     prepared,
+                    Some(binding),
                 ),
         }
     }
@@ -13629,7 +13654,17 @@ pub mod isi {
             }
             ensure_unique_proof(state_transaction, &pid)?;
             if let Some(native) = native_message {
-                execute_sccp_inbound_settlement(native.settlement, authority, state_transaction)?;
+                let binding = VerifiedSccpQuantityProofBinding {
+                    entry: state_transaction.tx_call_hash,
+                    proof: pid.clone(),
+                    envelope: Hash::new(&validated.encoded),
+                };
+                execute_sccp_inbound_settlement(
+                    native.settlement,
+                    authority,
+                    state_transaction,
+                    binding,
+                )?;
                 state_transaction.apply_sccp_replay_leaf(native.replay_mutation)?;
             }
             let height = current_height;
@@ -17239,8 +17274,8 @@ pub mod isi {
                 ),
             ));
         }
-        if !crate::sumeragi::is_bls_normal_public_key(peer_id.public_key()) {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+        if !crate::crypto_util::is_bls_normal_public_key(peer_id.public_key()) {
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::DisallowedAlgorithm,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17279,7 +17314,7 @@ pub mod isi {
         };
         let activation_height = activation_at.unwrap_or(activation_expected);
         if activation_height < block_height {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::ActivationInPast,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17291,7 +17326,7 @@ pub mod isi {
         if activation_height != activation_expected
             && !(is_genesis && activation_height == block_height)
         {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::LeadTimeViolation,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17355,7 +17390,7 @@ pub mod isi {
             .into_iter()
             .find(|id| id != &candidate_id)
         {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::IdentifierCollision,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17367,7 +17402,7 @@ pub mod isi {
         if let Some(existing) = world.consensus_keys.get(&candidate_id)
             && existing.public_key != *peer_id.public_key()
         {
-            crate::sumeragi::status::record_peer_key_policy_reject(
+            crate::status::record_peer_key_policy_reject(
                 PeerKeyPolicyRejectReason::IdentifierCollision,
             );
             return Err(InstructionExecutionError::InvalidParameter(
@@ -17393,7 +17428,7 @@ pub mod isi {
             is_genesis,
         ) {
             if let Some(reason) = peer_key_policy_reason(&err) {
-                crate::sumeragi::status::record_peer_key_policy_reject(reason);
+                crate::status::record_peer_key_policy_reject(reason);
             }
             return Err(err);
         }
@@ -21093,6 +21128,20 @@ pub mod isi {
         ) -> Result<(), Error> {
             super::parameter_validation::validate_ivm_heap_parameter(self.inner())?;
             state_transaction.validate_execution_output_parameter(self.inner())?;
+            if let Parameter::Sumeragi(change) = self.inner() {
+                // Sumeragi chain parameters take effect at `h + 2` through the consensus
+                // schedule; the demotion window is a genesis constant (`specs/sumeragi.md` §10.1).
+                crate::sumeragi::schedule::validate_parameter_change(
+                    state_transaction.world.parameters.get().sumeragi(),
+                    change,
+                    state_transaction._curr_block.is_genesis(),
+                )
+                .map_err(|error| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(error.to_string()),
+                    )
+                })?;
+            }
             if let Parameter::Custom(custom) = self.inner() {
                 if crate::state::is_retired_kagemusha_mint_finality_parameter(custom.id()) {
                     return Err(InstructionExecutionError::InvalidParameter(
@@ -21385,9 +21434,17 @@ pub mod isi {
             }
             set_parameter!(
                 Sumeragi(sumeragi.max_clock_drift_ms) => SumeragiParameter::MaxClockDriftMs,
+                Sumeragi(sumeragi.idle_block_interval_ms) => SumeragiParameter::IdleBlockIntervalMs,
+                Sumeragi(sumeragi.exec_budget_ms) => SumeragiParameter::ExecBudgetMs,
+                Sumeragi(sumeragi.apply_budget_ms) => SumeragiParameter::ApplyBudgetMs,
+                Sumeragi(sumeragi.max_block_bytes) => SumeragiParameter::MaxBlockBytes,
+                Sumeragi(sumeragi.empty_after_views) => SumeragiParameter::EmptyAfterViews,
+                Sumeragi(sumeragi.epoch_length_blocks) => SumeragiParameter::EpochLengthBlocks,
+                Sumeragi(sumeragi.demotion_window) => SumeragiParameter::DemotionWindow,
                 Block(block.max_transactions) => BlockParameter::MaxTransactions,
                 Block(block.max_time_trigger_invocations) => BlockParameter::MaxTimeTriggerInvocations,
                 Block(block.execution_output) => BlockParameter::ExecutionOutput,
+                Block(block.fastpq_source) => BlockParameter::FastpqSource,
                 Transaction(transaction.max_instructions) => TransactionParameter::MaxInstructions,
                 Transaction(transaction.ivm_bytecode_size) => TransactionParameter::IvmBytecodeSize,
                 Transaction(transaction.max_tx_bytes) => TransactionParameter::MaxTxBytes,
@@ -38721,7 +38778,7 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "signature_batch_max_bls", "unexpected error message: {msg}");
         });
         world_test!(register_peer_rejects_activation_before_lead_time {
-            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
+            let _guard = crate::status::peer_key_policy_test_guard();
             let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
@@ -38734,7 +38791,7 @@ seiyaku GovernanceLifecycle {
                 params.sumeragi.key_activation_lead_blocks = 2;
                 stx.apply();
             }
-            crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
+            crate::status::reset_peer_key_policy_counters_for_tests();
             let mut stx = state_block.transaction();
             let bls = checked_keypair_with_algorithm(Algorithm::BlsNormal);
             let peer_id = iroha_model_base::peer::PeerId::new(bls.public_key().clone());
@@ -38748,12 +38805,12 @@ seiyaku GovernanceLifecycle {
             assert_contains!(msg, "lead-time policy", "unexpected error: {msg}");
             assert!(stx.world.peers().iter().all(|p| p != &peer_id));
             assert_eq!(
-                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
+                crate::status::peer_key_policy_reject_snapshot_for_tests(),
                 (1, Some("lead_time_violation"))
             );
         });
         world_test!(register_peer_rejects_identifier_collisions {
-            let _guard = crate::sumeragi::status::peer_key_policy_test_guard();
+            let _guard = crate::status::peer_key_policy_test_guard();
             let mut state = blank_state();
             let mut pipeline = state.view().pipeline().clone();
             pipeline.signature_batch_max_bls = 4;
@@ -38784,7 +38841,7 @@ seiyaku GovernanceLifecycle {
                     .insert(peer_id.public_key().to_string(), vec![existing_id]);
                 stx.apply();
             }
-            crate::sumeragi::status::reset_peer_key_policy_counters_for_tests();
+            crate::status::reset_peer_key_policy_counters_for_tests();
             let mut stx = state_block.transaction();
             let isi =
                 iroha_data_model::isi::register::RegisterPeerWithPop::new(peer_id.clone(), pop);
@@ -38793,7 +38850,7 @@ seiyaku GovernanceLifecycle {
             let msg = smart_contract_instruction_error_message(err);
             assert_contains!(msg, "collision", "unexpected error: {msg}");
             assert_eq!(
-                crate::sumeragi::status::peer_key_policy_reject_snapshot_for_tests(),
+                crate::status::peer_key_policy_reject_snapshot_for_tests(),
                 (1, Some("identifier_collision"))
             );
         });
@@ -40059,6 +40116,47 @@ seiyaku GovernanceLifecycle {
                 .expect_execute(&ALICE_ID, &mut stx, "max clock drift is the mutable first-release Sumeragi parameter");
             let params = stx.world.parameters.get().sumeragi().clone();
             assert_eq!(params.max_clock_drift_ms(), 333);
+        });
+        world_test!(set_parameter_validates_sumeragi_chain_parameters_and_genesis_constants {
+            // Genesis (height 1) accepts the demotion window and defers the §9.4 combination
+            // check to the genesis schedule.
+            {
+                blank_state_transaction!(state, block, state_block, stx);
+                SetParameter(Parameter::Sumeragi(SumeragiParameter::DemotionWindow(
+                    NonZeroU64::new(64).expect("non-zero"),
+                )))
+                .expect_execute(&ALICE_ID, &mut stx, "demotion window in genesis");
+                assert_eq!(stx.world.parameters.get().sumeragi().demotion_window.get(), 64);
+            }
+            let state = blank_state();
+            let block = new_dummy_block_at_height(NonZeroU64::new(2).expect("non-zero"));
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let idle = |ms: u64| {
+                SetParameter(Parameter::Sumeragi(SumeragiParameter::IdleBlockIntervalMs(
+                    NonZeroU64::new(ms).expect("non-zero"),
+                )))
+            };
+            idle(7_000).expect_execute(&ALICE_ID, &mut stx, "a valid chain parameter change");
+            assert_eq!(
+                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                7_000
+            );
+            // Below the block time: §9.4 validation fails and nothing changes.
+            let error = idle(999).expect_execute_err(&ALICE_ID, &mut stx, "idle below block time");
+            assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
+            assert_eq!(
+                stx.world.parameters.get().sumeragi().idle_block_interval_ms.get(),
+                7_000
+            );
+            // The demotion window is a genesis constant.
+            let window = stx.world.parameters.get().sumeragi().demotion_window;
+            let error = SetParameter(Parameter::Sumeragi(SumeragiParameter::DemotionWindow(
+                NonZeroU64::new(64).expect("non-zero"),
+            )))
+            .expect_execute_err(&ALICE_ID, &mut stx, "demotion window after genesis");
+            assert!(matches!(error, InstructionExecutionError::InvalidParameter(_)));
+            assert_eq!(stx.world.parameters.get().sumeragi().demotion_window, window);
         });
         world_test!(set_parameter_alias_dataspace_bootstrap_grant_is_immutable_and_requires_existing_owner {
             use iroha_data_model::alias_setup::AliasDataspaceBootstrapGrantV1;

@@ -6072,10 +6072,11 @@ impl SubscriberFilter {
             message::Topic::BlockSync,
             message::Topic::Control,
         ];
-        const ROUTES: [message::SubscriberRoute; 3] = [
+        const ROUTES: [message::SubscriberRoute; 4] = [
             message::SubscriberRoute::General,
             message::SubscriberRoute::ToriiProxy,
             message::SubscriberRoute::Connect,
+            message::SubscriberRoute::Sumeragi,
         ];
         TOPICS.into_iter().any(|topic| {
             ROUTES.into_iter().any(|route| {
@@ -27596,6 +27597,9 @@ pub mod message {
         ToriiProxy,
         /// Torii websocket Connect relay protocol.
         Connect,
+        /// Sumeragi consensus frames: the consensus driver owns these FIFOs, one per traffic
+        /// class, and never competes with the generic relay workers for them.
+        Sumeragi,
     }
     /// Durable reconstruction available after a reliable progress delivery gap.
     ///

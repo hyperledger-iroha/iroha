@@ -27,7 +27,7 @@ INDEXED_MODEL: Final = "AtomicPrivateSettlementV1CommitteeFaults.tla"
 EVIDENCE_CODE_SOURCE_PATHS: Final[tuple[str, ...]] = (
     "scripts/formal/private_settlement_tlc_report.py",
     "scripts/formal/run_atomic_private_settlement_tlc.sh",
-    "scripts/formal/sumeragi_v2_tlc_result_contract.sh",
+    "scripts/formal/tlc_result_contract.sh",
     "scripts/formal/resolve_java.sh",
 )
 EVIDENCE_CODE_DOMAIN: Final = b"iroha-aps-formal-evidence-code-v1\0"

@@ -43,8 +43,7 @@ impl V2LaneWorkAdapter {
         }
         // The typed State resolver is the sole geometry authority and has already
         // enforced the exact dataspace `3f+1` size in the same immutable view.
-        let min_signers =
-            crate::sumeragi::network_topology::commit_quorum_from_len(validators.len()).max(1);
+        let min_signers = iroha_sumeragi::types::quorum(validators.len()).max(1);
         Some((validators, min_signers))
     }
 

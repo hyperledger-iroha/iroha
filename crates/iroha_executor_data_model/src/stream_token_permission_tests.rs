@@ -36,12 +36,12 @@ fn stream_token_operation_and_check_permissions_have_exact_distinct_provider_sco
     let observer_token: Permission = observer.into();
     assert_ne!(operator_token, observer_token);
     assert_eq!(
-        CanOperateSorafsStreamToken::try_from(&operator_token),
-        Ok(operator)
+        CanOperateSorafsStreamToken::try_from(&operator_token).expect("operator token"),
+        operator
     );
     assert_eq!(
-        CanCheckSorafsStreamToken::try_from(&observer_token),
-        Ok(observer)
+        CanCheckSorafsStreamToken::try_from(&observer_token).expect("observer token"),
+        observer
     );
     assert!(CanCheckSorafsStreamToken::try_from(&operator_token).is_err());
     assert!(CanOperateSorafsStreamToken::try_from(&observer_token).is_err());
@@ -56,8 +56,8 @@ fn stream_token_operation_and_check_permissions_have_exact_distinct_provider_sco
     }
     let json = norito::json::to_json(&operator).unwrap();
     assert_eq!(
-        norito::json::from_str::<CanOperateSorafsStreamToken>(&json),
-        Ok(operator)
+        norito::json::from_str::<CanOperateSorafsStreamToken>(&json).expect("operator JSON"),
+        operator
     );
     let with_extra = json.replacen("\"provider_id\":", "\"extra\":1,\"provider_id\":", 1);
     assert_ne!(with_extra, json);

@@ -1178,7 +1178,10 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
             })
             .collect::<Vec<_>>();
         if transaction_errors.is_empty() {
-            eyre!("staged genesis execution failed: {error}")
+            eyre!(
+                "staged genesis execution failed: {error} ({} network inputs)",
+                block.network_entrypoint_count()
+            )
         } else {
             eyre!(
                 "staged genesis execution failed: {error}; {}",

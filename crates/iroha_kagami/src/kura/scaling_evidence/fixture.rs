@@ -759,6 +759,7 @@ pub(super) struct RawBlock {
     pub signatures: BTreeSet<BlockSignature>,
     pub payload: iroha_data_model::block::BlockPayload,
     pub result: Option<iroha_data_model::block::BlockResult>,
+    pub commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
 }
 pub(super) fn mutate_height(
     height: &mut Height,

@@ -228,6 +228,7 @@ impl core::fmt::Debug for Digest384LastFieldJob<'_> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Digest384LastFieldJob")
             .field("expected_len", &self.prefix.expected_len())
+            .field("payload_len", &self.final_field.len())
             .finish_non_exhaustive()
     }
 }
@@ -652,7 +653,7 @@ mod tests {
         let digest = hash_last_field_cpu(&jobs[0]).unwrap();
         assert_eq!(
             format!("{:?}", jobs[0]),
-            "Digest384LastFieldJob { expected_len: 0, .. }"
+            "Digest384LastFieldJob { expected_len: 0, payload_len: 0, .. }"
         );
         for threads in [1, 2, 6] {
             let pool = rayon::ThreadPoolBuilder::new()
