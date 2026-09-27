@@ -133,7 +133,7 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   allocated.
 - `torii.events_buffer_capacity` (default: `10000`): Broadcast channel size used for `/v1/events/sse` and webhook enqueuing. Lower the value to bound memory/backpressure when subscribers lag.
 - `torii.ws_message_timeout_ms` (default: `10000`): WebSocket message timeout (read/write) for Torii event/block streams; increase it for slow clients or high-latency links. The initial subscription read uses one absolute deadline: Ping/Pong frames are accepted but do not renew it.
-- `torii.app_api.*`: Pagination/backpressure defaults for JSON convenience endpoints. `default_list_limit` seeds `limit` when omitted, `max_list_limit` and `max_fetch_size` bound page/fetch sizes, and `rate_limit_cost_per_row` controls how much each requested row costs under the app API rate limiter.
+- `torii.app_api_default_list_limit`, `torii.app_api_max_list_limit`, and `torii.app_api_max_fetch_size`: Pagination bounds for JSON convenience endpoints. The default list limit seeds `limit` when omitted; the other limits bound page and fetch sizes. `torii.app_api_rate_limit_cost_per_page` charges rate-limit units per default-sized page, rounding partial pages up and charging at least one page. With the defaults, a 100-row page costs one unit and a 500-row page costs five; an empty page costs one unit. These flat configuration keys do not form a nested `torii.app_api` table.
 - `[[torii.public_dataspace_upstreams]]`: Explicit routing for public-dataspace reads. Each of at most 256 entries binds one exact numeric `dataspace_id` (`0` is universal) to one canonical, credential-free HTTPS `base_url`; literal-IP loopback HTTP is permitted for local testing. Duplicate dataspaces, whitespace/case aliases, credentials, queries, fragments, percent aliases, trailing slashes, and unsafe schemes are configuration errors. Torii never reads this production routing policy from environment variables and never follows upstream redirects.
 - `[torii.recipient_lookup]`: Privacy-minimized retail routing and bank-name lookup. `policy_id` (default `cbuae_aed_sbp_pkr`) selects the governed FX corridor policy and `requests_per_minute` (default and maximum `30`) applies a dedicated per-signer limiter shared by `POST /v1/retail/recipients/route` and `POST /v1/retail/recipients/lookup`. Both endpoints require canonical request signing, an existing signer, an enabled owner-funded corridor policy, and a positive signer balance in that policy's source asset/dataspace. Settlement releases the destination asset only from the exact `NetworkId`-derived protocol escrow and requires exact fresh oracle evidence plus the signed expected output. `request_timeout_ms` bounds configured upstream bank calls and each `[[torii.recipient_lookup.routes]]` entry supplies an exact `fi_id` (`hbl.sbp` or `ubl.sbp`), a credential-free HTTPS `base_url` (literal-loopback HTTP only; no query or fragment), and a private `bearer_token` of 1–4096 visible ASCII bytes without whitespace. Redirects are never followed, so credentials and request bodies remain bound to the configured origin. `/route` returns only `{account_id, alias_fqn, fi_id}`; `/lookup` additionally contacts the selected bank route. Fee sponsorship is separate: account-signed `POST /v1/fee-sponsor-programs/by-id` reads one exact lifecycle record, while account-signed `POST /v1/fees/quote` evaluates the exact unsigned transaction payload through the canonical admission router. Neither endpoint synthesizes a fallback program or payer.
 - `torii.webhook.*`: Delivery/backoff tuning for the webhook worker. `queue_capacity` caps on-disk pending deliveries (default: `10000`), `max_attempts` bounds retries (default: `12`), `backoff_initial_ms`/`backoff_max_ms` set the exponential retry window (defaults: `1000`/`60000`), and `{connect,write,read}_timeout_ms` configure HTTP timeouts for delivery attempts. Listing, creating, and deleting webhook registrations requires a fresh allow-listed exact-network operator request signature bound to the method, path, sorted query, and raw body.
@@ -323,6 +323,45 @@ Defaults first: configuration values are curated for typical Iroha blockchain de
   - `connect_timeout_ms` / `request_timeout_ms` (defaults: 500 / 1500): HTTP timeouts for the verifier; zero collapses to the default.
   - `missing_assessment_grace_secs` (default: 0): deterministic fallback window; non-zero values allow temporary pass-through while emitting a warning.
   - `required_minimum_band` (default: `null`): required severity band (`low`, `medium`, `high`, or `critical`). Transactions missing the band or below the threshold are rejected when `enabled` is true.
+- `[sccp]`: Node-local SCCP components (`specs/sccp.md` §4.9, §4.13.4). Both tables are
+  file-only (no environment aliases, unknown keys are rejected) and every default works without
+  editing, so a validator with an empty file runs the attestor and the light-client keeper.
+  Parsing checks syntax only; owner-only checks of the key directory and secret-header files
+  happen at runtime in the attestor, the keeper and `iroha_sccp_rpc`.
+  - `[sccp.attestor]`: the in-node bridge-key attestor.
+    - `enabled` (default: `true`): run the attestor. An unusable key directory makes it inert
+      (`sccp_attestor_unconfigured`) without aborting the node.
+    - `key_dir` (default: empty ⇒ `<kura.store_dir>/sccp/bridge-keys`, derived like the default
+      snapshot directory; a relative path resolves against the configuration file): directory
+      created `0700` holding one owner-only `0600` `<address-hex>.key` file per bridge key.
+    - `auto_register` (default: `true`): submit `SetSccpBridgeKeyV1` for the newest local key
+      while the node is a registered, non-barred validator.
+    - `max_entries_per_transaction` (default: `64`, `1..=1024`): entries per
+      `SubmitSccpAttestationsV1` transaction; the node also caps it at runtime by the on-chain
+      `max_attestation_entries_per_instruction`.
+    - `resubmit_after_blocks` (default: `3`, at least `1`): resubmit entries still unrecorded
+      after this many blocks.
+    - `max_clock_drift_ms` (default: `3600000`): refuse to sign a rotation subject dated further
+      than this into the local future.
+    - `shutdown_grace_ms` (default: `30000`): on graceful shutdown, wait at most this long for
+      the node's pending subjects (handoffs first) to be recorded.
+  - `[sccp.light_client_keeper]`: the in-node inbound light-client keeper; enabled by default
+    (`enabled = true`) and effective only while the node holds an active or pending bridge key.
+    - `advance_after_ms` (default: `0` ⇒ `ws_bound_ms / 4` of each light client): staleness
+      after which the keeper submits a proof-carrying advance from the bridge key's account.
+    - `poll_interval_ms` / `request_timeout_ms` (defaults: `60000` / `10000`, both non-zero):
+      light-client state check cadence and per-request RPC timeout before failover.
+    - `max_advance_bytes` (default: `262144`, non-zero): largest advance the keeper builds; the
+      on-chain per-instruction bounds still apply.
+    - `[sccp.light_client_keeper.endpoints]`: `ethereum_execution`, `ethereum_beacon`, `bsc`
+      and `tron` (URL lists; `https`, or `http` for loopback hosts only, no embedded
+      credentials) and `ton_liteservers` (`<ipv4>:<port>:<base64 ed25519 public key>`). Each
+      list holds at most 64 unique entries; empty (the default) selects the compiled free public
+      list in `iroha_config::parameters::defaults::sccp::endpoints`, and a configured list
+      replaces it entirely.
+    - `[[sccp.light_client_keeper.secret_headers]]` (optional, repeatable, at most 64):
+      `endpoint`, `header` (an HTTP token that the RPC client does not set itself) and
+      `value_file`, an owner-only file holding the value. Inline values are refused.
 - `[zk]`: Zero-knowledge and SCCP verification settings. Worker counts, queue sizes, and timing
   knobs are operator-local; acceptance limits are consensus-critical and are committed into the
   block ZK/SCCP policy digest, so every validator must use the same file-backed values.

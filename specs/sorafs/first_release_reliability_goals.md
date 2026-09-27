@@ -28,13 +28,13 @@ checks pass against the same source candidate.
 
 | ID | Outcome | Owner | Required acceptance | State |
 | --- | --- | --- | --- | --- |
-| SR1 | One ordered durable storage index commit path; ordinary reads never rewrite the global index. Immutable metadata is shared without inventory-sized read clones. | Storage | Barrier-controlled read-A/ingest-B and read-A/evict-B interleavings survive restart; acknowledged manifests remain present; evicted manifests never reappear; failed/uncertain writes preserve explicit durability semantics. Read cost and persistence do not scale with the global inventory. | active |
-| SR2 | Expired manifests retire independently of repeated/shared content. | Storage/GC | Two expired manifests sharing bytes are reclaimed; repeated chunks within one manifest do not block GC; an unexpired sharing manifest remains readable; capacity/refcounts/audits remain exact after restart. | active |
+| SR1 | One ordered durable storage index commit path; ordinary reads never rewrite the global index. Immutable metadata is shared without inventory-sized read clones. | Storage | Barrier-controlled read-A/ingest-B and read-A/evict-B interleavings survive restart; acknowledged manifests remain present; evicted manifests never reappear; failed/uncertain writes preserve explicit durability semantics. Read cost and persistence do not scale with the global inventory. | complete |
+| SR2 | Expired manifests retire independently of repeated/shared content. | Storage/GC | Two expired manifests sharing bytes are reclaimed; repeated chunks within one manifest do not block GC; an unexpired sharing manifest remains readable; capacity/refcounts/audits remain exact after restart. | complete |
 | SR3 | Discovery consumes current governed finalized admission, renewal and revocation state. | Core/DataModel/Torii | Production constructor and same-State reader accept valid governed admission, observe live renewal/revocation, evict stale adverts, reject substituted/stale heads and preserve revocation across restart. Local envelope directories are not a second authority. | active |
 | SR4 | Fresh production tokens and authenticated publication complete through real authority. | Core/Torii/daemon/publisher | Reserve, Complete and challenged Check evidence authenticates exact execution and finality; issuer produces a usable token through production constructors. Authenticated initial-source staging breaks the empty-provider bootstrap cycle. Publisher waits for exact finalized registration, assignments and provider completion, then verifies every asset before declaring success. Recovery never double-spends or repeats a completed signature. | active |
 | SR5 | Payload corruption permits authenticated degraded startup and bounded repair. | Storage/repair | Corrupt/missing chunks quarantine only affected manifests; healthy objects serve; corrupted objects cannot serve or produce successful proofs. Finalized lease-bound repair restores bytes and verifies original commitments before clearing quarantine. Metadata/authority corruption still rejects startup. | active |
-| SR6 | Retrieval retains bounded working memory and incrementally verifies canonical content. | CAR/orchestrator | Consuming sink and bounded reorder window release committed chunks; memory is bounded independently of total object size; chunk/root/plan/CAR integrity and deterministic output remain identical; cancellation, truncation, corruption and sink failure release resources. Public SDK/CLI consumers use the canonical new path. | active |
-| SR7 | Gateway throttling and policy errors preserve typed meaning across scheduling. | CAR/gateway/orchestrator | Actual HTTP 429 honors bounded Retry-After and byte/request budgets; throttling does not mark a provider unhealthy; retry deadlines and cancellation remain bounded; full-path policy-denial tests retain structured evidence. | active |
+| SR6 | Retrieval retains bounded working memory and incrementally verifies canonical content. | CAR/orchestrator | Consuming sink and bounded reorder window release committed chunks; memory is bounded independently of total object size; chunk/root/plan/CAR integrity and deterministic output remain identical; cancellation, truncation, corruption and sink failure release resources. Public SDK/CLI consumers use the canonical new path. | complete |
+| SR7 | Gateway throttling and policy errors preserve typed meaning across scheduling. | CAR/gateway/orchestrator | Actual HTTP 429 honors bounded Retry-After and byte/request budgets; throttling does not mark a provider unhealthy; retry deadlines and cancellation remain bounded; full-path policy-denial tests retain structured evidence. | complete |
 | SR8 | Integrated first-release validation closes the seven findings. | Integration/release | Focused affected-crate tests, canonical wire roundtrips, codec guard, formatting and applicable lint pass. Four validators with mandatory signed RS16 DA/RBC exercise publish/replicate/retrieve/restart/repair/revoke through production constructors; no fixture adapter stands in for the authority under test. Broader workspace results and limitations are recorded separately. | active |
 
 SR1/SR2/SR5 share the storage ownership design. SR3 and SR7 can progress
@@ -116,3 +116,27 @@ goals have implementation and regression evidence.
   must verify that correction. Transport changes also separate authenticated
   metadata from bounded chunk frames and bind staged consumption to the current
   assignment revision. These changes remain under validation.
+- All 25 schema tests pass. The SoraFS configuration suite passes 157 cases and
+  finds one unconsumed diagnostic collector in a new test; its cleanup is fixed
+  and awaiting rerun. Current-admission and repair expiry now also respect
+  authenticated finalized time without relaxing local issuance/acquisition
+  bounds. Core compilation stopped in a concurrent FastPQ merge conflict before
+  validating those regressions.
+- The existing public SoraFS page and all 20 locale equivalents in the optional
+  sibling documentation checkout describe the implemented publication and
+  software-custody paths and their remaining runtime dependencies. The sibling
+  content, translation and artifact-provenance validation passes. This does not
+  substitute for the outstanding native and four-validator checks.
+
+- Storage ordering and GC (SR1/SR2), bounded retrieval (SR6), and typed throttling
+  (SR7) have their focused acceptance evidence. The final CAR suite passes 346
+  tests; the orchestrator suite passes 227, with two unrelated ignored tests.
+  The third full node suite passes 1,564 tests, has two ignored tests, and finds
+  one missing pin-policy field in a new fixture. After correcting only that
+  fixture, the rebuilt prepublication-refusal regression passes; no production
+  storage change separates those two results. All three prior GC failures pass.
+  The rebuilt SoraFS configuration library suite passes all 158 tests.
+- Core/Torii/daemon compilation next stopped on 11 missing APIs in concurrent
+  FastPQ integration changes. Those changes are owned by the active merge task.
+  SR3/SR4/SR5/SR8 remain open pending native tests, binary builds and actual
+  four-validator publication, restart, repair and Parliament revocation.

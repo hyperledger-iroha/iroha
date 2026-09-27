@@ -2358,8 +2358,9 @@ pub mod torii {
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
     /// Default global pre-auth connection cap (pre-RLIMIT clamp).
     pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
-    /// Default per-IP pre-auth connection cap.
-    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(64usize));
+    /// Default per-IP pre-auth connection cap, including bounded query waiters.
+    /// A solo client's next heavy-query wave must reach the execution queue.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(256usize));
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
@@ -2575,8 +2576,8 @@ pub mod torii {
     pub const APP_API_MAX_LIST_LIMIT: u32 = 500;
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub const APP_API_MAX_FETCH_SIZE: u32 = 500;
-    /// Rate-limiter cost applied per requested row on app-facing endpoints.
-    pub const APP_API_RATE_LIMIT_COST_PER_ROW: u32 = 1;
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub const APP_API_RATE_LIMIT_COST_PER_PAGE: u32 = 1;
     /// Canonical request freshness defaults for app-facing signed HTTP requests.
     pub mod app_auth {
         /// Maximum allowed clock skew for signed app requests (seconds).
@@ -2685,13 +2686,14 @@ pub mod torii {
     // The pre-auth gate charges every external HTTP request, including routine
     // deployment reads and writes. A solo walk with 128 proof reads, 58
     // mutations, 32 direct readbacks, four funding requests and seven outer MCP
-    // requests fits before refill without a 60s IP ban.
+    // requests fits before refill. Ordinary bursts recover with token refill;
+    // operators can explicitly configure a longer rate-violation cooldown.
     /// Steady-state rate for pre-authorization attempts per IP.
     pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(100);
     /// Burst tokens allowed for pre-authorization attempts per IP.
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(256);
-    /// Time to ban IPs that exceed pre-auth rate limits.
-    pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
+    /// Optional extra cooldown after pre-auth rate exhaustion; disabled by default.
+    pub const PREAUTH_BAN_DURATION: Duration = Duration::ZERO;
     /// Maximum number of temporary pre-auth bans retained in memory.
     pub const PREAUTH_BAN_CAPACITY: NonZeroUsize = nonzero!(4096usize);
     /// Exact transport source hosts trusted for internal Torii reads and privileged routing.
@@ -4847,6 +4849,95 @@ pub mod settlement {
         pub const XOR_ONLY_PCT: u8 = 10;
         /// Halt threshold percentage.
         pub const HALT_PCT: u8 = 2;
+    }
+}
+/// Node-local SCCP defaults for `[sccp.attestor]` and `[sccp.light_client_keeper]`
+/// (`specs/sccp.md` §4.9, §4.13.4). Every value works without operator input.
+pub mod sccp {
+    /// `[sccp.attestor]` defaults.
+    pub mod attestor {
+        /// The attestor runs on every node by default.
+        pub const ENABLED: bool = true;
+        /// Bridge-key directory below `kura.store_dir`, used while `key_dir` is empty.
+        pub const KEY_DIR_UNDER_KURA_STORE: &str = "sccp/bridge-keys";
+        /// Register the node's newest bridge key with `SetSccpBridgeKeyV1` automatically.
+        pub const AUTO_REGISTER: bool = true;
+        /// Attestation entries per `SubmitSccpAttestationsV1` transaction.
+        pub const MAX_ENTRIES_PER_TRANSACTION: u32 = 64;
+        /// Largest accepted `max_entries_per_transaction`; the node also caps it at runtime
+        /// by the on-chain `max_attestation_entries_per_instruction`.
+        pub const MAX_ENTRIES_PER_TRANSACTION_CEILING: u32 = 1_024;
+        /// Blocks after which still-unrecorded attestation entries are resubmitted.
+        pub const RESUBMIT_AFTER_BLOCKS: u64 = 3;
+        /// Largest lead of a rotation subject's `timestamp_ms` over the local clock that is signed.
+        pub const MAX_CLOCK_DRIFT_MS: u64 = 3_600_000;
+        /// Longest graceful-shutdown delay spent getting pending subjects recorded.
+        pub const SHUTDOWN_GRACE_MS: u64 = 30_000;
+    }
+    /// `[sccp.light_client_keeper]` defaults.
+    pub mod light_client_keeper {
+        /// The keeper runs by default; it acts only while the node holds a registered bridge key.
+        pub const ENABLED: bool = true;
+        /// `0` advances once `ws_bound_ms / 4` of each light client has elapsed without progress.
+        pub const ADVANCE_AFTER_MS: u64 = 0;
+        /// Cadence of checking local light-client state.
+        pub const POLL_INTERVAL_MS: u64 = 60_000;
+        /// Timeout of one RPC request before failing over to the next endpoint.
+        pub const REQUEST_TIMEOUT_MS: u64 = 10_000;
+        /// Largest encoded advance the keeper builds.
+        pub const MAX_ADVANCE_BYTES: usize = 262_144;
+        /// Longest accepted endpoint list per chain.
+        pub const MAX_ENDPOINTS_PER_LIST: usize = 64;
+        /// Most accepted `[[sccp.light_client_keeper.secret_headers]]` entries.
+        pub const MAX_SECRET_HEADERS: usize = 64;
+    }
+    /// Compiled free public endpoints (no API key), used when a configured list is empty
+    /// and reused by `iroha_sccp_rpc` and `iroha_sccp_wallet`.
+    // TODO(ws70): verify terms of use and route coverage of every compiled endpoint (spec §13 item 10).
+    pub mod endpoints {
+        /// Ethereum mainnet execution-layer JSON-RPC endpoints.
+        pub const ETHEREUM_EXECUTION: &[&str] = &[
+            "https://ethereum-rpc.publicnode.com",
+            "https://eth.llamarpc.com",
+            "https://cloudflare-eth.com",
+        ];
+        /// Ethereum mainnet beacon API endpoints serving the light-client routes.
+        pub const ETHEREUM_BEACON: &[&str] = &[
+            "https://ethereum-beacon-api.publicnode.com",
+            "https://lodestar-mainnet.chainsafe.io",
+        ];
+        /// BNB Smart Chain mainnet JSON-RPC endpoints.
+        pub const BSC: &[&str] = &[
+            "https://bsc-dataseed.bnbchain.org",
+            "https://bsc-rpc.publicnode.com",
+        ];
+        /// TRON mainnet HTTP API endpoints.
+        pub const TRON: &[&str] = &["https://api.trongrid.io", "https://tron-rpc.publicnode.com"];
+        /// TON mainnet liteservers as `<ipv4>:<port>:<base64 ed25519 public key>`, copied from
+        /// the `liteservers` array of `https://ton.org/global-config.json` (signed-integer IP
+        /// converted to dotted form).
+        // TODO(ws70): re-check these entries against the live global config before release;
+        // the published liteserver set rotates over time.
+        pub const TON_LITESERVERS: &[&str] = &[
+            "5.9.10.47:19949:n4VDnSCUuSpjnCyUk9e3QOOd6o0ItSWYbTnW3Wnn8wk=",
+            "5.9.10.15:48014:3XO67K/qi+gu3T9v8G2hx1yNmWZhccL3O7SoosFo8G0=",
+            "135.181.177.59:53312:aF91CuUHuuOv9rm2W5+O/4h38M3sRm40DtSdRxQhmtQ=",
+            "135.181.140.212:13206:K0t3+IWLOXHYMvMcrGZDPs+pn58a17LFbnXoQkKc2xw=",
+            "135.181.140.221:46995:wQE0MVhXNWUXpWiW5Bk8cAirIh5NNG3cZM1/fSVKIts=",
+            "65.21.141.233:30131:wrQaeIFispPfHndEBc0s0fx7GSp8UFFvebnytQQfc6A=",
+            "65.21.141.198:47160:vOe1Xqt/1AQ2Z56Pr+1Rnw+f0NmAA7rNCZFIHeChB7o=",
+            "65.21.141.231:17728:BYSVpL7aPk0kU5CtlsIae/8mf2B/NrBi7DKmepcjX6Q=",
+            "65.21.141.197:13570:iVQH71cymoNgnrhOT35tl/Y7k86X5iVuu5Vf68KmifQ=",
+            "164.68.101.206:52995:QnGFe9kihW+TKacEvvxFWqVXeRxCB6ChjjhNTrL7+/k=",
+            "164.68.99.144:20334:gyLh12v4hBRtyBygvvbbO2HqEtgl+ojpeRJKt4gkMq0=",
+            "188.68.216.239:19925:ucho5bEkufbKN1JR1BGHpkObq602whJn3Q3UwhtgSo4=",
+            "51.195.189.59:19434:J5CwYXuCZWVPgiFPW+NY2roBwDWpRRtANHSTYTRSVtI=",
+            "51.195.189.140:23067:vX8d0i31zB0prVuZK8fBkt37WnEpuEHrb7PElk4FJ1o=",
+            "135.181.132.198:53560:NlYhh/xf4uQpE+7EzgorPHqIaqildznrpajJTRRH2HU=",
+            "135.181.132.253:46529:jLO6yoooqUQqg4/1QXflpv2qGCoXmzZCR+bOsYJ2hxw=",
+            "54.39.158.156:51565:TDg+ILLlRugRB4Kpg3wXjPcoc+d+Eeb7kuVe16CS9z8=",
+            "185.86.79.9:4701:G6cNAr6wXBBByWDzddEWP5xMFsAcp6y13fXA8Q7EJlM=",
+        ];
     }
 }
 #[cfg(test)]

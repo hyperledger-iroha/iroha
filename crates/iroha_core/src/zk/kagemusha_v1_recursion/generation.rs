@@ -9762,7 +9762,10 @@ where
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-fn augment_halo2_ipa_proof_columns_v1<C, const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64>(
+pub(super) fn augment_halo2_ipa_proof_columns_v1<
+    C,
+    const PROOF_SUPPLIED_INSTANCE_COMMITMENT_MASK: u64,
+>(
     parameters: &ParamsIPA<C>,
     verifying_key: &VerifyingKey<C>,
     raw: KagemushaRawHalo2IpaProofV1,

@@ -2443,14 +2443,21 @@ fn main_finish_verifier_and_consensus_source_use_only_the_closed_release_path() 
         .find("let expected_indices = query_indices_v1")
         .expect("post-grinding queries");
     let fixed = verifier
-        .find("derive_zk_x509_main_fixed_openings_after_grinding_v1")
+        .find("prepare_complete_oods_fixed_v1")
         .expect("verifier-derived fixed openings");
-    assert!(grinding < queries && queries < fixed);
-    assert_eq!(
-        verifier.matches("MainOpenedGroupProviderV1::").count(),
-        FULL_PROFILE_TRACE_GROUPS_V1
+    let constraints = verifier
+        .find("main_oods::verify_main_deep_constraints_v1")
+        .expect("complete MAIN out-of-domain relation");
+    let authenticated_queries = verifier
+        .find("verify_opened_query_relations_after_complete_oods_v1")
+        .expect("current-row DEEP/FRI verification");
+    assert!(
+        grinding < queries
+            && queries < fixed
+            && fixed < constraints
+            && constraints < authenticated_queries
     );
-    assert!(verifier.contains("verify_opened_query_relations_with_deep_v1"));
+    assert!(!verifier.contains("verify_opened_query_relations_with_deep_v1"));
     let engine = include_str!("../engine.rs");
     let engine_production = &engine[..engine
         .find("#[cfg(test)]")
@@ -2465,8 +2472,8 @@ fn main_local_transcript_separates_binding_before_base_after_aux_and_wrong_outer
     let layout = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
     let base_roots = (0..ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1)
         .map(|index| TraceGroupProofV1 {
-            base_root: test_stark_digest_v1(u8::try_from(index + 1).expect("six roots")),
-            aux_root: test_stark_digest_v1(u8::try_from(index + 0x41).expect("six roots")),
+            base_root: test_stark_digest_v1(u8::try_from(index + 1).expect("root fixture byte")),
+            aux_root: test_stark_digest_v1(u8::try_from(index + 0x41).expect("root fixture byte")),
             base_frontier: Vec::new(),
             aux_frontier: Vec::new(),
         })
@@ -2603,10 +2610,11 @@ fn full_profile_layout_is_constant_exact_and_rejects_registration_splices() {
         usize::try_from(ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1)
             .expect("profile proof bound fits usize")
     );
+    assert_eq!(maximum_encoded_bytes, 7_692_192);
     assert!(
         maximum_encoded_bytes
-            > usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize"),
-        "the canonical registration remains inspectable while its full proof exceeds the release cap"
+            < usize::try_from(ZK_X509_MAX_PROOF_BYTES_V1).expect("consensus proof cap fits usize"),
+        "the complete joined MAIN opening schedule fits the unchanged release cap"
     );
     for signature in 0..P256_SIGNATURE_COUNT_V1 {
         let arithmetic = layout

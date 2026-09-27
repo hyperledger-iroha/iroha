@@ -149,7 +149,6 @@ use iroha_data_model::{
         ParliamentTimedOvnFinalizedCastingProofV1,
     },
     parliament_types::BallotAttemptId,
-    privacy::GoldilocksDigest384V1,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
 };

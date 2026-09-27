@@ -1,0 +1,704 @@
+//! SCCP v1 data events (`specs/sccp.md` §4.17).
+//!
+//! [`SccpEvent`] is the Taira data-event family of SCCP. Every variant carries an explicit
+//! payload struct. Parliament proposal lifecycle outcomes are reported by the existing
+//! Parliament governance events; SCCP adds only [`SccpEvent::GovernanceEnacted`] with the
+//! subjects it changed.
+// TODO(ws20): add `SccpEvent` to `DataEvent` with its filter and captured identity tests.
+
+use super::{
+    governance::SccpGovernanceSubjectV1,
+    inbound::SccpSourceLocatorV1,
+    light_client::{SccpLcFreezeReasonV1, SccpLcPointV1},
+    outbound::SccpVoidKindV1,
+    registry::SccpRouteActivationV1,
+};
+use crate::{
+    DeriveJsonDeserialize, DeriveJsonSerialize, account::AccountId, bridge::SccpNetworkV1,
+};
+use iroha_model_base::peer::PeerId;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
+
+/// Declare one closed SCCP event payload struct with the shared codec derives.
+macro_rules! sccp_event_payload {
+    ($(#[$meta:meta])* pub struct $name:ident { $($body:tt)* }) => {
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            Decode,
+            Encode,
+            IntoSchema,
+            DeriveJsonSerialize,
+            DeriveJsonDeserialize,
+        )]
+        #[norito(no_fast_from_json)]
+        #[norito(decode_from_slice)]
+        #[norito(deny_unknown_fields)]
+        #[derive(norito::NoritoSchema)]
+        $(#[$meta])*
+        pub struct $name { $($body)* }
+    };
+}
+
+sccp_event_payload! {
+    /// `RecordSccpMessage` or a bounce recorded an outbound message (§4.4 step 14).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpMessageRecordedV1")]
+    pub struct SccpMessageRecordedV1 {
+        /// Message id (§3.3).
+        pub message_id: [u8; 32],
+        /// External target network.
+        pub network: SccpNetworkV1,
+        /// Route revision.
+        pub revision: u32,
+        /// Per-revision nonce.
+        pub nonce: u64,
+        /// Recording Taira height.
+        pub height: u64,
+        /// Leaf index within the block.
+        pub commitment_index: u32,
+        /// Destination-time mint deadline.
+        pub deadline_ms: u64,
+    }
+}
+
+sccp_event_payload! {
+    /// The post-execution hook committed a block's SCCP leaves (§4.5).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpBlockCommittedV1")]
+    pub struct SccpBlockCommittedV1 {
+        /// Committing Taira height.
+        pub height: u64,
+        /// §3.4 block root.
+        pub root: [u8; 32],
+        /// Number of leaves.
+        pub count: u32,
+        /// History size after appending the block.
+        pub history_size: u64,
+    }
+}
+
+sccp_event_payload! {
+    /// An attestation subject was written (§4.6).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpSubjectCreatedV1")]
+    pub struct SccpSubjectCreatedV1 {
+        /// Subject height.
+        pub height: u64,
+        /// Signing generation.
+        pub generation: u64,
+        /// Committed SCCP messages.
+        pub message_count: u32,
+        /// Whether the subject hands off to a successor generation.
+        pub rotation: bool,
+    }
+}
+
+sccp_event_payload! {
+    /// One attestation signature was stored (§4.8).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpAttestationSignedV1")]
+    pub struct SccpAttestationSignedV1 {
+        /// Attested height.
+        pub height: u64,
+        /// Generation that signs the height.
+        pub generation: u64,
+        /// Roster slot of the signer.
+        pub signer_index: u8,
+        /// Bridge-key address of the signer.
+        pub address: [u8; 20],
+    }
+}
+
+sccp_event_payload! {
+    /// A subject first reached its generation's threshold (§4.8).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpBlockAttestedV1")]
+    pub struct SccpBlockAttestedV1 {
+        /// Attested height.
+        pub height: u64,
+        /// Signing generation.
+        pub generation: u64,
+        /// Stored signers when the threshold was reached.
+        pub signer_bitmap: u32,
+    }
+}
+
+sccp_event_payload! {
+    /// A new roster generation was created at a rotation height (§4.3.2).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpRosterGenerationCreatedV1")]
+    pub struct SccpRosterGenerationCreatedV1 {
+        /// New generation number.
+        pub generation: u64,
+        /// §3.7 digest.
+        pub digest: [u8; 32],
+        /// First height it signs.
+        pub activation_height: u64,
+        /// End of its validity.
+        pub valid_until_ms: u64,
+    }
+}
+
+/// Why roster derivation failed closed at a rotation height (§4.3.2).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[norito(tag = "failure", content = "detail")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sccp::events::SccpRosterDerivationFailureV1")]
+pub enum SccpRosterDerivationFailureV1 {
+    /// An epoch boundary lacked `next_epoch_snapshot`.
+    #[codec(index = 0)]
+    #[norito(rename = "missing_next_epoch_snapshot")]
+    MissingNextEpochSnapshot,
+    /// The roster size was outside `4..=31`.
+    #[codec(index = 1)]
+    #[norito(rename = "roster_size_out_of_range")]
+    RosterSizeOutOfRange,
+}
+
+sccp_event_payload! {
+    /// Roster derivation failed closed; the current generation stays (§4.3.2).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpRosterDerivationFailedV1")]
+    pub struct SccpRosterDerivationFailedV1 {
+        /// Rotation height.
+        pub height: u64,
+        /// Generation that stays current.
+        pub generation: u64,
+        /// Failure cause.
+        pub reason: SccpRosterDerivationFailureV1,
+        /// Roster size seen (0 when the snapshot was missing).
+        pub roster_size: u32,
+    }
+}
+
+sccp_event_payload! {
+    /// A rotation subject stayed unattested past `attestation_stall_ms` (§4.3.3).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpHandoffStalledV1")]
+    pub struct SccpHandoffStalledV1 {
+        /// Rotation height.
+        pub height: u64,
+        /// Outgoing generation.
+        pub generation: u64,
+    }
+}
+
+sccp_event_payload! {
+    /// `SetSccpBridgeKeyV1` staged a key or a revocation (§4.2.2).
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpBridgeKeySetV1")]
+    pub struct SccpBridgeKeySetV1 {
+        /// Peer whose key changes.
+        pub peer: PeerId,
+        /// Address of the new key; `None` for a revocation.
+        #[norito(required)]
+        pub address: Option<[u8; 20]>,
+        /// Account of the new key; `None` for a revocation.
+        #[norito(required)]
+        pub account: Option<AccountId>,
+        /// Epoch from which the binding applies.
+        pub activation_epoch: u64,
+    }
+}
+
+sccp_event_payload! {
+    /// Equivocation evidence was recorded and the key faulted (§4.11).
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpAttestationFaultV1")]
+    pub struct SccpAttestationFaultV1 {
+        /// Peer that owns the faulted key.
+        pub peer: PeerId,
+        /// Faulted key address.
+        pub address: [u8; 20],
+        /// Height named by the faulty statement.
+        pub height: u64,
+        /// §3.6 digest of the faulty statement.
+        pub statement_hash: [u8; 32],
+        /// Taira height that recorded the evidence.
+        pub reported_at_height: u64,
+    }
+}
+
+sccp_event_payload! {
+    /// An inbound burn was proven (§4.12.1).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpInboundProvenV1")]
+    pub struct SccpInboundProvenV1 {
+        /// Message id (§3.3).
+        pub message_id: [u8; 32],
+        /// External source network.
+        pub network: SccpNetworkV1,
+        /// Route revision.
+        pub revision: u32,
+        /// Payload amount in Taira units.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub amount: u128,
+        /// Source-chain position of the burn.
+        pub source_locator: SccpSourceLocatorV1,
+        /// Self-claim fee due at release.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub fee_due: u128,
+    }
+}
+
+sccp_event_payload! {
+    /// Core registered an absent account to credit it (§4.12.3 step 3, §4.16).
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpRecipientRegisteredV1")]
+    pub struct SccpRecipientRegisteredV1 {
+        /// Registered account.
+        pub account: AccountId,
+        /// Route network of the credit.
+        pub network: SccpNetworkV1,
+        /// Inbound or outbound message being settled; `None` for a stranded release.
+        #[norito(required)]
+        pub message_id: Option<[u8; 32]>,
+    }
+}
+
+sccp_event_payload! {
+    /// An inbound message was released to its recipient (§4.12.3 step 5).
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpInboundReleasedV1")]
+    pub struct SccpInboundReleasedV1 {
+        /// Message id.
+        pub message_id: [u8; 32],
+        /// External source network.
+        pub network: SccpNetworkV1,
+        /// Route revision.
+        pub revision: u32,
+        /// Credited account.
+        pub recipient: AccountId,
+        /// Full payload amount (the recipient receives `amount − fee`).
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub amount: u128,
+        /// Fee sent to the Nexus fee sink.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub fee: u128,
+    }
+}
+
+/// Why an inbound settlement bounced (§4.12.3 steps 1–2).
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[norito(tag = "reason", content = "detail")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sccp::events::SccpBounceReasonV1")]
+pub enum SccpBounceReasonV1 {
+    /// The recipient bytes do not decode as an `AccountAddress`.
+    #[codec(index = 0)]
+    #[norito(rename = "undecodable_recipient")]
+    UndecodableRecipient,
+    /// The recipient is an SCCP escrow account.
+    #[codec(index = 1)]
+    #[norito(rename = "escrow_recipient")]
+    EscrowRecipient,
+    /// The recipient's controller uses an algorithm or curve account admission refuses.
+    #[codec(index = 2)]
+    #[norito(rename = "inadmissible_controller")]
+    InadmissibleController,
+    /// Transfer control deterministically refuses an XOR credit to the recipient.
+    #[codec(index = 3)]
+    #[norito(rename = "credit_refused")]
+    CreditRefused,
+}
+
+sccp_event_payload! {
+    /// An inbound message bounced back to its source-chain sender (§4.12.5).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpInboundBouncedV1")]
+    pub struct SccpInboundBouncedV1 {
+        /// Inbound message id.
+        pub message_id: [u8; 32],
+        /// External network.
+        pub network: SccpNetworkV1,
+        /// Inbound revision.
+        pub revision: u32,
+        /// Outbound message returning the value.
+        pub bounce_message_id: [u8; 32],
+        /// Revision the bounce was recorded on.
+        pub bounce_revision: u32,
+        /// Bounced amount.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub amount: u128,
+        /// Bounce cause.
+        pub reason: SccpBounceReasonV1,
+    }
+}
+
+sccp_event_payload! {
+    /// Settlement or a bounce found `liability(r) < amount` (§4.12.3 step 4).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpInboundLiabilityShortfallV1")]
+    pub struct SccpInboundLiabilityShortfallV1 {
+        /// Inbound message id.
+        pub message_id: [u8; 32],
+        /// External network.
+        pub network: SccpNetworkV1,
+        /// Revision.
+        pub revision: u32,
+        /// Amount to settle.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub amount: u128,
+        /// Liability of the revision.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub liability: u128,
+    }
+}
+
+sccp_event_payload! {
+    /// A destination void of an outbound message was proven (§4.16).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpOutboundVoidedV1")]
+    pub struct SccpOutboundVoidedV1 {
+        /// Outbound message id.
+        pub message_id: [u8; 32],
+        /// External network.
+        pub network: SccpNetworkV1,
+        /// Revision.
+        pub revision: u32,
+        /// Voided nonce.
+        pub nonce: u64,
+        /// Void kind.
+        pub kind: SccpVoidKindV1,
+        /// Whether the refund waits for `SettleSccpV1::Refund`.
+        pub refund_pending: bool,
+    }
+}
+
+sccp_event_payload! {
+    /// A voided outbound message was refunded to its sender (§4.16).
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpOutboundRefundedV1")]
+    pub struct SccpOutboundRefundedV1 {
+        /// Outbound message id.
+        pub message_id: [u8; 32],
+        /// External network.
+        pub network: SccpNetworkV1,
+        /// Revision.
+        pub revision: u32,
+        /// Nonce.
+        pub nonce: u64,
+        /// Credited sender.
+        pub recipient: AccountId,
+        /// Refunded amount.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub amount: u128,
+    }
+}
+
+sccp_event_payload! {
+    /// A voided outbound message moved to the route's `stranded` balance (§4.16).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpOutboundStrandedV1")]
+    pub struct SccpOutboundStrandedV1 {
+        /// Outbound message id.
+        pub message_id: [u8; 32],
+        /// External network.
+        pub network: SccpNetworkV1,
+        /// Revision.
+        pub revision: u32,
+        /// Nonce.
+        pub nonce: u64,
+        /// Stranded amount.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub amount: u128,
+    }
+}
+
+sccp_event_payload! {
+    /// A Parliament-enacted `ReleaseStranded` paid out stranded value (§4.14.3).
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpStrandedReleasedV1")]
+    pub struct SccpStrandedReleasedV1 {
+        /// External network of the route.
+        pub network: SccpNetworkV1,
+        /// Credited account.
+        pub recipient: AccountId,
+        /// Released amount.
+        #[norito(json = "crate::json_helpers::u128_string")]
+        pub amount: u128,
+        /// Public memo of the action.
+        pub memo: String,
+        /// Enacted proposal.
+        pub proposal_id: [u8; 32],
+    }
+}
+
+sccp_event_payload! {
+    /// An advance moved a light client's head (§4.13.2).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpLightClientAdvancedV1")]
+    pub struct SccpLightClientAdvancedV1 {
+        /// Source chain.
+        pub network: SccpNetworkV1,
+        /// Newest stored set.
+        pub latest_set_id: u64,
+        /// Newest finalized point.
+        pub latest_finalized: SccpLcPointV1,
+        /// New state hash.
+        pub state_hash: [u8; 32],
+    }
+}
+
+sccp_event_payload! {
+    /// A light client was frozen (§4.13.2).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpLightClientFrozenV1")]
+    pub struct SccpLightClientFrozenV1 {
+        /// Source chain.
+        pub network: SccpNetworkV1,
+        /// Freeze reason.
+        pub reason: SccpLcFreezeReasonV1,
+    }
+}
+
+sccp_event_payload! {
+    /// A Parliament-enacted `InitializeLightClient` installed a light client (§4.13.2).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpLightClientInitializedV1")]
+    pub struct SccpLightClientInitializedV1 {
+        /// Source chain.
+        pub network: SccpNetworkV1,
+        /// Bootstrap set.
+        pub latest_set_id: u64,
+        /// Bootstrap checkpoint.
+        pub latest_finalized: SccpLcPointV1,
+        /// Initial state hash.
+        pub state_hash: [u8; 32],
+        /// Enacted proposal.
+        pub proposal_id: [u8; 32],
+    }
+}
+
+sccp_event_payload! {
+    /// A Parliament-enacted `InstallTrustedCheckpoint` wrote a checkpoint (§4.13.2).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpTrustedCheckpointInstalledV1")]
+    pub struct SccpTrustedCheckpointInstalledV1 {
+        /// Source chain.
+        pub network: SccpNetworkV1,
+        /// Checkpoint source height.
+        pub source_height: u64,
+        /// Checkpoint block hash.
+        pub block_hash: [u8; 32],
+        /// Enacted proposal.
+        pub proposal_id: [u8; 32],
+    }
+}
+
+sccp_event_payload! {
+    /// A revision changed activation state (§4.14.2).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpRevisionActivationChangedV1")]
+    pub struct SccpRevisionActivationChangedV1 {
+        /// External network.
+        pub network: SccpNetworkV1,
+        /// Revision.
+        pub revision: u32,
+        /// Previous state; `None` when `RegisterRoute` created the revision.
+        #[norito(required)]
+        pub from: Option<SccpRouteActivationV1>,
+        /// New state; `None` when `RemoveStaged` removed the revision.
+        #[norito(required)]
+        pub to: Option<SccpRouteActivationV1>,
+    }
+}
+
+sccp_event_payload! {
+    /// A destination control message was recorded (§4.14.6).
+    #[derive(Copy)]
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpControlRecordedV1")]
+    pub struct SccpControlRecordedV1 {
+        /// External network.
+        pub network: SccpNetworkV1,
+        /// Revision.
+        pub revision: u32,
+        /// Control nonce.
+        pub control_nonce: u64,
+        /// Commanded minting pause state.
+        pub paused: bool,
+        /// Recording Taira height.
+        pub height: u64,
+        /// Leaf index within the block.
+        pub commitment_index: u32,
+    }
+}
+
+sccp_event_payload! {
+    /// An SCCP Parliament proposal was enacted (§4.14.3).
+    #[norito_schema(name = "iroha_data_model::sccp::events::SccpGovernanceEnactedV1")]
+    pub struct SccpGovernanceEnactedV1 {
+        /// Enacted proposal id.
+        pub proposal_id: [u8; 32],
+        /// `S(P)`: the subjects whose revision counters were incremented.
+        pub subjects: Vec<SccpGovernanceSubjectV1>,
+    }
+}
+
+/// SCCP data events (§4.17).
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    iroha_data_model_derive::EventSet,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
+#[norito(decode_from_slice)]
+#[norito(deny_unknown_fields)]
+#[norito(tag = "event", content = "payload")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::sccp::events::SccpEvent")]
+#[event_set(schema_name = "iroha_data_model::sccp::events::SccpEventSet")]
+pub enum SccpEvent {
+    /// Outbound message recorded.
+    #[codec(index = 0)]
+    #[norito(rename = "message_recorded")]
+    MessageRecorded(SccpMessageRecordedV1),
+    /// Block leaves committed.
+    #[codec(index = 1)]
+    #[norito(rename = "block_committed")]
+    BlockCommitted(SccpBlockCommittedV1),
+    /// Attestation subject created.
+    #[codec(index = 2)]
+    #[norito(rename = "subject_created")]
+    SubjectCreated(SccpSubjectCreatedV1),
+    /// Attestation signature stored.
+    #[codec(index = 3)]
+    #[norito(rename = "attestation_signed")]
+    AttestationSigned(SccpAttestationSignedV1),
+    /// Subject reached its threshold.
+    #[codec(index = 4)]
+    #[norito(rename = "block_attested")]
+    BlockAttested(SccpBlockAttestedV1),
+    /// Roster generation created.
+    #[codec(index = 5)]
+    #[norito(rename = "roster_generation_created")]
+    RosterGenerationCreated(SccpRosterGenerationCreatedV1),
+    /// Roster derivation failed closed.
+    #[codec(index = 6)]
+    #[norito(rename = "roster_derivation_failed")]
+    RosterDerivationFailed(SccpRosterDerivationFailedV1),
+    /// Rotation subject stalled.
+    #[codec(index = 7)]
+    #[norito(rename = "handoff_stalled")]
+    HandoffStalled(SccpHandoffStalledV1),
+    /// Bridge key or revocation staged.
+    #[codec(index = 8)]
+    #[norito(rename = "bridge_key_set")]
+    BridgeKeySet(SccpBridgeKeySetV1),
+    /// Equivocation evidence recorded.
+    #[codec(index = 9)]
+    #[norito(rename = "attestation_fault")]
+    AttestationFault(SccpAttestationFaultV1),
+    /// Inbound burn proven.
+    #[codec(index = 10)]
+    #[norito(rename = "inbound_proven")]
+    InboundProven(SccpInboundProvenV1),
+    /// Absent account registered for a credit.
+    #[codec(index = 11)]
+    #[norito(rename = "recipient_registered")]
+    RecipientRegistered(SccpRecipientRegisteredV1),
+    /// Inbound message released.
+    #[codec(index = 12)]
+    #[norito(rename = "inbound_released")]
+    InboundReleased(SccpInboundReleasedV1),
+    /// Inbound message bounced.
+    #[codec(index = 13)]
+    #[norito(rename = "inbound_bounced")]
+    InboundBounced(SccpInboundBouncedV1),
+    /// Inbound settlement hit a liability shortfall.
+    #[codec(index = 14)]
+    #[norito(rename = "inbound_liability_shortfall")]
+    InboundLiabilityShortfall(SccpInboundLiabilityShortfallV1),
+    /// Outbound void proven.
+    #[codec(index = 15)]
+    #[norito(rename = "outbound_voided")]
+    OutboundVoided(SccpOutboundVoidedV1),
+    /// Outbound refund paid.
+    #[codec(index = 16)]
+    #[norito(rename = "outbound_refunded")]
+    OutboundRefunded(SccpOutboundRefundedV1),
+    /// Outbound value stranded.
+    #[codec(index = 17)]
+    #[norito(rename = "outbound_stranded")]
+    OutboundStranded(SccpOutboundStrandedV1),
+    /// Stranded value released by the Parliament.
+    #[codec(index = 18)]
+    #[norito(rename = "stranded_released")]
+    StrandedReleased(SccpStrandedReleasedV1),
+    /// Light-client head advanced.
+    #[codec(index = 19)]
+    #[norito(rename = "light_client_advanced")]
+    LightClientAdvanced(SccpLightClientAdvancedV1),
+    /// Light client frozen.
+    #[codec(index = 20)]
+    #[norito(rename = "light_client_frozen")]
+    LightClientFrozen(SccpLightClientFrozenV1),
+    /// Light client initialized.
+    #[codec(index = 21)]
+    #[norito(rename = "light_client_initialized")]
+    LightClientInitialized(SccpLightClientInitializedV1),
+    /// Trusted checkpoint installed.
+    #[codec(index = 22)]
+    #[norito(rename = "trusted_checkpoint_installed")]
+    TrustedCheckpointInstalled(SccpTrustedCheckpointInstalledV1),
+    /// Revision activation changed.
+    #[codec(index = 23)]
+    #[norito(rename = "revision_activation_changed")]
+    RevisionActivationChanged(SccpRevisionActivationChangedV1),
+    /// Destination control recorded.
+    #[codec(index = 24)]
+    #[norito(rename = "control_recorded")]
+    ControlRecorded(SccpControlRecordedV1),
+    /// SCCP governance proposal enacted.
+    #[codec(index = 25)]
+    #[norito(rename = "governance_enacted")]
+    GovernanceEnacted(SccpGovernanceEnactedV1),
+}
+
+#[cfg(test)]
+mod tests;

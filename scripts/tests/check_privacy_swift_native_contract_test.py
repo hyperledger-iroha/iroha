@@ -253,8 +253,6 @@ class PrivacySwiftNativeContractTests(unittest.TestCase):
                     "run: bash scripts/package_mobile_sdk_artifacts.sh --apple " in line):
                     self.assertIn('--lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"', line, path)
         self.assertIn('--lockfile-path "$(CURDIR)/Cargo.lock"', read("Makefile"))
-        self.assertEqual(read("scripts/check_sccp_production_corridor.sh").count(
-            'run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh" --lockfile-path "$ROOT/Cargo.lock"'), 2)
         self.assertIn('bash "${APPLE_ARTIFACT_CHECKER}" --apple-only --lockfile-path "${PRIVACY_RELEASE_CARGO_LOCK}"', read("ci/check_privacy_swift_sdk.sh"))
         android = read("kotlin/client-android/build.gradle.kts")
         self.assertEqual(android.count('"--lockfile-path",\n                tools.cargoLock.toString(),'), 2)

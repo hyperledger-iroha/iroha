@@ -20242,6 +20242,7 @@ seiyaku OpaqueInstructionSubmission {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
+        crate::fastpq::quantity_fixture::materialize(&mut batch);
         fastpq_prover::bind_axt_batch_with_proof_metadata(
             &mut batch,
             &binding,
@@ -20251,12 +20252,15 @@ seiyaku OpaqueInstructionSubmission {
             Some(expiry_slot),
         )
         .expect("bind AXT test batch");
-        let proof = fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
-            .expect("FASTPQ prover")
-            .prove_axt_bound(&batch, &binding)
-            .expect("FASTPQ proof");
-        let fastpq_payload =
-            fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
+        let fastpq_payload = if opaque {
+            // This fixture exercises semantic rejection before child proof decoding.
+            vec![0]
+        } else {
+            fastpq_prover::Prover::canonical(fastpq_prover::AXT_DEFAULT_PARAMETER)
+                .expect("FASTPQ prover")
+                .prove_axt_bound(&batch, &binding)
+                .expect("canonical AXT proof")
+        };
         let envelope = axt::AxtProofEnvelope {
             dsid,
             manifest_root,

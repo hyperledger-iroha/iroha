@@ -1,12 +1,13 @@
-//! Canonical bounded wire owner for the inactive DEEP compact candidate.
+//! Canonical bounded wire owner for the masked DEEP compact protocol.
 //!
 //! This DTO fixes 301 retained columns, 64 initial queries, a paired quotient plus composition mask,
 //! five folds [16,16,8,8,4], fixed raw FRI fibers, and all 128 terminal values. Minimal frontiers derive
 //! from sorted unique positions; a distinct frame admits no legacy fallback.
 //! Decoding checks bytes and cumulative resource budgets before shape preflight.
 //!
-//! TODO: Bind this DTO to the complete replacement transcript, public statement,
-//! OOD/AIR checks and authenticated openings before any production admission.
+//! The verifier binds this DTO to its transcript, public statement, OOD/AIR
+//! checks and authenticated openings. TODO: Independently qualify the integrated
+//! protocol and source-context authentication.
 //! Successful decode or shape preflight is not proof verification. In particular,
 //! the verifier must compare the positions to its own final transcript challenge.
 
@@ -137,6 +138,7 @@ fn limit(name: &'static str, actual: usize, maximum: usize) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn maximum_siblings(leaves: usize, selected: usize) -> usize {
     let depth = leaves.ilog2() as usize;
     (0..depth)
@@ -269,29 +271,48 @@ pub(super) fn preflight(proof: &DeepProof, queries: &[usize]) -> Result<OpeningP
 }
 
 /// Exact finite aggregate limits for the sole canonical DTO, before raw decoding.
+#[cfg(test)]
 pub(super) fn decode_limits(frame_bytes: usize) -> DecodeLimits {
+    decode_limits_with_allocation(frame_bytes, MAX_ALLOCATION_CHARGES)
+}
+
+fn decode_limits_with_allocation(frame_bytes: usize, allocation_charges: usize) -> DecodeLimits {
     DecodeLimits::new(
         MAX_SEQUENCE_ELEMENTS,
         frame_bytes,
         MAX_TOTAL_ELEMENTS,
-        MAX_ALLOCATION_CHARGES,
+        allocation_charges.min(MAX_ALLOCATION_CHARGES),
         MAX_DECODE_DEPTH,
     )
 }
 
-/// Decode a canonical candidate inside the fixed profile and caller byte ceiling.
+/// Decode the canonical masked frame inside the fixed profile and caller byte ceiling.
 ///
 /// The byte check precedes header/checksum parsing. Sequence/allocation/depth
 /// budgets remain active through canonical re-encoding. The proof's positions
 /// are checked for internal shape only: final verification must call `preflight`
 /// again with independently transcript-derived positions after replay.
+#[cfg(test)]
 pub(super) fn decode(bytes: &[u8], caller_max_bytes: usize) -> Result<DeepProof> {
+    decode_with_allocation(bytes, caller_max_bytes, MAX_ALLOCATION_CHARGES)
+}
+
+/// Canonical decode with the stricter caller/profile allocation-charge ceiling.
+/// Enclosing request scopes remain cumulative and cannot be reset by this call.
+pub(super) fn decode_with_allocation(
+    bytes: &[u8],
+    caller_max_bytes: usize,
+    allocation_charges: usize,
+) -> Result<DeepProof> {
     limit(
         "max_proof_bytes",
         bytes.len(),
         caller_max_bytes.min(MAX_FRAME_BYTES),
     )?;
-    let proof: DeepProof = norito::decode_canonical_with_limits(bytes, decode_limits(bytes.len()))?;
+    let proof: DeepProof = norito::decode_canonical_with_limits(
+        bytes,
+        decode_limits_with_allocation(bytes.len(), allocation_charges),
+    )?;
     if proof.rows.len() != QUERY_COUNT {
         return Err(shape("DEEP proof needs exactly 64 complete retained rows"));
     }
@@ -304,6 +325,7 @@ pub(super) fn decode(bytes: &[u8], caller_max_bytes: usize) -> Result<DeepProof>
 ///
 /// Each frontier maximum is attainable simultaneously by the linked query set
 /// in the size test. Fixed field payload lengths do not depend on scalar values.
+#[cfg(test)]
 pub(super) fn maximum_frame_bytes() -> usize {
     let field = |payload| {
         payload

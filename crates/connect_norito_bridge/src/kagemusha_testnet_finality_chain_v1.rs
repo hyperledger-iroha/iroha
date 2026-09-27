@@ -12,7 +12,10 @@ use iroha_data_model::{
 
 use crate::committed_transaction_inclusion::MAX_CHAIN_JSON_BYTES;
 #[cfg(unix)]
-use crate::kagemusha_testnet_observation_v1::pin_kagemusha_testnet_authenticated_finality_anchor_v1;
+use crate::{
+    kagemusha_testnet_observation_v1::pin_kagemusha_testnet_authenticated_finality_anchor_v1,
+    kagemusha_testnet_publication_v1::TestnetPublicationPermitV1,
+};
 
 const MAX_CHAIN_BUNDLES: usize = 4096;
 
@@ -69,16 +72,24 @@ pub fn verify_kagemusha_testnet_finality_anchor_from_chain_v1(
 /// replacement operation pin. No diagnostic lineage advances on failure.
 #[cfg(unix)]
 pub(crate) fn pin_kagemusha_testnet_authenticated_finality_chain_v1(
+    publication: &TestnetPublicationPermitV1<'_>,
     operation_id: [u8; 32],
     expected_network_id: NetworkId,
     trusted_first_context_id: HeightContextId,
     chain_json: &[u8],
 ) -> Result<(bool, KagemushaFinalityTrustAnchorV1), String> {
+    publication.require_valid()?;
     verify_then_pin_chain(
         expected_network_id,
         trusted_first_context_id,
         chain_json,
-        |verified| pin_kagemusha_testnet_authenticated_finality_anchor_v1(operation_id, verified),
+        |verified| {
+            pin_kagemusha_testnet_authenticated_finality_anchor_v1(
+                publication,
+                operation_id,
+                verified,
+            )
+        },
     )
 }
 
@@ -143,8 +154,11 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn pin_cannot_be_created_from_invalid_finality() {
+        let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+        let publication = gate.dispatch().unwrap();
         assert!(
             pin_kagemusha_testnet_authenticated_finality_chain_v1(
+                &publication.permit(),
                 [7; 32],
                 network(),
                 first_context(),

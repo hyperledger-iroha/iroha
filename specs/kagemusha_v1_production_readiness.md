@@ -5,7 +5,35 @@ qualified**. This record tracks implementation and validation work; it is not an
 independent cryptographic audit, hardware certification, or authorization to
 enable an offline monetary profile.
 
-## Release goals
+## Current bounded goal — 2026-09-26
+
+Finish and validate the existing signed-bootstrap-to-native-startup implementation
+in `/Users/takemiyamakoto/dev/iroha` on `optimizations`, then deliver one reviewable
+signed change. This replaces the open-ended production-readiness work scope for
+the current milestone. Production qualification remains a separate outcome.
+
+Completion requires all of the following:
+
+1. Compile and pass the focused shared bootstrap/freshness model, native
+   bootstrap/startup/publication/deadline, and Kagami issuance tests. Fix failures
+   in this scope, including signed time, replay, process ownership, partial
+   installation and panic-recovery regressions.
+2. Regenerate Kagami command help and pass its generated-help comparison and
+   canonical-command checks. Pass formatting for changed files and the codec
+   guard. Keep first-release APIs canonical, with no compatibility adapters.
+3. Commit only this milestone's reviewed implementation, tests, generated help
+   and source-coupled documentation with signing enabled. Preserve unrelated
+   working-tree changes and record the exact tests that actually completed.
+
+Scope is frozen to those acceptance criteria. New server issuer/storage work,
+HTTP deployment, app provisioning, recursive inventory/slice/root completion,
+hardware qualification and release-wide performance/security evidence are later
+milestones. Preserve their current work; do not pull them into this milestone.
+Collect already-running test results without expanding the implementation scope.
+Stop this milestone after its acceptance criteria pass; do not automatically
+continue into the later milestones or claim production readiness.
+
+## Subsequent production milestones
 
 1. Close monetary proof authority: constrain original recipient credentials,
    plaintext openings, finalized reserve credits, normalized hardware guards,
@@ -51,8 +79,21 @@ host. Swift and Kotlin expose this activation without root keys, storage paths
 or private mint openings. Exact retries reauthenticate; partial installation
 cannot be reset in process. Concrete deployment provisioning and native mint
 preparation remain required before an app can execute the complete testnet flow.
-The scoped bridge suite passes 355 tests with one existing ignored test. The new
-fixed five-slice arithmetic and shared dense MSM suite pass 40 tests with two
+The September 26 startup correction shares exclusive publication ownership
+across C/JNI and public Rust mutations, with scoped guard-borrowed permits and
+revocation checked again before returning success. Seven isolated tests of the
+actual publication module pass. The canonical bootstrap model passes 11 tests;
+Kagami now prepares, signs and assembles that same package. Native verification
+anchors its lease before reading freshness to charge suspension during the read.
+The new signed freshness model and native nonce/deadline owner bind authority
+time uncertainty and exact retained checkpoints; their combined validation is
+pending. Operational authority deployment and app provisioning remain required.
+The Pixel restart
+diagnostic now verifies a fresh StrongBox control before classifying exhaustion;
+its six unit tests pass and instrumentation compiles, but the revised check has
+not run on a device. Combined native/proof/CLI validation is pending.
+The September 25 bridge suite passed 355 tests with one existing ignored test.
+The fixed five-slice arithmetic and shared dense MSM suite passed 40 tests with two
 benchmark-only cases ignored, including both-parity full-capacity, empty-slice,
 padding and source-binding controls. The dense witness now derives a complete
 offset bound from its active additions; the previously rejecting 256-offset

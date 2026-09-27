@@ -16,6 +16,8 @@
 //! rejected here. This primitive is not connected to proof admission and does not
 //! remove replay, change production limits or establish protocol qualification.
 
+use zeroize::{Zeroize, Zeroizing};
+
 use super::{
     blake2b_compression_air::INITIALIZATION_VECTOR, transfer_integer_air::IntegerAirField,
 };
@@ -93,6 +95,33 @@ pub struct CompactRow<F = u64> {
     pub digest: [F; 8],
 }
 
+// Exhaustive destructuring makes any new witness field an explicit erasure
+// obligation. This adds no bound to the public generic row type itself.
+impl<F: Zeroize> Zeroize for CompactRow<F> {
+    fn zeroize(&mut self) {
+        let Self {
+            working,
+            message,
+            chaining,
+            bits,
+            carries,
+            present,
+            byte_len,
+            prefix_count,
+            digest,
+        } = self;
+        working.zeroize();
+        message.zeroize();
+        chaining.zeroize();
+        bits.zeroize();
+        carries.zeroize();
+        present.zeroize();
+        byte_len.zeroize();
+        prefix_count.zeroize();
+        digest.zeroize();
+    }
+}
+
 impl<F: IntegerAirField> CompactRow<F> {
     /// Canonical zero row.
     #[must_use]
@@ -115,6 +144,12 @@ impl<F: IntegerAirField> CompactRow<F> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompactHashWitness<F = u64> {
     rows: Box<[CompactRow<F>]>,
+}
+
+impl<F: Zeroize> Zeroize for CompactHashWitness<F> {
+    fn zeroize(&mut self) {
+        self.rows.zeroize();
+    }
 }
 
 impl<F> CompactHashWitness<F> {
@@ -171,6 +206,14 @@ impl CompactHashWitness<u64> {
     /// Generate a complete exact 0..128-byte final-block witness; reject longer inputs.
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        Self::from_bytes_guarded(bytes).map(|mut guarded| Self {
+            rows: core::mem::take(&mut guarded.rows),
+        })
+    }
+
+    /// Construct directly into fixed erased storage for private producer use.
+    /// No allocation grows or shrinks after private row values are written.
+    pub(crate) fn from_bytes_guarded(bytes: &[u8]) -> Option<Zeroizing<Self>> {
         if bytes.len() > MAX_MESSAGE_BYTES {
             return None;
         }
@@ -183,7 +226,9 @@ impl CompactHashWitness<u64> {
         h[0] ^= PARAMETER_WORD;
         let mut v = [0_u64; 16];
         let mut count = 0;
-        let mut rows = Vec::with_capacity(ROW_COUNT);
+        let mut witness = Zeroizing::new(Self {
+            rows: vec![CompactRow::zero(); ROW_COUNT].into_boxed_slice(),
+        });
         for index in 0..ROW_COUNT {
             let mut row = CompactRow {
                 working: limbs(&v),
@@ -245,9 +290,9 @@ impl CompactHashWitness<u64> {
                     row.digest[7] |= 1 << 24;
                 }
             }
-            rows.push(row);
+            witness.rows[index] = row;
         }
-        Self::from_rows(rows)
+        Some(witness)
     }
 }
 
@@ -521,6 +566,56 @@ mod tests {
             prefix_count: map(row.prefix_count),
             digest: row.digest.map(map),
         }
+    }
+
+    #[test]
+    fn guarded_hash_matches_all_rows_and_erases_every_cell() {
+        use crate::gadgets::compact_trace_columns::hash_row_cells;
+        let bytes = [0x5b; 83];
+        let reference = CompactHashWitness::from_bytes(&bytes).unwrap();
+        let mut guarded = CompactHashWitness::from_bytes_guarded(&bytes).unwrap();
+        assert_eq!(guarded.rows(), reference.rows());
+        let allocation = guarded.rows().as_ptr();
+        guarded.zeroize();
+        assert_eq!(guarded.rows().as_ptr(), allocation);
+        assert!(
+            guarded
+                .rows()
+                .iter()
+                .all(|row| hash_row_cells(row) == [0; COLUMN_COUNT])
+        );
+        assert!(CompactHashWitness::from_bytes_guarded(&[0; 129]).is_none());
+    }
+
+    #[test]
+    fn hash_guard_erases_rows_on_return_and_unwind() {
+        use crate::gadgets::compact_trace_columns::hash_row_from_cells;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ERASED: AtomicUsize = AtomicUsize::new(0);
+        #[derive(Clone, Copy)]
+        struct Cell(u64);
+        impl Zeroize for Cell {
+            fn zeroize(&mut self) {
+                assert_eq!(self.0, 17);
+                self.0.zeroize();
+                ERASED.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let make = || {
+            Zeroizing::new(CompactHashWitness {
+                rows: vec![hash_row_from_cells(&[Cell(17); COLUMN_COUNT]); 2].into_boxed_slice(),
+            })
+        };
+        drop(make());
+        assert_eq!(ERASED.load(Ordering::SeqCst), 2 * COLUMN_COUNT);
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _guarded = make();
+                panic!("test guarded hash unwind");
+            })
+            .is_err()
+        );
+        assert_eq!(ERASED.load(Ordering::SeqCst), 4 * COLUMN_COUNT);
     }
 
     #[test]

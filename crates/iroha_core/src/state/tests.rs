@@ -2682,6 +2682,7 @@ fn axt_proof_blob_for_with_profile(
         "entry_hash".to_owned(),
         source_tx_commitment.as_ref().to_vec(),
     );
+    crate::fastpq::quantity_fixture::materialize(&mut batch);
     fastpq_prover::bind_axt_batch_with_proof_metadata(
         &mut batch,
         &binding,
@@ -26887,6 +26888,7 @@ pub(crate) fn prove_finalized_lane_relay_for_registration(
         .da_commitment_hash
         .map(|commitment| Hash::from(commitment).into());
     let expiry_slot = envelope.block_header.height().get().saturating_add(10);
+    crate::fastpq::quantity_fixture::materialize(&mut batch);
     fastpq_prover::bind_axt_batch_with_proof_metadata(
         &mut batch,
         &binding,

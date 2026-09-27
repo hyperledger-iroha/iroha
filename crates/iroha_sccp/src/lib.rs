@@ -10,7 +10,9 @@
 extern crate alloc;
 /// Canonical capability and discovery records exchanged by Torii and SDK clients.
 pub mod api;
+pub mod light_client;
 mod replay_archive;
+pub mod v1;
 pub use replay_archive::*;
 mod source_identity;
 pub use source_identity::*;

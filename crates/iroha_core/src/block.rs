@@ -6091,7 +6091,7 @@ pub(crate) mod valid {
         generation: u64,
         header: BlockHeader,
         admissions: Vec<Vec<u8>>,
-        npos: Option<PreparedPristineConsensusEffects>,
+        npos: Option<PreparedPristineConsensusEffects<'state>>,
         context: crate::sumeragi::v2::VerifiedHeightContext,
     }
     impl PreparedNativeExecutionControls<'_> {
@@ -6104,6 +6104,16 @@ pub(crate) mod valid {
             overlay
                 .validate_native_pristine_control_owner(self.state, self.generation, &self.header)
                 .map_err(ValidBlock::execution_context_error)?;
+            if let Some(npos) = self.npos.as_ref() {
+                if !std::ptr::eq(npos.penalty_index.state, self.state)
+                    || npos.penalty_index.generation != self.generation
+                    || npos.penalty_index.header != self.header
+                {
+                    return Err(ValidBlock::execution_context_error(
+                        "Native pristine penalty index differs from its original control owner",
+                    ));
+                }
+            }
             if !self.admissions.is_empty() {
                 overlay
                     .stage_queue_plan_admissions_for_carrier(&self.admissions)
@@ -7160,13 +7170,15 @@ pub(crate) mod valid {
             Self::validate_sccp_commitment_root(&block)?;
             Ok(root)
         }
-        fn prepare_pristine_consensus_effects(
+        fn prepare_pristine_consensus_effects<'state>(
             block: &SignedBlock,
-            state: &State,
+            state: &'state State,
+            penalty_index: ValidatedNposPenaltyIndex<'state>,
             authenticated_height_context: Option<
                 &iroha_data_model::block::consensus_v2::HeightContext,
             >,
-        ) -> Result<Option<PreparedPristineConsensusEffects>, BlockValidationError> {
+        ) -> Result<Option<PreparedPristineConsensusEffects<'state>>, BlockValidationError>
+        {
             crate::smartcontracts::ivm::active_runtime_abi_hash(
                 &state.world_view(),
                 block.header().height().get(),
@@ -7176,6 +7188,12 @@ pub(crate) mod valid {
                     "persisted active runtime ABI is incompatible with this node: {error:?}"
                 ))
             })?;
+            let header = block.header();
+            if !std::ptr::eq(penalty_index.state, state) || penalty_index.header != header {
+                return Err(Self::npos_effects_error(
+                    "pristine index belongs to another State or carrier",
+                ));
+            }
             let Some(effects) = block.npos_consensus_effects() else {
                 return Ok(None);
             };
@@ -7184,9 +7202,9 @@ pub(crate) mod valid {
                     "NPoS finality effects require the authenticated height context",
                 )
             })?;
-            let header = block.header();
             let height = header.height().get();
             Ok(Some(PreparedPristineConsensusEffects {
+                penalty_index,
                 prune_keys: crate::sumeragi::evidence::v2_committed_evidence_prune_keys_from_state(
                     state, height,
                 )
@@ -7265,8 +7283,18 @@ pub(crate) mod valid {
                     "Native applying context differs from the committed Nexus or execution policy",
                 ));
             }
-            Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?;
-            let npos = Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?;
+            let penalty_index = Self::validate_npos_effects_with_state(
+                block,
+                state,
+                Some(frozen.mode),
+                Some(frozen),
+            )?;
+            let npos = Self::prepare_pristine_consensus_effects(
+                block,
+                state,
+                penalty_index,
+                Some(frozen),
+            )?;
             Ok(PreparedNativeExecutionControls {
                 state,
                 generation,
@@ -7299,6 +7327,7 @@ pub(crate) mod valid {
         fn state_block_for_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
+            penalty_index: ValidatedNposPenaltyIndex<'state>,
             soft_fork: bool,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
             authenticated_height_context: Option<
@@ -7307,11 +7336,23 @@ pub(crate) mod valid {
             replay: Option<&VerifiedReplayProposal>,
         ) -> Result<Box<StateBlock<'state>>, BlockValidationError> {
             Self::validate_npos_soft_fork_composition(block, soft_fork)?;
+            // Absence of due actions is also a parent-state observation. Retain
+            // its binding even when preparation has no effects/index to keep.
+            let npos_source = (
+                penalty_index.state,
+                penalty_index.generation,
+                penalty_index.header,
+            );
             let mut prepared_npos = Self::prepare_pristine_consensus_effects(
                 block,
                 state,
+                penalty_index,
                 authenticated_height_context,
             )?;
+            let check_npos_source = |overlay: &StateBlock<'_>| {
+                let (state, generation, header) = npos_source;
+                ValidatedNposPenaltyIndex::validate_source(state, generation, &header, overlay)
+            };
             let execution_context = block.execution_context();
             if execution_context.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
                 return Err(Self::execution_context_error(
@@ -7326,12 +7367,6 @@ pub(crate) mod valid {
                 .is_some_and(|reference| reference.execution_batch_hash.is_some())
                 && prepared_npos.is_some()
             {
-                Self::validate_npos_effects_with_state(
-                    block,
-                    state,
-                    authoritative_mode,
-                    authenticated_height_context,
-                )?;
                 let context = authenticated_height_context.ok_or_else(|| {
                     Self::npos_effects_error(
                         "merge beacon composition requires an authenticated height context",
@@ -7348,6 +7383,8 @@ pub(crate) mod valid {
                 None
             };
             let apply_npos = |state_block: &mut StateBlock<'_>| {
+                // Each constructor callback checks this before its first effect;
+                // do not reread diagnostic generation after QueuePlan staging.
                 prepared_npos.map_or(Ok(()), |prepared| prepared.apply(state_block))
             };
             let queue_plan_admissions = execution_context
@@ -7366,6 +7403,7 @@ pub(crate) mod valid {
                 }
                 return state
                     .block_with_pristine_carrier_stage(block, |state_block| {
+                        check_npos_source(state_block)?;
                         state_block
                             .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
                             .map_err(|error| {
@@ -7391,6 +7429,7 @@ pub(crate) mod valid {
                 })?;
                 return state
                     .block_with_pristine_carrier_stage(block, |state_block| {
+                        check_npos_source(state_block)?;
                         let stage = match replay {
                             Some(authority) => state_block
                                 .stage_certified_merge_reference_for_verified_replay(
@@ -7418,10 +7457,14 @@ pub(crate) mod valid {
                     .map(Box::new)
                     .map_err(BlockValidationError::from);
             }
+            let apply_pristine = |state_block: &mut StateBlock<'_>| {
+                check_npos_source(state_block)?;
+                apply_npos(state_block)
+            };
             let state_block = if soft_fork {
-                state.block_and_revert_with_pristine_carrier_stage(block, apply_npos)
+                state.block_and_revert_with_pristine_carrier_stage(block, apply_pristine)
             } else {
-                state.block_with_pristine_carrier_stage(block, apply_npos)
+                state.block_with_pristine_carrier_stage(block, apply_pristine)
             }?;
             Ok(Box::new(state_block))
         }
@@ -7672,7 +7715,7 @@ pub(crate) mod valid {
                 emit_rejection(&block, &error);
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
-            if let Err(error) = Self::validate_npos_effects_with_state(
+            let penalty_index = match Self::validate_npos_effects_with_state(
                 &block,
                 state,
                 Some(validation_profile.authoritative_consensus_mode()),
@@ -7680,11 +7723,14 @@ pub(crate) mod valid {
                     .v2_context()
                     .and_then(SumeragiV2ValidationContext::authenticated_height_context),
             ) {
-                let stateless_elapsed = stateless_start.elapsed();
-                record_timings(&mut timings, stateless_elapsed, None);
-                emit_rejection(&block, &error);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
+                Ok(index) => index,
+                Err(error) => {
+                    let stateless_elapsed = stateless_start.elapsed();
+                    record_timings(&mut timings, stateless_elapsed, None);
+                    emit_rejection(&block, &error);
+                    return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                }
+            };
             if let Some(block_cadence) = validation_profile.v2_block_cadence() {
                 let time_trigger_clock_progress_required = block
                     .header()
@@ -7783,6 +7829,7 @@ pub(crate) mod valid {
             let mut state_block = match Self::state_block_for_execution(
                 &block,
                 state,
+                penalty_index,
                 soft_fork,
                 Some(validation_profile.authoritative_consensus_mode()),
                 validation_profile
@@ -8387,132 +8434,160 @@ pub(crate) mod valid {
                 }
             }
         }
-        fn validate_npos_effects_with_state(
+        fn validate_npos_effects_with_state<'state>(
             block: &SignedBlock,
-            state: &State,
+            state: &'state State,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
             authenticated_height_context: Option<
                 &iroha_data_model::block::consensus_v2::HeightContext,
             >,
-        ) -> Result<(), BlockValidationError> {
-            Self::validate_npos_effects_header(block)?;
-            let block_height = block.header().height().get();
-            let actual_effects = block.npos_consensus_effects();
-            if block.header().is_genesis() {
-                return if actual_effects.is_none() {
-                    Ok(())
-                } else {
-                    Err(Self::npos_effects_error(
-                        "genesis must not carry NPoS effects without committed pre-block state",
-                    ))
-                };
-            }
-            if authoritative_mode
-                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
-            {
-                let context = authenticated_height_context.ok_or_else(|| {
+        ) -> Result<ValidatedNposPenaltyIndex<'state>, BlockValidationError> {
+            let generation = state.state_view_generation();
+            let result = (|| {
+                Self::validate_npos_effects_header(block)?;
+                let block_height = block.header().height().get();
+                let actual_effects = block.npos_consensus_effects();
+                if block.header().is_genesis() {
+                    return if actual_effects.is_none() {
+                        Ok(None)
+                    } else {
+                        Err(Self::npos_effects_error(
+                            "genesis must not carry NPoS effects without committed pre-block state",
+                        ))
+                    };
+                }
+                if authoritative_mode
+                    == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
+                {
+                    let context = authenticated_height_context.ok_or_else(|| {
                     Self::npos_effects_error(
                         "permissioned candidate validation requires its authenticated height context",
                     )
                 })?;
-                if context.mode
-                    != iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
-                    || context.height != block_height
-                {
-                    return Err(Self::npos_effects_error(
-                        "permissioned candidate differs from its authenticated height context",
-                    ));
-                }
-                if let Some(effects) = actual_effects
-                    && (!effects.v2_evidence_admissions.is_empty()
-                        || !effects.penalty_actions.is_empty())
-                {
-                    return Err(Self::npos_effects_error(
-                        "permissioned consensus blocks may carry only a requested global beacon pulse",
-                    ));
-                }
-                return Self::validate_global_beacon_pulse_effect(
-                    block,
-                    state,
-                    context,
-                    actual_effects
-                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
-                );
-            }
-            if authoritative_mode
-                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
-            {
-                let context = authenticated_height_context.ok_or_else(|| {
-                    Self::npos_effects_error(
-                        "NPoS candidate validation requires its authenticated height context",
+                    if context.mode
+                        != iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+                        || context.height != block_height
+                    {
+                        return Err(Self::npos_effects_error(
+                            "permissioned candidate differs from its authenticated height context",
+                        ));
+                    }
+                    if let Some(effects) = actual_effects
+                        && (!effects.v2_evidence_admissions.is_empty()
+                            || !effects.penalty_actions.is_empty())
+                    {
+                        return Err(Self::npos_effects_error(
+                            "permissioned consensus blocks may carry only a requested global beacon pulse",
+                        ));
+                    }
+                    return Self::validate_global_beacon_pulse_effect(
+                        block,
+                        state,
+                        context,
+                        actual_effects
+                            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
                     )
-                })?;
-                if context.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-                    || context.height != block_height
+                    .map(|()| None);
+                }
+                if authoritative_mode
+                    == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
                 {
+                    let context = authenticated_height_context.ok_or_else(|| {
+                        Self::npos_effects_error(
+                            "NPoS candidate validation requires its authenticated height context",
+                        )
+                    })?;
+                    if context.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+                        || context.height != block_height
+                    {
+                        return Err(Self::npos_effects_error(
+                            "NPoS candidate differs from its authenticated height context",
+                        ));
+                    }
+                    crate::sumeragi::v2_npos::validate_candidate_context(context).map_err(
+                        |error| {
+                            Self::npos_effects_error(format!(
+                                "invalid authenticated NPoS context: {error}"
+                            ))
+                        },
+                    )?;
+                    Self::validate_global_beacon_pulse_effect(
+                        block,
+                        state,
+                        context,
+                        actual_effects
+                            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
+                    )?;
+                }
+                let admission_keys = if let Some(effects) = actual_effects {
+                    crate::sumeragi::evidence::validate_v2_evidence_admissions(
+                        state,
+                        block_height,
+                        &effects.v2_evidence_admissions,
+                    )
+                    .map_err(|err| {
+                        Self::npos_effects_error(format!(
+                            "invalid Sumeragi v2 evidence admissions: {err}"
+                        ))
+                    })?
+                } else {
+                    Vec::new()
+                };
+                if let Some(effects) = actual_effects {
+                    let mut sorted_actions = effects.penalty_actions.clone();
+                    sorted_actions.sort();
+                    sorted_actions.dedup();
+                    if sorted_actions != effects.penalty_actions {
+                        return Err(Self::npos_effects_error(
+                            "NPoS penalty actions are not canonical",
+                        ));
+                    }
+                    crate::sumeragi::evidence::validate_v2_admission_penalty_separation(
+                        &admission_keys,
+                        &effects.penalty_actions,
+                    )
+                    .map_err(|err| Self::npos_effects_error(err.to_string()))?;
+                }
+                let applier = crate::sumeragi::penalties::PenaltyApplier::new(
+                    state,
+                    #[cfg(feature = "telemetry")]
+                    Some(state.metrics()),
+                    #[cfg(not(feature = "telemetry"))]
+                    None,
+                );
+                let (expected_actions, index) = applier
+                    .derive_npos_penalty_actions(&block.header())
+                    .map_err(Self::classify_npos_penalty_derivation_error)?;
+                let actual_actions = actual_effects
+                    .map(|effects| effects.penalty_actions.as_slice())
+                    .unwrap_or(&[]);
+                if expected_actions.as_slice() != actual_actions {
                     return Err(Self::npos_effects_error(
-                        "NPoS candidate differs from its authenticated height context",
+                        "NPoS penalty actions do not match pre-block state",
                     ));
                 }
-                crate::sumeragi::v2_npos::validate_candidate_context(context).map_err(|error| {
-                    Self::npos_effects_error(format!("invalid authenticated NPoS context: {error}"))
-                })?;
-                Self::validate_global_beacon_pulse_effect(
-                    block,
-                    state,
-                    context,
-                    actual_effects
-                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
-                )?;
+                let requires_index = actual_actions.iter().any(|action| {
+                    matches!(
+                        action,
+                        iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash(_)
+                    )
+                });
+                Ok(requires_index.then_some(index))
+            })();
+            if !crate::state::is_stable_state_view_generation(
+                generation,
+                state.state_view_generation(),
+            ) {
+                return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                    reason: "pristine NPoS source observation changed before effects".into(),
+                });
             }
-            let admission_keys = if let Some(effects) = actual_effects {
-                crate::sumeragi::evidence::validate_v2_evidence_admissions(
-                    state,
-                    block_height,
-                    &effects.v2_evidence_admissions,
-                )
-                .map_err(|err| {
-                    Self::npos_effects_error(format!(
-                        "invalid Sumeragi v2 evidence admissions: {err}"
-                    ))
-                })?
-            } else {
-                Vec::new()
-            };
-            if let Some(effects) = actual_effects {
-                let mut sorted_actions = effects.penalty_actions.clone();
-                sorted_actions.sort();
-                sorted_actions.dedup();
-                if sorted_actions != effects.penalty_actions {
-                    return Err(Self::npos_effects_error(
-                        "NPoS penalty actions are not canonical",
-                    ));
-                }
-                crate::sumeragi::evidence::validate_v2_admission_penalty_separation(
-                    &admission_keys,
-                    &effects.penalty_actions,
-                )
-                .map_err(|err| Self::npos_effects_error(err.to_string()))?;
-            }
-            let applier = crate::sumeragi::penalties::PenaltyApplier::new(
+            result.map(|index| ValidatedNposPenaltyIndex {
                 state,
-                #[cfg(feature = "telemetry")]
-                Some(state.metrics()),
-                #[cfg(not(feature = "telemetry"))]
-                None,
-            );
-            let expected_actions = applier
-                .derive_npos_penalty_actions(&block.header())
-                .map_err(Self::classify_npos_penalty_derivation_error)?;
-            let actual_actions = actual_effects
-                .map(|effects| effects.penalty_actions.as_slice())
-                .unwrap_or(&[]);
-            if expected_actions.as_slice() != actual_actions {
-                return Err(Self::npos_effects_error(
-                    "NPoS penalty actions do not match pre-block state",
-                ));
-            }
-            Ok(())
+                generation,
+                header: block.header(),
+                index,
+            })
         }
         fn validate_global_beacon_pulse_effect(
             block: &SignedBlock,
@@ -21942,6 +22017,7 @@ mod commit {
                 "entry_hash".to_owned(),
                 source_tx_commitment.as_ref().to_vec(),
             );
+            crate::fastpq::quantity_fixture::materialize(&mut batch);
             fastpq_prover::bind_axt_batch_with_proof_metadata(
                 &mut batch,
                 &binding,

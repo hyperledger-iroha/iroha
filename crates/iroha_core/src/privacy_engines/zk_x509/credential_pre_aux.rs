@@ -77,7 +77,7 @@ pub(crate) const ZK_X509_CREDENTIAL_MAIN_POST_BASE_CHALLENGE_FIELDS_V1: usize =
         + P256_CROSS_CHALLENGE_FIELDS_V1
         + P256_SCALAR_CHALLENGE_FIELDS_V1
         + P256_ARITHMETIC_COPY_CHALLENGE_FIELDS_V1;
-/// Exact number of verifier-owned MAIN trace groups in the first release.
+/// Exact number of physical joined MAIN base roots in the first release.
 pub(crate) const ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1: usize = 1;
 const _: () = {
     assert!(ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 == 1);
@@ -86,14 +86,14 @@ const _: () = {
 /// MAIN-owned input to the joint pre-auxiliary challenge schedule.
 ///
 /// The outer verifier constructs this only after decoding the canonical MAIN layout. The fixed-size
-/// root array makes omission, excess, and a caller- selected group count unrepresentable.
+/// root array makes omission, excess, and a caller-selected root count unrepresentable.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CredentialMainPreAuxV1 {
     /// Digest of the complete verifier-owned statement and genesis context.
     consensus_context_digest: [u8; 32],
     /// Digest of the canonical first-release MAIN profile.
     main_profile_digest: [u8; 32],
-    /// Exact log5, log8, log15, log16, log18, and log19 MAIN base roots.
+    /// One root authenticating all six ordered MAIN base column groups.
     main_base_roots: [PrivacyOuterDigestV1; ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1],
 }
 impl ZkX509CredentialMainPreAuxV1 {

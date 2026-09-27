@@ -14,6 +14,7 @@ fn replay_limits() -> CoefficientLimits {
 }
 fn limits() -> StreamLimits {
     StreamLimits {
+        digest_execution: crate::DigestExecutionV1::Cpu,
         max_payload_bytes: usize::MAX,
         max_hashes: usize::MAX,
     }

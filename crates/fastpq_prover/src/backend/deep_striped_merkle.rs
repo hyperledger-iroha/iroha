@@ -7,8 +7,8 @@
 //! A second replay captures exactly the existing multiproof's ordered frontier.
 //! No leaf values or full tree are retained. Digest scratch is erased on drop.
 //!
-//! TODO: Join this owner to the complete DEEP producer transcript; a computed
-//! commitment or frontier alone supplies no hiding, source authority or admission.
+//! The producer binds each completed root into the typed DEEP transcript.
+//! A computed commitment or frontier alone supplies no hiding or source authority.
 
 use super::{
     merkle_multiproof::{MultiproofLimits, MultiproofPlan, SiblingPosition},
@@ -20,6 +20,7 @@ use fastpq_isi::GoldilocksDigest384V1 as Digest;
 /// Local digest-stream budget, fixed before leaf replay.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct StreamLimits {
+    pub(super) digest_execution: crate::DigestExecutionV1,
     pub(super) max_payload_bytes: usize,
     pub(super) max_hashes: usize,
 }
@@ -264,6 +265,7 @@ impl StripedMerkle {
 /// Public Context/cache storage is borrowed and belongs to the outer producer;
 /// this owner charges its exact temporary canonical hash frame separately.
 pub(super) struct RowCommitmentPlan<'a> {
+    digest_execution: crate::DigestExecutionV1,
     replay: super::deep_masked_replay::MaskedReplayPlan,
     queries: &'a [usize],
     tree: StripedMerklePlan,
@@ -291,6 +293,7 @@ impl<'a> RowCommitmentPlan<'a> {
             limits.max_payload_bytes,
         )?;
         Ok(Self {
+            digest_execution: limits.digest_execution,
             replay,
             queries,
             tree,
@@ -306,7 +309,13 @@ impl<'a> RowCommitmentPlan<'a> {
             return Err(invalid("DEEP row commitment replay differs from its plan"));
         }
         replay.ensure_pass_available()?;
-        stream_rows(replay, binding, self.queries, self.tree)
+        stream_rows(
+            replay,
+            binding,
+            self.queries,
+            self.tree,
+            self.digest_execution,
+        )
     }
 }
 
@@ -339,6 +348,7 @@ fn stream_rows(
     binding: &super::deep_binding::Context,
     queries: &[usize],
     tree: StripedMerklePlan,
+    execution: crate::DigestExecutionV1,
 ) -> Result<RowCommitment> {
     use super::{
         compact_public_columns::COMMITTED_COLUMN_COUNT as WIDTH,
@@ -397,6 +407,7 @@ fn stream_rows(
                 &bytes[..count * WIDTH * 8],
                 WIDTH * 8,
                 &mut leaves[..count],
+                execution,
             )?;
             for (&index, &words) in indices[..count].iter().zip(leaves[..count].iter()) {
                 stream.push(index, digest(words), parent)?;

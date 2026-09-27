@@ -2,8 +2,8 @@
 """Screen current zk-X509 proof bytes against the fixed V1 cap.
 
 This reads the pinned Rust geometry instead of treating a Python copy of the
-profile as release evidence. It checks arithmetic and rejects a narrow class
-of partial redesigns; it does not prove a replacement AIR or its soundness.
+profile as release evidence. It independently counts the complete reduced
+wire; it does not prove the AIR or its soundness.
 """
 
 from __future__ import annotations
@@ -101,10 +101,10 @@ def screen(
     trace_bytes = _constant(
         profile, "ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1"
     )
-    per_column = q * 2 * 8
+    per_column = q * 8
     columns, remainder = divmod(trace_bytes, per_column)
     test_width = re.search(
-        r"assert!\(\s*136\s*\*\s*2\s*\*\s*([\d_]+)\s*\*\s*8\s*>",
+        r"assert!\(\s*136\s*\*\s*([\d_]+)\s*\*\s*8\s*<",
         native_test,
     )
     if remainder or test_width is None or columns != int(test_width.group(1).replace("_", "")):
@@ -150,15 +150,25 @@ def screen(
     if ca_deep % 32 or ca_remainder:
         raise GeometryError("CA DEEP opening width is inconsistent")
 
-    def complete_oods_candidate(current: int, width: int, log: int, group_count: int) -> int:
-        domain = 1 << log
-        return (current - q * width * 8
-                - 2 * group_count * (_maximum_frontier(domain, 2 * q) - _maximum_frontier(domain, q)) * 48
-                - 2 * (group_count - 1) * (_maximum_frontier(domain, q) + 1) * 48)
+    main_chunks = _constant(profile, "ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1")
+    if "AggregateTraceLayoutV1::JoinedCurrent" not in stark or "AggregateTraceLayoutV1::GroupedCurrent," not in accumulator:
+        raise GeometryError("complete OODS current-only commitment layout is missing")
 
-    candidate_main = complete_oods_candidate(wide_main, columns, main_log, groups)
-    candidate_ca = complete_oods_candidate(ca_inner, ca_columns, ca_log, 1)
-    candidate = candidate_main + candidate_ca + main_claim + ca_claim + outer
+    def exact_inner(width: int, log: int, chunks: int) -> int:
+        rounds = log - terminal_log
+        # One base and auxiliary root, one quotient and mask root, every FRI
+        # root including terminal. Both DEEP values of all columns remain.
+        roots = 2 + 2 + rounds + 1
+        fields = 8 + roots * 48 + (1 << terminal_log) * 32 + 8
+        fields += q * (4 + width * 8 + (chunks + 1 + 2 * rounds) * 32)
+        fields += (2 * width + chunks) * 32
+        frontiers = 4 * _maximum_frontier(1 << log, q)
+        frontiers += sum(_maximum_frontier(1 << (layer_log - 1), q)
+                         for layer_log in range(log, terminal_log, -1))
+        return fields + frontiers * 48
+
+    if exact_inner(columns, main_log, main_chunks) != wide_main or exact_inner(ca_columns, ca_log, ca_chunks) != ca_inner:
+        raise GeometryError("independent codec count disagrees with pinned component sizes")
     paired_saving = sum(
         (_maximum_frontier(1 << layer_log, 2 * q)
          - _maximum_frontier(1 << (layer_log - 1), q)) * 48
@@ -193,60 +203,29 @@ def screen(
     if p256_columns > log19_columns or log19_columns > columns or all_p256_columns > columns:
         raise GeometryError("P-256 width is not within the MAIN opening inventory")
 
-    other_bytes = combined - trace_bytes
-    opening_headroom = cap - other_bytes
-    if opening_headroom < 0:
-        raise GeometryError("non-trace proof components alone exceed the cap")
-    remaining_after_log19_p256 = combined - p256_columns * per_column
-    remaining_after_all_p256 = combined - all_p256_columns * per_column
-    remaining_after_log19 = combined - log19_columns * per_column
-    remaining_non_log19_columns = columns - log19_columns
     main_section_cap = cap - outer - ca_section_cap
-    if (
-        main_section_cap <= 0
-        or remaining_after_log19_p256 <= cap
-        or remaining_after_all_p256 <= cap
-        or remaining_after_log19 <= cap
-    ):
-        raise GeometryError("audited partial-redesign rejection no longer applies")
-
+    if combined > cap or wide_main + main_claim > main_section_cap:
+        raise GeometryError("complete relation exceeds the unchanged proof ceiling")
     return {
         "proof_cap_bytes": cap,
         "combined_current_max_bytes": combined,
-        "combined_excess_bytes": combined - cap,
+        "headroom_bytes": cap - combined,
         "implemented_paired_fri_saving_bytes": paired_saving,
-        "candidate_main_inner_bytes": candidate_main,
-        "candidate_ca_inner_bytes": candidate_ca,
-        "candidate_complete_relation_bytes": candidate,
-        "candidate_headroom_bytes": cap - candidate,
-        "candidate_requires_complete_fp4_air_and_shared_trace_commitments": True,
         "current_main_inner_max_bytes": wide_main,
+        "current_ca_inner_max_bytes": ca_inner,
         "main_section_cap_bytes": main_section_cap,
         "current_trace_columns": columns,
         "current_trace_opening_bytes": trace_bytes,
-        "non_trace_current_max_bytes": other_bytes,
-        "max_columns_if_non_trace_fixed": opening_headroom // per_column,
-        "minimum_columns_to_remove_if_non_trace_fixed": columns
-        - opening_headroom // per_column,
-        "log19_opening_bytes": log19_columns * per_column,
-        "remaining_non_log19_trace_columns": remaining_non_log19_columns,
+        "complete_deep_opening_bytes": deep,
+        "logical_main_groups": groups,
+        "physical_main_base_roots": 1,
+        "log19_trace_columns": log19_columns,
         "p256_signature_count": signature_count,
-        "p256_log19_opening_bytes": p256_columns * per_column,
-        "combined_after_hypothetically_removing_log19_p256_openings_bytes": remaining_after_log19_p256,
-        "remaining_excess_after_log19_p256_removal_bytes": remaining_after_log19_p256 - cap,
         "p256_all_group_trace_columns": all_p256_columns,
-        "p256_all_group_opening_bytes": all_p256_columns * per_column,
         "remaining_non_p256_trace_columns": columns - all_p256_columns,
-        "combined_after_hypothetically_removing_all_p256_trace_openings_bytes": remaining_after_all_p256,
-        "remaining_excess_after_all_p256_trace_opening_removal_bytes": remaining_after_all_p256 - cap,
-        "minimum_additional_non_p256_columns_to_replace_if_other_bytes_fixed":
-            (remaining_after_all_p256 - cap + per_column - 1) // per_column,
-        "combined_after_hypothetically_removing_all_log19_openings_bytes": remaining_after_log19,
-        "remaining_excess_after_log19_removal_bytes": remaining_after_log19 - cap,
-        "minimum_additional_non_log19_columns_to_replace_if_other_bytes_fixed":
-            remaining_non_log19_columns - opening_headroom // per_column,
         "production_qualified": False,
     }
+
 
 
 def main() -> None:

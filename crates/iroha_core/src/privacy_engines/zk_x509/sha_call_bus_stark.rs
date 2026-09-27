@@ -2179,6 +2179,29 @@ pub(crate) struct ZkX509ShaBatchSegmentAuxSourceV1<'a> {
 }
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl ZkX509ShaBatchSegmentAuxSourceV1<'_> {
+    /// Deterministically replay a challenge-independent column from this
+    /// already-bound owner. This exposes no new phase or challenge constructor.
+    pub(crate) fn replay_base_column_v1(
+        &self,
+        segment: usize,
+        local_column: usize,
+        target: &mut [F],
+    ) -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
+        let binding = self.binding.ok_or(ZkX509ShaCallBusStarkErrorV1::Phase)?;
+        validate_sha_segment_binding_families_v1(
+            binding.sha_word(),
+            binding.sha(),
+            binding.rfc5280(),
+        )?;
+        let source = ZkX509ShaBatchSegmentBaseSourceV1 {
+            schedule: self.schedule,
+            witnesses: self.witnesses,
+            replay: self.replay,
+            bound: false,
+        };
+        source.fill_base_column_v1(segment, local_column, target)
+    }
+
     fn replay_aux_rows_with_air_terminals_v1(
         &self,
         mut visitor: impl FnMut(usize, [F; ZK_X509_SHA_BATCH_AUX_WIDTH_V1]),

@@ -2150,6 +2150,7 @@ mod tests {
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            None,
             evidence_prune_keys.as_slice(),
             None,
             &[],
@@ -3451,6 +3452,7 @@ mod tests {
             match super::super::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut effects_transaction,
                 &effects,
+                None,
                 evidence_prune_keys.as_slice(),
                 None,
                 &[],
@@ -3537,6 +3539,7 @@ mod tests {
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut effects_transaction,
             &effects,
+            None,
             evidence_prune_keys.as_slice(),
             None,
             &[],

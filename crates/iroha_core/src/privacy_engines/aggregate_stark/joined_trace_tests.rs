@@ -257,6 +257,115 @@ fn joined_trace_rejects_group_width_domain_order_field_and_index_substitution() 
 }
 
 #[test]
+fn joined_trace_rejects_total_width_overflow_at_the_exact_u16_boundary() {
+    let (mut parameters, _, layout) = fixture();
+    parameters.maximum_base_columns_per_instance = usize::from(u16::MAX);
+    parameters.maximum_aux_columns_per_instance = usize::from(u16::MAX);
+    for kind in [JoinedTraceColumnKindV1::Base, JoinedTraceColumnKindV1::Aux] {
+        let mut groups = layout.trace_groups().to_vec();
+        for (index, group) in groups.iter_mut().enumerate() {
+            let width = 32_767 + index;
+            match kind {
+                JoinedTraceColumnKindV1::Base => group.base_width = width,
+                JoinedTraceColumnKindV1::Aux => group.aux_width = width,
+            }
+        }
+        let boundary = AggregateProofLayoutV1::new_with_trace_layout_v1(
+            parameters,
+            groups.clone(),
+            AggregateTraceLayoutV1::JoinedCurrent,
+        )
+        .unwrap();
+        let plan = JoinedTraceCommitmentPlanV1::new_v1(parameters, &boundary, kind).unwrap();
+        assert_eq!(plan.width_v1(), usize::from(u16::MAX));
+        assert_eq!(plan.group_range_v1(0).unwrap(), 0..32_767);
+        assert_eq!(plan.group_range_v1(1).unwrap(), 32_767..65_535);
+        match kind {
+            JoinedTraceColumnKindV1::Base => groups[0].base_width += 1,
+            JoinedTraceColumnKindV1::Aux => groups[0].aux_width += 1,
+        }
+        // Each logical width remains encodable. Only their joined sum overflows.
+        let separate = AggregateProofLayoutV1::new(parameters, groups.clone()).unwrap();
+        assert_eq!(
+            JoinedTraceCommitmentPlanV1::new_v1(parameters, &separate, kind),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        );
+        assert_eq!(
+            AggregateProofLayoutV1::new_with_trace_layout_v1(
+                parameters,
+                groups,
+                AggregateTraceLayoutV1::JoinedCurrent
+            ),
+            Err(AggregateStarkErrorV1::InvalidLayout)
+        );
+    }
+}
+
+#[test]
+fn joined_trace_authentication_rejects_swapped_equal_width_native_group_slices() {
+    let (parameters, domains, layout) = fixture();
+    let groups = layout
+        .trace_groups()
+        .iter()
+        .map(|group| AggregateTraceGroupLayoutV1 {
+            base_width: 2,
+            aux_width: 2,
+            ..*group
+        })
+        .collect();
+    let layout = AggregateProofLayoutV1::new_with_trace_layout_v1(
+        parameters,
+        groups,
+        AggregateTraceLayoutV1::JoinedCurrent,
+    )
+    .unwrap();
+    for kind in [JoinedTraceColumnKindV1::Base, JoinedTraceColumnKindV1::Aux] {
+        let plan = JoinedTraceCommitmentPlanV1::new_v1(parameters, &layout, kind).unwrap();
+        let polynomials = polynomial_groups(&plan);
+        let indices = [0, 31, 2047];
+        let opened = plan
+            .commit_v1(domains, &polynomials.iter().collect::<Vec<_>>(), &indices)
+            .unwrap();
+        let (_, node) = plan.roles_v1(domains);
+        let mut authenticated = BTreeMap::new();
+        for &index in &indices {
+            let row = &opened.opened_rows[&index];
+            let slices = [&row[0..2], &row[2..4]];
+            assert_ne!(slices[0], slices[1]);
+            authenticated.insert(index, plan.leaf_hash_v1(domains, index, &slices).unwrap());
+        }
+        verify_canonical_multiproof_v1(
+            domains.digest_context,
+            node,
+            &opened.commitment.root,
+            layout.common_lde_size(),
+            &authenticated,
+            &opened.commitment.frontier,
+        )
+        .unwrap();
+        let row = &opened.opened_rows[&31];
+        // Equal widths pass shape validation, so this rejection requires the
+        // joined leaf to authenticate the canonical native-group column order.
+        let swapped = plan
+            .leaf_hash_v1(domains, 31, &[&row[2..4], &row[0..2]])
+            .unwrap();
+        assert_ne!(authenticated[&31], swapped);
+        authenticated.insert(31, swapped);
+        assert!(
+            verify_canonical_multiproof_v1(
+                domains.digest_context,
+                node,
+                &opened.commitment.root,
+                layout.common_lde_size(),
+                &authenticated,
+                &opened.commitment.frontier
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn joined_trace_commitment_is_identical_across_worker_counts() {
     let (parameters, domains, layout) = fixture();
     let plan =

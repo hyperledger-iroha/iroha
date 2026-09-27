@@ -304,3 +304,93 @@ fn nested_replay_refuses_foreign_dimensions_and_small_fixture_is_not_a_candidate
         MaskedTraceReplay::arithmetic_fixture(&[&[0, 0, 0, GOLDILOCKS_MODULUS]], 4, 1).is_err()
     );
 }
+
+#[test]
+fn masked_stripe_fft_matches_fp4_and_horner_at_the_parallel_threshold() {
+    use crate::backend::polynomial_transform::PolynomialDomain;
+
+    for rows in [16, 64, 4096] {
+        let (mut replay, _) = small(rows, 1, 3, 1);
+        let coefficients = explicit_columns(&replay).remove(0);
+        let plan = replay.plan();
+        let mut seen = 0;
+        replay
+            .visit_subdomain(4 * rows, |stripe, step| {
+                assert_eq!(step, 32);
+                seen += 1;
+                let offset = stripe.point(0);
+                let offset_n = field_pow(offset, rows as u64);
+                // On this coset X^N=offset^N. Fold the explicit masked
+                // polynomial independently before the shared four-lane FFT.
+                let effective = (0..rows)
+                    .map(|degree| {
+                        F::embed_base(coefficients[degree]).add(
+                            F::embed_base(*coefficients.get(rows + degree).unwrap_or(&0))
+                                .mul_base(offset_n),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let domain =
+                    PolynomialDomain::new(rows, F::embed_base(offset), rows, 2 * rows * F::BYTES)?;
+                let expected = domain.evaluate(&effective, rows)?;
+                for index in 0..rows {
+                    let mut actual = [0];
+                    stripe.fill_row(index, &mut actual)?;
+                    assert!(actual[0] < GOLDILOCKS_MODULUS);
+                    assert_eq!(expected.value(index)?, F::embed_base(actual[0]));
+                    assert_eq!(stripe.point(index), domain.point(index)?.coefficients()[0]);
+                    if rows <= 64
+                        || [0, 1, 2, rows / 3, rows / 2 - 1, rows / 2, rows - 1].contains(&index)
+                    {
+                        assert_eq!(actual[0], horner(&coefficients, stripe.point(index)));
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(seen, 4);
+        assert_eq!(replay.remaining_passes, 0);
+        assert_eq!(plan.rows, rows);
+    }
+}
+
+#[test]
+fn physical_source_shape_canonicality_and_public_projection_precede_entropy() {
+    let zeros = vec![0; TRACE_ROWS];
+    let mut rng = CountingRng {
+        calls: 0,
+        value: 0,
+        failure: true,
+    };
+    for width in [0, 300, 301, 302, 341, 343] {
+        assert!(matches!(
+            MaskedTraceReplay::new(limits(1), &vec![zeros.as_slice(); width], &mut rng),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+    }
+    for length in [0, TRACE_ROWS - 1, TRACE_ROWS + 1] {
+        let changed = vec![0; length];
+        let mut columns = vec![zeros.as_slice(); 342];
+        columns[341] = &changed;
+        assert!(matches!(
+            MaskedTraceReplay::new(limits(1), &columns, &mut rng),
+            Err(Error::InvalidTraceShape { .. })
+        ));
+    }
+    for (column, row) in [(0, 0), (150, 7), (341, TRACE_ROWS - 1)] {
+        let mut changed = zeros.clone();
+        changed[row] = GOLDILOCKS_MODULUS;
+        let mut columns = vec![zeros.as_slice(); 342];
+        columns[column] = &changed;
+        assert!(matches!(
+            MaskedTraceReplay::new(limits(1), &columns, &mut rng),
+            Err(Error::NonCanonicalGoldilocksElement { context: "deep_source_trace", indices })
+                if indices == [column, row]
+        ));
+    }
+    assert!(matches!(
+        MaskedTraceReplay::new(limits(1), &vec![zeros.as_slice(); 342], &mut rng),
+        Err(Error::InvalidTraceShape { details }) if details.contains("source public column")
+    ));
+    assert_eq!(rng.calls, 0);
+}

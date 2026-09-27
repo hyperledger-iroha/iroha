@@ -27,12 +27,9 @@ mod sorafs_publication_http;
 #[test]
 fn four_peer_native_publication_repair_and_parliament_revocation() -> eyre::Result<()> {
     sorafs_network::run("sorafs-publication-governance", || async {
-        let Some(published) =
+        let published =
             sorafs_publication::create_and_publish(parliament::publication_parliament_builder)
-                .await?
-        else {
-            return Ok(());
-        };
+                .await?;
         sorafs_publication::qualify_storage_lifecycle(&published).await?;
         let proposal = published.authority.revocation_proposal(
             0,

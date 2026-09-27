@@ -348,7 +348,9 @@ const MAIN_BASE_COMMITMENT_NATIVE_LOGS_V1: [u8; FULL_PROFILE_TRACE_GROUPS_V1] =
 const _: () = assert!(
     CALCULATED_FULL_PROFILE_LOGICAL_REGISTRATIONS_V1 == FULL_PROFILE_LOGICAL_REGISTRATIONS_V1
 );
-const _: () = assert!(FULL_PROFILE_TRACE_GROUPS_V1 == ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1);
+// The complete ordered six-group row has one joined commitment. Logical
+// registration counts are validated independently by the exact layout.
+const _: () = assert!(ZK_X509_CREDENTIAL_MAIN_BASE_ROOT_COUNT_V1 == 1);
 const AGGREGATE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
     aggregate::AggregateStarkParametersV1 {
         proof_magic: PROOF_MAGIC_V1,
@@ -6971,12 +6973,12 @@ fn registered_opened_rows_v1<'a>(
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 trait MainTraceGroupSourceV1 {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>;
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1>;
@@ -7517,7 +7519,7 @@ impl<'a> MainP256Log5TraceGroupSourceV1<'a> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainP256Log5TraceGroupSourceV1<'_> {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -7540,7 +7542,7 @@ impl MainTraceGroupSourceV1 for MainP256Log5TraceGroupSourceV1<'_> {
         Ok(output)
     }
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -7971,7 +7973,7 @@ impl<'a> MainP256Log16TraceGroupSourceV1<'a> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainP256Log16TraceGroupSourceV1<'_> {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -7994,7 +7996,7 @@ impl MainTraceGroupSourceV1 for MainP256Log16TraceGroupSourceV1<'_> {
         Ok(output)
     }
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -8477,7 +8479,7 @@ impl<'assembly, 'source> MainLog19BaseTraceGroupSourceV1<'assembly, 'source> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -8511,7 +8513,7 @@ impl MainTraceGroupSourceV1 for MainLog19BaseTraceGroupSourceV1<'_, '_> {
         Ok(ZeroizingMainTraceColumnV1(column))
     }
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         _registration: RegisteredSegmentLayoutV1,
         _local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -8761,7 +8763,7 @@ impl Drop for MainLog19BoundTraceGroupSourceV1<'_> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -8779,8 +8781,8 @@ impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
             2..=5 => {
                 let segment = registration_index - 2;
                 let mut column = zeroed_main_trace_column_v1(registration.segment.trace_size())?;
-                self.sha_base[segment]
-                    .fill_base_column_v1(segment, local_column, &mut column)
+                self.sha_aux[segment]
+                    .replay_base_column_v1(segment, local_column, &mut column)
                     .map_err(map_main_sha_source_error_v1)?;
                 return Ok(column);
             }
@@ -8795,7 +8797,7 @@ impl MainTraceGroupSourceV1 for MainLog19BoundTraceGroupSourceV1<'_> {
         Ok(ZeroizingMainTraceColumnV1(column))
     }
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -9801,8 +9803,9 @@ struct MainLog19InstalledFixedOpeningsV1 {
 ///
 /// This is the only production route that can evaluate DER, RFC 5280, all
 /// four SHA registrations, and the fifteen P-256 registrations. It owns the
-/// exact 21-registration layout and cannot be initialized without the one
-/// verifier-derived opening token bound to all 136 transcript-order queries.
+/// exact 21-registration layout and compiles the statement-bound fixed schedule
+/// for complete DEEP constraint evaluation. Scalar reference checks additionally
+/// install the verifier-derived opening token bound to all 136 transcript-order queries.
 struct MainLog19VerifierConstraintSourceV1 {
     registrations: Vec<RegisteredSegmentLayoutV1>,
     post_base: ZkX509CredentialMainPostBaseChallengesV1,
@@ -10430,7 +10433,7 @@ impl<'a> MainP256ScalarTraceGroupSourceV1<'a> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainP256ScalarTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -10453,7 +10456,7 @@ impl MainTraceGroupSourceV1 for MainP256ScalarTraceGroupSourceV1<'_> {
         Ok(output)
     }
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -10943,7 +10946,7 @@ impl Drop for MainIoTraceGroupSourceV1<'_> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainIoTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -10958,7 +10961,7 @@ impl MainTraceGroupSourceV1 for MainIoTraceGroupSourceV1<'_> {
         )
     }
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -11308,7 +11311,7 @@ impl Drop for MainProjectionTraceGroupSourceV1<'_> {
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 impl MainTraceGroupSourceV1 for MainProjectionTraceGroupSourceV1<'_> {
     fn native_base_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {
@@ -11318,7 +11321,7 @@ impl MainTraceGroupSourceV1 for MainProjectionTraceGroupSourceV1<'_> {
         copied_array_column_v1(&self.trace.base.rows, local_column)
     }
     fn native_aux_column_v1(
-        &mut self,
+        &self,
         registration: RegisteredSegmentLayoutV1,
         local_column: usize,
     ) -> Result<ZeroizingMainTraceColumnV1, ZkX509StarkErrorV1> {

@@ -1840,6 +1840,7 @@ pub mod asset_alias;
 pub mod asset_transfer_control;
 /// Confidential registry management instructions. Bridge proof ingestion instructions.
 pub mod bridge;
+pub mod sccp;
 /// Confidential registry management instructions.
 pub mod confidential;
 /// Content lane instructions.

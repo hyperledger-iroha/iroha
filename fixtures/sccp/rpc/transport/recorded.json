@@ -1,0 +1,623 @@
+{
+  "captured": "2026-09-26",
+  "exchanges": {
+    "beacon/bootstrap": {
+      "body": "beacon/light_client_bootstrap.ssz",
+      "content_type": "application/octet-stream",
+      "headers": {
+        "eth-consensus-version": "fulu"
+      },
+      "request": {
+        "accept": "application/octet-stream",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/bootstrap/0xfea1d5a9a843e3afece8bdf7cfe4e0701d9b6282af51715834783170128f6ecd"
+      },
+      "source": "https://lodestar-mainnet.chainsafe.io",
+      "status": 200
+    },
+    "beacon/finality_update": {
+      "body": "beacon/light_client_finality_update.ssz",
+      "content_type": "application/octet-stream",
+      "headers": {
+        "eth-consensus-version": "fulu"
+      },
+      "request": {
+        "accept": "application/octet-stream",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/finality_update"
+      },
+      "source": "https://lodestar-mainnet.chainsafe.io",
+      "status": 200
+    },
+    "beacon/finality_update_json_only": {
+      "body": "beacon/light_client_finality_update_json_only.json",
+      "content_type": "application/json",
+      "request": {
+        "accept": "application/octet-stream",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/finality_update"
+      },
+      "source": "https://ethereum-beacon-api.publicnode.com",
+      "status": 200
+    },
+    "beacon/headers_finalized": {
+      "body": "beacon/headers_finalized.json",
+      "content_type": "application/json; charset=utf-8",
+      "request": {
+        "accept": "application/json",
+        "method": "GET",
+        "path": "/eth/v1/beacon/headers/finalized"
+      },
+      "source": "https://lodestar-mainnet.chainsafe.io",
+      "status": 200
+    },
+    "beacon/optimistic_update": {
+      "body": "beacon/light_client_optimistic_update.ssz",
+      "content_type": "application/octet-stream",
+      "headers": {
+        "eth-consensus-version": "fulu"
+      },
+      "request": {
+        "accept": "application/octet-stream",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/optimistic_update"
+      },
+      "source": "https://lodestar-mainnet.chainsafe.io",
+      "status": 200
+    },
+    "beacon/updates": {
+      "body": "beacon/light_client_updates.ssz",
+      "content_type": "application/octet-stream",
+      "headers": {
+        "eth-consensus-version": "fulu,fulu"
+      },
+      "request": {
+        "accept": "application/octet-stream",
+        "method": "GET",
+        "path": "/eth/v1/beacon/light_client/updates?start_period=1865&count=2"
+      },
+      "source": "https://lodestar-mainnet.chainsafe.io",
+      "status": 200
+    },
+    "bsc/eth_chainId": {
+      "body": "bsc/eth_chainId.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_chainId",
+          "params": []
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://bsc-dataseed.bnbchain.org",
+      "status": 200
+    },
+    "bsc/eth_getBlockByNumber_finalized": {
+      "body": "bsc/eth_getBlockByNumber_finalized.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getBlockByNumber",
+          "params": [
+            "finalized",
+            false
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://bsc-dataseed.bnbchain.org",
+      "status": 200
+    },
+    "evm/batch_blockNumber_getProof": {
+      "body": "evm/batch_blockNumber_getProof.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc_batch": [
+          {
+            "method": "eth_blockNumber",
+            "params": []
+          },
+          {
+            "method": "eth_getProof",
+            "params": [
+              "0x0000F90827F1C53a10cb7A02335B175320002935",
+              [
+                "0x0000000000000000000000000000000000000000000000000000000000001b75"
+              ],
+              "latest"
+            ]
+          }
+        ],
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_blockNumber": {
+      "body": "evm/eth_blockNumber.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_blockNumber",
+          "params": []
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_call": {
+      "body": "evm/eth_call.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_call",
+          "params": [
+            {
+              "data": "0x95d89b41",
+              "to": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+            },
+            "0x18daf08"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_chainId": {
+      "body": "evm/eth_chainId.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_chainId",
+          "params": []
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_estimateGas": {
+      "body": "evm/eth_estimateGas.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_estimateGas",
+          "params": [
+            {
+              "data": "0x95d89b41",
+              "to": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"
+            }
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_feeHistory": {
+      "body": "evm/eth_feeHistory.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_feeHistory",
+          "params": [
+            "0x4",
+            "0x18daf08",
+            [
+              25,
+              75
+            ]
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_getBlockByNumber_full": {
+      "body": "evm/eth_getBlockByNumber_full.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getBlockByNumber",
+          "params": [
+            "0x18daf08",
+            true
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "transactions reduced to the originals at indexes 32, 110, 186 and 317 (types 0x0, 0x3, 0x4, 0x2); header fields are verbatim"
+    },
+    "evm/eth_getBlockByNumber_hashes": {
+      "body": "evm/eth_getBlockByNumber_hashes.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getBlockByNumber",
+          "params": [
+            "0x18daf08",
+            false
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_getBlockByNumber_null": {
+      "body": "evm/eth_getBlockByNumber_null.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getBlockByNumber",
+          "params": [
+            "0xffffffff",
+            false
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_getBlockReceipts": {
+      "body": "evm/eth_getBlockReceipts.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getBlockReceipts",
+          "params": [
+            "0x18daf08"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "receipts reduced to the originals at indexes 32, 110, 186 and 317"
+    },
+    "evm/eth_getCode": {
+      "body": "evm/eth_getCode.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getCode",
+          "params": [
+            "0x0000F90827F1C53a10cb7A02335B175320002935",
+            "0x18daf08"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_getProof": {
+      "body": "evm/eth_getProof.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getProof",
+          "params": [
+            "0x0000F90827F1C53a10cb7A02335B175320002935",
+            [
+              "0x0000000000000000000000000000000000000000000000000000000000001b75"
+            ],
+            "latest"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200,
+      "trimmed": "element with id 7 of the recorded batch evm/batch_blockNumber_getProof (latest = 0x18daf58)"
+    },
+    "evm/eth_getProof_window_error": {
+      "body": "evm/eth_getProof_window_error.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getProof",
+          "params": [
+            "0x0000F90827F1C53a10cb7A02335B175320002935",
+            [
+              "0x0000000000000000000000000000000000000000000000000000000000001b75"
+            ],
+            "0x18daf08"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_getTransactionCount": {
+      "body": "evm/eth_getTransactionCount.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getTransactionCount",
+          "params": [
+            "0x4838b106fce9647bdf1e7877bf73ce8b0bad5f97",
+            "0x18daf08"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_getTransactionReceipt": {
+      "body": "evm/eth_getTransactionReceipt.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getTransactionReceipt",
+          "params": [
+            "0xe5bb91ca521805fde8fb1165b49fd18eb741779b34fe53b18614ee0e63605dc6"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_getTransactionReceipt_null": {
+      "body": "evm/eth_getTransactionReceipt_null.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_getTransactionReceipt",
+          "params": [
+            "0x0000000000000000000000000000000000000000000000000000000000000001"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_maxPriorityFeePerGas": {
+      "body": "evm/eth_maxPriorityFeePerGas.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_maxPriorityFeePerGas",
+          "params": []
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "evm/eth_sendRawTransaction_error": {
+      "body": "evm/eth_sendRawTransaction_error.json",
+      "content_type": "application/json",
+      "request": {
+        "json_rpc": {
+          "method": "eth_sendRawTransaction",
+          "params": [
+            "0x02c0"
+          ]
+        },
+        "method": "POST",
+        "path": ""
+      },
+      "source": "https://ethereum-rpc.publicnode.com",
+      "status": 200
+    },
+    "tron/wallet_broadcasthex_parse_error": {
+      "body": "tron/wallet_broadcasthex_parse_error.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "transaction": "0a02"
+        },
+        "method": "POST",
+        "path": "/wallet/broadcasthex"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    },
+    "tron/wallet_broadcasthex_sigerror": {
+      "body": "tron/wallet_broadcasthex_sigerror.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "transaction": "0a8b010a023d0822082e2ce42a4dd6fbca40989ad1f38d345a6d081f12690a31747970652e676f6f676c65617069732e636f6d2f70726f746f636f6c2e54726967676572536d617274436f6e747261637412340a15410000000000000000000000000000000000000000121541a614f803b6fd780986a42c78ec9c7f77e6ded13c2204313ce56770f7dbcdf38d34"
+        },
+        "method": "POST",
+        "path": "/wallet/broadcasthex"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    },
+    "tron/wallet_getblockbylimitnext": {
+      "body": "tron/wallet_getblockbylimitnext.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "endNum": 86588651,
+          "startNum": 86588649
+        },
+        "method": "POST",
+        "path": "/wallet/getblockbylimitnext"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200,
+      "trimmed": "transactions reduced to the first of each block; block headers verbatim"
+    },
+    "tron/wallet_getblockbynum": {
+      "body": "tron/wallet_getblockbynum.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "num": 86588651
+        },
+        "method": "POST",
+        "path": "/wallet/getblockbynum"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200,
+      "trimmed": "transactions reduced to the originals at indexes 0 and 38 (a USDT TriggerSmartContract); block header verbatim"
+    },
+    "tron/wallet_getblockbynum_api_error": {
+      "body": "tron/wallet_getblockbynum_api_error.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "num": "abc"
+        },
+        "method": "POST",
+        "path": "/wallet/getblockbynum"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    },
+    "tron/wallet_getblockbynum_missing": {
+      "body": "tron/wallet_getblockbynum_missing.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "num": 999999999
+        },
+        "method": "POST",
+        "path": "/wallet/getblockbynum"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    },
+    "tron/wallet_getcontractinfo": {
+      "body": "tron/wallet_getcontractinfo.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "value": "41a614f803b6fd780986a42c78ec9c7f77e6ded13c"
+        },
+        "method": "POST",
+        "path": "/wallet/getcontractinfo"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200,
+      "trimmed": "smart_contract.abi and smart_contract.bytecode removed; runtimecode and contract_state verbatim"
+    },
+    "tron/wallet_getnowblock": {
+      "body": "tron/wallet_getnowblock.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {},
+        "method": "POST",
+        "path": "/wallet/getnowblock"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200,
+      "trimmed": "transactions reduced to the first two; block header verbatim"
+    },
+    "tron/wallet_triggerconstantcontract": {
+      "body": "tron/wallet_triggerconstantcontract.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "contract_address": "41a614f803b6fd780986a42c78ec9c7f77e6ded13c",
+          "data": "313ce567",
+          "owner_address": "410000000000000000000000000000000000000000"
+        },
+        "method": "POST",
+        "path": "/wallet/triggerconstantcontract"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    },
+    "tron/wallet_triggerconstantcontract_revert": {
+      "body": "tron/wallet_triggerconstantcontract_revert.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "contract_address": "41a614f803b6fd780986a42c78ec9c7f77e6ded13c",
+          "data": "a9059cbb000000000000000000000000000000000000000000000000000000000000000100000000000000000000000000000000000000000000000000000000000f4240",
+          "owner_address": "410000000000000000000000000000000000000000"
+        },
+        "method": "POST",
+        "path": "/wallet/triggerconstantcontract"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    },
+    "tron/walletsolidity_getcontractinfo_405": {
+      "body": "tron/walletsolidity_getcontractinfo_405.html",
+      "content_type": "text/html;charset=iso-8859-1",
+      "request": {
+        "body": {
+          "value": "41a614f803b6fd780986a42c78ec9c7f77e6ded13c"
+        },
+        "method": "POST",
+        "path": "/walletsolidity/getcontractinfo"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 405
+    },
+    "tron/walletsolidity_getnowblock": {
+      "body": "tron/walletsolidity_getnowblock.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {},
+        "method": "POST",
+        "path": "/walletsolidity/getnowblock"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200,
+      "trimmed": "transactions reduced to the first two; block header verbatim"
+    },
+    "tron/walletsolidity_gettransactioninfobyid": {
+      "body": "tron/walletsolidity_gettransactioninfobyid.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "value": "6386e9f37d890da8924f089a0adbcd16a09ac0ff6a979cc9357cf7feb25e9f54"
+        },
+        "method": "POST",
+        "path": "/walletsolidity/gettransactioninfobyid"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    },
+    "tron/walletsolidity_gettransactioninfobyid_missing": {
+      "body": "tron/walletsolidity_gettransactioninfobyid_missing.json",
+      "content_type": "application/json",
+      "request": {
+        "body": {
+          "value": "0000000000000000000000000000000000000000000000000000000000000001"
+        },
+        "method": "POST",
+        "path": "/walletsolidity/gettransactioninfobyid"
+      },
+      "source": "https://api.trongrid.io",
+      "status": 200
+    }
+  },
+  "note": "Recorded from public mainnet endpoints; replayed offline by crates/iroha_sccp_rpc/tests/transport.rs. See README.md."
+}

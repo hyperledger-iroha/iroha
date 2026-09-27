@@ -326,12 +326,9 @@ fn all_49_main_oods_dispatches_match_scalar_relations_and_bind_each_registration
         claims,
     )
     .unwrap();
-    // This private test installs only the verifier's public schedule, without
-    // manufacturing any query cache or proof-derived fixed values.
-    log19.public_fixed = Some(
-        MainLog19PublicFixedAffineScheduleV1::compile_v1(&log19.rfc_fixed, &log19.sha_fixed)
-            .unwrap(),
-    );
+    // The production preparer compiles public fixed context without creating
+    // query caches or accepting any proof-derived fixed values.
+    log19.prepare_complete_oods_fixed_v1().unwrap();
     let prepared =
         prepare_main_deep_fixed_v1(&layout, point, &p256, &projection, &io, &log19).unwrap();
     let mut deep = aggregate::AggregateDeepProofV1 {

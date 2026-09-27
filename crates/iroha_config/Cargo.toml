@@ -25,6 +25,10 @@ path = "tests/iroha_config_integration.rs"
 name = "taira_config_contracts"
 path = "tests/taira_config_contracts.rs"
 
+[[test]]
+name = "sccp_node_config"
+path = "tests/sccp_node_config.rs"
+
 [dependencies]
 iroha_model_base = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }

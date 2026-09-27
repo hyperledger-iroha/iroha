@@ -1148,18 +1148,36 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
                 block_hash,
                 entry_hash: Hash::prehashed([batch_index as u8 + 1; Hash::LENGTH]),
                 batch_index,
-                parameter: "fastpq-state-transition-stark-v1".to_owned(),
                 transition_count: 0,
-                trace_commitment: iroha_data_model::privacy::GoldilocksDigest384V1::new(
-                    [u64::from(batch_index) + 1; 6],
-                )
-                .expect("canonical test FASTPQ trace commitment"),
-                proof_digest: Hash::new(&proof),
-                batch: fastpq_prover::TransitionBatch::new(
-                    "fastpq-state-transition-stark-v1",
-                    fastpq_prover::PublicInputs::default(),
-                ),
-                proof,
+                public_inputs: iroha_data_model::fastpq::FastpqPublicInputs {
+                    dsid: [0; 16],
+                    slot: 0,
+                    old_root: [0; 32],
+                    new_root: [0; 32],
+                    perm_root: [0; 32],
+                    tx_set_hash: [0; 32],
+                },
+                ordering_hash: [0; 32],
+                artifact_identity: iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1 {
+                    proof_kind: iroha_data_model::fastpq::FastpqProofKindV1::OrdinaryCompact,
+                    profile_id: fastpq_prover::offline_compact::quantity_profile_id(),
+                    public_statement_digest: Hash::new(b"recovery statement").into(),
+                    artifact_digest: Hash::new(&proof).into(),
+                    inner_bundle_digest: Hash::new(b"recovery inner bundle").into(),
+                    artifact_bytes: proof.len() as u64,
+                    commitments:
+                        iroha_data_model::fastpq::FastpqCommitmentDescriptionV1::OrderedCompactAir(
+                            iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1 {
+                                segment_count: 1,
+                                segment_air_row_roots: vec![
+                                    iroha_data_model::privacy::GoldilocksDigest384V1::new(
+                                        [u64::from(batch_index) + 1; 6],
+                                    )
+                                    .unwrap(),
+                                ],
+                            },
+                        ),
+                },
             });
     }
     app.kura.write_pipeline_metadata(&sidecar);

@@ -261,6 +261,69 @@ mod tests {
     }
 
     #[test]
+    fn note_parsers_preserve_fields_and_reject_late_private_field_errors() {
+        let input = || JsConfidentialTransferInputV2 {
+            amount: "17".into(),
+            rho_hex: "11".repeat(32),
+            diversifier_hex: Some("22".repeat(32)),
+            leaf_index: 31,
+        };
+        let transfer = parse_confidential_transfer_inputs_v2(vec![input()]).unwrap();
+        let redemption = parse_confidential_unshield_inputs_v2(vec![input()]).unwrap();
+        assert_eq!(transfer[0].amount, 17);
+        assert_eq!(transfer[0].rho, [0x11; 32]);
+        assert_eq!(transfer[0].diversifier, [0x22; 32]);
+        assert_eq!(transfer[0].leaf_index, 31);
+        assert_eq!(redemption[0].amount, transfer[0].amount);
+        assert_eq!(redemption[0].rho, transfer[0].rho);
+        assert_eq!(redemption[0].diversifier, transfer[0].diversifier);
+        assert_eq!(redemption[0].leaf_index, transfer[0].leaf_index);
+        let invalid_input = || {
+            let mut note = input();
+            note.diversifier_hex = None;
+            note
+        };
+        for error in [
+            parse_confidential_transfer_inputs_v2(vec![input(), invalid_input()]).unwrap_err(),
+            parse_confidential_unshield_inputs_v2(vec![input(), invalid_input()]).unwrap_err(),
+        ] {
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert_eq!(error.reason, "inputs[1].diversifier_hex is required");
+        }
+        let output = || JsConfidentialTransferOutputV2 {
+            amount: "17".into(),
+            rho_hex: "33".repeat(32),
+            owner_tag_hex: "44".repeat(32),
+        };
+        let parsed = parse_confidential_transfer_outputs_v2(vec![output()]).unwrap();
+        assert_eq!(parsed[0].amount, 17);
+        assert_eq!(parsed[0].rho, [0x33; 32]);
+        assert_eq!(parsed[0].owner_tag, [0x44; 32]);
+        let mut invalid_output = output();
+        invalid_output.owner_tag_hex = "private-invalid-tag".into();
+        let error =
+            parse_confidential_transfer_outputs_v2(vec![output(), invalid_output]).unwrap_err();
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert!(error.reason.contains("outputs[1].owner_tag_hex"));
+        assert!(!error.reason.contains("private-invalid-tag"));
+
+        let change = || JsConfidentialUnshieldOutputV3 {
+            amount: "3".into(),
+            rho_hex: "55".repeat(32),
+        };
+        let parsed = parse_confidential_unshield_outputs_v3(vec![change()]).unwrap();
+        assert_eq!(parsed[0].amount, 3);
+        assert_eq!(parsed[0].rho, [0x55; 32]);
+        let mut invalid_change = change();
+        invalid_change.rho_hex = "private-invalid-rho".into();
+        let error =
+            parse_confidential_unshield_outputs_v3(vec![change(), invalid_change]).unwrap_err();
+        assert_eq!(error.status, napi::Status::InvalidArg);
+        assert!(error.reason.contains("outputs[1].rho_hex"));
+        assert!(!error.reason.contains("private-invalid-rho"));
+    }
+
+    #[test]
     fn public_envelope_preserves_native_proof_and_output_order() {
         use iroha_core::zk::ProofRelation;
         let actual = envelope(ConfidentialProof {
@@ -274,5 +337,75 @@ mod tests {
         assert_eq!(actual.root.as_ref(), &[3; 32]);
         assert_eq!(actual.nullifiers[1].as_ref(), &[5; 32]);
         assert_eq!(actual.output_commitments[0].as_ref(), &[6; 32]);
+    }
+
+    #[test]
+    fn native_note_derivation_matches_core_and_redacts_late_decode_failures() {
+        let asset = AssetDefinitionId::from_uuid_bytes([
+            1, 2, 3, 4, 5, 6, 0x47, 8, 0x89, 10, 11, 12, 13, 14, 15, 16,
+        ])
+        .unwrap()
+        .to_string();
+        let key = [7; 32];
+        let rho = [0x11; 32];
+        let diversifier = [0x22; 32];
+        let owner =
+            confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(&key, diversifier)
+                .unwrap();
+        let derived_owner = derive_confidential_owner_tag_v2(
+            Uint8Array::from(key.to_vec()),
+            Some(hex::encode(diversifier)),
+        )
+        .unwrap();
+        assert_eq!(derived_owner.as_ref(), &owner);
+        let note = derive_confidential_note_v2(
+            asset.clone(),
+            "17".into(),
+            hex::encode(rho),
+            hex::encode(owner),
+        )
+        .unwrap();
+        assert_eq!(
+            note.as_ref(),
+            &confidential_v2::derive_confidential_note_v2(&asset, 17, rho, owner).unwrap()
+        );
+        let network = parse_transaction_network_id_bytes(&[1; 32]).unwrap();
+        let nullifier = derive_confidential_nullifier_v2(
+            Uint8Array::from(vec![1; 32]),
+            asset.clone(),
+            Uint8Array::from(key.to_vec()),
+            hex::encode(rho),
+        )
+        .unwrap();
+        assert_eq!(
+            nullifier.as_ref(),
+            &confidential_v2::derive_confidential_nullifier_v3(
+                &key,
+                rho,
+                confidential_v2::derive_confidential_asset_tag_v3(&asset).unwrap(),
+                confidential_v2::derive_confidential_network_tag_v3(&network).unwrap(),
+            )
+            .unwrap()
+        );
+        for error in [
+            derive_confidential_owner_tag_v2(Uint8Array::from(key.to_vec()), None).unwrap_err(),
+            derive_confidential_note_v2(
+                asset.clone(),
+                "17".into(),
+                hex::encode(rho),
+                "private-invalid-owner".into(),
+            )
+            .unwrap_err(),
+            derive_confidential_nullifier_v2(
+                Uint8Array::from(vec![1; 32]),
+                asset,
+                Uint8Array::from(key.to_vec()),
+                "private-invalid-rho".into(),
+            )
+            .unwrap_err(),
+        ] {
+            assert_eq!(error.status, napi::Status::InvalidArg);
+            assert!(!error.reason.contains("private-invalid"));
+        }
     }
 }

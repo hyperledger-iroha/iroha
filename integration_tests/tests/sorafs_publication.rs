@@ -116,6 +116,37 @@ async fn fund_and_declare(
     asset: AssetDefinitionId,
 ) -> Result<()> {
     let governor = client(network, 0, &ALICE_KEYPAIR);
+    // NPoS genesis funds the test-network bootstrap accounts, not caller-registered workers.
+    // Fund every separate production custody account through ordinary signed transfers.
+    let mut effective = toml::Table::new();
+    for layer in network.config_layers_for_peer(&network.peers()[0]) {
+        merge(&mut effective, layer.into_owned());
+    }
+    let native_fee_asset: AssetDefinitionId = effective
+        .get("nexus")
+        .and_then(|value| value.get("fees"))
+        .and_then(|value| value.get("fee_asset_id"))
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| eyre!("publication network must expose its actual bootstrap fee asset"))?
+        .parse()?;
+    for provider in providers {
+        for account in std::iter::once(provider.owner()).chain(
+            provider
+                .role_keys
+                .iter()
+                .map(|key| AccountId::new(key.public_key().clone())),
+        ) {
+            submit_instruction(
+                &governor,
+                Transfer::asset_quantity(
+                    AssetId::of(native_fee_asset.clone(), ALICE_ID.clone()),
+                    10_000_u32,
+                    account,
+                ),
+            )
+            .await?;
+        }
+    }
     let policy = ReserveAuthorityPolicyV1 {
         version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
         revision: 1,
@@ -266,7 +297,7 @@ async fn refresh_network_adverts(
 /// A caller may add the genuine Parliament corridor before genesis for subsequent revocation tests.
 pub(super) async fn create_and_publish(
     transform: impl FnOnce(NetworkBuilder) -> NetworkBuilder,
-) -> Result<Option<PublishedNetwork>> {
+) -> Result<PublishedNetwork> {
     init_instruction_registry();
     let cli_binary = std::env::var_os("TEST_NETWORK_BIN_SORAFS_CLI")
         .map(PathBuf::from)
@@ -358,9 +389,8 @@ pub(super) async fn create_and_publish(
     }
     let context = "four_peer_native_publication_and_storage_lifecycle";
     let network = sandbox::build_network_or_skip(transform(builder), context);
-    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
-        return Ok(None);
-    };
+    let network = sandbox::enforce_network_start_requirement(network, context)?
+        .ok_or_else(|| eyre!("publication qualification requires an actual four-validator network; startup was unavailable"))?;
     ensure!(
         network.peers().len() == 4,
         "publication requires exactly four validators"
@@ -537,7 +567,7 @@ pub(super) async fn create_and_publish(
         true,
     )
     .await?;
-    Ok(Some(PublishedNetwork {
+    Ok(PublishedNetwork {
         network,
         authority,
         providers,
@@ -548,7 +578,7 @@ pub(super) async fn create_and_publish(
         payload,
         cli_binary,
         _runtime_directory: runtime_directory,
-    }))
+    })
 }
 
 pub(super) fn cid(bytes: &[u8]) -> String {
@@ -850,9 +880,7 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
 #[test]
 fn four_peer_publication_replication_retrieval_restart_and_native_repair() -> Result<()> {
     super::sorafs_network::run("sorafs-publication", || async {
-        let Some(published) = create_and_publish(|builder| builder).await? else {
-            return Ok(());
-        };
+        let published = create_and_publish(|builder| builder).await?;
         qualify_storage_lifecycle(&published)
             .await
             .wrap_err("actual native publication lifecycle")?;

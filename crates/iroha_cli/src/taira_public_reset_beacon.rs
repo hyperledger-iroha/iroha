@@ -1163,6 +1163,18 @@ struct VerifiedInstall {
     instructions: Vec<iroha_data_model::isi::InstructionBox>,
 }
 
+/// Create private native work custody without depending on the SSH process umask.
+fn private_beacon_workdir(root: &Path, prefix: &str) -> Result<tempfile::TempDir> {
+    validate_owner_private_dir(root, "beacon work parent")?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(prefix);
+    #[cfg(unix)]
+    builder.permissions(fs::Permissions::from_mode(0o700));
+    let temporary = builder.tempdir_in(root)?;
+    validate_owner_private_dir(temporary.path(), "beacon work directory")?;
+    Ok(temporary)
+}
+
 /// The same-release daemon remains the single public bundle/policy codec owner.
 /// It revalidates the public transcript and every provider digest on each admission;
 /// neither the receipt nor an arbitrary JSON digest is substituted for that check.
@@ -1179,9 +1191,7 @@ fn verify_native_install(
     let (_, before) = read_public::<PublicBundleV1>(&bundle_path, "beacon bundle")?;
     let validator = &inventory.validators[0];
     verify_regular_hash(program, &artifact(&validator.artifacts, "iroha3d")?.sha256)?;
-    let temporary = tempfile::Builder::new()
-        .prefix("native-bundle-check-")
-        .tempdir_in(root)?;
+    let temporary = private_beacon_workdir(root, "native-bundle-check-")?;
     let output = temporary.path().join("instructions.json");
     let mut args = vec![
         "beacon-bootstrap".into(),
@@ -1367,9 +1377,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             )?);
             // The existing native loader scrubs/truncates this disposable copy. It
             // never consumes the persistent signed config or prints private bytes.
-            let temporary = tempfile::Builder::new()
-                .prefix("lifecycle-key-")
-                .tempdir_in(root)?;
+            let temporary = private_beacon_workdir(root, "lifecycle-key-")?;
             let path = temporary.path().join("config.toml");
             reset::inputs::write_new_private(&path, &bytes)?;
             let file = OpenOptions::new()
@@ -2377,6 +2385,52 @@ pub(in super::super) fn derive_plan(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn beacon_native_workdirs_are_private_under_permissive_ssh_umask() {
+        const CHILD: &str = "IROHA_BEACON_WORKDIR_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            for mask in ["022", "077"] {
+                let result = Command::new("/bin/sh")
+                    .args([
+                        "-c",
+                        "umask \"$1\"; shift; exec \"$@\"",
+                        "beacon-workdir-test",
+                        mask,
+                    ])
+                    .arg(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "taira_public_reset::host::beacon::tests::beacon_native_workdirs_are_private_under_permissive_ssh_umask",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, "1")
+                    .output()
+                    .unwrap();
+                let stdout = String::from_utf8_lossy(&result.stdout);
+                assert!(
+                    result.status.success()
+                        && stdout.contains("test result: ok. 1 passed; 0 failed;"),
+                    "beacon workdir regression under umask{mask} did not execute and pass exactly once: {stdout}{}",
+                    String::from_utf8_lossy(&result.stderr)
+                );
+            }
+            return;
+        }
+        let root = reset::private_custody_test_dir("taira-beacon-workdir-");
+        for prefix in ["lifecycle-key-", "native-bundle-check-"] {
+            let temporary = private_beacon_workdir(root.path(), prefix).unwrap();
+            let path = temporary.path().to_path_buf();
+            assert_eq!(fs::metadata(&path).unwrap().mode() & 0o7777, 0o700);
+            let output = path.join("config.toml");
+            reset::inputs::write_new_private(&output, b"fixture = 1\n").unwrap();
+            assert_eq!(fs::metadata(&output).unwrap().mode() & 0o7777, 0o600);
+            assert_eq!(fs::read(&output).unwrap(), b"fixture = 1\n");
+            drop(temporary);
+            assert!(!path.exists());
+        }
+    }
 
     #[cfg(unix)]
     #[test]

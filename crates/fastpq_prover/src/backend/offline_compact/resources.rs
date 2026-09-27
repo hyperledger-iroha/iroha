@@ -4,15 +4,17 @@ use super::{ProvingLimits, VerificationLimits};
 use crate::{
     Error, Result,
     backend::{
-        compact_protocol::replay::TraceReplayPlan, compact_prover_resources::segment_charge,
+        compact_prover_resources::{replay_plan, segment_charge},
+        compact_public_columns::COMMITTED_COLUMN_COUNT,
+        deep_geometry, deep_proof,
     },
     gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT},
 };
 
-pub(in crate::backend) const QUANTITY_QUERY_COUNT: usize = 375;
-pub(in crate::backend) const QUANTITY_SHARED_FRAME_BOUND: usize = 4_017_376;
+pub(in crate::backend) const QUANTITY_QUERY_COUNT: usize = deep_geometry::QUERY_COUNT;
+pub(in crate::backend) const QUANTITY_SHARED_FRAME_BOUND: usize = deep_proof::MAX_FRAME_BYTES;
 
-/// Resource arithmetic for the current, unmasked offline quantity artifact.
+/// Resource arithmetic for the current masked offline quantity artifact.
 ///
 /// This report neither authenticates a statement nor authorizes a proof. Counts
 /// describe the fixed protocol; byte bounds describe different resources and
@@ -31,10 +33,10 @@ pub struct QuantityArtifactResources {
     pub trace_cells_per_segment: usize,
     /// Base-field trace cells processed sequentially across all segments.
     pub total_trace_cells: usize,
-    /// Exact peak owned coefficient-plus-stripe payload for sequential replay.
+    /// Fixed replay payload including source, coefficients, entropy and one stripe.
     ///
-    /// Caller inputs, digest trees, scalar/extension oracles, fixed preparation,
-    /// row openings and allocator/runtime overhead are outside this subtotal.
+    /// Digest trees, quotient/FRI workspace, codec and allocator/runtime overhead
+    /// are outside this subtotal.
     pub trace_replay_peak_bytes: usize,
     /// Rows per column in each in-place replay transform.
     pub trace_replay_transform_rows: usize,
@@ -42,8 +44,8 @@ pub struct QuantityArtifactResources {
     pub trace_replay_stripes: usize,
     /// Maximum column transforms per segment, including initial interpolation.
     ///
-    /// Three full passes commit rows, mix columns and evaluate quotients. A
-    /// fourth visits only stripes needed by final row openings.
+    /// Three conservative full passes cover row commitments, the quotient
+    /// numerator and selected row openings.
     pub trace_replay_maximum_column_transforms: usize,
     /// Necessary raw row-opening bytes per segment, excluding other proof data.
     ///
@@ -52,7 +54,7 @@ pub struct QuantityArtifactResources {
     pub minimum_segment_row_bytes: usize,
     /// Necessary raw row-opening bytes across the complete bundle.
     pub minimum_bundle_row_bytes: usize,
-    /// Necessary child payload bytes for rows plus mixed/quotient values.
+    /// Necessary child payload bytes for rows plus randomized quotient chunks and composition masks.
     ///
     /// Merkle frontiers, FRI openings, indices and framing increase this floor.
     pub minimum_segment_proof_payload_bytes: usize,
@@ -64,10 +66,11 @@ pub struct QuantityArtifactResources {
     pub maximum_total_segment_frame_bytes: usize,
     /// Conservative complete bundle carrier bound, excluding outer transport.
     pub maximum_bundle_frame_bytes: usize,
-    /// Conservative structural working-payload charge for one segment.
+    /// Necessary structural working-payload floor for one segment.
     ///
     /// This uses the caller's maximum statement length and the fixed child-frame
-    /// bound. It is neither an allocation reservation nor an RSS ceiling. Private
+    /// bound. The exact relation-dependent producer plan must also pass before
+    /// trace expansion. This floor is neither an allocation reservation nor an RSS ceiling. Private
     /// SMTs, retained child frames, decoder charges, thread stacks and unrelated
     /// process memory have separate budgets.
     pub segment_charge_bytes: usize,
@@ -81,8 +84,8 @@ pub struct QuantityArtifactResources {
 /// the complete statement length. For a conservative report before preparing
 /// contexts, the bundle's total statement-byte cap bounds every child.
 ///
-/// The current profile is unmasked and offline-only. No plan enables private
-/// proofs, production admission, or larger protocol/resource limits.
+/// The masked profile uses the same plan for node and standalone callers.
+/// Resource accounting never replaces statement authentication or verification.
 ///
 /// # Errors
 /// Rejects an empty bundle or overflow in any work/byte bound.
@@ -93,13 +96,15 @@ pub fn quantity_artifact_resources(
     let roots = segments
         .checked_sub(1)
         .ok_or_else(|| invalid("quantity resource plan requires a nonempty bundle"))?;
-    let replay = TraceReplayPlan::new(PHYSICAL_ROW_COUNT, COLUMN_COUNT)?;
+    let replay = replay_plan()?;
     let trace_cells_per_segment = mul(COLUMN_COUNT, PHYSICAL_ROW_COUNT)?;
-    let minimum_segment_row_bytes =
-        mul(mul(QUANTITY_QUERY_COUNT, COLUMN_COUNT)?, size_of::<u64>())?;
+    let minimum_segment_row_bytes = mul(
+        mul(QUANTITY_QUERY_COUNT, COMMITTED_COLUMN_COUNT)?,
+        size_of::<u64>(),
+    )?;
     let minimum_segment_proof_payload_bytes = add(
         minimum_segment_row_bytes,
-        mul(mul(QUANTITY_QUERY_COUNT, 2)?, crate::GoldilocksFp4V1::BYTES)?,
+        mul(mul(QUANTITY_QUERY_COUNT, 3)?, crate::GoldilocksFp4V1::BYTES)?,
     )?;
     // Keep the same conservative framing allowances as actual producer ingress:
     // at most ten prefix bytes per scalar/sequence plus the carrier fields.
@@ -116,9 +121,9 @@ pub fn quantity_artifact_resources(
         total_queries: mul(segments, QUANTITY_QUERY_COUNT)?,
         trace_cells_per_segment,
         total_trace_cells: mul(segments, trace_cells_per_segment)?,
-        trace_replay_peak_bytes: replay.peak_trace_bytes,
-        trace_replay_transform_rows: replay.trace_rows,
-        trace_replay_stripes: replay.stripes,
+        trace_replay_peak_bytes: replay.payload_bytes,
+        trace_replay_transform_rows: PHYSICAL_ROW_COUNT,
+        trace_replay_stripes: replay.stripes(),
         trace_replay_maximum_column_transforms: replay.maximum_column_transforms,
         minimum_segment_row_bytes,
         minimum_bundle_row_bytes: mul(segments, minimum_segment_row_bytes)?,
@@ -170,10 +175,19 @@ impl QuantityArtifactResources {
                 self.segment_charge_bytes,
                 proving.max_segment_charge_bytes,
             ),
-            ("max_air_row_values", COLUMN_COUNT, child.max_air_row_values),
-            ("max_fri_layers", 18, child.max_fri_layers),
-            ("max_query_path_len", 19, child.max_query_path_len),
-            ("max_fri_round_values", 4, child.max_fri_round_values),
+            (
+                "max_compact_prover_segment_work_units",
+                replay_plan()?.work_units,
+                proving.max_segment_work_units,
+            ),
+            (
+                "max_air_row_values",
+                COMMITTED_COLUMN_COUNT,
+                child.max_air_row_values,
+            ),
+            ("max_fri_layers", 6, child.max_fri_layers),
+            ("max_query_path_len", 23, child.max_query_path_len),
+            ("max_fri_round_values", 16, child.max_fri_round_values),
             (
                 "max_bundle_wire_bytes",
                 self.maximum_bundle_frame_bytes,
@@ -214,28 +228,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn default_policy_accepts_the_canonical_two_segment_resource_plan() {
+        let proving = ProvingLimits::default();
+        let verification = VerificationLimits::default();
+        let resources =
+            quantity_artifact_resources(2, verification.bundle.max_total_statement_bytes).unwrap();
+        resources
+            .check_proving_limits(proving, verification)
+            .unwrap();
+        assert_eq!(
+            verification.bundle.segment.max_proof_bytes,
+            deep_proof::MAX_FRAME_BYTES
+        );
+        assert_eq!(proving.digest_execution, crate::DigestExecutionV1::Cpu);
+        let mut insufficient = verification;
+        insufficient.bundle.segment.max_queries -= 1;
+        assert!(
+            resources
+                .check_proving_limits(proving, insufficient)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn planner_reports_unavoidable_wire_bytes_and_sequential_work() {
         let one = quantity_artifact_resources(1, 0).unwrap();
         let two = quantity_artifact_resources(2, 256).unwrap();
-        assert_eq!(one.minimum_segment_row_bytes, 1_026_000);
-        assert!(one.minimum_segment_row_bytes > 512 * 1024);
-        assert_eq!(one.minimum_segment_proof_payload_bytes, 1_050_000);
-        assert!(one.minimum_segment_proof_payload_bytes > 1024 * 1024);
-        assert_eq!(two.minimum_total_segment_payload_bytes, 2_100_000);
-        assert_eq!(two.minimum_bundle_row_bytes, 2_052_000);
-        assert!(two.minimum_bundle_row_bytes > 1024 * 1024);
-        assert_eq!(two.total_queries, 750);
+        assert_eq!(one.minimum_segment_row_bytes, 154_112);
+        assert_eq!(one.minimum_segment_proof_payload_bytes, 160_256);
+        assert_eq!(two.minimum_total_segment_payload_bytes, 320_512);
+        assert_eq!(two.minimum_bundle_row_bytes, 308_224);
+        assert_eq!(two.total_queries, 128);
         assert_eq!(one.trace_cells_per_segment, 342 * 65_536);
-        assert_eq!(one.trace_replay_peak_bytes, 358_612_992);
+        assert_eq!(
+            one.trace_replay_peak_bytes,
+            replay_plan().unwrap().payload_bytes
+        );
         assert_eq!(one.trace_replay_transform_rows, 65_536);
-        assert_eq!(one.trace_replay_stripes, 8);
-        assert_eq!(one.trace_replay_maximum_column_transforms, 11_286);
+        assert_eq!(one.trace_replay_stripes, 128);
+        assert_eq!(one.trace_replay_maximum_column_transforms, 115_885);
         assert_eq!(two.trace_replay_peak_bytes, one.trace_replay_peak_bytes);
         assert_eq!(two.total_trace_cells, 2 * one.trace_cells_per_segment);
-        assert_eq!(two.maximum_total_segment_frame_bytes, 2 * 4_017_376);
+        assert_eq!(
+            two.maximum_total_segment_frame_bytes,
+            2 * QUANTITY_SHARED_FRAME_BOUND
+        );
         assert_eq!(
             two.maximum_bundle_frame_bytes,
-            1024 + 64 + 2 * (4_017_376 + 32)
+            1024 + 64 + 2 * (QUANTITY_SHARED_FRAME_BOUND + 32)
         );
         // Sequential children do not multiply the per-segment charge.
         assert_eq!(two.segment_charge_bytes, one.segment_charge_bytes + 8 * 256);

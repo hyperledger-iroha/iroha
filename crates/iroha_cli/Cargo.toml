@@ -76,6 +76,8 @@ iroha = { workspace = true }
 iroha_wallet = { workspace = true }
 iroha_storage_client = { workspace = true }
 iroha_sccp = { workspace = true }
+iroha_sccp_rpc = { workspace = true }
+iroha_sccp_wallet = { workspace = true }
 iroha_primitives = { workspace = true }
 ivm = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["sm"] }

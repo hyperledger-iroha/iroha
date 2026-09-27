@@ -918,3 +918,62 @@ fn completed_work_survives_healthy_output_overflow_and_bounds_the_next_overlay()
 
 #[path = "output_network_tests.rs"]
 mod network;
+
+#[test]
+fn refused_output_apply_keeps_state_witness_and_auxiliary_rollback_armed() {
+    let _guard = witness::exec_witness_guard();
+    for poisoned in [false, true] {
+        witness::start_block();
+        let state = state(16_384);
+        let mut block = state.block(source(&state, 1).header());
+        let before = block.world.parameters.get().clone();
+        let events = block.world.external_event_buf.len();
+        let fragments = block.committed_fragment_count();
+        let mut attempt = OutputTransaction::new(&mut block);
+        let tx = attempt.transaction.as_mut().unwrap();
+        write_state(tx, 7);
+        let expected = if poisoned {
+            *tx.block_execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+            "transaction cannot apply in the current execution-output phase"
+        } else {
+            tx.callback_journal.record_failure();
+            "transaction callback journal does not authorize application"
+        };
+        assert_eq!(attempt.apply(), Err(expected.into()));
+        assert_eq!(*block.world.parameters.get(), before);
+        assert_eq!(block.world.external_event_buf.len(), events);
+        assert_eq!(block.committed_fragment_count(), fragments);
+        assert!(matches!(
+            block.execution_output_plan,
+            Some(ExecutionOutputPlanState::Poisoned)
+        ));
+        let snapshot = witness::snapshot_exec_witness();
+        assert!(snapshot.reads.is_empty());
+        assert!(snapshot.writes.is_empty());
+        #[cfg(feature = "zk-preverify")]
+        assert!(block.zk_dedup.check_and_insert(&proof()));
+    }
+}
+
+#[test]
+fn poisoned_carrier_refuses_consensus_world_application() {
+    let state = state(16_384);
+    let mut block = state.block(source(&state, 1).header());
+    let before = block.world.parameters.get().clone();
+    let fragments = block.committed_fragment_count();
+    let mut tx = block.transaction();
+    tx.world
+        .parameters
+        .get_mut()
+        .set_parameter(Parameter::Block(BlockParameter::MaxTransactions(
+            NonZeroU64::new(7).unwrap(),
+        )));
+    *tx.block_execution_output_plan = Some(ExecutionOutputPlanState::Poisoned);
+    tx.apply_consensus_effects();
+    assert_eq!(*block.world.parameters.get(), before);
+    assert_eq!(block.committed_fragment_count(), fragments);
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(ExecutionOutputPlanState::Poisoned)
+    ));
+}

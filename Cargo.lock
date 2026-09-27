@@ -4735,6 +4735,9 @@ dependencies = [
  "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
+ "iroha_sccp",
+ "iroha_sccp_rpc",
+ "iroha_sccp_wallet",
  "iroha_service_model",
  "iroha_telemetry",
  "iroha_test_network",
@@ -4857,6 +4860,8 @@ dependencies = [
  "iroha_model_base",
  "iroha_primitives",
  "iroha_sccp",
+ "iroha_sccp_rpc",
+ "iroha_sccp_wallet",
  "iroha_service_model",
  "iroha_storage_client",
  "iroha_test_samples",
@@ -5651,6 +5656,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_sccp_rpc"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "aes",
+ "ctr",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "hex",
+ "iroha_config",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_sccp",
+ "norito",
+ "reqwest",
+ "sha2",
+ "tiny-keccak",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "iroha_sccp_wallet"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "iroha_config",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_sccp",
+ "iroha_sccp_rpc",
+ "iroha_wallet",
+ "k256",
+ "norito",
+ "sha2",
+ "tiny-keccak",
+ "zeroize",
+]
+
+[[package]]
 name = "iroha_schema"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -6099,6 +6144,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
+ "iroha_sccp_rpc",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",

@@ -214,7 +214,6 @@ impl MultiproofPlan {
 
     /// Exact retained Vec payload, including reserved capacity, for prover planning.
     /// Allocator metadata and this fixed-size object are not dynamic payload.
-    #[cfg(test)]
     pub(super) fn owned_payload_bytes(&self) -> Result<usize> {
         self.indices
             .capacity()
@@ -229,7 +228,6 @@ impl MultiproofPlan {
     }
 
     /// Exact canonical selected positions, borrowed by the streamed producer.
-    #[cfg(test)]
     pub(super) fn queried_indices(&self) -> &[usize] {
         &self.indices
     }
@@ -265,7 +263,6 @@ impl MultiproofPlan {
     ///
     /// The callback receives only coordinates derived from trusted geometry.
     /// All cached level widths are checked before the first hash invocation.
-    #[cfg(test)]
     pub(super) fn open_with(
         &self,
         levels: &[Vec<Digest>],

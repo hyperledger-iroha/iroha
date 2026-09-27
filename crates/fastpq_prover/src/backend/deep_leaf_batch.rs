@@ -1,12 +1,16 @@
-//! Fixed-size parallel canonical leaf hashing with ordered outputs and exact scratch bounds.
+//! Bounded canonical leaf hashing under explicit CPU or required-device execution.
 
 use rayon::prelude::*;
 
 use super::{
+    compact_v1::{MAX_PREPARED_HASH_FRAME_BYTES, PreparedHashFrame},
     deep_binding::{BindingError, Context, Oracle},
     masked_quotient::{checked_add as add, checked_mul as mul},
 };
-use crate::{Error, Result};
+#[cfg(feature = "fastpq-gpu")]
+use crate::digest384_batch::execute_last_fields_with_cpu;
+use crate::digest384_batch::{Digest384LastFieldJob, last_fields_payload_charge};
+use crate::{DigestExecutionV1, Error, Result};
 
 /// Independent of the worker count, witness, transcript and proof representation.
 pub(super) const CAPACITY: usize = 32;
@@ -15,15 +19,23 @@ pub(super) const CAPACITY: usize = 32;
 /// private canonical frame per possible concurrent hash. Worker stacks, allocator
 /// metadata and the shared public Context are charged/excluded by their owners.
 pub(super) fn payload_bytes(binding: &Context, oracle: Oracle, leaf_bytes: usize) -> Result<usize> {
-    mul(
+    let bodies = mul(CAPACITY, MAX_PREPARED_HASH_FRAME_BYTES)?;
+    let host = mul(
         CAPACITY,
         add(
             leaf_bytes,
             add(
-                48 + size_of::<Result<()>>(),
+                48 + size_of::<Result<()>>()
+                    + size_of::<Result<PreparedHashFrame>>()
+                    + size_of::<PreparedHashFrame>()
+                    + size_of::<Digest384LastFieldJob<'_>>(),
                 binding.tree_frame_bytes(oracle).map_err(binding_error)?,
             )?,
         )?,
+    )?;
+    add(
+        host,
+        add(bodies, last_fields_payload_charge(CAPACITY, bodies)?)?,
     )
 }
 
@@ -37,6 +49,7 @@ pub(super) fn hash(
     payloads: &[u8],
     leaf_bytes: usize,
     output: &mut [[u64; 6]],
+    execution: DigestExecutionV1,
 ) -> Result<()> {
     if indices.is_empty()
         || indices.len() > CAPACITY
@@ -46,6 +59,36 @@ pub(super) fn hash(
     {
         return Err(invalid("DEEP leaf batch has another exact bounded shape"));
     }
+    #[cfg(feature = "fastpq-gpu")]
+    if matches!(execution, DigestExecutionV1::Device(_)) {
+        let frames = indices
+            .par_iter()
+            .zip(payloads.par_chunks_exact(leaf_bytes))
+            .map(|(&index, bytes)| {
+                let index = u32::try_from(index)
+                    .map_err(|_| invalid("DEEP leaf batch index exceeds u32"))?;
+                binding.prepare_leaf(oracle, index, bytes)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let bytes = frames
+            .iter()
+            .try_fold(0usize, |sum, frame| add(sum, frame.payload_len()))?;
+        let digests = execute_last_fields_with_cpu(
+            frames.len(),
+            bytes,
+            execution,
+            |index| frames[index].hash_cpu(),
+            || frames.iter().map(PreparedHashFrame::job).collect(),
+        )?;
+        if digests.len() != output.len() {
+            return Err(invalid("DEEP leaf executor returned another digest count"));
+        }
+        for (destination, digest) in output.iter_mut().zip(digests) {
+            *destination = digest.words();
+        }
+        return Ok(());
+    }
+    let _ = execution;
     let results: Vec<Result<()>> = output
         .par_iter_mut()
         .zip(payloads.par_chunks_exact(leaf_bytes))
@@ -107,6 +150,7 @@ mod tests {
                             &payloads,
                             96,
                             &mut outputs,
+                            DigestExecutionV1::Cpu,
                         )
                         .unwrap();
                     });
@@ -136,13 +180,19 @@ mod tests {
                 );
             }
         }
+        let bodies = CAPACITY * MAX_PREPARED_HASH_FRAME_BYTES;
         assert_eq!(
             payload_bytes(&binding, Oracle::QuotientAndMask, 96).unwrap(),
             CAPACITY
                 * (96
                     + 48
                     + size_of::<Result<()>>()
+                    + size_of::<Result<PreparedHashFrame>>()
+                    + size_of::<PreparedHashFrame>()
+                    + size_of::<Digest384LastFieldJob<'_>>()
                     + binding.tree_frame_bytes(Oracle::QuotientAndMask).unwrap())
+                + bodies
+                + last_fields_payload_charge(CAPACITY, bodies).unwrap()
         );
     }
 
@@ -163,7 +213,8 @@ mod tests {
                     indices,
                     bytes,
                     width,
-                    &mut outputs[..count]
+                    &mut outputs[..count],
+                    DigestExecutionV1::Cpu,
                 )
                 .is_err()
             );
@@ -175,7 +226,8 @@ mod tests {
                 &[0; CAPACITY + 1],
                 &[0; (CAPACITY + 1) * 96],
                 96,
-                &mut outputs
+                &mut outputs,
+                DigestExecutionV1::Cpu,
             )
             .is_err()
         );
@@ -186,9 +238,159 @@ mod tests {
                 &[0, LDE_ROWS],
                 &[0; 192],
                 96,
-                &mut outputs[..2]
+                &mut outputs[..2],
+                DigestExecutionV1::Cpu,
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn prepared_leaves_and_parents_match_independent_canonical_hashes() {
+        use crate::backend::GOLDILOCKS_MODULUS;
+        let binding = Context::new(&vec![73; 200 * 1024]).unwrap();
+        for oracle in [
+            Oracle::Row,
+            Oracle::QuotientAndMask,
+            Oracle::Fri(0),
+            Oracle::Fri(4),
+            Oracle::Terminal,
+        ] {
+            let (_, _, leaves, width) = oracle.shape().unwrap();
+            for index in [0, leaves - 1] {
+                let payload: Vec<_> = (0..width / 8)
+                    .flat_map(|i| (i as u64 + 1).to_le_bytes())
+                    .collect();
+                let prepared = binding
+                    .prepare_leaf(oracle, index as u32, &payload)
+                    .unwrap();
+                assert_eq!(prepared.job().unwrap().prefix().received_len(), 0);
+                assert!(
+                    prepared.job().unwrap().final_field().len() <= MAX_PREPARED_HASH_FRAME_BYTES
+                );
+                assert_eq!(
+                    prepared.hash_cpu().unwrap(),
+                    binding.hash_leaf(oracle, index as u32, &payload).unwrap()
+                );
+                let mut output = [[0; 6]];
+                hash(
+                    &binding,
+                    oracle,
+                    &[index],
+                    &payload,
+                    width,
+                    &mut output,
+                    DigestExecutionV1::Cpu,
+                )
+                .unwrap();
+                assert_eq!(output[0], prepared.hash_cpu().unwrap().words());
+                assert!(
+                    binding
+                        .prepare_leaf(oracle, leaves as u32, &payload)
+                        .is_err()
+                );
+                assert!(
+                    binding
+                        .prepare_leaf(oracle, index as u32, &payload[..width - 1])
+                        .is_err()
+                );
+                let mut malformed = payload;
+                malformed[..8].copy_from_slice(&GOLDILOCKS_MODULUS.to_le_bytes());
+                assert!(
+                    binding
+                        .prepare_leaf(oracle, index as u32, &malformed)
+                        .is_err()
+                );
+                assert!(
+                    hash(
+                        &binding,
+                        oracle,
+                        &[index],
+                        &malformed,
+                        width,
+                        &mut output,
+                        DigestExecutionV1::Cpu
+                    )
+                    .is_err()
+                );
+            }
+        }
+        let left = Digest::new([1, 2, 3, 4, 5, 6]).unwrap();
+        let right = Digest::new([6, 5, 4, 3, 2, 1]).unwrap();
+        for (oracle, level, index) in [
+            (Oracle::Row, 1, 257),
+            (Oracle::Row, 23, 0),
+            (Oracle::Fri(0), 2, 513),
+        ] {
+            let frame = binding
+                .prepare_parent(oracle, level, index, left, right)
+                .unwrap();
+            assert_eq!(
+                frame.hash_cpu().unwrap(),
+                binding
+                    .hash_parent(oracle, level, index, left, right)
+                    .unwrap()
+            );
+            assert!(
+                binding
+                    .prepare_parent(oracle, 0, index, left, right)
+                    .is_err()
+            );
+        }
+        assert!(
+            binding
+                .prepare_parent(Oracle::Terminal, 1, 0, left, right)
+                .is_err()
+        );
+        assert!(
+            binding
+                .prepare_parent(Oracle::Row, 24, 0, left, right)
+                .is_err()
+        );
+    }
+
+    #[cfg(all(feature = "fastpq-gpu", target_os = "macos"))]
+    #[test]
+    #[ignore = "requires actual Metal DEEP leaf execution; no CPU substitution"]
+    fn bounded_masked_leaf_metal_matches_cpu_for_every_oracle() {
+        let _lane = crate::backend::acquire_gpu_lane();
+        let binding = Context::new(b"actual Metal masked DEEP leaves").unwrap();
+        for oracle in [
+            Oracle::Row,
+            Oracle::QuotientAndMask,
+            Oracle::Fri(0),
+            Oracle::Fri(4),
+            Oracle::Terminal,
+        ] {
+            let (_, _, leaves, width) = oracle.shape().unwrap();
+            let count = leaves.min(CAPACITY);
+            let indices = (0..count).collect::<Vec<_>>();
+            let payloads = (0..count * width / 8)
+                .flat_map(|value| (value as u64).to_le_bytes())
+                .collect::<Vec<_>>();
+            let mut cpu = vec![[0; 6]; count];
+            let mut metal = vec![[0; 6]; count];
+            hash(
+                &binding,
+                oracle,
+                &indices,
+                &payloads,
+                width,
+                &mut cpu,
+                DigestExecutionV1::Cpu,
+            )
+            .unwrap();
+            hash(
+                &binding,
+                oracle,
+                &indices,
+                &payloads,
+                width,
+                &mut metal,
+                DigestExecutionV1::Device(crate::Digest384GpuBackendV1::Metal),
+            )
+            .unwrap();
+            assert_eq!(metal, cpu);
+        }
     }
 }

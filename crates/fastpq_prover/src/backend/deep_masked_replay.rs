@@ -1,4 +1,4 @@
-//! Bounded base-field vanishing-mask replay for the inactive DEEP construction.
+//! Bounded base-field vanishing-mask replay for the canonical DEEP construction.
 //!
 //! For a stripe x=a*g^j, x^N=a^N. Thus C(x)+(x^N-1)r(x) is an N-point
 //! FFT of C_k+(a^N-1)r_k, twisted by a^k. Only one 301-column stripe is
@@ -10,9 +10,9 @@
 //! have fixed zeroizing allocations, no Clone, Debug, seed export or serialization.
 //! Borrowed input, incidental arithmetic copies and caller-owned callback buffers
 //! remain outside that erasure/accounting guarantee.
-//! The test-only candidate producer consumes this owner for commitments and the
-//! exact full AIR quotient. TODO: Execute the full construction and complete its
-//! transcript security reduction before admission. No live wire changes.
+//! The producer consumes this owner for commitments and the exact full AIR
+//! quotient. TODO: Qualify complete generated artifacts and independently review
+//! the transcript security reduction.
 
 use rand::TryCryptoRng;
 use rayon::prelude::*;
@@ -300,10 +300,12 @@ impl MaskedStripe<'_> {
 }
 
 /// Selected rows retain clearing ownership until the final proof DTO is constructed.
+#[cfg(test)]
 pub(super) struct SelectedMaskedRows {
     width: usize,
     values: SecretPolynomial<u64>,
 }
+#[cfg(test)]
 impl SelectedMaskedRows {
     pub(super) fn rows(&self) -> impl Iterator<Item = &[u64]> {
         self.values.chunks_exact(self.width)
@@ -497,6 +499,7 @@ impl MaskedTraceReplay {
     }
 
     /// At most 128 rows, preserving duplicates/order and replaying each stripe once.
+    #[cfg(test)]
     pub(super) fn selected_rows(&mut self, indices: &[usize]) -> Result<SelectedMaskedRows> {
         if indices.len() > self.plan.max_selected
             || indices

@@ -2,8 +2,8 @@
 //!
 //! Fixed values come from the same closed public schedules as scalar queries.
 //! Every logical registration contributes its full quotient with its native
-//! vanishing polynomial. This additional check retains all authenticated query
-//! checks; it does not select a reduced wire format or authorize activation.
+//! vanishing polynomial. This complete relation check precedes authenticated
+//! current-row DEEP and FRI query verification under the selected proof profile.
 
 use super::*;
 

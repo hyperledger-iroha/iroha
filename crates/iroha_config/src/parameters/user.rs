@@ -63,6 +63,10 @@ use std::{
 };
 use thiserror::Error;
 mod app_routed_read_config;
+mod sccp;
+pub use sccp::{
+    SccpAttestor, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode, SccpSecretHeader,
+};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -926,6 +930,9 @@ pub struct Root {
     /// Concurrency settings for thread pools.
     #[config(nested)]
     concurrency: Concurrency,
+    /// Node-local SCCP attestor and light-client keeper (`[sccp.*]`, file-only).
+    #[config(nested)]
+    sccp: SccpNode,
 }
 /// User-level enumeration translating `ParseError` settings.
 #[derive(thiserror::Error, Debug, Copy, Clone)]
@@ -993,6 +1000,9 @@ pub enum ParseError {
     /// Genesis trust-root configuration was absent, ambiguous, or invalid.
     #[error("Invalid genesis trust-root configuration")]
     InvalidGenesisConfig,
+    /// Node-local SCCP attestor or light-client keeper configuration was invalid.
+    #[error("Invalid SCCP node configuration")]
+    InvalidSccpConfig,
 }
 struct AccountAddressParseScope {
     _chain_discriminant: iroha_data_model::account::address::ChainDiscriminantGuard,
@@ -1209,6 +1219,7 @@ impl Root {
         });
         let genesis = self.genesis.parse(&mut emitter);
         let kura = self.kura.parse(&mut emitter);
+        let sccp = self.sccp.parse(&kura.store_dir, &mut emitter);
         let logger = self.logger;
         let queue = self.queue;
         let mut snapshot = self.snapshot;
@@ -1485,6 +1496,7 @@ impl Root {
             crypto,
             settlement,
             confidential,
+            sccp,
         };
         root.apply_storage_budget();
         Ok(root)
@@ -14610,9 +14622,10 @@ pub struct Torii {
     /// Maximum fetch size accepted by app-facing iterable queries.
     #[config(default = "defaults::torii::APP_API_MAX_FETCH_SIZE")]
     pub app_api_max_fetch_size: u32,
-    /// Rate-limiter cost applied per requested row on app-facing endpoints.
-    #[config(default = "defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW")]
-    pub app_api_rate_limit_cost_per_row: u32,
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    /// Empty pages cost one page; the default charges one unit per 100 rows.
+    #[config(default = "defaults::torii::APP_API_RATE_LIMIT_COST_PER_PAGE")]
+    pub app_api_rate_limit_cost_per_page: u32,
     /// Maximum allowed clock skew for signed app-facing canonical requests (seconds).
     #[config(default = "defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS")]
     pub app_auth_max_clock_skew_secs: u64,
@@ -14742,11 +14755,12 @@ pub struct Torii {
     pub preauth_max_connections: Option<NonZeroUsize>,
     /// Maximum concurrent pre-auth connections per IP.
     pub preauth_max_connections_per_ip: Option<NonZeroUsize>,
-    /// Pre-auth handshake rate per IP (tokens/sec). None disables.
+    /// Pre-auth request rate per IP (tokens/sec); omission selects the default.
     pub preauth_rate_per_ip_per_sec: Option<u32>,
-    /// Pre-auth handshake burst per IP (tokens). None disables.
+    /// Pre-auth request burst per IP (tokens); omission selects the default.
     pub preauth_burst_per_ip: Option<u32>,
-    /// Temporary ban duration applied after rate/limit violations (milliseconds).
+    /// Extra cooldown after pre-auth rate exhaustion (milliseconds; zero disables).
+    /// Connection-capacity rejection never applies a ban.
     pub preauth_ban_duration_ms: Option<DurationMs>,
     /// Maximum number of temporary pre-auth bans retained in memory.
     #[config(default = "defaults::torii::PREAUTH_BAN_CAPACITY")]
@@ -16044,8 +16058,8 @@ impl Torii {
             std::num::NonZeroU32::new(self.app_api_max_list_limit).unwrap_or(nonzero!(1_u32));
         let max_fetch_size =
             std::num::NonZeroU32::new(self.app_api_max_fetch_size).unwrap_or(nonzero!(1_u32));
-        let rate_limit_cost_per_row =
-            std::num::NonZeroU32::new(self.app_api_rate_limit_cost_per_row)
+        let rate_limit_cost_per_page =
+            std::num::NonZeroU32::new(self.app_api_rate_limit_cost_per_page)
                 .unwrap_or(nonzero!(1_u32));
         let webhook = self.webhook.parse();
         let webhook_security = self.webhook_security.parse();
@@ -16279,7 +16293,7 @@ impl Torii {
                 default_list_limit,
                 max_list_limit,
                 max_fetch_size,
-                rate_limit_cost_per_row,
+                rate_limit_cost_per_page,
                 request_signature_max_clock_skew: Duration::from_secs(
                     self.app_auth_max_clock_skew_secs,
                 ),
@@ -17883,8 +17897,8 @@ fn validate_app_api_limits(config: &Torii, emitter: &mut Emitter<ParseError>) {
             config.app_api_max_fetch_size,
         ),
         (
-            "torii.app_api_rate_limit_cost_per_row",
-            config.app_api_rate_limit_cost_per_row,
+            "torii.app_api_rate_limit_cost_per_page",
+            config.app_api_rate_limit_cost_per_page,
         ),
     ] {
         if value == 0 {

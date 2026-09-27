@@ -45,6 +45,11 @@ path = "tests/sorafs_publication_governance.rs"
 required-features = ["parliament-test-signers"]
 
 [[test]]
+name = "sccp_lanes"
+path = "tests/sccp_lanes/main.rs"
+required-features = ["parliament-test-signers"]
+
+[[test]]
 name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 
@@ -119,6 +124,9 @@ iroha_config_base = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_executor_data_model = { workspace = true }
+iroha_sccp = { workspace = true, features = ["test-fixtures"] }
+iroha_sccp_rpc = { workspace = true }
+iroha_sccp_wallet = { workspace = true }
 ivm = { workspace = true }
 base64 = { workspace = true }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check FASTPQ's source-owned wire geometry; this does not qualify proofs."""
+"""Check the offline DEEP wire budget and retained diagnostics, not admission."""
 
 from __future__ import annotations
 
@@ -26,6 +26,7 @@ SOURCES = {
     "backend": "crates/fastpq_prover/src/backend.rs",
     "axt": "crates/fastpq_prover/src/axt_binding.rs",
     "retained": "crates/fastpq_prover/src/backend/compact_quantity_diagnostic.rs",
+    "artifact": "crates/fastpq_prover/src/backend/compact_artifact.rs",
 }
 
 
@@ -78,9 +79,12 @@ def frontier(leaves: int, opened: int) -> int:
 
 
 def deep_frame_bound(sources: dict[str, str], width: int, fp4_bytes: int, digest_bytes: int) -> int:
-    """Derive the inactive DTO bound with its raw row and fixed FRI-fiber codecs."""
+    """Derive the sole offline frame bound from its fixed row and FRI codecs."""
     geometry = sources["deep_geometry"]
     queries = number(geometry, r"QUERY_COUNT: usize = ([\d_]+);", "DEEP query count")
+    rows = number(geometry, r"LDE_ROWS: usize = ([\d_]+);", "DEEP LDE rows")
+    require(geometry, r"FRI_ARITIES: \[usize; 5\] = \[16, 16, 8, 8, 4\];", "fixed DEEP FRI schedule")
+    require(geometry, r"FRI_LENGTHS: \[usize; 6\] = \[8_388_608, 524_288, 32_768, 4_096, 512, 128\];", "fixed DEEP FRI domains")
     public = number(sources["public_columns"], r"PUBLIC_COLUMN_COUNT: usize = ([\d_]+);", "public columns")
     require(sources["public_columns"], r"COMMITTED_COLUMN_COUNT: usize = COLUMN_COUNT - PUBLIC_COLUMN_COUNT", "retained width")
     arrays = []
@@ -93,8 +97,10 @@ def deep_frame_bound(sources: dict[str, str], width: int, fp4_bytes: int, digest
             raise ValueError(f"wrong DEEP {name} length")
         arrays.append(values)
     arities, lengths = arrays
-    if any(lengths[i] != arity * lengths[i + 1] for i, arity in enumerate(arities)):
+    if lengths[0] != rows or any(lengths[i] != arity * lengths[i + 1] for i, arity in enumerate(arities)):
         raise ValueError("DEEP FRI dimensions disagree")
+    require(sources["deep"], r"values: FriValues,", "fixed FRI wire owner")
+    require(sources["deep"], r"values: RowValues,", "fixed retained row wire owner")
     require(sources["deep_row"], r"struct RowValues\(\[u64; COMMITTED_COLUMN_COUNT\]\)", "retained row")
     require(sources["deep_row"], r"BYTES: usize = COMMITTED_COLUMN_COUNT \* size_of::<u64>\(\)", "raw retained row bytes")
     require(sources["deep_row"], r"writer\.write_all\(&value\.to_le_bytes\(\)\)", "raw retained row encoding")
@@ -122,7 +128,7 @@ def deep_frame_bound(sources: dict[str, str], width: int, fp4_bytes: int, digest
 
 
 def budget(sources: dict[str, str]) -> dict[str, object]:
-    """Derive a conservative current-frame bound and read candidate boundaries."""
+    """Derive diagnostic and fixed offline bounds from their distinct source owners."""
     profile = sources["profile"].split("#[derive", 1)[0]
     query_count = number(profile, r"const QUERY_COUNT: usize = ([\d_]+);", "query count")
     trace_rows = number(profile, r"geometry\.schema\.trace_rows != ([\d_]+)", "trace rows")
@@ -140,10 +146,7 @@ def budget(sources: dict[str, str]) -> dict[str, object]:
     axt_cap = number(sources["axt"], r"DEFAULT_MAX_AXT_FASTPQ_PAYLOAD_BYTES: usize = ([\d_]+) \* 1024;", "AXT KiB cap") * 1024
     deep_max = number(sources["deep"], r"MAX_FRAME_BYTES: usize = ([\d_]+);", "DEEP DTO bound")
     rust_bound = number(sources["shared"], r"assert_eq!\(bound, ([\d_]+)\);", "Rust current bound")
-    producer_bound = number(sources["resources"], r"const QUANTITY_SHARED_FRAME_BOUND: usize = ([\d_]+);", "producer preflight bound")
-    resource_queries = number(sources["resources"], r"const QUANTITY_QUERY_COUNT: usize = ([\d_]+);", "resource query count")
-
-    if width != row_width or width != declared_width or trace_rows * 8 != lde_rows or arity != 2 or lde_rows >> folds != terminal or resource_queries != query_count:
+    if width != row_width or width != declared_width or trace_rows * 8 != lde_rows or arity != 2 or lde_rows >> folds != terminal:
         raise ValueError("profile and fixed-row codec geometry disagree")
     require(sources["row"], r"BYTES: usize = Self::WIDTH \* size_of::<u64>\(\)", "fixed row byte width")
     require(sources["row"], r"writer\.write_all\(&value\.to_le_bytes\(\)\)", "canonical row encoding")
@@ -155,12 +158,18 @@ def budget(sources: dict[str, str]) -> dict[str, object]:
     require(sources["shared"], r"proof\.queries\.len\(\) != query_count", "exact query count")
     require(sources["shared"], r"encoded_frame_len\(proof\)\?;\s*check_limit\(\"max_proof_bytes\", bytes, limits\.max_proof_bytes\)", "typed proof byte admission")
     require(sources["digest"], r"GOLDILOCKS_DIGEST384_BYTES_V1: usize = GOLDILOCKS_DIGEST384_LANES_V1 \* 8", "digest byte width")
-    require(sources["backend"], r"#\[cfg\(test\)\]\s*#\[path = \"backend/deep_engine.rs\"\]\s*mod deep_engine;", "test-only DEEP verifier")
+    require(sources["backend"], r"^#\[path = \"backend/deep_engine.rs\"\]\s*mod deep_engine;", "offline DEEP verifier")
+    if re.search(r"#\[cfg\(test\)\]\s*#\[path = \"backend/deep_engine.rs\"\]", sources["backend"]):
+        raise ValueError("offline DEEP verifier cannot be test-only")
+    require(sources["backend"], r"#\[cfg\(test\)\]\s*#\[path = \"backend/compact_quantity_diagnostic.rs\"\]\s*mod compact_quantity_diagnostic;", "retained test-only diagnostics")
     require(sources["deep"], r"caller_max_bytes\.min\(MAX_FRAME_BYTES\)", "DEEP decoder cap")
     require(sources["producer"], r"QUANTITY_SHARED_FRAME_BOUND as SHARED_FRAME_BOUND", "shared producer frame bound")
     require(sources["producer"], r"quantity_artifact_resources\(count, 0\)\?\.check_proving_limits\(proving, verification\)\?", "producer resource preflight")
+    require(sources["resources"], r"QUANTITY_QUERY_COUNT: usize = deep_geometry::QUERY_COUNT;", "canonical resource query owner")
+    require(sources["resources"], r"QUANTITY_SHARED_FRAME_BOUND: usize = deep_proof::MAX_FRAME_BYTES;", "canonical resource frame owner")
     require(sources["resources"], r"maximum_segment_frame_bytes: QUANTITY_SHARED_FRAME_BOUND", "planned child frame bound")
     require(sources["resources"], r'"max_proof_bytes",\s*self\.maximum_segment_frame_bytes,\s*child\.max_proof_bytes', "producer byte preflight")
+    require(sources["artifact"], r"fn profile_id_for<V: CompactTransferValue>\(\).*?\{\s*//[^\n]*\n\s*//[^\n]*\n\s*#\[cfg\(test\)\]\s*if !V::QUANTITY_CONTEXT \{\s*return [^\n]+\n\s*\}\s*quantity_diagnostic_profile_id\(\)\s*\}", "single offline quantity profile")
 
     if (segment_cap, axt_cap) != (524_288, 1_048_576):
         raise ValueError("fixed first-release proof ceilings changed")
@@ -203,8 +212,8 @@ def budget(sources: dict[str, str]) -> dict[str, object]:
         rounds_bytes,
         vector(terminal, fp4_bytes),
     )
-    if framed_bound != rust_bound or framed_bound != producer_bound:
-        raise ValueError(f"source-derived frame {framed_bound} differs from Rust/producer bounds")
+    if framed_bound != rust_bound:
+        raise ValueError(f"source-derived diagnostic frame {framed_bound} differs from its Rust bound")
 
     retained = {
         name: int(length.replace("_", ""))
@@ -213,12 +222,12 @@ def budget(sources: dict[str, str]) -> dict[str, object]:
             sources["retained"],
         )
     }
-    if set(retained) != {"ordinary-single", "axt-single", "ordinary-bundle", "axt-bundle"}:
+    if set(retained) != {"ordinary-single", "axt-single"}:
         raise ValueError("retained diagnostic inventory changed")
     if not (raw_floor > axt_cap > segment_cap > deep_max):
         raise ValueError("current/deep proof budget classification changed; review the new protocol")
     return {
-        "current": {
+        "shared_diagnostic": {
             "trace_rows": trace_rows, "columns": width, "constraints": constraints,
             "lde_rows": lde_rows, "queries": query_count, "folds": folds,
             "mandatory_row_bytes": minimum_rows,
@@ -233,7 +242,7 @@ def budget(sources: dict[str, str]) -> dict[str, object]:
         },
         "limits": {"segment": segment_cap, "axt_inner": axt_cap},
         "retained_test_metadata": retained,
-        "deep_test_only_dto": {"max_frame_bytes": deep_max, "headroom": segment_cap - deep_max},
+        "offline_deep": {"max_frame_bytes": deep_max, "headroom": segment_cap - deep_max},
         "production_qualified": False,
     }
 

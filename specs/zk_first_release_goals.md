@@ -102,20 +102,24 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   passes for this extension. Accelerator memory and target-specific
   side-channel qualification remain open; no guarantee is made about
   compiler-created scalar/register copies.
-- FASTPQ's offline API and real producer share one allocation-free resource
-  calculation. Impossible shape/byte policies reject before private-tree work.
-  The actual producer now replays coset stripes from retained coefficients:
-  its trace subtotal falls from a 1,434,451,968-byte LDE matrix alone to
-  358,612,992 bytes for coefficients and one stripe. Other memory and repeated
-  passes are separately charged. The private DEEP candidate now connects masked
-  trace replay, exact quotient division, independent composition masking,
-  committed coefficient/FRI replay, OOD checks, canonical encoding and independent
-  verifier self-check. The fresh kernel run passes 80 tests, including the prior
-  malformed public-digest fixture correction and private framing cleanup.
-  The complete candidate is test-only; its full-size diagnostic and source-state
-  admission remain outstanding. A bounded scalar debug sample indicates many
-  hours for full execution; bounded parallel hashing and release measurements
-  are being implemented before making any performance claim.
+- FASTPQ's normal offline Quantity route now uses the bounded masked DEEP
+  producer: base-field trace replay, zero-remainder full quotient division,
+  independently masked quotient chunks and composition, coefficient/FRI replay,
+  canonical encoding and independent bounded verifier self-check. The sealed
+  relation owner binds the complete prepared ordinary/AXT statement and identity.
+  The 301-column trace replay subtotal is 499,759,968 bytes; other active/retained
+  buffers and repeated passes are separately charged. Its actual canonical child
+  envelope is 502,895 bytes under the unchanged 524,288-byte cap. The 2 GiB segment
+  charge and 2^42 work-unit default are preserved; impossible plans fail closed.
+  Bulk leaf hashing uses bounded 32-job batches and explicit CPU/required-device
+  policy; parents and transcript hashes use CPU. Public device readiness precedes
+  private work. There is no required-device fallback. The earlier 80 native
+  kernel passes predate this merged public route and do not validate it. Fresh
+  normal-library and focused native validation are queued; the current geometry,
+  hiding-screen and source-budget Python selection passes 37 checks. Independent
+  sequencing review found no blocker in the retained masked construction. The
+  full-size diagnostic, measured resource/performance results, complete hiding
+  and soundness review, and authoritative source-state admission remain open.
 - Reviewed Halo2/note-STARK/FASTPQ source-contract repairs pass their focused
   29-check Python selection. The retired-codec guard passes. The current JS
   confidential input and TypeScript checks pass 6 cases including mocked
@@ -123,19 +127,22 @@ and physical-device evidence cannot be replaced by self-issued certificates.
   existing addon rejects the changed source tree's provenance. Workspace
   formatting check finds concurrent unfinished
   formatting, so it is not a pass; changed files are formatted by their owners.
-- X509's prover, verifier and exact codec now use authenticated paired FRI leaves.
-  The current maximum projection falls by 867,456 bytes to 18,288,618; seven
-  geometry checks pass. Common-domain grouping and full extension-field AIR
-  evaluation remain required for the projected 9,204,362-byte candidate. That
-  projection is not proof-size or soundness qualification. Compact CA now
-  checks its complete quotient at Fp4 DEEP openings. MAIN fixed-schedule Fp4
-  evaluation and all component-family polynomial kernels are implemented;
-  typed registration integration and native validation are in progress.
-  Independent interpolation tests cover nonboolean off-domain selectors. The
-  SHA capacity selector now uses polynomial selection and its actual degree six
-  is registered. Binding sinks also contained degree-three terms despite a
-  degree-two registration; the degree and quotient accounting are corrected.
-  Both stay within the existing global degree ceiling, masks and chunk counts.
+- X509 now joins all six native MAIN column groups under one base and one
+  auxiliary commitment while preserving all 49 registrations. The codec opens
+  only the authenticated current rows; full Fp4 DEEP checks bind both current
+  and native-next claims before the shared FRI verifier. Paired FRI leaves and
+  this layout give a codec-derived combined maximum of 9,204,362 bytes, leaving
+  232,822 bytes under the unchanged ceiling. Eight geometry checks pass;
+  fresh native proof and mutation tests are queued. No maximum-shape proof or
+  resource qualification is claimed from this bound. Independent code review
+  found no reduced-opening arithmetic or joined-root binding blocker.
+  All component-family polynomial kernels and verifier-derived fixed schedules
+  are implemented. Independent interpolation tests cover nonboolean off-domain
+  selectors. SHA polynomial selection has its actual degree six registered;
+  binding sinks use their actual degree three. Both stay within the existing
+  degree ceiling, masking and quotient chunk counts. Activation still requires
+  independent soundness and hiding review, real proof vectors, and resource
+  evidence on the final candidate.
 - The first Core build stopped on variant-size lints before producing key
   digests. The typed-error enum and an explicitly justified bounded inline
   consensus-parent enum expectation resolve those source blockers. The rebuilt

@@ -259,8 +259,9 @@ isolated and are not a deployment-selected custody provider.
 
 `core_api::sorafs_publication::four_peer_publication_replication_retrieval_restart_and_native_repair`
 constructs four validators and three native software providers. Signed genesis
-establishes admission; real reserve funding and capacity registration precede
-challenged assignment/completion proofs. Only one provider receives publisher
+establishes admission; ordinary transfers of the actual configured fee asset fund
+each distinct provider and worker account. Real reserve funding and capacity
+registration precede challenged assignment/completion proofs. Only one provider receives publisher
 staging, so the other two must use assignment-authorized source transport. The
 scenario verifies public CID bytes, healthy restart, unavailable corrupt payload
 after restart, and the production repair worker's finalized completion and readback.
@@ -269,6 +270,8 @@ verified saved checkpoint, requires its complete success receipt and asset
 readback, and independently challenges the resulting native completion again.
 Set `TEST_NETWORK_BIN_SORAFS_CLI` to the absolute prebuilt `sorafs_cli` artifact
 built with `cli-orchestrator`; missing CLI artifacts fail before network startup.
+Both publication qualification tests fail if the four-validator network cannot
+start; an unavailable sandbox cannot produce a passing skip.
 Each provider explicitly declares and bounds two GiB for these two small pins;
 the test does not preallocate that disk space.
 The gateway uses a genuinely signed and acknowledged empty compliance catalog;

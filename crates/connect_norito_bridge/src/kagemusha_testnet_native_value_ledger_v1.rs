@@ -7,7 +7,6 @@
 
 use std::{
     mem::{align_of, size_of},
-    panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     ptr, slice,
     sync::{Mutex, OnceLock},
@@ -22,6 +21,9 @@ use crate::{
     ERR_BUFFER_TOO_SMALL, ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1, ERR_KAGEMUSHA_V1, ERR_NULL_PTR,
     kagemusha_testnet_observation_v1::{
         KagemushaTestnetDurableObservationModeV1, with_kagemusha_testnet_durable_credit_owner_v1,
+    },
+    kagemusha_testnet_publication_v1::{
+        TestnetPublicationPermitV1, catch_testnet_dispatch_panic_v1, testnet_publication_gate_v1,
     },
 };
 
@@ -61,7 +63,7 @@ static TESTNET_VALUE_LEDGER_INSTALL_LOCK_V1: Mutex<()> = Mutex::new(());
 /// This native host type counts real finalized top-ups in the exact signed testnet scope.
 /// It does not bind a wallet account, authorize peer spending, or enter production monetary
 /// state. The returned credit is an inspection result, never a hardware credential.
-pub struct KagemushaTestnetNativeValueLedgerV1 {
+pub(crate) struct KagemushaTestnetNativeValueLedgerV1 {
     ledger: KagemushaTestnetMintCreditLedgerV1,
 }
 
@@ -70,8 +72,11 @@ impl KagemushaTestnetNativeValueLedgerV1 {
     ///
     /// # Errors
     /// Rejects absent/process-only owner, unsafe or existing path, and uncertain storage.
-    pub fn create_new(path: &Path) -> Result<Self, String> {
-        with_kagemusha_testnet_durable_credit_owner_v1(|owner| {
+    pub(crate) fn create_new(
+        publication: &TestnetPublicationPermitV1<'_>,
+        path: &Path,
+    ) -> Result<Self, String> {
+        with_kagemusha_testnet_durable_credit_owner_v1(publication, |owner| {
             KagemushaTestnetMintCreditLedgerV1::create_new(path, owner)
                 .map(|ledger| Self { ledger })
                 .map_err(|error| {
@@ -89,8 +94,11 @@ impl KagemushaTestnetNativeValueLedgerV1 {
     /// Rejects absent/process-only owner, changed proof/reservation/finality evidence,
     /// malformed or conflicting ledger records, duplicate credits, or unsafe storage.
     /// A valid older complete WAL prefix remains undetectable without an external trusted head.
-    pub fn open_existing(path: &Path) -> Result<Self, String> {
-        with_kagemusha_testnet_durable_credit_owner_v1(|owner| {
+    pub(crate) fn open_existing(
+        publication: &TestnetPublicationPermitV1<'_>,
+        path: &Path,
+    ) -> Result<Self, String> {
+        with_kagemusha_testnet_durable_credit_owner_v1(publication, |owner| {
             KagemushaTestnetMintCreditLedgerV1::open_existing(path, owner)
                 .map(|ledger| Self { ledger })
                 .map_err(|error| {
@@ -107,11 +115,12 @@ impl KagemushaTestnetNativeValueLedgerV1 {
     /// # Errors
     /// Rejects absent/process-only owner, unobserved or changed proof, duplicate credit,
     /// scope mismatch, or uncertain ledger storage.
-    pub fn credit_finalized_top_up(
+    pub(crate) fn credit_finalized_top_up(
         &mut self,
+        publication: &TestnetPublicationPermitV1<'_>,
         operation_id: [u8; 32],
     ) -> Result<KagemushaTestnetMintLedgerCreditV1, String> {
-        with_kagemusha_testnet_durable_credit_owner_v1(|owner| {
+        with_kagemusha_testnet_durable_credit_owner_v1(publication, |owner| {
             let admission = owner
                 .admit_finalized_testnet_value(operation_id)
                 .map_err(|error| format!("KAGEMUSHA testnet value admission rejected: {error}"))?;
@@ -137,10 +146,12 @@ impl KagemushaTestnetNativeValueLedgerV1 {
 /// # Errors
 /// Rejects an absent/process-only proof owner, duplicate installation, unsafe path, changed
 /// replay evidence, or uncertain storage.
-pub fn install_kagemusha_testnet_native_value_ledger_v1(
+pub(crate) fn install_kagemusha_testnet_native_value_ledger_v1(
+    publication: &TestnetPublicationPermitV1<'_>,
     path: &Path,
     mode: KagemushaTestnetDurableObservationModeV1,
 ) -> Result<(), String> {
+    publication.require_valid()?;
     let _install_guard = TESTNET_VALUE_LEDGER_INSTALL_LOCK_V1
         .lock()
         .map_err(|_| "KAGEMUSHA native testnet value-ledger install lock is poisoned".to_owned())?;
@@ -149,10 +160,10 @@ pub fn install_kagemusha_testnet_native_value_ledger_v1(
     }
     let ledger = match mode {
         KagemushaTestnetDurableObservationModeV1::Create => {
-            KagemushaTestnetNativeValueLedgerV1::create_new(path)
+            KagemushaTestnetNativeValueLedgerV1::create_new(publication, path)
         }
         KagemushaTestnetDurableObservationModeV1::Recover => {
-            KagemushaTestnetNativeValueLedgerV1::open_existing(path)
+            KagemushaTestnetNativeValueLedgerV1::open_existing(publication, path)
         }
     }?;
     TESTNET_VALUE_LEDGER_V1
@@ -173,13 +184,23 @@ pub fn install_kagemusha_testnet_native_value_ledger_v1(
 pub fn credit_kagemusha_testnet_native_value_v1(
     operation_id: [u8; 32],
 ) -> Result<(KagemushaTestnetMintLedgerCreditV1, u128), String> {
+    testnet_publication_gate_v1().with_dispatch(|publication| {
+        credit_kagemusha_testnet_native_value_under_publication_v1(publication, operation_id)
+    })
+}
+
+pub(crate) fn credit_kagemusha_testnet_native_value_under_publication_v1(
+    publication: &TestnetPublicationPermitV1<'_>,
+    operation_id: [u8; 32],
+) -> Result<(KagemushaTestnetMintLedgerCreditV1, u128), String> {
+    publication.require_valid()?;
     let installed = TESTNET_VALUE_LEDGER_V1
         .get()
         .ok_or_else(|| "KAGEMUSHA native testnet value ledger is unavailable".to_owned())?;
     let mut installed = installed
         .lock()
         .map_err(|_| "KAGEMUSHA native testnet value ledger is poisoned".to_owned())?;
-    let credit = installed.credit_finalized_top_up(operation_id)?;
+    let credit = installed.credit_finalized_top_up(publication, operation_id)?;
     Ok((credit, installed.total_admitted()))
 }
 
@@ -232,12 +253,19 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_credit_v1(
     if output_capacity < KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1 {
         return ERR_BUFFER_TOO_SMALL;
     }
+    // Serialize the entire admission and ledger write with complete host publication.
+    let Ok(_publication) = testnet_publication_gate_v1().dispatch() else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
     let operation_id: [u8; 32] = unsafe { slice::from_raw_parts(operation_id_ptr, 32) }
         .try_into()
         .expect("fixed operation ID length");
-    let encoded = catch_unwind(AssertUnwindSafe(|| {
-        let (credit, total_admitted) =
-            credit_kagemusha_testnet_native_value_v1(operation_id).map_err(|_| ())?;
+    let encoded = catch_testnet_dispatch_panic_v1(&_publication, || {
+        let (credit, total_admitted) = credit_kagemusha_testnet_native_value_under_publication_v1(
+            &_publication.permit(),
+            operation_id,
+        )
+        .map_err(|_| ())?;
         let scope = credit.scope();
         let archive = KagemushaTestnetMintLedgerCreditArchiveV1 {
             version: 1,
@@ -259,7 +287,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_credit_v1(
             return Err(());
         }
         Ok(bytes)
-    }));
+    });
     let Ok(Ok(encoded)) = encoded else {
         return if TESTNET_VALUE_LEDGER_V1.get().is_some() {
             ERR_KAGEMUSHA_V1
@@ -279,16 +307,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_credit_permit_rejects_caught_panic_before_looking_up_or_locking_ledger() {
+        let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+        let guard = gate.dispatch().unwrap();
+        let permit = guard.permit();
+        assert!(
+            catch_testnet_dispatch_panic_v1(&guard, || panic!("uncertain credit callback"))
+                .is_err()
+        );
+        let error = credit_kagemusha_testnet_native_value_under_publication_v1(&permit, [9; 32])
+            .err()
+            .unwrap();
+        assert_eq!(
+            error,
+            "KAGEMUSHA testnet publication was permanently revoked"
+        );
+    }
+
+    #[test]
     fn native_ledger_cannot_start_without_installed_durable_owner() {
+        let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+        let publication = gate.exclusive().unwrap();
         let directory = tempfile::tempdir().unwrap();
         let path = directory
             .path()
             .canonicalize()
             .unwrap()
             .join("value-ledger");
-        assert!(KagemushaTestnetNativeValueLedgerV1::create_new(&path).is_err());
+        assert!(
+            KagemushaTestnetNativeValueLedgerV1::create_new(&publication.permit(), &path).is_err()
+        );
         assert!(!path.exists());
-        assert!(KagemushaTestnetNativeValueLedgerV1::open_existing(&path).is_err());
+        assert!(
+            KagemushaTestnetNativeValueLedgerV1::open_existing(&publication.permit(), &path)
+                .is_err()
+        );
     }
 
     #[test]

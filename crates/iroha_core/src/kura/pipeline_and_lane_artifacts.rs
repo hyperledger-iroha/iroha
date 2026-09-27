@@ -231,172 +231,113 @@ pub struct PipelineProofSnapshot {
     /// Optional transaction hash associated with the trace.
     pub tx_hash: Option<[u8; 32]>,
 }
-/// FASTPQ proof artifact captured after block commit for local AXT packaging and audits.
+/// Canonical FASTPQ artifact identity recorded after committed execution.
 ///
-/// Sidecar persistence stores compact metadata-only snapshots to keep per-block
-/// recovery metadata bounded under sustained throughput. Full proof payloads
-/// should be exported through dedicated proof artifact paths rather than folded
-/// into the pipeline sidecar.
+/// Recovery sidecars contain metadata only. Complete statements, private witnesses
+/// and proof frames remain outside this bounded record; identity fields describe
+/// content and never grant proof verification or AXT authorization.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::FastpqProofSnapshot")]
 pub struct FastpqProofSnapshot {
-    /// Block height the proof belongs to.
+    /// Block height the artifact belongs to.
     pub height: u64,
-    /// Block hash the proof belongs to.
+    /// Canonical block hash the artifact belongs to.
     pub block_hash: HashOf<BlockHeader>,
-    /// Transaction entrypoint or execution-witness entry hash proven by this batch.
+    /// Original finalized transcript bundle's entry hash.
     pub entry_hash: Hash,
-    /// Zero-based batch position in the committed execution witness.
+    /// Position in the committed execution witness's transcript bundle order.
     pub batch_index: u32,
-    /// FASTPQ parameter set used to produce the proof.
-    pub parameter: String,
-    /// Number of transitions carried by `batch`.
+    /// Complete public transition occurrence count.
     pub transition_count: u32,
-    /// Canonical six-lane batch trace commitment proven by `proof`.
-    pub trace_commitment: GoldilocksDigest384V1,
-    /// Stable digest of the Norito-encoded FASTPQ proof bytes.
-    pub proof_digest: Hash,
-    /// Canonical transition batch proven by the FASTPQ proof, or compact public inputs for sidecars.
-    pub batch: fastpq_prover::TransitionBatch,
-    /// Norito-encoded FASTPQ proof bytes; empty when persisted as sidecar metadata.
-    pub proof: Vec<u8>,
+    /// Exact public input commitments checked by the artifact verifier.
+    pub public_inputs: iroha_data_model::fastpq::FastpqPublicInputs,
+    /// Complete canonical public transition ordering commitment.
+    pub ordering_hash: [u8; 32],
+    /// Recomputed canonical artifact identity and ordered AIR row commitments.
+    pub artifact_identity: iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1,
 }
 impl FastpqProofSnapshot {
-    /// Create a compact sidecar snapshot from a proven batch without embedding
-    /// transition rows or proof bytes.
+    /// Retain only exact public metadata and the canonical artifact identity.
     #[must_use]
-    pub fn compact_from_batch(
+    pub fn from_statement(
         height: u64,
         block_hash: HashOf<BlockHeader>,
         entry_hash: Hash,
         batch_index: u32,
-        batch: &fastpq_prover::TransitionBatch,
-        trace_commitment: GoldilocksDigest384V1,
-        proof_digest: Hash,
+        statement: &iroha_data_model::fastpq::FastpqPublicTransferStatementV1,
+        artifact_identity: iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1,
     ) -> Self {
-        let transition_count = u32::try_from(batch.transitions.len()).unwrap_or(u32::MAX);
-        let compact_batch =
-            fastpq_prover::TransitionBatch::new(batch.parameter.clone(), batch.public_inputs);
         Self {
             height,
             block_hash,
             entry_hash,
             batch_index,
-            parameter: batch.parameter.clone(),
-            transition_count,
-            trace_commitment,
-            proof_digest,
-            batch: compact_batch,
-            proof: Vec::new(),
+            transition_count: u32::try_from(statement.transitions.len()).unwrap_or(u32::MAX),
+            public_inputs: statement.public_inputs,
+            ordering_hash: statement.ordering_hash,
+            artifact_identity,
         }
     }
-    /// Return a bounded sidecar representation while retaining proof identity.
-    #[must_use]
-    pub fn compact_for_sidecar(&self) -> Self {
-        let compact_batch = fastpq_prover::TransitionBatch::new(
-            self.batch.parameter.clone(),
-            self.batch.public_inputs,
-        );
-        Self {
-            height: self.height,
-            block_hash: self.block_hash,
-            entry_hash: self.entry_hash,
-            batch_index: self.batch_index,
-            parameter: self.parameter.clone(),
-            transition_count: self.transition_count,
-            trace_commitment: self.trace_commitment,
-            proof_digest: self.proof_digest,
-            batch: compact_batch,
-            proof: Vec::new(),
-        }
-    }
-    /// Return `true` when both snapshots describe the same proof attachment.
+    /// Return whether two records describe the same canonical artifact attachment.
     #[must_use]
     pub fn same_attachment(&self, other: &Self) -> bool {
         self.entry_hash == other.entry_hash
             && self.batch_index == other.batch_index
-            && self.proof_digest == other.proof_digest
+            && self.artifact_identity.artifact_digest == other.artifact_identity.artifact_digest
     }
-    /// Decode the embedded FASTPQ proof.
-    ///
-    /// # Errors
-    ///
-    /// Returns a Norito decode error when the proof bytes are malformed.
-    pub fn decode_proof(&self) -> Result<fastpq_prover::Proof, norito::Error> {
-        norito::decode_from_bytes(&self.proof)
-    }
-    /// Convert this FASTPQ proof snapshot to the JSON object used by recovery endpoints.
+    /// Encode recovery metadata using canonical frames independently of ambient flags.
     #[must_use]
     pub fn to_json_value(&self) -> JsonValue {
         let mut entry = norito::json::Map::new();
+        for (key, value) in [
+            ("entry_hash", self.entry_hash.to_string()),
+            (
+                "profile_id",
+                hex::encode(self.artifact_identity.profile_id.0),
+            ),
+            (
+                "artifact_digest",
+                hex::encode(self.artifact_identity.artifact_digest),
+            ),
+            (
+                "public_statement_digest",
+                hex::encode(self.artifact_identity.public_statement_digest),
+            ),
+            ("ordering_hash", hex::encode(self.ordering_hash)),
+            (
+                "public_inputs",
+                BASE64_STANDARD.encode(
+                    norito::encode_canonical(&self.public_inputs)
+                        .expect("encode FASTPQ public inputs"),
+                ),
+            ),
+            (
+                "artifact_identity",
+                BASE64_STANDARD.encode(
+                    norito::encode_canonical(&self.artifact_identity)
+                        .expect("encode FASTPQ artifact identity"),
+                ),
+            ),
+        ] {
+            entry.insert(
+                key.to_owned(),
+                norito::json::to_value(&value).expect("serialize FASTPQ identity"),
+            );
+        }
         entry.insert(
-            "entry_hash".to_string(),
-            norito::json::to_value(&self.entry_hash.to_string()).expect("serialize entry hash"),
-        );
-        entry.insert(
-            "batch_index".to_string(),
+            "batch_index".to_owned(),
             norito::json::to_value(&self.batch_index).expect("serialize batch index"),
         );
         entry.insert(
-            "parameter".to_string(),
-            norito::json::to_value(&self.parameter).expect("serialize parameter"),
-        );
-        entry.insert(
-            "transition_count".to_string(),
+            "transition_count".to_owned(),
             norito::json::to_value(&self.transition_count).expect("serialize transition count"),
         );
         entry.insert(
-            "trace_commitment".to_string(),
-            norito::json::to_value(&hex::encode(self.trace_commitment.to_le_bytes()))
-                .expect("serialize trace commitment"),
-        );
-        entry.insert(
-            "proof_digest".to_string(),
-            norito::json::to_value(&self.proof_digest.to_string()).expect("serialize proof digest"),
-        );
-        entry.insert(
-            "batch".to_string(),
-            norito::json::to_value(
-                &BASE64_STANDARD
-                    .encode(norito::encode_canonical(&self.batch).expect("encode FASTPQ batch")),
-            )
-            .expect("serialize FASTPQ batch"),
-        );
-        entry.insert(
-            "proof".to_string(),
-            norito::json::to_value(&BASE64_STANDARD.encode(&self.proof))
-                .expect("serialize FASTPQ proof"),
+            "artifact_bytes".to_owned(),
+            norito::json::to_value(&self.artifact_identity.artifact_bytes)
+                .expect("serialize artifact size"),
         );
         norito::json::Value::Object(entry)
-    }
-    /// Package this snapshot as an AXT proof blob.
-    ///
-    /// The snapshot batch must have been bound before proving with the exact
-    /// manifest root, DA commitment, committed amount, and expiry supplied to
-    /// this export path. This method only compares and packages those values;
-    /// it never repairs legacy proof metadata. Pre-binding snapshots therefore
-    /// require reproving before they can be exported as AXT proof blobs.
-    ///
-    /// # Errors
-    ///
-    /// Returns a FASTPQ prover error when the embedded proof is malformed, the
-    /// batch was not already AXT-bound before proof generation, or supplied
-    /// outer metadata differs from its proof-bound value.
-    pub fn to_axt_proof_blob(
-        &self,
-        manifest_root: [u8; 32],
-        da_commitment: Option<[u8; 32]>,
-        expiry_slot: Option<u64>,
-    ) -> fastpq_prover::Result<iroha_data_model::nexus::ProofBlob> {
-        let proof = norito::decode_from_bytes(&self.proof)
-            .map_err(|source| fastpq_prover::Error::AxtProofPayloadDecode { source })?;
-        fastpq_prover::axt_proof_blob_from_bound_batch(
-            &self.batch,
-            proof,
-            manifest_root,
-            da_commitment,
-            expiry_slot,
-        )
     }
 }
 /// Known metadata format variants for certified standalone lane blocks.
@@ -2801,7 +2742,10 @@ pub(crate) struct AutonomousLifecyclePayloadCustodyAuthorization {
 }
 #[allow(variant_size_differences)] // Ephemeral checked Queue facts stay inline and allocation-free.
 enum AutonomousLifecycleBootstrapPersistenceAuthentication<'authorization> {
-    #[cfg_attr(not(test), allow(dead_code, reason = "TODO: wire native consensus owner"))]
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "TODO: wire native consensus owner")
+    )]
     ProducerQueue {
         height_context_id: HeightContextId,
         validator_count: u8,

@@ -1,119 +1,43 @@
-//! Early structural working-set charges for one fixed compact proof segment.
+//! Witness-free structural payload floor for one masked DEEP proof segment.
 //!
-//! These charges deliberately sum buffers whose lifetimes need not overlap.
-//! They cover the fixed trace, public preparation, commitment/FRI payloads and
-//! bounded evaluator jobs before witness rows or transforms are constructed.
-//! They are accounting units, not an allocator reservation or a process RSS
-//! ceiling: allocator metadata, thread stacks, Rayon runtime, cold compilation
-//! of the source-owned hash DAG and unrelated process memory are excluded.
-//! Private SMT construction, retained child frames and complete public inputs
-//! have separate caller limits; this per-segment charge cannot replace them.
-//! Dense fallible iterator slots use the current Rust type layout. This is a
-//! local prover policy value, never a consensus charge or a proof field.
+//! This floor covers physical witness expansion, bounded masked replay, and
+//! caller framing before private trees are constructed. It is not the complete
+//! relation-dependent producer charge or an RSS reservation. Each segment must
+//! additionally pass the exact `deep_prover::ProducerPlan` before trace expansion;
+//! that plan includes quotient, commitment, FRI and codec workspace.
 
-use fastpq_isi::GoldilocksDigest384V1;
-
-use super::{
-    compact_hash_quotient::{
-        LOCAL_SLOTS, MAX_PROVER_LEDGER_NODES, MAX_PROVER_OUTPUT_TERMS, MAX_PROVER_SELECTOR_MASKS,
-        MAX_PROVER_SELECTOR_RUNS, TRANSITION_SLOTS,
-    },
-    compact_protocol::{MAX_PROVER_JOBS, replay::TraceReplayPlan},
-    compact_smt_quotient::{FIXED_COLUMN_COUNT, FIXED_ROW_COUNT, RESIDUE_COUNT},
-};
+use super::deep_masked_replay::{MaskedReplayPlan, ReplayLimits};
 use crate::{
-    Error, GoldilocksFp4V1, Result,
-    gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_HASH_ROWS, PHYSICAL_ROW_COUNT},
+    Error, Result,
+    gadgets::compact_smt_air::{COLUMN_COUNT, PHYSICAL_ROW_COUNT},
 };
 
-#[cfg(test)]
-const BLOWUP: usize = 8;
-const MASK_CYCLE_ROWS: usize = 4096;
-const QUERIES: usize = 375;
-const FRI_FOLDS: usize = 17;
-const TREE_DEPTH: usize = 19;
-const CONSTRAINTS: usize = LOCAL_SLOTS + TRANSITION_SLOTS + RESIDUE_COUNT;
+/// Derive the fixed replay requirements without a witness, entropy or transforms.
+pub(super) fn replay_plan() -> Result<MaskedReplayPlan> {
+    MaskedReplayPlan::new(ReplayLimits {
+        max_payload_bytes: usize::MAX,
+        max_work_units: usize::MAX,
+        max_full_passes: 3,
+    })
+}
 
-/// Charge one segment without materializing a relation, witness, FFT or LDE.
-///
-/// `statement_bytes` includes its complete bound caller context. The frame
-/// argument is the caller's already validated maximum for one encoded child,
-/// rather than the length of a proof which has already been generated.
+/// Charge a necessary structural floor plus complete bound context and framing.
 pub(super) fn segment_charge(statement_bytes: usize, child_frame_bytes: usize) -> Result<usize> {
-    let mut charge = 0usize;
-    let replay = TraceReplayPlan::new(PHYSICAL_ROW_COUNT, COLUMN_COUNT)?;
-    let lde_rows = replay.lde_rows;
-
-    // Logical-to-physical growth/boxing, physical rows and column conversion
-    // use four conservative base matrices. The actual replay owner retains
-    // coefficients plus one reusable stripe; its shared preflight accounts
-    // their exact payload. In-place FFTs allocate no per-worker matrix.
-    add(&mut charge, &[4, COLUMN_COUNT, PHYSICAL_ROW_COUNT, 8])?;
-    add(&mut charge, &[replay.peak_trace_bytes])?;
-    add(&mut charge, &[FIXED_COLUMN_COUNT, PHYSICAL_ROW_COUNT, 8])?;
-    add(&mut charge, &[FIXED_COLUMN_COUNT, lde_rows, 8])?;
-    add(&mut charge, &[2, PHYSICAL_ROW_COUNT, 8])?; // Both planner coset tables.
-    add(&mut charge, &[MASK_CYCLE_ROWS, PHYSICAL_HASH_ROWS, 8])?;
-    add(
-        &mut charge,
-        &[MASK_CYCLE_ROWS, MAX_PROVER_SELECTOR_MASKS, 8],
-    )?;
-    add(&mut charge, &[2, FIXED_ROW_COUNT, FIXED_COLUMN_COUNT, 8])?;
-
-    // Mixed and quotient outputs plus their bounded stripe chunks, joint,
-    // initial FRI clone and retained geometric FRI layers fit in eight
-    // complete extension arrays. Twelve digest arrays
-    // cover the three complete oracle trees, geometric FRI trees, row chunks
-    // and tree-building leaves. Fallible parallel collections additionally
-    // retain Result slots before extracting successful values. Full trees use
-    // full six-lane 48-byte field digests.
-    add(&mut charge, &[8, lde_rows, size_of::<GoldilocksFp4V1>()])?;
-    add(
-        &mut charge,
-        &[12, lde_rows, size_of::<GoldilocksDigest384V1>()],
-    )?;
-    add(
-        &mut charge,
-        &[lde_rows, size_of::<Result<GoldilocksDigest384V1>>()],
-    )?;
-    add(
-        &mut charge,
-        &[lde_rows, size_of::<Result<GoldilocksFp4V1>>()],
-    )?;
-
-    // Each fixed indexed partition owns one evaluator, two input rows and one
-    // residue vector. Hash node/mask/run/term counts have normal-path guards.
-    add(&mut charge, &[MAX_PROVER_JOBS, MAX_PROVER_LEDGER_NODES, 8])?;
-    add(&mut charge, &[MAX_PROVER_JOBS, 2, COLUMN_COUNT, 8])?;
-    add(&mut charge, &[MAX_PROVER_JOBS, CONSTRAINTS, 8])?;
-    // Six-lane row commitments serialize one row per indexed job. Query assembly
-    // later owns another row pair, after evaluator jobs have been dropped.
-    add(&mut charge, &[MAX_PROVER_JOBS, COLUMN_COUNT, 8])?;
-    add(&mut charge, &[2, COLUMN_COUNT, 8])?;
-    add(&mut charge, &[MAX_PROVER_LEDGER_NODES, 64])?;
-    add(&mut charge, &[MAX_PROVER_SELECTOR_MASKS, 48])?;
-    add(&mut charge, &[MAX_PROVER_SELECTOR_RUNS, 32])?;
-    add(&mut charge, &[MAX_PROVER_OUTPUT_TERMS, 32])?;
-
-    // Expanded openings coexist with shared-frontier conversion. Count every
-    // path at the largest depth, without discounting shared ancestors, plus
-    // ownership/map bookkeeping. Encoding and statement copies are separate
-    // conservative charges, not claimed exact Norito allocation sizes.
-    add(&mut charge, &[QUERIES, 2, COLUMN_COUNT, 8])?;
-    add(&mut charge, &[QUERIES, 4 + FRI_FOLDS, TREE_DEPTH, 48])?;
-    add(&mut charge, &[QUERIES, FRI_FOLDS, 3, 32])?;
-    add(&mut charge, &[QUERIES, FRI_FOLDS + 4, 256])?;
-    add(&mut charge, &[8, child_frame_bytes])?;
+    let mut charge = replay_plan()?.payload_bytes;
+    // Logical/physical witness growth and guarded source columns. The exact
+    // producer plan separately counts its borrowed physical source matrix.
+    add(&mut charge, &[5, COLUMN_COUNT, PHYSICAL_ROW_COUNT, 8])?;
     add(&mut charge, &[8, statement_bytes])?;
+    add(&mut charge, &[8, child_frame_bytes])?;
     Ok(charge)
 }
 
-/// Reject insufficient per-segment caller policy before allocating trace data.
+/// Reject insufficient outer structural policy before witness expansion.
 pub(super) fn check_segment_charge(
     statement_bytes: usize,
     child_frame_bytes: usize,
     maximum: usize,
-) -> Result<usize> {
+) -> Result<()> {
     let actual = segment_charge(statement_bytes, child_frame_bytes)?;
     if actual > maximum {
         return Err(Error::VerifierLimitExceeded {
@@ -122,23 +46,21 @@ pub(super) fn check_segment_charge(
             max: maximum,
         });
     }
-    Ok(actual)
+    Ok(())
 }
 
-fn product(factors: &[usize]) -> Result<usize> {
-    factors.iter().try_fold(1usize, |value, factor| {
-        value.checked_mul(*factor).ok_or_else(overflow)
-    })
-}
-
-fn add(total: &mut usize, factors: &[usize]) -> Result<()> {
-    *total = total.checked_add(product(factors)?).ok_or_else(overflow)?;
+fn add(charge: &mut usize, factors: &[usize]) -> Result<()> {
+    let amount = factors
+        .iter()
+        .try_fold(1usize, |n, &factor| n.checked_mul(factor))
+        .ok_or_else(overflow)?;
+    *charge = charge.checked_add(amount).ok_or_else(overflow)?;
     Ok(())
 }
 
 fn overflow() -> Error {
-    Error::InvalidTraceShape {
-        details: "compact prover segment charge overflow".to_owned(),
+    Error::TransferInvariant {
+        details: "compact prover structural charge overflows".to_owned(),
     }
 }
 
@@ -147,70 +69,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn structural_charge_covers_the_trace_and_fixed_preparation() {
-        let charge = segment_charge(0, 0).unwrap();
-        let base = COLUMN_COUNT * PHYSICAL_ROW_COUNT * 8;
-        let replay = TraceReplayPlan::new(PHYSICAL_ROW_COUNT, COLUMN_COUNT).unwrap();
-        let fixed = FIXED_COLUMN_COUNT * PHYSICAL_ROW_COUNT * (BLOWUP + 1) * 8;
-        assert_eq!(replay.peak_trace_bytes, 2 * base);
-        assert!(charge > 4 * base + replay.peak_trace_bytes + fixed);
-        assert_eq!(size_of::<GoldilocksDigest384V1>(), 48);
-        assert_eq!(size_of::<GoldilocksFp4V1>(), 32);
-        assert_eq!(MAX_PROVER_JOBS, 32);
-    }
-
-    #[test]
-    fn fixed_profile_matches_the_charged_geometry_and_native_rows() {
-        use crate::gadgets::compact_smt_air::SmtRow;
-
-        assert_eq!(PHYSICAL_ROW_COUNT, 65_536);
-        assert_eq!(COLUMN_COUNT, 342);
-        assert_eq!(CONSTRAINTS, 923);
-        assert_eq!(PHYSICAL_HASH_ROWS * BLOWUP, MASK_CYCLE_ROWS);
+    fn charge_covers_source_conversion_and_masked_replay() {
+        let replay = replay_plan().unwrap();
+        let source = 5 * COLUMN_COUNT * PHYSICAL_ROW_COUNT * 8;
+        assert_eq!(segment_charge(0, 0).unwrap(), source + replay.payload_bytes);
+        assert_eq!(replay.stripes(), 128);
+        assert_eq!(replay.maximum_column_transforms, 301 * (1 + 3 * 128));
         assert_eq!(
-            fastpq_isi::FASTPQ_FINAL_V1.fri.blowup_factor as usize,
-            BLOWUP
+            PHYSICAL_ROW_COUNT,
+            crate::backend::deep_geometry::TRACE_ROWS
         );
-        assert_eq!(fastpq_isi::FASTPQ_FINAL_V1.fri.arity, 2);
-        assert_eq!((PHYSICAL_ROW_COUNT * BLOWUP).ilog2() as usize, TREE_DEPTH);
-        assert_eq!(PHYSICAL_ROW_COUNT * BLOWUP >> FRI_FOLDS, 4);
-        // Logical/physical row vectors must not silently acquire an uncharged
-        // field or padding while column width remains unchanged.
-        assert_eq!(size_of::<SmtRow<u64>>(), COLUMN_COUNT * size_of::<u64>());
+        assert_eq!(
+            size_of::<crate::gadgets::compact_smt_air::SmtRow<u64>>(),
+            COLUMN_COUNT * 8
+        );
     }
 
     #[test]
-    fn both_variable_inputs_contribute_and_overflow_is_rejected() {
-        let base = segment_charge(0, 0).unwrap();
-        assert_eq!(segment_charge(3, 7).unwrap(), base + 8 * (3 + 7));
+    fn charge_enforces_inclusive_limits_and_context() {
+        let charge = segment_charge(256, 1024).unwrap();
+        assert_eq!(charge, segment_charge(0, 0).unwrap() + 8 * (256 + 1024));
+        check_segment_charge(256, 1024, charge).unwrap();
+        assert!(matches!(
+            check_segment_charge(256, 1024, charge - 1),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_compact_prover_segment_charge_bytes", actual, max
+            }) if actual == charge && max == charge - 1
+        ));
         assert!(segment_charge(usize::MAX, 0).is_err());
         assert!(segment_charge(0, usize::MAX).is_err());
-    }
-
-    #[test]
-    fn exact_policy_boundary_is_inclusive() {
-        let actual = segment_charge(256 * 1024, 4_017_376).unwrap();
-        assert_eq!(
-            check_segment_charge(256 * 1024, 4_017_376, actual).unwrap(),
-            actual
-        );
-        assert!(matches!(
-            check_segment_charge(256 * 1024, 4_017_376, actual - 1),
-            Err(Error::VerifierLimitExceeded {
-                limit: "max_compact_prover_segment_charge_bytes",
-                actual: measured,
-                max,
-            }) if measured == actual && max == actual - 1
-        ));
-        assert!(check_segment_charge(0, 0, 0).is_err());
-    }
-
-    #[test]
-    fn checked_products_and_sums_do_not_wrap() {
-        assert_eq!(product(&[3, 5, 7]).unwrap(), 105);
-        assert!(product(&[usize::MAX, 2]).is_err());
-        let mut total = usize::MAX - 1;
-        assert!(add(&mut total, &[2]).is_err());
-        assert_eq!(total, usize::MAX - 1);
     }
 }

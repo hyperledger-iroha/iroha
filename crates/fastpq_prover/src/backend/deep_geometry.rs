@@ -1,25 +1,29 @@
 //! Exact geometry and out-of-domain AIR linkage for the compact replacement.
 //!
-//! Constants describe one fixed inactive replacement relation. They are not
+//! Constants describe one fixed offline replacement profile. They are not
 //! proof-supplied parameters or a production registry entry. The 41 public
 //! columns reconstruct at the actual extension points before the unchanged
-//! 923-slot AIR is checked. The doubled FRI bound is only the degree needed by
-//! the screened hiding geometry; it supplies no hiding or soundness argument.
-//! TODO: Complete masked row/quotient and composition commitments, their
-//! transcript order, and a reviewed concrete bound before proof admission.
+//! 923-slot AIR is checked. The offline engine binds roots, transcript order
+//! and complete bounded openings. The doubled FRI bound accommodates the
+//! fixed masking degrees used by the integrated bounded producer;
+//! the bound itself supplies no hiding or soundness argument.
+//! TODO: Independently qualify concrete protocol bounds and authenticated ledger
+//! context for the complete masked row/quotient and composition commitments.
 
 use fastpq_isi::{FASTPQ_FINAL_V1, StarkParameterSet};
 
 use super::{
-    FriDomain, GOLDILOCKS_MODULUS,
+    FriDomain,
     compact_protocol::FixedAir,
-    compact_public_columns::{COMMITTED_COLUMN_COUNT, PublicColumnReconstruction},
+    compact_public_columns::PublicColumnReconstruction,
     compact_transfer_air::CompactTransferAir,
     deep_composition::{DeepComposition, OodPair},
     field_pow,
     fixed_domain::FixedTraceDomain,
     polynomial_field::PolynomialField,
 };
+#[cfg(test)]
+use super::{GOLDILOCKS_MODULUS, compact_public_columns::COMMITTED_COLUMN_COUNT};
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};
 
 /// Physical one-delta execution subgroup order.

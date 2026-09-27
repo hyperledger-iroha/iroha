@@ -10,7 +10,6 @@
 use std::collections::BTreeMap;
 use std::{
     mem::{align_of, size_of},
-    panic::{AssertUnwindSafe, catch_unwind},
     path::Path,
     ptr, slice,
     sync::{Arc, Mutex, OnceLock},
@@ -42,6 +41,10 @@ use crate::kagemusha_mobile_bootstrap_v1::KagemushaVerifiedMobileBootstrapV1;
 use crate::kagemusha_reserve_finality_v1::trusted_anchor;
 use crate::{
     ERR_BUFFER_TOO_SMALL, ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1, ERR_KAGEMUSHA_V1, ERR_NULL_PTR,
+    kagemusha_testnet_publication_v1::{
+        TestnetPublicationPermitV1, TestnetPublicationStateV1, catch_testnet_dispatch_panic_v1,
+        testnet_publication_gate_v1,
+    },
 };
 
 /// Maximum canonical Norito archive for one complete public State statement.
@@ -157,16 +160,26 @@ pub enum KagemushaTestnetObservationInstallErrorV1 {
 pub fn install_kagemusha_testnet_state_observation_owner_v1(
     owner: KagemushaTestnetProofObservationOwnerV1,
 ) -> Result<(), KagemushaTestnetObservationInstallErrorV1> {
+    let publication = testnet_publication_gate_v1()
+        .exclusive()
+        .map_err(|_| KagemushaTestnetObservationInstallErrorV1::AlreadyInstalled)?;
+    if *publication != TestnetPublicationStateV1::Standalone {
+        return Err(KagemushaTestnetObservationInstallErrorV1::AlreadyInstalled);
+    }
     let _installation_guard = TESTNET_STATE_OBSERVATION_INSTALL_LOCK_V1
         .lock()
         .map_err(|_| KagemushaTestnetObservationInstallErrorV1::AlreadyInstalled)?;
-    install_testnet_observation_owner_unlocked(owner, false)
+    install_testnet_observation_owner_unlocked(&publication.permit(), owner, false)
 }
 
 fn install_testnet_observation_owner_unlocked(
+    publication: &TestnetPublicationPermitV1<'_>,
     owner: KagemushaTestnetProofObservationOwnerV1,
     durable: bool,
 ) -> Result<(), KagemushaTestnetObservationInstallErrorV1> {
+    if publication.require_valid().is_err() {
+        return Err(KagemushaTestnetObservationInstallErrorV1::AlreadyInstalled);
+    }
     TESTNET_STATE_OBSERVATION_OWNER_V1
         .set(Mutex::new(KagemushaTestnetObservationInstallationV1 {
             owner,
@@ -226,6 +239,10 @@ pub fn load_and_install_kagemusha_testnet_state_observation_owner_v1(
     profile: KagemushaRecursiveVerifierProfileV1,
     artifact_root: impl AsRef<Path>,
 ) -> Result<(), String> {
+    let publication = testnet_publication_gate_v1().exclusive()?;
+    if *publication != TestnetPublicationStateV1::Standalone {
+        return Err("testnet diagnostic installation requires standalone publication".to_owned());
+    }
     let _installation_guard = TESTNET_STATE_OBSERVATION_INSTALL_LOCK_V1
         .lock()
         .map_err(|_| "KAGEMUSHA testnet owner installation lock is poisoned".to_owned())?;
@@ -243,7 +260,7 @@ pub fn load_and_install_kagemusha_testnet_state_observation_owner_v1(
     )?;
     let owner = KagemushaTestnetProofObservationOwnerV1::new(verifier, scope)
         .map_err(|error| format!("invalid KAGEMUSHA testnet observation owner: {error}"))?;
-    install_testnet_observation_owner_unlocked(owner, false)
+    install_testnet_observation_owner_unlocked(&publication.permit(), owner, false)
         .map_err(|_| "KAGEMUSHA testnet observation owner is already installed".to_owned())
 }
 
@@ -287,6 +304,7 @@ pub(crate) fn authenticated_observation_scope(
 /// journal, missing independent finality anchors, failed replay, or an already installed owner.
 #[cfg(unix)]
 pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner_v1(
+    publication: &TestnetPublicationPermitV1<'_>,
     manifest_archive: &[u8],
     validation_receipt_archive: &[u8],
     release_attestation_archive: &[u8],
@@ -297,6 +315,7 @@ pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner
     mode: KagemushaTestnetDurableObservationModeV1,
     independent_anchors: &BTreeMap<[u8; 32], KagemushaVerifiedFinalityChainV1>,
 ) -> Result<(), String> {
+    publication.require_valid()?;
     bootstrap.require_unexpired()?;
     let scope = authenticated_observation_scope(bootstrap)?;
     // Serialize journal creation with every installation path. A duplicate caller must
@@ -338,7 +357,7 @@ pub(crate) fn load_and_install_kagemusha_testnet_durable_state_observation_owner
     // Artifact loading and journal replay may be lengthy. A checkpoint checked only
     // at entry must not authorize publication after its installation lease expires.
     bootstrap.require_unexpired()?;
-    install_testnet_observation_owner_unlocked(owner, true)
+    install_testnet_observation_owner_unlocked(publication, owner, true)
         .map_err(|_| "KAGEMUSHA testnet observation owner is already installed".to_owned())
 }
 
@@ -407,6 +426,17 @@ fn load_authenticated_testnet_verifier(
 pub fn reserve_kagemusha_testnet_mint_before_submission_v1(
     reservation: &MintInboxReservationV1,
 ) -> Result<bool, String> {
+    testnet_publication_gate_v1().with_dispatch(|publication| {
+        reserve_kagemusha_testnet_mint_under_publication_v1(publication, reservation)
+    })
+}
+
+#[cfg(unix)]
+pub(crate) fn reserve_kagemusha_testnet_mint_under_publication_v1(
+    publication: &TestnetPublicationPermitV1<'_>,
+    reservation: &MintInboxReservationV1,
+) -> Result<bool, String> {
+    publication.require_valid()?;
     let installed = TESTNET_STATE_OBSERVATION_OWNER_V1
         .get()
         .ok_or_else(|| "KAGEMUSHA native testnet observation owner is unavailable".to_owned())?;
@@ -436,9 +466,11 @@ pub fn reserve_kagemusha_testnet_mint_before_submission_v1(
 /// replacement pin, or poisoned owner.
 #[cfg(unix)]
 pub(crate) fn pin_kagemusha_testnet_authenticated_finality_anchor_v1(
+    publication: &TestnetPublicationPermitV1<'_>,
     operation_id: [u8; 32],
     verified_chain: &KagemushaVerifiedFinalityChainV1,
 ) -> Result<bool, String> {
+    publication.require_valid()?;
     let installed = TESTNET_STATE_OBSERVATION_OWNER_V1
         .get()
         .ok_or_else(|| "KAGEMUSHA native testnet observation owner is unavailable".to_owned())?;
@@ -461,8 +493,10 @@ pub(crate) fn pin_kagemusha_testnet_authenticated_finality_anchor_v1(
 /// rederiving the Applied proof and durably counting its credit.
 #[cfg(unix)]
 pub(crate) fn with_kagemusha_testnet_durable_credit_owner_v1<T>(
+    publication: &TestnetPublicationPermitV1<'_>,
     consume: impl FnOnce(&KagemushaTestnetProofObservationOwnerV1) -> Result<T, String>,
 ) -> Result<T, String> {
+    publication.require_valid()?;
     let owner = TESTNET_STATE_OBSERVATION_OWNER_V1
         .get()
         .ok_or_else(|| "KAGEMUSHA durable testnet observation owner is unavailable".to_owned())?;
@@ -559,10 +593,15 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_state_proof_observe_v1
     let proof_archive =
         unsafe { slice::from_raw_parts(paired_proof_archive_ptr, paired_proof_archive_len) }
             .to_vec();
+    // Keep the publication dispatch guard through verification, journal mutation and output.
+    // A partially installed owner is never usable, even if its OnceLock is already populated.
+    let Ok(_publication) = testnet_publication_gate_v1().dispatch() else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
     let Some(owner) = TESTNET_STATE_OBSERVATION_OWNER_V1.get() else {
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
-    let archive = catch_unwind(AssertUnwindSafe(|| {
+    let archive = catch_testnet_dispatch_panic_v1(&_publication, || {
         let public: KagemushaStateRelationPublicInputsV1 = norito::decode_canonical_with_limits(
             &public_archive,
             norito::canonical_decode_limits(public_archive.len()),
@@ -598,7 +637,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_state_proof_observe_v1
             .observe_and_advance(&public, &proof)
             .map_err(|_| ())?;
         Ok(archive)
-    }));
+    });
     let Ok(Ok(archive)) = archive else {
         return ERR_KAGEMUSHA_V1;
     };
@@ -701,6 +740,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
     if output_capacity < KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1 {
         return ERR_BUFFER_TOO_SMALL;
     }
+    // Keep the publication dispatch guard through verification, journal mutation and output.
+    // A partially installed owner is never usable, even if its OnceLock is already populated.
+    let Ok(_publication) = testnet_publication_gate_v1().dispatch() else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
     let Some(owner) = TESTNET_STATE_OBSERVATION_OWNER_V1.get() else {
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
@@ -727,7 +771,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
     let proof_archive =
         unsafe { slice::from_raw_parts(paired_proof_archive_ptr, paired_proof_archive_len) }
             .to_vec();
-    let archive = catch_unwind(AssertUnwindSafe(|| {
+    let archive = catch_testnet_dispatch_panic_v1(&_publication, || {
         let trust_anchor =
             trusted_anchor(anchor_network_id, anchor_height, anchor_context_id).map_err(|_| ())?;
         // Core rejects an absent native reservation or independently pinned finality
@@ -778,7 +822,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_finalized_mint_observe
             return Err(());
         }
         Ok(archive)
-    }));
+    });
     let Ok(Ok(archive)) = archive else {
         return ERR_KAGEMUSHA_V1;
     };
@@ -840,13 +884,18 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_admit_v1(
     if output_capacity < KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1 {
         return ERR_BUFFER_TOO_SMALL;
     }
+    // Keep the publication dispatch guard through verification, journal mutation and output.
+    // A partially installed owner is never usable, even if its OnceLock is already populated.
+    let Ok(_publication) = testnet_publication_gate_v1().dispatch() else {
+        return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
+    };
     let Some(owner) = TESTNET_STATE_OBSERVATION_OWNER_V1.get() else {
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
     let operation_id: [u8; 32] = unsafe { slice::from_raw_parts(operation_id_ptr, 32) }
         .try_into()
         .expect("fixed operation ID length");
-    let archive = catch_unwind(AssertUnwindSafe(|| {
+    let archive = catch_testnet_dispatch_panic_v1(&_publication, || {
         let installed = owner.lock().map_err(|_| ())?;
         if !installed.durable {
             return Err(());
@@ -882,7 +931,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_testnet_value_admit_v1(
             return Err(());
         }
         Ok(archive)
-    }));
+    });
     let Ok(Ok(archive)) = archive else {
         return ERR_KAGEMUSHA_V1;
     };
@@ -1342,6 +1391,11 @@ mod tests {
     fn testnet_value_credit_owner_rejects_process_only_installation() {
         assert!(require_durable_credit_owner_v1(false).is_err());
         assert!(require_durable_credit_owner_v1(true).is_ok());
-        assert!(with_kagemusha_testnet_durable_credit_owner_v1(|_| Ok(())).is_err());
+        let gate = crate::kagemusha_testnet_publication_v1::TestnetPublicationGateV1::for_test();
+        let publication = gate.dispatch().unwrap();
+        assert!(
+            with_kagemusha_testnet_durable_credit_owner_v1(&publication.permit(), |_| Ok(()))
+                .is_err()
+        );
     }
 }

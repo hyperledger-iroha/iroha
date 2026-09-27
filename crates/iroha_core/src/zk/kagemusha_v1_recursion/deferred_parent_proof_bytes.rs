@@ -168,10 +168,6 @@ where
     /// hybrid-proof object have been absorbed.
     pub(in crate::zk::kagemusha_v1_recursion) transcript_binding: AssignedValue<C::ScalarExt>,
     /// Proof-read commitments for instance columns one and two, in that order.
-    #[expect(
-        dead_code,
-        reason = "Retain the exact proof-read cell for recursive composition and transcript qualification"
-    )]
     pub(in crate::zk::kagemusha_v1_recursion) carrier_commitments: [DeferredEcPoint<'chip, C>; 2],
     /// Exact proof-read objects, including both hybrid carrier commitments.
     pub(in crate::zk::kagemusha_v1_recursion) loaded_stream: DeferredProofStreamV1<'chip, C>,

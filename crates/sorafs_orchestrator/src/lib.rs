@@ -5870,6 +5870,17 @@ mod tests {
                     }
                     Err(_) => break,
                 };
+                // Accepted sockets can inherit the listener's nonblocking mode on macOS.
+                // The fixture reads a complete request synchronously, within a bounded timeout.
+                stream
+                    .set_nonblocking(false)
+                    .expect("make mock privacy request socket blocking");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound mock privacy request reads");
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .expect("bound mock privacy response writes");
                 served_requests = served_requests.saturating_add(1);
                 let mut buffer = [0u8; 4096];
                 let mut received = Vec::new();
@@ -9234,7 +9245,9 @@ mod tests {
             assert_eq!(guard.mode(), ProxyMode::MetadataOnly);
         }
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
@@ -9326,7 +9339,9 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(150)).await;
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
@@ -9427,7 +9442,9 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(150)).await;
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,
@@ -9521,7 +9538,9 @@ mod tests {
         );
         tokio::time::sleep(Duration::from_millis(150)).await;
         collector.shutdown().await;
-        let _ = server_handle.join();
+        server_handle
+            .join()
+            .expect("privacy fixture server succeeded");
         assert_eq!(
             metrics.soranet_privacy_collector_enabled.get(),
             0,

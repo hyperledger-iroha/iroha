@@ -148,9 +148,13 @@ needed an explicit integer type. The closure type and an unused repair-source
 test import are repaired; their preimages are preserved under
 `target/first-release-core-retry4-small-repairs-20260926`. The X509 owner then
 added the composite evaluators and small arithmetic forwarding tests. Core
-retry 5 is pending in
-`target/first-release-core-retained-validation-retry5-20260926.log`; the
-focused runner now also selects both new evaluator tests. The Genesis wire
+retry 5 exited 101 before tests with 37 errors from the concurrent X509
+joined-root migration in
+`target/first-release-core-retained-validation-retry5-20260926.log`. Its stale
+compile-time comparison of six logical groups with one joined root is repaired
+in `target/first-release-x509-joined-root-assertion-20260926`; exact logical
+registration validation is unchanged. Retired test callers are being migrated
+by their owner. The focused runner also selects both new evaluator tests. The Genesis wire
 consumer passed its canonical digest roundtrip (one test, zero failures or
 ignored tests), exit 0 in `target/first-release-single-buffer-genesis-20260926.log`.
 None of the stopped builds executed the selected Core tests.
@@ -207,3 +211,60 @@ formatting, and the no-legacy-codec guard passes again in
 The follow-up structural check also passes (exit 0) in
 `target/first-release-resultless-followup-structural-20260926.log`.
 The DataModel retry passed 45 tests; Core runtime validation remains pending.
+
+The reviewed Numeric/BigInt serialization cut is now integrated from
+`target/native-canonical-numeric-streaming-20260926/patch.diff`. Numeric borrows
+its existing helper; BigInt writes its unchanged canonical signed encoding
+from borrowed digits through a fixed 512-byte buffer. This removes the
+mantissa clone, two's-complement vector and encoded-length vector from these
+serializers. Output errors retain their actual Norito I/O kind. Root and
+independent source review found no blocker; the added tests cover signed
+width boundaries, numeric extrema/scales and exact/short outputs. Both files
+pass focused formatting, and the no-legacy-codec guard passed again.
+The full `iroha_primitives` library suite passed all 321 tests with zero
+failures or ignored tests in the local `first-release-primitives` Cargo slot.
+Both edited source hashes remained unchanged; the result is
+`target/first-release-numeric-streaming-primitives-result-20260926.json`.
+Strict crate Clippy initially found nine test-helper lints. The scoped
+visibility, borrowing and hexadecimal helper cleanup and extraction of the
+unchanged golden table now pass Clippy with `--lib --tests -- -D warnings`.
+Independent review confirms all 102 assertion expressions and 16 golden
+frames are unchanged. The full library suite then passed all 321 tests again,
+with zero failures or ignored tests and all six selected input hashes
+unchanged; `target/first-release-primitives-test-clippy-repair-20260926/result.json`
+records both checks. Other nested serialization and work reservations remain open.
+
+Inner topology, resilience and foundational trust projection now uses exact
+JSON value types: boolean or floating-point revisions cannot stand in for
+integers. The 39 new controls plus existing promotion suite passed 245 tests
+against a byte-identical source snapshot with sibling runtime temporary files.
+The original in-source temporary-directory run remains recorded separately
+with 233 passes and 12 production-path-guard failures. Neither the guard nor
+its assertions were relaxed. Evidence is under
+`target/sorafs-inner-trust-types-20260926`. Native topology execution remains
+closed: persisted claims still lack executor-owned entry origins and a
+finalized authoritative producer. This parser fix does not qualify inner
+approvals or open promotion.
+
+The standalone pristine penalty-index handoff is integrated from
+`target/native-pristine-penalty-index-standalone-20260926/patch.diff`, with
+all nine source hashes matching the reviewed output. The actual funded
+producer index now survives validation and moves into the sole applying
+kernel, eliminating its second build. The ordinary pristine callback retains
+its State/generation/header check even when no effects or index are present;
+a stale observation of absent due penalties must refuse locally before
+execution. Existing Native interfaces and error classes remain unchanged.
+The five new component tests cover capacity/retry, actual allocation identity,
+changed source/actions, unwind and stale absence; their runtime result is
+pending in `target/first-release-core-penalty-index-validation-20260926.log`.
+The larger body-custody draft and nested resource admission remain separate
+and unintegrated. Its formal/source companion is in preparation.
+
+The Mochi wire consumer exited 101 before tests on four concurrent FASTPQ
+production compile errors. The concurrent owner moved its existing `rand`
+dependency to ordinary dependencies; root removed the test-only gate from
+the already-used private proof-budget constant. Locked metadata confirms a
+target-independent normal dependency without changing the lockfile. The
+repair changes no verifier or admission path. Consumer validation must be
+retried; this failure and the earlier Core test migration failures grant no
+runtime or release qualification.

@@ -1,14 +1,14 @@
-"""Source-drift checks for the current and test-only FASTPQ proof geometry."""
+"""Source-drift checks for offline DEEP and retained FASTPQ diagnostics."""
 
 import pytest
 
 from scripts.fastpq.check_compact_source_budget import budget, load_sources
 
 
-def test_source_owned_current_floor_and_test_only_deep_boundary() -> None:
-    """The present complete-row proof cannot satisfy either fixed payload cap."""
+def test_source_owned_offline_deep_bound_and_retained_diagnostic_floor() -> None:
+    """The sole offline profile fits the byte cap without qualifying admission."""
     result = budget(load_sources())
-    current = result["current"]
+    current = result["shared_diagnostic"]
     assert current["mandatory_row_bytes"] == 1_026_000
     assert current["mandatory_mixed_quotient_bytes"] == 24_000
     assert current["mandatory_raw_floor"] == 1_050_000
@@ -17,7 +17,8 @@ def test_source_owned_current_floor_and_test_only_deep_boundary() -> None:
     assert result["limits"] == {"segment": 524_288, "axt_inner": 1_048_576}
     assert current["fri_value_bytes_at_independent_maxima"] == 272_512
     assert current["fri_frontier_bytes_at_independent_maxima"] == 875_760
-    assert result["deep_test_only_dto"] == {"max_frame_bytes": 502_895, "headroom": 21_393}
+    assert result["offline_deep"] == {"max_frame_bytes": 502_895, "headroom": 21_393}
+    assert set(result["retained_test_metadata"]) == {"ordinary-single", "axt-single"}
     assert result["production_qualified"] is False
 
 
@@ -35,11 +36,19 @@ def test_source_owned_current_floor_and_test_only_deep_boundary() -> None:
         ("deep_row", "COMMITTED_COLUMN_COUNT * size_of::<u64>()", "COMMITTED_COLUMN_COUNT * 4"),
         ("deep_fri", "1 + arity * Fp4::BYTES", "8 + arity * Fp4::BYTES"),
         ("deep_geometry", "[16, 16, 8, 8, 4]", "[16, 16, 8, 8, 8]"),
-        ("resources", "QUANTITY_SHARED_FRAME_BOUND: usize = 4_017_376", "QUANTITY_SHARED_FRAME_BOUND: usize = 4_017_377"),
-        ("resources", "QUANTITY_QUERY_COUNT: usize = 375", "QUANTITY_QUERY_COUNT: usize = 374"),
+        ("resources", "QUANTITY_SHARED_FRAME_BOUND: usize = deep_proof::MAX_FRAME_BYTES", "QUANTITY_SHARED_FRAME_BOUND: usize = 4_017_376"),
+        ("resources", "QUANTITY_QUERY_COUNT: usize = deep_geometry::QUERY_COUNT", "QUANTITY_QUERY_COUNT: usize = 375"),
         ("resources", "maximum_segment_frame_bytes: QUANTITY_SHARED_FRAME_BOUND", "maximum_segment_frame_bytes: 0"),
         ("producer", ".check_proving_limits(proving, verification)?", ".check_proving_limits(proving, verification).ok()"),
+        ("producer", "QUANTITY_SHARED_FRAME_BOUND as SHARED_FRAME_BOUND", "QUANTITY_SHARED_FRAME_BOUND as RETIRED_FRAME_BOUND"),
         ("deep", "PROOF_BYTE_TARGET: usize = 512 * 1024", "PROOF_BYTE_TARGET: usize = 513 * 1024"),
+        ("deep", "values: FriValues,", "values: Vec<Fp4>,"),
+        ("deep", "values: RowValues,", "values: Vec<u64>,"),
+        ("deep_geometry", "LDE_ROWS: usize = 8_388_608", "LDE_ROWS: usize = 4_194_304"),
+        ("artifact", "quantity_diagnostic_profile_id()\n}", "FastpqCompactProfileIdV1([0; 32])\n}"),
+        ("public_columns", "PUBLIC_COLUMN_COUNT: usize = 41", "PUBLIC_COLUMN_COUNT: usize = 40"),
+        ("backend", '#[path = "backend/deep_engine.rs"]', '#[cfg(test)]\n#[path = "backend/deep_engine.rs"]'),
+        ("backend", '#[cfg(test)]\n#[path = "backend/compact_quantity_diagnostic.rs"]', '#[path = "backend/compact_quantity_diagnostic.rs"]'),
     ],
 )
 def test_source_drift_fails_closed(name: str, old: str, new: str) -> None:

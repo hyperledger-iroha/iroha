@@ -15,16 +15,15 @@
 //! and R before the transcript derives that challenge.
 //! The replay adapter borrows fresh masks and virtual trace coefficients from
 //! `deep_masked_replay`; `deep_masked_quotient` supplies exact blinded chunks.
-//! The test-only candidate producer joins these owners to bounded commitments/FRI.
-//! TODO: Execute and qualify the full soundness/hiding reduction before admission.
+//! The producer joins these owners to bounded commitments/FRI.
+//! TODO: Execute and qualify the full soundness/hiding reduction.
 
+#[cfg(test)]
+use super::deep_composition::DeepComposition;
 use super::{
-    compact_public_columns::COMMITTED_COLUMN_COUNT,
-    deep_composition::{DeepComposition, OodPair},
-    deep_masked_replay::MaskedTraceReplay,
-    polynomial_field::PolynomialField,
-    polynomial_transform::validate_coefficients,
-    secret_polynomial::SecretPolynomial,
+    compact_public_columns::COMMITTED_COLUMN_COUNT, deep_composition::OodPair,
+    deep_masked_replay::MaskedTraceReplay, polynomial_field::PolynomialField,
+    polynomial_transform::validate_coefficients, secret_polynomial::SecretPolynomial,
 };
 use crate::{Error, Result, field::GoldilocksFp4V1 as F};
 
@@ -44,18 +43,21 @@ pub(super) struct DeepPolynomialSource<'a> {
 // Both storage forms feed the same composition arithmetic; neither is a wire layout.
 #[derive(Clone, Copy)]
 enum TraceCoefficients<'a> {
+    #[cfg(test)]
     Dense(&'a [&'a [u64]]),
     VanishingReplay(&'a MaskedTraceReplay),
 }
 impl TraceCoefficients<'_> {
-    fn extent(self, column: usize) -> usize {
+    fn extent(self, _column: usize) -> usize {
         match self {
-            Self::Dense(columns) => columns[column].len(),
+            #[cfg(test)]
+            Self::Dense(columns) => columns[_column].len(),
             Self::VanishingReplay(replay) => replay.coefficient_extent(),
         }
     }
     fn coefficient(self, column: usize, degree: usize) -> u64 {
         match self {
+            #[cfg(test)]
             Self::Dense(columns) => columns[column][degree],
             Self::VanishingReplay(replay) => replay.coefficient(column, degree),
         }
@@ -68,6 +70,7 @@ impl<'a> DeepPolynomialSource<'a> {
     /// Empty trace/chunk slices denote zero; R always has exactly 2N coefficients.
     /// Extents over the exclusive bounds are rejected even when the excess
     /// coefficients are zero; no input is truncated.
+    #[cfg(test)]
     pub(super) fn new(
         trace: &'a [&'a [u64]],
         quotient: [&'a [F]; 2],
@@ -179,6 +182,7 @@ impl PreparedDeepPolynomial<'_> {
     }
 
     /// Prepare the independently implemented bounded point evaluator.
+    #[cfg(test)]
     pub(super) fn evaluator(&self) -> Result<DeepComposition> {
         DeepComposition::new(
             self.points,

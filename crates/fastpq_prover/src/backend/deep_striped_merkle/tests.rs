@@ -5,6 +5,7 @@ use crate::backend::{MerkleTreeRoleV1, merkle_node_hash};
 
 fn limits() -> StreamLimits {
     StreamLimits {
+        digest_execution: crate::DigestExecutionV1::Cpu,
         max_payload_bytes: usize::MAX,
         max_hashes: usize::MAX,
     }
@@ -225,7 +226,14 @@ fn actual_masked_rows_use_canonical_binding_and_match_materialized_frontiers() {
     let tree = StripedMerklePlan::new(leaves_count, 128, &queries, limits()).unwrap();
     let verifier = tree.openings.clone().unwrap();
     assert!(RowCommitmentPlan::new(replay.plan(), &binding, &queries, limits()).is_err());
-    let actual = stream_rows(&mut replay, &binding, &queries, tree).unwrap();
+    let actual = stream_rows(
+        &mut replay,
+        &binding,
+        &queries,
+        tree,
+        crate::DigestExecutionV1::Cpu,
+    )
+    .unwrap();
     let mut all = vec![Digest::default(); leaves_count];
     replay
         .visit_all(|stripe| {

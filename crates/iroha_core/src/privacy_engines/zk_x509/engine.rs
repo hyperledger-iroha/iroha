@@ -327,10 +327,10 @@ pub(crate) fn prepare_zk_x509_prover_input_v1(
 /// Every state, witness, release-profile, topology, and native-relation check
 /// completes before the entropy source is touched. The constructor then:
 ///
-/// 1. commits the exact six MAIN base groups;
-/// 2. constructs and self-verifies the compact-CA proof against those roots;
-/// 3. derives the sole joint `X5B1` capability from the seven committed roots;
-/// 4. commits MAIN auxiliary groups and completes `X5M1`;
+/// 1. joins the exact six MAIN base groups under one authenticated root;
+/// 2. constructs and self-verifies the compact-CA proof against that root;
+/// 3. derives the sole joint `X5B1` capability from the MAIN and CA roots;
+/// 4. commits the joined MAIN auxiliary columns and completes `X5M1`;
 /// 5. wraps the ordered pair in `X5S1` and independently invokes the consensus
 ///    verifier on the exact final bytes.
 ///
@@ -688,7 +688,9 @@ mod tests {
     }
 
     #[test]
-    fn credential_prover_rejects_unsupported_main_wire_before_witness_or_entropy() {
+    fn credential_prover_accepts_geometry_but_rejects_invalid_witness_before_entropy() {
+        super::super::stark::validate_zk_x509_main_proof_budget_v1()
+            .expect("complete MAIN and CA wire fits the unchanged credential budget");
         let fixture = super::super::relation::release_fixture::build_zk_x509_reference_fixture_v1()
             .expect("canonical reference fixture");
         let mut rng = PreflightEntropyV1::default();
@@ -701,12 +703,10 @@ mod tests {
             &[],
             &mut rng,
         )
-        .expect_err("the mandatory MAIN opening payload exceeds the credential budget");
+        .expect_err("invalid witness must reject before proof construction or entropy");
         assert_eq!(
             error,
-            ZkX509EngineErrorV1::MainProofConstruction(
-                super::super::stark::ZkX509StarkErrorV1::ProofTooLarge
-            )
+            ZkX509EngineErrorV1::WitnessCodec(ZkX509WitnessCodecErrorV1::Truncated)
         );
         assert_eq!(rng.requests, 0);
     }
@@ -716,7 +716,7 @@ mod tests {
         assert!(ZK_X509_COMPILED_PROFILE_DIGEST_V1.is_some());
         assert!(
             String::from_utf8_lossy(ZK_X509_AIR_COMPONENT_DESCRIPTOR_V1)
-                .ends_with("activation=unavailable-proof-cap")
+                .ends_with("activation=unavailable-qualification")
         );
     }
     #[test]
@@ -757,13 +757,13 @@ mod tests {
             .expect("health-checked entropy");
         let main_base = prover
             .find("commit_zk_x509_main_base_phase_v1_with_rng(")
-            .expect("six MAIN base roots");
+            .expect("joined MAIN base root");
         let ca = prover
             .find("prove_zk_x509_ca_accumulator_stark_v1_with_rng(")
             .expect("compact-CA proof");
         let joint_binding = prover
             .find("derive_zk_x509_credential_pre_aux_binding_v1(")
-            .expect("joint seven-root X5B1");
+            .expect("joint MAIN and CA root X5B1");
         let main_aux = prover
             .find(".bind_credential_pre_aux_v1_with_rng(")
             .expect("bound MAIN auxiliary phase");

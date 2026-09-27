@@ -6,9 +6,9 @@
 //! remainder coefficient must vanish. The fresh replay-owned T then randomizes
 //! both quotient chunks without truncating the unequal high chunk.
 //!
-//! The test-only candidate producer binds this owner to its actual row challenge.
-//! TODO: Complete full producer/PCS qualification. Arithmetic success supplies neither source
-//! authority nor proof admission. The existing offline wire remains unchanged.
+//! The producer binds this owner to its actual row challenge.
+//! TODO: Complete full producer/PCS qualification. Arithmetic success supplies
+//! neither source authority nor independent security review.
 
 use super::{
     air_degree::SLOT_COUNT,

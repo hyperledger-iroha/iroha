@@ -1,8 +1,8 @@
 //! Necessary decode-policy minima checked before private quantity proving.
 //!
 //! These are lower bounds, not a sufficient budget or an estimate of the final
-//! decoder's charges. Every child opens 375 distinct current rows of 342 fixed
-//! eight-byte values. Their payload alone costs at least 1,026,000 bytes both in
+//! decoder's charges. Every child opens 64 distinct current rows of 301 fixed
+//! eight-byte values. Their payload alone costs at least 154,112 bytes both in
 //! the canonical frame and in the decoded row vectors. The transport owns the
 //! complete carrier as a `Vec<u8>`, so that raw row payload also supplies a lower
 //! bound on its sequence, field, cumulative-element and allocation requirements.
@@ -88,8 +88,9 @@ mod tests {
     use norito::core::DecodeLimits;
 
     const DISTINCT_CURRENT_ROWS: usize = crate::backend::offline_compact::QUANTITY_QUERY_COUNT;
-    const CHILD_ROW_PAYLOAD_BYTES: usize =
-        DISTINCT_CURRENT_ROWS * crate::gadgets::compact_smt_air::COLUMN_COUNT * size_of::<u64>();
+    const CHILD_ROW_PAYLOAD_BYTES: usize = DISTINCT_CURRENT_ROWS
+        * crate::backend::compact_public_columns::COMMITTED_COLUMN_COUNT
+        * size_of::<u64>();
 
     fn policy(count: usize) -> VerificationLimits {
         let bytes = count * CHILD_ROW_PAYLOAD_BYTES;
@@ -125,7 +126,7 @@ mod tests {
 
     #[test]
     fn decode_policy_necessary_minima_are_inclusive_and_scale_with_all_children() {
-        assert_eq!(CHILD_ROW_PAYLOAD_BYTES, 1_026_000);
+        assert_eq!(CHILD_ROW_PAYLOAD_BYTES, 154_112);
         for count in [1, 2, 128] {
             let exact = policy(count);
             preflight_decode_policy(count, exact).unwrap();

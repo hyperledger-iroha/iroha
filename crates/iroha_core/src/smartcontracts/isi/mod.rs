@@ -1404,6 +1404,7 @@ mod tests {
         let da_commitment = envelope
             .da_commitment_hash
             .map(|commitment| iroha_crypto::Hash::from(commitment).into());
+        crate::fastpq::quantity_fixture::materialize(&mut batch);
         fastpq_prover::bind_axt_batch_with_proof_metadata(
             &mut batch,
             &binding,
@@ -1511,6 +1512,7 @@ mod tests {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
+        crate::fastpq::quantity_fixture::materialize(&mut batch);
         fastpq_prover::bind_axt_batch_with_proof_metadata(
             &mut batch,
             &binding,

@@ -267,13 +267,25 @@ impl<'block, 'state> OutputTransaction<'block, 'state> {
         }
     }
 
-    fn apply(mut self) {
-        if let Some(transaction) = self.transaction.take() {
-            transaction.apply();
+    fn apply(mut self) -> Result<(), String> {
+        // Keep State, witness and auxiliary rollback owners armed through refusal.
+        // Taking State first would also prevent Drop from restoring zk_dedup.
+        if self.witness.is_none() {
+            return Err("output transaction witness owner is absent".into());
         }
-        if let Some(witness) = self.witness.take() {
-            witness.commit();
-        }
+        self.transaction
+            .as_mut()
+            .ok_or("output transaction State owner is absent")?
+            .prepare_apply()?;
+        self.transaction
+            .take()
+            .expect("checked output transaction State owner")
+            .apply_prepared();
+        self.witness
+            .take()
+            .expect("checked output transaction witness owner")
+            .commit();
+        Ok(())
     }
 }
 
@@ -489,7 +501,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                             ).into(),
                         );
                     }
-                    attempt.apply();
+                    attempt.apply()?;
                     (row, NetworkSuccessDisposition::Applied)
                 }
                 ReservedExecutionOutput::OutputLimit(row) => {

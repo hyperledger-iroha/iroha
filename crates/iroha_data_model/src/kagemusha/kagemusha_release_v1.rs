@@ -3752,6 +3752,12 @@ impl KagemushaAuthenticatedReleaseV1 {
     }
 }
 
+// Keep fixture helpers inside this module's privacy boundary; only the documented
+// test wrapper is exposed through `testing`, never in a default shipping build.
+#[cfg(any(test, feature = "test-fixtures"))]
+#[path = "../testing/kagemusha_release.rs"]
+pub(crate) mod fixture_support;
+
 #[cfg(test)]
 #[path = "kagemusha_release_v1_tests.rs"]
 mod tests;

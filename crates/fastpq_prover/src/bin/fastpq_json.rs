@@ -3,7 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, Subcommand};
 use fastpq_prover::gadgets::transfer::decode_transcripts;
 use fastpq_prover::{
-    AXT_DEFAULT_PARAMETER, OperationKind, Proof, Prover, PublicInputs, StateTransition,
+    AXT_DEFAULT_PARAMETER, OperationKind, Prover, PublicInputs, StateTransition,
     TransitionBatch, axt_proof_blob_from_bound_batch,
     batch_manifest_sha256 as axt_batch_manifest_sha256, bind_axt_batch_with_proof_metadata,
     canonicalize_binding, set_axt_remote_spend_claims, transition_batch_from_model,
@@ -167,7 +167,6 @@ struct ProofResponse {
     proof_bytes_len: usize,
     prove_ms: f64,
     verify_ms: f64,
-    trace_commitment: String,
     batch_manifest_sha256: String,
     dataspace_id_hex: String,
     axt_descriptor_hex: String,
@@ -197,7 +196,6 @@ struct VerifyResponse {
     proof_sha256: String,
     proof_bytes_len: usize,
     verify_ms: f64,
-    trace_commitment: String,
     batch_manifest_sha256: String,
 }
 #[derive(Debug, Clone, JsonDeserialize)]
@@ -338,7 +336,7 @@ fn handle_measure(request: MeasureInput) -> Result<MeasureOutput, String> {
     }
     Ok(MeasureOutput {
         dataspace: request.dataspace,
-        measurement_mode: "fastpq_prover_fixture_replay".to_string(),
+        measurement_mode: "fastpq_masked_quantity_artifact".to_string(),
         sample_count: request.fixtures.len(),
         parameter,
         benchmarks,
@@ -351,7 +349,7 @@ fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
         parameter,
         ..request
     };
-    let (proof_bytes, prove_time, verify_time, trace_commitment, batch_manifest_sha256) =
+    let (proof_bytes, prove_time, verify_time, batch_manifest_sha256) =
         prove_request(&normalized_request)?;
     let axt = build_axt_materials(&normalized_request, &proof_bytes)?;
     Ok(ProofResponse {
@@ -362,7 +360,6 @@ fn handle_prove(request: ProofRequest) -> Result<ProofResponse, String> {
         proof_bytes_base64: BASE64_STANDARD.encode(&proof_bytes),
         prove_ms: duration_ms(prove_time),
         verify_ms: duration_ms(verify_time),
-        trace_commitment,
         batch_manifest_sha256,
         dataspace_id_hex: axt.dataspace_id,
         axt_descriptor_hex: axt.descriptor,
@@ -394,10 +391,8 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
     let proof_bytes = BASE64_STANDARD
         .decode(input.proof_bytes_base64.as_bytes())
         .map_err(|err| format!("invalid proof_bytes_base64: {err}"))?;
-    let proof: Proof = norito::decode_canonical(&proof_bytes)
-        .map_err(|err| format!("failed to decode proof bytes: {err}"))?;
     let started = Instant::now();
-    verify_axt_bound_batch(&batch, &proof, &binding)
+    verify_axt_bound_batch(&batch, &proof_bytes, &binding)
         .map_err(|err| format!("FASTPQ verification failed: {err}"))?;
     let verify_time = started.elapsed();
     Ok(VerifyResponse {
@@ -406,7 +401,6 @@ fn handle_verify(input: VerifyInput) -> Result<VerifyResponse, String> {
         proof_sha256: sha256_hex(&proof_bytes),
         proof_bytes_len: proof_bytes.len(),
         verify_ms: duration_ms(verify_time),
-        trace_commitment: hex::encode(proof.commitment().to_le_bytes()),
         batch_manifest_sha256: batch_manifest_sha256(&request),
     })
 }
@@ -497,7 +491,7 @@ fn trimmed_filter(value: Option<String>) -> Option<String> {
 }
 fn prove_request(
     request: &ProofRequest,
-) -> Result<(Vec<u8>, Duration, Duration, String, String), String> {
+) -> Result<(Vec<u8>, Duration, Duration, String), String> {
     let binding = request_to_binding(request)?;
     let batch = build_batch_from_request(request)?;
     let prover = Prover::canonical(&request.parameter)
@@ -511,13 +505,11 @@ fn prove_request(
     verify_axt_bound_batch(&batch, &proof, &binding)
         .map_err(|err| format!("FASTPQ verification failed: {err}"))?;
     let verify_time = verify_started.elapsed();
-    let proof_bytes =
-        encode_canonical(&proof).map_err(|err| format!("proof encode failed: {err}"))?;
+    let proof_bytes = proof;
     Ok((
         proof_bytes,
         prove_time,
         verify_time,
-        hex::encode(proof.commitment().to_le_bytes()),
         batch_manifest_sha256(request),
     ))
 }
@@ -572,15 +564,13 @@ fn build_axt_materials(request: &ProofRequest, proof_bytes: &[u8]) -> Result<Axt
     };
     let manifest_root_hex = Hash::prehashed(manifest_root).to_string();
     let batch = build_batch_from_request(request)?;
-    let proof: Proof = norito::decode_canonical(proof_bytes)
-        .map_err(|err| format!("failed to decode proof bytes for AXT payload: {err}"))?;
     let da_commitment = Some(hex_digest32(
         &batch_manifest_sha256(request),
         "batch_manifest_sha256",
     )?);
     let effect_proof_blob = axt_proof_blob_from_bound_batch(
         &batch,
-        proof,
+        proof_bytes.to_vec(),
         manifest_root,
         da_commitment,
         Some(AXT_JSON_PROOF_EXPIRY_SLOT),
@@ -943,7 +933,7 @@ fn duration_ms(duration: Duration) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::nexus::{AxtHandleIssuerContextV1, AxtHandleReplayKey, AxtProofEnvelope};
+    use iroha_data_model::nexus::{AxtHandleIssuerContextV1, AxtHandleReplayKey};
     use iroha_model_base::topology::LaneId;
     use iroha_primitives::Quantity;
     fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
@@ -1131,44 +1121,18 @@ mod tests {
         assert_eq!(trimmed_filter(None), None);
     }
     #[test]
-    fn effect_proof_blob_does_not_relabel_policy_digest_as_amount_commitment() {
+    fn opaque_effect_carriers_are_not_transfer_proofs() {
         let source_tx_commitment = [0x11; 32];
         let mut request = proof_request(captured_batch_base64(12, source_tx_commitment));
         request.target_dsids = vec![12];
         request.claim_type = "authorization".to_owned();
         request.verified_effect_type = "fixture_effect".to_owned();
-        request.verifier_id = "fastpq".to_owned();
-        request.verifier_version = "v1".to_owned();
-
-        let (proof_bytes, ..) = prove_request(&request).expect("prove captured AXT batch");
-        let proof: Proof = norito::decode_canonical(&proof_bytes).expect("canonical proof");
-        use norito::codec::Encode;
-        let alternate = {
-            let _layout = norito::core::DecodeFlagsGuard::enter(0);
-            assert_eq!(norito_hex(&proof).unwrap(), hex::encode(&proof_bytes));
-            norito::to_bytes(&proof).unwrap()
-        };
-        assert_ne!(alternate, proof_bytes);
-        let mut trailing = proof_bytes.clone();
-        trailing.push(0);
-        for invalid in [proof.encode(), alternate, trailing] {
-            let verify_error = handle_verify(VerifyInput {
-                request: request.clone(),
-                proof_bytes_base64: BASE64_STANDARD.encode(&invalid),
-            })
-            .expect_err("public verifier rejects noncanonical proof frames");
-            assert!(verify_error.starts_with("failed to decode proof bytes:"));
-            assert!(build_axt_materials(&request, &invalid).is_err());
-        }
-        let artifacts =
-            build_axt_materials(&request, &proof_bytes).expect("build checked AXT materials");
-        let encoded_blob = hex::decode(artifacts.effect_proof_blob).expect("decode proof blob hex");
-        let blob: ProofBlob =
-            norito::decode_canonical(&encoded_blob).expect("decode canonical proof blob");
-        let envelope: AxtProofEnvelope =
-            norito::decode_canonical(&blob.payload).expect("decode canonical AXT envelope");
-
-        assert_eq!(envelope.amount_commitment, None);
-        fastpq_prover::verify_axt_proof_blob(&blob).expect("effect proof blob verifies");
+        let error = prove_request(&request).expect_err("metadata-only effects have no transfer relation");
+        assert!(error.contains("axt_opaque_effect"), "{error}");
+        let bytes = vec![0; 40];
+        assert!(handle_verify(VerifyInput {
+            request: request.clone(), proof_bytes_base64: BASE64_STANDARD.encode(&bytes),
+        }).is_err());
+        assert!(build_axt_materials(&request, &bytes).is_err());
     }
 }

@@ -1245,8 +1245,8 @@ mod tests {
                         iroha_config::parameters::defaults::torii::APP_API_MAX_FETCH_SIZE,
                     )
                     .expect("non-zero max fetch size"),
-                    rate_limit_cost_per_row: NonZeroU32::new(
-                        iroha_config::parameters::defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW,
+                    rate_limit_cost_per_page: NonZeroU32::new(
+                        iroha_config::parameters::defaults::torii::APP_API_RATE_LIMIT_COST_PER_PAGE,
                     )
                     .expect("non-zero app-api rate limit cost"),
                     request_signature_max_clock_skew: Duration::from_secs(

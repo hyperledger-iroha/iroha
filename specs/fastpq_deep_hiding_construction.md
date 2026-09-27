@@ -1,10 +1,13 @@
 # DEEP hiding construction prerequisite
 
-This is a source-coupled construction analysis, not a qualified protocol or
-production profile. The actual offline compact producer keeps its existing
-unmasked bytes. `deep_engine`, `deep_proof` and the new quotient-mask arithmetic
-remain private validation modules under `cfg(test)`. No accepted layout, decoder,
-registry, cap or admission gate changes here.
+This is a source-coupled construction analysis, not a qualified production
+profile. The offline compact producer uses one bounded masked DEEP construction
+with explicit cryptographic entropy, exact quotient division and independently
+committed composition masking. `deep_engine`, `deep_proof` and the masking
+owners are private normal-library modules. The canonical frame includes the
+authenticated composition-mask opening. Production callers must independently
+authenticate source state, permissions, finality and replay protection; the
+cryptographic and performance evidence limits below are separate obligations.
 
 ## Primary construction and remaining adaptation
 
@@ -84,7 +87,7 @@ zeroizing outputs. It selects no entropy source or security policy.
 ## Composition, wire and verifier obligations
 
 `DeepComposition` supplies the existing 606 terms of `H_lambda`, whose powers
-start at zero. The inactive candidate now authenticates the independent
+start at zero. The integrated offline candidate authenticates the independent
 `R in F_p4[X]_<2N` together with both quotient evaluations before `z` and the
 batching challenge. Its coefficient producer and initial FRI equality use
 `R + lambda H_lambda`. The extra lambda is necessary: `R` owns power zero and
@@ -115,7 +118,7 @@ retain their counts; the maximal native codec fixture is queued for execution:
 | --- | ---: |
 | Pre-mask candidate maximum DEEP DTO | 500,783 |
 | Third quotient field, 64 queries | 2,112 |
-| Current inactive candidate layout maximum | 502,895 |
+| Current offline candidate layout maximum | 502,895 |
 | Candidate margin to unchanged 524,288 cap | 21,393 |
 | Two candidate children before AXT carrier | 1,005,790 |
 | Margin to 1,048,576 inner cap before carrier/context | 42,786 |

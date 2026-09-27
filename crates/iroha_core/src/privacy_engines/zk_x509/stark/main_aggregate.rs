@@ -15,6 +15,9 @@ use super::super::{
 use super::*;
 #[path = "main_oods.rs"]
 mod main_oods;
+#[cfg(test)]
+#[path = "main_resource_tests.rs"]
+mod main_resource_tests;
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use rayon::prelude::*;
 #[derive(Clone, Copy)]
@@ -3518,9 +3521,10 @@ pub(crate) fn zk_x509_main_pre_aux_from_proof_v1(
 }
 /// Verify the complete six-group, 49-registration canonical MAIN aggregate.
 ///
-/// Every fixed opening is reconstructed after post-grinding query derivation. The proof supplies
-/// only authenticated trace/composition/FRI openings and terminal claims; it cannot select a
-/// provider, registration, schedule, fixed row, or shared X5B1 challenge.
+/// Verifier-owned fixed polynomials are evaluated at the DEEP points for the complete
+/// constraint check. The proof supplies authenticated trace/composition/FRI openings and
+/// terminal claims; it cannot select a provider, registration, schedule, fixed row,
+/// or shared X5B1 challenge.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn verify_zk_x509_main_aggregate_stark_v1(
     statement: &IrohaZkX509StarkP256StatementV1,

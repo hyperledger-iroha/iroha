@@ -1034,7 +1034,7 @@ def _inner_signer_matches(
         ),
     }
     for field, value in expected.items():
-        if observed.get(field) != value:
+        if not promotion_runner.exact_json_equal(observed.get(field), value):
             errors.append(f"inner approval {label} {field} must match independent trust")
 
 

@@ -3,9 +3,9 @@
 //! This owner streams canonical leaves and the exact natural-order Merkle tree,
 //! then retains only selected values and the existing minimal frontier. The
 //! terminal retains all 128 values. No full oracle or full digest tree is stored.
-//! The test-only candidate producer consumes this owner for roots and openings.
-//! TODO: Execute and cryptographically qualify the complete construction before
-//! admission; this owner computes commitments, not proof acceptance.
+//! The producer consumes this owner for roots and openings.
+//! TODO: Cryptographically qualify the complete construction; this owner computes
+//! commitments, while the independent engine verifies the complete proof.
 
 use super::{
     deep_binding::{BindingError, Context, Oracle},
@@ -19,6 +19,7 @@ use fastpq_isi::GoldilocksDigest384V1 as Digest;
 
 /// Exact oracle identity, source geometry and checked active-phase payload bound.
 pub(super) struct CoefficientCommitmentPlan<'a> {
+    digest_execution: crate::DigestExecutionV1,
     replay: CoefficientReplayPlan,
     oracle: Oracle,
     queries: &'a [usize],
@@ -78,14 +79,8 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             queries,
             limits,
         )?;
-        let hashing = if terminal {
-            add(
-                mul(fields, F::BYTES)?,
-                binding.tree_frame_bytes(oracle).map_err(binding_error)?,
-            )?
-        } else {
-            super::deep_leaf_batch::payload_bytes(binding, oracle, mul(fields, F::BYTES)?)?
-        };
+        let hashing =
+            super::deep_leaf_batch::payload_bytes(binding, oracle, mul(fields, F::BYTES)?)?;
         let payload_bytes = add(
             replay.payload_bytes,
             add(
@@ -97,6 +92,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
         let leaf_hashes = tree.leaf_hashes;
         let parent_hashes = tree.parent_hashes;
         Ok(Self {
+            digest_execution: limits.digest_execution,
             replay,
             oracle,
             queries,
@@ -129,14 +125,9 @@ impl<'a> CoefficientCommitmentPlan<'a> {
             super::deep_leaf_batch::CAPACITY
         };
         let mut bytes = SecretPolynomial::zeroed(capacity * self.fields * F::BYTES)?;
-        // Terminal hashes directly; nonterminal batch digest storage is included
-        // in the shared hashing plan before either private allocation is made.
-        let mut leaves =
-            SecretPolynomial::<[u64; 6]>::zeroed(if self.oracle == Oracle::Terminal {
-                0
-            } else {
-                capacity
-            })?;
+        // Every oracle uses the explicitly selected bulk-leaf executor. The
+        // terminal retains its one-leaf duplicated-parent Merkle geometry.
+        let mut leaves = SecretPolynomial::<[u64; 6]>::zeroed(capacity)?;
         let mut selected = SecretPolynomial::zeroed(self.retained)?;
         let parent = |level: usize, index: usize, left, right| {
             binding
@@ -151,10 +142,20 @@ impl<'a> CoefficientCommitmentPlan<'a> {
                 Ok(())
             })?;
             pack(&selected, &mut bytes)?;
-            let leaf = binding
-                .hash_leaf(self.oracle, 0, &bytes)
-                .map_err(binding_error)?;
-            tree.push(0, leaf, parent)?;
+            super::deep_leaf_batch::hash(
+                binding,
+                self.oracle,
+                &[0],
+                &bytes,
+                self.fields * F::BYTES,
+                &mut leaves,
+                self.digest_execution,
+            )?;
+            tree.push(
+                0,
+                Digest::new(leaves[0]).expect("canonical terminal hash"),
+                parent,
+            )?;
         } else {
             replay.visit_all(|stripe| {
                 let rows = if self.oracle == Oracle::QuotientAndMask {
@@ -192,6 +193,7 @@ impl<'a> CoefficientCommitmentPlan<'a> {
                         &bytes[..count * self.fields * F::BYTES],
                         self.fields * F::BYTES,
                         &mut leaves[..count],
+                        self.digest_execution,
                     )?;
                     for (&index, &words) in indices[..count].iter().zip(leaves[..count].iter()) {
                         tree.push(

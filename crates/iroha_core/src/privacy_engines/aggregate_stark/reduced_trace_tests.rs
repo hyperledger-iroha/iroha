@@ -255,3 +255,244 @@ fn trace_layout_is_bound_before_roots_and_joined_scalar_savings_are_exact() {
         .collect::<Vec<_>>();
     verify_all_merkle_openings_v1(&proof, parameters, DOMAINS, &current, &indices).unwrap();
 }
+
+#[test]
+fn complete_oods_current_rows_bind_both_deep_points_through_real_fri() {
+    use rand::{SeedableRng as _, rngs::StdRng};
+    for trace_layout in [
+        AggregateTraceLayoutV1::GroupedCurrent,
+        AggregateTraceLayoutV1::JoinedCurrent,
+    ] {
+        let parameters = AggregateStarkParametersV1 {
+            fri_commitment_layout: AggregateFriCommitmentLayoutV1::Paired,
+            ..PARAMETERS
+        };
+        let groups = vec![AggregateTraceGroupLayoutV1 {
+            native_trace_log2: 8,
+            segment_instances: 1,
+            base_width: 1,
+            aux_width: 1,
+        }];
+        let layout = AggregateProofLayoutV1::new_with_trace_layout_v1(
+            parameters,
+            groups.clone(),
+            trace_layout,
+        )
+        .unwrap();
+        let grouped = AggregateProofLayoutV1::new_with_trace_layout_v1(
+            parameters,
+            groups,
+            AggregateTraceLayoutV1::GroupedCurrent,
+        )
+        .unwrap();
+        let rows = layout.common_lde_size();
+        let group_marker = if trace_layout == AggregateTraceLayoutV1::JoinedCurrent {
+            JOINED_TRACE_GROUP_MARKER_V1
+        } else {
+            0
+        };
+        let base = vec![vec![F(7); rows]];
+        let aux = vec![vec![F(11); rows]];
+        let material = vec![AggregateTraceGroupMaterialV1 {
+            base_tree: row_tree_v1(
+                DOMAINS.digest_context,
+                DOMAINS.base_leaf,
+                DOMAINS.base_node,
+                group_marker,
+                &base,
+                rows,
+            )
+            .unwrap(),
+            aux_tree: row_tree_v1(
+                DOMAINS.digest_context,
+                DOMAINS.aux_leaf,
+                DOMAINS.aux_node,
+                group_marker,
+                &aux,
+                rows,
+            )
+            .unwrap(),
+            base_lde: base,
+            aux_lde: aux,
+        }];
+        let mut trace_groups = vec![AggregateTraceGroupProofV1 {
+            base_root: material[0].base_tree.root(),
+            aux_root: material[0].aux_tree.root(),
+            base_frontier: Vec::new(),
+            aux_frontier: Vec::new(),
+        }];
+        let compositions = vec![
+            vec![vec![E::ZERO; rows]; parameters.composition_degree_chunks];
+            parameters.security_lanes
+        ];
+        let trees = compositions
+            .iter()
+            .enumerate()
+            .map(|(lane, values)| composition_tree_v1(DOMAINS, lane, values).unwrap())
+            .collect::<Vec<_>>();
+        let composition_roots = trees
+            .iter()
+            .map(PrivacyOuterMerkleTreeV1::root)
+            .collect::<Vec<_>>();
+        let mut rng = StdRng::seed_from_u64(0x44_45_45_50);
+        let masks = build_fri_mask_oracles_v1(parameters, DOMAINS, &layout, &mut rng).unwrap();
+        let fri_mask_roots = masks
+            .iter()
+            .map(|mask| mask.tree.root())
+            .collect::<Vec<_>>();
+        let mut transcript = transcript();
+        absorb_layout_v1(
+            &mut transcript,
+            parameters,
+            DOMAINS,
+            b"complete-oods-fixture",
+            &layout,
+        )
+        .unwrap();
+        absorb_base_roots_v1(&mut transcript, DOMAINS, &trace_groups).unwrap();
+        absorb_aux_roots_v1(&mut transcript, DOMAINS, &trace_groups).unwrap();
+        absorb_composition_roots_v1(&mut transcript, parameters, DOMAINS, &composition_roots)
+            .unwrap();
+        absorb_fri_mask_roots_v1(&mut transcript, parameters, DOMAINS, &fri_mask_roots).unwrap();
+        let point = derive_deep_point_v1(&mut transcript, parameters, &layout).unwrap();
+        let wire = |value| E::from_base(F(value)).coefficients().map(F::value);
+        let deep = AggregateDeepProofV1 {
+            trace_groups: vec![AggregateDeepTraceGroupOpeningV1 {
+                base_current: vec![wire(7)],
+                base_next: vec![wire(7)],
+                aux_current: vec![wire(11)],
+                aux_next: vec![wire(11)],
+            }],
+            composition_values: vec![
+                vec![[0; 4]; parameters.composition_degree_chunks];
+                parameters.security_lanes
+            ],
+        };
+        absorb_deep_openings_v1(&mut transcript, &deep, parameters, &layout).unwrap();
+        // Independently constant base/aux polynomials and zero quotient chunks
+        // have zero DEEP divided differences at both distinct opening points.
+        let mixes = vec![
+            AggregateDeepLaneMixV1 {
+                trace_groups: vec![AggregateDeepTraceGroupMixV1 {
+                    base_current: vec![E::from_base(F(2))],
+                    base_next: vec![E::from_base(F(3))],
+                    aux_current: vec![E::from_base(F(5))],
+                    aux_next: vec![E::from_base(F(7))],
+                }],
+                composition: vec![E::ONE; parameters.composition_degree_chunks]
+            };
+            parameters.security_lanes
+        ];
+        let mut verifier_transcript = transcript.clone();
+        let lanes = masks
+            .iter()
+            .enumerate()
+            .map(|(lane, mask)| {
+                build_fri_lane_v1(
+                    parameters,
+                    DOMAINS,
+                    &layout,
+                    lane,
+                    mask.evaluations.clone(),
+                    &mut transcript,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let indices = query_indices_v1(&transcript, parameters, DOMAINS, &layout).unwrap();
+        // The materialized current-row assembler is identical for one logical
+        // group; the tree already carries the selected layout's leaf marker.
+        let queries = indices
+            .iter()
+            .map(|&index| {
+                build_query_v1(
+                    parameters,
+                    &grouped,
+                    index,
+                    &material,
+                    &compositions,
+                    &masks,
+                    &lanes,
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let (trace, composition_frontiers, fri_mask_frontiers, frontiers) = build_all_frontiers_v1(
+            parameters, &grouped, &queries, &material, &trees, &masks, &lanes,
+        )
+        .unwrap();
+        for (group, (base, aux)) in trace_groups.iter_mut().zip(trace) {
+            group.base_frontier = base;
+            group.aux_frontier = aux;
+        }
+        let proof = AggregateStarkProofV1 {
+            version: parameters.proof_version,
+            trace_groups,
+            composition_roots,
+            composition_frontiers,
+            fri_mask_roots,
+            fri_mask_frontiers,
+            fri_lanes: lanes
+                .into_iter()
+                .zip(frontiers)
+                .map(|(lane, round_frontiers)| AggregateFriLaneProofV1 {
+                    roots: lane.roots,
+                    terminal_values: lane
+                        .terminal_values
+                        .iter()
+                        .map(|value| value.coefficients().map(F::value))
+                        .collect(),
+                    round_frontiers,
+                })
+                .collect(),
+            queries,
+            grinding_nonce: 0,
+        };
+        let (betas, terminals) = verify_fri_commitments_v1(
+            &proof,
+            parameters,
+            DOMAINS,
+            &layout,
+            &mut verifier_transcript,
+        )
+        .unwrap();
+        assert_eq!(
+            query_indices_v1(&verifier_transcript, parameters, DOMAINS, &layout).unwrap(),
+            indices
+        );
+        verify_all_merkle_openings_v1(&proof, parameters, DOMAINS, &layout, &indices).unwrap();
+        let verify = |proof, deep, betas: &[Vec<E>], terminals: &[Vec<E>]| {
+            verify_opened_query_relations_after_complete_oods_v1(
+                proof, deep, point, &mixes, parameters, &layout, &indices, betas, terminals,
+            )
+        };
+        verify(&proof, &deep, &betas, &terminals).unwrap();
+        for coordinate in 0..4 {
+            let mut changed = deep.clone();
+            let group = &mut changed.trace_groups[0];
+            let target = match coordinate {
+                0 => &mut group.base_current,
+                1 => &mut group.base_next,
+                2 => &mut group.aux_current,
+                _ => &mut group.aux_next,
+            };
+            target[0][1] = 1;
+            assert_eq!(
+                verify(&proof, &changed, &betas, &terminals),
+                Err(AggregateStarkErrorV1::FriOpening)
+            );
+        }
+        let mut changed = proof.clone();
+        changed.queries[0].composition_values[0][0][1] = 1;
+        assert_eq!(
+            verify(&changed, &deep, &betas, &terminals),
+            Err(AggregateStarkErrorV1::FriOpening)
+        );
+        let mut changed = terminals.clone();
+        changed[0][0] = changed[0][0].add(E::ONE);
+        assert!(verify(&proof, &deep, &betas, &changed).is_err());
+        let mut changed = betas.clone();
+        changed[0][0] = changed[0][0].add(E::ONE);
+        assert!(verify(&proof, &deep, &changed, &terminals).is_err());
+    }
+}

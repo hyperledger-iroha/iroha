@@ -1911,6 +1911,7 @@ pub fn derive_confidential_owner_tag_v2(
     spend_key: Uint8Array,
     diversifier_hex: Option<String>,
 ) -> napi::Result<Buffer> {
+    let diversifier_hex = zeroize::Zeroizing::new(diversifier_hex);
     let spend_key = spend_key.as_ref();
     if spend_key.len() != 32 {
         return Err(napi::Error::new(
@@ -1918,10 +1919,12 @@ pub fn derive_confidential_owner_tag_v2(
             "confidential spend key must be 32 bytes",
         ));
     }
-    let diversifier =
-        parse_required_confidential_diversifier_hex("diversifier_hex", diversifier_hex.as_deref())?;
+    let diversifier = zeroize::Zeroizing::new(parse_required_confidential_diversifier_hex(
+        "diversifier_hex",
+        diversifier_hex.as_deref(),
+    )?);
     Ok(Buffer::from(
-        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(spend_key, diversifier)
+        confidential_v2::derive_confidential_owner_tag_v2_with_diversifier(spend_key, *diversifier)
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?
             .to_vec(),
     ))
@@ -1980,20 +1983,23 @@ pub fn derive_confidential_note_v2(
     rho_hex: String,
     owner_tag_hex: String,
 ) -> napi::Result<Buffer> {
+    let amount = zeroize::Zeroizing::new(amount);
+    let rho_hex = zeroize::Zeroizing::new(rho_hex);
+    let owner_tag_hex = zeroize::Zeroizing::new(owner_tag_hex);
     let asset_definition_id: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid asset definition id: {err}"),
         )
     })?;
-    let amount = parse_confidential_amount_u128("amount", &amount)?;
-    let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
-    let owner_tag = parse_fixed_32_hex("owner_tag_hex", &owner_tag_hex)?;
+    let amount = zeroize::Zeroizing::new(parse_confidential_amount_u128("amount", &amount)?);
+    let rho = zeroize::Zeroizing::new(parse_fixed_32_hex("rho_hex", &rho_hex)?);
+    let owner_tag = zeroize::Zeroizing::new(parse_fixed_32_hex("owner_tag_hex", &owner_tag_hex)?);
     let commitment = confidential_v2::derive_confidential_note_v2(
         &asset_definition_id.to_string(),
-        amount,
-        rho,
-        owner_tag,
+        *amount,
+        *rho,
+        *owner_tag,
     )
     .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     Ok(Buffer::from(commitment.to_vec()))
@@ -2007,6 +2013,7 @@ pub fn derive_confidential_nullifier_v2(
     spend_key: Uint8Array,
     rho_hex: String,
 ) -> napi::Result<Buffer> {
+    let rho_hex = zeroize::Zeroizing::new(rho_hex);
     let network_id = parse_transaction_network_id_bytes(network_id.as_ref())?;
     let spend_key = spend_key.as_ref();
     if spend_key.len() != 32 {
@@ -2021,14 +2028,14 @@ pub fn derive_confidential_nullifier_v2(
             format!("invalid asset definition id: {err}"),
         )
     })?;
-    let rho = parse_fixed_32_hex("rho_hex", &rho_hex)?;
+    let rho = zeroize::Zeroizing::new(parse_fixed_32_hex("rho_hex", &rho_hex)?);
     let asset_tag =
         confidential_v2::derive_confidential_asset_tag_v3(&asset_definition_id.to_string())
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     let network_tag = confidential_v2::derive_confidential_network_tag_v3(&network_id)
         .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     let nullifier =
-        confidential_v2::derive_confidential_nullifier_v3(spend_key, rho, asset_tag, network_tag)
+        confidential_v2::derive_confidential_nullifier_v3(spend_key, *rho, asset_tag, network_tag)
             .map_err(|err| napi::Error::new(napi::Status::InvalidArg, err))?;
     Ok(Buffer::from(nullifier.to_vec()))
 }
@@ -7138,23 +7145,27 @@ fn parse_confidential_transfer_inputs_v2(
         .iter()
         .enumerate()
         .map(|(index, input)| {
-            Ok(ConfidentialTransferInputV2 {
-                amount: parse_confidential_amount_u128(
-                    &format!("inputs[{index}].amount"),
-                    &input.amount,
-                )?,
-                rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
-                diversifier: parse_required_confidential_diversifier_hex(
-                    &format!("inputs[{index}].diversifier_hex"),
-                    input.diversifier_hex.as_deref(),
-                )?,
-                leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
-                    napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!("inputs[{index}].leaf_index is out of range"),
-                    )
-                })?,
-            })
+            // Establish the clearing owner before any fallible private-field parsing.
+            let mut parsed = ConfidentialTransferInputV2 {
+                amount: 0,
+                rho: [0; 32],
+                diversifier: [0; 32],
+                leaf_index: 0,
+            };
+            parsed.amount =
+                parse_confidential_amount_u128(&format!("inputs[{index}].amount"), &input.amount)?;
+            parsed.rho = parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?;
+            parsed.diversifier = parse_required_confidential_diversifier_hex(
+                &format!("inputs[{index}].diversifier_hex"),
+                input.diversifier_hex.as_deref(),
+            )?;
+            parsed.leaf_index = usize::try_from(input.leaf_index).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("inputs[{index}].leaf_index is out of range"),
+                )
+            })?;
+            Ok(parsed)
         })
         .collect()
 }
@@ -7166,23 +7177,27 @@ fn parse_confidential_unshield_inputs_v2(
         .iter()
         .enumerate()
         .map(|(index, input)| {
-            Ok(ConfidentialUnshieldInputV2 {
-                amount: parse_confidential_amount_u128(
-                    &format!("inputs[{index}].amount"),
-                    &input.amount,
-                )?,
-                rho: parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?,
-                diversifier: parse_required_confidential_diversifier_hex(
-                    &format!("inputs[{index}].diversifier_hex"),
-                    input.diversifier_hex.as_deref(),
-                )?,
-                leaf_index: usize::try_from(input.leaf_index).map_err(|_| {
-                    napi::Error::new(
-                        napi::Status::InvalidArg,
-                        format!("inputs[{index}].leaf_index is out of range"),
-                    )
-                })?,
-            })
+            // Establish the clearing owner before any fallible private-field parsing.
+            let mut parsed = ConfidentialUnshieldInputV2 {
+                amount: 0,
+                rho: [0; 32],
+                diversifier: [0; 32],
+                leaf_index: 0,
+            };
+            parsed.amount =
+                parse_confidential_amount_u128(&format!("inputs[{index}].amount"), &input.amount)?;
+            parsed.rho = parse_fixed_32_hex(&format!("inputs[{index}].rho_hex"), &input.rho_hex)?;
+            parsed.diversifier = parse_required_confidential_diversifier_hex(
+                &format!("inputs[{index}].diversifier_hex"),
+                input.diversifier_hex.as_deref(),
+            )?;
+            parsed.leaf_index = usize::try_from(input.leaf_index).map_err(|_| {
+                napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!("inputs[{index}].leaf_index is out of range"),
+                )
+            })?;
+            Ok(parsed)
         })
         .collect()
 }
@@ -7194,17 +7209,21 @@ fn parse_confidential_transfer_outputs_v2(
         .iter()
         .enumerate()
         .map(|(index, output)| {
-            Ok(ConfidentialTransferOutputV2 {
-                amount: parse_confidential_amount_u128(
-                    &format!("outputs[{index}].amount"),
-                    &output.amount,
-                )?,
-                rho: parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?,
-                owner_tag: parse_fixed_32_hex(
-                    &format!("outputs[{index}].owner_tag_hex"),
-                    &output.owner_tag_hex,
-                )?,
-            })
+            let mut parsed = ConfidentialTransferOutputV2 {
+                amount: 0,
+                rho: [0; 32],
+                owner_tag: [0; 32],
+            };
+            parsed.amount = parse_confidential_amount_u128(
+                &format!("outputs[{index}].amount"),
+                &output.amount,
+            )?;
+            parsed.rho = parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?;
+            parsed.owner_tag = parse_fixed_32_hex(
+                &format!("outputs[{index}].owner_tag_hex"),
+                &output.owner_tag_hex,
+            )?;
+            Ok(parsed)
         })
         .collect()
 }
@@ -7216,13 +7235,16 @@ fn parse_confidential_unshield_outputs_v3(
         .iter()
         .enumerate()
         .map(|(index, output)| {
-            Ok(ConfidentialUnshieldOutputV3 {
-                amount: parse_confidential_amount_u128(
-                    &format!("outputs[{index}].amount"),
-                    &output.amount,
-                )?,
-                rho: parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?,
-            })
+            let mut parsed = ConfidentialUnshieldOutputV3 {
+                amount: 0,
+                rho: [0; 32],
+            };
+            parsed.amount = parse_confidential_amount_u128(
+                &format!("outputs[{index}].amount"),
+                &output.amount,
+            )?;
+            parsed.rho = parse_fixed_32_hex(&format!("outputs[{index}].rho_hex"), &output.rho_hex)?;
+            Ok(parsed)
         })
         .collect()
 }

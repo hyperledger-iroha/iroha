@@ -1,9 +1,10 @@
 # FASTPQ public artifact boundary
 
-Source contract updated 2026-09-08. The model codecs in
+Source contract updated 2026-09-26. The model codecs in
 `crates/iroha_data_model/src/fastpq/public_artifact.rs` describe unverified public
-transport data. They register no qualified compact profile. Production proof
-admission still uses the raw replay verifier.
+transport data. The canonical masked verifier binds these artifacts to the
+ordinary or AXT transfer relation. Transport decoding establishes neither
+cryptographic qualification nor source authority.
 
 ## Statement and identity
 
@@ -50,24 +51,25 @@ allocation and depth budgets. An enclosing decode scope retains cumulative
 charges across sequential child decodes. The separate opaque bundle cap does
 not parse a proof or authenticate its contents.
 
-At legacy AXT ingress, `fastpq_prover::artifact_dispatch` checks the raw cap
-first and rejects either recognized compact schema after reading only the
-fixed 40-byte header. It performs no body decode, checksum scan or proof hash
-for that rejection. Invalid and unknown headers retain the original strict
-legacy decoder and error policy. There is no compact acceptance branch.
+AXT ingress checks the one-MiB raw cap before decoding the exact
+`FastpqAxtCompactArtifactV1` schema. It rejects ordinary, predecessor and malformed
+frames without decoder probing. The bounded verifier checks the complete public
+statement and independent binding, manifest, DA, amount and expiry context;
+anchored consumers additionally retain exact finalized-root and ordered
+transaction checks. Opaque metadata-only effects have no transfer AIR.
 
-Lane proof output now encodes canonical Norito bytes before deriving its byte
-digest. Kura snapshot batches and Torii recovery batches likewise select the
-canonical layout; Torii retains its bounded two-pass encoding and existing
-per-batch and cumulative byte limits. These are serialization corrections,
-not new compact persistence or admission support.
+Lane proof output encodes canonical Norito bytes before deriving its byte
+digest. Kura stores canonical artifact identity and public-input metadata;
+Torii recovery batches retain canonical framing and bounded two-pass encoding
+with per-batch and cumulative byte limits. Ordinary snapshots are not AXT
+proof-export paths.
 
 ## Offline verifier mapping
 
 The normal-library `fastpq_prover::offline_compact` facade connects canonical
-quantity model wrappers to the sole [six-lane V1 verifier](fastpq_compact_protocol_contract.md).
+quantity model wrappers to the sole [DEEP verifier](fastpq_deep_protocol_contract.md).
 It derives its metadata profile ID from the complete fixed
-`QuantityArtifactProfileV1` description, never accepts a proof-selected
+`deep_compact::QuantityArtifactProfileV1` description, never accepts a proof-selected
 implementation, and compares all seven PublicIO fields with independently
 supplied expectations. The AXT entry point additionally compares the complete
 binding, original metadata, pre-proof mirrors and ordered remote preimages.
@@ -83,17 +85,19 @@ the catalog/protocol, compact geometry, lane parameters, tape schedule and compl
 quantity relation identities. These metadata/content hashes are distinct from
 the six-word commitments; none substitutes for the complete logical hash context.
 
-Old SHAKE/prototype carrier schemas are rejected. Production ingress still rejects
-compact artifacts, and no compact persistence/admission path uses the offline
-success result. The current complete-row DTO exceeds both production byte caps
-before framing; explicit diagnostic budgets do not widen production policy.
+Old SHAKE/prototype carrier schemas are rejected. Core and AXT callers use the
+same fixed masked profile and compare their independently expected context.
+The fixed DEEP child DTO has a 502,895-byte shape ceiling;
+actual carrier, statement and artifact overhead still need their independent
+caps. This is not evidence of complete same-profile proof generation or resource
+qualification; explicit diagnostic budgets do not widen production policy.
 Concrete security, witness privacy, authenticated caller integration and release
 hardware evidence remain separate obligations.
 
 ## Validation and remaining work
 
 The counts, artifacts and measurements below retain their original earlier source
-scope. They are not validation of the current six-lane compact transcript or its
+scope. They are not validation of the current DEEP compact transcript or its
 changed profile and wire identities. New evidence must bind the actual source,
 executable and complete proof bytes; compiler success alone is insufficient.
 

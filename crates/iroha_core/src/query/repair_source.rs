@@ -158,11 +158,13 @@ pub fn authorize_repair_lease_v1(
     {
         return Err(rejected);
     }
-    for provider in [request.target_provider] {
-        read_finalized_provider_admission_v1(view, ProviderId::new(provider), now_unix_ms / 1000)
-            .map_err(|_| rejected)?
-            .ok_or(rejected)?;
-    }
+    read_finalized_provider_admission_v1(
+        view,
+        ProviderId::new(request.target_provider),
+        now_unix_ms / 1000,
+    )
+    .map_err(|_| rejected)?
+    .ok_or(rejected)?;
     let pin = world
         .pin_manifests()
         .get(&ManifestDigest::new(request.manifest_digest))

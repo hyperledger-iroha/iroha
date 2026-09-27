@@ -6014,7 +6014,10 @@ mod tests {
         let backend = StorageBackend::new(config.clone()).unwrap();
         let payload = b"all content verified before live authority is revoked";
         let plan = single_file_plan(payload).unwrap();
-        let manifest = manifest_builder_for_plan(payload, &plan).build().unwrap();
+        let manifest = manifest_builder_for_plan(payload, &plan)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .unwrap();
         let before = fs::read(&backend.index_path).ok();
         let mut reader = payload.as_slice();
         let mut checked = false;

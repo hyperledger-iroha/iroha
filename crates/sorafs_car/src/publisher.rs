@@ -332,6 +332,7 @@ mod tests {
             .content_length(plan.content_length)
             .car_digest(*car.car_archive_digest.as_bytes())
             .car_size(car.car_size)
+            .pin_policy(sorafs_manifest::PinPolicy::default())
             .build()
             .unwrap();
         let header = PublisherSourceHeaderV1::new([1; 32], [2; 32], 1, &manifest, &plan).unwrap();

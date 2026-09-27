@@ -88,6 +88,7 @@ use std::{
 };
 #[path = "actual_soranet_handshake_debug.rs"]
 mod actual_soranet_handshake_debug;
+mod sccp;
 #[path = "actual_sorafs_reputation.rs"]
 mod sorafs_reputation;
 use crate::{
@@ -98,6 +99,12 @@ pub use iroha_data_model::nexus::DaManifestPolicy;
 use norito::{
     codec::{Decode, Encode},
     streaming::EntropyMode,
+};
+pub use sccp::{
+    SCCP_MAX_SECRET_HEADER_NAME_BYTES, SCCP_RESERVED_SECRET_HEADER_NAMES, SccpAttestor,
+    SccpEndpointError, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode,
+    SccpSecretHeader, SccpTonLiteserver, compiled_http_endpoints, compiled_ton_liteservers,
+    derived_bridge_key_dir, parse_sccp_http_endpoint, parse_sccp_secret_header_name,
 };
 pub use sorafs_reputation::{
     SorafsReputationFinalizedArchiveRetentionAuthority, SorafsReputationRuntime,
@@ -191,6 +198,8 @@ pub struct Root {
     pub settlement: Settlement,
     /// Streaming configuration (control-plane key material).
     pub streaming: Streaming,
+    /// Node-local SCCP attestor and light-client keeper.
+    pub sccp: SccpNode,
 }
 /// Embedded Soracloud runtime-manager configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7821,8 +7830,8 @@ pub struct AppApi {
     pub max_list_limit: NonZeroU32,
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub max_fetch_size: NonZeroU32,
-    /// Rate-limiter cost applied per requested row when backpressure is enforced.
-    pub rate_limit_cost_per_row: NonZeroU32,
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub rate_limit_cost_per_page: NonZeroU32,
     /// Maximum allowed clock skew for signed app requests.
     pub request_signature_max_clock_skew: Duration,
     /// TTL for app-request nonces retained for replay detection. Configuration

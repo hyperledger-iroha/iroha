@@ -121,12 +121,12 @@ def test_ignored_untracked_outputs_are_outside_source_but_tracked_files_are_chec
 
 
 @pytest.mark.parametrize("relative,contents", [
-    ("circuits/sccp/vendor/cpu/cpu_wasm.go", "package cpu\n"),
-    ("circuits/sccp/vendor/cpu/cpu_wasip1.go", "package cpu\n"),
-    ("circuits/sccp/vendor/cpu/cpu_wasm_test.go", "package cpu\n"),
-    ("circuits/sccp/vendor/cpu/endian.go", "//go:build amd64 || wasm\npackage cpu\n"),
-    ("circuits/sccp/vendor/tty/platform.go", "//go:build !wasip1\npackage tty\n"),
-    ("circuits/sccp/vendor/tty/platform.go", "// +build amd64,linux wasm\npackage tty\n"),
+    ("tools/go-module/vendor/cpu/cpu_wasm.go", "package cpu\n"),
+    ("tools/go-module/vendor/cpu/cpu_wasip1.go", "package cpu\n"),
+    ("tools/go-module/vendor/cpu/cpu_wasm_test.go", "package cpu\n"),
+    ("tools/go-module/vendor/cpu/endian.go", "//go:build amd64 || wasm\npackage cpu\n"),
+    ("tools/go-module/vendor/tty/platform.go", "//go:build !wasip1\npackage tty\n"),
+    ("tools/go-module/vendor/tty/platform.go", "// +build amd64,linux wasm\npackage tty\n"),
 ])
 def test_go_target_files_and_build_comments_are_checked(repository, relative, contents):
     path = repository / relative

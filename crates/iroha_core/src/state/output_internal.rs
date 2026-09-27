@@ -131,7 +131,7 @@ impl InternalInvocation {
                 {
                     return Err("quarantine action disappeared".into());
                 }
-                policy.apply();
+                policy.apply()?;
             }
             Self::Time(_) => {
                 let action = state
@@ -166,7 +166,7 @@ impl InternalInvocation {
                 ) {
                     return Err("retry action disappeared".into());
                 }
-                policy.apply();
+                policy.apply()?;
             }
         }
         Ok(())
@@ -290,7 +290,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .as_mut()
                 .ok_or("missing internal transaction")?;
             append_completions(&mut tx.world.external_event_buf, call, &row)?;
-            attempt.apply();
+            attempt.apply()?;
         } else {
             drop(attempt);
             append_completions(&mut self.state.world.external_event_buf, call, &row)?;

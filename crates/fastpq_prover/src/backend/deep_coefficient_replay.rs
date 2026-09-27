@@ -1,12 +1,12 @@
 //! Bounded Fp4 coefficient replay and exact existing FRI coefficient folding.
 //!
-//! Every candidate layer has M/D=64. Four base-field D-point FFTs evaluate
+//! Every fixed layer has M/D=64. Four base-field D-point FFTs evaluate
 //! one Fp4 polynomial on a stripe. Grouped FRI fibers remain within that stripe,
 //! so neither commitments nor openings need a full M-element oracle allocation.
 //! Consecutive arity-r coefficient blocks fold by Horner at beta, matching the
 //! existing inverse-fiber transform exactly. This adds storage scheduling only.
-//! TODO: Integrate the complete transcript and qualify the private producer;
-//! these private arithmetic owners do not activate any proof format or gate.
+//! The producer binds each completed replay into the canonical transcript.
+//! TODO: Independently qualify the complete private producer and resource bounds.
 
 use super::{
     FriDomain,
@@ -164,6 +164,7 @@ impl CoefficientReplayPlan {
     pub(super) fn arity(self) -> usize {
         self.arity
     }
+    #[cfg(test)]
     pub(super) fn domain(self) -> FriDomain {
         self.domain
     }

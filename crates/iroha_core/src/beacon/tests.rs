@@ -1340,6 +1340,7 @@ fn assert_same_block_key_rotation_persists_requested_pulse(parliament_requested_
         crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            None,
             evidence_prune_keys.as_slice(),
             Some(expected_anchor),
             &stale_roster,
@@ -1358,6 +1359,7 @@ fn assert_same_block_key_rotation_persists_requested_pulse(parliament_requested_
     crate::sumeragi::penalties::apply_npos_consensus_effects_to_transaction(
         &mut transaction,
         &effects,
+        None,
         evidence_prune_keys.as_slice(),
         Some(expected_anchor),
         &roster,

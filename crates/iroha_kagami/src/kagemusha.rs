@@ -1,5 +1,7 @@
 //! Fail-closed KAGEMUSHA V1 release authentication.
 
+mod mobile_bootstrap;
+
 use crate::{Outcome, RunArgs, json_macros::JsonDeserialize};
 use clap::{Args as ClapArgs, Subcommand};
 #[cfg(unix)]
@@ -158,6 +160,15 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Prepare one mobile checkpoint from an authenticated Experimental release.
+    #[command(name = "prepare-mobile-bootstrap-v1")]
+    PrepareMobileBootstrapV1(mobile_bootstrap::PrepareArgs),
+    /// Sign one independently pinned mobile bootstrap checkpoint.
+    #[command(name = "sign-mobile-bootstrap-approval-v1")]
+    SignMobileBootstrapApprovalV1(mobile_bootstrap::SignArgs),
+    /// Authenticate and assemble distinct approvals into a mobile bootstrap package.
+    #[command(name = "assemble-mobile-bootstrap-v1")]
+    AssembleMobileBootstrapV1(mobile_bootstrap::AssembleArgs),
     /// Prepare an unsigned testnet candidate from checked artifacts and typed evidence.
     #[command(name = "prepare-experimental-release-v1")]
     PrepareExperimentalReleaseV1(PrepareExperimentalReleaseV1Args),
@@ -215,6 +226,9 @@ struct AuthenticateReleaseV1Args {
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
+            Command::PrepareMobileBootstrapV1(args) => mobile_bootstrap::prepare(&args, writer),
+            Command::SignMobileBootstrapApprovalV1(args) => mobile_bootstrap::sign(&args, writer),
+            Command::AssembleMobileBootstrapV1(args) => mobile_bootstrap::assemble(&args, writer),
             Command::PrepareExperimentalReleaseV1(args) => {
                 prepare_experimental_release_v1(&args, writer)
             }
@@ -756,50 +770,10 @@ fn authenticate_experimental_release_v1<T: Write>(
     args: &AuthenticateExperimentalReleaseV1Args,
     writer: &mut std::io::BufWriter<T>,
 ) -> Outcome {
-    let manifest_bytes = read_bounded_immutable_file(
-        &args.manifest,
-        KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
-        "KAGEMUSHA V1 experimental release manifest",
-    )?;
-    let receipt_bytes = read_bounded_immutable_file(
-        &args.validation_receipt,
-        KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
-        "KAGEMUSHA V1 experimental validation receipt",
-    )?;
-    let policy_bytes = read_bounded_immutable_file(
-        &args.authority_policy,
-        KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
-        "KAGEMUSHA V1 experimental authority policy",
-    )?;
-    let attestation_bytes = read_bounded_immutable_file(
-        &args.attestation,
-        KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
-        "KAGEMUSHA V1 experimental release attestation",
-    )?;
-    let manifest = KagemushaReleaseManifestV1::decode_canonical_exact(&manifest_bytes)
-        .map_err(|source| eyre!("invalid experimental release manifest: {source}"))?;
-    let receipt =
-        KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&receipt_bytes)
-            .map_err(|source| eyre!("invalid experimental validation receipt: {source}"))?;
-    let policy = KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(&policy_bytes)
-        .map_err(|source| eyre!("invalid experimental authority policy: {source}"))?;
-    let attestation = KagemushaReleaseAttestationV1::decode_canonical_exact(&attestation_bytes)
-        .map_err(|source| eyre!("invalid experimental release attestation: {source}"))?;
-    let authenticated = manifest
-        .authenticate_experimental(&receipt, &policy, &attestation)
-        .map_err(|source| eyre!("experimental release authentication failed: {source}"))?;
+    let (_, policy, authenticated) = load_authenticated_experimental_release_v1(args)?;
     let KagemushaReleasePurposeV1::TestnetExperiment(signed_scope) = authenticated.purpose() else {
         bail!("experimental command requires a signed testnet-experiment purpose");
     };
-    validate_experimental_operator_pins_v1(
-        &args.pins,
-        *authenticated.network_id().as_bytes(),
-        authenticated.release_id(),
-        signed_scope,
-    )?;
-    validate_exact_release_inventory_v1(&manifest.artifacts)?;
-    let artifact_root = canonical_artifact_root(&args.artifact_root)?;
-    rehash_all_release_artifacts_v1(&manifest.artifacts, &artifact_root)?;
 
     let approved_signers = authenticated
         .approved_signers()
@@ -878,6 +852,61 @@ fn authenticate_experimental_release_v1<T: Write>(
         norito::json::to_json(&JsonValue::Object(report))?
     )?;
     Ok(())
+}
+
+fn load_authenticated_experimental_release_v1(
+    args: &AuthenticateExperimentalReleaseV1Args,
+) -> color_eyre::Result<(
+    KagemushaReleaseManifestV1,
+    KagemushaReleaseAuthorityPolicyV1,
+    KagemushaAuthenticatedReleaseV1,
+)> {
+    let manifest_bytes = read_bounded_immutable_file(
+        &args.manifest,
+        KAGEMUSHA_RELEASE_MANIFEST_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental release manifest",
+    )?;
+    let receipt_bytes = read_bounded_immutable_file(
+        &args.validation_receipt,
+        KAGEMUSHA_INTERNAL_VALIDATION_RECEIPT_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental validation receipt",
+    )?;
+    let policy_bytes = read_bounded_immutable_file(
+        &args.authority_policy,
+        KAGEMUSHA_RELEASE_AUTHORITY_POLICY_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental authority policy",
+    )?;
+    let attestation_bytes = read_bounded_immutable_file(
+        &args.attestation,
+        KAGEMUSHA_RELEASE_ATTESTATION_MAX_BYTES_V1,
+        "KAGEMUSHA V1 experimental release attestation",
+    )?;
+    let manifest = KagemushaReleaseManifestV1::decode_canonical_exact(&manifest_bytes)
+        .map_err(|source| eyre!("invalid experimental release manifest: {source}"))?;
+    let receipt =
+        KagemushaInternalValidationReceiptV1::decode_canonical_experimental_exact(&receipt_bytes)
+            .map_err(|source| eyre!("invalid experimental validation receipt: {source}"))?;
+    let policy = KagemushaReleaseAuthorityPolicyV1::decode_canonical_exact(&policy_bytes)
+        .map_err(|source| eyre!("invalid experimental authority policy: {source}"))?;
+    let attestation = KagemushaReleaseAttestationV1::decode_canonical_exact(&attestation_bytes)
+        .map_err(|source| eyre!("invalid experimental release attestation: {source}"))?;
+    let authenticated = manifest
+        .authenticate_experimental(&receipt, &policy, &attestation)
+        .map_err(|source| eyre!("experimental release authentication failed: {source}"))?;
+    let KagemushaReleasePurposeV1::TestnetExperiment(signed_scope) = authenticated.purpose() else {
+        bail!("experimental command requires a signed testnet-experiment purpose");
+    };
+    validate_experimental_operator_pins_v1(
+        &args.pins,
+        *authenticated.network_id().as_bytes(),
+        authenticated.release_id(),
+        signed_scope,
+    )?;
+    validate_exact_release_inventory_v1(&manifest.artifacts)?;
+    let artifact_root = canonical_artifact_root(&args.artifact_root)?;
+    rehash_all_release_artifacts_v1(&manifest.artifacts, &artifact_root)?;
+
+    Ok((manifest, policy, authenticated))
 }
 
 fn validate_experimental_operator_pins_v1(
@@ -2129,20 +2158,12 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn experimental_preparation_rehashes_every_artifact_and_evidence_file() {
-        let parent = fs::canonicalize(std::env::temp_dir()).expect("canonical temporary parent");
-        let artifact_dir = tempfile::Builder::new()
-            .prefix(".kagemusha-experimental-artifacts-")
-            .tempdir_in(&parent)
-            .expect("artifact fixture directory");
-        let evidence_dir = tempfile::Builder::new()
-            .prefix(".kagemusha-experimental-evidence-")
-            .tempdir_in(parent)
-            .expect("evidence fixture directory");
-        let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_dir.path())
+    pub(in crate::kagemusha) fn write_experimental_artifact_fixture(
+        artifact_root: &Path,
+    ) -> Vec<KagemushaArtifactBindingV1> {
+        let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_root)
             .expect("content-addressed artifact resolver");
-        let artifacts = KagemushaArtifactRoleV1::ALL
+        KagemushaArtifactRoleV1::ALL
             .into_iter()
             .enumerate()
             .map(|(index, role)| {
@@ -2165,7 +2186,24 @@ mod tests {
                     byte_len: u64::try_from(byte_len).expect("bounded artifact length"),
                 }
             })
-            .collect::<Vec<_>>();
+            .collect::<Vec<_>>()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn experimental_preparation_rehashes_every_artifact_and_evidence_file() {
+        let parent = fs::canonicalize(std::env::temp_dir()).expect("canonical temporary parent");
+        let artifact_dir = tempfile::Builder::new()
+            .prefix(".kagemusha-experimental-artifacts-")
+            .tempdir_in(&parent)
+            .expect("artifact fixture directory");
+        let evidence_dir = tempfile::Builder::new()
+            .prefix(".kagemusha-experimental-evidence-")
+            .tempdir_in(parent)
+            .expect("evidence fixture directory");
+        let artifacts = write_experimental_artifact_fixture(artifact_dir.path());
+        let resolver = KagemushaDirectoryArtifactResolverV1::new(artifact_dir.path())
+            .expect("content-addressed artifact resolver");
         rehash_all_release_artifacts_v1(&artifacts, artifact_dir.path())
             .expect("all 50 real artifact bindings match");
         let evidence_bytes = b"observed structural circuit rows";

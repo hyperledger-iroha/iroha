@@ -53,9 +53,19 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
     let occupied = budget
         .try_reserve_bytes(free - source_bytes + 1)
         .expect("leave one byte less than the exact source backing");
-    let refusal = ValidBlock::state_block_for_execution(&carrier, &state, false, None, None, None)
-        .err()
-        .expect("original history pool must refuse before block start");
+    let penalty_index = ValidBlock::validate_npos_effects_with_state(&carrier, &state, None, None)
+        .expect("validate original ordinary carrier before source admission");
+    let refusal = ValidBlock::state_block_for_execution(
+        &carrier,
+        &state,
+        penalty_index,
+        false,
+        None,
+        None,
+        None,
+    )
+    .err()
+    .expect("original history pool must refuse before block start");
     assert!(matches!(
         refusal,
         BlockValidationError::MembershipAdmission(
@@ -72,9 +82,18 @@ fn ordinary_signed_carrier_capacity_refusal_keeps_original_source_for_retry() {
         budget.limit_bytes() - source_bytes + 1
     );
     drop(occupied);
-    let mut retry =
-        ValidBlock::state_block_for_execution(&carrier, &state, false, None, None, None)
-            .expect("same signed carrier retries after original capacity is released");
+    let penalty_index = ValidBlock::validate_npos_effects_with_state(&carrier, &state, None, None)
+        .expect("revalidate the same ordinary carrier for retry");
+    let mut retry = ValidBlock::state_block_for_execution(
+        &carrier,
+        &state,
+        penalty_index,
+        false,
+        None,
+        None,
+        None,
+    )
+    .expect("same signed carrier retries after original capacity is released");
     assert_eq!(retry._curr_block, carrier.header());
     assert!(budget.reserved_bytes() >= baseline + source_bytes);
     retry
@@ -107,8 +126,18 @@ fn ordinary_signed_carrier_admits_exact_source_and_block_owner_boundary() {
     let occupied = budget
         .try_reserve_bytes(free - source_bytes - block_owner_bytes)
         .expect("leave exactly the source and acquired block owner demand");
-    let retry = ValidBlock::state_block_for_execution(&carrier, &state, false, None, None, None)
-        .expect("exact original history-pool boundary must admit");
+    let penalty_index = ValidBlock::validate_npos_effects_with_state(&carrier, &state, None, None)
+        .expect("validate ordinary carrier before exact-boundary source admission");
+    let retry = ValidBlock::state_block_for_execution(
+        &carrier,
+        &state,
+        penalty_index,
+        false,
+        None,
+        None,
+        None,
+    )
+    .expect("exact original history-pool boundary must admit");
     assert_eq!(budget.reserved_bytes(), budget.limit_bytes());
     assert_eq!(retry._curr_block, carrier.header());
     drop(retry);

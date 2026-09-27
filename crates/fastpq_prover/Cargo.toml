@@ -30,6 +30,7 @@ time = { workspace = true }
 base64 = { workspace = true, features = ["std"] }
 hex = { workspace = true, features = ["std"] }
 zeroize = { workspace = true }
+rand = { workspace = true }
 
 halo2curves = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -39,7 +40,6 @@ metal = { version = "0.32.0", optional = true }
 [dev-dependencies]
 criterion = { workspace = true }
 iroha_test_samples = { workspace = true }
-rand = { workspace = true }
 
 [[bench]]
 name = "planner"
