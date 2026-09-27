@@ -4,12 +4,12 @@ use iroha_data_model::block::execution_output::ExecutionOutputV1;
 use iroha_data_model::{
     NetworkId,
     block::consensus_v2::{
-        BlockSubject, CertifiedBodyRequest, CertifiedBodyResponse, CommitCertificateRequest,
-        CommitCertificateResponse, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
-        ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
-        HeightContext, MergeCarrierCommitmentV1, NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
-        PROTOCOL_VERSION, PayloadChunk, PayloadEncoding, PayloadManifest, Proposal,
-        ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
+        BeaconHorizonStatusV1, BlockSubject, CertifiedBodyRequest, CertifiedBodyResponse,
+        CommitCertificateRequest, CommitCertificateResponse, ConsensusMessageV2,
+        ConsensusMessageV2Payload, ConsensusMode, ConsensusRound, DataAvailabilityLayout,
+        DualQuorum, ExecutionCommitment, GlobalPhase, HeightContext, MergeCarrierCommitmentV1,
+        NATIVE_AMX_APPLICATION_MANIFEST_VERSION, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding,
+        PayloadManifest, Proposal, ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
         SumeragiV2HeightContextStatus, SumeragiV2IgnoreCount, SumeragiV2IgnoreReason,
         SumeragiV2LivenessBlocker, SumeragiV2LivenessStatus, SumeragiV2LocalWorkStage,
         SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
@@ -489,6 +489,13 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
                 },
             ],
         },
+        beacon_horizon: Some(BeaconHorizonStatusV1 {
+            epoch_length_blocks: 100,
+            next_required_pulse_height: Some(99),
+            active_session_id: Some([0x5B; 32]),
+            session_covers_next_pulse: true,
+            local_provider_ready: false,
+        }),
     };
     status
         .validate()

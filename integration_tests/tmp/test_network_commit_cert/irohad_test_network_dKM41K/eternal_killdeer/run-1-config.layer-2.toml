@@ -1,0 +1,5 @@
+telemetry_enabled = true
+telemetry_profile = "full"
+
+[sumeragi]
+da_enabled = true

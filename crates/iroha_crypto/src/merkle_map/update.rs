@@ -17,6 +17,12 @@ pub struct MerkleMapEdit<V> {
     pub after: Option<MerkleMapValueRef<V>>,
 }
 
+/// Logical node descriptor carrying the physical locations of store `S`.
+pub type MerkleMapStoreNode<S> = MerkleMapNode<
+    <S as MerkleMapNodeStore>::NodeLocation,
+    <S as MerkleMapNodeStore>::ValueLocation,
+>;
+
 /// Caller-owned immutable storage addressed by explicit physical references.
 ///
 /// Implementations must preserve existing bindings, including on failure or
@@ -36,14 +42,10 @@ pub trait MerkleMapNodeStore {
     ///
     /// # Errors
     /// Returns the original local failure without replacing it with absence.
-    #[expect(
-        clippy::type_complexity,
-        reason = "the store returns the exact authenticated node and its original error type"
-    )]
     fn read(
         &mut self,
         reference: &MerkleMapNodeRef<Self::NodeLocation>,
-    ) -> Result<Option<MerkleMapNode<Self::NodeLocation, Self::ValueLocation>>, Self::Error>;
+    ) -> Result<Option<MerkleMapStoreNode<Self>>, Self::Error>;
 
     /// Append a node and return its explicit location, preserving old bindings.
     ///
@@ -53,10 +55,7 @@ pub trait MerkleMapNodeStore {
     ///
     /// # Errors
     /// Returns the original local failure; the prepared root is not returned.
-    fn write(
-        &mut self,
-        node: MerkleMapNode<Self::NodeLocation, Self::ValueLocation>,
-    ) -> Result<Self::NodeLocation, Self::Error>;
+    fn write(&mut self, node: MerkleMapStoreNode<Self>) -> Result<Self::NodeLocation, Self::Error>;
 }
 
 /// Fixed path storage, explicitly owned and admitted by the update caller.
@@ -67,12 +66,11 @@ pub trait MerkleMapNodeStore {
 /// Stale public descriptors may remain after a call, but each new operation
 /// uses only its own authenticated path, including after error or unwind.
 pub struct MerkleMapUpdateWorkspace<N: Copy, V: Copy> {
-    #[expect(
-        clippy::type_complexity,
-        reason = "the fixed path stores one exact node reference and value at each depth"
-    )]
-    path: [Option<(MerkleMapNodeRef<N>, MerkleMapNode<N, V>)>; super::MAX_PATH_NODES],
+    path: [Option<LoadedPathNode<N, V>>; super::MAX_PATH_NODES],
 }
+
+/// One authenticated path node and the reference it was loaded through.
+type LoadedPathNode<N, V> = (MerkleMapNodeRef<N>, MerkleMapNode<N, V>);
 
 impl<N: Copy, V: Copy> MerkleMapUpdateWorkspace<N, V> {
     /// Maximum number of loaded nodes on one 256-bit key path.
@@ -234,7 +232,7 @@ impl<N: Copy> MerkleMapRoot<N> {
 
 fn write_node<S: MerkleMapNodeStore>(
     store: &mut S,
-    node: MerkleMapNode<S::NodeLocation, S::ValueLocation>,
+    node: MerkleMapStoreNode<S>,
 ) -> Result<MerkleMapNodeRef<S::NodeLocation>, MerkleMapUpdateError<S::Error>> {
     let hash = node.hash();
     let location = store.write(node).map_err(MerkleMapUpdateError::Write)?;

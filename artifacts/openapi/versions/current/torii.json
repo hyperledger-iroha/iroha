@@ -51407,6 +51407,9 @@
       "SumeragiStatusResponse": {
         "additionalProperties": false,
         "properties": {
+          "beacon_horizon": {
+            "$ref": "#/components/schemas/SumeragiV2BeaconHorizonStatus"
+          },
           "body_state": {
             "$ref": "#/components/schemas/SumeragiV2BodyState"
           },
@@ -51490,6 +51493,43 @@
           "last_committed_height",
           "height_context",
           "liveness"
+        ],
+        "type": "object"
+      },
+      "SumeragiV2BeaconHorizonStatus": {
+        "additionalProperties": false,
+        "description": "Local global-beacon horizon observed when the active height was activated. It is signed inside BridgeFinalityAttestationBodyV1 so operators can bound restarts against the next mandatory pulse; it never authorizes signing.",
+        "properties": {
+          "active_session_id": {
+            "$ref": "#/components/schemas/SumeragiV2Bytes32"
+          },
+          "epoch_length_blocks": {
+            "description": "Committed NPoS epoch length; zero in permissioned mode.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "local_provider_ready": {
+            "description": "This validator's partial-signer provider attested custody of its seat in the active session; false on observers.",
+            "type": "boolean"
+          },
+          "next_required_pulse_height": {
+            "description": "Earliest height at or after the active height whose finalized beacon pulse is consensus-mandatory.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "session_covers_next_pulse": {
+            "description": "The active session is authenticated for this network and roster and is live at next_required_pulse_height.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "epoch_length_blocks",
+          "session_covers_next_pulse",
+          "local_provider_ready"
         ],
         "type": "object"
       },
@@ -62183,6 +62223,298 @@
         },
         "x-iroha-tool-effect": "read",
         "x-iroha-websocket-subprotocol": "iroha-norito-v1"
+      }
+    },
+    "/v1/bridge/finality/attestation/latest": {
+      "get": {
+        "description": "Selects the durable tip of the immutable state view that builds the proof, then returns the same statement as /v1/bridge/finality/attestation/{height}: it signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status including its beacon_horizon, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. Both selectors share one rate-limit bucket. Responses are never cacheable. Exact positive applied or independently sampled status height disagreement returns typed HTTP 409 progress. Progress is unsigned and never replaces successful attestation authentication.",
+        "operationId": "bridgeFinalityAttestationLatest",
+        "parameters": [
+          {
+            "description": "Exact non-zero 32-byte freshness challenge as 64 lowercase hexadecimal characters.",
+            "in": "header",
+            "name": "X-Iroha-Finality-Challenge",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeFinalityAttestationV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Challenge-bound durable-tip finality attestation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Challenge header is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "HTTP routing or endpoint absence is a fixed failure and does not establish startup or finality snapshot progress.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason TipChanged or ConflictingState. Only TipChanged with an exact tip_mismatch payload establishes snapshot progress, binding requested_height, applied_height, status_height, challenge, node_id, and network_id. Heights are positive and not all equal. Validate every selector before retrying within the existing deadline. This unsigned observation is not finality proof. ConflictingState, missing/corrupt proofs, identity, subject, CommitQC or signature failures never grant retryable progress. Genesis scaling treats TipChanged as non-retryable conflict.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason InternalFailure. Signing or representation failed; this fixed failure grants neither readiness nor snapshot progress.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "ErrorEnvelope code bridge_finality_attestation_failure carries the sole details.finality_attestation_failure record. FinalityAttestationFailure reason ConsensusUninitialized, GenesisUncommitted, RestartRequired, or FinalityUnavailable. Only the first two explicit startup reasons permit deadline-bounded genesis readiness retries. Missing durable proofs never mean startup.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "description": "The negotiated finality representation must not be MIME-sniffed.",
+                "schema": {
+                  "const": "nosniff",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {},
+          {
+            "IrohaApiToken": []
+          }
+        ],
+        "summary": "Return a challenge-bound node-signed attestation for whichever height is the durable tip.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "public",
+          "authentication": "torii_default",
+          "schemaVersion": 1,
+          "stableRouteId": "bridge.finality_attestation.read_latest"
+        },
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/bridge/finality/attestation/{height}": {

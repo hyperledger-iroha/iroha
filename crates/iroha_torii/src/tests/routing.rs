@@ -539,6 +539,7 @@ mod tests {
             },
             last_commit_qc: None,
             liveness: Default::default(),
+            beacon_horizon: None,
         };
         let zero_seed = iroha_data_model::parameter::system::SumeragiNposParameters {
             epoch_seed: [0; 32],
@@ -873,6 +874,7 @@ mod tests {
                     total_power: 4,
                 }),
                 liveness: SumeragiV2LivenessStatus::default(),
+                beacon_horizon: None,
             };
             snapshot
                 .validate()
@@ -886,6 +888,11 @@ mod tests {
                     iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION.path(),
                     axum::routing::get(crate::handler_bridge_finality_attestation),
                 )
+                .route(
+                    iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION_LATEST
+                        .path(),
+                    axum::routing::get(crate::handler_bridge_finality_attestation_latest),
+                )
                 .layer(axum::middleware::from_fn(crate::capture_response_format))
                 .layer(axum::middleware::from_fn(crate::coalesce_accept_headers))
                 .layer(axum::middleware::from_fn(
@@ -896,8 +903,12 @@ mod tests {
         }
 
         fn request(height: u64, challenge: [u8; 32]) -> Request<Body> {
+            selector_request(&height.to_string(), challenge)
+        }
+
+        fn selector_request(selector: &str, challenge: [u8; 32]) -> Request<Body> {
             let mut request = Request::builder()
-                .uri(format!("/v1/bridge/finality/attestation/{height}"))
+                .uri(format!("/v1/bridge/finality/attestation/{selector}"))
                 .header(axum::http::header::ACCEPT, "application/x-norito")
                 .header(
                     crate::BRIDGE_FINALITY_CHALLENGE_HEADER,
@@ -1011,6 +1022,95 @@ mod tests {
             assert_eq!(progress.requested_height, 2);
             assert_eq!(progress.applied_height, 1);
             assert_eq!(progress.status_height, 1);
+        }
+
+        #[tokio::test]
+        async fn finality_attestation_latest_selects_the_durable_tip_and_signs_the_horizon() {
+            use iroha_data_model::block::consensus_v2::{BeaconHorizonStatusV1, ConsensusMode};
+
+            let _scope = StatusScope::new();
+            let (mut app, _, artifact) =
+                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(true);
+            let mut snapshot = configure_signer_and_status(&mut app, &artifact);
+            let npos = artifact.height_context.mode == ConsensusMode::Npos;
+            snapshot.beacon_horizon = Some(BeaconHorizonStatusV1 {
+                epoch_length_blocks: if npos { 10 } else { 0 },
+                next_required_pulse_height: Some(artifact.height + 4),
+                active_session_id: Some([0x6A; 32]),
+                session_covers_next_pulse: true,
+                local_provider_ready: true,
+            });
+            snapshot
+                .validate()
+                .expect("status with a published horizon");
+            v2_status::set_v2_status(snapshot.clone());
+            let challenge = [0x39; 32];
+            let response = router(&app)
+                .oneshot(selector_request("latest", challenge))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response.headers()[axum::http::header::CACHE_CONTROL],
+                "no-store"
+            );
+            let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+                .await
+                .unwrap();
+            let attestation: BridgeFinalityAttestationV1 = norito::decode_canonical_with_limits(
+                &bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .expect("canonical latest attestation");
+            attestation.verify().expect("signed latest statement");
+            assert_eq!(attestation.body.challenge, challenge);
+            assert_eq!(attestation.body.finality_proof.finality_artifact, artifact);
+            assert_eq!(
+                attestation.body.status.beacon_horizon,
+                snapshot.beacon_horizon
+            );
+            let mut tampered = attestation;
+            tampered
+                .body
+                .status
+                .beacon_horizon
+                .as_mut()
+                .expect("signed horizon")
+                .local_provider_ready = false;
+            assert!(
+                tampered.verify().is_err(),
+                "the signature covers the horizon"
+            );
+
+            v2_status::clear_v2_status();
+            let response = router(&app)
+                .oneshot(selector_request("latest", [0x3A; 32]))
+                .await
+                .unwrap();
+            assert_eq!(response.status().as_u16(), 503);
+            let bytes =
+                axum::body::to_bytes(response.into_body(), FINALITY_ATTESTATION_FAILURE_MAX_BYTES)
+                    .await
+                    .unwrap();
+            let envelope: ErrorEnvelope = norito::decode_canonical_with_limits(
+                &bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .expect("canonical latest failure envelope");
+            let failure = envelope
+                .details
+                .and_then(|details| details.finality_attestation_failure)
+                .expect("finality failure detail");
+            assert_eq!(failure.reason, Reason::ConsensusUninitialized);
+            assert!(
+                failure.matches(
+                    1,
+                    [0x3A; 32],
+                    &PeerId::new(app.torii_proxy_bridge_signer.public_key().clone()),
+                    *app.state.network_id_ref(),
+                ),
+                "an uninitialized latest selector echoes a valid positive height"
+            );
         }
 
         #[tokio::test]

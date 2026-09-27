@@ -7872,7 +7872,7 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
         input_bound,
     )
     .expect("exact arithmetic diagnostic");
-    assert_eq!(diagnostic, (trace.clone(), prefix_bounds.clone()));
+    assert_eq!(diagnostic, (trace.clone(), prefix_bounds));
     assert!(matches!(
         require_ram_lfe_bfv_production_qualification_v1(),
         Err(BfvError::ProductionQualificationUnavailable(_))
@@ -8039,10 +8039,7 @@ fn full_bootstrap_execution_prefix_trace_consumes_governed_artifacts() {
         input_noise_bound,
     )
     .expect("bounded-noise arithmetic diagnostic");
-    assert_eq!(
-        diagnostic,
-        (bounded_trace.clone(), bounded_prefix_bounds.clone())
-    );
+    assert_eq!(diagnostic, (bounded_trace.clone(), bounded_prefix_bounds));
     validate_bfv_full_bootstrap_execution_prefix_trace_bounds_v1(
         &params,
         BfvFullBootstrapExecutionProofBoundModeV1::BoundedNoise,

@@ -348,7 +348,7 @@ pub(super) async fn create_and_publish(
     .with_genesis_instruction(Register::domain(Domain::new(domain)))
     .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
         asset.clone(),
-        "Publication reserve".into(),
+        "Publication reserve",
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )))

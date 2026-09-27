@@ -5,6 +5,7 @@
   "error.logger": "Nem sikerült inicializálni a naplózási rendszert",
   "error.start": "Iroha indítása sikertelen",
   "error.run": "Hiba történt az Iroha futtatása közben",
+  "error.check_storage": "A Kura (blokktárolás) nem felelt meg a csak olvasható tárolóellenőrzésnek",
   "error.start_p2p": "Nem lehet elindítani a peer-to-peer hálózatot",
   "error.init_kura": "Nem lehet inicializálni a Kura-t (blokktárolás)",
   "error.start_dev_telemetry": "A fejlesztői telemetria szolgáltatást nem sikerült elindítani",

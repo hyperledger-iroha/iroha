@@ -1,0 +1,10 @@
+[dataspace]
+name = "acme"
+network = "https://taira.sora.org"
+visibility = "restricted"
+owner_key = "~/.iroha/keys/acme-owner.key"
+account_alias = "treasury"
+max_fee = "20"
+
+[committee]
+source = "network"

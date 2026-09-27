@@ -1918,6 +1918,8 @@ mod tests {
                 sync: iroha_config::parameters::actual::StreamingSync::from_defaults(),
                 codec: iroha_config::parameters::actual::StreamingCodec::from_defaults(),
             },
+            data_dir: None,
+            lifecycle: iroha_config::parameters::actual::Lifecycle::default(),
         }
     }
     #[tokio::test]

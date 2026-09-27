@@ -2495,6 +2495,105 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     checkpoint.assert_called_once_with(None)
                 self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
+    @staticmethod
+    def pre_network_split(scope, shipping):
+        selected = gate.qualification_stages(scope)
+        early, _, _ = gate.native_harness_plan(selected, shipping)
+        priority_cli, deferred_cli = gate.partition_priority_stages(
+            selected["cli"], test_names=gate.PRIORITY_CLI_TESTS)
+        priority_torii, _ = gate.partition_priority_stages(
+            selected["torii-unit"], stage_labels=gate.PRIORITY_TORII_STAGE_LABELS)
+        pending = tuple(stage for stage in selected["core"]
+                        if stage in gate.CORE_PENDING_KURA_RECOVERY_STAGES)
+        independent = (("cli", selected["cli"]),) + early
+        prefix, deferred = gate.pre_network_partition(
+            independent, priority_cli=priority_cli, deferred_cli=deferred_cli,
+            priority_torii=priority_torii, pending_kura=pending)
+        return independent, prefix, deferred
+
+    def test_pre_network_partition_places_each_selected_independent_test_once(self):
+        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+
+        def rows(groups):
+            return [(name, test) for name, stages in groups for _, tests in stages for test in tests]
+
+        for scope in gate.QUALIFICATION_SCOPES:
+            with self.subTest(scope=scope):
+                independent, prefix, deferred = self.pre_network_split(scope, shipping)
+                first, later = rows(prefix), rows(deferred.items())
+                self.assertFalse(set(first) & set(later))
+                self.assertCountEqual(first + later, rows(independent))
+                self.assertEqual(list(deferred), [name for name, _ in independent])
+                self.assertEqual([name for name, _ in prefix],
+                                 [name for name, _ in independent if name in dict(prefix)])
+                for name in gate.MV_OWNERSHIP_HARNESSES:
+                    self.assertEqual(deferred[name], ())
+                    self.assertEqual(dict(prefix)[name], gate.qualification_stages(scope)[name])
+                for name, startup in (("core", gate.CORE_STARTUP_STAGES), ("daemon", gate.DAEMON_STARTUP_STAGES),
+                                      ("torii-unit", gate.TORII_STARTUP_STAGES)):
+                    self.assertFalse(any(stage in startup for stage in deferred[name]))
+                for test in gate.PRIORITY_CLI_TESTS:
+                    self.assertIn(("cli", test), first)
+                    self.assertNotIn(("cli", test), later)
+
+    def test_pre_network_partition_rejects_priority_torii_overlapping_startup(self):
+        startup = gate.TORII_STARTUP_STAGES[:1]
+        with self.assertRaisesRegex(gate.CheckError, "overlaps mandatory startup"):
+            gate.pre_network_partition((("torii-unit", startup),), priority_cli=(), deferred_cli=(),
+                                       priority_torii=startup, pending_kura=())
+
+    def test_exact_pre_network_checkpoint_skips_prefix_but_reruns_network_and_deferred_groups(self):
+        shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
+        for scope in gate.QUALIFICATION_SCOPES:
+            for reuse in (True, False):
+                copies, order, executed = self.copies(), [], []
+                _, prefix, deferred = self.pre_network_split(scope, shipping)
+                evidence = gate.independent_check_evidence(copies, prefix, qualification_scope=scope)
+                completed = evidence if reuse else dict(evidence, selected_tests=evidence["selected_tests"][1:])
+                complete = MagicMock(side_effect=lambda value: order.append(("complete", value is None)))
+                prefix_update = MagicMock(side_effect=lambda value: order.append(("prefix", value is None)))
+
+                def run(name, root, env, stages, locks, **_kwargs):
+                    executed.append((name, stages))
+
+                with self.subTest(scope=scope, reuse=reuse), \
+                     patch.object(gate, "shipping_harnesses", return_value=shipping), \
+                     patch.object(gate, "require_network_fixture_capacity"), \
+                     patch.object(gate, "run_lifecycle_source_checks"), \
+                     patch.object(gate, "compile_test_harnesses", return_value=copies), \
+                     patch.object(copies, "release", side_effect=lambda name: order.append(("release", name))), \
+                     patch.object(gate, "run_stages", side_effect=run), \
+                     patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs: order.append("network")), \
+                     contextlib.redirect_stdout(io.StringIO()) as output:
+                    gate.run_checks(Path("/frozen"), qualification_scope=scope,
+                                    environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
+                                    source_commit="a" * 40, update_independent_checks=complete,
+                                    completed_pre_network_checks=completed,
+                                    update_pre_network_checks=prefix_update)
+                later = [(name, stages) for name, stages in deferred.items() if stages]
+                network = order.index("network")
+                checkpoints = [row for row in order if row != "network" and row[0] != "release"]
+                if reuse:
+                    self.assertEqual(executed, [("config", gate.CONFIG_STAGES)] + later)
+                    self.assertEqual(checkpoints, [("complete", True), ("complete", False)])
+                    prefix_update.assert_not_called()
+                    self.assertIn("reused exact pre-network", output.getvalue())
+                else:
+                    self.assertEqual(executed[-len(later):], later)
+                    self.assertCountEqual(
+                        [(name, stage) for name, stages in executed[1:-len(later)] for stage in stages],
+                        [(name, stage) for name, stages in prefix for stage in stages])
+                    self.assertEqual(checkpoints, [("complete", True), ("prefix", True),
+                                                   ("prefix", False), ("complete", False)])
+                    self.assertEqual(prefix_update.call_args_list[1].args, (evidence,))
+                    self.assertLess(order.index(("prefix", False)), network)
+                self.assertGreater(order.index(("complete", False)), network)
+                self.assertEqual(complete.call_args_list[1].args[0]["passed"], True)
+                # Completed copies leave disk before shipping codegen; deferred copies stay frozen.
+                for name, stages in deferred.items():
+                    released = order.index(("release", name))
+                    self.assertEqual(released < network, not stages, name)
+
     def test_standalone_cli_selects_basic_by_default_and_forwards_explicit_full(self):
         import taira_release as release
         for arguments, scope in (([], "basic"), (["--native-check-scope", "full"], "full")):
@@ -3423,7 +3522,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                   'zk::zkparse::production_parameter_cache_tests::finite_production_cache_rejects_unadmitted_domains_without_construction',
                   'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_duplicate_and_mismatched_metadata',
                   'zk::halo2_ipa_parameter_source_tests::production_parameter_source_rejects_unbounded_k_before_construction',
-                  'zk::debug_backend_tests::halo2_ivm_execution_rejects_relabelled_demo_verifying_key',
+                  'zk::debug_backend_tests::halo2_ivm_replay_binding_rejects_relabelled_demo_verifying_key',
                   'sns::tests::registration_absence_is_distinct_from_policy_and_malformed_state'],
          'torii-unit': ['sns::tests::registration_absence_http_response_is_typed_and_other_not_found_is_not',
                         'openapi::tests::sns_name_absence_openapi_is_typed_and_selector_bound'],

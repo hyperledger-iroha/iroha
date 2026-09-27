@@ -223,6 +223,11 @@ fn resolve_private_key_source(
         }
     }
 }
+/// Read one canonical private key from a configured file.
+///
+/// Launchers that load a `data_dir` node check the custody of the fixed `<data_dir>/secrets/`
+/// key files before this parser runs (`irohad::node_secrets::verify_config_key_custody`). The
+/// encoded key is read into a zeroizing buffer.
 fn read_private_key_file(
     file: WithOrigin<PathBuf>,
     file_field: &'static str,
@@ -255,7 +260,7 @@ fn read_private_key_file(
             ));
         }
     }
-    let mut encoded = String::new();
+    let mut encoded = zeroize::Zeroizing::new(String::new());
     opened
         .take(MAX_PRIVATE_KEY_FILE_BYTES + 1)
         .read_to_string(&mut encoded)
@@ -845,8 +850,10 @@ pub struct Root {
     #[config(env = "PRIVATE_KEY_FILE")]
     private_key_file: Option<WithOrigin<PathBuf>>,
     /// Dedicated Ed25519 identity used only by the SoraNet transport handshake.
+    ///
+    /// When omitted, it is derived from the configured transport private key.
     #[config(env = "P2P_SORANET_TRANSPORT_PUBLIC_KEY")]
-    soranet_transport_public_key: WithOrigin<PublicKey>,
+    soranet_transport_public_key: Option<WithOrigin<PublicKey>>,
     /// Private half of the dedicated SoraNet transport identity.
     #[config(env = "P2P_SORANET_TRANSPORT_PRIVATE_KEY")]
     soranet_transport_private_key: Option<WithOrigin<PrivateKey>>,
@@ -943,6 +950,30 @@ pub struct Root {
     /// Node-local SCCP attestor and light-client keeper (`[sccp.*]`, file-only).
     #[config(nested)]
     sccp: SccpNode,
+    /// Node data directory: state paths default under `<data_dir>/state/` and secret files
+    /// under `<data_dir>/secrets/` (see [`defaults::data_dir`]).
+    ///
+    /// The derived defaults are completed by [`crate::node_config`] while the node file is
+    /// loaded; a reader that bypasses it is rejected during parsing.
+    data_dir: Option<WithOrigin<PathBuf>>,
+    /// Node process lifecycle settings.
+    #[config(nested)]
+    lifecycle: Lifecycle,
+}
+/// User-level node process lifecycle settings.
+#[derive(Debug, Clone, Copy, ReadConfig)]
+pub struct Lifecycle {
+    /// Exit when standard input reaches end-of-file. Only a supervising parent that holds the
+    /// other end of the pipe sets this.
+    #[config(default = "defaults::lifecycle::EXIT_ON_STDIN_CLOSE")]
+    pub exit_on_stdin_close: bool,
+}
+impl Lifecycle {
+    fn parse(self) -> actual::Lifecycle {
+        actual::Lifecycle {
+            exit_on_stdin_close: self.exit_on_stdin_close,
+        }
+    }
 }
 /// User-level enumeration translating `ParseError` settings.
 #[derive(thiserror::Error, Debug, Copy, Clone)]
@@ -950,6 +981,9 @@ pub enum ParseError {
     /// Key pair (public/private) values could not be combined into a valid key pair.
     #[error("Failed to construct the key pair")]
     BadKeyPair,
+    /// `data_dir` was not resolved by the node-file loader or is not absolute.
+    #[error("Invalid node data directory")]
+    InvalidDataDir,
     /// The dedicated SoraNet transport identity is not a matching Ed25519 key pair.
     #[error("Invalid dedicated SoraNet transport identity")]
     InvalidSoranetTransportIdentity,
@@ -1183,21 +1217,36 @@ impl Root {
         let soranet_transport_private_key_origin = soranet_transport_private_key
             .as_ref()
             .map(|(_, origin)| origin.clone());
-        let (soranet_transport_public_key, soranet_transport_public_key_origin) =
-            self.soranet_transport_public_key.into_tuple();
+        let configured_transport_public_key = self
+            .soranet_transport_public_key
+            .map(WithOrigin::into_tuple);
+        let soranet_transport_public_key_origin =
+            configured_transport_public_key.as_ref().map_or_else(
+                || {
+                    ParameterOrigin::custom(
+                        "derived from the SoraNet transport private key".to_owned(),
+                    )
+                },
+                |(_, origin)| origin.clone(),
+            );
         let soranet_transport_key_pair = soranet_transport_private_key.and_then(
             |(soranet_transport_private_key, soranet_transport_private_key_origin)| {
-                KeyPair::new(soranet_transport_public_key, soranet_transport_private_key)
-                    .attach(ConfigValueAndOrigin::new(
-                        "[REDACTED]",
-                        soranet_transport_public_key_origin.clone(),
-                    ))
-                    .attach(ConfigValueAndOrigin::new(
-                        "[REDACTED]",
-                        soranet_transport_private_key_origin.clone(),
-                    ))
-                    .change_context(ParseError::InvalidSoranetTransportIdentity)
-                    .ok_or_emit(&mut emitter)
+                match configured_transport_public_key {
+                    Some((public_key, _)) => {
+                        KeyPair::new(public_key, soranet_transport_private_key)
+                    }
+                    None => KeyPair::from_private_key(soranet_transport_private_key),
+                }
+                .attach(ConfigValueAndOrigin::new(
+                    "[REDACTED]",
+                    soranet_transport_public_key_origin.clone(),
+                ))
+                .attach(ConfigValueAndOrigin::new(
+                    "[REDACTED]",
+                    soranet_transport_private_key_origin.clone(),
+                ))
+                .change_context(ParseError::InvalidSoranetTransportIdentity)
+                .ok_or_emit(&mut emitter)
             },
         );
         if let Some(key_pair) = soranet_transport_key_pair.as_ref()
@@ -1244,6 +1293,7 @@ impl Root {
             trusted
         });
         let genesis = self.genesis.parse(&mut emitter);
+        let data_dir = Self::parse_data_dir(self.data_dir, &mut emitter);
         let kura = self.kura.parse(&mut emitter);
         let sccp = self.sccp.parse(&kura.store_dir, &mut emitter);
         let logger = self.logger;
@@ -1536,9 +1586,53 @@ impl Root {
             settlement,
             confidential,
             sccp,
+            data_dir,
+            lifecycle: self.lifecycle.parse(),
         };
         root.apply_storage_budget();
         Ok(root)
+    }
+    /// Resolve `data_dir` and require that its derived layout was completed by the loader.
+    ///
+    /// [`crate::node_config`] writes the resolved absolute `data_dir` to its own source
+    /// ([`defaults::data_dir::LAYOUT_SOURCE`]) together with every derived state and secret path.
+    /// A `data_dir` from any other source means the configuration was read without that loader
+    /// and would silently ignore `data_dir`, so it is rejected.
+    fn parse_data_dir(
+        data_dir: Option<WithOrigin<PathBuf>>,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<actual::DataDir> {
+        let data_dir = data_dir?;
+        let completed = matches!(
+            data_dir.origin(),
+            ParameterOrigin::File { path, .. }
+                if path.as_path() == Path::new(defaults::data_dir::LAYOUT_SOURCE)
+        );
+        if !completed {
+            emitter.emit(
+                Report::new(ParseError::InvalidDataDir)
+                    .attach(
+                        "data_dir is set but its derived state and secret paths were not \
+                         completed; load the node file with iroha_config::node_config",
+                    )
+                    .attach(ConfigValueAndOrigin::new(
+                        data_dir.value().display().to_string(),
+                        data_dir.origin().clone(),
+                    )),
+            );
+            return None;
+        }
+        let (root, origin) = data_dir.into_tuple();
+        if !root.is_absolute() {
+            emitter.emit(Report::new(ParseError::InvalidDataDir).attach(
+                ConfigValueAndOrigin::new(
+                    format!("data_dir `{}` must be absolute", root.display()),
+                    origin,
+                ),
+            ));
+            return None;
+        }
+        Some(actual::DataDir::new(root))
     }
 }
 /// Telemetry capability bundles selectable by configuration.
@@ -6670,6 +6764,18 @@ impl Sumeragi {
         Ok((records_dir, installation_log))
     }
 
+    /// Parse this section on its own, as profile geometry validation does.
+    ///
+    /// The safety-record paths are resolved against the default `kura.store_dir`; geometry
+    /// validation never reads them.
+    pub(crate) fn parse_section(self) -> Result<actual::Sumeragi, ParseError> {
+        let mut emitter = Emitter::new();
+        let kura_store_dir = WithOrigin::inline(PathBuf::from(defaults::kura::STORE_DIR));
+        let parsed = self.parse(&mut emitter, &kura_store_dir);
+        emitter.into_result()?;
+        Ok(parsed.expect("a Sumeragi section without errors parses"))
+    }
+
     fn parse(
         self,
         emitter: &mut Emitter<ParseError>,
@@ -9595,15 +9701,28 @@ impl Streaming {
                 );
                 None
             }
-            (None, true, Some((_, origin))) => {
-                emitter.emit(
-                    Report::new(ParseError::InvalidStreamingConfig)
-                        .attach(
-                            "streaming.identity_public_key must be provided when a streaming private-key source is set",
-                        )
-                        .attach(ConfigValueAndOrigin::new("[REDACTED]", origin)),
-                );
-                None
+            (None, true, Some((priv_key, priv_origin))) => {
+                // The public half is derived from the private key when only the private
+                // source is configured (for example the fixed `<data_dir>/secrets` file).
+                if priv_key.algorithm() != iroha_crypto::Algorithm::Ed25519 {
+                    emitter.emit(
+                        Report::new(ParseError::InvalidStreamingConfig)
+                            .attach("streaming.identity_private_key must be Ed25519")
+                            .attach(ConfigValueAndOrigin::new("[REDACTED]", priv_origin)),
+                    );
+                    return None;
+                }
+                match iroha_crypto::KeyPair::from_private_key(priv_key) {
+                    Ok(pair) => Some(pair),
+                    Err(err) => {
+                        emitter.emit(
+                            Report::new(ParseError::InvalidStreamingConfig)
+                                .attach(format!("failed to derive streaming key pair: {err}"))
+                                .attach(ConfigValueAndOrigin::new("[REDACTED]", priv_origin)),
+                        );
+                        None
+                    }
+                }
             }
             (Some(_) | None, true, None) => None,
             (None, false, None) => Some(identity.clone()),
@@ -18748,7 +18867,7 @@ impl AccountOnboarding {
             return None;
         }
         let encoded = match fs::read_to_string(path) {
-            Ok(encoded) => encoded,
+            Ok(encoded) => zeroize::Zeroizing::new(encoded),
             Err(err) => {
                 emit_torii_config_error(
                     emitter,
@@ -19388,7 +19507,7 @@ impl ToriiFaucet {
             return None;
         }
         let encoded = match fs::read_to_string(path) {
-            Ok(encoded) => encoded,
+            Ok(encoded) => zeroize::Zeroizing::new(encoded),
             Err(err) => {
                 emit_torii_config_error(
                     emitter,
@@ -19554,6 +19673,13 @@ impl ToriiFaucet {
 #[derive(Debug, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct ToriiKagemushaV1Commands {
+    /// Optional public binding of the redemption issuer: the canonical single-signature account
+    /// the redemption private key must sign for.
+    ///
+    /// It belongs to the redemption group and requires a redemption key. A compiled-profile node
+    /// file sets it to bind the profile's KAGEMUSHA V1 commands template; the key then comes from
+    /// `<data_dir>/secrets/authority/kagemusha_redemption.key`.
+    pub redemption_authority: Option<String>,
     /// Optional private key for the account submitting redemption instructions.
     pub redemption_private_key: Option<PrivateKey>,
     /// Optional owner-held file containing the KAGEMUSHA V1 redemption issuer's private key.
@@ -19569,14 +19695,54 @@ pub struct ToriiKagemushaV1Commands {
     pub operation_registry_max_bytes: usize,
 }
 impl ToriiKagemushaV1Commands {
+    /// Parse `redemption_authority` as a canonical single-signature account literal.
+    fn parse_redemption_authority(
+        raw: &str,
+        emitter: &mut Emitter<ParseError>,
+    ) -> Option<AccountId> {
+        let parsed = match AccountId::parse_encoded(raw) {
+            Ok(account_id) => account_id,
+            Err(err) => {
+                emit_torii_config_error(
+                    emitter,
+                    format!(
+                        "torii.kagemusha_v1_commands.redemption_authority must be a canonical domainless AccountId: {err}"
+                    ),
+                );
+                return None;
+            }
+        };
+        if raw != parsed.to_string() {
+            emit_torii_config_error(
+                emitter,
+                format!(
+                    "torii.kagemusha_v1_commands.redemption_authority must use canonical form `{parsed}`"
+                ),
+            );
+            return None;
+        }
+        if parsed.try_signatory().is_none() {
+            emit_torii_config_error(
+                emitter,
+                "torii.kagemusha_v1_commands.redemption_authority must be a single-signature AccountId",
+            );
+            return None;
+        }
+        Some(parsed)
+    }
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::ToriiKagemushaV1Commands> {
         let Self {
+            redemption_authority,
             redemption_private_key,
             redemption_private_key_file,
             redemption_minimum_xor_balance,
             operation_registry_max_entries,
             operation_registry_max_bytes,
         } = self;
+        let redemption_authority = match redemption_authority {
+            Some(raw) => Some(Self::parse_redemption_authority(&raw, emitter)?),
+            None => None,
+        };
         let redemption_private_key = match (redemption_private_key, redemption_private_key_file) {
             (Some(_), Some(_)) => {
                 emit_torii_config_error(
@@ -19637,6 +19803,25 @@ impl ToriiKagemushaV1Commands {
             Some(Err(())) => return None,
             None => None,
         };
+        match (&redemption_authority, &key_pair) {
+            (Some(_), None) => {
+                emit_torii_config_error(
+                    emitter,
+                    "torii.kagemusha_v1_commands.redemption_authority requires a redemption private key",
+                );
+                return None;
+            }
+            (Some(authority), Some(key_pair))
+                if authority.try_signatory() != Some(key_pair.public_key()) =>
+            {
+                emit_torii_config_error(
+                    emitter,
+                    "the KAGEMUSHA V1 redemption private key does not sign for torii.kagemusha_v1_commands.redemption_authority",
+                );
+                return None;
+            }
+            _ => {}
+        }
         let redemption_issuer = match (key_pair, redemption_minimum_xor_balance) {
             (Some(key_pair), Some(redemption_minimum_xor_balance))
                 if !redemption_minimum_xor_balance.is_zero() =>

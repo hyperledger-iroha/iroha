@@ -41,12 +41,14 @@ that separate diagnostic graph never qualifies a release.
 After mandatory startup checks, both scopes run the exact reset-scope CLI test
 and canonical outcome, transaction-details and prepared-account admission Torii
 groups from the completed native graph. They collect failures before the
-production shipping build. The four-peer network fixture then runs
+production shipping build; preparation records this exact passed prefix in its
+pre-network checkpoint. The four-peer network fixture then runs
 before the remaining independent tests, so an unusable fresh testnet fails
-before the long regression census.
+before the long regression census. The complete independent checkpoint is
+published only after that fixture and the deferred census pass.
 The required shipping codegen checks every authoritative binary and rejects
 Core/Torii fixture features from its own Cargo artifact stream, including when
-an independent checkpoint is reused. Network execution remains required.
+either checkpoint is reused. Network execution remains required.
 Full additionally executes advanced Core recovery and proof-production matrices.
 Both scopes require strict runtime catalog readback codecs and the lifecycle HTTP
 endpoint, compiled in the same native graph; no runtime security policy is relaxed.
@@ -4432,7 +4434,12 @@ def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int,
 
 def independent_check_evidence(harnesses: NativeArtifactCopies, stages, *,
                                qualification_scope: str = "basic") -> dict[str, object]:
-    """Bind a complete independent pass to its exact census and copied Cargo artifacts."""
+    """Bind a passed independent census to its exact tests and copied Cargo artifacts.
+
+    The same record shape attests the pre-network prefix and the complete
+    independent census; each is reusable only when it equals the census the
+    current run requires, so neither can stand in for the other.
+    """
     qualification_stages(qualification_scope)
     artifacts = {row["selection"]: row for row in harnesses.observations}
     selections = [name for name, _ in stages]
@@ -4728,22 +4735,56 @@ def partition_priority_stages(stages, *, test_names=(), stage_labels=(),
     return tuple(priority), tuple(deferred)
 
 
+def pre_network_partition(independent_stages, *, priority_cli, deferred_cli,
+                          priority_torii, pending_kura):
+    """Split the complete independent census at the four-peer fixture.
+
+    MV ownership, pending-Kura recovery, startup and priority groups form the
+    pre-network prefix; every other selected test is deferred until after the
+    network fixture. Each test belongs to exactly one side.
+    """
+    startup = {"core": CORE_STARTUP_STAGES + pending_kura, "daemon": DAEMON_STARTUP_STAGES,
+               "torii-unit": TORII_STARTUP_STAGES}
+    if any(stage in startup["torii-unit"] for stage in priority_torii):
+        raise CheckError("priority Torii stage overlaps mandatory startup checks")
+    prefix, deferred = [], {}
+    for name, stages in independent_stages:
+        if name == "cli":
+            first, later = priority_cli, deferred_cli
+        elif name in MV_OWNERSHIP_HARNESSES:
+            first, later = stages, ()
+        else:
+            early = startup.get(name, ()) + (priority_torii if name == "torii-unit" else ())
+            first = tuple(stage for stage in stages if stage in early)
+            later = tuple(stage for stage in stages if stage not in early)
+        if first:
+            prefix.append((name, first))
+        deferred[name] = later
+    return tuple(prefix), deferred
+
+
 def run_checks(root: Path, *, qualification_scope: str = "basic",
                environment: dict[str, str] | None = None,
                source_commit: str | None = None, lock_fds: tuple[int, ...] = (),
                completed_independent_checks: dict[str, object] | None = None,
-               update_independent_checks=None) -> None:
-    """Run the gate; preparation alone may supply its exact-request checkpoint.
+               update_independent_checks=None,
+               completed_pre_network_checks: dict[str, object] | None = None,
+               update_pre_network_checks=None) -> None:
+    """Run the gate; preparation alone may supply its exact-request checkpoints.
 
-    The callback receives None before rerunning independent tests, then complete
-    evidence after every selected independent test passed. A network failure
-    never publishes scope success. Neither scope permits skipping a selected test.
+    The pre-network checkpoint binds the MV ownership, startup and priority
+    prefix that passes before the four-peer fixture. The complete checkpoint
+    binds every selected independent test after the fixture and the deferred
+    groups pass. Each callback receives None before its tests rerun, then exact
+    evidence after they pass. The network fixture always reruns, and a network
+    failure never publishes complete success. Neither scope permits skipping a
+    selected test.
     """
     scoped_stages = qualification_stages(qualification_scope)
     priority_cli, deferred_cli = partition_priority_stages(
         scoped_stages["cli"], test_names=PRIORITY_CLI_TESTS,
         whole_census_if_absent=True)
-    priority_torii, deferred_torii = partition_priority_stages(
+    priority_torii, _ = partition_priority_stages(
         scoped_stages["torii-unit"], stage_labels=PRIORITY_TORII_STAGE_LABELS,
         whole_census_if_absent=True)
     if sys.platform not in {"darwin", "linux"}:
@@ -4795,48 +4836,58 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                                     harnesses=selections) as harnesses:
             for name in compile_only:
                 harnesses.release(name)
-            # Always rerun configuration, including exact independent-pass reuse.
+            # Always rerun configuration, including exact checkpoint reuse.
             # A schema failure propagates immediately and releases the whole batch.
             run_config_checks(harnesses, fixture_root, env, lock_fds)
-            failures = []
             independent_stages = ((("cli", STAGES),) if STAGES else ()) + early_stages
+            # Startup fixtures are part of the same canonical census, but execute
+            # before CLI and long consensus/proof groups. Retain each immutable copy
+            # until its remaining stages finish; no test runs twice or gains a skip flag.
+            pending_kura = tuple(stage for stage in scoped_stages["core"]
+                                 if stage in CORE_PENDING_KURA_RECOVERY_STAGES)
+            prefix_stages, deferred_stages = pre_network_partition(
+                independent_stages, priority_cli=priority_cli, deferred_cli=deferred_cli,
+                priority_torii=priority_torii, pending_kura=pending_kura)
+            prefix = dict(prefix_stages)
             checkpoint_enabled = update_independent_checks is not None
             evidence = independent_check_evidence(harnesses, independent_stages,
                                                   qualification_scope=qualification_scope) if checkpoint_enabled else None
             reuse_independent = checkpoint_enabled and completed_independent_checks == evidence
+            prefix_checkpoint_enabled = update_pre_network_checks is not None and not reuse_independent
+            prefix_evidence = independent_check_evidence(
+                harnesses, prefix_stages,
+                qualification_scope=qualification_scope) if prefix_checkpoint_enabled else None
+            reuse_prefix = reuse_independent or (
+                prefix_checkpoint_enabled and completed_pre_network_checks == prefix_evidence)
             if reuse_independent:
                 print("[taira-check] reused exact independent test census and artifact pass", flush=True)
-            elif update_independent_checks is not None:
+            elif checkpoint_enabled:
                 # Retire a mismatched old pass before a failed rerun could leave
                 # it available to a later attempt whose artifacts happen to match.
                 update_independent_checks(None)
-            # Startup fixtures are part of the same canonical census/checkpoint, but
-            # execute before CLI and long consensus/proof groups. Retain each immutable copy
-            # until its remaining stages finish; no test runs twice or gains a skip flag.
-            startup = {"core": CORE_STARTUP_STAGES, "daemon": DAEMON_STARTUP_STAGES, "torii-unit": TORII_STARTUP_STAGES}
-            if any(stage in startup["torii-unit"] for stage in priority_torii):
-                raise CheckError("priority Torii stage overlaps mandatory startup checks")
-            pending_kura = tuple(stage for stage in scoped_stages["core"]
-                                 if stage in CORE_PENDING_KURA_RECOVERY_STAGES)
-            preflight = tuple((name, tuple(stage for stage in stages
-                                          if stage in startup.get(name, ())
-                                          and not (name == "core" and stage in pending_kura)))
-                              for name, stages in early_stages)
-            if not reuse_independent:
+            if reuse_prefix and not reuse_independent:
+                print("[taira-check] reused exact pre-network test census and artifact pass", flush=True)
+            elif prefix_checkpoint_enabled:
+                update_pre_network_checks(None)
+            if not reuse_prefix:
                 # These exact immutable copies belong to the same complete Cargo
-                # graph and checkpoint. Refuse before Core runtime work; this
+                # graph and checkpoints. Refuse before Core runtime work; this
                 # does not claim to run before Core harness compilation.
                 for name in MV_OWNERSHIP_HARNESSES:
-                    if scoped_stages[name]:
-                        run_stages(harnesses[name], fixture_root, env,
-                                   scoped_stages[name], lock_fds)
+                    if prefix.get(name):
+                        run_stages(harnesses[name], fixture_root, env, prefix[name], lock_fds)
                 # Actual post-Kura recovery is a prerequisite for every later
                 # stage. Keep the shared Cargo graph and exact checkpoint census,
                 # but do not bury a publication failure among other startup cases.
                 if pending_kura:
                     run_stages(harnesses["core"], fixture_root, env, pending_kura, lock_fds)
                 startup_failures = []
-                for name, stages in preflight:
+                for name, _ in early_stages:
+                    # MV ownership and pending-Kura ran above; priority Torii
+                    # runs with the priority CLI group below.
+                    separate = {"core": pending_kura, "torii-unit": priority_torii}.get(name, ())
+                    stages = () if name in MV_OWNERSHIP_HARNESSES else tuple(
+                        stage for stage in prefix.get(name, ()) if stage not in separate)
                     if stages:
                         try:
                             run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
@@ -4846,10 +4897,9 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 # when a restart's mandatory storage or policy boundary already failed.
                 if startup_failures:
                     raise SelectedRegressionFailures(startup_failures)
-            if not reuse_independent:
-                # Exact checkpoint reuse skips both priority groups. Otherwise,
-                # expose common deployment blockers before shipping metadata;
-                # aggregate both harnesses to report both root causes at once.
+                # Expose common deployment blockers before shipping codegen and the
+                # four-peer fixture; aggregate both harnesses to report both causes.
+                priority_failures = []
                 for name, stages in (("cli", priority_cli), ("torii-unit", priority_torii)):
                     if not stages:
                         continue
@@ -4860,9 +4910,19 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                         else:
                             run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
                     except SelectedRegressionFailures as error:
-                        failures.extend(error.failures)
-                if failures:
-                    raise SelectedRegressionFailures(failures)
+                        priority_failures.extend(error.failures)
+                if priority_failures:
+                    raise SelectedRegressionFailures(priority_failures)
+                if prefix_checkpoint_enabled:
+                    # A later shipping, capacity or network failure retries from
+                    # here without repeating this exact passed prefix.
+                    update_pre_network_checks(prefix_evidence)
+            # Copies with no deferred stage are complete (or covered by the exact
+            # checkpoint). Release them before shipping codegen and the four-peer
+            # fixture need their disk reserve; deferred copies stay frozen.
+            for name, _ in independent_stages:
+                if not deferred_stages[name]:
+                    harnesses.release(name)
             # The mandatory network fixture's normal shipping build separately
             # checks production codegen and Core/Torii features. Its Cargo JSON
             # artifacts are audited before any peer starts, including on reuse.
@@ -4875,30 +4935,26 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                 run_network_checks(root, fixture_root, env, lock_fds,
                                    harness=harnesses["network"], stages=scoped_stages["network"])
                 harnesses.release("network")
-            if STAGES:
+            failures = []
+            for name, _ in independent_stages:
+                remaining = deferred_stages[name]
+                if not remaining:
+                    continue
+                # Exact complete reuse runs no deferred group, but still
+                # verifies and releases each retained copy.
                 if not reuse_independent:
                     try:
-                        if deferred_cli:
-                            run_stages(harnesses["cli"], fixture_root, env, deferred_cli,
+                        if name == "cli":
+                            run_stages(harnesses[name], fixture_root, env, remaining,
                                        lock_fds, batch=True)
-                    except SelectedRegressionFailures as error:
-                        failures.extend(error.failures)
-                harnesses.release("cli")
-            for name, stages in early_stages:
-                # Ownership stages already passed above (or share the exact
-                # reused checkpoint). Release their copies here, without a second run.
-                selected_stages = deferred_torii if name == "torii-unit" else stages
-                remaining = () if name in MV_OWNERSHIP_HARNESSES else tuple(
-                    stage for stage in selected_stages if stage not in startup.get(name, ()))
-                if not reuse_independent and remaining:
-                    try:
-                        run_stages(harnesses[name], fixture_root, env, remaining, lock_fds)
+                        else:
+                            run_stages(harnesses[name], fixture_root, env, remaining, lock_fds)
                     except SelectedRegressionFailures as error:
                         failures.extend(error.failures)
                 harnesses.release(name)
             if failures:
                 raise SelectedRegressionFailures(failures)
-            if not reuse_independent and update_independent_checks is not None:
+            if not reuse_independent and checkpoint_enabled:
                 update_independent_checks(evidence)
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:

@@ -88,10 +88,14 @@ class LifecycleRegistrationTests(unittest.TestCase):
 
     def test_registration_failure_stops_before_source_subprocesses_or_rustc(self):
         self.replace('Cargo.toml', 'name = "torii_nexus_sorafs"', 'name = "removed_target"')
-        with patch.object(gate.subprocess, 'run') as child, \
+        # This fixture carries only the Torii package; MV registration has its
+        # own real-source coverage and runs first in the same lexical phase.
+        with patch.object(gate, 'validate_mv_test_registration') as mv, \
+             patch.object(gate.subprocess, 'run') as child, \
              patch.object(gate, '_run_standalone_checks') as rust, \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, 'explicitly registered once'):
                 gate.run_lifecycle_source_checks(self.root, {}, ())
+        mv.assert_called_once_with(self.root)
         child.assert_not_called()
         rust.assert_not_called()

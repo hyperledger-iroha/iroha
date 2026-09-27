@@ -748,6 +748,12 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.liveness.queues.count, 1)
         XCTAssertEqual(decoded.liveness.queues.first?.queue, .effectDispatch)
         XCTAssertEqual(decoded.liveness.blocker, .localControlPending)
+        let horizon = try XCTUnwrap(decoded.beaconHorizon)
+        XCTAssertEqual(horizon.epochLengthBlocks, 100)
+        XCTAssertEqual(horizon.nextRequiredPulseHeight, 99)
+        XCTAssertEqual(horizon.activeSessionID?.bytes, Data(repeating: 0x5B, count: 32))
+        XCTAssertTrue(horizon.sessionCoversNextPulse)
+        XCTAssertFalse(horizon.localProviderReady)
 
         // The fifth struct field follows four fixed-width fields and is the
         // canonical one-byte `restart_required` boolean.

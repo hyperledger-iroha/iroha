@@ -5,6 +5,7 @@
   "error.logger": "Ora bisa nginisialisasi sistem log",
   "error.start": "Ora bisa miwiti Iroha",
   "error.run": "Kesalahan kelakon nalika mbukak Iroha",
+  "error.check_storage": "Kura (panyimpenan blok) gagal ing pamriksan panyimpenan mung-maca",
   "error.start_p2p": "Ora bisa miwiti jaringan P2P",
   "error.init_kura": "Ora bisa nginisialisasi Kura (panyimpenan blok)",
   "error.start_dev_telemetry": "Ora bisa miwiti layanan telemetri pangembang",

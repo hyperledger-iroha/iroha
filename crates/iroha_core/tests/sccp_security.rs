@@ -73,7 +73,7 @@ fn staged_tron_route() -> SccpGovernedRouteV1 {
     };
     let lane = tron_lane();
     route.lane_id = lane;
-    route.route_id = iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.to_owned();
+    iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.clone_into(&mut route.route_id);
     route.destination = SccpDestinationDeploymentV1::Tron(deployment);
     let route_config_hash = route
         .destination

@@ -19,10 +19,11 @@ final class KagemushaTestnetValueAdmissionV1Tests: XCTestCase {
   }
 
   func testUnavailableOwnerAndNativeRejectionStayDistinct() {
-    for (status, expected) in [
-      (-312, KagemushaTestnetValueAdmissionErrorV1.ownerUnavailable),
-      (-311, KagemushaTestnetValueAdmissionErrorV1.nativeRejected(-311)),
-    ] {
+    let cases: [(Int32, KagemushaTestnetValueAdmissionErrorV1)] = [
+      (-312, .ownerUnavailable),
+      (-311, .nativeRejected(-311)),
+    ]
+    for (status, expected) in cases {
       let endpoint = Endpoint(status: status, archive: archive())
       XCTAssertThrowsError(try KagemushaTestnetValueAdmissionBridgeV1.admit(
         operationID: operationID, endpoint: endpoint)) { error in

@@ -5,6 +5,7 @@
   "error.logger": "Lokitusjärjestelmää ei voitu alustaa",
   "error.start": "Irohan käynnistäminen epäonnistui",
   "error.run": "Virhe suoritettaessa Irohaa",
+  "error.check_storage": "Kura (lohkotallennus) ei läpäissyt vain luku -tallennustarkistusta",
   "error.start_p2p": "Vertaisverkkoa ei voida käynnistää",
   "error.init_kura": "KURAa ei voida alustaa (lohkotallennus)",
   "error.start_dev_telemetry": "Kehittäjien telemetriapalvelua ei voitu käynnistää",

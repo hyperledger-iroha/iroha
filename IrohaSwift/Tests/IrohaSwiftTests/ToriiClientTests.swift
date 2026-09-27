@@ -15789,6 +15789,26 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         }
 
         XCTAssertNil(try decode(base).mergeCarrier)
+        XCTAssertNil(try decode(base).transactionInputCommitment)
+        func withTransactionTrees(_ inputs: UInt64?, _ outputs: UInt64?) -> [String: Any] {
+            var value = base
+            value["transaction_input_commitment"] = inputs.map {
+                ["root": nativeAmxTestHash(0xCB), "leaf_count": $0] as [String: Any]
+            } ?? NSNull()
+            value["transaction_output_commitment"] = outputs.map {
+                ["root": nativeAmxTestHash(0xCD), "leaf_count": $0] as [String: Any]
+            } ?? NSNull()
+            return value
+        }
+        let trees = try decode(withTransactionTrees(2, 3))
+        XCTAssertEqual(trees.transactionInputCommitment?.leafCount, 2)
+        XCTAssertEqual(trees.transactionOutputCommitment?.root, nativeAmxTestHash(0xCD))
+        for (inputs, outputs) in [(UInt64(2), UInt64?(1)), (1, nil), (0, 1)] {
+            XCTAssertThrowsError(try decode(withTransactionTrees(inputs, outputs)))
+        }
+        var missingTree = base
+        missingTree.removeValue(forKey: "transaction_output_commitment")
+        XCTAssertThrowsError(try decode(missingTree))
         XCTAssertEqual(try decode(base).executedBlockWireLen, 123)
         var carried = base
         carried["merge_carrier"] = [

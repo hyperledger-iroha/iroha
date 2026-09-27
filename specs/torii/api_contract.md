@@ -424,6 +424,17 @@ with code `route_unavailable`; generic, malformed, or selector-mismatched
 status must also bind the exact hash and requested scope. Cache and queue
 observations are progress hints, not proof of Applied execution.
 
+`GET /v1/bridge/finality/attestation/latest` returns the same challenge-bound
+statement for whichever height is the durable tip of the immutable state view
+that builds the proof; it shares the `{height}` form's rate-limit bucket and
+failure contract, and its failures bind the height that view selected (at
+least 1; before consensus starts, the status tip or genesis). The
+signed `status` carries `beacon_horizon` (`epoch_length_blocks`,
+`next_required_pulse_height`, `active_session_id`, `session_covers_next_pulse`,
+`local_provider_ready`), or `null` before serialized height activation has
+published it, so operators can bound restarts against the next mandatory
+beacon pulse over public routes.
+
 `GET /v1/bridge/finality/attestation/{height}` uses one negotiated JSON or
 canonical Norito `ErrorEnvelope` with code `bridge_finality_attestation_failure`
 and the sole detail `finality_attestation_failure`. Its closed

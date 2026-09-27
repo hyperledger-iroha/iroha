@@ -5,6 +5,7 @@
   "error.logger": "Günlük sistemi başlatılamadı",
   "error.start": "Iroha başlatılamadı",
   "error.run": "Iroha çalıştırılırken hata oluştu",
+  "error.check_storage": "Kura (blok depolama) salt okunur depolama denetiminden geçemedi",
   "error.start_p2p": "Eşler arası ağ başlatılamıyor",
   "error.init_kura": "Kura başlatılamıyor (blok depolama)",
   "error.start_dev_telemetry": "Geliştirici telemetri hizmeti başlatılamadı",

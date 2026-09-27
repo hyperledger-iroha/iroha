@@ -5,6 +5,7 @@
   "error.logger": "Det gick inte att initiera loggningssystemet",
   "error.start": "Det gick inte att starta Iroha",
   "error.run": "Ett fel uppstod vid körning av Iroha",
+  "error.check_storage": "Kura (blocklagring) klarade inte den skrivskyddade lagringskontrollen",
   "error.start_p2p": "Kan inte starta peer-to-peer-nätverk",
   "error.init_kura": "Det går inte att initiera Kura (blocklagring)",
   "error.start_dev_telemetry": "Kan inte starta telemetritjänsten för utveckling",

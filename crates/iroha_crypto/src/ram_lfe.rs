@@ -475,6 +475,7 @@ pub enum RamLfeError {
     #[error("phone nullifier secret must be at least 32 bytes")]
     WeakPhoneNullifierSecret,
 }
+
 /// Derive a stable, non-enumerable retail-phone nullifier after canonicalization.
 ///
 /// The attestor must retain the same secret for the lifetime of the pinned policy.
@@ -485,8 +486,11 @@ pub enum RamLfeError {
 /// pins its decryption key and nullifier secret for the policy lifetime.
 ///
 /// # Errors
-/// Returns an error for a noncanonical phone, a secret shorter than 32 bytes,
-/// or an HKDF expansion failure.
+///
+/// Returns [`RamLfeError::NonCanonicalPhone`] unless `canonical_phone` is exact
+/// E.164 (`+`, a nonzero leading digit, 2..=15 digits in total),
+/// [`RamLfeError::WeakPhoneNullifierSecret`] when `secret` is shorter than 32
+/// bytes, and [`RamLfeError::DerivationFailed`] if HKDF expansion fails.
 pub fn derive_phone_retail_nullifier_v1(
     secret: &[u8],
     network_id: &[u8; Hash::LENGTH],
@@ -511,13 +515,16 @@ pub fn derive_phone_retail_nullifier_v1(
         .map_err(|_| RamLfeError::DerivationFailed)?;
     Ok(Hash::prehashed(*material))
 }
+
 /// Decrypt a BFV input at the trusted attestor boundary and derive its phone
 /// nullifier only if the encrypted plaintext itself is exact canonical E.164.
 /// The plaintext remains local to the attestor and is never a ledger field.
 ///
 /// # Errors
-/// Returns an error if BFV decryption fails, the plaintext is not canonical E.164,
-/// the nullifier secret is shorter than 32 bytes, or HKDF expansion fails.
+///
+/// Returns [`RamLfeError::Bfv`] when decryption fails,
+/// [`RamLfeError::NonCanonicalPhone`] when the plaintext is not UTF-8 canonical
+/// E.164, and any error of [`derive_phone_retail_nullifier_v1`].
 pub fn derive_phone_retail_nullifier_from_ciphertext_v1(
     public_parameters: &BfvIdentifierPublicParameters,
     secret_key: &BfvSecretKey,
@@ -532,6 +539,7 @@ pub fn derive_phone_retail_nullifier_from_ciphertext_v1(
     let phone = std::str::from_utf8(&plaintext).map_err(|_| RamLfeError::NonCanonicalPhone)?;
     derive_phone_retail_nullifier_v1(nullifier_secret, network_id, phone)
 }
+
 #[cfg(test)]
 mod phone_retail_nullifier_tests {
     use super::*;

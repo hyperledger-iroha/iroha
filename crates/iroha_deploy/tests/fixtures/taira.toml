@@ -1,0 +1,66 @@
+# Taira-shaped network definition (spec §3.4) with generated, structurally valid host keys.
+[network]
+name = "taira"
+profile = "sora-nexus-v1"
+chain_id = "fc56984b-2be7-431d-840e-21514d1883f0"
+chain_discriminant = 369
+public_root = "https://taira.sora.org"
+admin_key = "~/.iroha/keys/taira-admin.key"
+
+[ssh]
+identity = "~/.ssh/taira_deploy_ed25519.pub"   # held in ssh-agent (agent = true by default)
+user = "root"
+
+[inrou]
+enabled = true           # Inrou on for public Taira validators
+
+[faucet]
+enabled = true
+
+[[onboarding.credential]]
+id = "inori-app"
+scope = "universal"
+
+[edge]
+host = "taira-edge.sora.org"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAII/Qy9iUV0qtyLY+1eFlrL4Of4FHwMdxxqCRC51i2K6L"
+domain = "taira.sora.org"
+tls_certificate = "/etc/letsencrypt/live/taira.sora.org/fullchain.pem"
+tls_private_key = "/etc/letsencrypt/live/taira.sora.org/privkey.pem"
+cors_origins = ["https://taira-explorer.sora.org", "https://explorer.sora.org"]
+per_node_domains = true
+explorer_domain = "taira-explorer.sora.org"
+explorer_root = "/var/www/taira-explorer"
+
+[monitor]
+webhook_file = "~/.iroha/secrets/taira-webhook.url"
+
+# Dataspace registration rights (exact set).
+# `iroha dataspace plan` prints the exact line for an owner to send here.
+# [[grant]]
+# account = "<owner account id>"
+# permission = "CanRegisterDataspace"
+
+[[node]]
+name = "v1"
+host = "taira-v1.sora.org"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJx61jSMsPGwubMm7CiE1KkCd7Awvkl/Cgr7EvdSzhH9"
+domain = "taira-validator-1.sora.org"
+
+[[node]]
+name = "v2"
+host = "taira-v2.sora.org"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJVyAKJzTpzSN4LdGL1E0Id05Hlk1bO6i4pflYC0csl5"
+domain = "taira-validator-2.sora.org"
+
+[[node]]
+name = "v3"
+host = "taira-v3.sora.org"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEoQXPl4+7bLqedCuGjcOtPBl7EOfF4S3ayBg+gw4O+x"
+domain = "taira-validator-3.sora.org"
+
+[[node]]
+name = "v4"
+host = "taira-v4.sora.org"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIGFS0A0UonCmwO/c2Il8nuW0Glh8aPdagsGzVght7JR"
+domain = "taira-validator-4.sora.org"

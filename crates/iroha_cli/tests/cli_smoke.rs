@@ -4035,7 +4035,8 @@ fn sumeragi_summary_commands_against_torii_mock() {
                     "no_progress_age_ms": 0,
                     "blocker": null,
                     "ignore_counts": []
-                }
+                },
+                "beacon_horizon": null
             }
         }),
     )

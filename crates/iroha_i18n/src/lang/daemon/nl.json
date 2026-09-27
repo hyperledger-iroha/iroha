@@ -5,6 +5,7 @@
   "error.logger": "Kon logger niet initialiseren",
   "error.start": "Starten van Iroha mislukt",
   "error.run": "Er is een fout opgetreden tijdens het uitvoeren van Iroha",
+  "error.check_storage": "Kura (blokopslag) heeft de alleen-lezen opslagcontrole niet doorstaan",
   "error.start_p2p": "Kan peer-to-peer-netwerk niet starten",
   "error.init_kura": "Kan Kura niet initialiseren (blokopslag)",
   "error.start_dev_telemetry": "Kan DEV-telemetrieservice niet starten",

@@ -2059,6 +2059,54 @@ public struct SumeragiV2LivenessStatus: Equatable, Sendable {
     }
 }
 
+/// Local global-beacon horizon published by serialized height activation.
+public struct SumeragiV2BeaconHorizonStatus: Equatable, Sendable {
+    public let epochLengthBlocks: UInt64
+    public let nextRequiredPulseHeight: UInt64?
+    public let activeSessionID: SumeragiV2Bytes32?
+    public let sessionCoversNextPulse: Bool
+    public let localProviderReady: Bool
+
+    public init(
+        epochLengthBlocks: UInt64,
+        nextRequiredPulseHeight: UInt64?,
+        activeSessionID: SumeragiV2Bytes32?,
+        sessionCoversNextPulse: Bool,
+        localProviderReady: Bool
+    ) {
+        self.epochLengthBlocks = epochLengthBlocks
+        self.nextRequiredPulseHeight = nextRequiredPulseHeight
+        self.activeSessionID = activeSessionID
+        self.sessionCoversNextPulse = sessionCoversNextPulse
+        self.localProviderReady = localProviderReady
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(
+            sumeragiV2U64(epochLengthBlocks),
+            sumeragiV2Option(nextRequiredPulseHeight.map(sumeragiV2U64)),
+            sumeragiV2Option(activeSessionID.map { sumeragiV2ByteArrayElements($0.bytes) }),
+            sumeragiV2Bool(sessionCoversNextPulse),
+            sumeragiV2Bool(localProviderReady)
+        )
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            epochLengthBlocks: sumeragiV2DecodeU64(reader.field("status horizon epoch length")),
+            nextRequiredPulseHeight: sumeragiV2DecodeOption(reader.field("status horizon next pulse"), decode: sumeragiV2DecodeU64),
+            activeSessionID: sumeragiV2DecodeOption(reader.field("status horizon session")) {
+                try SumeragiV2Bytes32(sumeragiV2DecodeByteArrayElements($0, count: 32))
+            },
+            sessionCoversNextPulse: sumeragiV2DecodeBool(reader.field("status horizon covers pulse")),
+            localProviderReady: sumeragiV2DecodeBool(reader.field("status horizon provider ready"))
+        )
+        try reader.finish("status beacon horizon")
+        return value
+    }
+}
+
 /// Compact protocol-v2-only `/v1/sumeragi/status` payload.
 public struct SumeragiV2Status: Equatable, Sendable {
     public let protocolVersion: UInt16
@@ -2081,6 +2129,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
     public let heightContext: SumeragiV2HeightContextStatus
     public let lastCommitQC: SumeragiV2CommitQCStatus?
     public let liveness: SumeragiV2LivenessStatus
+    public let beaconHorizon: SumeragiV2BeaconHorizonStatus?
 
     public init(
         protocolVersion: UInt16 = SumeragiV2ConsensusMessage.protocolVersion,
@@ -2102,7 +2151,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
         lastCommittedSubject: SumeragiV2BlockSubject?,
         heightContext: SumeragiV2HeightContextStatus,
         lastCommitQC: SumeragiV2CommitQCStatus?,
-        liveness: SumeragiV2LivenessStatus = .empty
+        liveness: SumeragiV2LivenessStatus = .empty,
+        beaconHorizon: SumeragiV2BeaconHorizonStatus? = nil
     ) throws {
         guard protocolVersion == SumeragiV2ConsensusMessage.protocolVersion else {
             throw SumeragiV2WireError.invalid("unsupported status protocol version \(protocolVersion)")
@@ -2127,6 +2177,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
         self.heightContext = heightContext
         self.lastCommitQC = lastCommitQC
         self.liveness = liveness
+        self.beaconHorizon = beaconHorizon
     }
 
     public func encode() -> Data {
@@ -2141,7 +2192,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
             sumeragiV2Option(pendingPersistenceID.map(sumeragiV2U64)),
             sumeragiV2U64(lastCommittedHeight),
             sumeragiV2Option(lastCommittedSubject?.encode()), heightContext.encode(),
-            sumeragiV2Option(lastCommitQC?.encode()), liveness.encode()
+            sumeragiV2Option(lastCommitQC?.encode()), liveness.encode(),
+            sumeragiV2Option(beaconHorizon?.encode())
         )
     }
 
@@ -2168,7 +2220,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
             lastCommittedSubject: sumeragiV2DecodeOption(reader.field("status committed subject"), decode: SumeragiV2BlockSubject.decode),
             heightContext: SumeragiV2HeightContextStatus.decode(reader.field("status height context")),
             lastCommitQC: sumeragiV2DecodeOption(reader.field("status last commit qc"), decode: SumeragiV2CommitQCStatus.decode),
-            liveness: SumeragiV2LivenessStatus.decode(reader.field("status liveness"))
+            liveness: SumeragiV2LivenessStatus.decode(reader.field("status liveness")),
+            beaconHorizon: sumeragiV2DecodeOption(reader.field("status beacon horizon"), decode: SumeragiV2BeaconHorizonStatus.decode)
         )
         try reader.finish("Sumeragi v2 status")
         guard value.encode() == data else {
@@ -2291,6 +2344,31 @@ private func sumeragiV2U16(_ value: UInt16) -> Data { sumeragiV2Integer(value) }
 private func sumeragiV2U32(_ value: UInt32) -> Data { sumeragiV2Integer(value) }
 private func sumeragiV2U64(_ value: UInt64) -> Data { sumeragiV2Integer(value) }
 private func sumeragiV2Bool(_ value: Bool) -> Data { Data([value ? 1 : 0]) }
+
+/// Generic Norito fixed byte array (for example `Option<[u8; 32]>`): every element is its own
+/// compact-length-prefixed field, unlike a hash or a direct `[u8; 32]` struct field.
+private func sumeragiV2ByteArrayElements(_ bytes: Data) -> Data {
+    var output = Data()
+    for byte in bytes {
+        output.append(sumeragiV2Varint(1))
+        output.append(byte)
+    }
+    return output
+}
+
+private func sumeragiV2DecodeByteArrayElements(_ data: Data, count: Int) throws -> Data {
+    var reader = SumeragiV2Reader(data)
+    var bytes = Data()
+    for _ in 0..<count {
+        let element = try reader.field("fixed byte array element")
+        guard element.count == 1, let byte = element.first else {
+            throw SumeragiV2WireError.invalid("fixed byte array element must contain one byte")
+        }
+        bytes.append(byte)
+    }
+    try reader.finish("fixed byte array")
+    return bytes
+}
 
 private func sumeragiV2Integer<T: FixedWidthInteger>(_ value: T) -> Data {
     var littleEndian = value.littleEndian

@@ -1493,6 +1493,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
                 bundle_accel: A::BundleAcceleration::None,
             },
         },
+        data_dir: None,
+        lifecycle: A::Lifecycle::default(),
     }
 }
 #[cfg(test)]

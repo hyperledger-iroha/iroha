@@ -52685,7 +52685,10 @@ pub(crate) fn validate_sccp_state_local_profile(state: &State) -> core::result::
 pub(crate) fn validate_sccp_snapshot_revert_candidate(
     state: &State,
 ) -> core::result::Result<(), String> {
-    let reverted_world = state.world.block_and_revert();
+    let reverted_world = state
+        .world
+        .try_block_and_revert()
+        .map_err(|error| format!("SCCP rollback preview storage admission refused: {error}"))?;
     let reverted_registry =
         ValidatedSccpRegistryV1::try_from_wire(reverted_world.sccp_registry.get().clone())?;
     validate_sccp_state_view(

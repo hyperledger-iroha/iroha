@@ -1,4 +1,9 @@
-"""Immutable ownership preflight ordering; no Cargo or live inputs."""
+"""Immutable MV ownership ordering in the complete native graph; no Cargo or live inputs.
+
+Immutable qualification compiles one complete graph and runs each selected MV
+ownership test once from its copied executable. The cheaper portable-first
+Cargo phase belongs only to the focused development diagnostic.
+"""
 
 import contextlib
 import io
@@ -75,18 +80,15 @@ class ImmutableOwnershipPreflightTests(unittest.TestCase):
                                 source_commit="a" * 40, lock_fds=(77,))
         return events
 
-    def test_immutable_preflight_precedes_full_graph_and_full_graph_reruns_tests(self):
+    def test_ownership_runs_once_in_the_complete_graph_before_later_work(self):
         self.assertEqual(self.run_fixture(), [
-            "compile:mv-map,concread", "run:mv-map", "release:mv-map",
-            "run:concread", "release:concread", "close", "full-metadata",
-            "compile:mv-map,concread", "run:mv-map", "run:concread",
+            "full-metadata", "compile:mv-map,concread", "run:mv-map", "run:concread",
             "release:mv-map", "release:concread", "close",
         ])
 
-    def test_failed_preflight_collects_failures_and_never_starts_full_graph(self):
+    def test_ownership_failure_stops_immediately_and_closes_the_complete_graph(self):
         self.assertEqual(self.run_fixture(fail=True), [
-            "compile:mv-map,concread", "run:mv-map", "release:mv-map",
-            "run:concread", "release:concread", "close",
+            "full-metadata", "compile:mv-map,concread", "run:mv-map", "close",
         ])
 
     def test_both_scopes_select_all_five_portable_ownership_harnesses(self):

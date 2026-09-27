@@ -22,7 +22,7 @@ fn sorafs_publication_contracts_bind_canonical_account_auth_and_evidence_bounds(
     ];
     for (name, schema, maximum) in routes {
         let path = format!("/v1/sorafs/publish/{name}");
-        let operation = &document["paths"][&path]["post"];
+        let operation = &document["paths"][path.as_str()]["post"];
         assert_eq!(
             operation["x-iroha-route-auth"]["authentication"].as_str(),
             Some("canonical_account_signature")

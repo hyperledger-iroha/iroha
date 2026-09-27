@@ -5,6 +5,7 @@
   "error.logger": "Sirna galmeessaa jalqabuun hin danda'amne",
   "error.start": "Iroha jalqabu hin dandeenye",
   "error.run": "Iroha hojiirra oolchuu keessatti dogoggorri uumame",
+  "error.check_storage": "Kura (kuusaa buloockii) qorannoo kuusaa dubbisuu qofaa hin darbine",
   "error.start_p2p": "Cimina P2P jalqabu hin dandeenye",
   "error.init_kura": "Kura (kuusaa buloockii) jalqabu hin dandeenye",
   "error.start_dev_telemetry": "Tajaajila telemetry misoomaa jalqabu hin dandeenye",

@@ -5,6 +5,7 @@
   "error.logger": "Logimissüsteemi ei saanud lähtestada",
   "error.start": "Iroha käivitamine nurjus",
   "error.run": "Iroha käitamisel ilmnes tõrge",
+  "error.check_storage": "Kura (ploki salvestusruum) ei läbinud kirjutuskaitstud salvestuskontrolli",
   "error.start_p2p": "Võrdõigusvõrku ei saa käivitada",
   "error.init_kura": "Kura lähtestamine nurjus (ploki salvestusruum)",
   "error.start_dev_telemetry": "Arendaja telemeetriateenust ei saanud käivitada",

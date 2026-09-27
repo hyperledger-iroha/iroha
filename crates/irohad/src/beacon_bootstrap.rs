@@ -3,18 +3,23 @@
 //! Each provision process owns one dealer secret and one recipient key. Public
 //! frames are signed, phase heights are independently finality-verified, and a
 //! failed attempt is never rerolled in the same owner-private journal root.
+//! Seat credentials use Core's codec (`iroha_core::beacon::credential`).
+//!
+//! TODO(P8): delete this subcommand at the network-deployment cutover, when
+//! `iroha network apply` drives the Core ceremony (`iroha_core::beacon::ceremony`).
 
-use crate::external_software_signer::{
-    GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1, RuntimeGlobalBeaconShareProvisioningV1,
-    encode_global_beacon_partial_signer_credential_v1,
-    global_beacon_partial_signer_inventory_digest_v1,
-    global_beacon_partial_signer_public_inventory_digest_v1,
-};
+use crate::external_software_signer::GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1;
 use clap::{Parser, Subcommand};
 use iroha_core::beacon::{
     AdaptiveGlobalThresholdBeaconDkgCryptoV1, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     GlobalThresholdBeaconDkgSnapshotV1, GlobalThresholdBeaconDkgStateV1,
-    LocalGlobalThresholdBeaconDkgSeatV1, global_threshold_beacon_roster_hash_v1,
+    LocalGlobalThresholdBeaconDkgSeatV1,
+    credential::{
+        RuntimeGlobalBeaconShareProvisioningV1, encode_global_beacon_partial_signer_credential_v1,
+        global_beacon_partial_signer_inventory_digest_v1,
+        global_beacon_partial_signer_public_inventory_digest_v1,
+    },
+    global_threshold_beacon_roster_hash_v1,
 };
 use iroha_core::state::{
     THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,

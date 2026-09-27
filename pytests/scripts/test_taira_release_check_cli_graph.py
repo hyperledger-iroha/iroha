@@ -5,11 +5,11 @@ import json
 import os
 from pathlib import Path
 import stat
-import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
 import test_taira_release_check as existing
+from taira_fake_libtest import executable
 
 gate = existing.gate
 
@@ -137,11 +137,8 @@ class CliCopyLifetimeTests(unittest.TestCase):
         self.addCleanup(os.close, fd)
         locks = (fd,)
         executed = self.directory / "cli-executed"
-        payload = (f"#!{sys.executable}\nimport sys\nfrom pathlib import Path\n"
-                   "if '--list' in sys.argv: print('cli_fixture: test'); sys.exit(0)\n"
-                   f"Path({str(executed)!r}).write_text('original isolated CLI')\n"
-                   + ("sys.exit(101)\n" if failure == "cli" else
-                      "print('test cli_fixture ... ok\\ntest result: ok. 1 passed; 0 failed; 0 ignored;')\n")).encode()
+        payload = executable(("cli_fixture",), executed,
+                             failed=("cli_fixture",) if failure == "cli" else ()).encode()
         raw_cli, cli_row, _ = self.artifact("cli", payload)
         rows = {"cli": cli_row}
         if network:
@@ -154,7 +151,7 @@ class CliCopyLifetimeTests(unittest.TestCase):
         runs = []
         real_run_stages = gate.run_stages
 
-        def run_cli(harness, *args):
+        def run_cli(harness, *args, **kwargs):
             self.assertEqual(harness, str(copy))
             self.assertTrue(copy.exists())
             if network:
@@ -165,7 +162,8 @@ class CliCopyLifetimeTests(unittest.TestCase):
             # Source Cargo outputs may already have changed; use only the copy.
             raw_cli.write_bytes(b"replacement from unrelated later Cargo graph")
             runs.append(harness)
-            return real_run_stages(harness, *args)
+            self.assertEqual(kwargs, {"batch": True})
+            return real_run_stages(harness, *args, **kwargs)
 
         def build(*args, **kwargs):
             self.assertEqual(kwargs, {"harnesses": (("network", "cli") if network else ("cli",)), "lock_fds": locks})
@@ -190,7 +188,8 @@ class CliCopyLifetimeTests(unittest.TestCase):
             existing.isolate_stage_fixture(stack, keep=("NETWORK_STAGES",))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", gate.NETWORK_STAGES if network else ()))
             stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", ("cli_fixture",)),)))
-            for function in ("run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
+            for function in ("run_lifecycle_source_checks", "run_config_checks",
+                             "require_network_fixture_capacity", "check_test_harnesses"):
                 stack.enter_context(patch.object(gate, function))
             batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", side_effect=build))
             later_compile = stack.enter_context(patch.object(gate, "compile_harness", side_effect=AssertionError("no separate CLI compilation")))
@@ -210,9 +209,8 @@ class CliCopyLifetimeTests(unittest.TestCase):
             self.assertEqual(raw_cli.read_bytes(), b"replacement from unrelated later Cargo graph")
         self.assertEqual(original_production.read_bytes(), b"shipping cli retained")
         self.assertEqual(original_node.read_bytes(), b"shipping node retained")
-        self.assertTrue(executed.exists())
-        if executed.exists():
-            self.assertEqual(executed.read_text(), "original isolated CLI")
+        # Only the immutable copy executed; the replaced Cargo output never ran.
+        self.assertEqual(executed.read_text(), "cli_fixture\n")
 
     def test_cli_copy_executes_once_before_production_build_and_four_peer(self):
         self.run_sequence()

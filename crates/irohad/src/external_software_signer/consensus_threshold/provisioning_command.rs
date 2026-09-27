@@ -259,19 +259,13 @@ pub(super) fn validate_retained_incumbent(
     incumbent_index: Option<u16>,
     active: iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1,
 ) -> Result<(), &'static str> {
-    let validated = decode_global_beacon_credential_v1(bytes, &network, binding)
+    let retained = decode_global_beacon_credential_shares_v1(bytes, &network, binding)
         .map_err(|_| "invalid retained credential")?;
-    drop(validated);
-    let wire: RuntimeGlobalBeaconSignerCredentialWireV1 = norito::decode_canonical_with_limits(
-        bytes,
-        CONSENSUS_THRESHOLD_CREDENTIAL_DECODE_LIMITS_V1,
-    )
-    .map_err(|_| "invalid retained credential")?;
     if let Some(index) = incumbent_index {
-        if !wire.sessions.iter().any(|entry| {
-            entry.signer_index == index
-                && entry.public_session.session_id == active.session_id
-                && entry.public_session.transcript_hash == active.transcript_hash
+        if !retained.iter().any(|entry| {
+            entry.signer_index() == index
+                && entry.public_session().session_id == active.session_id
+                && entry.public_session().transcript_hash == active.transcript_hash
         }) {
             return Err("retained credential omits exact incumbent session custody");
         }

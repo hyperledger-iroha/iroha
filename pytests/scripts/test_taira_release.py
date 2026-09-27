@@ -1,7 +1,6 @@
 """Local preparation regressions; disposable files and a local Git index, no Cargo or network."""
 
 import argparse
-import ast
 import contextlib
 import hashlib
 import importlib.util
@@ -2224,31 +2223,12 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertIn(str(routine / ".taira-build-lane"), str(raised.exception))
         self.assertNotIn("/attempts", str(raised.exception))
 
-    def test_ci_selects_an_explicit_stable_development_target(self):
+    def test_ci_release_gate_no_longer_uses_development_lanes(self):
+        # CI runs the nextest release-gate profile; these lanes remain local tooling.
         workflow = (SCRIPT.parent.parent / ".github/workflows/workspace_release.yml").read_text()
-        self.assertIn('mkdir -p "$GITHUB_WORKSPACE/target/taira-native-checks"', workflow)
-        self.assertIn('taira_release_check.py --target-dir "$GITHUB_WORKSPACE/target/taira-native-checks"', workflow)
-        self.assertLess(workflow.index('"fetch"'), workflow.index("python3 scripts/taira_release_check.py"))
-        fetch_step = workflow.split("- name: Check Taira CLI release boundaries before workspace build", 1)[1].split("- name: Build the full workspace", 1)[0]
-        fetch_python = fetch_step.split("python3 - <<'PY'\n", 1)[1].split("          PY", 1)[0]
-        ast.parse("\n".join(line.removeprefix("          ") for line in fetch_python.splitlines()), filename="workflow-isolated-fetch")
-        self.assertIn('release.isolated_cargo_environment(root, root, env)', fetch_python)
-        self.assertIn('env["CARGO_NET_OFFLINE"] = "false"', fetch_python)
-        self.assertIn('"--manifest-path", str(root / "Cargo.toml"), "--locked"', fetch_python)
-        self.assertIn('pass_fds=(lock_fd,)', fetch_python)
-        self.assertNotIn('"--offline"', fetch_python)
-        full_build = workflow.split("- name: Build the full workspace", 1)[1].split("\n  doc:", 1)[0]
-        for expected in ('target = root / "target/taira-native-checks"',
-                         'release.cargo_lane(root, target, "development")',
-                         'release.child_environment(dict(os.environ), target)',
-                         'release.isolated_cargo_environment(root, root, env)',
-                         'env["CARGO_INCREMENTAL"] = "0"',
-                         'env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build"',
-                         '"--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline", "--workspace"',
-                         'subprocess.run(command, cwd="/", env=env', 'pass_fds=(lock_fd,)'):
-            self.assertIn(expected, full_build)
-        python = full_build.split("python3 - <<'PY'\n", 1)[1].split("          PY", 1)[0]
-        ast.parse("\n".join(line.removeprefix("          ") for line in python.splitlines()), filename="workflow-full-build")
+        for retired in ("taira_release", "taira-native-checks", "cargo_lane", "isolated_cargo_environment"):
+            self.assertNotIn(retired, workflow)
+        self.assertIn("cargo nextest run --profile release-gate", workflow)
         repo, _ = self.development_paths()
         lane = repo / "target" / "taira-native-checks"
         lane.mkdir()

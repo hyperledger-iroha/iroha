@@ -1,4 +1,18 @@
 //! Descriptor-anchored immutable public evidence shared by wallet operations.
+//!
+//! A journal is one owner-private directory holding, in order:
+//! - `operation.json`: the exact prepared operation (for example a signed
+//!   transaction), written once with [`Journal::write_operation`];
+//! - `submission.json`: a durable marker recorded by
+//!   [`Journal::record_submission`] *before* the only dispatch, so a crash can
+//!   never cause a blind resubmission;
+//! - `applied.json`: the exact committed evidence, written once with
+//!   [`Journal::write_applied_evidence`].
+//!
+//! Every record is immutable: rewriting different bytes fails. The directory is
+//! pinned by descriptor, exclusively locked while open, and rejects links and
+//! group/other permissions. The deployment engine's exact-wire canary writes
+//! (`iroha_deploy` gate G6, P2) are meant to use the same journal.
 use eyre::{Result, WrapErr as _, eyre};
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sha2::{Digest as _, Sha256};
@@ -10,8 +24,11 @@ use std::{
 
 const MAX_JOURNAL_BYTES: usize = 4 * 1024 * 1024;
 
+/// Name of the only evidence record, written by [`Journal::write_applied_evidence`].
+const APPLIED_EVIDENCE: &str = "applied.json";
+
 /// Retained private operation directory and its exclusive process lock.
-pub(crate) struct Journal {
+pub struct Journal {
     path: PathBuf,
     #[cfg(unix)]
     directory: File,
@@ -19,16 +36,36 @@ pub(crate) struct Journal {
     _lock: File,
 }
 
+impl core::fmt::Debug for Journal {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("Journal")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Journal {
-    pub(crate) fn path(&self) -> &Path {
+    /// Canonical absolute path of the pinned journal directory.
+    pub fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) fn create(path: &Path) -> Result<Self> {
+    /// Create a fresh owner-private journal directory and hold its exclusive lock.
+    ///
+    /// # Errors
+    /// Fails when the parent is missing, the directory already exists, or the
+    /// platform lacks descriptor-relative file and lock support.
+    pub fn create(path: &Path) -> Result<Self> {
         Self::acquire(path, true)
     }
 
-    pub(crate) fn open(path: &Path) -> Result<Self> {
+    /// Reopen an existing journal and hold its exclusive lock.
+    ///
+    /// # Errors
+    /// Fails when the directory or lock is missing, unsafe, replaced, or
+    /// already held by another operation.
+    pub fn open(path: &Path) -> Result<Self> {
         Self::acquire(path, false)
     }
 
@@ -102,11 +139,20 @@ impl Journal {
         )
     }
 
-    pub(crate) fn write_operation<T: JsonSerialize>(&self, operation: &T) -> Result<()> {
+    /// Retain the exact canonical JSON of a prepared operation, once.
+    ///
+    /// # Errors
+    /// Fails when an operation is already retained or the bytes exceed the bound.
+    pub fn write_operation<T: JsonSerialize>(&self, operation: &T) -> Result<()> {
         self.install("operation.json", &json::to_vec(operation)?)
     }
 
-    pub(crate) fn read_operation<T: JsonDeserialize + JsonSerialize>(&self) -> Result<T> {
+    /// Read the retained operation, requiring its exact canonical encoding.
+    ///
+    /// # Errors
+    /// Fails when no operation was prepared or the retained bytes are not the
+    /// canonical encoding of `T`.
+    pub fn read_operation<T: JsonDeserialize + JsonSerialize>(&self) -> Result<T> {
         let bytes = self.read("operation.json")?;
         let operation: T =
             json::from_slice(&bytes).wrap_err("invalid closed account-operation journal")?;
@@ -122,7 +168,11 @@ impl Journal {
             "operation_sha256": (hex::encode(Sha256::digest(json::to_vec(operation)?)))
         }))?)
     }
-    pub(crate) fn submission_recorded<T: JsonSerialize>(&self, operation: &T) -> Result<bool> {
+    /// Whether the durable pre-dispatch marker for exactly `operation` exists.
+    ///
+    /// # Errors
+    /// Fails when a marker exists for different operation bytes.
+    pub fn submission_recorded<T: JsonSerialize>(&self, operation: &T) -> Result<bool> {
         let bytes = Self::submission_bytes(operation)?;
         match self.read_optional("submission.json")? {
             Some(existing) if existing == bytes => Ok(true),
@@ -130,7 +180,15 @@ impl Journal {
             None => Ok(false),
         }
     }
-    pub(crate) fn record_submission<T: JsonSerialize>(&self, operation: &T) -> Result<bool> {
+    /// Durably record the pre-dispatch marker for `operation`.
+    ///
+    /// Returns `true` only for the call that created the marker; that caller
+    /// alone may dispatch. `false` means an earlier attempt exists and the
+    /// operation must be reconciled, never resubmitted.
+    ///
+    /// # Errors
+    /// Fails when a marker exists for different bytes or cannot be installed.
+    pub fn record_submission<T: JsonSerialize>(&self, operation: &T) -> Result<bool> {
         if self.submission_recorded(operation)? {
             return Ok(false);
         }
@@ -138,19 +196,17 @@ impl Journal {
         Ok(true)
     }
 
-    pub(crate) fn write_evidence_exact<T: JsonSerialize>(
-        &self,
-        name: &str,
-        evidence: &T,
-    ) -> Result<()> {
-        if !matches!(name, "applied.json") {
-            eyre::bail!("invalid wallet evidence record name");
-        }
+    /// Retain the exact committed evidence (`applied.json`); an identical
+    /// rewrite is accepted, different bytes are rejected.
+    ///
+    /// # Errors
+    /// Fails when different evidence is retained or the bytes exceed the bound.
+    pub fn write_applied_evidence<T: JsonSerialize>(&self, evidence: &T) -> Result<()> {
         let bytes = json::to_vec(evidence)?;
-        match self.read_optional(name)? {
+        match self.read_optional(APPLIED_EVIDENCE)? {
             Some(existing) if existing == bytes => Ok(()),
             Some(_) => eyre::bail!("retained wallet evidence differs from the exact operation"),
-            None => self.install(name, &bytes),
+            None => self.install(APPLIED_EVIDENCE, &bytes),
         }
     }
 
@@ -312,6 +368,49 @@ mod tests {
         fs::create_dir(&path).unwrap();
         assert!(journal.install("later.json", b"two").is_err());
         assert!(!path.join("later.json").exists());
+    }
+
+    #[test]
+    fn public_protocol_records_one_operation_marker_and_exact_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("canary");
+        let journal = Journal::create(&path).unwrap();
+        assert!(format!("{journal:?}").contains("canary"));
+        let operation = norito::json!({"schema": "test.canary.v1", "wire": "00ff"});
+        journal.write_operation(&operation).unwrap();
+        assert!(
+            journal.write_operation(&operation).is_err(),
+            "operations are written once"
+        );
+        assert_eq!(
+            journal.read_operation::<norito::json::Value>().unwrap(),
+            operation
+        );
+        assert!(!journal.submission_recorded(&operation).unwrap());
+        assert!(
+            journal.record_submission(&operation).unwrap(),
+            "first marker owns dispatch"
+        );
+        assert!(
+            !journal.record_submission(&operation).unwrap(),
+            "later calls never dispatch"
+        );
+        assert!(journal.submission_recorded(&operation).unwrap());
+        let other = norito::json!({"schema": "test.canary.v1", "wire": "0100"});
+        assert!(journal.submission_recorded(&other).is_err());
+        let evidence = norito::json!({"height": 7});
+        journal.write_applied_evidence(&evidence).unwrap();
+        journal.write_applied_evidence(&evidence).unwrap();
+        assert!(
+            journal
+                .write_applied_evidence(&norito::json!({"height": 8}))
+                .is_err()
+        );
+        assert!(path.join(APPLIED_EVIDENCE).is_file());
+        drop(journal);
+        let reopened = Journal::open(&path).unwrap();
+        assert_eq!(reopened.path(), path.canonicalize().unwrap());
+        assert!(reopened.submission_recorded(&operation).unwrap());
     }
 
     #[test]

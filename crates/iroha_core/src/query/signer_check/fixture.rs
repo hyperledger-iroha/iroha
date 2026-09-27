@@ -217,11 +217,21 @@ fn commit_with_schedule(
                         instruction,
                         true,
                     );
+                tx.current_direct_stream_token_instruction_index =
+                    crate::executor::Executor::direct_stream_token_instruction_index(
+                        &tx,
+                        &transaction,
+                        instruction,
+                        index,
+                        true,
+                    )
+                    .expect("exact signed native instruction position");
                 let result = executor.execute_instruction(
                     &mut tx,
                     transaction.authority(),
                     instruction.clone(),
                 );
+                tx.current_direct_stream_token_instruction_index = None;
                 tx.current_direct_final_promotion_operation_origin = None;
                 tx.current_direct_sorafs_admission_initialization = false;
                 result

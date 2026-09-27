@@ -1,0 +1,42 @@
+# Example owner-brought committee (spec §3.7). Replace the hosts and keys with your own;
+# the keys below are generated placeholders.
+[dataspace]
+name = "acme"
+network = "https://taira.sora.org"
+# network_id = "hash:<64 hex from networks/taira.card.toml>#<crc>"   # optional non-interactive pin
+visibility = "restricted"
+owner_key = "~/.iroha/keys/acme-owner.key"
+account_alias = "treasury"
+max_fee = "50"
+
+[committee]
+source = "owner"
+
+[ssh]
+identity = "~/.ssh/acme_deploy_ed25519.pub"
+user = "deploy"
+become = "sudo"
+
+[edge]                               # optional public Torii for the lane (manifest torii_url)
+host = "dsv1.acme.example"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBRrxoDPPbd7GIlKQiITJxDX+TBp0NJBELHUddbY+nud"
+domain = "ds.acme.example"           # per-node https://acme-1.ds.acme.example ...
+tls_certificate = "/etc/letsencrypt/live/ds.acme.example/fullchain.pem"
+tls_private_key = "/etc/letsencrypt/live/ds.acme.example/privkey.pem"
+
+[[committee.node]]
+name = "acme-1"
+host = "dsv1.acme.example"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBRrxoDPPbd7GIlKQiITJxDX+TBp0NJBELHUddbY+nud"
+[[committee.node]]
+name = "acme-2"
+host = "dsv2.acme.example"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOoTLEOzzVISRihmGep3U1GkW99B5tj2o97iNBSnX6IP"
+[[committee.node]]
+name = "acme-3"
+host = "dsv3.acme.example"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICOPyiA3MDqzwGfVDUSgdBEGDsXTPHxW/TQto2f9aY5u"
+[[committee.node]]
+name = "acme-4"
+host = "dsv4.acme.example"
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINWxcMvid4lA0qT0SNy4pbcpL2TFb438etWXirfaaxdV"

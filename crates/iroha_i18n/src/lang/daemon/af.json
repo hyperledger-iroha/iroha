@@ -5,6 +5,7 @@
   "error.logger": "Kon nie die logstelsel inisieer nie",
   "error.start": "Kon nie Iroha begin nie",
   "error.run": "’n Fout het plaasgevind terwyl Iroha geloop het",
+  "error.check_storage": "Kura (blokberging) het die leesalleen-bergingkontrole gedruip",
   "error.start_p2p": "Kon nie die P2P-netwerk begin nie",
   "error.init_kura": "Kon nie Kura (blokberging) inisieer nie",
   "error.start_dev_telemetry": "Kon nie die ontwikkelaarstelematriese diens begin nie",

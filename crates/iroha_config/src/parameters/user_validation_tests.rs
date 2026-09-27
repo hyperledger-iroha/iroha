@@ -549,6 +549,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         config.torii.receipt_public_key = Some(key_pair.public_key().clone());
         config.torii.receipt_private_key = Some(private_key.clone());
         config.torii.kagemusha_v1_commands = Some(super::ToriiKagemushaV1Commands {
+            redemption_authority: None,
             redemption_private_key: Some(private_key.clone()),
             redemption_private_key_file: None,
             redemption_minimum_xor_balance: Some(Quantity::from(1_u64)),

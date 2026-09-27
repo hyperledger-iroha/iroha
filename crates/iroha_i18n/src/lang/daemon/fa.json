@@ -5,6 +5,7 @@
   "error.logger": "سیستم ثبت رخداد راه‌اندازی نشد",
   "error.start": "Iroha راه‌اندازی نشد",
   "error.run": "حین اجرای Iroha خطا رخ داد",
+  "error.check_storage": "Kura (ذخیره‌سازی بلاک) بررسی فقط‌خواندنی ذخیره‌سازی را رد کرد",
   "error.start_p2p": "شبکه P2P راه‌اندازی نشد",
   "error.init_kura": "Kura (ذخیره‌سازی بلاک) راه‌اندازی نشد",
   "error.start_dev_telemetry": "سرویس تله‌متری توسعه‌دهندگان راه‌اندازی نشد",

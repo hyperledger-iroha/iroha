@@ -19,6 +19,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::metadata::Metadata;
 use iroha_test_network::Network;
 use sorafs_car::{
     CarBuildPlan,
