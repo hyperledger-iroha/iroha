@@ -105,7 +105,7 @@ fn v2_commit_certificate_request(index: u64, requester: &PeerId) -> BlockMessage
     BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            network_id: crate::sumeragi::synthetic_network_id("fair-v2-ingress-test"),
+            network_id: crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test"),
             context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
                 b"fair-v2-ingress-context",
             ))),

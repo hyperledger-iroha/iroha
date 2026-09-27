@@ -1,13 +1,14 @@
-# FASTPQ DEEP offline protocol contract
+# FASTPQ masked DEEP protocol contract
 
 Source contract: 2026-09-26. The normal-library
 [`offline_compact`](../crates/fastpq_prover/src/backend/offline_compact.rs)
-Quantity producer and verifier select this single fixed profile. This is an
-implementation contract, not evidence that its complete proof generation,
-cryptographic qualification or production integration has passed. Node admission
-still uses replay; the offline success result grants no execution authority,
-source finality or AXT spend authorization. The proof is unmasked and has no
-witness-hiding or zero-knowledge claim. Current evidence and remaining release
+quantity producer and verifier select this single fixed profile. Core transfer
+proofs and AXT envelopes use canonical artifacts with bounded verification.
+This is an implementation contract, not evidence that complete proof generation,
+cryptographic or deployment qualification has passed. A verifier result grants no execution authority,
+source finality or AXT spend authorization. The implemented producer samples
+trace, quotient and independent composition masks. The complete construction
+still has no independently qualified zero-knowledge claim. Current evidence and remaining release
 gates belong in [production readiness](fastpq_production_readiness.md).
 
 ## Fixed relation and geometry
@@ -39,12 +40,21 @@ preimages. Every segment binds its ordinal, complete batch and ordered root chai
 
 The [public-column owner](../crates/fastpq_prover/src/backend/compact_public_columns.rs)
 fixes the 342-to-301 projection and evaluates known polynomials at the actual
-extension points. The unmasked producer constructs trace columns of degree
-`<N`; its combined AIR quotient has degree `<2N` and is split by coefficients as
-`Q(X)=Q0(X)+X^N Q1(X)`, with both halves degree `<N`. This does not split
-evaluation arrays into adjacent halves. The verifier's fixed FRI envelope is
-the larger `<2N` bound above. That bound permits no inference of witness hiding;
-the private-producer preflight still refuses every proposed mask.
+extension points. Each retained base polynomial is
+`A_j(X)=C_j(X)+(X^N-1)r_j(X)`, where `C_j` interpolates the physical source and
+`r_j` has 136 independent base-field coefficients. The 41 public columns are
+unchanged. The complete numerator has exclusive degree bound 196,751; exact
+4N-domain interpolation and division produce a quotient of degree `<131215`.
+Every remainder coefficient must be zero.
+
+The quotient is split by coefficients as `Q=Q0+X^N Q1`, then independently
+masked as `Q0'=Q0+X^N T`, `Q1'=Q1-T`, with 65 Fp4 coefficients in `T`.
+The resulting exclusive chunk bounds are 65,601 and 65,679: the high chunk is
+not truncated to the split length. Independently sampled `R` has 131,072 Fp4
+coefficients. Every chunk and composition fits the fixed `<2N` FRI envelope.
+The [construction note](fastpq_deep_hiding_construction.md) distinguishes the
+finite-opening rank argument from the outstanding complete FRI/Fiat–Shamir
+privacy and soundness obligations.
 
 ## Commitment and challenge order
 
@@ -60,7 +70,7 @@ in every logical hash input; its reusable prefix is not a substituted digest.
 | Message | Decoded whole tape | Bytes | Following commitment |
 | --- | --- | --- | --- |
 | 1 | Dummy | 48 | 301-column row root |
-| 2 | 923 independent Fp4 alphas | 29,568 | Paired quotient-half root |
+| 2 | 923 independent Fp4 alphas | 29,568 | Joined Q0/Q1/R root |
 | 3 | One Fp4 OOD point `z` | 48 | All 604 OOD answers |
 | 4 | One Fp4 batching scalar `lambda` | 48 | Initial composition FRI root |
 | 5..8 | One Fp4 beta each | 48 each | Next FRI root |
@@ -93,8 +103,8 @@ answers. [`deep_composition`](../crates/fastpq_prover/src/backend/deep_compositi
 defines `h_j=(A_j-I_j)/((X-z)(X-omega*z))` and
 `t_k=(Qk-Qk(z))/(X-z)`. The 606 components, in order, are
 `(h_j,X^2*h_j)` for each of 301 columns, followed by
-`(t_0,X*t_0,t_1,X*t_1)`. The composition is their power batch with weights
-`1,lambda,...,lambda^605`. Both shifts are required for the reconstructed degree
+`(t_0,X*t_0,t_1,X*t_1)`. The composition is `R` plus their power batch with weights
+`lambda,lambda^2,...,lambda^606`; only the independent mask has weight one. Both shifts are required for the reconstructed degree
 obligations; dropping them is a different protocol.
 
 [`deep_prover`](../crates/fastpq_prover/src/backend/deep_prover.rs) constructs this
@@ -102,15 +112,37 @@ composition in coefficient space with exact division before evaluating its LDE.
 It computes the AIR numerator on the shared 4N interpolation domain and exactly
 divides by `X^N-1`; no zero-mask adapter or pointwise 8M AIR replay is used.
 Private coefficient/evaluation buffers use the existing erased-storage owner.
-The 301 base LDE columns alone hold 20,199,768,064 bytes, before quotient, FRI and
-tree storage. Explicit checked payload/work budgets are not RSS or latency bounds.
+Base trace replay retains the source, coefficients, masks and one N-row stripe;
+it visits 128 stripes per complete row pass. The numerator uses only its four
+nested stripes. Q0/Q1/R and all FRI layers use coefficient replay too. Streamed
+Merkle stacks retain exact queried frontiers and compare replayed roots before
+emitting openings. No complete 20,199,768,064-byte base LDE is retained.
+
+The fixed trace replay subtotal is 499,759,968 bytes, including borrowed source,
+coefficients, one stripe, entropy and maximum selected-row storage. The whole
+`ProducerPlan` additionally charges quotient/FRI coefficients, active tree and
+hash buffers, both full public prefix caches and codec/self-verification buffers.
+It preflights payload, arithmetic/inspection work, hash calls and proof bytes
+before private transforms. The offline wrapper also checks source conversion,
+private SMT, bundle and decode budgets. These are checked payload/work charges,
+not RSS or latency bounds. Defaults allow a 2 GiB segment charge and 2^46
+structural work units; an oversized plan fails before private computation.
+
+Fresh entropy comes from an explicit `TryCryptoRng`; the normal offline wrapper
+uses `OsRng`. Failed attempts do not reuse masks. CPU and required-device policies
+select bulk leaf hashing only; streamed parents and transcript hashing use CPU.
+Required-device availability is checked with public input before private-tree
+work, entropy and transforms, and actual dispatch checks quarantine again.
+There is no implicit CPU fallback for required-device failures. Leaves are
+prepared in fixed batches of at most 32, independent of worker count. No hardware
+or whole-prover performance qualification follows from this dispatch wiring.
 
 ## Bounded wire verification
 
-The sole child frame is `fastpq_prover::deep_compact::ProofV1` in
+The sole child frame is `fastpq_prover::deep_compact::MaskedCompositionProofV1` in
 [`deep_proof`](../crates/fastpq_prover/src/backend/deep_proof.rs). It carries row and
-paired-quotient roots, six FRI/terminal roots, complete OOD answers, queried rows
-and quotient pairs, minimal sibling frontiers, five sets of complete strided FRI
+joined Q0/Q1/R roots, six FRI/terminal roots, complete OOD answers, queried rows
+and Q0/Q1/R triples, minimal sibling frontiers, five sets of complete strided FRI
 fibers and the complete 128-value terminal. Row cells are fixed canonical u64
 fields. Each FRI fiber has one arity byte followed by exactly that many raw
 canonical Fp4 values; no vector count or per-value framing is accepted. Every
@@ -121,17 +153,17 @@ performs one bounded canonical decode, the OOD identity, authenticated opening
 checks and 320 fold checks (five per original query). Fiber `j` at length `M`
 and arity `r` contains positions `j+k*(M/r)`, not adjacent positions. Domains
 advance by the `r`th-power map. The entire authenticated terminal must represent
-one polynomial of degree `<2` on the folded coset. The narrower unmasked
-producer emits a constant terminal. A singleton terminal tree has its required
+one polynomial of degree `<2` on the folded coset. Both linear terminal
+coefficients are retained and all values are checked. A singleton terminal tree has its required
 duplicate-child parent.
 The verifier constructs no private witness, trace, FFT or full LDE.
 
-The fixed DTO upper envelope is 500,783 bytes, below the 512 KiB child target;
+The fixed DTO upper envelope is 502,895 bytes, below the 512 KiB child target;
 this shape bound is not an end-to-end proof-generation measurement. Decoding
 intersects the caller's allocation allowance with 8 MiB and retains stricter
 outer scopes. The enclosing ordinary/AXT carrier accumulates bytes, statement
 bytes, 64 queries per segment and all decode charges. It publishes ordered row
-roots only after every child verifies. Two maximal children use 1,001,566 bytes;
+roots only after every child verifies. Two maximal children use 1,005,790 bytes;
 actual context and framing must still fit the independently enforced bundle and
 artifact limits. No arbitrary-size batch is promised to fit 1 MiB.
 
@@ -140,7 +172,8 @@ The metadata ID is SHA-256 of the canonical
 [`compact_artifact`](../crates/fastpq_prover/src/backend/compact_artifact.rs).
 It binds the exact geometry, ten tapes, field/hash parameters, child-frame schema,
 quantity schemas and both ordinary/AXT relation identities. The profile identity
-also binds `fri-degree2n:terminal-degree2-128` and `fixed-fri-fiber-wire:v1`.
+also binds the joined mask oracle, affine masking batch,
+`fri-degree2n:terminal-degree2-128` and `fixed-fri-fiber-wire:v1`.
 The previous profile ID and child layout are not accepted alternatives. Their
 remaining engines and constructors exist only in predecessor test diagnostics; their conditional
 [375-query analysis](fastpq_compact_typed_profile.md) does not qualify this profile.

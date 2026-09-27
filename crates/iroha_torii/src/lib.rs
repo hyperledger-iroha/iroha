@@ -75,6 +75,8 @@ mod parliament_tle_release;
 pub mod privacy_issuance_api;
 #[doc(hidden)]
 pub mod profile_stats;
+mod staking_preparation;
+mod validator_committee;
 #[cfg(test)]
 use iroha_data_model::events::trigger_completed::TriggerCompletedEvent;
 mod canonical_history;
@@ -88,6 +90,8 @@ mod vpn;
 #[cfg(test)]
 use ledger_state_finality::StateFinalityResponse;
 use ledger_state_finality::{handler_ledger_state_proof, handler_ledger_state_root};
+use staking_preparation::handler_staking_preparation;
+use validator_committee::handler_validator_committee_status;
 pub use vpn::VpnRelayTrust;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
@@ -15705,70 +15709,54 @@ fn zk_ivm_prove_enqueue(
         tokio::sync::mpsc::error::TrySendError::Closed(job) => ZkIvmProveEnqueueError::Closed(job),
     })
 }
-fn normalize_halo2_ipa_circuit_id(raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/ipa-v1/") {
-        return (!rest.is_empty()).then(|| trimmed.to_string());
-    }
-    if let Some(rest) = trimmed.strip_prefix("halo2/pasta/") {
-        return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-    }
-    if let Some(rest) = trimmed.strip_prefix(iroha_core::zk::ZK_BACKEND_HALO2_IPA) {
-        if let Some(rest) = rest.strip_prefix("::") {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-        }
-        if let Some(rest) = rest.strip_prefix(':') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-        }
-        if let Some(rest) = rest.strip_prefix('/') {
-            return (!rest.is_empty()).then(|| format!("halo2/pasta/ipa-v1/{rest}"));
-        }
-    }
-    Some(format!("halo2/pasta/ipa-v1/{trimmed}"))
-}
-fn halo2_ipa_circuit_id_matches(record_id: &str, env_id: &str) -> bool {
-    match (
-        normalize_halo2_ipa_circuit_id(record_id),
-        normalize_halo2_ipa_circuit_id(env_id),
-    ) {
-        (Some(rec), Some(env)) => rec == env,
-        _ => record_id == env_id,
-    }
-}
-fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() || trimmed == backend {
-        return None;
-    }
-    if let Some(rest) = trimmed.strip_prefix(backend) {
-        if let Some(rest) = rest.strip_prefix(':') {
-            return (!rest.is_empty()).then(|| trimmed.to_string());
-        }
-        if let Some(rest) = rest.strip_prefix('/') {
-            return (!rest.is_empty()).then(|| format!("{backend}:{rest}"));
-        }
-    }
-    Some(format!("{backend}:{trimmed}"))
-}
 fn is_stark_fri_v1_backend(backend: &str) -> bool {
     iroha_data_model::zk::is_stark_fri_v1_backend_label(backend)
 }
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
-    if backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA {
-        halo2_ipa_circuit_id_matches(record_id, env_id)
-    } else if is_stark_fri_v1_backend(backend) {
-        match (
-            normalize_stark_fri_circuit_id(backend, record_id),
-            normalize_stark_fri_circuit_id(backend, env_id),
-        ) {
-            (Some(rec), Some(env)) => rec == env,
-            _ => record_id == env_id,
+    record_id == env_id
+        && match iroha_core::zk::production_verify_backend_tag(backend) {
+            Some(iroha_data_model::zk::BackendTag::Halo2IpaPasta) => {
+                iroha_core::zk::halo2_open_verify_circuit_id_matches_backend(backend, record_id)
+            }
+            Some(iroha_data_model::zk::BackendTag::Stark) => {
+                iroha_core::zk::stark_open_verify_circuit_id_matches_backend(backend, record_id)
+            }
+            None => false,
         }
-    } else {
-        record_id == env_id
+}
+
+#[cfg(test)]
+mod exact_proof_circuit_id_tests {
+    use super::circuit_id_matches;
+
+    #[test]
+    fn proof_metadata_uses_core_canonical_identity_without_aliases() {
+        let backend = iroha_core::zk::ZK_BACKEND_HALO2_IPA;
+        let canonical = iroha_core::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID;
+        for halo2_backend in [backend, iroha_core::zk::IVM_REPLAY_BINDING_V1_HALO2_BACKEND] {
+            assert!(circuit_id_matches(halo2_backend, canonical, canonical));
+            for alias in [
+                "ivm-replay-binding-v1",
+                "halo2/pasta/ivm-replay-binding-v1",
+                "halo2/ipa:ivm-replay-binding-v1",
+                "halo2/pasta/ipa-v1/ivm-replay-binding-v1",
+                "halo2/pasta/ipa/ivm-execution-v1",
+            ] {
+                assert!(!circuit_id_matches(halo2_backend, alias, alias));
+                assert!(!circuit_id_matches(halo2_backend, alias, canonical));
+            }
+        }
+        let stark = iroha_core::zk::ZK_BACKEND_STARK_FRI_V1;
+        let exact = format!("{stark}:ivm-replay-binding-v1");
+        assert!(circuit_id_matches(stark, &exact, &exact));
+        for alias in [
+            "ivm-replay-binding-v1".to_owned(),
+            format!("{stark}/ivm-replay-binding-v1"),
+            format!(" {exact}"),
+        ] {
+            assert!(!circuit_id_matches(stark, &alias, &alias));
+        }
+        assert!(!circuit_id_matches("unsupported", "equal", "equal"));
     }
 }
 const ZK_KEY_ID_PATH_DOMAIN_V1: &[u8] = b"iroha:torii:zk-key-id:v1";
@@ -15985,7 +15973,7 @@ async fn handler_zk_ivm_derive(
     require_zk_ivm_derive_authority(&req.authority, &verified)?;
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
     let backend = req.vk_ref.backend.as_str();
-    if !iroha_core::zk::is_ivm_execution_backend(backend) {
+    if !iroha_core::zk::is_ivm_replay_binding_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri`".to_owned(),
@@ -16067,18 +16055,18 @@ async fn handler_zk_ivm_derive(
             if !circuit_id_matches(
                 vk_ref.backend.as_str(),
                 &vk_record.circuit_id,
-                iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+                iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             ) {
                 return Err(format!(
-                    "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{}` (got `{}`)",
+                    "verifying key circuit_id is not compatible with `ivm-replay-binding-v1` for backend `{}` (got `{}`)",
                     vk_ref.backend, vk_record.circuit_id,
                 ));
             }
             if vk_record.public_inputs_schema_hash
-                != iroha_core::zk::ivm_execution_public_inputs_schema_hash()
+                != iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash()
             {
                 return Err(
-                    "verifying key schema hash is not compatible with `ivm-execution-v1`"
+                    "verifying key schema hash is not compatible with `ivm-replay-binding-v1`"
                         .to_owned(),
                 );
             }
@@ -16184,7 +16172,7 @@ async fn handler_zk_ivm_prove(
     }
     validate_zk_ivm_fee_payment(&req.fee_payment, &req.metadata)?;
     let backend = req.vk_ref.backend.as_str();
-    if !iroha_core::zk::is_ivm_execution_backend(backend) {
+    if !iroha_core::zk::is_ivm_replay_binding_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "ivm prove requires vk_ref.backend == `halo2/ipa` or `stark/fri`".to_owned(),
@@ -16257,21 +16245,21 @@ async fn handler_zk_ivm_prove(
         if !circuit_id_matches(
             backend,
             &vk_record.circuit_id,
-            iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
         ) {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                    "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{backend}` (got `{}`)",
+                    "verifying key circuit_id is not compatible with `ivm-replay-binding-v1` for backend `{backend}` (got `{}`)",
                     vk_record.circuit_id,
                 )),
             )));
         }
         if vk_record.public_inputs_schema_hash
-            != iroha_core::zk::ivm_execution_public_inputs_schema_hash()
+            != iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash()
         {
             return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "verifying key schema hash is not compatible with `ivm-execution-v1`"
+                    "verifying key schema hash is not compatible with `ivm-replay-binding-v1`"
                         .to_owned(),
                 ),
             )));
@@ -16427,19 +16415,19 @@ async fn handler_zk_ivm_prove(
                 if !circuit_id_matches(
                     backend.as_str(),
                     &vk_record.circuit_id,
-                    iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+                    iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
                 ) {
                     return Err(format!(
-                        "verifying key circuit_id is not compatible with `ivm-execution-v1` for backend `{}` (got `{}`)",
+                        "verifying key circuit_id is not compatible with `ivm-replay-binding-v1` for backend `{}` (got `{}`)",
                         backend.as_str(),
                         vk_record.circuit_id,
                     ));
                 }
                 if vk_record.public_inputs_schema_hash
-                    != iroha_core::zk::ivm_execution_public_inputs_schema_hash()
+                    != iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash()
                 {
                     return Err(
-                        "verifying key schema hash is not compatible with `ivm-execution-v1`"
+                        "verifying key schema hash is not compatible with `ivm-replay-binding-v1`"
                             .to_owned(),
                     );
                 }
@@ -16539,7 +16527,7 @@ async fn handler_zk_ivm_prove(
                         "proving key",
                         ZK_IVM_MAX_VERIFYING_KEY_BYTES,
                     )?;
-                    iroha_core::zk::prove_halo2_ipa_ivm_execution_envelope(
+                    iroha_core::zk::prove_halo2_ipa_ivm_replay_binding_envelope(
                         circuit_id.as_str(),
                         &vk_box,
                         code_hash,
@@ -16551,7 +16539,7 @@ async fn handler_zk_ivm_prove(
                 } else if is_stark_fri_v1_backend(backend.as_str()) {
                     #[cfg(feature = "zk-stark")]
                     {
-                        iroha_core::zk::prove_stark_fri_ivm_execution_envelope(
+                        iroha_core::zk::prove_stark_fri_ivm_replay_binding_envelope(
                             backend.as_str(),
                             circuit_id.as_str(),
                             &vk_box,
@@ -44183,6 +44171,8 @@ impl Torii {
             READYZ => unauthenticated_get(handler_readyz);
             LIVEZ => unauthenticated_get(handler_livez);
             NEXUS_LIFECYCLE_GET => public_get(handler_get_nexus_lane_lifecycle);
+            NEXUS_VALIDATOR_COMMITTEE_GET => public_get(handler_validator_committee_status);
+            NEXUS_STAKING_PREPARATION_POST => limited_public_post(handler_staking_preparation, iroha_data_model::nexus::PUBLIC_LANE_PREPARATION_REQUEST_MAX_BYTES);
             NFT_OFFER_CAPABILITIES => public_get(handler_nft_offer_capabilities);
             NFT_OFFER_LIST => public_get(handler_nft_offer_list);
             NFT_OFFER_GET => public_get(handler_nft_offer_get);
@@ -45318,6 +45308,11 @@ impl Torii {
             PIN_REGISTRY => limited_public_get(sorafs::api::handle_get_sorafs_pin_registry, sorafs_body_limit);
             PIN_MANIFEST => limited_public_get(sorafs::api::handle_get_sorafs_pin_manifest, sorafs_body_limit);
             PIN_REGISTER => limited_canonical_signed_post(handler_post_sorafs_register_manifest, sorafs_body_limit);
+            REPAIR_SOURCE => limited_canonical_account_post(sorafs::repair_source::read_chunk, sorafs_operator_state, iroha_data_model::sorafs::repair_source::REPAIR_SOURCE_REQUEST_MAX_BYTES_V1, iroha_data_model::sorafs::repair_source::REPAIR_SOURCE_REQUEST_MAX_BYTES_V1);
+            PROVIDER_SOURCE => limited_canonical_account_post(sorafs::provider_source::read_source, sorafs_operator_state, 4096, 4096);
+            PUBLISH_SOURCE => limited_canonical_account_post(sorafs::publisher::stage_source, sorafs_operator_state, sorafs_car::publisher::PUBLISHER_SOURCE_REQUEST_MAX_BYTES_V1, sorafs_car::publisher::PUBLISHER_SOURCE_REQUEST_MAX_BYTES_V1);
+            PUBLISH_PREPARE => limited_canonical_account_post(sorafs::publisher::prepare_publication, sorafs_operator_state, 4096, 4096);
+            PUBLISH_PROOF => limited_canonical_account_post(sorafs::publisher::publication_proof, sorafs_operator_state, 4096, 4096);
             ALIASES => limited_canonical_account_get(sorafs::api::handle_get_sorafs_aliases, sorafs_operator_state, sorafs_body_limit, 0);
             REPLICATION => limited_canonical_account_get(sorafs::api::handle_get_sorafs_replication_orders, sorafs_operator_state, sorafs_body_limit, 0);
             STORAGE_STATE => limited_operator_get(sorafs::api::handle_get_sorafs_storage_state, sorafs_operator_state, sorafs_body_limit);
@@ -46232,7 +46227,7 @@ impl Torii {
             })?;
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
-        let sorafs_admission = load_sorafs_admission(&config, state.network_id_ref())?;
+        let sorafs_admission = load_sorafs_admission(&config, Arc::clone(&state))?;
         #[cfg(feature = "app_api")]
         let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
             config.sorafs_por.enabled,
@@ -49759,63 +49754,16 @@ fn require_sorafs_potr_finalized_reader_inputs(
 }
 fn load_sorafs_admission(
     config: &iroha_config::parameters::actual::Torii,
-    network_id: &iroha_data_model::NetworkId,
+    state: Arc<CoreState>,
 ) -> Result<Option<Arc<sorafs::AdmissionRegistry>>, ToriiBuildError> {
-    let Some(admission_cfg) = config.sorafs_discovery.admission.as_ref() else {
-        if config.sorafs_discovery.discovery_enabled {
-            return Err(ToriiBuildError::invalid_configuration(
-                "sorafs.discovery.admission",
-                "discovery requires envelopes_dir, trusted_council_keys, and signature_threshold",
-            ));
-        }
+    if !config.sorafs_discovery.discovery_enabled && config.sorafs_discovery.admission.is_none() {
         return Ok(None);
-    };
-    let trusted_council_keys = admission_cfg
-        .trusted_council_keys
-        .iter()
-        .enumerate()
-        .map(|(index, key)| {
-            let (algorithm, payload) = key.try_to_bytes().map_err(|error| {
-                ToriiBuildError::invalid_configuration(
-                    "sorafs.discovery.admission.trusted_council_keys",
-                    format!("key at index {index} is invalid: {error}"),
-                )
-            })?;
-            if algorithm != iroha_crypto::Algorithm::Ed25519 {
-                return Err(ToriiBuildError::invalid_configuration(
-                    "sorafs.discovery.admission.trusted_council_keys",
-                    format!("key at index {index} must use Ed25519"),
-                ));
-            }
-            <[u8; 32]>::try_from(payload).map_err(|_| {
-                ToriiBuildError::invalid_configuration(
-                    "sorafs.discovery.admission.trusted_council_keys",
-                    format!("Ed25519 key at index {index} must contain 32 bytes"),
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
-        trusted_council_keys,
-        admission_cfg.signature_threshold.get(),
-    )
-    .map_err(|error| ToriiBuildError::invalid_configuration("sorafs.discovery.admission", error))?;
-    let registry = sorafs::AdmissionRegistry::load_from_dir(
-        &admission_cfg.envelopes_dir,
-        *network_id.as_bytes(),
-        policy,
-    )
-    .map_err(|error| {
-        ToriiBuildError::component_initialization(
-            "sorafs.discovery.admission.registry",
-            format!(
-                "failed to load registry from {}: {error}",
-                admission_cfg.envelopes_dir.display()
-            ),
-        )
-    })?;
-    Ok(Some(Arc::new(registry)))
+    }
+    // Admission and revocation are Parliament effects in the exact same State as Torii.
+    // A configured directory is never a second authority or a fallback on finality outage.
+    Ok(Some(Arc::new(sorafs::AdmissionRegistry::from_state(state))))
 }
+
 #[derive(Clone)]
 struct GatewaySecurityComponents {
     policy: Arc<sorafs::gateway::GatewayPolicy>,

@@ -15,8 +15,10 @@ use iroha_data_model::{
     isi::{
         Log, Register, RegisterBox, Revoke, RevokeBox, Unregister, UnregisterBox,
         sorafs::{
-            MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
-            MutateSorafsReleaseManifestAuthority, MutateSorafsTopologyAuthority,
+            InitializeSorafsProviderAdmissionV1, MutateSorafsFinalPromotionAccountCustody,
+            MutateSorafsFinalPromotionAuthority, MutateSorafsReleaseManifestAuthority,
+            MutateSorafsStreamTokenAuthority, MutateSorafsStreamTokenCustody,
+            MutateSorafsTopologyAuthority,
         },
     },
     permission::Permission,
@@ -70,6 +72,59 @@ pub(crate) fn commit(
     membership: bool,
     finality: bool,
 ) -> Vec<bool> {
+    commit_with_schedule(
+        state,
+        finalized_blocks,
+        now,
+        transactions,
+        membership,
+        finality,
+        false,
+        false,
+    )
+}
+
+pub(crate) fn commit_native_operation(
+    state: &Arc<State>,
+    finalized_blocks: &mut Vec<SccpFinalizedBlockTestFixtureV1>,
+    now: u64,
+    transactions: Vec<SignedTransaction>,
+    membership: bool,
+    finality: bool,
+) -> Vec<bool> {
+    commit_with_schedule(
+        state,
+        finalized_blocks,
+        now,
+        transactions,
+        membership,
+        finality,
+        true,
+        false,
+    )
+}
+
+#[cfg(test)]
+pub(crate) fn commit_genesis_admission(
+    state: &Arc<State>,
+    blocks: &mut Vec<SccpFinalizedBlockTestFixtureV1>,
+    now: u64,
+    transactions: Vec<SignedTransaction>,
+    finality: bool,
+) -> Vec<bool> {
+    commit_with_schedule(state, blocks, now, transactions, true, finality, true, true)
+}
+
+fn commit_with_schedule(
+    state: &Arc<State>,
+    finalized_blocks: &mut Vec<SccpFinalizedBlockTestFixtureV1>,
+    now: u64,
+    transactions: Vec<SignedTransaction>,
+    membership: bool,
+    finality: bool,
+    native_operations: bool,
+    derive_genesis_network: bool,
+) -> Vec<bool> {
     // These fixtures exercise exactly the closed native custody and topology transitions,
     // with no callback or arbitrary executor capable of producing omitted output.
     // They intentionally do not stand in for genesis or ordinary admission.
@@ -96,9 +151,12 @@ pub(crate) fn commit(
             instructions.iter().all(|instruction| {
                 let instruction = instruction.as_any();
                 instruction.is::<MutateSorafsFinalPromotionAuthority>()
+                    || instruction.is::<InitializeSorafsProviderAdmissionV1>()
                     || instruction.is::<MutateSorafsFinalPromotionAccountCustody>()
                     || instruction.is::<MutateSorafsReleaseManifestAuthority>()
                     || instruction.is::<MutateSorafsTopologyAuthority>()
+                    || instruction.is::<MutateSorafsStreamTokenAuthority>()
+                    || instruction.is::<MutateSorafsStreamTokenCustody>()
                     || instruction.is::<Log>()
                     // Existing adversarial cases execute observer/operator
                     // permission and account removal in the exact native cut.
@@ -140,19 +198,34 @@ pub(crate) fn commit(
         tx.current_tx_hash = Some(transaction.hash());
         tx.current_entrypoint_index = Some(entry_index as u64);
         let executor = tx.world.executor.clone();
-        let result = instructions.iter().try_for_each(|instruction| {
-            tx.current_direct_final_promotion_operation_origin =
-                crate::executor::Executor::direct_final_promotion_operation_origin(
-                    &tx,
-                    &transaction,
-                    instruction,
-                    true,
+        let result = instructions
+            .iter()
+            .enumerate()
+            .try_for_each(|(index, instruction)| {
+                tx.current_direct_sorafs_admission_initialization =
+                    crate::executor::Executor::direct_sorafs_admission_initialization(
+                        &tx,
+                        &transaction,
+                        instruction,
+                        index,
+                        true,
+                    );
+                tx.current_direct_final_promotion_operation_origin =
+                    crate::executor::Executor::direct_final_promotion_operation_origin(
+                        &tx,
+                        &transaction,
+                        instruction,
+                        true,
+                    );
+                let result = executor.execute_instruction(
+                    &mut tx,
+                    transaction.authority(),
+                    instruction.clone(),
                 );
-            let result =
-                executor.execute_instruction(&mut tx, transaction.authority(), instruction.clone());
-            tx.current_direct_final_promotion_operation_origin = None;
-            result
-        });
+                tx.current_direct_final_promotion_operation_origin = None;
+                tx.current_direct_sorafs_admission_initialization = false;
+                result
+            });
         outcomes.push(result.is_ok());
         let result = match result {
             Ok(()) => {
@@ -188,7 +261,19 @@ pub(crate) fn commit(
         )
         .unwrap();
     state_block.commit_world_overlay_for_testing().unwrap();
-    let finalized = sccp_finalize_taira_block_test_fixture_v1(&signed, finalized_blocks.last());
+    let finalized = if derive_genesis_network {
+        iroha_sccp::sccp_finalize_native_genesis_network_block_test_fixture_v1(
+            &signed,
+            finalized_blocks.last(),
+        )
+    } else if native_operations {
+        iroha_sccp::sccp_finalize_taira_native_operation_block_test_fixture_v1(
+            &signed,
+            finalized_blocks.last(),
+        )
+    } else {
+        sccp_finalize_taira_block_test_fixture_v1(&signed, finalized_blocks.last())
+    };
     let proof = &finalized.proof().finality_artifact;
     assert_eq!(proof.height_context.roster.len(), 4);
     assert_eq!(proof.commit_qc.signers.len(), 3);

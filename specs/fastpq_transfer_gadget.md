@@ -78,6 +78,11 @@ The `fastpq_json` and `fastpq_fixture_rebind` tools accept only the canonical
 bare payloads, alternate layouts, and trailing bytes are rejected. JSON-tool
 proofs, relay references, touch-manifest commitments, and emitted Norito objects
 use the canonical V1 frame independently of ambient layout guards.
+AXT proof bytes are the exact `FastpqAxtCompactArtifactV1` frame, with complete
+quantity-encoded public rows and no embedded replay proof. The JSON prover and
+verifier report the artifact byte length and SHA-256; the former preprocessing
+`trace_commitment` field is removed. Metadata-only opaque effects have no
+transfer AIR and are rejected before proving.
 Torii recovery emits the same public batch frame, counting the borrowed source
 before model conversion and enforcing the per-batch and aggregate byte budgets.
 The Core prover lane canonically encodes persisted proofs within the smaller of

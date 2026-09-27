@@ -32,6 +32,9 @@ pub(crate) mod orderbook_worker;
 pub mod pop_api;
 pub mod por;
 #[cfg(feature = "app_api")]
+pub(crate) mod publisher;
+pub(crate) mod provider_source;
+#[cfg(feature = "app_api")]
 pub mod potr_signing;
 pub(crate) mod public_gateway;
 #[cfg(all(test, feature = "app_api"))]
@@ -119,6 +122,8 @@ pub use stream_token_admission::{
 };
 #[cfg(test)]
 pub(crate) use token::signer_test_support;
+#[cfg(feature = "test-fixtures")]
+pub use token::native_issuer_test_fixture;
 pub(crate) use token::{
     MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
     MAX_TOKEN_FUTURE_SKEW_SECS, StreamTokenQuotaSubject,
@@ -129,3 +134,6 @@ pub use token::{
     StreamTokenSignerClientV1, StreamTokenSignerPinsV1, StreamTokenSignerReceiptV1,
     StreamTokenStateObserverClientV1, TokenOverrides, decode_token_base64, encode_token_base64,
 };
+
+/// Authenticated chunks for current finalized native repair leases.
+pub(crate) mod repair_source;

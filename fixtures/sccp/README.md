@@ -22,11 +22,3 @@ python3 scripts/generate_ton_sccp_stateinit_golden.py \
 Use `--write` only for an intentional reviewed contract/layout change. The
 macOS archive identity is accepted for development parity checks; production
 release artifacts remain restricted to the digest-pinned Linux/amd64 builder.
-
-`release_evidence_v1/` is an explicitly retired, test-only negative snapshot.
-Its finality anchors use Sumeragi protocol v3, which first-release SCCP rejects;
-`scripts/sccp_release_fixture.py reject` proves that boundary. The snapshot
-must not be validated, bundled, verified, resealed, or presented as canonical
-release evidence. Its detached signatures use disposable, non-production keys
-whose private material is not retained, and production policy loaders deny
-every published fixture public key.

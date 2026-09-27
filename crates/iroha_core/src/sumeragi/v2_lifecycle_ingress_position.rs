@@ -2212,7 +2212,7 @@ mod tests {
             wire::ConsensusMessageV2Payload::CommitCertificateRequest(
                 wire::CommitCertificateRequest {
                     protocol_version: wire::PROTOCOL_VERSION,
-                    network_id: crate::sumeragi::synthetic_network_id(
+                    network_id: crate::unit_test_support::synthetic_network_id(
                         "lifecycle-ingress-position-test",
                     ),
                     context_id,

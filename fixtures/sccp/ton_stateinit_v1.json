@@ -1,0 +1,247 @@
+{
+  "code": {
+    "bucket": {
+      "bits": 5950,
+      "cells": 20,
+      "depth": 6,
+      "hash": "e36819d3c7c4f489c9a0b1bc7ad520ff90f388263db19dafb4eab95c90e426b1"
+    },
+    "minter": {
+      "bits": 64157,
+      "cells": 118,
+      "depth": 16,
+      "hash": "d3afa6f2a007603bb32c5f7d34c0e537f8fb245a658a91e10a49695e523c02eb"
+    },
+    "wallet": {
+      "bits": 5722,
+      "cells": 13,
+      "depth": 4,
+      "hash": "ee3cf858ffdc0e230e9b97914a75c0d7d4ecd317881ecec0873d2abd875aaa90"
+    }
+  },
+  "generator": "scripts/generate_ton_sccp_stateinit_golden.py",
+  "schema": "iroha.sccp.ton-stateinit.v1",
+  "spec": "specs/sccp.md §5.3.1 (revision 3)",
+  "toolchain": {
+    "acton": "1.2.0",
+    "tolk": "1.4.2"
+  },
+  "vectors": [
+    {
+      "address": {
+        "account_id": "492a5e8cc18da55f53963484998aa731f830c89a8ddd5eeea9b78018fd13cd75",
+        "raw": "0:492a5e8cc18da55f53963484998aa731f830c89a8ddd5eeea9b78018fd13cd75",
+        "workchain": 0
+      },
+      "children": {
+        "bucket_0_account_id": "37b5bb0f4fcda15fb878ae92ac79df24fbde27887e028ab4f6e5a75bf27c73fa",
+        "bucket_1_account_id": "94a4f9868c368381bfb7eae16fd81204cc61bdcd91169aec671adebc3963322b",
+        "wallet_account_id": "71c8c39c326c04e722b9a546f1a021d494439db770093a1efcd1a515436811f7",
+        "wallet_owner": "0:abababababababababababababababababababababababababababababababab"
+      },
+      "generation": 7,
+      "initial_data": {
+        "config": {
+          "bit_len": 676,
+          "data": "11111111111111111111111111111111111111111111111111111111111111110000000180de0b6b3a76400000000000000000007c9eed4f02ae435a8a7913451e107c5fc9085258bb4dd15e80c3f51c0f3cf53210",
+          "depth": 7,
+          "hash": "5b3619e6faf5c00f662c5e75485431d730e8820eb7446f8b0367b611a9033ce2",
+          "refs": [
+            "wallet_code",
+            "bucket_code"
+          ]
+        },
+        "depth": 8,
+        "hash": "bdc1e98dab57b453e3bbb2f2f5efbd69e6880579445c53c32b6aa96a54c4f862",
+        "members": [
+          {
+            "bit_len": 641,
+            "data": "010101010101010101010101010101010101010102020202020202020202020202020202020202020303030303030303030303030303030303030303040404040404040404040404040404040404040400",
+            "depth": 0,
+            "hash": "efdb0f63b51fe0addd82eb234ccb1c4fda247dd2bbe0f845258aa353a56d2a28",
+            "refs": []
+          }
+        ],
+        "root": {
+          "bit_len": 267,
+          "data": "00000000000000000000000000000000000000000000000000000000000000000000",
+          "depth": 8,
+          "hash": "bdc1e98dab57b453e3bbb2f2f5efbd69e6880579445c53c32b6aa96a54c4f862",
+          "refs": [
+            "config",
+            "roster"
+          ]
+        },
+        "roster": {
+          "bit_len": 464,
+          "data": "c9eed4f02ae435a8a7913451e107c5fc9085258bb4dd15e80c3f51c0f3cf53210000000000000007000001a3185c5000000001a3607558000403",
+          "depth": 1,
+          "hash": "f0e8dc1f221010d8407e023420ce004d6259cc632652f397993a418e83b05ab1",
+          "refs": [
+            "members[0]"
+          ]
+        }
+      },
+      "label": "n4",
+      "max_supply": "1000000000000000000",
+      "members": [
+        "0101010101010101010101010101010101010101",
+        "0202020202020202020202020202020202020202",
+        "0303030303030303030303030303030303030303",
+        "0404040404040404040404040404040404040404"
+      ],
+      "n": 4,
+      "roster_digest": "c9eed4f02ae435a8a7913451e107c5fc9085258bb4dd15e80c3f51c0f3cf5321",
+      "route_revision": 1,
+      "state_init_hash": "492a5e8cc18da55f53963484998aa731f830c89a8ddd5eeea9b78018fd13cd75",
+      "t": 3,
+      "taira_network_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "valid_from_ms": 1800000000000,
+      "valid_until_ms": 1801209600000
+    },
+    {
+      "address": {
+        "account_id": "ae224bd3b03c747ec3eeea5800acdd0d9a46332ccfc7dfb06fb77fb81357925f",
+        "raw": "0:ae224bd3b03c747ec3eeea5800acdd0d9a46332ccfc7dfb06fb77fb81357925f",
+        "workchain": 0
+      },
+      "children": {
+        "bucket_0_account_id": "8f9adb78f91e684e9a42a65cd11c5f99dc2dd0f13233fc6609ec460c5070af31",
+        "bucket_1_account_id": "159e99a45f8af3d1d0e84ec2a398bbbc42aa542b9602e870495df5730c40c9e4",
+        "wallet_account_id": "651d6f4e46e0a20bf515efeaf4eab2ddc4a3c478c6a8ab3d20c23c79ce1f1a76",
+        "wallet_owner": "0:abababababababababababababababababababababababababababababababab"
+      },
+      "generation": 12,
+      "initial_data": {
+        "config": {
+          "bit_len": 708,
+          "data": "111111111111111111111111111111111111111111111111111111111111111100000002cffffffffffffffffffffffff000000000000000c49d2226452fbcb946ee8e4fa8e941a25dc9208e82aef31939537a446680dbb1c0",
+          "depth": 7,
+          "hash": "a37974d8e9810c4975531eacc6335ca625ea458ddd99f1580abdb2ef01cd9049",
+          "refs": [
+            "wallet_code",
+            "bucket_code"
+          ]
+        },
+        "depth": 8,
+        "hash": "c2763072d4fe90c72a141ec531e5abe9c7b508a876013f8d257b696294f9be2b",
+        "members": [
+          {
+            "bit_len": 961,
+            "data": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001010101010101010101010101010101010101010202020202020202020202020202020202020202030303030303030303030303030303030303030380",
+            "depth": 5,
+            "hash": "dc0e732e52041cc4ac42095ce3c7521d7ac68fee4ca2a84e5ad436222158ad2c",
+            "refs": [
+              "members[1]"
+            ]
+          },
+          {
+            "bit_len": 961,
+            "data": "04040404040404040404040404040404040404040505050505050505050505050505050505050505060606060606060606060606060606060606060607070707070707070707070707070707070707070808080808080808080808080808080808080808090909090909090909090909090909090909090980",
+            "depth": 4,
+            "hash": "d1264c03ed927a7e920155c37ca1f06e17f0f5a4510258670a25ba38c313149d",
+            "refs": [
+              "members[2]"
+            ]
+          },
+          {
+            "bit_len": 961,
+            "data": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f80",
+            "depth": 3,
+            "hash": "ff5f589e7fccf11d9ac9b0ffc76d090efd268714566dd358fcf7c0e1e9b32029",
+            "refs": [
+              "members[3]"
+            ]
+          },
+          {
+            "bit_len": 961,
+            "data": "10101010101010101010101010101010101010101111111111111111111111111111111111111111121212121212121212121212121212121212121213131313131313131313131313131313131313131414141414141414141414141414141414141414151515151515151515151515151515151515151580",
+            "depth": 2,
+            "hash": "c591631ef449195c2edb344490321e60a1f69bc940ca4b9998d3f3ff2cc8ba42",
+            "refs": [
+              "members[4]"
+            ]
+          },
+          {
+            "bit_len": 961,
+            "data": "16161616161616161616161616161616161616161717171717171717171717171717171717171717181818181818181818181818181818181818181819191919191919191919191919191919191919191a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b80",
+            "depth": 1,
+            "hash": "39b6d89e7ee56c7a17c8276c037963de171208f1caf9babaf2531690f760d487",
+            "refs": [
+              "members[5]"
+            ]
+          },
+          {
+            "bit_len": 161,
+            "data": "1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c00",
+            "depth": 0,
+            "hash": "09ad23fc7a67a79309aad6f2db236c0a7ad964ec9a924a13c9e773c87275f223",
+            "refs": []
+          }
+        ],
+        "root": {
+          "bit_len": 267,
+          "data": "00000000000000000000000000000000000000000000000000000000000000000000",
+          "depth": 8,
+          "hash": "c2763072d4fe90c72a141ec531e5abe9c7b508a876013f8d257b696294f9be2b",
+          "refs": [
+            "config",
+            "roster"
+          ]
+        },
+        "roster": {
+          "bit_len": 464,
+          "data": "49d2226452fbcb946ee8e4fa8e941a25dc9208e82aef31939537a446680dbb1c000000000000000c000001a3185c5000000001a3607558001f15",
+          "depth": 6,
+          "hash": "4ddd3398565917ec0d93edfdf6bd50a85fd20b9c83b6fb0ab26559ce9a1ae6d6",
+          "refs": [
+            "members[0]"
+          ]
+        }
+      },
+      "label": "n31",
+      "max_supply": "79228162514264337593543950335",
+      "members": [
+        "0000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000",
+        "0101010101010101010101010101010101010101",
+        "0202020202020202020202020202020202020202",
+        "0303030303030303030303030303030303030303",
+        "0404040404040404040404040404040404040404",
+        "0505050505050505050505050505050505050505",
+        "0606060606060606060606060606060606060606",
+        "0707070707070707070707070707070707070707",
+        "0808080808080808080808080808080808080808",
+        "0909090909090909090909090909090909090909",
+        "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+        "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d",
+        "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e",
+        "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
+        "1010101010101010101010101010101010101010",
+        "1111111111111111111111111111111111111111",
+        "1212121212121212121212121212121212121212",
+        "1313131313131313131313131313131313131313",
+        "1414141414141414141414141414141414141414",
+        "1515151515151515151515151515151515151515",
+        "1616161616161616161616161616161616161616",
+        "1717171717171717171717171717171717171717",
+        "1818181818181818181818181818181818181818",
+        "1919191919191919191919191919191919191919",
+        "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b",
+        "1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c"
+      ],
+      "n": 31,
+      "roster_digest": "49d2226452fbcb946ee8e4fa8e941a25dc9208e82aef31939537a446680dbb1c",
+      "route_revision": 2,
+      "state_init_hash": "ae224bd3b03c747ec3eeea5800acdd0d9a46332ccfc7dfb06fb77fb81357925f",
+      "t": 21,
+      "taira_network_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "valid_from_ms": 1800000000000,
+      "valid_until_ms": 1801209600000
+    }
+  ]
+}

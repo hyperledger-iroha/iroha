@@ -29,12 +29,6 @@ pub enum Error {
     /// Serialization failure while computing deterministic commitments.
     #[error("failed to encode batch: {0}")]
     Encode(#[from] norito::core::Error),
-    /// A recognized compact artifact has no admitted production verification route.
-    #[error("FASTPQ compact artifact `{schema}` is not production-qualified")]
-    UnqualifiedCompactArtifact {
-        /// Exact recognized nominal schema; this is not a caller-provided label.
-        schema: &'static str,
-    },
     /// The verifier recomputed a commitment that does not match the proof.
     #[error("trace commitment mismatch")]
     CommitmentMismatch,

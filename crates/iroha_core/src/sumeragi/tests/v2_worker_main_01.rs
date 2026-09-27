@@ -4911,6 +4911,7 @@ fn zero_top_up_epoch_boundary_commit_signs_next_epoch_authorization() {
             [0x73; 32],
         );
     context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation: None,
         epoch: context.epoch + 1,
         kagemusha_mint_finality_authorization: next_mint_authorization.clone(),
         kagemusha_mint_finality_authority: next_mint_roster,

@@ -6962,7 +6962,7 @@ pub mod isi {
         authorization: crate::state::VerifiedNexusFeeBurn,
     ) -> Result<(), Error> {
         let (source_id, amount) = authorization.into_parts();
-        let expected_definition = crate::block::parse_asset_definition_literal_with_world(
+        let expected_definition = crate::block::resolve_network_xor_asset_definition(
             &state_transaction.world,
             &state_transaction.nexus.fees.fee_asset_id,
             0,
@@ -7003,16 +7003,13 @@ pub mod isi {
         authorization: crate::state::VerifiedNexusFeeBurn,
     ) -> Result<(), Error> {
         let (source_id, amount) = authorization.into_parts();
-        let expected_definition = crate::block::parse_asset_definition_literal_with_world(
-            world,
-            &nexus.fees.fee_asset_id,
-            0,
-        )
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                "verified Nexus fee burn has an invalid configured fee asset".into(),
-            )
-        })?;
+        let expected_definition =
+            crate::block::resolve_network_xor_asset_definition(world, &nexus.fees.fee_asset_id, 0)
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "verified Nexus fee burn has an invalid configured fee asset".into(),
+                    )
+                })?;
         if nexus.fees.settlement_mode
             != iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn
             || source_id.definition() != &expected_definition

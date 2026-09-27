@@ -5,6 +5,7 @@ use std::cell::Cell;
 use super::*;
 use crate::{
     VerifyLimits,
+    backend::deep_geometry::QUERY_COUNT,
     backend::{
         compact_prover_resources::segment_charge,
         compact_quantity_tests::{QuantityCase, QuantityFixture},
@@ -65,12 +66,8 @@ fn proving() -> ProvingLimits {
         digest_execution: crate::DigestExecutionV1::Cpu,
         private_smt: TransferSmtBuildLimits::for_update_limit(4).unwrap(),
         max_total_trace_cells: 2 * COLUMN_COUNT * PHYSICAL_ROW_COUNT,
-        max_segment_work_units: usize::try_from(1_u64 << 42).unwrap(),
-        max_segment_charge_bytes: segment_charge(
-            policy().bundle.max_total_statement_bytes,
-            SHARED_FRAME_BOUND,
-        )
-        .unwrap(),
+        max_segment_work_units: usize::try_from(1_u64 << 46).unwrap(),
+        max_segment_charge_bytes: 2 * 1024 * 1024 * 1024,
     }
 }
 
@@ -234,11 +231,11 @@ fn complete_statement_caps_are_inclusive_and_fail_before_public_preparation() {
 }
 
 #[test]
-fn coefficient_work_budget_rejects_before_statement_digest_or_private_rows() {
+fn masked_replay_work_budget_rejects_before_statement_digest_or_private_rows() {
     let statement = fixture().model();
     let mut expected = expected(&statement);
     expected.public_statement_digest[0] ^= 1;
-    let minimum = DeepTraceCoefficients::required_resources()
+    let minimum = crate::backend::compact_prover_resources::replay_plan()
         .unwrap()
         .work_units;
     for cap in [0, minimum - 1] {
@@ -308,6 +305,49 @@ fn impossible_decoder_budget_rejects_before_statement_digest_work() {
             field: "compact_public_statement_digest"
         })
     ));
+}
+
+#[test]
+fn fixed_shape_and_carrier_policy_reject_before_statement_digest_work() {
+    let statement = fixture().model();
+    let mut expected = expected(&statement);
+    expected.public_statement_digest[0] ^= 1;
+    let resources = quantity_artifact_resources(2, 0).unwrap();
+    for (name, minimum) in [
+        (
+            "max_air_row_values",
+            crate::backend::compact_public_columns::COMMITTED_COLUMN_COUNT,
+        ),
+        ("max_fri_layers", 6),
+        ("max_query_path_len", 23),
+        ("max_fri_round_values", 16),
+        (
+            "max_bundle_wire_bytes",
+            resources.maximum_bundle_frame_bytes,
+        ),
+        (
+            "max_compact_producer_bundle_bytes",
+            resources.maximum_bundle_frame_bytes,
+        ),
+    ] {
+        let mut limited = policy();
+        let cap = minimum - 1;
+        match name {
+            "max_air_row_values" => limited.bundle.segment.max_air_row_values = cap,
+            "max_fri_layers" => limited.bundle.segment.max_fri_layers = cap,
+            "max_query_path_len" => limited.bundle.segment.max_query_path_len = cap,
+            "max_fri_round_values" => limited.bundle.segment.max_fri_round_values = cap,
+            "max_bundle_wire_bytes" => limited.bundle.max_wire_bytes = cap,
+            "max_compact_producer_bundle_bytes" => limited.transport.max_bundle_frame_bytes = cap,
+            _ => unreachable!(),
+        }
+        assert_limit(
+            check_statement(&statement, expected, proving(), limited),
+            name,
+            minimum,
+            cap,
+        );
+    }
 }
 
 #[test]

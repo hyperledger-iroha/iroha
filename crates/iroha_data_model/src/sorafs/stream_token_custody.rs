@@ -124,3 +124,38 @@ pub struct StreamTokenCustodyControlRecordV1 {
 
 #[cfg(test)]
 mod tests;
+
+/// Canonical custody commitment encoding failed or exceeded its protocol bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("invalid bounded native custody commitment")]
+pub struct StreamTokenCustodyCommitmentErrorV1;
+
+/// Compute the exact authority-bound native request commitment used by custody history.
+/// This is public material derivation, not execution or finality evidence.
+pub fn stream_token_custody_request_digest_v1(
+    instruction: &crate::isi::sorafs::MutateSorafsStreamTokenCustody,
+    authority: &AccountId,
+) -> Result<[u8; 32], StreamTokenCustodyCommitmentErrorV1> {
+    let invalid = StreamTokenCustodyCommitmentErrorV1;
+    if norito::canonical_frame_len(instruction).map_err(|_| invalid)? > 32 * 1024 {
+        return Err(invalid);
+    }
+    let mut bytes = b"iroha.sorafs.stream-token.custody-request.v1\0".to_vec();
+    bytes.extend_from_slice(&norito::encode_canonical(instruction).map_err(|_| invalid)?);
+    bytes.extend_from_slice(&norito::encode_canonical(authority).map_err(|_| invalid)?);
+    Ok(*iroha_crypto::Hash::new(bytes).as_ref())
+}
+impl StreamTokenCustodyControlRecordV1 {
+    /// Compute the canonical native record digest, without claiming execution or finality.
+    pub fn canonical_digest(&self) -> Result<[u8; 32], StreamTokenCustodyCommitmentErrorV1> {
+        let invalid = StreamTokenCustodyCommitmentErrorV1;
+        if norito::canonical_frame_len(self).map_err(|_| invalid)?
+            > STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1
+        {
+            return Err(invalid);
+        }
+        let mut bytes = STREAM_TOKEN_CUSTODY_RECORD_DOMAIN_V1.to_vec();
+        bytes.extend_from_slice(&norito::encode_canonical(self).map_err(|_| invalid)?);
+        Ok(*iroha_crypto::Hash::new(bytes).as_ref())
+    }
+}

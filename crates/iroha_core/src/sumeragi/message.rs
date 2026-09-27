@@ -1186,7 +1186,7 @@ mod tests {
             .expect("derive Kura replica advert signer");
         let mut advert = KuraReplicaAdvertV1 {
             version: KURA_REPLICA_ADVERT_VERSION_V1,
-            network_id: crate::sumeragi::synthetic_network_id("kura-replica-advert-test"),
+            network_id: crate::unit_test_support::synthetic_network_id("kura-replica-advert-test"),
             height: 17,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"replica-block")),
             executed_block_wire_len: 4096,
@@ -1209,7 +1209,7 @@ mod tests {
             .expect("exact signed advert is valid");
         let mut mutations = Vec::new();
         let mut wrong_network = advert.clone();
-        wrong_network.network_id = crate::sumeragi::synthetic_network_id("other-network");
+        wrong_network.network_id = crate::unit_test_support::synthetic_network_id("other-network");
         mutations.push(wrong_network);
         let mut wrong_height = advert.clone();
         wrong_height.height += 1;

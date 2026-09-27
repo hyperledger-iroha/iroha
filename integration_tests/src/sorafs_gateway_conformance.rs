@@ -2335,6 +2335,7 @@ fn map_car_write_error(error: &CarWriteError) -> GatewayError {
         | CarWriteError::DigestMismatch { .. }
         | CarWriteError::DagInvariant { .. }
         | CarWriteError::DirectoryPathConflict
+        | CarWriteError::ManifestMetadataMismatch { .. }
         | CarWriteError::ArithmeticOverflow { .. }
         | CarWriteError::AllocationFailed { .. }
         | CarWriteError::InvalidPlan(_) => GatewayError::RangePayloadMismatch,

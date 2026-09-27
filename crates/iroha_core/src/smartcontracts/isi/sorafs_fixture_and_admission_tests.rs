@@ -459,8 +459,7 @@ fn provider_reverse_index_iteration_is_exact_and_ordered() {
     );
 }
 fn completion_anchor_hash() -> iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> {
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 42, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 42, 0);
     iroha_crypto::HashOf::new(&header)
 }
 fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
@@ -666,7 +665,10 @@ fn register_governed_capacity_declaration(
 ) -> Result<(), InstructionExecutionError> {
     record.registered_epoch = pin_consensus_epoch(stx);
     seed_governed_capacity_provider(stx, record.provider_id, authority, Quantity::from(1_u32));
-    RegisterCapacityDeclaration { record }.execute(authority, stx)
+    RegisterCapacityDeclaration {
+        declaration: record.declaration,
+    }
+    .execute(authority, stx)
 }
 fn seed_sorafs_permissions(state: &mut State, authority: &AccountId) {
     let mut perms = Permissions::default();
@@ -1341,7 +1343,7 @@ fn pin_expiry_rejects_malformed_index_without_partial_retirement() {
         .expect_err("malformed authenticated expiry state must reject the complete effect");
     assert!(matches!(
         error,
-        InstructionExecutionError::InvariantViolation(message)
+        PinExpiryMaintenanceError::Instruction(InstructionExecutionError::InvariantViolation(message))
             if message.contains("non-canonical expiry key")
     ));
     assert!(matches!(

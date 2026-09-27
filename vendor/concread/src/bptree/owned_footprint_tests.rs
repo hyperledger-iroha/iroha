@@ -100,7 +100,8 @@ fn exact(owner: &Owned, records: &Rc<RefCell<Records>>) -> AllocationDemand {
 fn owned_floor_matches_actual_growth_overwrite_removal_and_retained_base() {
     let (records, map) = fixture();
     let mut owner = owned(&map, &records);
-    assert_eq!(exact(&owner, &records).allocations(), 5);
+    // Leaf, root, initial reader, notification, cursor and next reader.
+    assert_eq!(exact(&owner, &records).allocations(), 6);
     for key in 0..48 {
         owner
             .try_insert_admitted(key, key * 3, |d| admit(&records, d))

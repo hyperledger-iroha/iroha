@@ -50,6 +50,9 @@ use std::{
     time::{Duration, Instant},
 };
 mod errors;
+mod startup_recovery;
+pub use startup_recovery::StartupRecovery;
+pub(crate) use startup_recovery::{StartupRecoveryPublisher, channel as startup_recovery_channel};
 
 pub use errors::TryReadError;
 use errors::TryWriteError;
@@ -841,7 +844,7 @@ impl SnapshotMaker {
     pub fn start(
         snapshot_maker: Option<Self>,
         state: Arc<State>,
-        startup_recovery: crate::sumeragi::StartupRecovery,
+        startup_recovery: StartupRecovery,
         shutdown_signal: ShutdownSignal,
     ) -> Child {
         Child::new(
@@ -875,13 +878,13 @@ impl SnapshotMaker {
     }
 
     pub(crate) async fn run_startup_maintenance<B, W, F>(
-        mut startup_recovery: crate::sumeragi::StartupRecovery,
+        mut startup_recovery: StartupRecovery,
         shutdown_signal: ShutdownSignal,
         budget: B,
         writers: W,
     ) where
         B: FnOnce(),
-        W: FnOnce(crate::sumeragi::StartupRecovery, ShutdownSignal) -> F,
+        W: FnOnce(StartupRecovery, ShutdownSignal) -> F,
         F: std::future::Future<Output = ()>,
     {
         if !startup_recovery.wait_for_success(&shutdown_signal).await
@@ -898,7 +901,7 @@ impl SnapshotMaker {
 
     pub(crate) async fn run_snapshot_loop<W: FnMut()>(
         create_every: Duration,
-        mut startup_recovery: crate::sumeragi::StartupRecovery,
+        mut startup_recovery: StartupRecovery,
         shutdown_signal: ShutdownSignal,
         mut write_snapshot: W,
     ) {
@@ -2848,6 +2851,7 @@ fn try_read_snapshot_bundle<F>(
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<SnapshotReadOutcome, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
@@ -2923,6 +2927,7 @@ where
             false,
         )?;
         let seed = KuraSeed {
+            operation_index_budget: operation_index_budget.clone(),
             kura: Arc::clone(kura),
             lane_manifests: Arc::clone(lane_manifests),
             query_handle: live_query_store.clone(),
@@ -3010,6 +3015,7 @@ where
     // cell roles decode directly into their final typed registry owners.
     validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
+        operation_index_budget: operation_index_budget.clone(),
         kura: Arc::clone(kura),
         lane_manifests: Arc::clone(lane_manifests),
         query_handle: live_query_store.clone(),
@@ -3169,6 +3175,7 @@ pub fn try_read_snapshot(
     zk: &iroha_config::parameters::actual::Zk,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     let bootstrap_policy = SnapshotBootstrapPolicy::default();
     try_read_snapshot_with_bootstrap_policy(
@@ -3188,6 +3195,7 @@ pub fn try_read_snapshot(
         #[cfg(feature = "telemetry")]
         telemetry,
         read_buffer_budget,
+        operation_index_budget,
     )
 }
 /// Read and verify a snapshot with an explicit audited hash-only bootstrap policy.
@@ -3213,6 +3221,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
     bootstrap_policy: &SnapshotBootstrapPolicy,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError> {
     try_read_snapshot_with_initializer(
         store_dir,
@@ -3235,6 +3244,7 @@ pub fn try_read_snapshot_with_bootstrap_policy(
         #[cfg(feature = "telemetry")]
         telemetry,
         read_buffer_budget,
+        operation_index_budget,
     )
 }
 #[allow(clippy::too_many_lines)]
@@ -3256,6 +3266,7 @@ fn try_read_snapshot_with_initializer<F>(
     initialize_state: &F,
     #[cfg(feature = "telemetry")] telemetry: StateTelemetry,
     read_buffer_budget: &AllocationBudget,
+    operation_index_budget: &AllocationBudget,
 ) -> Result<Box<State>, TryReadError>
 where
     F: Fn(&mut State) -> Result<(), TryReadError>,
@@ -3301,6 +3312,7 @@ where
             #[cfg(feature = "telemetry")]
             telemetry,
             read_buffer_budget,
+            operation_index_budget,
         )?;
         if !emergency_fast {
             generation.verify_generation_unchanged()?;
@@ -4459,6 +4471,7 @@ fn validate_generated_snapshot_for_restart_with_policy(
         .map_err(|_| TryReadError::Serialization(json::Error::InvalidUtf8))?;
     validate_snapshot_sccp_registry_raw(input)?;
     let seed = KuraSeed {
+        operation_index_budget: state.world.operation_index_budget().clone(),
         kura: state.kura_handle(),
         lane_manifests: state.lane_manifests.read().clone(),
         query_handle: state.query_handle.clone(),

@@ -72,10 +72,7 @@ async fn dispatch<T: Pload + ClassifyTopic>(
             Class::Safety => &senders.safety,
             Class::Lane => &senders.high,
             Class::Payload => &senders.payload,
-            Class::Availability => &senders.availability,
             Class::BlockSync => &senders.block_sync,
-            Class::RecoveryControl => &senders.recovery_control,
-            Class::RecoveryData => &senders.recovery_data,
             Class::Control => &senders.control,
             Class::Low => &senders.low,
         };

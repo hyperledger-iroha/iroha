@@ -3,6 +3,8 @@
 #![allow(clippy::similar_names, clippy::too_many_lines)]
 #[path = "../src/execution_output_test_support.rs"]
 mod execution_output_test_support;
+#[path = "../src/fastpq/quantity_fixture.rs"]
+mod quantity_fixture;
 use iroha_config::parameters::actual::NexusAxt as ActualAxtTiming;
 #[cfg(feature = "app_api")]
 use iroha_core::nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet};
@@ -539,6 +541,7 @@ fn proof_blob_for_profile(
         "entry_hash".to_string(),
         source_tx_commitment.as_ref().to_vec(),
     );
+    quantity_fixture::materialize(&mut batch);
     fastpq_prover::bind_axt_batch_with_proof_metadata(
         &mut batch,
         &binding,

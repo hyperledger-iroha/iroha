@@ -351,21 +351,46 @@ pub(crate) struct LaneClosedInstance {
     // fallible checks and original retirement consumption have succeeded.
     published_terminal: bool,
 }
+
+/// Opaque proof that one original closed instance was consumed by this exact
+/// published Native source. A matching block hash or copied scalar cannot mint
+/// this receipt; only `LaneClosedInstance::retire_published` can.
+pub(crate) struct NativeLaneRetirementReceipt<'proof, 'carrier> {
+    instance_id: HeightContextId,
+    published: &'proof crate::state::PublishedNativeApply<'carrier>,
+}
+
+impl NativeLaneRetirementReceipt<'_, '_> {
+    /// Verify the exact original instance and borrowed publication operation.
+    pub(crate) fn matches(
+        &self,
+        id: HeightContextId,
+        published: &crate::state::PublishedNativeApply<'_>,
+    ) -> bool {
+        self.instance_id == id && std::ptr::eq(self.published, published)
+    }
+}
+
 impl LaneClosedInstance {
     /// Consume this original drained owner after actual global publication.
     /// Held Apply must first pass the separate shared-reducer settlement path.
     /// Every refusal returns the same owner and leaves its output fence armed.
-    pub(crate) fn retire_published(
+    pub(crate) fn retire_published<'proof, 'carrier>(
         mut self,
-        published: &crate::state::PublishedNativeApply<'_>,
-    ) -> std::result::Result<(), (Self, LaneInstanceError)> {
+        published: &'proof crate::state::PublishedNativeApply<'carrier>,
+    ) -> std::result::Result<NativeLaneRetirementReceipt<'proof, 'carrier>, (Self, LaneInstanceError)>
+    {
         let authorized = match self.owner.authorize_terminal_retirement(published) {
             Ok(authorized) => authorized,
             Err(error) => return Err((self, error)),
         };
+        let instance_id = self.owner.verified.instance_id();
         self.owner.consume_published_retirements(&authorized);
         self.published_terminal = true;
-        Ok(())
+        Ok(NativeLaneRetirementReceipt {
+            instance_id,
+            published,
+        })
     }
     /// Exact returned-but-unacknowledged control event retained through closure.
     pub(crate) fn unacknowledged_control(&self) -> Option<&reducer::Event> {
@@ -579,7 +604,7 @@ impl LaneProcessOwner {
             ));
         };
         match closed.retire_published(published) {
-            Ok(()) => {
+            Ok(_receipt) => {
                 self.entries.remove(&id);
                 Ok(true)
             }

@@ -1,7 +1,7 @@
 
 {
   "order_id_hex": "4444444444444444444444444444444444444444444444444444444444444444",
-  "manifest_cid_hex": "aabbccdd",
+  "manifest_cid_hex": "01711f20abababababababababababababababababababababababababababababababab",
   "manifest_digest_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "chunking_profile": "sorafs.sf1@1.0.0",
   "target_replicas": 2,
@@ -18,7 +18,7 @@
     }
   ],
   "issued_at": 1700000500,
-  "deadline_at": 1700000800,
+  "deadline_at": 1700001400,
   "sla": {
     "ingest_deadline_secs": 900,
     "min_availability_percent_milli": 99000,

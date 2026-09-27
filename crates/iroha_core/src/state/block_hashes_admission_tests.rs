@@ -301,6 +301,31 @@ fn prepaid_tip_fill_and_publication_need_no_further_pool_credit() {
 }
 
 #[test]
+fn cold_history_owner_prepays_its_exact_shared_layout() {
+    let control_bytes = ChargedBlockHashMap::layout().size();
+    let insufficient = AllocationBudget::new(control_bytes - 1);
+    let refused = BlockHashes::try_new(std::iter::empty(), insufficient.clone());
+    assert!(matches!(
+        refused,
+        Err(BlockHashAdmissionError::Capacity(
+            AllocationRefusal::ExceedsLimit {
+                requested_bytes,
+                ..
+            }
+        )) if requested_bytes == control_bytes
+    ));
+    assert_eq!(insufficient.reserved_bytes(), 0);
+
+    let budget = AllocationBudget::new(1 << 20);
+    let owner = BlockHashes::try_new(std::iter::empty(), budget.clone()).unwrap();
+    assert!(
+        budget.reserved_bytes() >= control_bytes,
+        "the original owner retains its prepaid shared-allocation charge"
+    );
+    assert_eq!(owner.committed_height(), 0);
+}
+
+#[test]
 fn cold_construction_refusal_refunds_every_partially_built_owner() {
     for bytes in [1, 4096] {
         let budget = AllocationBudget::new(bytes);

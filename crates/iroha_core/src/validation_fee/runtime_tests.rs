@@ -12,6 +12,9 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     let domain = Domain::new(domain_id).build(&deployer);
     let fee_domain = Domain::new(DomainId::try_new("fees", "paynet").expect("fee-asset domain id"))
         .build(&deployer);
+    let xor_domain =
+        Domain::new(DomainId::try_new("universal", "universal").expect("canonical XOR domain id"))
+            .build(&deployer);
     let mut accounts = vec![Account::new(deployer.clone()).build(&deployer)];
     accounts.extend((2..=7).map(|seed| Account::new(account(seed)).build(&deployer)));
     let fee_definition = AssetDefinition::new(
@@ -31,7 +34,7 @@ fn treasury_payout_is_exempt_when_enacted_policy_lists_class() {
     )
     .build(&deployer);
     let world = crate::state::World::with(
-        [domain, fee_domain],
+        [domain, fee_domain, xor_domain],
         accounts,
         [fee_definition, xor_definition],
     );
@@ -1380,7 +1383,7 @@ fn wrong_treasury_or_wrong_asset_fee_is_rejected() {
     let wrong_treasury = account(4);
     let policy = policy(&treasury);
     let fee_asset = policy_fee_asset(&policy);
-    let xor = asset_definition("xor");
+    let xor = xor_asset();
     let wrong_treasury_tx = tx(
         1,
         vec![
@@ -1667,7 +1670,7 @@ fn zero_qualifying_transaction_rejects_mismatched_validation_fee_policy_metadata
     let recipient = account(2);
     let treasury = account(3);
     let policy = policy(&treasury);
-    let non_fee_asset = asset_definition("xor");
+    let non_fee_asset = xor_asset();
     let mut metadata = metadata_for(&policy);
     let observed_hash_hex = hex::encode([9u8; 32]);
     metadata.insert(
@@ -1698,7 +1701,7 @@ fn zero_qualifying_transaction_with_fee_coordinate_requires_policy_metadata() {
     let recipient = account(2);
     let treasury = account(3);
     let policy = policy(&treasury);
-    let non_fee_asset = asset_definition("xor");
+    let non_fee_asset = xor_asset();
     let tx = tx(
         1,
         vec![transfer(
@@ -1720,7 +1723,7 @@ fn zero_qualifying_transaction_rejects_dangling_fee_entry_coordinate() {
     let recipient = account(2);
     let treasury = account(3);
     let policy = policy(&treasury);
-    let non_fee_asset = asset_definition("xor");
+    let non_fee_asset = xor_asset();
     let mut metadata = metadata_for(&policy);
     metadata.insert(
         Name::from_str(VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY).expect("metadata key"),
@@ -1864,7 +1867,7 @@ fn batch_fee_entry_rejects_wrong_treasury_asset_and_source() {
     let sponsor = account(6);
     let policy = policy(&treasury);
     let fee_asset = policy_fee_asset(&policy);
-    let xor = asset_definition("xor");
+    let xor = xor_asset();
     let wrong_treasury_tx = tx(
         1,
         vec![
@@ -2114,12 +2117,7 @@ fn multisig_proposal_signed_fee_coordinate_resolves_unique_nested_context() {
         1,
         vec![
             nested_proposal().into(),
-            transfer(
-                &user,
-                &asset_definition("xor"),
-                Quantity::from(1_u64),
-                &recipient,
-            ),
+            transfer(&user, &xor_asset(), Quantity::from(1_u64), &recipient),
         ],
         metadata_for_fee_instruction(&policy, 1),
     );
@@ -2344,7 +2342,7 @@ fn multisig_proposal_context_fee_rejects_wrong_treasury_asset_and_source() {
     let sponsor = account(6);
     let policy = policy(&treasury);
     let fee_asset = policy_fee_asset(&policy);
-    let xor = asset_definition("xor");
+    let xor = xor_asset();
     let wrong_treasury_tx = tx(
         1,
         vec![

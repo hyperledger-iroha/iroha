@@ -112,6 +112,15 @@ macro_rules! schema_types {
             iroha_data_model::isi::sorafs::MutateSorafsStreamTokenCustody,
             iroha_data_model::sorafs::stream_token_custody::StreamTokenCustodyControlRecordV1,
             iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody,
+            // Native operation transitions and retained execution provenance are public V1 DTOs.
+            iroha_data_model::isi::sorafs::MutateSorafsStreamTokenAuthority,
+            iroha_data_model::sorafs::stream_token_authority::StreamTokenNativeOperationV1,
+            iroha_executor_data_model::permission::sorafs::CanOperateSorafsStreamToken,
+            iroha_executor_data_model::permission::sorafs::CanCheckSorafsStreamToken,
+            // Signed-genesis admission, canonical capacity input and publisher state assertions.
+            iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1,
+            iroha_data_model::isi::sorafs::RegisterCapacityDeclaration,
+            iroha_data_model::isi::sorafs::AssertSorafsPublicationV1,
             // Native deployment authority and commitment-only retained histories.
             iroha_data_model::isi::sorafs::MutateSorafsFinalPromotionAuthority,
             // Registered for canonical V1 decoding; Core admission remains closed.
@@ -221,6 +230,8 @@ mod tests {
     mod final_promotion;
     mod final_promotion_account_custody;
     mod privacy_qualification;
+    mod sorafs_publication;
+    mod stream_token_authority;
     mod stream_token_custody;
     mod topology_authority;
     fn generate_test_map() -> BTreeMap<core::any::TypeId, String> {

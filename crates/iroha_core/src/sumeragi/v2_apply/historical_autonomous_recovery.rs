@@ -194,7 +194,7 @@ fn preflight_historical_autonomous_lane_recovery_inner(
     let expected_epoch = input.historical_context.epoch;
     if retained_record.is_none() {
         let world = state.world_view();
-        let derived_epoch = crate::sumeragi::epoch_for_height_from_world(
+        let derived_epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
             &world,
             height,
             input.historical_context.mode,

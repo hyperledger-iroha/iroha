@@ -17,6 +17,7 @@ use crate::runtime_provider_registry::{
     IrohaRuntimeProviderRegistryErrorV1,
 };
 use clap::Parser;
+use iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath;
 use std::{
     fmt,
     path::{Path, PathBuf},
@@ -49,6 +50,7 @@ pub trait RuntimeProviderBrokerBackendRegistryV1: Send + Sync {
 /// redacted [`Debug`] implementation.
 pub struct RuntimeProviderBrokerDeploymentV1 {
     bindings: IrohaRuntimeProviderBindingsV1,
+    endpoint_path: RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
 }
 impl RuntimeProviderBrokerDeploymentV1 {
@@ -64,6 +66,7 @@ impl RuntimeProviderBrokerDeploymentV1 {
     /// registry's payload-free failure category when resolution fails.
     pub fn try_new(
         bindings: IrohaRuntimeProviderBindingsV1,
+        endpoint_path: RuntimeProviderBrokerEndpointPath,
         registry: &dyn RuntimeProviderBrokerBackendRegistryV1,
     ) -> Result<Self, RuntimeProviderBrokerLauncherErrorV1> {
         if bindings.is_empty() {
@@ -72,14 +75,18 @@ impl RuntimeProviderBrokerDeploymentV1 {
         let backends = registry
             .resolve(&bindings)
             .map_err(RuntimeProviderBrokerLauncherErrorV1::BackendRegistry)?;
-        Ok(Self { bindings, backends })
+        Ok(Self {
+            bindings,
+            endpoint_path,
+            backends,
+        })
     }
     /// Return the number of exact public provider bindings to be served.
     #[must_use]
     pub fn binding_count(&self) -> usize {
         self.bindings.len()
     }
-    /// Qualify every backend and serve on the platform-fixed authenticated
+    /// Qualify every backend and serve on the configured authenticated
     /// endpoint until the server stops.
     ///
     /// Clients may request only canonical non-empty subsets of this exact
@@ -92,7 +99,7 @@ impl RuntimeProviderBrokerDeploymentV1 {
     /// resolved set is missing, extra, substituted, stale, revoked,
     /// test-marked, or live qualification otherwise fails.
     pub fn serve(self) -> Result<(), RuntimeProviderBrokerLauncherErrorV1> {
-        serve_runtime_provider_broker_v1(&self.bindings, self.backends)
+        serve_runtime_provider_broker_v1(&self.bindings, &self.endpoint_path, self.backends)
             .map_err(RuntimeProviderBrokerLauncherErrorV1::Server)
     }
     /// Qualify every backend and serve with caller-owned readiness and shutdown.
@@ -116,6 +123,7 @@ impl RuntimeProviderBrokerDeploymentV1 {
     {
         serve_runtime_provider_broker_with_lifecycle_v1(
             &self.bindings,
+            &self.endpoint_path,
             self.backends,
             lifecycle,
             on_ready,
@@ -142,6 +150,7 @@ impl RuntimeProviderBrokerDeploymentV1 {
     {
         serve_runtime_provider_broker_with_fallible_readiness_v1(
             &self.bindings,
+            &self.endpoint_path,
             self.backends,
             lifecycle,
             on_ready,
@@ -191,8 +200,8 @@ impl std::error::Error for RuntimeProviderBrokerLauncherErrorV1 {
 ///
 /// The deployment package statically selects and constructs its concrete
 /// [`RuntimeProviderBrokerBackendRegistryV1`]. The process CLI accepts only the
-/// canonical public catalog path: it has no private-key, credential, dynamic
-/// plugin, environment-selector, or endpoint-override argument.
+/// canonical public catalog and validated broker endpoint paths: it has no
+/// private-key, credential, dynamic plugin, or environment-selector argument.
 #[derive(Clone, Debug, Parser, PartialEq, Eq)]
 #[command(
     name = "sorafs_runtime_provider_broker",
@@ -203,12 +212,20 @@ pub struct RuntimeProviderBrokerExecutableArgsV1 {
     /// Absolute path to the canonical secret-free V1 provider catalog.
     #[arg(long, value_name = "ABSOLUTE_PATH")]
     catalog: PathBuf,
+    /// Public absolute path of this broker's authenticated Unix socket.
+    #[arg(long = "broker-endpoint", value_name = "ABSOLUTE_SOCKET_PATH")]
+    broker_endpoint: RuntimeProviderBrokerEndpointPath,
 }
 impl RuntimeProviderBrokerExecutableArgsV1 {
     /// Return the operator-supplied canonical catalog path.
     #[must_use]
     pub fn catalog_path(&self) -> &Path {
         &self.catalog
+    }
+    /// Return the validated public endpoint path.
+    #[must_use]
+    pub fn broker_endpoint(&self) -> &RuntimeProviderBrokerEndpointPath {
+        &self.broker_endpoint
     }
 }
 /// Fully assembled process shell for a statically linked deployment broker.
@@ -234,7 +251,34 @@ impl RuntimeProviderBrokerExecutableV1 {
         args: &RuntimeProviderBrokerExecutableArgsV1,
         registry: &dyn RuntimeProviderBrokerBackendRegistryV1,
     ) -> Result<Self, RuntimeProviderBrokerExecutableErrorV1> {
-        Self::try_from_catalog_file(args.catalog_path(), registry)
+        Self::try_from_catalog_file(args.catalog_path(), args.broker_endpoint.clone(), registry)
+    }
+    /// Assemble the feature-isolated disposable broker from a canonically
+    /// decoded owner-private catalog and the stock backend registry.
+    ///
+    /// The caller must obtain `bindings` with
+    /// [`load_owner_private_runtime_provider_broker_catalog_file_v1`]. This
+    /// path is unavailable in every shipping build.
+    ///
+    /// # Errors
+    ///
+    /// Preserves exact backend resolution and deployment errors.
+    #[cfg(all(
+        feature = "test-network-disposable-broker",
+        any(target_os = "linux", target_os = "macos")
+    ))]
+    pub fn try_from_owner_private_catalog_v1(
+        bindings: IrohaRuntimeProviderBindingsV1,
+        endpoint_path: RuntimeProviderBrokerEndpointPath,
+        registry: &dyn RuntimeProviderBrokerBackendRegistryV1,
+    ) -> Result<Self, RuntimeProviderBrokerExecutableErrorV1> {
+        let deployment =
+            RuntimeProviderBrokerDeploymentV1::try_new(bindings, endpoint_path, registry)
+                .map_err(RuntimeProviderBrokerExecutableErrorV1::Launcher)?;
+        Ok(Self {
+            deployment,
+            lifecycle: Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
+        })
     }
     /// Load one canonical catalog file and resolve its complete backend set.
     ///
@@ -243,11 +287,13 @@ impl RuntimeProviderBrokerExecutableV1 {
     /// Returns the same fail-closed categories as [`Self::try_from_args`].
     pub fn try_from_catalog_file(
         catalog_path: &Path,
+        endpoint_path: RuntimeProviderBrokerEndpointPath,
         registry: &dyn RuntimeProviderBrokerBackendRegistryV1,
     ) -> Result<Self, RuntimeProviderBrokerExecutableErrorV1> {
         let bindings = load_runtime_provider_broker_catalog_file_v1(catalog_path)?;
-        let deployment = RuntimeProviderBrokerDeploymentV1::try_new(bindings, registry)
-            .map_err(RuntimeProviderBrokerExecutableErrorV1::Launcher)?;
+        let deployment =
+            RuntimeProviderBrokerDeploymentV1::try_new(bindings, endpoint_path, registry)
+                .map_err(RuntimeProviderBrokerExecutableErrorV1::Launcher)?;
         Ok(Self {
             deployment,
             lifecycle: Arc::new(RuntimeProviderBrokerLifecycleV1::new()),
@@ -440,13 +486,37 @@ pub fn load_runtime_provider_broker_catalog_file_v1(
 ) -> Result<IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerExecutableErrorV1> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        load_runtime_provider_broker_catalog_file_on_unix_v1(catalog_path)
+        load_runtime_provider_broker_catalog_file_on_unix_v1(
+            catalog_path,
+            trusted_runtime_provider_catalog_owner_uid_v1(),
+        )
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = catalog_path;
         Err(RuntimeProviderBrokerExecutableErrorV1::UnsupportedPlatform)
     }
+}
+/// Read an owner-private public catalog only for the non-shipping disposable broker.
+///
+/// It retains the stock no-symlink, all-ancestor, single-link, mode, inode,
+/// bounded-read, and canonical Norito checks. Only the expected file owner is
+/// the local service UID rather than the host package administrator.
+///
+/// # Errors
+///
+/// Rejects any untrusted path, file identity, or catalog encoding.
+#[cfg(all(
+    feature = "test-network-disposable-broker",
+    any(target_os = "linux", target_os = "macos")
+))]
+pub fn load_owner_private_runtime_provider_broker_catalog_file_v1(
+    catalog_path: &Path,
+) -> Result<IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerExecutableErrorV1> {
+    load_runtime_provider_broker_catalog_file_on_unix_v1(
+        catalog_path,
+        rustix::process::geteuid().as_raw(),
+    )
 }
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -484,8 +554,8 @@ impl RuntimeProviderCatalogFileIdentityV1 {
 fn trusted_runtime_provider_catalog_owner_uid_v1() -> u32 {
     #[cfg(test)]
     {
-        // Unit fixtures cannot install root-owned files. This branch is absent
-        // from every production build; the shipped loader accepts root only.
+        // Unit fixtures cannot install root-owned files. Shipping builds and
+        // the production loader in feature-isolated builds accept root only.
         rustix::process::geteuid().as_raw()
     }
     #[cfg(not(test))]
@@ -496,6 +566,7 @@ fn trusted_runtime_provider_catalog_owner_uid_v1() -> u32 {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn validate_runtime_provider_catalog_path_v1(
     catalog_path: &Path,
+    trusted_owner_uid: u32,
 ) -> Result<(), RuntimeProviderBrokerExecutableErrorV1> {
     use std::{os::unix::fs::MetadataExt as _, path::Component};
     if !catalog_path.is_absolute()
@@ -508,7 +579,6 @@ fn validate_runtime_provider_catalog_path_v1(
     let parent = catalog_path
         .parent()
         .ok_or(RuntimeProviderBrokerExecutableErrorV1::InvalidCatalogPath)?;
-    let trusted_owner_uid = trusted_runtime_provider_catalog_owner_uid_v1();
     for directory in parent.ancestors() {
         let metadata = std::fs::symlink_metadata(directory)
             .map_err(|_| RuntimeProviderBrokerExecutableErrorV1::CatalogUnavailable)?;
@@ -525,9 +595,10 @@ fn validate_runtime_provider_catalog_path_v1(
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn load_runtime_provider_broker_catalog_file_on_unix_v1(
     catalog_path: &Path,
+    trusted_owner_uid: u32,
 ) -> Result<IrohaRuntimeProviderBindingsV1, RuntimeProviderBrokerExecutableErrorV1> {
     use std::io::Read as _;
-    validate_runtime_provider_catalog_path_v1(catalog_path)?;
+    validate_runtime_provider_catalog_path_v1(catalog_path, trusted_owner_uid)?;
     let descriptor = rustix::fs::open(
         catalog_path,
         rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
@@ -539,7 +610,6 @@ fn load_runtime_provider_broker_catalog_file_on_unix_v1(
         .metadata()
         .map_err(|_| RuntimeProviderBrokerExecutableErrorV1::CatalogUnavailable)?;
     let before = RuntimeProviderCatalogFileIdentityV1::from_metadata(&before_metadata);
-    let trusted_owner_uid = trusted_runtime_provider_catalog_owner_uid_v1();
     if !before_metadata.is_file()
         || before.owner != trusted_owner_uid
         || before.mode & 0o7222 != 0
@@ -668,6 +738,12 @@ mod tests {
     use super::*;
     use crate::IrohaRuntimeProviderSlotV1;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    fn endpoint() -> RuntimeProviderBrokerEndpointPath {
+        RuntimeProviderBrokerEndpointPath::try_new(
+            iroha_config::parameters::defaults::runtime_provider_broker::endpoint_path(),
+        )
+        .expect("validated default broker endpoint")
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     use std::{fs, sync::atomic::AtomicBool};
     struct RecordingRegistry {
@@ -729,6 +805,7 @@ mod tests {
         let registry = RecordingRegistry::available();
         let result = RuntimeProviderBrokerDeploymentV1::try_new(
             IrohaRuntimeProviderBindingsV1::empty_for_test("sora.production"),
+            endpoint(),
             &registry,
         );
         assert_eq!(
@@ -741,7 +818,8 @@ mod tests {
     fn backend_registry_failure_category_is_preserved() {
         let registry =
             RecordingRegistry::failing(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
-        let result = RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), &registry);
+        let result =
+            RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), endpoint(), &registry);
         assert_eq!(
             result.expect_err("stale provider must reject broker assembly"),
             RuntimeProviderBrokerLauncherErrorV1::BackendRegistry(
@@ -776,22 +854,48 @@ mod tests {
         assert!(std::error::Error::source(&server).is_some());
     }
     #[test]
-    fn executable_cli_accepts_only_the_public_catalog_path() {
+    fn executable_cli_requires_catalog_and_validated_public_endpoint() {
         let args = RuntimeProviderBrokerExecutableArgsV1::try_parse_from([
             "sorafs_runtime_provider_broker",
             "--catalog",
             "/var/lib/iroha/runtime-provider-catalog-v1.norito",
+            "--broker-endpoint",
+            "/var/iroha/run/runtime-provider-broker-v1.sock",
         ])
-        .expect("parse the sole public launcher input");
+        .expect("parse exact public launcher inputs");
         assert_eq!(
             args.catalog_path(),
             Path::new("/var/lib/iroha/runtime-provider-catalog-v1.norito")
+        );
+        assert_eq!(
+            args.broker_endpoint().as_path(),
+            Path::new("/var/iroha/run/runtime-provider-broker-v1.sock")
         );
         assert!(
             RuntimeProviderBrokerExecutableArgsV1::try_parse_from([
                 "sorafs_runtime_provider_broker"
             ])
             .is_err()
+        );
+        assert!(
+            RuntimeProviderBrokerExecutableArgsV1::try_parse_from([
+                "sorafs_runtime_provider_broker",
+                "--catalog",
+                "/var/lib/iroha/runtime-provider-catalog-v1.norito",
+            ])
+            .is_err(),
+            "broker endpoint is required"
+        );
+        assert!(
+            RuntimeProviderBrokerExecutableArgsV1::try_parse_from([
+                "sorafs_runtime_provider_broker",
+                "--catalog",
+                "/var/lib/iroha/runtime-provider-catalog-v1.norito",
+                "--broker-endpoint",
+                "../runtime-provider-broker-v1.sock",
+            ])
+            .is_err(),
+            "relative endpoint is rejected before credential loading"
         );
         for forbidden in [
             "--socket",
@@ -805,6 +909,8 @@ mod tests {
                     "sorafs_runtime_provider_broker",
                     "--catalog",
                     "/var/lib/iroha/runtime-provider-catalog-v1.norito",
+                    "--broker-endpoint",
+                    "/var/iroha/run/runtime-provider-broker-v1.sock",
                     forbidden,
                     "forbidden",
                 ])
@@ -826,12 +932,33 @@ mod tests {
             bytes
         );
     }
+    #[cfg(all(
+        feature = "test-network-disposable-broker",
+        any(target_os = "linux", target_os = "macos")
+    ))]
+    #[test]
+    fn disposable_catalog_uses_the_same_canonical_loader_and_backend_assembly() {
+        let catalog = qualified_catalog();
+        let bytes = catalog.export_canonical_v1().expect("encode catalog");
+        let (_directory, path) = write_catalog_file(&bytes);
+        let loaded = load_owner_private_runtime_provider_broker_catalog_file_v1(&path)
+            .expect("load exact owner-private catalog");
+        assert_eq!(loaded, catalog);
+        let executable = RuntimeProviderBrokerExecutableV1::try_from_owner_private_catalog_v1(
+            loaded,
+            endpoint(),
+            &RecordingRegistry::available(),
+        )
+        .expect("assemble exact stock backend set");
+        assert_eq!(executable.binding_count(), catalog.len());
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[test]
     fn catalog_file_loader_rejects_relative_missing_and_noncanonical_input() {
         let registry = RecordingRegistry::available();
         let relative = RuntimeProviderBrokerExecutableV1::try_from_catalog_file(
             Path::new("providers.norito"),
+            endpoint(),
             &registry,
         );
         assert!(matches!(
@@ -845,6 +972,7 @@ mod tests {
             .expect("canonicalize current directory");
         let missing = RuntimeProviderBrokerExecutableV1::try_from_catalog_file(
             &root.join("absent-runtime-provider-catalog-v1.norito"),
+            endpoint(),
             &registry,
         );
         assert!(matches!(
@@ -854,7 +982,7 @@ mod tests {
         assert_eq!(registry.calls.load(Ordering::Relaxed), 0);
         let (_directory, path) = write_catalog_file(b"not a canonical catalog");
         assert!(matches!(
-            RuntimeProviderBrokerExecutableV1::try_from_catalog_file(&path, &registry),
+            RuntimeProviderBrokerExecutableV1::try_from_catalog_file(&path, endpoint(), &registry),
             Err(RuntimeProviderBrokerExecutableErrorV1::Catalog(
                 IrohaRuntimeProviderCatalogErrorV1::NonCanonicalEncoding
             ))
@@ -907,6 +1035,7 @@ mod tests {
             RecordingRegistry::failing(IrohaRuntimeProviderRegistryErrorV1::TestProviderRejected);
         let args = RuntimeProviderBrokerExecutableArgsV1 {
             catalog: path.clone(),
+            broker_endpoint: endpoint(),
         };
         assert!(matches!(
             RuntimeProviderBrokerExecutableV1::try_from_args(&args, &failing),
@@ -919,6 +1048,7 @@ mod tests {
         assert_eq!(failing.calls.load(Ordering::Relaxed), 1);
         let executable = RuntimeProviderBrokerExecutableV1::try_from_catalog_file(
             &path,
+            endpoint(),
             &RecordingRegistry::available(),
         )
         .expect("assemble executable shell");
@@ -1023,8 +1153,9 @@ mod tests {
     #[test]
     fn assembled_launcher_reports_only_public_summary() {
         let registry = RecordingRegistry::available();
-        let deployment = RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), &registry)
-            .expect("assemble public catalog");
+        let deployment =
+            RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), endpoint(), &registry)
+                .expect("assemble public catalog");
         assert_eq!(deployment.binding_count(), 1);
         let debug = format!("{deployment:?}");
         assert!(debug.contains("sora.production"));
@@ -1036,8 +1167,9 @@ mod tests {
     #[test]
     fn serve_rejects_incomplete_backend_set_before_endpoint_access() {
         let registry = RecordingRegistry::available();
-        let deployment = RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), &registry)
-            .expect("assemble public catalog");
+        let deployment =
+            RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), endpoint(), &registry)
+                .expect("assemble public catalog");
         assert_eq!(
             deployment
                 .serve()
@@ -1051,8 +1183,9 @@ mod tests {
     #[test]
     fn pre_requested_shutdown_suppresses_readiness_callback() {
         let registry = RecordingRegistry::available();
-        let deployment = RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), &registry)
-            .expect("assemble public catalog");
+        let deployment =
+            RuntimeProviderBrokerDeploymentV1::try_new(qualified_catalog(), endpoint(), &registry)
+                .expect("assemble public catalog");
         let lifecycle = Arc::new(RuntimeProviderBrokerLifecycleV1::new());
         lifecycle.request_shutdown();
         let ready = AtomicBool::new(false);

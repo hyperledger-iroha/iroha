@@ -330,6 +330,12 @@ pub enum StorageError {
         /// Canonical manifest identifier (hex-encoded digest).
         manifest_id: String,
     },
+    /// Authenticated metadata is retained, but payload integrity has not been restored.
+    #[error("manifest {manifest_id} payload is unavailable pending verified repair")]
+    PayloadUnavailable {
+        /// Canonical manifest identifier (hex-encoded digest).
+        manifest_id: String,
+    },
     /// Another caller is already retiring the requested manifest.
     #[error("manifest {manifest_id} retirement is already in progress")]
     ManifestRetirementInProgress {
@@ -378,6 +384,7 @@ pub struct StorageBackend {
     durability_healthy: AtomicBool,
     durability_failure: Mutex<Option<String>>,
     retiring_manifests: Mutex<BTreeSet<String>>,
+    publisher_sources: Mutex<PublisherSourceCacheV1>,
     state: RwLock<StorageState>,
 }
 struct ManifestRetirementIntent<'backend> {
@@ -519,6 +526,7 @@ pub struct StoredManifest {
     manifest_path: PathBuf,
     io_lock: Arc<RwLock<()>>,
     retirement_pending: Arc<AtomicBool>,
+    payload_available: Arc<AtomicBool>,
 }
 /// Callback-scoped lifecycle lease for one storage-admitted payload.
 ///
@@ -562,6 +570,9 @@ impl AdmittedPayloadReadLeaseV1<'_> {
     ///
     /// Returns a payload-free permission error after the bounded reader-pass allowance is spent.
     pub fn open_reader(&self) -> io::Result<AdmittedPayloadReaderV1<'_>> {
+        self.manifest
+            .ensure_payload_available()
+            .map_err(|_| admitted_payload_read_error())?;
         let opened = self.opened_readers.get();
         if opened >= ADMITTED_PAYLOAD_MAX_FRESH_READERS_V1 {
             return Err(io::Error::new(
@@ -593,6 +604,9 @@ pub struct AdmittedPayloadReaderV1<'manifest> {
 }
 impl Read for AdmittedPayloadReaderV1<'_> {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        self.manifest
+            .ensure_payload_available()
+            .map_err(|_| admitted_payload_read_error())?;
         if output.is_empty() || self.offset >= self.manifest.content_length() {
             return Ok(0);
         }
@@ -700,6 +714,7 @@ struct IngestedPayload {
     pdp_tree: Option<Arc<PdpMerkleTreeV1>>,
 }
 struct ManifestRuntimeProofs {
+    payload_available: bool,
     por_commitment_digest: Option<[u8; 32]>,
     por_tree: Arc<PorMerkleTree>,
     pdp_commitment_digest: Option<[u8; 32]>,
@@ -767,6 +782,7 @@ impl StoredManifest {
             manifest_path: try_clone_path_buf(&self.manifest_path, "runtime manifest path")?,
             io_lock: Arc::clone(&self.io_lock),
             retirement_pending: Arc::clone(&self.retirement_pending),
+            payload_available: Arc::clone(&self.payload_available),
         })
     }
     /// Canonical identifier derived from the manifest digest (hex string).
@@ -992,6 +1008,9 @@ impl StoredManifest {
                 manifest_id: self.manifest_id.clone(),
             });
         }
+        self.read_manifest_with_bytes()
+    }
+    fn read_manifest_with_bytes(&self) -> Result<(ManifestV1, Vec<u8>), StorageError> {
         let path = self.manifest_path();
         let bytes = read_bounded_regular_file(path, MAX_MANIFEST_BYTES)?;
         let manifest: ManifestV1 = norito::decode_from_bytes_with_limits(
@@ -1004,7 +1023,11 @@ impl StoredManifest {
             || manifest.root_cid != self.manifest_cid
             || manifest.content_length != self.content_length
             || canonical_profile_handle(&manifest) != self.chunk_profile_handle
-            || manifest.por_root != *self.por_tree.root()
+            || self
+                .por_commitment
+                .as_ref()
+                .map(|commitment| commitment.root)
+                != Some(manifest.por_root)
         {
             return Err(corrupt_storage_state(
                 path,
@@ -1088,15 +1111,28 @@ impl StoredManifest {
             files,
         })
     }
-    /// Build an in-memory PoR tree for the stored manifest.
-    #[must_use]
-    pub fn por_tree(&self) -> PorMerkleTree {
-        (*self.por_tree).clone()
+    /// Clone the verified PoR tree, refusing quarantined payloads.
+    pub fn por_tree(&self) -> Result<PorMerkleTree, StorageError> {
+        self.por_tree_ref().cloned()
     }
     /// Borrow the runtime PoR tree rebuilt from verified payload bytes.
+    pub fn por_tree_ref(&self) -> Result<&PorMerkleTree, StorageError> {
+        self.ensure_payload_available()?;
+        Ok(self.por_tree.as_ref())
+    }
+    /// Whether this runtime snapshot has verified payload and proof indexes.
     #[must_use]
-    pub fn por_tree_ref(&self) -> &PorMerkleTree {
-        self.por_tree.as_ref()
+    pub fn payload_available(&self) -> bool {
+        self.payload_available.load(Ordering::Acquire)
+    }
+    fn ensure_payload_available(&self) -> Result<(), StorageError> {
+        if self.payload_available() {
+            Ok(())
+        } else {
+            Err(StorageError::PayloadUnavailable {
+                manifest_id: self.manifest_id.clone(),
+            })
+        }
     }
     /// Domain-separated digest binding the bounded PoR commitment into the index.
     #[must_use]
@@ -1116,7 +1152,9 @@ impl StoredManifest {
     /// Canonical runtime PDP tree rebuilt or constructed from verified payload bytes.
     #[must_use]
     pub fn pdp_tree(&self) -> Option<&PdpMerkleTreeV1> {
-        self.pdp_tree.as_deref()
+        self.payload_available()
+            .then(|| self.pdp_tree.as_deref())
+            .flatten()
     }
     /// Exact retained-node-slab bytes charged to the aggregate PDP tree budget.
     #[must_use]
@@ -1508,12 +1546,6 @@ fn increment_refcount(
         Err(index) => entries.insert(index, ChunkRefcountEntry { digest, count: 1 }),
     }
     Ok(())
-}
-fn refcount(entries: &[ChunkRefcountEntry], digest: &[u8; 32]) -> Option<u32> {
-    entries
-        .binary_search_by_key(digest, |entry| entry.digest)
-        .ok()
-        .map(|index| entries[index].count)
 }
 fn corrupt_storage_state(path: &Path, reason: impl Into<String>) -> StorageError {
     StorageError::CorruptStorageState {
@@ -2308,11 +2340,26 @@ fn rebuild_runtime_trees(
         .max(1);
     let mut chunk_store = ChunkStore::with_profile_and_heap_limit(profile, heap_limit)?;
     let mut source = ManifestPayload::new(manifest);
-    chunk_store.ingest_plan_source(&plan, &mut source)?;
+    chunk_store
+        .ingest_plan_source(&plan, &mut source)
+        .map_err(|error| {
+            if matches!(error, ChunkStoreError::PayloadDigestMismatch) {
+                // Each chunk already matched the authenticated plan. A different full-payload
+                // digest therefore corrupts the persisted metadata, not the repairable bytes.
+                corrupt_storage_state(
+                    manifest.manifest_path(),
+                    "persisted payload digest mismatch",
+                )
+            } else {
+                StorageError::from(error)
+            }
+        })?;
     let por_tree = Arc::new(chunk_store.take_por_tree());
     let pdp_tree = chunk_store.take_pdp_tree().map(Arc::new);
     Ok((por_tree, pdp_tree))
 }
+include!("store_payload_recovery.rs");
+include!("store_publisher_source.rs");
 fn validate_rebuilt_por(
     commitment: &StoredPorCommitmentV1,
     tree: &PorMerkleTree,
@@ -2494,6 +2541,7 @@ impl StorageBackend {
                 manifest_path,
                 io_lock,
                 ManifestRuntimeProofs {
+                    payload_available: false,
                     por_commitment_digest: Some(entry.por_commitment_digest),
                     por_tree: Arc::new(PorMerkleTree::empty()),
                     pdp_commitment_digest: entry.pdp_commitment_digest,
@@ -2502,27 +2550,30 @@ impl StorageBackend {
                 },
             )?;
             let profile = chunk_profile_from_manifest(&manifest)?;
-            let (rebuilt_por, rebuilt_pdp) = rebuild_runtime_trees(&stored_manifest, profile)
-                .map_err(|error| {
-                    corrupt_storage_state(
-                        &metadata_path,
-                        format!("failed to rebuild trees from verified chunk bytes: {error}"),
-                    )
-                })?;
-            validate_rebuilt_por(
-                stored_manifest.por_commitment.as_ref().ok_or_else(|| {
-                    corrupt_storage_state(&metadata_path, "runtime PoR commitment is missing")
-                })?,
-                &rebuilt_por,
-                &metadata_path,
-            )?;
-            validate_rebuilt_pdp(
-                stored_manifest.pdp_commitment.as_ref(),
-                rebuilt_pdp.as_deref(),
-                &metadata_path,
-            )?;
-            stored_manifest.por_tree = rebuilt_por;
-            stored_manifest.pdp_tree = rebuilt_pdp;
+            let plan = stored_manifest.try_to_car_plan(profile)?;
+            plan.verify_manifest_metadata(&manifest).map_err(|error| {
+                corrupt_storage_state(
+                    &metadata_path,
+                    format!("manifest plan identity mismatch: {error}"),
+                )
+            })?;
+            match rebuild_verified_runtime_trees(&stored_manifest, profile) {
+                Ok((rebuilt_por, rebuilt_pdp)) => {
+                    stored_manifest.por_tree = rebuilt_por;
+                    stored_manifest.pdp_tree = rebuilt_pdp;
+                    stored_manifest
+                        .payload_available
+                        .store(true, Ordering::Release);
+                }
+                Err(error) if payload_integrity_error(&error) => {
+                    iroha_logger::warn!(
+                        manifest_id = %stored_manifest.manifest_id(),
+                        %error,
+                        "retaining unavailable SoraFS payload for finalized native repair"
+                    );
+                }
+                Err(error) => return Err(error),
+            }
             stored_manifest.pdp_tree_memory_bytes = candidate_pdp_bytes;
             reserve_refcount_entries(&mut chunk_refcounts, stored_manifest.chunk_files.len())?;
             for chunk in &stored_manifest.chunk_files {
@@ -2593,6 +2644,7 @@ impl StorageBackend {
             durability_healthy: AtomicBool::new(true),
             durability_failure: Mutex::new(None),
             retiring_manifests: Mutex::new(BTreeSet::new()),
+            publisher_sources: Mutex::new(PublisherSourceCacheV1::default()),
             state: RwLock::new(state),
         })
     }
@@ -2932,68 +2984,80 @@ impl StorageBackend {
                 manifest_id: manifest_id.to_owned(),
             });
         }
-        let mut state = self.state.write().expect("storage state poisoned");
-        if self.manifest_retirement_pending(manifest_id) {
-            return Err(StorageError::ManifestRetirementInProgress {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        self.ensure_durability_healthy()?;
-        let manifest =
-            state
-                .manifests
-                .get_mut(manifest_id)
-                .ok_or_else(|| StorageError::ManifestNotFound {
+        loop {
+            let mut state = self.state.write().expect("storage state poisoned");
+            if self.manifest_retirement_pending(manifest_id) {
+                return Err(StorageError::ManifestRetirementInProgress {
                     manifest_id: manifest_id.to_owned(),
-                })?;
-        let io_lock = Arc::clone(&manifest.io_lock);
-        let _io_guard = io_lock
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.ensure_durability_healthy()?;
-        let expected = manifest.chunk_files.len();
-        if chunk_roles.len() != expected {
-            return Err(StorageError::ChunkRoleLengthMismatch {
-                expected,
-                actual: chunk_roles.len(),
-            });
+                });
+            }
+            self.ensure_durability_healthy()?;
+            let manifest = state.manifests.get_mut(manifest_id).ok_or_else(|| {
+                StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                }
+            })?;
+            let io_lock = Arc::clone(&manifest.io_lock);
+            let _io_guard = match io_lock.try_write() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    drop(state);
+                    drop(
+                        io_lock
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                    continue;
+                }
+            };
+            self.ensure_durability_healthy()?;
+            let expected = manifest.chunk_files.len();
+            if chunk_roles.len() != expected {
+                return Err(StorageError::ChunkRoleLengthMismatch {
+                    expected,
+                    actual: chunk_roles.len(),
+                });
+            }
+            let mut updated = manifest.try_clone_runtime()?;
+            updated.stripe_layout = Some(stripe_layout);
+            for (chunk, role) in updated.chunk_files.iter_mut().zip(chunk_roles.iter()) {
+                chunk.role = Some(role.role);
+                chunk.group_id = Some(role.group_id);
+            }
+            let record = updated.to_record()?;
+            let metadata_path = updated
+                .manifest_path
+                .parent()
+                .ok_or_else(|| {
+                    corrupt_storage_state(&updated.manifest_path, "manifest path has no parent")
+                })?
+                .join(METADATA_FILE_NAME);
+            let metadata_bytes = norito::to_bytes(&record)?;
+            ensure_persistent_artifact_size(
+                "manifest metadata",
+                &metadata_bytes,
+                MAX_MANIFEST_METADATA_BYTES,
+            )?;
+            let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
+                Ok(()) => None,
+                Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
+                Err(AtomicWriteError::BeforeCommit(source)) => {
+                    return Err(StorageError::Io(source));
+                }
+            };
+            *manifest = Arc::new(updated);
+            if let Some(error) = durability_error {
+                self.fail_stop_durability(&error);
+                return Err(error.into_storage_error());
+            }
+            return Ok(());
         }
-        let mut updated = manifest.try_clone_runtime()?;
-        updated.stripe_layout = Some(stripe_layout);
-        for (chunk, role) in updated.chunk_files.iter_mut().zip(chunk_roles.iter()) {
-            chunk.role = Some(role.role);
-            chunk.group_id = Some(role.group_id);
-        }
-        let record = updated.to_record()?;
-        let metadata_path = updated
-            .manifest_path
-            .parent()
-            .ok_or_else(|| {
-                corrupt_storage_state(&updated.manifest_path, "manifest path has no parent")
-            })?
-            .join(METADATA_FILE_NAME);
-        let metadata_bytes = norito::to_bytes(&record)?;
-        ensure_persistent_artifact_size(
-            "manifest metadata",
-            &metadata_bytes,
-            MAX_MANIFEST_METADATA_BYTES,
-        )?;
-        let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
-            Ok(()) => None,
-            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
-            Err(AtomicWriteError::BeforeCommit(source)) => return Err(StorageError::Io(source)),
-        };
-        *manifest = Arc::new(updated);
-        if let Some(error) = durability_error {
-            self.fail_stop_durability(&error);
-            return Err(error.into_storage_error());
-        }
-        Ok(())
     }
     /// Persist updated file-layout and optional stripe metadata for an existing manifest.
     ///
-    /// This supports idempotent re-pinning of the same manifest payload with richer logical-file
-    /// metadata, such as upgrading a raw blob pin into a site manifest for the same content CID.
+    /// The complete file layout must reproduce the existing manifest's root CID. Changing paths
+    /// or converting a raw blob into a site requires a new canonical manifest identity.
     pub fn attach_plan_metadata(
         &self,
         manifest_id: &str,
@@ -3009,90 +3073,107 @@ impl StorageBackend {
         }
         let files = stored_files_from_plan(plan)?;
         validate_persistent_file_layout(&files)?;
-        let mut state = self.state.write().expect("storage state poisoned");
-        if self.manifest_retirement_pending(manifest_id) {
-            return Err(StorageError::ManifestRetirementInProgress {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        self.ensure_durability_healthy()?;
-        let manifest =
-            state
-                .manifests
-                .get_mut(manifest_id)
-                .ok_or_else(|| StorageError::ManifestNotFound {
+        loop {
+            let mut state = self.state.write().expect("storage state poisoned");
+            if self.manifest_retirement_pending(manifest_id) {
+                return Err(StorageError::ManifestRetirementInProgress {
                     manifest_id: manifest_id.to_owned(),
+                });
+            }
+            self.ensure_durability_healthy()?;
+            let manifest = state.manifests.get_mut(manifest_id).ok_or_else(|| {
+                StorageError::ManifestNotFound {
+                    manifest_id: manifest_id.to_owned(),
+                }
+            })?;
+            let io_lock = Arc::clone(&manifest.io_lock);
+            let _io_guard = match io_lock.try_write() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    drop(state);
+                    drop(
+                        io_lock
+                            .write()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                    continue;
+                }
+            };
+            self.ensure_durability_healthy()?;
+            if manifest.content_length != plan.content_length
+                || manifest.payload_digest != *plan.payload_digest.as_bytes()
+            {
+                return Err(StorageError::ManifestExists {
+                    manifest_id: manifest_id.to_owned(),
+                });
+            }
+            let chunks_match = manifest.chunk_files.len() == plan.chunks.len()
+                && manifest
+                    .chunk_files
+                    .iter()
+                    .zip(&plan.chunks)
+                    .all(|(stored, planned)| {
+                        stored.offset == planned.offset
+                            && stored.length == planned.length
+                            && stored.digest == planned.digest
+                    });
+            if !chunks_match {
+                return Err(StorageError::ManifestExists {
+                    manifest_id: manifest_id.to_owned(),
+                });
+            }
+            let (canonical_manifest, _) = manifest.read_manifest_with_bytes()?;
+            plan.verify_manifest_metadata(&canonical_manifest)
+                .map_err(|error| StorageError::InvalidFileLayout {
+                    reason: format!("layout changes the admitted manifest identity: {error}"),
                 })?;
-        let io_lock = Arc::clone(&manifest.io_lock);
-        let _io_guard = io_lock
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.ensure_durability_healthy()?;
-        if manifest.content_length != plan.content_length
-            || manifest.payload_digest != *plan.payload_digest.as_bytes()
-        {
-            return Err(StorageError::ManifestExists {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        let chunks_match = manifest.chunk_files.len() == plan.chunks.len()
-            && manifest
-                .chunk_files
-                .iter()
-                .zip(&plan.chunks)
-                .all(|(stored, planned)| {
-                    stored.offset == planned.offset
-                        && stored.length == planned.length
-                        && stored.digest == planned.digest
-                });
-        if !chunks_match {
-            return Err(StorageError::ManifestExists {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        let mut updated = manifest.try_clone_runtime()?;
-        if let Some(roles) = chunk_roles {
-            let expected = manifest.chunk_files.len();
-            if roles.len() != expected {
-                return Err(StorageError::ChunkRoleLengthMismatch {
-                    expected,
-                    actual: roles.len(),
-                });
+            let mut updated = manifest.try_clone_runtime()?;
+            if let Some(roles) = chunk_roles {
+                let expected = manifest.chunk_files.len();
+                if roles.len() != expected {
+                    return Err(StorageError::ChunkRoleLengthMismatch {
+                        expected,
+                        actual: roles.len(),
+                    });
+                }
+                for (chunk, role) in updated.chunk_files.iter_mut().zip(roles.iter()) {
+                    chunk.role = Some(role.role);
+                    chunk.group_id = Some(role.group_id);
+                }
             }
-            for (chunk, role) in updated.chunk_files.iter_mut().zip(roles.iter()) {
-                chunk.role = Some(role.role);
-                chunk.group_id = Some(role.group_id);
+            if let Some(layout) = stripe_layout {
+                updated.stripe_layout = Some(layout);
             }
+            updated.files = files;
+            let record = updated.to_record()?;
+            let metadata_path = updated
+                .manifest_path
+                .parent()
+                .ok_or_else(|| {
+                    corrupt_storage_state(&updated.manifest_path, "manifest path has no parent")
+                })?
+                .join(METADATA_FILE_NAME);
+            let metadata_bytes = norito::to_bytes(&record)?;
+            ensure_persistent_artifact_size(
+                "manifest metadata",
+                &metadata_bytes,
+                MAX_MANIFEST_METADATA_BYTES,
+            )?;
+            let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
+                Ok(()) => None,
+                Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
+                Err(AtomicWriteError::BeforeCommit(source)) => {
+                    return Err(StorageError::Io(source));
+                }
+            };
+            *manifest = Arc::new(updated);
+            if let Some(error) = durability_error {
+                self.fail_stop_durability(&error);
+                return Err(error.into_storage_error());
+            }
+            return Ok(());
         }
-        if let Some(layout) = stripe_layout {
-            updated.stripe_layout = Some(layout);
-        }
-        updated.files = files;
-        let record = updated.to_record()?;
-        let metadata_path = updated
-            .manifest_path
-            .parent()
-            .ok_or_else(|| {
-                corrupt_storage_state(&updated.manifest_path, "manifest path has no parent")
-            })?
-            .join(METADATA_FILE_NAME);
-        let metadata_bytes = norito::to_bytes(&record)?;
-        ensure_persistent_artifact_size(
-            "manifest metadata",
-            &metadata_bytes,
-            MAX_MANIFEST_METADATA_BYTES,
-        )?;
-        let durability_error = match write_atomic_classified(&metadata_path, &metadata_bytes) {
-            Ok(()) => None,
-            Err(error @ AtomicWriteError::DurabilityUncertain { .. }) => Some(error),
-            Err(AtomicWriteError::BeforeCommit(source)) => return Err(StorageError::Io(source)),
-        };
-        *manifest = Arc::new(updated);
-        if let Some(error) = durability_error {
-            self.fail_stop_durability(&error);
-            return Err(error.into_storage_error());
-        }
-        Ok(())
     }
     /// Ingest a manifest payload using the provided build plan and payload stream.
     ///
@@ -3123,6 +3204,26 @@ impl StorageBackend {
         stripe_layout: Option<DaStripeLayout>,
         chunk_roles: Option<Vec<ChunkRoleMetadata>>,
     ) -> Result<String, StorageError> {
+        self.ingest_manifest_guarded(
+            manifest,
+            plan,
+            reader,
+            (stripe_layout, chunk_roles),
+            &mut |_| Ok(()),
+        )
+    }
+
+    /// Perform the normal verified ingest, checking live authority just before serialized publication.
+    /// The callback must release any external state view before returning; storage never retains it.
+    fn ingest_manifest_guarded<R: Read>(
+        &self,
+        manifest: &ManifestV1,
+        plan: &CarBuildPlan,
+        reader: &mut R,
+        layout: (Option<DaStripeLayout>, Option<Vec<ChunkRoleMetadata>>),
+        before_publish: &mut impl FnMut(&mut R) -> Result<(), StorageError>,
+    ) -> Result<String, StorageError> {
+        let (stripe_layout, chunk_roles) = layout;
         self.ensure_durability_healthy()?;
         if manifest.version != MANIFEST_VERSION_V1 {
             return Err(StorageError::UnsupportedManifestVersion {
@@ -3292,6 +3393,7 @@ impl StorageBackend {
             manifest_dir.join(MANIFEST_FILE_NAME),
             Arc::new(RwLock::new(())),
             ManifestRuntimeProofs {
+                payload_available: true,
                 por_commitment_digest: Some(por_commitment_digest),
                 por_tree,
                 pdp_commitment_digest,
@@ -3385,6 +3487,9 @@ impl StorageBackend {
                 return Err(StorageError::from(err));
             }
         }
+        // All payload and metadata checks are finished. Refusal here leaves the transaction
+        // in staging, so the existing guards remove it and release every reservation.
+        before_publish(reader)?;
         fs::rename(&staging_dir, &manifest_dir)?;
         let staging_root = staging_dir.parent().ok_or_else(|| {
             corrupt_storage_state(&staging_dir, "ingest transaction path has no parent")
@@ -3430,7 +3535,9 @@ impl StorageBackend {
         state.index = new_index;
         state.total_bytes = new_total_bytes;
         state.pdp_tree_bytes = new_pdp_tree_bytes;
-        state.manifests.insert(runtime_manifest_id, Arc::new(stored_manifest));
+        state
+            .manifests
+            .insert(runtime_manifest_id, Arc::new(stored_manifest));
         state.chunk_refcounts = refcounts;
         reservation.release(&mut state);
         if let Some(error) = durability_error {
@@ -3454,35 +3561,49 @@ impl StorageBackend {
         manifest_id: &str,
         work: impl FnOnce(&StoredManifest) -> T,
     ) -> Result<T, StorageError> {
-        self.ensure_durability_healthy()?;
-        if self.manifest_retirement_pending(manifest_id) {
-            return Err(StorageError::ManifestRetirementInProgress {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        let state = self.state.read().expect("storage state poisoned");
-        if self.manifest_retirement_pending(manifest_id) {
-            return Err(StorageError::ManifestRetirementInProgress {
-                manifest_id: manifest_id.to_owned(),
-            });
-        }
-        let manifest =
-            state
-                .manifests
-                .get(manifest_id)
-                .ok_or_else(|| StorageError::ManifestNotFound {
+        loop {
+            self.ensure_durability_healthy()?;
+            if self.manifest_retirement_pending(manifest_id) {
+                return Err(StorageError::ManifestRetirementInProgress {
                     manifest_id: manifest_id.to_owned(),
-                })?;
-        let io_lock = Arc::clone(&manifest.io_lock);
-        let io_guard = io_lock
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.ensure_durability_healthy()?;
-        let manifest = Arc::clone(manifest);
-        drop(state);
-        let result = work(&manifest);
-        drop(io_guard);
-        Ok(result)
+                });
+            }
+            let state = self.state.read().expect("storage state poisoned");
+            if self.manifest_retirement_pending(manifest_id) {
+                return Err(StorageError::ManifestRetirementInProgress {
+                    manifest_id: manifest_id.to_owned(),
+                });
+            }
+            let manifest =
+                state
+                    .manifests
+                    .get(manifest_id)
+                    .ok_or_else(|| StorageError::ManifestNotFound {
+                        manifest_id: manifest_id.to_owned(),
+                    })?;
+            let io_lock = Arc::clone(&manifest.io_lock);
+            let io_guard = match io_lock.try_read() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    // A queued exclusive metadata writer may block another shared lease. Never
+                    // wait while retaining state: an existing repair lease must publish its roots.
+                    drop(state);
+                    drop(
+                        io_lock
+                            .read()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                    continue;
+                }
+            };
+            self.ensure_durability_healthy()?;
+            let manifest = Arc::clone(manifest);
+            drop(state);
+            let result = work(&manifest);
+            drop(io_guard);
+            return Ok(result);
+        }
     }
     /// Run work for the digest-selected manifest under its lifecycle read lease.
     ///
@@ -3493,34 +3614,48 @@ impl StorageBackend {
         digest: &[u8; 32],
         work: impl FnOnce(&StoredManifest) -> T,
     ) -> Result<Option<T>, StorageError> {
-        self.ensure_durability_healthy()?;
-        let manifest_id = hex::encode(digest);
-        if self.manifest_retirement_pending(&manifest_id) {
-            return Ok(None);
+        loop {
+            self.ensure_durability_healthy()?;
+            let manifest_id = hex::encode(digest);
+            if self.manifest_retirement_pending(&manifest_id) {
+                return Ok(None);
+            }
+            let state = self.state.read().expect("storage state poisoned");
+            if self.manifest_retirement_pending(&manifest_id) {
+                return Ok(None);
+            }
+            let Some(manifest) = state.manifests.get(&manifest_id) else {
+                return Ok(None);
+            };
+            if manifest.manifest_digest != *digest {
+                return Err(corrupt_storage_state(
+                    &self.index_path,
+                    "manifest map key disagrees with its canonical digest",
+                ));
+            }
+            let io_lock = Arc::clone(&manifest.io_lock);
+            let io_guard = match io_lock.try_read() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    // A queued exclusive metadata writer may block another shared lease. Never
+                    // wait while retaining state: an existing repair lease must publish its roots.
+                    drop(state);
+                    drop(
+                        io_lock
+                            .read()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner),
+                    );
+                    continue;
+                }
+            };
+            self.ensure_durability_healthy()?;
+            let manifest = Arc::clone(manifest);
+            drop(state);
+            let result = work(&manifest);
+            drop(io_guard);
+            return Ok(Some(result));
         }
-        let state = self.state.read().expect("storage state poisoned");
-        if self.manifest_retirement_pending(&manifest_id) {
-            return Ok(None);
-        }
-        let Some(manifest) = state.manifests.get(&manifest_id) else {
-            return Ok(None);
-        };
-        if manifest.manifest_digest != *digest {
-            return Err(corrupt_storage_state(
-                &self.index_path,
-                "manifest map key disagrees with its canonical digest",
-            ));
-        }
-        let io_lock = Arc::clone(&manifest.io_lock);
-        let io_guard = io_lock
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.ensure_durability_healthy()?;
-        let manifest = Arc::clone(manifest);
-        drop(state);
-        let result = work(&manifest);
-        drop(io_guard);
-        Ok(Some(result))
     }
     /// Run trusted local readback work with opaque fresh readers while retaining the manifest
     /// lifecycle lease.
@@ -3597,20 +3732,31 @@ impl StorageBackend {
     }
     fn next_access_sequence(&self) -> Result<u64, StorageError> {
         self.access_counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |previous| previous.checked_add(1))
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |previous| {
+                previous.checked_add(1)
+            })
             .map(|previous| previous + 1)
-            .map_err(|_| corrupt_storage_state(&self.index_path, "manifest access counter overflow"))
+            .map_err(|_| {
+                corrupt_storage_state(&self.index_path, "manifest access counter overflow")
+            })
     }
     fn with_manifest_for_access<T, F>(&self, manifest_id: &str, work: F) -> Result<T, StorageError>
     where
         F: FnOnce(&StoredManifest) -> Result<T, StorageError>,
     {
         self.with_manifest_io(manifest_id, |manifest| {
+            manifest.ensure_payload_available()?;
             // Recency is advisory process-local state. In particular, no reader may publish
             // an index snapshot after a concurrent admission or retirement has committed.
             let next_access = self.next_access_sequence()?;
-            manifest.last_access.fetch_max(next_access, Ordering::Relaxed);
-            work(manifest)
+            manifest
+                .last_access
+                .fetch_max(next_access, Ordering::Relaxed);
+            let result = work(manifest);
+            if result.as_ref().err().is_some_and(payload_integrity_error) {
+                manifest.payload_available.store(false, Ordering::Release);
+            }
+            result
         })?
     }
     /// Verify an entire offline payload under one manifest lifecycle read lease.
@@ -3671,6 +3817,7 @@ impl StorageBackend {
                     .ok_or_else(|| StorageError::ManifestNotFound {
                         manifest_id: manifest_id.to_owned(),
                     })?;
+            manifest.ensure_payload_available()?;
             if offset > manifest.content_length {
                 return Err(StorageError::RangeOutOfBounds {
                     offset,
@@ -3750,6 +3897,23 @@ impl StorageBackend {
             read_verified_chunk(record, chunk_index).map_err(StorageError::ChunkStore)
         })
     }
+    /// Read one verified chunk by ordinal without cloning or scanning the manifest plan.
+    ///
+    /// Returns `None` when the ordinal is absent. The lifecycle lease, integrity checks,
+    /// unavailable-payload guard and volatile access accounting match other payload reads.
+    pub fn read_chunk_at(
+        &self,
+        manifest_id: &str,
+        index: usize,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.with_manifest_for_access(manifest_id, |manifest| {
+            manifest
+                .chunk_files
+                .get(index)
+                .map(|record| read_verified_chunk(record, index).map_err(StorageError::ChunkStore))
+                .transpose()
+        })
+    }
     /// Sample PoR leaves for the specified manifest.
     pub fn sample_por(
         &self,
@@ -3768,15 +3932,16 @@ impl StorageBackend {
             });
         }
         if count == 0 {
-            if self.manifest(manifest_id).is_none() {
-                return Err(StorageError::ManifestNotFound {
-                    manifest_id: manifest_id.to_owned(),
-                });
-            }
+            let manifest =
+                self.manifest(manifest_id)
+                    .ok_or_else(|| StorageError::ManifestNotFound {
+                        manifest_id: manifest_id.to_owned(),
+                    })?;
+            manifest.ensure_payload_available()?;
             return Ok(Vec::new());
         }
         self.with_manifest_for_access(manifest_id, |manifest| {
-            let por_tree = manifest.por_tree_ref();
+            let por_tree = manifest.por_tree_ref()?;
             let total = por_tree.leaf_count();
             if total == 0 {
                 return Ok(Vec::new());
@@ -4017,6 +4182,7 @@ impl StoredManifest {
             manifest_path,
             io_lock,
             retirement_pending: Arc::new(AtomicBool::new(false)),
+            payload_available: Arc::new(AtomicBool::new(runtime_proofs.payload_available)),
         })
     }
     fn to_record(&self) -> Result<StoredManifestRecord, StorageError> {
@@ -5647,8 +5813,11 @@ fn invalid_chunk_file(record: &ChunkFileRecord, reason: &str) -> ChunkStoreError
 }
 #[cfg(test)]
 mod tests {
+    include!("store_repair_cursor_tests.rs");
     include!("store_fixture_and_ownership_tests.rs");
     include!("store_manifest_payload_integrity_tests.rs");
+    include!("store_lifecycle_recovery_tests.rs");
+    include!("store_publisher_source_tests.rs");
     #[test]
     fn startup_rolls_back_uncommitted_gc_move() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -5839,6 +6008,60 @@ mod tests {
         assert_staging_empty(&backend);
     }
     #[test]
+    fn ingest_final_authority_refusal_never_publishes_or_leaks_reservations() {
+        let temporary = tempfile::tempdir().unwrap();
+        let config = temp_config(&temporary);
+        let backend = StorageBackend::new(config.clone()).unwrap();
+        let payload = b"all content verified before live authority is revoked";
+        let plan = single_file_plan(payload).unwrap();
+        let manifest = manifest_builder_for_plan(payload, &plan)
+            .pin_policy(PinPolicy::default())
+            .build()
+            .unwrap();
+        let before = fs::read(&backend.index_path).ok();
+        let mut reader = payload.as_slice();
+        let mut checked = false;
+        let result = backend.ingest_manifest_guarded(
+            &manifest,
+            &plan,
+            &mut reader,
+            (None, None),
+            &mut |reader| {
+                assert!(reader.is_empty(), "all payload must have been consumed");
+                checked = true;
+                Err(StorageError::Io(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "authority revoked before publication",
+                )))
+            },
+        );
+        assert!(checked);
+        assert!(matches!(result, Err(StorageError::Io(error))
+            if error.kind() == io::ErrorKind::PermissionDenied));
+        assert_eq!(backend.manifest_count(), 0);
+        assert_eq!(backend.total_bytes(), 0);
+        assert_eq!(fs::read(&backend.index_path).ok(), before);
+        assert_staging_empty(&backend);
+        let state = backend.state.read().unwrap();
+        assert_eq!(state.reserved_bytes, 0);
+        assert_eq!(state.reserved_pdp_tree_bytes, 0);
+        assert!(state.inflight_manifests.is_empty());
+        drop(state);
+        drop(backend);
+        let restarted = StorageBackend::new(config).unwrap();
+        assert_eq!(restarted.manifest_count(), 0);
+        assert_eq!(restarted.total_bytes(), 0);
+        restarted
+            .ingest_manifest(&manifest, &plan, &mut payload.as_slice())
+            .unwrap();
+        assert_eq!(
+            restarted.manifest_count(),
+            1,
+            "refusal released the original reservation"
+        );
+    }
+
+    #[test]
     fn ingest_manifest_persists_metadata_and_chunks() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
@@ -5871,7 +6094,7 @@ mod tests {
             assert_eq!(record.digest, chunk.digest);
             assert!(record.path.exists(), "chunk file must exist on disk");
         }
-        let por_tree = stored.por_tree();
+        let por_tree = stored.por_tree().expect("available payload tree");
         assert_eq!(por_tree.payload_len(), plan.content_length);
         assert_eq!(por_tree.chunks().len(), plan.chunks.len());
         fn assert_frame<T>(bytes: &[u8], name: &str) -> T
@@ -6387,6 +6610,11 @@ mod tests {
         ));
         let mut updated_plan = single_file_plan(payload).expect("plan");
         updated_plan.files[0].path = vec!["index.html".to_owned()];
+        assert!(matches!(
+            backend.attach_plan_metadata(&manifest_id, &updated_plan, None, None),
+            Err(StorageError::InvalidFileLayout { .. })
+        ));
+        let original_plan = single_file_plan(payload).expect("plan");
         let metadata_path = backend
             .manifests_dir
             .join(&manifest_id)
@@ -6394,7 +6622,7 @@ mod tests {
         fs::remove_file(&metadata_path).expect("remove metadata file");
         fs::create_dir(&metadata_path).expect("block metadata replacement");
         assert!(matches!(
-            backend.attach_plan_metadata(&manifest_id, &updated_plan, None, None),
+            backend.attach_plan_metadata(&manifest_id, &original_plan, None, None),
             Err(StorageError::Io(_))
         ));
         let after = backend.manifest(&manifest_id).expect("stored manifest");
@@ -6715,7 +6943,7 @@ mod tests {
         eviction.join().expect("eviction joins");
     }
     #[test]
-    fn last_access_persists_after_reads() {
+    fn last_access_is_volatile_and_reads_do_not_write_metadata() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
         let payload = b"last access persistence";
@@ -6731,15 +6959,20 @@ mod tests {
         let stored = backend.manifest(&manifest_id).expect("stored");
         let initial_access = stored.last_access();
         assert!(initial_access > 0);
+        let index_before = fs::read(&backend.index_path).expect("durable index before read");
+        let metadata_path = stored.manifest_path().with_file_name(METADATA_FILE_NAME);
+        let metadata_before = fs::read(&metadata_path).expect("durable manifest before read");
         let _slice = backend
             .read_payload_range(&manifest_id, 0, 4)
             .expect("read");
         let updated = backend.manifest(&manifest_id).expect("stored");
         assert!(updated.last_access() > initial_access);
+        assert_eq!(fs::read(&backend.index_path).unwrap(), index_before);
+        assert_eq!(fs::read(&metadata_path).unwrap(), metadata_before);
         drop(backend);
         let reloaded = StorageBackend::new(temp_config(&temp_dir)).expect("reload");
         let stored_reloaded = reloaded.manifest(&manifest_id).expect("stored");
-        assert_eq!(stored_reloaded.last_access(), updated.last_access());
+        assert_eq!(stored_reloaded.last_access(), initial_access);
     }
     #[test]
     fn evict_manifest_removes_files_and_updates_index() {
@@ -7044,7 +7277,10 @@ mod tests {
             .ingest_manifest(&manifest, &plan, &mut reader)
             .expect("ingest");
         let stored = backend.manifest(&manifest_id).expect("stored manifest");
-        let leaf_count = stored.por_tree().leaf_count_u64();
+        let leaf_count = stored
+            .por_tree()
+            .expect("available payload tree")
+            .leaf_count_u64();
         let collision_seed = (0u64..)
             .find(|seed| {
                 let first = sorafs_car::splitmix64(*seed);
@@ -7059,14 +7295,18 @@ mod tests {
         let samples = backend
             .sample_por(&manifest_id, 4, collision_seed)
             .expect("PoR samples");
-        let expected = stored.por_tree().leaf_count().min(4);
+        let expected = stored
+            .por_tree()
+            .expect("available payload tree")
+            .leaf_count()
+            .min(4);
         assert_eq!(samples.len(), expected);
         assert_eq!(
             samples.iter().map(|(index, _)| *index).collect::<Vec<_>>(),
             expected_indices,
             "provider storage sampling must use the shared collision schedule"
         );
-        let root = *stored.por_tree().root();
+        let root = *stored.por_tree().expect("available payload tree").root();
         for (_idx, proof) in samples {
             assert!(proof.verify(&root));
         }
@@ -7157,6 +7397,36 @@ mod tests {
         assert_eq!(bytes, payload);
     }
     #[test]
+    fn read_chunk_at_verifies_ordinal_and_quarantines_tampering() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let backend = StorageBackend::new(temp_config(&temp_dir)).unwrap();
+        let payload = b"indexed reads retain integrity and lifecycle checks";
+        let plan = single_file_plan(payload).unwrap();
+        let manifest = test_manifest(payload, &plan, 0xB2);
+        let id = backend
+            .ingest_manifest(&manifest, &plan, &mut payload.as_slice())
+            .unwrap();
+        assert_eq!(
+            backend.read_chunk_at(&id, 0).unwrap().as_deref(),
+            Some(payload.as_slice())
+        );
+        assert_eq!(backend.read_chunk_at(&id, 1).unwrap(), None);
+        let stored = backend.manifest(&id).unwrap();
+        let mut corrupted = payload.to_vec();
+        corrupted[0] ^= 0x80;
+        fs::write(&stored.chunk(0).unwrap().path, corrupted).unwrap();
+        assert!(matches!(
+            backend.read_chunk_at(&id, 0),
+            Err(StorageError::ChunkStore(ChunkStoreError::DigestMismatch {
+                chunk_index: 0
+            }))
+        ));
+        assert!(matches!(
+            backend.read_chunk_at(&id, 0),
+            Err(StorageError::PayloadUnavailable { .. })
+        ));
+    }
+    #[test]
     fn same_length_chunk_corruption_fails_all_read_paths() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let backend = StorageBackend::new(temp_config(&temp_dir)).expect("backend init");
@@ -7181,25 +7451,20 @@ mod tests {
         ));
         assert!(matches!(
             backend.read_payload_range(&manifest_id, 0, payload.len()),
-            Err(StorageError::ChunkStore(ChunkStoreError::DigestMismatch {
-                chunk_index: 0
-            }))
+            Err(StorageError::PayloadUnavailable { .. })
         ));
         assert!(matches!(
             backend.sample_por(&manifest_id, 1, 42),
-            Err(StorageError::ChunkStore(ChunkStoreError::DigestMismatch {
-                chunk_index: 0
-            }))
+            Err(StorageError::PayloadUnavailable { .. })
         ));
         let schedulers =
             StorageSchedulersRuntime::new(crate::scheduler::StorageSchedulerConfig::default());
         backend
             .with_admitted_payload_read_lease_by_digest(&manifest_digest, &schedulers, |lease| {
-                let mut reader = lease.open_reader().expect("open admitted payload reader");
-                let mut bytes = Vec::new();
-                let error = reader
-                    .read_to_end(&mut bytes)
-                    .expect_err("admitted read rejects corrupt chunk");
+                let error = lease
+                    .open_reader()
+                    .err()
+                    .expect("quarantined lease refuses a reader");
                 assert_eq!(error.kind(), io::ErrorKind::InvalidData);
             })
             .expect("acquire admitted payload lease")
@@ -7232,7 +7497,7 @@ mod tests {
         ));
         assert!(matches!(
             backend.read_payload_range(&manifest_id, 0, payload.len()),
-            Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
+            Err(StorageError::PayloadUnavailable { .. })
         ));
     }
     #[cfg(unix)]
@@ -7259,7 +7524,7 @@ mod tests {
         ));
         assert!(matches!(
             backend.read_payload_range(&manifest_id, 0, payload.len()),
-            Err(StorageError::ChunkStore(ChunkStoreError::Io(_)))
+            Err(StorageError::PayloadUnavailable { .. })
         ));
     }
     #[test]
@@ -7330,7 +7595,7 @@ mod tests {
         let metadata_bytes = fs::read(&metadata_path).expect("read bounded metadata");
         let record: StoredManifestRecord =
             norito::decode_from_bytes(&metadata_bytes).expect("decode metadata");
-        let tree = stored.por_tree_ref();
+        let tree = stored.por_tree_ref().expect("available payload tree");
         assert!(tree.segment_count() > tree.chunks().len());
         assert!(tree.leaf_count() > tree.segment_count());
         assert_eq!(
@@ -7515,7 +7780,12 @@ mod tests {
         assert!(stored.pdp_tree().is_none());
         assert_eq!(stored.pdp_tree_memory_bytes(), 0);
         assert!(stored.por_commitment_digest().is_some());
-        assert!(stored.por_tree_ref().is_empty());
+        assert!(
+            stored
+                .por_tree_ref()
+                .expect("available payload tree")
+                .is_empty()
+        );
         assert_eq!(backend.pdp_tree_memory_bytes(), 0);
         assert!(matches!(
             backend.prove_pdp_samples(&manifest_id, &first_pdp_sample()),
@@ -7529,7 +7799,12 @@ mod tests {
             .expect("restored empty payload");
         assert!(restored.pdp_commitment().is_none());
         assert!(restored.pdp_tree().is_none());
-        assert!(restored.por_tree_ref().is_empty());
+        assert!(
+            restored
+                .por_tree_ref()
+                .expect("available payload tree")
+                .is_empty()
+        );
         assert_eq!(restarted.pdp_tree_memory_bytes(), 0);
     }
     #[test]
@@ -7986,7 +8261,7 @@ mod tests {
         assert_eq!(bytes, payload);
     }
     #[test]
-    fn restart_rejects_same_length_chunk_corruption() {
+    fn restart_quarantines_same_length_chunk_corruption() {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
         let payload = b"restart integrity verification";
         let (config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC1);
@@ -7997,11 +8272,34 @@ mod tests {
         drop(backend);
         let mut corrupted = payload.to_vec();
         corrupted[0] ^= 0x01;
-        fs::write(&chunk_path, corrupted).expect("corrupt chunk");
+        fs::write(&chunk_path, &corrupted).expect("corrupt chunk");
+        let recovered = StorageBackend::new(config).expect("retain authenticated damaged manifest");
+        let damaged = recovered
+            .manifest(&manifest_id)
+            .expect("repair metadata retained");
+        assert!(!damaged.payload_available());
         assert!(matches!(
-            StorageBackend::new(config),
-            Err(StorageError::CorruptStorageState { .. })
+            damaged.por_tree_ref(),
+            Err(StorageError::PayloadUnavailable { .. })
         ));
+        assert!(damaged.pdp_tree().is_none());
+        assert!(damaged.load_manifest().is_ok());
+        assert!(matches!(
+            recovered.read_payload_range(&manifest_id, 0, payload.len()),
+            Err(StorageError::PayloadUnavailable { .. })
+        ));
+        assert!(matches!(
+            recovered.sample_por(&manifest_id, 1, 7),
+            Err(StorageError::PayloadUnavailable { .. })
+        ));
+        assert!(matches!(
+            recovered.prove_pdp_samples(&manifest_id, &[]),
+            Err(StorageError::PayloadUnavailable { .. })
+        ));
+        assert_eq!(
+            fs::read(&chunk_path).expect("damaged bytes retained for repair"),
+            corrupted
+        );
     }
     #[test]
     fn restart_rejects_unsupported_index_version_and_duplicate_ids() {

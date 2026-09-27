@@ -1,4 +1,19 @@
 impl StorageBackend {
+    /// Select one repair discovery cursor without copying other manifests or their chunk plans.
+    /// The caller must acquire the selected manifest's lifecycle lease before using its files.
+    pub(crate) fn next_repair_manifest_id(
+        &self,
+        after: Option<&str>,
+    ) -> Result<Option<String>, StorageError> {
+        self.ensure_durability_healthy()?;
+        let state = self.state.read().expect("storage state poisoned");
+        let lower = after.map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded);
+        Ok(state
+            .manifests
+            .range::<str, _>((lower, std::ops::Bound::Unbounded))
+            .next()
+            .map(|(id, _)| id.clone()))
+    }
     /// Returns a clone of the stored manifest metadata, if present.
     #[must_use]
     pub fn manifest(&self, manifest_id: &str) -> Option<StoredManifest> {

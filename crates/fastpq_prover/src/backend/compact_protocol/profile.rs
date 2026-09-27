@@ -100,7 +100,14 @@ impl Binding {
 
     /// Hash the complete canonical row and its exact position.
     pub(super) fn row(&self, index: usize, values: &[u64]) -> Result<Digest> {
-        let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let length = values
+            .len()
+            .checked_mul(size_of::<u64>())
+            .ok_or_else(|| shape("compact row packing byte count overflow"))?;
+        let mut bytes = SecretPolynomial::<u8>::zeroed(length)?;
+        for (chunk, value) in bytes.chunks_exact_mut(size_of::<u64>()).zip(values) {
+            chunk.copy_from_slice(&value.to_le_bytes());
+        }
         self.context
             .hash_leaf(compact::Oracle::Row, coordinate(index)?, &bytes)
             .map_err(candidate_error)
@@ -135,7 +142,14 @@ impl Binding {
         index: usize,
         values: &[GoldilocksFp4V1],
     ) -> Result<Digest> {
-        let bytes: Vec<_> = values.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let length = values
+            .len()
+            .checked_mul(size_of::<u64>())
+            .ok_or_else(|| shape("compact row packing byte count overflow"))?;
+        let mut bytes = SecretPolynomial::<u8>::zeroed(length)?;
+        for (chunk, value) in bytes.chunks_exact_mut(size_of::<u64>()).zip(values) {
+            chunk.copy_from_slice(&value.to_le_bytes());
+        }
         self.context
             .hash_leaf(fri_oracle(round)?, coordinate(index)?, &bytes)
             .map_err(candidate_error)
@@ -628,13 +642,17 @@ mod tests {
         assert!(prepare_trace(&air, &vec![Vec::new(); 342]).is_err());
         let geometry = Geometry::new(&air).unwrap();
         let binding = Binding::new(&air, &geometry).unwrap();
-        // This intentionally absent witness/row tree is never touched: schema
-        // and complete context must reject reuse before any prover work.
+        // This intentionally tiny real replay owner and absent row tree are never
+        // touched: schema/context reject reuse before any prover work.
         let trace = PreparedTrace {
             geometry,
             binding,
             bound_statement: air.public.clone(),
-            columns: Vec::new(),
+            replay: replay::TraceReplay::new(
+                replay::TraceReplayPlan::new(2, 1).unwrap(),
+                &[vec![0; 2]],
+            )
+            .unwrap(),
             rows: CommittedTree {
                 levels: Vec::new(),
                 leaf_count: 0,

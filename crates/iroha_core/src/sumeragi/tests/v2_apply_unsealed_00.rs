@@ -578,7 +578,7 @@ impl ApplyFixture {
                 power: 1,
             })
             .collect::<Vec<_>>();
-        let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-apply-crash-test");
+        let network_id = crate::unit_test_support::synthetic_network_id("sumeragi-v2-apply-crash-test");
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
             crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, u64::MAX, &roster);
         let mut context = wire::HeightContext {
@@ -1249,7 +1249,7 @@ fn build_successor_apply_fixture_with_autonomous_payloads(
 }
 #[test]
 fn durable_application_evidence_rejects_identity_mutations() {
-    let worker = crate::sumeragi::sumeragi_thread_builder("durable-application-evidence-test")
+    let worker = crate::sumeragi::threads::sumeragi_thread_builder("durable-application-evidence-test")
         .spawn(durable_application_evidence_rejects_identity_mutations_fixture_body)
         .expect("run Apply evidence checks on the production consensus stack");
     if let Err(payload) = worker.join() {
@@ -2299,7 +2299,7 @@ fn reserve_autonomous_crash_batch(
     let network_id = fixture.context.network_id;
     let epoch = {
         let world = fixture.state.world_view();
-        crate::sumeragi::epoch_for_height_from_world(
+        crate::sumeragi::v2_npos::epoch_for_height_from_world(
             &world,
             proposal.descriptor.proposal_height,
             fixture.context.mode,

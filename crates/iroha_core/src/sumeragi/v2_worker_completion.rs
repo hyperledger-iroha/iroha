@@ -1455,7 +1455,7 @@ impl V2CleanupSupervisor {
     fn with_capacity(capacity: NonZeroUsize) -> Self {
         let (sender, receiver) = mpsc::sync_channel(capacity.get());
         let submission = V2CleanupSubmission { sender };
-        let join = match super::sumeragi_thread_builder("sumeragi-v2-cleanup").spawn(move || {
+        let join = match super::threads::sumeragi_thread_builder("sumeragi-v2-cleanup").spawn(move || {
             while let Ok(job) = receiver.recv() {
                 execute_post_finality_cleanup(job);
             }
@@ -1569,7 +1569,7 @@ impl V2IoHandle {
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
         let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
         let worker_admission = Arc::clone(&admission);
-        let join = super::sumeragi_thread_builder("sumeragi-v2-io")
+        let join = super::threads::sumeragi_thread_builder("sumeragi-v2-io")
             .spawn(move || {
                 // A local guard drops before the closure environment releases
                 // command/completion channels, closing output first on panic

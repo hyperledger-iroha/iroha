@@ -2,8 +2,9 @@
 //!
 //! The standalone config loader admits only the service's public endpoint policy, expected
 //! identities, stable provider handles, revisions, bounds, and policy digests. Runtime credentials
-//! and private keys remain behind the platform-fixed local provider broker.
+//! and private keys remain behind the configured authenticated local provider broker.
 use clap::Parser;
+use iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath;
 use iroha_data_model::NetworkId;
 use iroha_model_base::chain::ChainId;
 use irohad::StockGovernanceDagServiceRuntimeProviderRegistryV1;
@@ -29,6 +30,9 @@ struct Args {
     /// Exact genesis-header-derived identity used by the broker handshake.
     #[arg(long, value_name = "NETWORK_ID")]
     network_id: NetworkId,
+    /// Public absolute path of this service's authenticated local broker socket.
+    #[arg(long, value_name = "ABSOLUTE_SOCKET_PATH")]
+    broker_endpoint: RuntimeProviderBrokerEndpointPath,
     /// Reconcile exactly once without starting the query listener.
     #[arg(long)]
     once: bool,
@@ -39,11 +43,15 @@ async fn main() {
         config,
         chain_id,
         network_id,
+        broker_endpoint,
         once,
     } = Args::parse();
-    let runtime_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> = Arc::new(
-        StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id, network_id),
-    );
+    let runtime_registry: Arc<dyn GovernanceDagServiceRuntimeProviderRegistryV1> =
+        Arc::new(StockGovernanceDagServiceRuntimeProviderRegistryV1::new(
+            chain_id,
+            network_id,
+            broker_endpoint,
+        ));
     if let Err(error) = Box::pin(run_governance_dag_service_with_runtime_registry(
         config,
         once,
@@ -59,7 +67,7 @@ async fn main() {
 mod tests {
     use super::*;
     #[test]
-    fn cli_requires_a_canonical_chain_identity() {
+    fn cli_requires_canonical_chain_network_and_broker_endpoint() {
         let args = Args::try_parse_from([
             "sorafs_governance_dag",
             "--config",
@@ -68,6 +76,8 @@ mod tests {
             "sora.production",
             "--network-id",
             "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
+            "--broker-endpoint",
+            "/var/iroha/run/runtime-provider-broker-v1.sock",
             "--once",
         ])
         .expect("parse canonical launcher arguments");
@@ -77,6 +87,10 @@ mod tests {
             "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7"
         );
         assert!(args.once);
+        assert_eq!(
+            args.broker_endpoint.as_path(),
+            std::path::Path::new("/var/iroha/run/runtime-provider-broker-v1.sock")
+        );
         assert!(
             Args::try_parse_from([
                 "sorafs_governance_dag",
@@ -84,10 +98,35 @@ mod tests {
                 "governance.toml",
                 "--chain-id",
                 "not canonical",
+                "--broker-endpoint",
+                "/var/iroha/run/runtime-provider-broker-v1.sock",
                 "--network-id",
                 "hash:A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5#95D7",
             ])
             .is_err()
+        );
+        let canonical_network = args.network_id.to_string();
+        let required = [
+            "sorafs_governance_dag",
+            "--config",
+            "governance.toml",
+            "--chain-id",
+            "sora.production",
+            "--network-id",
+            canonical_network.as_str(),
+        ];
+        assert!(
+            Args::try_parse_from(required).is_err(),
+            "the public broker endpoint is required"
+        );
+        assert!(
+            Args::try_parse_from(
+                required
+                    .into_iter()
+                    .chain(["--broker-endpoint", "../runtime-provider-broker-v1.sock",])
+            )
+            .is_err(),
+            "a relative broker endpoint is rejected before provider resolution"
         );
         assert!(
             Args::try_parse_from([

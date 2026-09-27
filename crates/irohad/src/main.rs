@@ -3,14 +3,14 @@
 compile_error!(
     "the feature-isolated Parliament fixture signers cannot be compiled into an optimized daemon"
 );
-/// Native fresh global-beacon provisioning under centralized deployment custody.
+/// Per-seat authenticated global-beacon DKG and exact-quorum rotation provisioning.
 #[cfg(unix)]
 pub mod beacon_bootstrap;
 /// Iroha server command-line interface and node bootstrap entrypoint.
 mod i18n;
-mod network_relay;
 /// Deployment-injected factory for the supervised private Musubi publication service.
 pub mod musubi_publication_service;
+mod network_relay;
 /// Asynchronous Nexus DPN fee settlement relay.
 /// Explicit recovery boundaries for daemon-owned provider work.
 mod panic_recovery;
@@ -26,8 +26,13 @@ pub mod runtime_provider_registry;
 mod soracloud_runtime;
 /// Exact external signer boundary for Soracloud runtime mutations.
 pub mod soracloud_runtime_signer;
+/// Stock assembly of the configured production compliance HTTPS transport.
+mod sorafs_gateway_compliance_transport;
 /// Supervised committed `SoraFS` hedging/billing projector and delivery worker.
 pub mod sorafs_hedging_billing_runtime;
+/// Explicit owner-only software credentials for the four native transaction roles.
+#[cfg(unix)]
+mod sorafs_native_software_signers;
 /// Fail-closed config-bound `SoraFS` `PoP` runtime construction.
 pub mod sorafs_pop_runtime;
 /// Supervised finalized-PoR reputation reconciliation and optional archive compaction.
@@ -36,6 +41,8 @@ pub mod sorafs_por_replay_archive_runtime;
 pub mod sorafs_provider_ingest_finalized_query;
 /// Supervised finalized-ledger `SoraFS` provider-ingest worker.
 pub mod sorafs_provider_ingest_runtime;
+/// Native authenticated remote repair chunk reader.
+pub mod sorafs_repair_source;
 /// Immutable finalized-ledger query adapter for the reputation runtime.
 pub mod sorafs_reputation_finalized_query;
 /// Supervised committed `SoraFS` reputation projector and publisher.
@@ -50,7 +57,7 @@ mod startup_artifact;
 /// Native Falcon-backed standalone Taira Bootle/Lantern issuer broker.
 #[cfg(feature = "daemon")]
 pub mod taira_bootle_lantern_broker;
-/// Fixed-descriptor Taira runtime signer and deployment launcher.
+/// Fixed-descriptor runtime signer and Taira deployment launcher.
 #[cfg(unix)]
 pub mod taira_runtime_signer;
 use crate::soracloud_runtime::{
@@ -92,7 +99,7 @@ use iroha_core::{
     snapshot::{TryReadError as TryReadSnapshotError, try_read_snapshot_with_bootstrap_policy},
     state::{State, World, WorldReadOnly as _},
     streaming::{ManifestPublisher, run_ticket_event_listener},
-    sumeragi::{VotingBlock, filter_validators_from_trusted, network_topology::Topology},
+    sumeragi::{filter_validators_from_trusted, network_topology::Topology},
 };
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
@@ -117,6 +124,11 @@ use iroha_telemetry::metrics::set_duplicate_metrics_panic;
 use iroha_torii::Torii;
 use norito::{codec::Encode, derive::JsonDeserialize, streaming::CapabilityFlags};
 use parking_lot::deadlock;
+#[cfg(all(
+    feature = "test-network-disposable-broker",
+    any(target_os = "linux", target_os = "macos")
+))]
+pub use runtime_provider_broker::load_owner_private_runtime_provider_broker_catalog_file_v1;
 pub use runtime_provider_broker::{
     BootleLanternIssuanceBrokerBackendErrorV1, BootleLanternIssuanceBrokerBackendV1,
     ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1,
@@ -159,10 +171,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{
-    sync::broadcast,
-    task,
-};
+use tokio::{sync::broadcast, task};
 
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 /// Build-time source identity embedded for release artifact validation.
@@ -267,21 +276,6 @@ fn decode_consensus_handshake_meta(
 type SharedSoraFsProviderCache = Arc<tokio::sync::RwLock<iroha_torii::sorafs::ProviderAdvertCache>>;
 #[derive(Debug)]
 enum SharedSoraFsProviderCacheError {
-    AdmissionPolicyRequired,
-    MalformedCouncilKey {
-        index: usize,
-        source: Box<dyn std::error::Error + Send + Sync>,
-    },
-    UnsupportedCouncilKeyAlgorithm {
-        index: usize,
-        algorithm: iroha_crypto::Algorithm,
-    },
-    InvalidCouncilKeyLength {
-        index: usize,
-        actual: usize,
-    },
-    InvalidCouncilPolicy(sorafs_manifest::ProviderAdmissionCouncilPolicyError),
-    AdmissionRegistry(iroha_torii::sorafs::AdmissionRegistryError),
     UnknownCapability(String),
     DuplicateCapability(String),
     EmptyCapabilities,
@@ -293,27 +287,6 @@ enum SharedSoraFsProviderCacheError {
 impl core::fmt::Display for SharedSoraFsProviderCacheError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::AdmissionPolicyRequired => formatter.write_str(
-                "SoraFS discovery requires sorafs.discovery.admission.envelopes_dir, trusted_council_keys, and signature_threshold",
-            ),
-            Self::MalformedCouncilKey { index, source } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} is malformed: {source}"
-            ),
-            Self::UnsupportedCouncilKeyAlgorithm { index, algorithm } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} uses {algorithm:?}; Ed25519 is required"
-            ),
-            Self::InvalidCouncilKeyLength { index, actual } => write!(
-                formatter,
-                "SoraFS admission council key at index {index} has {actual} bytes; 32 are required"
-            ),
-            Self::InvalidCouncilPolicy(source) => {
-                write!(formatter, "invalid SoraFS admission council policy: {source}")
-            }
-            Self::AdmissionRegistry(source) => {
-                write!(formatter, "failed to load SoraFS provider admission registry: {source}")
-            }
             Self::UnknownCapability(name) => write!(
                 formatter,
                 "unknown SoraFS capability `{name}` in torii.sorafs.known_capabilities"
@@ -322,9 +295,8 @@ impl core::fmt::Display for SharedSoraFsProviderCacheError {
                 formatter,
                 "duplicate SoraFS capability `{name}` in torii.sorafs.known_capabilities"
             ),
-            Self::EmptyCapabilities => formatter.write_str(
-                "torii.sorafs.known_capabilities must include at least one capability",
-            ),
+            Self::EmptyCapabilities => formatter
+                .write_str("torii.sorafs.known_capabilities must include at least one capability"),
             Self::ReplayCheckpoint { path, source } => write!(
                 formatter,
                 "failed to load SoraFS provider replay checkpoint {}: {source}",
@@ -336,63 +308,21 @@ impl core::fmt::Display for SharedSoraFsProviderCacheError {
 impl std::error::Error for SharedSoraFsProviderCacheError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::MalformedCouncilKey { source, .. } => Some(source.as_ref()),
-            Self::InvalidCouncilPolicy(source) => Some(source),
-            Self::AdmissionRegistry(source) => Some(source),
             Self::ReplayCheckpoint { source, .. } => Some(source),
-            Self::AdmissionPolicyRequired
-            | Self::UnsupportedCouncilKeyAlgorithm { .. }
-            | Self::InvalidCouncilKeyLength { .. }
-            | Self::UnknownCapability(_)
-            | Self::DuplicateCapability(_)
-            | Self::EmptyCapabilities => None,
+            Self::UnknownCapability(_) | Self::DuplicateCapability(_) | Self::EmptyCapabilities => {
+                None
+            }
         }
     }
 }
 fn build_shared_sorafs_provider_cache(
     config: &Config,
-    network_id: &NetworkId,
+    state: Arc<State>,
 ) -> Result<Option<SharedSoraFsProviderCache>, SharedSoraFsProviderCacheError> {
     let discovery = &config.torii.sorafs_discovery;
     if !discovery.discovery_enabled {
         return Ok(None);
     }
-    let admission_cfg = discovery
-        .admission
-        .as_ref()
-        .ok_or(SharedSoraFsProviderCacheError::AdmissionPolicyRequired)?;
-    let trusted_council_keys = admission_cfg
-        .trusted_council_keys
-        .iter()
-        .enumerate()
-        .map(|(index, key)| {
-            let (algorithm, payload) = key.try_to_bytes().map_err(|source| {
-                SharedSoraFsProviderCacheError::MalformedCouncilKey {
-                    index,
-                    source: Box::new(source),
-                }
-            })?;
-            if algorithm != iroha_crypto::Algorithm::Ed25519 {
-                return Err(
-                    SharedSoraFsProviderCacheError::UnsupportedCouncilKeyAlgorithm {
-                        index,
-                        algorithm,
-                    },
-                );
-            }
-            <[u8; 32]>::try_from(payload).map_err(|_| {
-                SharedSoraFsProviderCacheError::InvalidCouncilKeyLength {
-                    index,
-                    actual: payload.len(),
-                }
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let policy = sorafs_manifest::ProviderAdmissionCouncilPolicy::new(
-        trusted_council_keys,
-        admission_cfg.signature_threshold.get(),
-    )
-    .map_err(SharedSoraFsProviderCacheError::InvalidCouncilPolicy)?;
     let mut capabilities = Vec::new();
     for name in &discovery.known_capabilities {
         let capability = iroha_torii::sorafs::parse_capability_name(name)
@@ -407,14 +337,7 @@ fn build_shared_sorafs_provider_cache(
     if capabilities.is_empty() {
         return Err(SharedSoraFsProviderCacheError::EmptyCapabilities);
     }
-    let admission = Arc::new(
-        iroha_torii::sorafs::AdmissionRegistry::load_from_dir(
-            &admission_cfg.envelopes_dir,
-            *network_id.as_bytes(),
-            policy,
-        )
-        .map_err(SharedSoraFsProviderCacheError::AdmissionRegistry)?,
-    );
+    let admission = Arc::new(iroha_torii::sorafs::AdmissionRegistry::from_state(state));
     let replay_checkpoint_path = if discovery.replay_checkpoint_path.is_absolute() {
         discovery.replay_checkpoint_path.clone()
     } else {
@@ -906,10 +829,6 @@ pub struct Args {
         hide = true
     )]
     test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode,
-    /// Use real consumed Taira custody in the explicit Core-only native fixture.
-    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-    #[arg(long = "test-network-production-beacon-custody", hide = true)]
-    test_network_production_beacon_custody: bool,
     /// Override FASTPQ prover execution mode (`cpu` or `gpu`).
     #[arg(
         long = "fastpq-execution-mode",
@@ -1500,11 +1419,15 @@ mod snapshot_read_error_tests {
     fn snapshot_state_admission_never_authorizes_empty_state_fallback() {
         use iroha_core::state::{
             BlockHashAdmissionError, MembershipAdmissionError, StateAdmissionError,
+            StateStorageAdmissionError,
         };
         let budget = mv::allocation::AllocationBudget::new(1);
         let _occupied = budget.try_reserve_bytes(1).unwrap();
         let refusal = budget.try_reserve_bytes(1).unwrap_err();
         for admission in [
+            StateAdmissionError::Storage(StateStorageAdmissionError::World(
+                mv::storage::AdmittedStorageError::Allocation(refusal.clone()),
+            )),
             StateAdmissionError::Membership(MembershipAdmissionError::Capacity(refusal.clone())),
             StateAdmissionError::History(BlockHashAdmissionError::Capacity(refusal)),
             StateAdmissionError::Membership(MembershipAdmissionError::Allocator {
@@ -2155,42 +2078,66 @@ const fn sorafs_native_signer_role_required(
 ) -> bool {
     storage_enabled || role_generation_enabled
 }
+fn validate_selected_sorafs_native_signer_presence(
+    role: &'static str,
+    required: bool,
+    binding: Option<&iroha_config::parameters::actual::SorafsNativeTransactionSignerBinding>,
+    injected: bool,
+) -> Result<(), String> {
+    let native = binding.is_some_and(|binding| binding.software_credential.is_some());
+    if native && injected {
+        return Err(format!(
+            "SoraFS {role} native software custody conflicts with an external adapter"
+        ));
+    }
+    if native && !cfg!(unix) {
+        return Err(format!(
+            "SoraFS {role} native software custody requires owner-only Unix runtime credentials"
+        ));
+    }
+    validate_sorafs_native_signer_role_presence(
+        role,
+        required,
+        binding.is_some(),
+        injected || native,
+    )
+}
 fn validate_sorafs_native_signer_provider_presence(
     config: &Config,
     runtime_deps: &IrohaRuntimeDeps,
 ) -> Result<(), String> {
     let configured = &config.torii.sorafs_storage.native_transaction_signers;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "proof_outcome",
         sorafs_native_signer_role_required(config.torii.sorafs_storage.enabled, false),
-        configured.proof_outcome.is_some(),
+        configured.proof_outcome.as_ref(),
         runtime_deps.sorafs_proof_outcome_signer.is_some(),
     )?;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "repair",
         sorafs_native_signer_role_required(
             config.torii.sorafs_storage.enabled,
             config.torii.sorafs_repair.enabled,
         ),
-        configured.repair.is_some(),
+        configured.repair.as_ref(),
         runtime_deps.sorafs_repair_transaction_signer.is_some(),
     )?;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "reserve",
         sorafs_native_signer_role_required(
             config.torii.sorafs_storage.enabled,
             config.torii.sorafs_storage.reserve_worker.enabled,
         ),
-        configured.reserve.is_some(),
+        configured.reserve.as_ref(),
         runtime_deps.sorafs_reserve_transaction_signer.is_some(),
     )?;
-    validate_sorafs_native_signer_role_presence(
+    validate_selected_sorafs_native_signer_presence(
         "orderbook",
         sorafs_native_signer_role_required(
             config.torii.sorafs_storage.enabled,
             config.torii.sorafs_storage.orderbook_worker.enabled,
         ),
-        configured.orderbook.is_some(),
+        configured.orderbook.as_ref(),
         runtime_deps.sorafs_orderbook_transaction_signer.is_some(),
     )
 }
@@ -2422,6 +2369,73 @@ impl Iroha {
             )
             .map_err(|message| Report::new(StartError::StartTorii).attach(message))?;
         }
+        #[cfg(unix)]
+        let native_provider_ingest = if !emergency_fast {
+            config
+                .torii
+                .sorafs_storage
+                .provider_ingest_runtime
+                .as_ref()
+                .filter(|ingest| ingest.native_completion_credential.is_some())
+                .map(|ingest| {
+                    let roles = &config.torii.sorafs_storage.native_transaction_signers;
+                    if ingest.completion_signer_public_key == *config.common.key_pair.public_key()
+                        || [
+                            &roles.proof_outcome,
+                            &roles.repair,
+                            &roles.reserve,
+                            &roles.orderbook,
+                        ]
+                        .into_iter()
+                        .flatten()
+                        .any(|role| role.public_key == ingest.completion_signer_public_key)
+                    {
+                        return Err(eyre::eyre!(
+                            "native completion custody requires a separate role key"
+                        ));
+                    }
+                    let provider = config.torii.sorafs_storage.provider_id.ok_or_else(|| {
+                        eyre::eyre!("native provider ingest requires configured provider identity")
+                    })?;
+                    if runtime_deps
+                        .sorafs_provider_ingest_authenticated_source
+                        .is_some()
+                        || runtime_deps
+                            .sorafs_provider_ingest_signer_resolver
+                            .is_some()
+                        || runtime_deps
+                            .sorafs_provider_ingest_checkpoint_runtime
+                            .is_some()
+                    {
+                        return Err(eyre::eyre!(
+                            "native provider ingest rejects substituted external adapters"
+                        ));
+                    }
+                    sorafs_provider_ingest_runtime::native_software::NativeProducerV1::prepare(
+                        ingest,
+                        provider,
+                        &config.torii.sorafs_storage.data_dir,
+                    )
+                })
+                .transpose()
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii)
+                        .attach(format!("native provider ingest rejected: {error}"))
+                })?
+        } else {
+            None
+        };
+        #[cfg(not(unix))]
+        if config
+            .torii
+            .sorafs_storage
+            .provider_ingest_runtime
+            .as_ref()
+            .is_some_and(|ingest| ingest.native_completion_credential.is_some())
+        {
+            return Err(Report::new(StartError::StartTorii)
+                .attach("native provider ingest requires owner-only Unix credential custody"));
+        }
         let sorafs_provider_ingest_preflight = if emergency_fast {
             None
         } else if let Some(provider_ingest_config) =
@@ -2436,7 +2450,33 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires the exact configured storage provider identity",
                         )
                     })?;
-            let authenticated_source = runtime_deps
+            let native_preflight = {
+                #[cfg(unix)]
+                {
+                    if let Some(native) = native_provider_ingest.as_ref() {
+                        Some(
+                            native
+                                .preflight(provider_ingest_config, provider_id)
+                                .await
+                                .map_err(|error| {
+                                    Report::new(StartError::StartTorii).attach(format!(
+                                        "native provider ingest preflight rejected: {error}"
+                                    ))
+                                })?,
+                        )
+                    } else {
+                        None
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    None::<sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1>
+                }
+            };
+            if let Some(preflight) = native_preflight {
+                Some(preflight)
+            } else {
+                let authenticated_source = runtime_deps
                     .sorafs_provider_ingest_authenticated_source
                     .clone()
                     .ok_or_else(|| {
@@ -2444,7 +2484,7 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected authenticated governed source-fetch adapter",
                         )
                     })?;
-            let signer_resolver = runtime_deps
+                let signer_resolver = runtime_deps
                     .sorafs_provider_ingest_signer_resolver
                     .clone()
                     .ok_or_else(|| {
@@ -2452,7 +2492,7 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected governance-aware signer resolver",
                         )
                     })?;
-            let checkpoint_runtime = runtime_deps
+                let checkpoint_runtime = runtime_deps
                     .sorafs_provider_ingest_checkpoint_runtime
                     .clone()
                     .ok_or_else(|| {
@@ -2460,19 +2500,19 @@ impl Iroha {
                             "enabled SoraFS provider-ingest runtime requires an injected sealed monotonic checkpoint provider",
                         )
                     })?;
-            if provider_ingest_config
-                .finalized_archive
-                .retention_authority
-                .is_some()
-                != runtime_deps
-                    .sorafs_provider_ingest_retention_authority
+                if provider_ingest_config
+                    .finalized_archive
+                    .retention_authority
                     .is_some()
-            {
-                return Err(Report::new(StartError::StartTorii).attach(
+                    != runtime_deps
+                        .sorafs_provider_ingest_retention_authority
+                        .is_some()
+                {
+                    return Err(Report::new(StartError::StartTorii).attach(
                         "SoraFS provider-ingest finalized-archive retention requires exact configured/injected sealed authority presence",
                     ));
-            }
-            Some(
+                }
+                Some(
                     sorafs_provider_ingest_runtime::preflight_runtime_adapters(
                         provider_ingest_config,
                         provider_id,
@@ -2489,6 +2529,7 @@ impl Iroha {
                         ))
                     })?,
                 )
+            }
         } else {
             if runtime_deps
                 .sorafs_provider_ingest_authenticated_source
@@ -2661,6 +2702,14 @@ impl Iroha {
                 })?
         };
         let mut loaded_state_from_snapshot = false;
+        let operation_index_budget = mv::allocation::AllocationBudget::new(
+            usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
+                |_| {
+                    Report::new(StartError::InitKura)
+                        .attach("configured operation-index pool exceeds addressable memory")
+                },
+            )?,
+        );
         let snapshot_read_buffer_budget =
             mv::allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
         let snapshot_result = if snapshot_mode_allows_restore(config.snapshot.mode) {
@@ -2681,6 +2730,7 @@ impl Iroha {
                 #[cfg(feature = "telemetry")]
                 state_telemetry.clone(),
                 &snapshot_read_buffer_budget,
+                &operation_index_budget,
             )
         } else {
             iroha_logger::info!("Snapshot restore is disabled by configuration");
@@ -2725,11 +2775,13 @@ impl Iroha {
                     "Kura retains the configured-primary replay floor; rebuilding state from blocks"
                 );
                 let genesis_public_key = effective_genesis_public_key.clone();
-                let mut world = World::with(
+                let mut world = World::try_with_operation_index_budget(
                     [genesis_domain(genesis_public_key.clone())],
                     [genesis_account(genesis_public_key)],
                     [],
-                );
+                    operation_index_budget.clone(),
+                )
+                .map_err(|error| Report::new(error).change_context(StartError::InitKura))?;
                 if let Some(genesis_block) = stored_genesis_block.as_ref().or(genesis.as_ref()) {
                     iroha_core::sns::seed_genesis_alias_bootstrap(
                         &mut world,
@@ -2819,15 +2871,18 @@ impl Iroha {
         }
         // Reuse the policy snapshot installed before geometry; emergency Fast never scans local
         // policy sources.
-        let (frozen_startup_lane_manifests, frozen_startup_lane_compliance) =
-            if let Some(policies) = &startup_lane_policies {
-                (Arc::clone(&policies.manifests), policies.compliance.clone())
-            } else {
-                iroha_logger::warn!(
-                    "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
-                );
-                (Arc::new(LaneManifestRegistry::empty()), None)
-            };
+        let (frozen_startup_lane_manifests, frozen_startup_lane_compliance) = if let Some(
+            policies,
+        ) =
+            &startup_lane_policies
+        {
+            (Arc::clone(&policies.manifests), policies.compliance.clone())
+        } else {
+            iroha_logger::warn!(
+                "emergency Fast startup deferred lane-manifest and compliance directory loading until a Strict restart"
+            );
+            (Arc::new(LaneManifestRegistry::empty()), None)
+        };
         if emergency_fast {
             state.install_lane_manifests(&frozen_startup_lane_manifests);
             state.install_lane_compliance_engine(None);
@@ -3155,25 +3210,11 @@ impl Iroha {
                     "Genesis manifest crypto settings do not match node configuration: {err}"
                 )));
             }
-            let expected = match signed_consensus_mode {
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned => {
-                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG
-                }
-                iroha_data_model::block::consensus_v2::ConsensusMode::Npos => {
-                    iroha_core::sumeragi::consensus::NPOS_TAG
-                }
-            };
-            let got = match manifest.consensus_mode() {
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Permissioned => {
-                    iroha_core::sumeragi::consensus::PERMISSIONED_TAG
-                }
-                iroha_data_model::parameter::system::SumeragiConsensusMode::Npos => {
-                    iroha_core::sumeragi::consensus::NPOS_TAG
-                }
-            };
-            if got != expected {
+            let got =
+                iroha_data_model::parameter::system::ConsensusMode::from(manifest.consensus_mode());
+            if got != signed_consensus_mode {
                 return Err(Report::new(StartError::InitKura).attach(format!(
-                    "Genesis manifest consensus_mode mismatch: manifest `{got}`, expected `{expected}`"
+                    "Genesis manifest consensus_mode mismatch: manifest `{got:?}`, expected `{signed_consensus_mode:?}`"
                 )));
             }
         }
@@ -3376,6 +3417,15 @@ impl Iroha {
                     iroha_logger::debug!(height = h, "found pipeline recovery sidecar");
                 }
             }
+        }
+        let state: Arc<State> = Arc::from(state);
+        #[cfg(unix)]
+        if let Some(native) = native_provider_ingest.as_ref() {
+            native.bind_state(Arc::clone(&state)).map_err(|error| {
+                Report::new(StartError::StartTorii).attach(format!(
+                    "native provider ingest State binding rejected: {error}"
+                ))
+            })?;
         }
         #[cfg(feature = "telemetry")]
         if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =
@@ -3855,11 +3905,52 @@ impl Iroha {
         let sorafs_governance_dag_signer = runtime_deps.sorafs_governance_dag_signer.clone();
         let sorafs_governance_dag_checkpoint_store =
             runtime_deps.sorafs_governance_dag_checkpoint_store.clone();
-        let sorafs_stream_token_signer_client =
+        let mut sorafs_stream_token_signer_client =
             runtime_deps.sorafs_stream_token_signer_client.clone();
-        let sorafs_stream_token_state_observer =
+        let mut sorafs_stream_token_state_observer =
             runtime_deps.sorafs_stream_token_state_observer.clone();
-        let sorafs_stream_token_approved_anchor = runtime_deps.sorafs_stream_token_approved_anchor;
+        let mut sorafs_stream_token_approved_anchor =
+            runtime_deps.sorafs_stream_token_approved_anchor;
+        #[cfg(unix)]
+        if !emergency_fast
+            && config
+                .torii
+                .sorafs_storage
+                .stream_tokens
+                .signer
+                .as_ref()
+                .is_some_and(|signer| signer.native.is_some())
+        {
+            if sorafs_stream_token_signer_client.is_some()
+                || sorafs_stream_token_state_observer.is_some()
+                || sorafs_stream_token_approved_anchor.is_some()
+            {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "native stream-token custody conflicts with externally supplied adapters",
+                ));
+            }
+            let native = crate::signer_operation::stream_token::native::runtime::build_native_stream_token_runtime_v1(
+                &config.torii.sorafs_storage, Arc::clone(&state), Arc::clone(&queue))
+                .map_err(|_| Report::new(StartError::StartTorii).attach("configured native stream-token authority unavailable"))?
+                .ok_or_else(|| Report::new(StartError::StartTorii).attach("configured native stream-token authority absent"))?;
+            sorafs_stream_token_signer_client = Some(native.signer);
+            sorafs_stream_token_state_observer = Some(native.observer);
+            sorafs_stream_token_approved_anchor = Some(native.anchor);
+        }
+        #[cfg(not(unix))]
+        if !emergency_fast
+            && config
+                .torii
+                .sorafs_storage
+                .stream_tokens
+                .signer
+                .as_ref()
+                .is_some_and(|signer| signer.native.is_some())
+        {
+            return Err(Report::new(StartError::StartTorii).attach(
+                "native stream-token software custody requires owner-only Unix runtime credentials",
+            ));
+        }
         let sorafs_stream_token_gateway_admission =
             runtime_deps.sorafs_stream_token_gateway_admission.clone();
         let sorafs_appeal_finance_runtime_signers =
@@ -3867,6 +3958,16 @@ impl Iroha {
         let sorafs_appeal_finance_checkpoint_runtime = runtime_deps
             .sorafs_appeal_finance_checkpoint_runtime
             .clone();
+        #[cfg(unix)]
+        if !emergency_fast {
+            sorafs_native_software_signers::install_native_software_signers(
+                &config.torii.sorafs_storage.native_transaction_signers,
+                Arc::clone(&state),
+                config.common.key_pair.public_key(),
+                &mut runtime_deps,
+            )
+            .map_err(|error| Report::new(StartError::StartTorii).attach(error))?;
+        }
         let sorafs_proof_outcome_signer = runtime_deps.sorafs_proof_outcome_signer.clone();
         let sorafs_repair_transaction_signer =
             runtime_deps.sorafs_repair_transaction_signer.clone();
@@ -3978,25 +4079,24 @@ impl Iroha {
             .map(sorafs_provider_ingest_runtime::QualifiedProviderIngestRuntimeAdaptersV1::checkpoint_runtime);
         let sorafs_por_finalized_replay_archive =
             runtime_deps.sorafs_por_finalized_replay_archive.clone();
-        let sorafs_gateway_compliance_feed_transport = runtime_deps
+        let mut sorafs_gateway_compliance_feed_transport = runtime_deps
             .sorafs_gateway_compliance_feed_transport
             .clone();
         if !emergency_fast {
-            match (
-                config.torii.sorafs_gateway.compliance.as_ref(),
-                sorafs_gateway_compliance_feed_transport.as_ref(),
-            ) {
-                (Some(_), None) => {
-                    return Err(Report::new(StartError::StartTorii).attach(
-                    "enabled SoraFS gateway compliance requires the exact deployment-owned authenticated feed transport",
-                ));
+            match config.torii.sorafs_gateway.compliance.as_ref() {
+                Some(compliance) => {
+                    sorafs_gateway_compliance_feed_transport = Some(
+                        sorafs_gateway_compliance_transport::resolve(
+                            &compliance.feed_transport_provider, &compliance.feeds,
+                            sorafs_gateway_compliance_feed_transport.take(),
+                        ).map_err(|error| Report::new(StartError::StartTorii).attach(error))?,
+                    );
                 }
-                (None, Some(_)) => {
+                None if sorafs_gateway_compliance_feed_transport.is_some() => {
                     return Err(Report::new(StartError::StartTorii).attach(
-                        "disabled SoraFS gateway compliance rejects an unexpected feed transport",
-                    ));
+                        "disabled SoraFS gateway compliance rejects an unexpected feed transport"));
                 }
-                (Some(_), Some(_)) | (None, None) => {}
+                None => {}
             }
             match (
                 config.torii.sorafs_gateway.acme.provider.as_ref(),
@@ -4151,10 +4251,48 @@ impl Iroha {
         let shared_sorafs_cache = if emergency_fast {
             None
         } else {
-            build_shared_sorafs_provider_cache(&config, state.network_id_ref())
+            build_shared_sorafs_provider_cache(&config, Arc::clone(&state))
                 .map_err(Report::new)
                 .change_context(StartError::StartTorii)?
         };
+        if let Some(source_config) = config
+            .torii
+            .sorafs_repair
+            .source
+            .as_ref()
+            .filter(|_| !emergency_fast)
+        {
+            if config
+                .torii
+                .sorafs_storage
+                .native_transaction_signers
+                .repair
+                .as_ref()
+                .is_none_or(|binding| binding.authority != source_config.authority)
+            {
+                return Err(Report::new(StartError::StartTorii).attach(
+                    "remote SoraFS repair requires the configured native repair authority",
+                ));
+            }
+            let cache = shared_sorafs_cache.clone().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("remote SoraFS repair requires native provider discovery")
+            })?;
+            let node = sorafs_node.as_ref().ok_or_else(|| {
+                Report::new(StartError::StartTorii)
+                    .attach("remote SoraFS repair requires local storage")
+            })?;
+            let source = sorafs_repair_source::NativeRepairSourceV1::new(
+                source_config,
+                Arc::clone(&state),
+                cache,
+            )
+            .map_err(|error| {
+                Report::new(StartError::StartTorii)
+                    .attach(format!("remote SoraFS repair source rejected: {error}"))
+            })?;
+            node.set_repair_orchestrator(Arc::new(source));
+        }
         let sorafs_provider_ingest_runtime = if let Some(provider_ingest_config) =
             sorafs_provider_ingest_config
         {
@@ -7948,15 +8086,15 @@ fn configure_reports(args: &Args) {
 /// Run the stock daemon launcher.
 ///
 /// The stock binaries resolve supported runtime-only bindings through a
-/// platform-fixed local broker running under the same effective service UID.
+/// configured authenticated local broker running under the same effective service UID.
 /// The broker is not contacted when the validated configuration contains no
 /// runtime-provider bindings.
 pub fn main_entry() {
-    soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
-    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-    if taira_runtime_signer::dispatch_production_beacon_fixture_if_requested() {
+    #[cfg(unix)]
+    if external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
         return;
     }
+    soracloud_runtime::dispatch_inrou_internal_launcher_if_requested();
     let _ = std::hint::black_box(BUILD_SOURCE_ID);
     if let Err(report) = run_main(None, None) {
         eprintln!("{report:?}");
@@ -8281,6 +8419,80 @@ fn install_fastpq_queue_probe(labels: FastpqDeviceLabels) {
         })
         .expect("spawn FASTPQ Metal queue telemetry thread");
 }
+/// Reject a missing Pasta seed source before contacting deployment providers.
+///
+/// Registry providers have no Pasta slot; the fixed consumed descriptor and
+/// exact launcher factory are the only supported ways to provide local seed
+/// custody. A later check binds the resolved holder to the full signed record.
+fn verify_signed_genesis_mint_finality_source_before_providers(
+    network_id: iroha_data_model::NetworkId,
+    local_validator: &iroha_model_base::peer::PeerId,
+    authenticated_authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    configured_seed_fd: bool,
+    launcher_authority: bool,
+) -> Result<(), String> {
+    authenticated_authority
+        .validate()
+        .map_err(|error| format!("signed-genesis Pasta authority is invalid: {error}"))?;
+    if authenticated_authority.network_id != network_id {
+        return Err("signed-genesis Pasta authority belongs to another network".to_owned());
+    }
+    if authenticated_authority
+        .validators
+        .iter()
+        .any(|entry| &entry.validator == local_validator)
+        && !configured_seed_fd
+        && !launcher_authority
+    {
+        return Err(
+            "signed-genesis validator requires a private Pasta seed source before provider startup"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Require exact Pasta custody before a signed-genesis validator starts.
+///
+/// A peer absent from the signed genesis authority has no genesis voting seat.
+/// Its separately held seed becomes usable only after the authenticated height
+/// context activates a generation containing that exact peer and public keys.
+fn verify_signed_genesis_mint_finality_custody(
+    network_id: iroha_data_model::NetworkId,
+    local_validator: &iroha_model_base::peer::PeerId,
+    authenticated_authority: &iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityAuthorityGenerationV1,
+    held_authority: Option<
+        &iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalityLocalAuthorityV1,
+    >,
+) -> Result<(), String> {
+    authenticated_authority
+        .validate()
+        .map_err(|error| format!("signed-genesis Pasta authority is invalid: {error}"))?;
+    if authenticated_authority.network_id != network_id {
+        return Err("signed-genesis Pasta authority belongs to another network".to_owned());
+    }
+    let Some(index) = authenticated_authority
+        .validators
+        .iter()
+        .position(|entry| &entry.validator == local_validator)
+    else {
+        return Ok(());
+    };
+    let held_authority = held_authority.ok_or_else(|| {
+        "signed-genesis validator requires its exact private Pasta seed before startup".to_owned()
+    })?;
+    let expected_index = u32::try_from(index)
+        .map_err(|_| "signed-genesis Pasta seat index exceeds u32".to_owned())?;
+    if held_authority.authority() != Some(authenticated_authority)
+        || held_authority.signer().map(
+            iroha_core::zk::kagemusha_v1_recursion::KagemushaMintFinalitySignerV1::validator_index,
+        ) != Some(expected_index)
+    {
+        return Err("held Pasta seed does not match this signed-genesis validator seat".to_owned());
+    }
+    Ok(())
+}
+
 fn run_main(
     runtime_provider_registry: Option<&dyn IrohaRuntimeProviderRegistryV1>,
     musubi_publication_factory: Option<
@@ -8304,11 +8516,6 @@ fn run_main_with_config_guard(
     launcher_runtime_factory: Option<IrohaLauncherRuntimeFactoryV1>,
 ) -> ReportResult<(), MainError> {
     let args = parse_args();
-    #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-    if args.test_network_production_beacon_custody && launcher_config_guard.is_none() {
-        return Err(Report::new(MainError::Config)
-            .attach("production beacon fixture requires its explicit launcher registry boundary"));
-    }
     let lang = i18n::detect_language(args.language.as_deref());
     i18n::init(lang);
     configure_reports(&args);
@@ -8359,6 +8566,24 @@ fn run_main_with_config_guard(
     // static configuration has passed the same offline checks as
     // `--check-config`, and before Tokio or node-owned durable state starts.
     validate_startup_config_offline(&config).change_context(MainError::Config)?;
+    let authenticated_genesis = genesis
+        .as_ref()
+        .map(|local_genesis| {
+            validate_available_genesis_for_check(&config, local_genesis, None)
+                .map(|(authenticated, _)| authenticated)
+        })
+        .transpose()?;
+    if let Some(authenticated_genesis) = authenticated_genesis.as_ref() {
+        let context = authenticated_genesis.context();
+        verify_signed_genesis_mint_finality_source_before_providers(
+            iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash),
+            &config.common.peer.id,
+            &context.kagemusha_mint_finality_authority,
+            config.sumeragi.mint_finality_seed_fd.is_some(),
+            launcher_runtime_factory.is_some(),
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    }
     let runtime_deps = if emergency_fast {
         iroha_logger::warn!(
             "emergency Fast startup skipped deployment runtime-provider projection and resolution"
@@ -8370,8 +8595,11 @@ fn run_main_with_config_guard(
                 .map_err(Report::new)
                 .change_context(MainError::Config)
                 .attach("failed to project deployment runtime-provider bindings")?;
-            (!bindings.is_empty())
-                .then(runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new)
+            (!bindings.is_empty()).then(|| {
+                runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new(
+                    config.runtime_provider_broker.endpoint_path.clone(),
+                )
+            })
         } else {
             None
         };
@@ -8386,22 +8614,48 @@ fn run_main_with_config_guard(
             .change_context(MainError::Config)
             .attach("failed to resolve deployment runtime-provider bindings")?
     };
+    if config.sumeragi.mint_finality_seed_fd.is_some() && launcher_runtime_factory.is_some() {
+        return Err(Report::new(MainError::Config)
+            .attach("configured mint-finality seed rejects a second launcher authority"));
+    }
     let runtime_deps = if let Some(factory) = launcher_runtime_factory {
         if emergency_fast {
             return Err(Report::new(MainError::Config)
                 .attach("deployment runtime authority requires authenticated full startup"));
         }
-        let local_genesis = genesis.as_ref().ok_or_else(|| {
+        let authenticated_genesis = authenticated_genesis.as_ref().ok_or_else(|| {
             Report::new(MainError::Config)
                 .attach("deployment runtime authority requires the exact local signed genesis")
         })?;
-        let (authenticated_genesis, _) =
-            validate_available_genesis_for_check(&config, local_genesis, None)?;
-        factory(&config, &authenticated_genesis, runtime_deps)
+        factory(&config, authenticated_genesis, runtime_deps)
             .map_err(|error| Report::new(MainError::Config).attach(error))?
     } else {
         runtime_deps
     };
+    #[cfg(unix)]
+    let runtime_deps = if config.sumeragi.mint_finality_seed_fd.is_some() {
+        if emergency_fast {
+            return Err(Report::new(MainError::Config)
+                .attach("configured mint-finality seed rejects emergency startup"));
+        }
+        let authenticated_genesis = authenticated_genesis.as_ref().ok_or_else(|| {
+            Report::new(MainError::Config)
+                .attach("configured mint-finality seed requires exact local signed genesis")
+        })?;
+        taira_runtime_signer::resolve_inherited_mint_finality_runtime(
+            &config,
+            authenticated_genesis,
+            runtime_deps,
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?
+    } else {
+        runtime_deps
+    };
+    #[cfg(not(unix))]
+    if config.sumeragi.mint_finality_seed_fd.is_some() {
+        return Err(Report::new(MainError::Config)
+            .attach("mint-finality private descriptor requires a Unix daemon"));
+    }
     #[cfg(feature = "test-network-parliament-signers")]
     let runtime_deps = {
         if emergency_fast {
@@ -8455,6 +8709,22 @@ fn run_main_with_config_guard(
             }
         }
     };
+    if let Some(authenticated_genesis) = authenticated_genesis.as_ref() {
+        let context = authenticated_genesis.context();
+        let expected_network_id =
+            iroha_data_model::NetworkId::from_genesis_hash(config.genesis.expected_hash);
+        if context.network_id != expected_network_id {
+            return Err(Report::new(MainError::Config)
+                .attach("signed-genesis Pasta context belongs to another network"));
+        }
+        verify_signed_genesis_mint_finality_custody(
+            expected_network_id,
+            &config.common.peer.id,
+            &context.kagemusha_mint_finality_authority,
+            runtime_deps.kagemusha_mint_finality_authority.as_deref(),
+        )
+        .map_err(|error| Report::new(MainError::Config).attach(error))?;
+    }
     let musubi_publication_factory = if emergency_fast {
         None
     } else {
@@ -8719,11 +8989,20 @@ fn validate_genesis_execution_offline(
         ))
     })?;
     let kura = open_disposable_validation_kura(config, &validation_root)?;
-    let mut world = World::with(
+    let mut world = World::try_with_operation_index_budget(
         [genesis_domain(config.genesis.public_key.clone())],
         [genesis_account(config.genesis.public_key.clone())],
         [],
-    );
+        mv::allocation::AllocationBudget::new(
+            usize::try_from(config.nexus.storage.kagemusha_operation_index_bytes.get()).map_err(
+                |_| {
+                    Report::new(MainError::Config)
+                        .attach("configured operation-index pool exceeds addressable memory")
+                },
+            )?,
+        ),
+    )
+    .map_err(|error| Report::new(error).change_context(MainError::Config))?;
     iroha_core::sns::seed_genesis_alias_bootstrap(
         &mut world,
         &genesis.0,
@@ -8753,21 +9032,18 @@ fn validate_genesis_execution_offline(
             .change_context(MainError::Config)?;
     apply_state_geometry_config_before_kura_replay(&mut state, &startup_policies)
         .change_context(MainError::Config)?;
-    let signed_voters =
-        iroha_core::sumeragi::signed_genesis_voting_peers(genesis).map_err(|error| {
-            Report::new(MainError::Config).attach(format!(
-                "invalid signed Sumeragi v2 genesis roster: {error}"
-            ))
+    let signed_voters = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis.0)
+        .map_err(|error| {
+            Report::new(MainError::Config)
+                .attach(format!("invalid signed Sumeragi genesis roster: {error}"))
         })?;
     let topology = Topology::new(signed_voters);
-    let mut voting_block: Option<VotingBlock> = None;
-    let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (_valid, staged) = ValidBlock::validate_signed_genesis(
         genesis.0.clone(),
         &topology,
         genesis_authority,
         &TimeSource::new_system(),
         &state,
-        &mut voting_block,
         signed_mode,
     )
     .unpack(|_| {})
@@ -8918,7 +9194,7 @@ fn consensus_caps_from_genesis(
                 == iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned =>
         {
             (
-                iroha_core::sumeragi::signed_genesis_voting_peers(genesis)
+                iroha_core::sumeragi::schedule::genesis_validators(genesis)
                     .ok()?
                     .len(),
                 None,
@@ -8960,7 +9236,6 @@ fn consensus_caps_from_genesis(
         maximum_validator_roster_len,
     ))
 }
-
 
 fn authenticated_maximum_validator_roster_len(
     mode: iroha_data_model::block::consensus_v2::ConsensusMode,
@@ -10073,7 +10348,9 @@ mod tests {
             .split_once("// Recovery: scan recent persisted pipeline sidecars")
             .expect("pipeline recovery diagnostics")
             .1
-            .split_once("if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =")
+            .split_once(
+                "if let Some((queue_task, telemetry_task, governance_task, registry_cfg_task)) =",
+            )
             .expect("end of pipeline recovery diagnostics")
             .0;
         assert_eq!(
@@ -10445,9 +10722,9 @@ mod tests {
         );
         assert!(
             run_main_source.contains(
-                "(!bindings.is_empty()).then(runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new)"
+                "(!bindings.is_empty()).then(||{runtime_provider_broker::StockRuntimeProviderBrokerRegistryV1::new(config.runtime_provider_broker.endpoint_path.clone(),)})"
             ),
-            "the stock broker registry must be instantiated only for a non-empty binding catalog"
+            "the stock broker registry must use the validated endpoint only for a non-empty binding catalog"
         );
         assert!(
             run_main_source.contains(
@@ -11221,21 +11498,19 @@ mod tests {
             let provisional =
                 sign_configured_genesis_for_test(genesis.clone(), genesis_authority, config);
             let authority = AccountId::new(genesis_authority.public_key().clone());
-            let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
+            let voters = iroha_core::sumeragi::startup::genesis_committee_peers(&provisional.0)
                 .expect("provisional fixture voting roster");
             let topology = Topology::new(voters);
             let (mode, _) =
                 signed_v2_genesis_context_metadata(&provisional).expect("signed v2 metadata");
             let (_validation_root, state, _kura) =
                 genesis_staging_state_for_test(config, &provisional);
-            let mut voting_block = None;
-            let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let (_valid, staged) = ValidBlock::validate_signed_genesis(
                 provisional.0,
                 &topology,
                 &authority,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 mode,
             )
             .unpack(|_| {})
@@ -11464,14 +11739,12 @@ mod tests {
                 SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone(),
             )]);
             let time_source = TimeSource::new_system();
-            let mut voting_block = None;
-            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis(
                 block,
                 &topology,
                 &genesis_account_id,
                 &time_source,
                 &state,
-                &mut voting_block,
                 iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
             )
             .unpack(|_| {});
@@ -11533,21 +11806,19 @@ mod tests {
             let genesis = bind_staged_context_for_test(raw_genesis, &genesis_authority, &config);
             let (_validation_root, state, _kura) =
                 genesis_staging_state_for_test(&config, &genesis);
-            let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&genesis)
+            let voters = iroha_core::sumeragi::startup::genesis_committee_peers(&genesis.0)
                 .expect("signed voting roster");
             let topology = Topology::new(voters);
             let before_height = state.committed_height();
             let before_hashes = state.committed_block_hashes_snapshot();
-            let mut voting_block = None;
             let (mode, _signed_parameters) =
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
-            let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let (_valid, staged) = ValidBlock::validate_signed_genesis(
                 genesis.0.clone(),
                 &topology,
                 &authority_id,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 mode,
             )
             .unpack(|_| {})
@@ -12089,8 +12360,6 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
-                #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,
@@ -12157,8 +12426,6 @@ mod tests {
                 #[cfg(feature = "test-network-parliament-signers")]
                 test_network_parliament_beacon_signer_mode:
                     TestNetworkParliamentBeaconSignerMode::Valid,
-                #[cfg(all(unix, feature = "test-network-production-beacon-custody"))]
-                test_network_production_beacon_custody: false,
                 fastpq_execution_mode: None,
                 fastpq_poseidon_mode: None,
                 fastpq_device_class: None,

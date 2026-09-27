@@ -1,5 +1,7 @@
 //! FASTPQ-specific transcript helpers shared across the host.
 pub mod lane;
+#[cfg(test)]
+pub(crate) mod quantity_fixture;
 mod quantity_statement;
 #[cfg(test)]
 pub(crate) use quantity_statement::quantity_materializer_invocations_for_testing;

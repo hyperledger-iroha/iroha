@@ -30,7 +30,8 @@ mod execution_prefix;
 mod journals;
 pub(super) mod queue_retirement;
 pub(crate) use journals::{
-    CarrierArchivePreparationError, CarrierJournalPreparationError, RetainedCarrier,
+    CarrierArchivePreparationError, CarrierJournalPreparationError, CarrierJournalShellReservation,
+    RetainedCarrier,
 };
 pub(crate) use journals::{PublishedCarrier, PublishedNativeApply};
 
@@ -94,6 +95,20 @@ impl<'state> PreparedCarrier<'state> {
     pub(crate) fn world_journal_shell_bytes() -> Result<usize, mv::allocation::AllocationRefusal> {
         super::world_journals::resources::WorldJournalShellDemand::plan()
             .map(|demand| demand.total_bytes())
+    }
+
+    /// Reserve exact World, capture and effects shells before candidate execution.
+    pub(crate) fn reserve_journal_shells<A>(
+        budget: &mv::allocation::AllocationBudget,
+    ) -> Result<journals::CarrierJournalShellReservation<A>, mv::allocation::AllocationRefusal>
+    {
+        journals::CarrierJournalShellReservation::try_reserve(budget)
+    }
+
+    #[cfg(test)]
+    pub(in crate::state) fn reserve_journal_shells_for_test<A>()
+    -> journals::CarrierJournalShellReservation<A> {
+        journals::CarrierJournalShellReservation::for_test()
     }
 
     /// Exact inline allocation for the deferred effects owner captured by journals.
@@ -183,6 +198,3 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use journals::publish_governance_fixture;
-
-#[cfg(test)]
-pub(in crate::state) use journals::archive_fixture_instructions;

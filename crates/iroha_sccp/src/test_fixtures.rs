@@ -461,7 +461,7 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
             source_network: SccpNetworkV1::SoraTaira,
             protocol_version: iroha_data_model::block::consensus_v2::PROTOCOL_VERSION,
             chain_id_hash: sccp_sora_taira_chain_id_hash_v1(),
-            epoch: 1,
+            epoch: 0,
             epoch_end_height: 10,
             roster_commitment: [0x78; 32],
             checkpoint_height: 5,
@@ -494,7 +494,7 @@ pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutbound
         contract_artifact_sha256: [0xb1; 32],
         vk_ref: SccpPortableVerifyingKeyRefV1 {
             backend: "stark/fri/v1".to_owned(),
-            name: "ivm-execution-v1".to_owned(),
+            name: "ivm-replay-binding-v1".to_owned(),
             version: 1,
             commitment: [0xb2; 32],
         },
@@ -934,6 +934,38 @@ pub fn sccp_finalize_taira_block_test_fixture_v1(
         block,
         parent,
         SccpFinalityFixtureEpochSchedule::Ordinary,
+        false,
+    )
+}
+
+/// Finalize one exact native-operation test block in a bounded 255-height epoch.
+///
+/// The four-validator roster, canonical source/output checks, three-vote CommitQC and signed
+/// RS16 layout are identical to the short SCCP fixture. This separate schedule supports the
+/// sequential Reserve/Check/Complete rounds of native services without changing bridge fixtures.
+///
+/// # Panics
+/// Panics outside heights 1 through 255, on a wrong parent or epoch schedule, or malformed wire.
+#[must_use]
+pub fn sccp_finalize_taira_native_operation_block_test_fixture_v1(
+    block: &SignedBlock,
+    parent: Option<&SccpFinalizedBlockTestFixtureV1>,
+) -> SccpFinalizedBlockTestFixtureV1 {
+    sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+        block, parent, SccpFinalityFixtureEpochSchedule::NativeOperations, false,
+    )
+}
+
+/// Finalize a native test chain whose network identity is derived from its actual signed genesis.
+/// The same exact four-validator, three-vote RS16 fixture applies; no production State is injected.
+/// # Panics
+/// Rejects malformed blocks, wrong parents or heights outside the bounded 255-height epoch.
+#[must_use]
+pub fn sccp_finalize_native_genesis_network_block_test_fixture_v1(
+    block: &SignedBlock, parent: Option<&SccpFinalizedBlockTestFixtureV1>,
+) -> SccpFinalizedBlockTestFixtureV1 {
+    sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
+        block, parent, SccpFinalityFixtureEpochSchedule::NativeOperations, true,
     )
 }
 
@@ -944,12 +976,14 @@ fn sccp_finalize_taira_epoch_boundary_test_fixture_v1(
         block,
         None,
         SccpFinalityFixtureEpochSchedule::GenesisBoundary,
+        false,
     )
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SccpFinalityFixtureEpochSchedule {
     Ordinary,
+    NativeOperations,
     GenesisBoundary,
 }
 
@@ -961,12 +995,14 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
     block: &SignedBlock,
     parent: Option<&SccpFinalizedBlockTestFixtureV1>,
     epoch_schedule: SccpFinalityFixtureEpochSchedule,
+    derive_genesis_network: bool,
 ) -> SccpFinalizedBlockTestFixtureV1 {
     let block_header = block.header();
     let height = block_header.height().get();
     assert!(
         match epoch_schedule {
             SccpFinalityFixtureEpochSchedule::Ordinary => (1..=9).contains(&height),
+            SccpFinalityFixtureEpochSchedule::NativeOperations => (1..=255).contains(&height),
             SccpFinalityFixtureEpochSchedule::GenesisBoundary => height == 1,
         },
         "the exact SCCP finality signer received a height outside its selected epoch schedule"
@@ -1004,7 +1040,10 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
         max_payload_size_bytes: 4096,
         max_chunk_count: 8,
     };
-    let network_id = sccp_taira_finality_network_id_v1();
+    let network_id = if derive_genesis_network {
+        parent.map_or_else(|| iroha_data_model::NetworkId::from_genesis_hash(block.hash()),
+            |parent| parent.proof().finality_artifact.height_context.network_id)
+    } else { sccp_taira_finality_network_id_v1() };
     let context = match (height, block_header.prev_block_hash(), parent) {
         (1, None, None) => {
             use iroha_data_model::isi::kagemusha_v1::{
@@ -1014,6 +1053,7 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
 
             let first_epoch_end = match epoch_schedule {
                 SccpFinalityFixtureEpochSchedule::Ordinary => 10,
+                SccpFinalityFixtureEpochSchedule::NativeOperations => 256,
                 SccpFinalityFixtureEpochSchedule::GenesisBoundary => 1,
             };
             let (authorization, authority) =
@@ -1045,6 +1085,7 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
                         .validate_successor(&authorization)
                         .expect("exact SCCP epoch-one authorization is contiguous");
                     iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
+                        committee_preparation: None,
                         epoch: successor.epoch,
                         kagemusha_mint_finality_authorization: successor,
                         kagemusha_mint_finality_authority: authority.clone(),
@@ -1076,7 +1117,7 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
                 kagemusha_mint_finality_authority: authority,
             }
         }
-        (2..=9, Some(parent_hash), Some(parent)) => {
+        (2..=255, Some(parent_hash), Some(parent)) => {
             assert_exact_finalized_block_fixture(parent);
             assert_eq!(
                 parent.block().header().height().get().checked_add(1),
@@ -1088,6 +1129,9 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
                 Some(height)
             );
             let parent_context = &parent.proof().finality_artifact.height_context;
+            if epoch_schedule == SccpFinalityFixtureEpochSchedule::NativeOperations {
+                assert_eq!(parent_context.epoch_end_height, 256, "native operation fixture cannot switch epoch schedules");
+            }
             let (
                 epoch,
                 epoch_end_height,
@@ -1218,6 +1262,8 @@ fn sccp_finalize_taira_block_with_epoch_schedule_test_fixture_v1(
 
 #[cfg(test)]
 mod finality_descendant_tests;
+#[cfg(test)]
+mod sorafs_publication_tests;
 fn exact_sccp_fixture_block(
     context: SccpOutboundMessageContextV1,
     payload: &SccpPayloadV1,

@@ -13,6 +13,12 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds},
 };
 use iroha_telemetry::metrics;
+
+// TODO: replace this refusal only with a compiled RAM-LFE program-execution
+// relation. A four-limb payload hash binding is not an execution proof.
+const PROOF_RELATION_UNAVAILABLE: &str =
+    "RAM-LFE proof mode is unavailable: no compiled program-execution proof relation";
+
 /// Execution handlers for RAM-LFE program-policy ISIs.
 pub mod isi {
     use super::*;
@@ -157,19 +163,11 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
             .into(),
         ));
     }
+    if policy.verification_mode == RamLfeVerificationMode::Proof {
+        return Err(Error::InvariantViolation(PROOF_RELATION_UNAVAILABLE.into()));
+    }
     match policy.backend {
-        RamLfeBackend::HkdfSha3_512PrfV1 => {
-            if policy.verification_mode == RamLfeVerificationMode::Proof {
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "RAM-LFE program policy {} cannot use proof verification with backend {}",
-                        policy.program_id,
-                        policy.backend.as_str()
-                    )
-                    .into(),
-                ));
-            }
-        }
+        RamLfeBackend::HkdfSha3_512PrfV1 => {}
         RamLfeBackend::BfvAffineSha3_256V1 => {
             if policy.commitment.public_parameters.is_empty() {
                 return Err(Error::InvariantViolation(
@@ -199,16 +197,6 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
                     .into(),
                 )
             })?;
-            if policy.verification_mode == RamLfeVerificationMode::Proof {
-                return Err(Error::InvariantViolation(
-                    format!(
-                        "RAM-LFE program policy {} cannot use proof verification with backend {}",
-                        policy.program_id,
-                        policy.backend.as_str()
-                    )
-                    .into(),
-                ));
-            }
         }
         RamLfeBackend::BfvProgrammedSha3_256V1 => {
             decode_bfv_programmed_public_parameters(&policy.commitment.public_parameters).map_err(
@@ -229,8 +217,8 @@ pub(crate) fn validate_program_policy(policy: &RamLfeProgramPolicy) -> Result<()
 /// Validate a stateless RAM-LFE execution receipt against the published program policy and clock.
 ///
 /// This mirrors the attestation checks used during identifier-claim admission,
-/// but without any identifier-specific ledger binding checks. Proof-mode
-/// receipts are admitted only under the supplied node verification guardrails.
+/// but without any identifier-specific ledger binding checks. Proof mode is
+/// unavailable until a complete program-execution relation is implemented.
 pub fn validate_execution_receipt_at(
     receipt: &RamLfeExecutionReceipt,
     program_policy: &RamLfeProgramPolicy,
@@ -257,6 +245,9 @@ pub fn validate_execution_receipt_at(
             "RAM-LFE receipt verification mode does not match program policy {}",
             program_policy.program_id
         ));
+    }
+    if program_policy.verification_mode == RamLfeVerificationMode::Proof {
+        return Err(PROOF_RELATION_UNAVAILABLE.to_owned());
     }
     if program_policy.commitment.backend != program_policy.backend {
         return Err(format!(
@@ -532,6 +523,31 @@ mod tests {
     #[test]
     fn checked_keypair_preserves_default_algorithm() {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
+    }
+    #[test]
+    fn unavailable_proof_policy_and_receipt_reject_before_parameter_or_proof_work() {
+        for backend in [
+            RamLfeBackend::HkdfSha3_512PrfV1,
+            RamLfeBackend::BfvAffineSha3_256V1,
+            RamLfeBackend::BfvProgrammedSha3_256V1,
+        ] {
+            let mut policy = sample_policy();
+            policy.backend = backend;
+            policy.commitment.backend = backend;
+            policy.verification_mode = RamLfeVerificationMode::Proof;
+            policy.commitment.public_parameters = vec![0xff];
+            let error = validate_program_policy(&policy).expect_err("no compiled relation");
+            assert!(error.to_string().contains(PROOF_RELATION_UNAVAILABLE));
+            let receipt = sample_receipt(&policy, 100, None);
+            assert_eq!(
+                validate_execution_receipt_at(&receipt, &policy, 100, test_guardrails()),
+                Err(PROOF_RELATION_UNAVAILABLE.to_owned())
+            );
+        }
+        let mut signed = sample_policy();
+        signed.backend = RamLfeBackend::HkdfSha3_512PrfV1;
+        signed.commitment.backend = signed.backend;
+        validate_program_policy(&signed).expect("signed policy remains supported");
     }
     #[test]
     fn malformed_bfv_parameters_are_rejected_without_panicking() {

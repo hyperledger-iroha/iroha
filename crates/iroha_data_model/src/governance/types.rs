@@ -3569,7 +3569,16 @@ impl ProposalKind {
                 }
             },
             Self::SorafsProviderGovernance(proposal) => {
-                GovernanceSubjectPreimageV1::SorafsProvider(proposal.action.provider_id())
+                match proposal.action.as_ref() {
+                    SorafsProviderGovernanceActionV1::Admission(action) => {
+                        match action.provider_id().map_err(|error| norito::Error::Message(error.to_string()))? {
+                            Some(provider) => GovernanceSubjectPreimageV1::SorafsProviderAdmission(provider),
+                            None => GovernanceSubjectPreimageV1::SorafsAdmissionCouncil,
+                        }
+                    }
+                    _ => GovernanceSubjectPreimageV1::SorafsProvider(
+                        proposal.action.provider_id().ok_or_else(|| norito::Error::Message("missing provider identity".into()))?),
+                }
             }
             Self::GlobalDataTriggerPermissionGovernance(proposal) => {
                 GovernanceSubjectPreimageV1::GlobalDataTriggerPermission(proposal.authority.clone())
@@ -3607,6 +3616,10 @@ enum GovernanceSubjectPreimageV1 {
     SorafsProvider(crate::sorafs::capacity::ProviderId),
     #[codec(index = 10)]
     GlobalDataTriggerPermission(AccountId),
+    #[codec(index = 11)]
+    SorafsAdmissionCouncil,
+    #[codec(index = 12)]
+    SorafsProviderAdmission(crate::sorafs::capacity::ProviderId),
 }
 
 impl ProposalContentId {

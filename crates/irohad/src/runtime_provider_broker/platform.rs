@@ -23,11 +23,6 @@ mod stream_token_gateway_client;
 #[cfg(test)]
 use std::io;
 use stream_token_gateway_client::StreamTokenGatewayAdmissionBrokerProvider;
-#[cfg(target_os = "linux")]
-const STOCK_BROKER_ENDPOINT_V1: &str =
-    "/run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock";
-#[cfg(target_os = "macos")]
-const STOCK_BROKER_ENDPOINT_V1: &str = "/private/var/iroha/run/runtime-provider-broker-v1.sock";
 const STOCK_BROKER_SOCKET_MODE_V1: u32 = 0o660;
 const BROKER_IO_TIMEOUT_V1: Duration = Duration::from_secs(15);
 const MAX_BROKER_SESSIONS_V1: usize = 8;
@@ -53,6 +48,13 @@ fn set_socket_mode(path: &Path) -> io::Result<()> {
 )]
 mod tests {
     use super::process_admission_fixture::*;
+    fn validated_production_endpoint()
+    -> iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath {
+        iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
+            iroha_config::parameters::defaults::runtime_provider_broker::endpoint_path(),
+        )
+        .expect("validated default broker endpoint")
+    }
     include!("server_tests_01.rs");
     include!("server_tests_02.rs");
     include!("server_tests_03.rs");

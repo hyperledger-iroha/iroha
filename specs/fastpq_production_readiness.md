@@ -15,33 +15,41 @@ bound. These replay limits do not qualify or admit compact proofs.
 
 The normal offline quantity facade now selects the bounded DEEP profile:
 301 committed columns, 64 queries, five higher-arity folds and one OOD evaluation
-of the complete 923-slot AIR. The applied candidate includes the real coefficient
-conversion, exact polynomial quotient and full producer, together with per-phase
-work limits, cumulative decode accounting and authenticated row-root results.
-The retained September 26 normal-library and test build passed with 3,741 unchanged
-captured inputs. A subsequent scope audit found that its pre-build snapshot omitted
-`vendor/num-bigint-0.4.6`; this is not a complete dependency-closure qualification. Its focused selections pass 285 tests with zero
-failures and 11 explicit diagnostic ignores, including the repaired full-proof
-resource-boundary regression. The real
-full-domain quotient and eight-million-point FFT/inverse checks also passed on
-their retained source snapshot. A raw 485,490-byte proof passes bounded
-verification and context/tamper controls: generation plus controls took
-13,039.8 seconds with 25,942,648 KiB maximum RSS, and separate verification plus
-controls took 3.07 seconds. These contended local diagnostics are not release
-benchmarks. Complete ordinary/AXT generation was interrupted when the Linux guest
-stopped, so no complete public artifact is qualified by that attempt. Exact
-source and executable bindings remain in the
-[integration checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
+of the complete 923-slot AIR. The applied producer uses bounded base-field
+vanishing-mask replay, exact full-numerator division, randomized quotient chunks
+and an independently committed composition mask. Fresh cryptographic entropy is
+passed explicitly to the construction; public columns remain reconstructed and
+unmasked. Checked payload, work and hash budgets cover the complete construction,
+with cumulative decode accounting and authenticated row-root results.
+The September 26 normal-library and test build passed with 3,720 unchanged
+dependency-closure inputs; its focused selection passed 238 tests with zero
+failures and seven explicitly deferred full-domain/artifact diagnostics. The real
+full-domain quotient and eight-million-point FFT/inverse checks also passed. Raw
+proof generation had started; complete ordinary/AXT producer verification
+remained pending in the [integration checkpoint](../docs/history/2026-09-26/fastpq-deep-integration.md).
 The September 22 verifier-only checkpoint passed 84 focused tests;
 its maximum-shaped codec fixture measured 506,351 bytes, which is not evidence
 of a valid generated proof. Earlier profile measurements below retain their
 original source and do not qualify this replacement or change Core admission.
-The merged fixed-fiber codec has a 500,783-byte maximum frame. Its sole profile
+The merged fixed-fiber codec has a 502,895-byte maximum frame, including the
+authenticated composition-mask opening. Its sole profile
 binds the doubled FRI degree sequence `[131072,8192,512,64,8,2]` and checks the
 complete terminal against a degree-`<2` polynomial on the folded coset. The
-integrated producer remains unmasked and constructs degree-`<N` trace columns;
-the larger verifier degree envelope does not provide witness hiding. The
-earlier executable evidence does not qualify this merged profile.
+integrated producer uses 136 base-field mask coefficients per retained column,
+65 extension-field quotient-mask coefficients and an independent degree-`<2N`
+composition mask. This construction still requires whole-transcript hiding and
+soundness review. The earlier executable evidence covered a different producer
+and does not qualify this merged profile.
+
+The public `offline_compact::quantity_artifact_resources(segments,
+maximum_segment_statement_bytes)` planner uses the same fixed DEEP query and
+frame owners as producer admission. It separates raw opening bytes, canonical
+child/carrier bounds and checked construction payload/work from peak RSS.
+A zero statement length reports a floor; real proving also checks complete
+statement contexts, private-tree policy, enclosing decode limits and final
+output. Impossible fixed AIR/FRI/Merkle and carrier policies are rejected before
+statement hashing or private-tree construction. Planning grants neither
+production admission nor a qualified zero-knowledge claim.
 
 ## Predecessor offline implementation and evidence
 
@@ -61,8 +69,37 @@ segment, cumulative queries and cumulative Norito decode charges. The opaque
 success result retains every ordered child's complete six-word row commitment.
 It grants no source finality or admission authority.
 
-The same facade exposes ordinary and AXT quantity producers under this one
-six-lane profile. They check independent expectations and explicit byte,
+The predecessor offline producer used the shared `TraceReplayPlan` to retain the
+65,536-row coefficient matrix and replay one of eight coset stripes at a time.
+Its owned coefficient-plus-stripe payload is exactly 358,612,992 bytes; the
+former complete trace LDE alone required 1,434,451,968 bytes. Caller trace
+buffers, complete digest trees, mixed/quotient/FRI arrays, fixed preparation,
+query rows and runtime overhead remain outside that subtotal and retain their
+separate structural charges. Three complete passes commit rows, mix columns
+and evaluate quotients; final openings replay only selected stripes. The plan
+bounds this at 11,286 column transforms of 65,536 values, including initial
+interpolation. This trades repeated CPU FFT work for less retained trace memory.
+That storage change preserved the then-current deterministic FFT, polynomial
+degrees, row positions, hash framing, transcript and proof wire. Small reference tests compare cells,
+next-row wraparound, canonical row bytes, roots and minimal query frontiers;
+full-profile runtime/RSS and device qualification remain required. This is a
+storage prerequisite for the predecessor unmasked candidate, not evidence for
+the current masked DEEP producer or an admission change.
+
+The cryptographic completion sequence remains: (1) select and independently
+review a witness-hiding/quotient-blinding construction consistent with the
+actual opening sets and degree ledger; (2) prove its commitment and encoded
+opening layout fits the unchanged 512 KiB proof target and complete 1 MiB AXT
+carrier ceiling; (3) implement bounded-memory proving, including its complete
+commitment/evaluation workspace, and establish deterministic CPU/device
+equivalence; (4) connect the bounded verifier to authenticated source/finality,
+authorization and atomic replay state; (5) qualify exact-source full proofs,
+soundness and restart/four-validator admission. Neither predecessor unmasked
+proofs nor the integrated construction can substitute for step (1), and widening
+the DEEP rows alone exceeds the single-proof target before other fields.
+
+The predecessor facade exposed ordinary and AXT quantity producers under its
+six-lane profile. They checked independent expectations and explicit byte,
 trace-cell, decode and private-tree budgets before expanding a physical trace.
 Supplied touched-tree roots must match the derived private witnesses. Every
 segment is preflighted, segments are proved sequentially, and a process-local
@@ -109,7 +146,7 @@ diagnostic ignored, including exact canonical-hash parity. A scoped complete-has
 comparison improved both tested payload sizes; dependent-prover and release
 performance results remain outstanding in the September 22 record.
 
-The fixed geometry has 65,536 rows, 342 columns, 923 slots, 375 unique queries,
+The predecessor geometry had 65,536 rows, 342 columns, 923 slots, 375 unique queries,
 17 binary folds and four terminal values. The 22-message transcript expands 931
 six-word blocks, including the complete fixed 401-candidate query tape. Its
 profile identity, context, schema and challenge bytes differ from the retired
@@ -122,7 +159,7 @@ row, without per-cell lengths or a row-vector count. At 750 opened rows this
 removes 262,501 framed bytes; it changes no authenticated value or mathematical
 profile. The sole fixed-row schema rejects prior variable-row frames.
 
-The current DTO requires at least 1,050,000 raw bytes for its 375 complete rows
+The predecessor DTO requires at least 1,050,000 raw bytes for its 375 complete rows
 and mixed/quotient pairs, before any framing, indices, roots or FRI openings.
 This exceeds the 512 KiB compact proof target and 1 MiB AXT ceiling. The producer
 requires its fixed valid-shape upper bound of 4,017,376 framed bytes per segment,
@@ -132,29 +169,16 @@ Explicit offline budgets provide no production qualification. The internally
 reviewed conditional ideal-field block/tuple reduction still requires the actual
 framing and AIR mapping and does not qualify the concrete six-lane construction.
 
-Production node verification still replays the complete witness; Core has no
-consumer of this offline facade. Execution-owned source quotas, frozen policy,
-mandatory reserves and rejection rollback are applied. The retained Core diagnostic
-passes 305 tests and fails 23 fixtures; their corrections are applied and await the
-new build. The shared merge attempt, authenticated prefix owner, recorder lifecycle,
-whole-source packing and original carrier custody are now applied and under validation.
-The typed transfer/mint/burn model and shared public preparation pass 62 focused
-Linux checks. The actual schema owner passes 23 tests; its regenerated reference
-adds the 11 effect types without changing existing entries. Rollback-local typed
-effect capture and original signed sponsor-fee burn capture are applied with
-bounded entry accounting. Core compilation remains incomplete: the latest retry
-identified a missing sponsor-capability hash import, with its repair staged.
-Capture remains nonexportable until mandatory aggregate fee owners, lifecycle/rekey
-and raw mutation coverage are complete. Proof dispatch remains unfinished.
-The native immutable executable passes 68 focused tests, including six explicitly
-required Metal device tests; complete public ordinary/AXT proving is still running.
-These are scoped executable diagnostics: source snapshots omitted local vendor
-inputs and cannot qualify a complete build closure. Atomic D7 publication, finalized
-source authentication, AXT authorization, witness privacy,
+Core transfer proofs and AXT envelope verification use the canonical masked
+artifact and bounded verifier. The AXT decoder accepts only its nominal compact
+schema and compares binding, manifest, DA, amount and expiry context. Anchored
+verification retains the independently supplied finalized roots and ordered
+transaction checks. Metadata-only opaque effect carriers have no transfer AIR
+and are rejected as unsupported semantics. Execution-owned source quotas, atomic
+D7 publication, complete finalized-source authorization, witness-hiding review,
 independent cryptographic qualification, hardware/resource measurements and
-four-validator rollout/recovery remain unfinished. Production consumers, schemas,
-fixtures and SDKs must change together after those obligations are met. No
-production profile, limit or admission registry is activated by this slice.
+four-validator rollout/recovery remain separate unfinished obligations; decoding
+or mathematical verification never supplies those authorities.
 
 The September 23 anchored-spend model preflight now requires exclusive amount
 shapes before the issuer signs: a clear intent and draft mirror must equal the
@@ -193,8 +217,9 @@ producer. The original degree-`<N` base-field row layout could not consume any
 nonzero subgroup-vanishing mask; opening 64 complete masked Fp4 rows would also
 exceed 512 KiB. The [original DEEP preflight](../docs/history/2026-09-24/fastpq-f07-deep-preflight-and-resource-floor.md)
 established that obstruction with six focused tests against its then-current
-geometry. A reviewed hiding/opening redesign remains a prerequisite for private
-proofs; the integrated unmasked producer does not satisfy that obligation.
+geometry. The integrated masking construction addresses that design obstruction;
+independent whole-transcript hiding and soundness review remain prerequisites
+for qualified private proofs.
 The then-inactive [doubled-degree terminal boundary](../docs/history/2026-09-24/fastpq-f07-doubled-degree-terminal-boundary.md)
 bound the screened `<2N` FRI progression into its transcript and checked all
 128 terminal values at degree `<2` on the folded coset. Its private-producer
@@ -207,11 +232,19 @@ soundness and resource bounds.
 The subsequent [fixed FRI fiber wire cut](../docs/history/2026-09-24/fastpq-f07-fixed-fri-fibers.md)
 removed sequence counts and per-element framing from the then-inactive DEEP
 DTO's fixed-arity `[16,16,8,8,4]` fibers. Its profile identity binds the new layout;
-the exact maximal frame is 500,783 bytes, 5,568 fewer than the preceding
-candidate; 55 focused DEEP tests passed against that frame and bounded decoder.
-The codec is retained in the integrated profile. This wire reduction does not
-shrink the recorded ~8 MB predecessor proofs or supply the missing `R(x)`,
-masked producer, privacy argument, or admission path.
+that snapshot's exact maximal frame was 500,783 bytes, 5,568 fewer than the
+preceding candidate; 55 focused DEEP tests passed against that frame and bounded
+decoder. The fixed-fiber codec is retained in the integrated profile. Those
+measurements do not shrink the recorded ~8 MB predecessor proofs or qualify
+the current masked producer, privacy argument or admission path.
+The current [hiding construction prerequisite](fastpq_deep_hiding_construction.md)
+adds explicit quotient-pair masking and an authenticated independent composition
+mask to the integrated DEEP codec/coefficient producer/verifier. It reserves
+lambda power zero for the mask and powers 1 through 606 for relation terms.
+The exact source-derived frame maximum is 502,895 bytes. The bounded masked
+producer and checked structural resource plan are integrated; complete native
+proofs, measured whole-prover resources, cryptographic qualification and
+authenticated source admission remain required.
 
 ## Completion goals
 
@@ -219,12 +252,12 @@ masked producer, privacy argument, or admission path.
 | --- | --- | --- |
 | G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Core still rejects unanchored spending; signed anchored-spend model amount preflight passes 2/2 focused tests but is not admitted; source/nonce and evidence gaps remain |
 | G2: Constrain the complete transfer statement | Reviewed AIR ledger or equivalent bounded public-input checks, with negative tests for every relation below | Complete 923-slot one-delta hash/SMT ledgers, bounded public checks and typed PublicIO/claim adapter pass; external authority/root authentication remains separate |
-| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | The bounded DEEP offline format, producer and ordinary/AXT verifier are implemented. One raw 485,490-byte full proof passes; complete public ordinary/AXT artifacts remain pending. Authenticated Core admission is unwired and production still replays |
+| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | The canonical masked DEEP format, producer and ordinary/AXT verifier are integrated; exact-source complete proof/size evidence and full authenticated execution qualification remain pending |
 | G4: Qualify cryptography | Protocol-specific qROM argument, final multi-target digest analysis, independently reproduced constants and vectors, independent review bound to final artifacts | Unavailable |
 | G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | CPU remains the producer default; the M4 Max shader passes 5,454 digest comparisons over 954 dispatches, and the applied Rust lifecycle/tree path passes all six required actual-Metal checks. Full-proof performance, fleet and CUDA qualification remain incomplete; the native quotient fixture failure remains recorded in the September 26 checkpoint |
 | G6: Qualify integration and release | Same-source four-validator tests, restart/recovery and adversarial admission, signed immutable source and artifacts, rollout/rollback evidence | Incomplete |
 
-Goals G2 and G3 must complete together before removing replay. The selected
+Goals G2 and G3 require joint qualification. The selected
 product remains a transfer proof system; replacing it with a replay-only format
 would not satisfy this goal.
 

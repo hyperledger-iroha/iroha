@@ -1,26 +1,26 @@
 [package]
 name = "iroha-sccp-ton"
-description = "Immutable TON SCCP bridge and Taira XOR Jetton contracts"
-version = "0.1.0"
+description = "SCCP v1 TON destination: Taira XOR Jetton minter with the bridge built in, wallets and consumption buckets"
+version = "1.0.0"
 license = "Apache-2.0"
 
 [toolchain]
-acton = "1.1.0"
+acton = "1.2.0"
 
-[contracts.TairaXorJettonWallet]
-display-name = "TairaXorJettonWallet"
-src = "contracts/TairaXorJettonWallet.tolk"
+[contracts.SccpTairaXorMinter]
+display-name = "SccpTairaXorMinter"
+src = "contracts/SccpTairaXorMinter.tolk"
 depends = []
 
-[contracts.TairaXorSccpBridge]
-display-name = "TairaXorSccpBridge"
-src = "contracts/TairaXorSccpBridge.tolk"
-depends = ["TairaXorJettonWallet", "TairaXorJettonMaster"]
+[contracts.SccpTairaXorWallet]
+display-name = "SccpTairaXorWallet"
+src = "contracts/SccpTairaXorWallet.tolk"
+depends = []
 
-[contracts.TairaXorJettonMaster]
-display-name = "TairaXorJettonMaster"
-src = "contracts/TairaXorJettonMaster.tolk"
-depends = ["TairaXorJettonWallet"]
+[contracts.SccpConsumedBucket]
+display-name = "SccpConsumedBucket"
+src = "contracts/SccpConsumedBucket.tolk"
+depends = []
 
 [test]
 fail-on-diff = false

@@ -170,13 +170,6 @@ pub(crate) enum NativeCustodyCheckRefV1<'a> {
         )
     )]
     ReleaseManifest(&'a MutateSorafsReleaseManifestAuthority),
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "stream-token native Check has no production caller yet"
-        )
-    )]
     StreamToken(&'a MutateSorafsStreamTokenAuthority),
     #[cfg_attr(
         not(test),

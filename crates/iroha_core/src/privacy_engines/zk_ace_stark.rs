@@ -1285,7 +1285,7 @@ fn build_schedule(
         append_poseidon_lane(
             &mut schedule,
             lane,
-            prefix.state(),
+            *prefix.state(),
             prefix.next_rate_position(),
             &identity_message_words(),
             lane,
@@ -1301,7 +1301,7 @@ fn build_schedule(
         append_poseidon_lane(
             &mut schedule,
             lane,
-            prefix.state(),
+            *prefix.state(),
             prefix.next_rate_position(),
             &replay_message_words(),
             DIGEST_LANES + lane,

@@ -6,6 +6,9 @@ use super::*;
 pub(super) fn validate_public_lane_stake_reserves(
     world: &impl WorldReadOnly,
 ) -> Result<(), String> {
+    let currency = world
+        .sumeragi_npos_parameters()
+        .map(|params| params.xor_asset_definition_id);
     let mut by_validator = BTreeMap::<(LaneId, AccountId), (Quantity, Quantity, Quantity)>::new();
     for (key, share) in world.public_lane_stake_shares().iter() {
         if !public_lane_stake_share_matches_key(key, share) {
@@ -33,7 +36,11 @@ pub(super) fn validate_public_lane_stake_reserves(
                 .map_err(|_| "staking self-bonded total overflowed".to_owned())?;
         }
         for (request_id, request) in &share.pending_unbonds {
-            if request_id != &request.request_id || request.amount.is_zero() {
+            if request_id != &request.request_id
+                || request.amount.is_zero()
+                || request.slashable_through_height == 0
+                || request.liability_release_height < request.slashable_through_height
+            {
                 return Err(
                     "staking custody source contains a noncanonical pending unbond".to_owned(),
                 );
@@ -47,6 +54,15 @@ pub(super) fn validate_public_lane_stake_reserves(
     for (key, validator) in world.public_lane_validators().iter() {
         if !public_lane_validator_record_matches_key(key, validator)
             || validator.stake_account != validator.validator
+            || validator
+                .election_exit_height
+                .is_some_and(|end| end < validator.activation_height)
+            || validator.deactivation_height.is_some_and(|end| {
+                end < validator.activation_height
+                    || validator
+                        .election_exit_height
+                        .is_none_or(|requested| end < requested)
+            })
         {
             return Err("staking custody source contains a noncanonical validator".to_owned());
         }
@@ -65,6 +81,11 @@ pub(super) fn validate_public_lane_stake_reserves(
     }
     let mut expected_reserves = BTreeMap::<AssetId, Quantity>::new();
     for (key, (asset, held)) in world.public_lane_stake_custody().iter() {
+        if currency.as_ref() != Some(asset.definition()) {
+            return Err(
+                "staking custody does not use the committed network XOR identity".to_owned(),
+            );
+        }
         if held.is_zero() || expected_custody.remove(key).as_ref() != Some(held) {
             return Err(
                 "pinned staking custody is zero, orphaned or differs from canonical shares"
@@ -120,10 +141,7 @@ mod tests {
     fn fixture() -> (World, AssetId) {
         let mut world = World::new();
         let asset = AssetId::new(
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("staking", "universal").unwrap(),
-                "xor".parse().unwrap(),
-            ),
+            SumeragiNposParameters::default().xor_asset_definition_id,
             ALICE_ID.clone(),
         );
         for account in [ALICE_ID.clone(), BOB_ID.clone()] {
@@ -162,6 +180,7 @@ mod tests {
                 metadata: Metadata::default(),
                 status: PublicLaneValidatorStatus::Active,
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: Some(0),
             },
@@ -227,6 +246,7 @@ mod tests {
 
     fn restore(value: json::Value) -> Result<Box<State>, deserialize::StateRestoreError> {
         deserialize::KuraSeed {
+            operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
             lane_manifests: Arc::new(LaneManifestRegistry::empty()),
             kura: Kura::blank_kura_for_testing(),
             query_handle: crate::query::store::LiveQueryStore::start_test(),

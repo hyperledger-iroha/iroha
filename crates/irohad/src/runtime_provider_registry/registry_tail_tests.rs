@@ -1391,3 +1391,57 @@ fn registry_native_signer_uses_catalog_network_before_any_provider_method() {
         "the exact network reaches the provider"
     );
 }
+
+#[test]
+fn explicit_native_software_binding_is_excluded_from_external_provider_catalog() {
+    let provider = ProofOutcomeTestSigner::new();
+    let mut config = default_runtime_config();
+    let mut binding = actual_native_signer_binding(&provider.expected_binding());
+    binding.handle = "software://sorafs/proof-outcome/primary".into();
+    binding.software_credential = Some("/run/iroha/proof-key".into());
+    config
+        .torii
+        .sorafs_storage
+        .native_transaction_signers
+        .proof_outcome = Some(binding);
+    let catalog = IrohaRuntimeProviderBindingsV1::try_from_config(&config).unwrap();
+    assert!(
+        !catalog
+            .iter()
+            .any(|binding| binding.slot()
+                == IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner)
+    );
+}
+
+#[test]
+fn builtin_compliance_transport_is_assembled_locally_and_excluded_from_broker_catalog() {
+    let mut config = default_runtime_config();
+    configure_stream_token_runtime(&mut config);
+    let external = IrohaRuntimeProviderBindingsV1::try_from_config(&config).unwrap();
+    assert!(external.iter().any(
+        |binding| binding.slot() == IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport
+    ));
+    let compliance = config.torii.sorafs_gateway.compliance.as_mut().unwrap();
+    compliance.feed_transport_provider.provider_handle =
+        iroha_torii::sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1.into();
+    compliance.feed_transport_provider.revision =
+        iroha_torii::sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1;
+    let pins = compliance
+        .feeds
+        .iter()
+        .flat_map(|feed| &feed.hosts)
+        .map(|host| {
+            (
+                host.hostname.clone(),
+                host.accepted_spki_sha256.iter().copied().collect(),
+            )
+        })
+        .collect();
+    compliance.feed_transport_provider.policy_digest =
+        iroha_torii::sorafs::gateway::gateway_compliance_feed_transport_policy_digest(&pins)
+            .unwrap();
+    let native = IrohaRuntimeProviderBindingsV1::try_from_config(&config).unwrap();
+    assert!(!native.iter().any(
+        |binding| binding.slot() == IrohaRuntimeProviderSlotV1::GatewayComplianceFeedTransport
+    ));
+}

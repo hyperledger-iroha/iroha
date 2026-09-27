@@ -6,6 +6,7 @@
 //! and performs an explicit Kura-authorized rollover after application.
 
 mod native_candidate;
+use native_candidate::OwnedCandidateParent;
 pub(crate) mod native_drain;
 pub(in crate::sumeragi) mod native_process;
 mod native_source;
@@ -100,7 +101,7 @@ use super::{
     v2_worker::{
         ExactFanoutOwnership, KuraReplicaAdvertRefreshOwner, ProductionV2Services,
         QueuePlanBatchSources, V2CleanupSupervisor, V2CompletionRuntimeCutDecisionV1,
-        durable_exact_output_handoff_owner_pair,
+        durable_exact_output_service_owner,
     },
 };
 use crate::{
@@ -1295,6 +1296,7 @@ fn run_inner(
             lifecycle_storage_authority,
             first_height_authenticated_genesis,
             pending_successor_activation,
+            staged_genesis_nexus_amx_context,
             first_height_genesis,
             genesis_account,
             block_cadence,
@@ -1641,24 +1643,25 @@ fn schedule_local_proposal(
                     .ok_or(V2RunnerError::MissingParent)?,
             )
         };
-        let (parent, logical_time) =
-            match (context.snapshot_bootstrap.as_ref(), parent_body.as_deref()) {
-                (Some(anchor), None) => (
-                    CandidateParent::Snapshot(anchor),
-                    snapshot_successor_logical_time(anchor, block_cadence)?,
-                ),
-                (None, Some(parent)) => {
-                    let logical_time = parent
-                        .header()
-                        .creation_time()
-                        .checked_add(block_cadence)
-                        .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
-                    u64::try_from(logical_time.as_millis())
-                        .map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
-                    (CandidateParent::Block(parent), logical_time)
-                }
-                _ => return Err(V2RunnerError::InvalidSnapshotBootstrapParent),
-            };
+        let (parent_owner, logical_time) = match (context.snapshot_bootstrap.as_ref(), parent_body)
+        {
+            (Some(anchor), None) => (
+                OwnedCandidateParent::Snapshot(anchor.clone()),
+                snapshot_successor_logical_time(anchor, block_cadence)?,
+            ),
+            (None, Some(parent)) => {
+                let logical_time = parent
+                    .header()
+                    .creation_time()
+                    .checked_add(block_cadence)
+                    .ok_or(V2RunnerError::V2BlockTimeOverflow)?;
+                u64::try_from(logical_time.as_millis())
+                    .map_err(|_| V2RunnerError::V2BlockTimeOverflow)?;
+                (OwnedCandidateParent::Block(parent), logical_time)
+            }
+            _ => return Err(V2RunnerError::InvalidSnapshotBootstrapParent),
+        };
+        let parent = parent_owner.borrow();
         let (_, header_clock) = iroha_primitives::time::TimeSource::new_mock(logical_time);
         let builder = crate::block::BlockBuilder::new_with_time_source(Vec::new(), header_clock);
         let carrier_context_header = match parent {
@@ -1721,7 +1724,7 @@ fn schedule_local_proposal(
             context,
             directive,
             local_validator,
-            parent,
+            parent_owner,
             queue,
             attachments,
         )?
@@ -3020,6 +3023,10 @@ fn classify_penalty_derivation_failure(error: eyre::Report) -> V2RunnerError {
     if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
         V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
             crate::state::StateBlockStartError::from(refusal.clone()),
+        ))
+    } else if let Some(refusal) = error.downcast_ref::<crate::state::StateStorageAdmissionError>() {
+        V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
+            crate::state::StateBlockStartError::Storage(refusal.clone()),
         ))
     } else if let Some(refusal) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
         V2RunnerError::CandidateBuild(

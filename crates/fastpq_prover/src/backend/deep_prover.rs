@@ -1,631 +1,531 @@
-//! Full fixed-profile producer for the bounded DEEP verifier.
+//! Complete bounded masked DEEP construction from a prepared public relation.
 //!
-//! Commitments precede their challenges; the quotient uses complete polynomial
-//! evaluation and exact division, and the DEEP polynomial is formed before its
-//! LDE. Every opening comes from the retained committed arrays and minimal tree
-//! frontiers. Private arrays use fixed allocations erased on drop.
-//! TODO: Qualify witness hiding, concrete hash security, execution quotas and
-//! hardware/resource performance before production admission.
+//! Fresh explicitly supplied entropy feeds vanishing-masked base trace replay,
+//! exact full-numerator division, randomized quotient chunks and independent R.
+//! Every commitment and opening uses the same bounded replay owners. The final
+//! canonical frame is checked by the independently implemented bounded verifier.
+//! The caller binds authenticated ledger context before invoking this owner.
+//! TODO: Complete the full resource diagnostic and independent soundness/hiding
+//! review; construction alone does not establish those qualification results.
 
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
-use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
-use rayon::prelude::*;
-#[cfg(test)]
-use std::time::Instant;
+use rand::TryCryptoRng;
 
 use super::{
     compact_public_columns::COMMITTED_COLUMN_COUNT,
-    compact_v1::{MAX_PREPARED_HASH_FRAME_BYTES, PreparedHashFrame},
     deep_binding::{BindingError, Context, Message, Oracle, Transcript},
-    deep_composition::OodPair,
-    deep_geometry::{CONSTRAINTS, DeepGeometry, FRI_ARITIES, FRI_LENGTHS, LDE_ROWS, TRACE_ROWS},
-    deep_polynomial::DeepPolynomialSource,
-    deep_proof::{
-        self, DeepProof, FriGroup, FriRound, FriValues, OodAnswers, OpeningPlans, QuotientOpening,
-        RowOpening, RowValues,
+    deep_coefficient_commitment::{CoefficientCommitment, CoefficientCommitmentPlan},
+    deep_coefficient_replay::{
+        CoefficientLimits, CoefficientReplay, CoefficientReplayPlan, fold_coefficients,
     },
-    deep_quotient::{DeepQuotientLimits, PreparedDeepTrace},
+    deep_composition::OodPair,
+    deep_engine,
+    deep_geometry::{CONSTRAINTS, DeepGeometry, FRI_DEGREES, LDE_ROWS, QUERY_COUNT, TRACE_ROWS},
+    deep_masked_quotient::{DeepQuotientPlan, QuotientLimits},
+    deep_masked_replay::{
+        MaskedReplayPlan, MaskedTraceReplay, ReplayLimits, TRACE_MASK_COEFFICIENTS,
+    },
+    deep_polynomial::{DeepPolynomialSource, WORKSPACE_BYTES},
+    deep_proof::{
+        self, DeepProof, FriGroup, FriRound, FriValues, OodAnswers, OpeningPlans,
+        QuotientMaskOpening,
+    },
     deep_relation::DeepRelation,
-    fri_fold::FriFoldPlan,
-    merkle_multiproof::MultiproofPlan,
-    mul_mod,
-    polynomial_field::PolynomialField,
-    polynomial_transform::PolynomialDomain,
+    deep_striped_merkle::{RowCommitmentPlan, StreamLimits},
+    masked_quotient::{checked_add as add, checked_mul as mul},
     secret_polynomial::SecretPolynomial,
 };
-use crate::digest384_batch::{
-    Digest384LastFieldJob, execute_last_fields_with_cpu, last_fields_payload_charge,
-};
-use crate::{DigestExecutionV1, Error, Result, cyclotomic, field::GoldilocksFp4V1 as F};
-use zeroize::Zeroizing;
+use crate::{DigestExecutionV1, Error, Result, VerifyLimits, field::GoldilocksFp4V1 as F};
 
-// Bounded per-tree preparation; exactly the same charge on every backend.
-const HASH_BATCH_FRAMES: usize = 256;
-
-// Test qualification reports phase names and elapsed time only. The normal
-// producer has no stderr side effect or environment-based diagnostic switch.
-#[cfg(test)]
-struct PhaseTimer {
-    name: &'static str,
-    round: Option<usize>,
-    started: Instant,
-}
-
-#[cfg(test)]
-impl PhaseTimer {
-    fn start(name: &'static str, round: Option<usize>) -> Self {
-        let timer = Self {
-            name,
-            round,
-            started: Instant::now(),
-        };
-        timer.report("start");
-        timer
-    }
-
-    fn report(&self, event: &str) {
-        use std::io::Write;
-        // Logging must not cause a second panic while a phase unwinds.
-        let _ = writeln!(
-            std::io::stderr(),
-            "deep_prover_phase={} round={:?} event={} elapsed_ms={}",
-            self.name,
-            self.round,
-            event,
-            self.started.elapsed().as_millis()
-        );
-    }
-}
-
-#[cfg(test)]
-impl Drop for PhaseTimer {
-    fn drop(&mut self) {
-        self.report("end");
-    }
-}
-
-#[cfg(not(test))]
-struct PhaseTimer;
-
-#[cfg(not(test))]
-impl PhaseTimer {
-    fn start(_name: &'static str, _round: Option<usize>) -> Self {
-        Self
-    }
-}
-
-#[cfg(not(test))]
-impl Drop for PhaseTimer {
-    fn drop(&mut self) {}
-}
-
-/// Caller-owned local prover ceilings; these do not grant ledger admission.
+/// Explicit caller resource and execution budget, fixed before private work.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct ProverLimits {
-    /// Explicit local commitment executor, independent of protocol identity.
+pub(super) struct ConstructionLimits {
     pub(super) digest_execution: DigestExecutionV1,
-    /// Conservative live and temporary array payload charge, not process RSS.
     pub(super) max_payload_bytes: usize,
-    /// Existing exact quotient arithmetic and inspection-work ceiling.
-    pub(super) quotient: DeepQuotientLimits,
-    /// Complete canonical proof-frame ceiling.
+    pub(super) max_work_units: usize,
+    pub(super) max_hash_calls: usize,
     pub(super) max_proof_bytes: usize,
 }
 
-/// Prove a caller-prepared fixed transfer AIR from its 301 base coefficients.
+/// One attempt's fixed pass schedule and conservative, checked payload/work bound.
 ///
-/// Coefficient slices may be short, including empty zero columns; their exact
-/// degree must be below N. Public columns are always derived independently.
-pub(super) fn prove(
-    relation: &impl DeepRelation,
-    coefficients: &[&[u64]],
-    limits: ProverLimits,
-) -> Result<Vec<u8>> {
-    let geometry = DeepGeometry::new()?;
-    let binding = preflight(relation, coefficients, limits)?;
-    let phase = PhaseTimer::start("coefficient_preparation", None);
-    let prepared_trace = PreparedDeepTrace::prepare(coefficients, limits.quotient)?;
-    let quotient_payload = prepared_trace
-        .plan(relation.deep_relation(), limits.quotient)?
-        .payload_bytes();
-    limit(
-        "max_deep_prover_payload_bytes",
-        payload_charge(quotient_payload)?,
-        limits.max_payload_bytes,
-    )?;
-    let transform = PolynomialDomain::for_deep(&geometry, limits.max_payload_bytes)?;
-    drop(phase);
+/// Includes the borrowed physical source, every retained private polynomial,
+/// active stripe/tree/frame buffers, all public prefix-cache slots, proof/codec
+/// storage and the self-check decode allowance. Phase buffers are sometimes
+/// deliberately summed. Excludes allocator metadata, thread stacks, process-wide
+/// constants, caller-owned AIR/RNG internals and unrelated caller allocations.
+/// It is neither peak RSS nor a timing estimate.
+pub(super) struct ProducerPlan<'a, R: DeepRelation> {
+    relation: &'a R,
+    binding: Context,
+    replay: MaskedReplayPlan,
+    replay_limits: ReplayLimits,
+    quotient: DeepQuotientPlan<'a>,
+    coefficient: CoefficientReplayPlan,
+    fri: [CoefficientReplayPlan; 5],
+    terminal: CoefficientReplayPlan,
+    limits: ConstructionLimits,
+    pub(super) payload_bytes: usize,
+    pub(super) work_units: usize,
+    pub(super) hash_calls: usize,
+}
 
-    let phase = PhaseTimer::start("base_lde", None);
-    let columns = coefficients
-        .par_iter()
-        .map(|values| base_lde(&geometry, values))
-        .collect::<Result<Vec<_>>>()?;
-    drop(phase);
-    let phase = PhaseTimer::start("row_tree", None);
-    let row_tree = Tree::build(
-        &binding,
-        Oracle::Row,
-        LDE_ROWS,
-        limits.digest_execution,
-        |index| {
-            let mut bytes = Zeroizing::new([0; COMMITTED_COLUMN_COUNT * 8]);
-            for (slot, column) in columns.iter().enumerate() {
-                bytes[slot * 8..slot * 8 + 8].copy_from_slice(&column[index].to_le_bytes());
-            }
-            binding.prepare_leaf(Oracle::Row, index as u32, &bytes[..])
-        },
-    )?;
-    drop(phase);
-    let mut transcript = Transcript::new(binding.clone());
-    if transcript.challenge().map_err(binding_error)? != Message::Dummy {
-        return Err(invalid("DEEP producer requires the initial dummy message"));
+impl<'a, R: DeepRelation> ProducerPlan<'a, R> {
+    /// Derive the whole attempt before reading private columns or consuming RNG.
+    /// Only the bounded public statement and small frontier plans allocate here.
+    pub(super) fn new(relation: &'a R, limits: ConstructionLimits) -> Result<Self> {
+        limit(
+            "max_deep_proof_bytes",
+            deep_proof::MAX_FRAME_BYTES,
+            limits.max_proof_bytes,
+        )?;
+        let replay_limits = ReplayLimits {
+            max_payload_bytes: limits.max_payload_bytes,
+            max_work_units: limits.max_work_units,
+            // Row root, the four-stripe numerator, and row openings. Charging
+            // the numerator as a full pass is a conservative structural bound.
+            max_full_passes: 3,
+        };
+        let replay = MaskedReplayPlan::new(replay_limits)?;
+        let quotient = DeepQuotientPlan::new(
+            relation.deep_relation(),
+            replay,
+            QuotientLimits {
+                max_payload_bytes: limits.max_payload_bytes,
+                max_work_units: limits.max_work_units,
+            },
+        )?;
+        let binding = Context::for_relation(relation).map_err(binding_error)?;
+        let coefficient_limits = CoefficientLimits {
+            max_payload_bytes: limits.max_payload_bytes,
+            max_work_units: limits.max_work_units,
+            // Each scoped coefficient owner makes exactly one traversal. This
+            // enclosing plan charges root and opening traversals separately.
+            max_full_passes: 1,
+        };
+        let coefficient = CoefficientReplayPlan::quotient_and_mask(coefficient_limits)?;
+        let fri: [CoefficientReplayPlan; 5] = (0..5)
+            .map(|round| CoefficientReplayPlan::fri(round, coefficient_limits))
+            .collect::<Result<Vec<_>>>()?
+            .try_into()
+            .ok()
+            .expect("five fixed coefficient layers");
+        let terminal = CoefficientReplayPlan::terminal(coefficient_limits)?;
+        let stream = stream_limits(limits);
+        let queries = maximal_queries();
+        let openings = OpeningPlans::new(&queries)?;
+        let row = RowCommitmentPlan::new(replay, &binding, &queries, stream)?;
+        let paired = CoefficientCommitmentPlan::new(
+            coefficient,
+            &binding,
+            Oracle::QuotientAndMask,
+            &queries,
+            stream,
+        )?;
+        let mut coefficient_peak = paired.payload_bytes;
+        let mut tree_hashes = mul(4, 2 * LDE_ROWS - 1)?;
+        let mut coefficient_work = mul(2, coefficient.work_units)?;
+        for (round, &layer) in fri.iter().enumerate() {
+            let commitment = CoefficientCommitmentPlan::new(
+                layer,
+                &binding,
+                Oracle::Fri(round as u8),
+                &openings.round_indices[round],
+                stream,
+            )?;
+            coefficient_peak = coefficient_peak.max(commitment.payload_bytes);
+            tree_hashes = add(
+                tree_hashes,
+                mul(2, add(commitment.leaf_hashes, commitment.parent_hashes)?)?,
+            )?;
+            coefficient_work = add(coefficient_work, mul(2, layer.work_units)?)?;
+        }
+        let terminal_commitment =
+            CoefficientCommitmentPlan::new(terminal, &binding, Oracle::Terminal, &[], stream)?;
+        coefficient_peak = coefficient_peak.max(terminal_commitment.payload_bytes);
+        tree_hashes = add(tree_hashes, 2)?;
+        coefficient_work = add(coefficient_work, terminal.work_units)?;
+        // Retain both blinded chunks (each conservatively <2N) and every FRI
+        // coefficient vector until final queries. No full-domain oracle survives.
+        let retained_coefficients = mul(
+            2 * FRI_DEGREES[0] + FRI_DEGREES.iter().sum::<usize>(),
+            F::BYTES,
+        )?;
+        let active = quotient
+            .payload_bytes
+            .max(row.payload_bytes)
+            .max(add(replay.payload_bytes, coefficient_peak)?);
+        // The proof's bounded decode charge dominates its DTO's cells/Vec owners,
+        // canonical output, frontier-plan storage and public transcript buffers.
+        // Charge three separate allowances rather than relying on their lifetimes.
+        // A second Context is created only by the independent final self-check.
+        let public_and_codec = add(
+            mul(
+                2,
+                binding
+                    .maximum_retained_payload_bytes()
+                    .map_err(binding_error)?,
+            )?,
+            mul(3, deep_proof::MAX_ALLOCATION_CHARGES)?,
+        )?;
+        let payload_bytes = add(
+            active,
+            add(
+                retained_coefficients,
+                add(WORKSPACE_BYTES, public_and_codec)?,
+            )?,
+        )?;
+        // Horner OOD answers, coefficient batching/divisions/folds, selected row
+        // packing and oracle packing all have fixed extents. These are structural
+        // field/byte work units, separate from the explicit hash-call budget.
+        let polynomial_work = mul(
+            32,
+            add(
+                mul(COMMITTED_COLUMN_COUNT, TRACE_ROWS + TRACE_MASK_COEFFICIENTS)?,
+                FRI_DEGREES.iter().sum(),
+            )?,
+        )?;
+        let packing_work = mul(2 * LDE_ROWS, 8 * COMMITTED_COLUMN_COUNT + 3 * F::BYTES)?;
+        // A second complete quotient work allowance safely covers the bounded
+        // independent verifier/AIR check; it performs no quotient FFT or replay.
+        let work_units = add(
+            mul(2, quotient.work_units)?,
+            add(coefficient_work, add(polynomial_work, packing_work)?)?,
+        )?;
+        let verifier_tree_hashes = add(
+            mul(2, add(QUERY_COUNT, openings.initial.work().parent_hashes)?)?,
+            add(
+                openings
+                    .rounds
+                    .iter()
+                    .map(|p| p.work().queried_leaves + p.work().parent_hashes)
+                    .sum(),
+                2,
+            )?,
+        )?;
+        // 637 whole-tape blocks, nine chain commits and one OOD hash per side.
+        let hash_calls = add(
+            crate::digest384_batch::MAX_PREFLIGHT_HASH_CALLS,
+            add(tree_hashes, add(verifier_tree_hashes, 2 * (637 + 9 + 1))?)?,
+        )?;
+        limit(
+            "max_deep_producer_payload_bytes",
+            payload_bytes,
+            limits.max_payload_bytes,
+        )?;
+        limit(
+            "max_deep_producer_work_units",
+            work_units,
+            limits.max_work_units,
+        )?;
+        limit(
+            "max_deep_producer_hash_calls",
+            hash_calls,
+            limits.max_hash_calls,
+        )?;
+        limit(
+            "max_deep_producer_addressable_bytes",
+            payload_bytes,
+            isize::MAX as usize,
+        )?;
+        Ok(Self {
+            relation,
+            binding,
+            replay,
+            replay_limits,
+            quotient,
+            coefficient,
+            fri,
+            terminal,
+            limits,
+            payload_bytes,
+            work_units,
+            hash_calls,
+        })
     }
-    transcript
-        .commit_root(Oracle::Row, row_tree.root())
-        .map_err(binding_error)?;
-    let alphas = fields(&mut transcript, CONSTRAINTS)?;
-    let phase = PhaseTimer::start("quotient_build", None);
-    let quotient = prepared_trace.build(relation.deep_relation(), &alphas, limits.quotient)?;
-    drop(prepared_trace);
-    drop(phase);
-    let phase = PhaseTimer::start("quotient_lde", None);
-    let source = DeepPolynomialSource::new(coefficients, &quotient)?;
-    let halves = source.quotient_halves();
-    let low = transform.evaluate(halves[0], halves[0].len())?;
-    let high = transform.evaluate(halves[1], halves[1].len())?;
-    drop(phase);
-    let phase = PhaseTimer::start("quotient_tree", None);
-    let quotient_tree = Tree::build(
-        &binding,
-        Oracle::QuotientPair,
-        LDE_ROWS,
-        limits.digest_execution,
-        |index| {
-            let mut bytes = Zeroizing::new([0; 64]);
-            bytes[..32].copy_from_slice(&low.value(index)?.to_le_bytes());
-            bytes[32..].copy_from_slice(&high.value(index)?.to_le_bytes());
-            binding.prepare_leaf(Oracle::QuotientPair, index as u32, &bytes[..])
-        },
-    )?;
-    drop(phase);
-    transcript
-        .commit_root(Oracle::QuotientPair, quotient_tree.root())
-        .map_err(binding_error)?;
-    let phase = PhaseTimer::start("ood_composition", None);
-    let z = fields(&mut transcript, 1)?[0];
-    let prepared = source.prepare(OodPair::new(z, geometry.trace_generator())?);
-    let answers = prepared.trace_answers();
-    let ood = OodAnswers {
-        current: answers[0].to_vec(),
-        next: answers[1].to_vec(),
-        quotient: prepared.quotient_answers().to_vec(),
-    };
-    geometry.check_ood(
-        relation.deep_relation(),
-        &alphas,
-        z,
-        &ood.current,
-        &ood.next,
-        &ood.quotient,
-    )?;
-    transcript
-        .commit_ood(&ood.current, &ood.next, &ood.quotient)
-        .map_err(binding_error)?;
-    let lambda = fields(&mut transcript, 1)?[0];
-    let polynomial = prepared.compose(lambda, limits.max_payload_bytes)?;
-    drop(phase);
-    let phase = PhaseTimer::start("composition_lde", None);
-    let first = transform.evaluate(polynomial.coefficients(), TRACE_ROWS)?;
-    let mut initial = SecretPolynomial::zeroed(LDE_ROWS)?;
-    for (index, value) in initial.iter_mut().enumerate() {
-        *value = first.value(index)?;
-    }
-    drop(first);
-    drop(phase);
-    let mut layers = vec![initial];
-    let mut trees = Vec::with_capacity(5);
-    let mut domain = geometry.domain();
-    for (round, &arity) in FRI_ARITIES.iter().enumerate() {
-        let values = &layers[round];
-        let groups = FRI_LENGTHS[round + 1];
-        let oracle = Oracle::Fri(round as u8);
-        let phase = PhaseTimer::start("fri_tree", Some(round));
-        let tree = Tree::build(&binding, oracle, groups, limits.digest_execution, |index| {
-            let mut bytes = Zeroizing::new([0_u8; 16 * F::BYTES]);
-            for coordinate in 0..arity {
-                bytes[coordinate * F::BYTES..(coordinate + 1) * F::BYTES]
-                    .copy_from_slice(&values[index + coordinate * groups].to_le_bytes());
-            }
-            binding.prepare_leaf(oracle, index as u32, &bytes[..arity * F::BYTES])
-        })?;
-        drop(phase);
+
+    /// Execute exactly the preflighted attempt; aborts never reuse entropy.
+    pub(super) fn build(self, columns: &[&[u64]], rng: &mut impl TryCryptoRng) -> Result<Vec<u8>> {
+        let Self {
+            relation,
+            binding,
+            replay: replay_plan,
+            replay_limits,
+            quotient: quotient_plan,
+            coefficient,
+            fri,
+            terminal,
+            limits,
+            ..
+        } = self;
+        crate::digest384_batch::preflight_last_fields_execution(limits.digest_execution)?;
+        let stream = stream_limits(limits);
+        let geometry = DeepGeometry::new()?;
+        let mut transcript = Transcript::new(binding.clone());
+        if transcript.challenge().map_err(binding_error)? != Message::Dummy {
+            return Err(invalid(
+                "DEEP producer did not begin with dummy transcript message",
+            ));
+        }
+        let mut replay = MaskedTraceReplay::new(replay_limits, columns, rng)?;
+        if replay.plan() != replay_plan {
+            return Err(invalid("DEEP producer replay plan drift"));
+        }
+        let row_root = RowCommitmentPlan::new(replay_plan, &binding, &[], stream)?
+            .build(&mut replay, &binding)?
+            .root;
         transcript
-            .commit_root(oracle, tree.root())
+            .commit_root(Oracle::Row, row_root)
             .map_err(binding_error)?;
-        let beta = fields(&mut transcript, 1)?[0];
-        let phase = PhaseTimer::start("fri_fold", Some(round));
-        let fold = FriFoldPlan::new(arity, domain.coset_generator(groups))?;
-        let mut next = SecretPolynomial::zeroed(groups)?;
-        fold.fold_layer_into(values, beta, domain, &mut next)?;
-        domain = domain.folded(arity);
-        trees.push(tree);
-        layers.push(next);
-        drop(phase);
-    }
-    let phase = PhaseTimer::start("terminal_tree", None);
-    let terminal = layers[5].to_vec();
-    if terminal.iter().any(|value| *value != terminal[0]) {
-        return Err(invalid("DEEP producer terminal is not constant"));
-    }
-    let terminal_bytes: Vec<_> = terminal
-        .iter()
-        .flat_map(|value| value.to_le_bytes())
-        .collect();
-    let terminal_tree = Tree::build(
-        &binding,
-        Oracle::Terminal,
-        1,
-        limits.digest_execution,
-        |_| binding.prepare_leaf(Oracle::Terminal, 0, &terminal_bytes),
-    )?;
-    drop(phase);
-    transcript
-        .commit_root(Oracle::Terminal, terminal_tree.root())
-        .map_err(binding_error)?;
-    let phase = PhaseTimer::start("wire_assembly", None);
-    let Message::Queries(queries) = transcript.challenge().map_err(binding_error)? else {
-        return Err(invalid(
-            "DEEP producer requires its final whole query message",
-        ));
-    };
-    let queries: Vec<_> = queries.into_iter().map(|index| index as usize).collect();
-    let plans = OpeningPlans::new(&queries)?;
-    let rows = queries
-        .iter()
-        .map(|&index| {
-            Ok(RowOpening {
+        let alphas = fields(&mut transcript, CONSTRAINTS)?;
+        let quotient = quotient_plan.build(&mut replay, &alphas)?;
+        let chunks = quotient.chunks();
+        let quotient_root = commit(
+            coefficient,
+            &binding,
+            Oracle::QuotientAndMask,
+            &[],
+            &[chunks[0], chunks[1], replay.composition_mask()],
+            stream,
+        )?
+        .root;
+        transcript
+            .commit_root(Oracle::QuotientAndMask, quotient_root)
+            .map_err(binding_error)?;
+        let z = fields(&mut transcript, 1)?[0];
+        let prepared = DeepPolynomialSource::from_replay(&replay, chunks)?
+            .prepare(OodPair::new(z, geometry.trace_generator())?);
+        let answers = prepared.trace_answers();
+        let ood = OodAnswers {
+            current: answers[0].to_vec(),
+            next: answers[1].to_vec(),
+            quotient: prepared.quotient_answers().to_vec(),
+        };
+        geometry.check_ood(
+            relation.deep_relation(),
+            &alphas,
+            z,
+            &ood.current,
+            &ood.next,
+            &ood.quotient,
+        )?;
+        transcript
+            .commit_ood(&ood.current, &ood.next, &ood.quotient)
+            .map_err(binding_error)?;
+        let lambda = fields(&mut transcript, 1)?[0];
+        let composition = prepared.compose(lambda, WORKSPACE_BYTES)?;
+        drop(prepared);
+        let mut roots = Vec::with_capacity(6);
+        let mut folded: Vec<SecretPolynomial<F>> = Vec::with_capacity(5);
+        for (round, &plan) in fri.iter().enumerate() {
+            let source = if round == 0 {
+                composition.coefficients()
+            } else {
+                &folded[round - 1]
+            };
+            let oracle = Oracle::Fri(round as u8);
+            let root = commit(plan, &binding, oracle, &[], &[source], stream)?.root;
+            roots.push(root);
+            transcript
+                .commit_root(oracle, root)
+                .map_err(binding_error)?;
+            let beta = fields(&mut transcript, 1)?[0];
+            folded.push(fold_coefficients(
+                round,
+                source,
+                beta,
+                limits.max_payload_bytes,
+            )?);
+        }
+        let terminal_commitment = commit(
+            terminal,
+            &binding,
+            Oracle::Terminal,
+            &[],
+            &[&folded[4]],
+            stream,
+        )?;
+        roots.push(terminal_commitment.root);
+        transcript
+            .commit_root(Oracle::Terminal, terminal_commitment.root)
+            .map_err(binding_error)?;
+        let Message::Queries(queries) = transcript.challenge().map_err(binding_error)? else {
+            return Err(invalid(
+                "DEEP producer final message has no complete queries",
+            ));
+        };
+        let queries: Vec<usize> = queries.into_iter().map(|v| v as usize).collect();
+        let plans = OpeningPlans::new(&queries)?;
+        let row = RowCommitmentPlan::new(replay_plan, &binding, &queries, stream)?
+            .build(&mut replay, &binding)?;
+        same_root(row_root, row.root)?;
+        let paired = commit(
+            coefficient,
+            &binding,
+            Oracle::QuotientAndMask,
+            &queries,
+            &[chunks[0], chunks[1], replay.composition_mask()],
+            stream,
+        )?;
+        same_root(quotient_root, paired.root)?;
+        let quotients = queries
+            .iter()
+            .zip(paired.openings())
+            .map(|(&index, values)| QuotientMaskOpening {
                 index: index as u32,
-                values: RowValues::new(columns.iter().map(|column| column[index]).collect())?,
+                low: values[0],
+                high: values[1],
+                composition_mask: values[2],
             })
-        })
-        .collect::<Result<_>>()?;
-    let quotients = queries
-        .iter()
-        .map(|&index| {
-            Ok(QuotientOpening {
-                index: index as u32,
-                low: low.value(index)?,
-                high: high.value(index)?,
-            })
-        })
-        .collect::<Result<_>>()?;
-    let rounds = plans
-        .round_indices
-        .iter()
-        .enumerate()
-        .map(|(round, indices)| {
-            let groups = indices
+            .collect();
+        let mut rounds = Vec::with_capacity(5);
+        for (round, &plan) in fri.iter().enumerate() {
+            let source = if round == 0 {
+                composition.coefficients()
+            } else {
+                &folded[round - 1]
+            };
+            let opened = commit(
+                plan,
+                &binding,
+                Oracle::Fri(round as u8),
+                &plans.round_indices[round],
+                &[source],
+                stream,
+            )?;
+            same_root(roots[round], opened.root)?;
+            let groups = plans.round_indices[round]
                 .iter()
-                .map(|&index| {
+                .zip(opened.openings())
+                .map(|(&index, values)| {
                     Ok(FriGroup {
                         index: index as u32,
-                        values: FriValues::new(
-                            (0..FRI_ARITIES[round])
-                                .map(|coordinate| {
-                                    layers[round][index + coordinate * FRI_LENGTHS[round + 1]]
-                                })
-                                .collect(),
-                        )?,
+                        values: FriValues::new(values.to_vec())?,
                     })
                 })
-                .collect::<Result<_>>()?;
-            Ok(FriRound {
-                groups,
-                siblings: trees[round].frontier(&plans.rounds[round])?,
-            })
-        })
-        .collect::<Result<_>>()?;
-    let mut fri_roots: Vec<_> = trees
-        .iter()
-        .map(|tree| WireDigest::from(tree.root()))
-        .collect();
-    fri_roots.push(WireDigest::from(terminal_tree.root()));
-    let proof = DeepProof {
-        row_root: WireDigest::from(row_tree.root()),
-        quotient_root: WireDigest::from(quotient_tree.root()),
-        fri_roots,
-        ood,
-        rows,
-        quotients,
-        row_siblings: row_tree.frontier(&plans.initial)?,
-        quotient_siblings: quotient_tree.frontier(&plans.initial)?,
-        rounds,
-        terminal,
-    };
-    deep_proof::preflight(&proof, &queries)?;
-    let bytes = norito::encode_canonical(&proof)?;
-    limit("max_deep_proof_bytes", bytes.len(), limits.max_proof_bytes)?;
-    limit(
-        "max_deep_frame_bytes",
-        bytes.len(),
-        deep_proof::MAX_FRAME_BYTES,
-    )?;
-    drop(phase);
-    Ok(bytes)
-}
-
-fn preflight(
-    relation: &impl DeepRelation,
-    coefficients: &[&[u64]],
-    limits: ProverLimits,
-) -> Result<Context> {
-    limit(
-        "max_deep_proof_bytes",
-        deep_proof::MAX_FRAME_BYTES,
-        limits.max_proof_bytes,
-    )?;
-    limit(
-        "max_deep_prover_payload_bytes",
-        payload_charge(0)?,
-        limits.max_payload_bytes,
-    )?;
-    if coefficients.len() != COMMITTED_COLUMN_COUNT
-        || coefficients.iter().any(|column| column.len() > TRACE_ROWS)
-    {
-        return Err(invalid(
-            "DEEP prover needs exactly 301 degree-below-N coefficient columns",
-        ));
-    }
-    for (column, values) in coefficients.iter().enumerate() {
-        for (degree, &value) in values.iter().enumerate() {
-            value.validate("deep_prover_coefficients", &[column, degree])?;
-        }
-    }
-    Context::for_relation(relation).map_err(binding_error)
-}
-
-// Conservative array charges sum lifetimes instead of discounting overlap.
-// Includes input coefficients, full base LDE, all trees and fallible digest
-// collection slots, quotient/DEEP lane matrices and retained folding layers.
-// Allocator metadata, thread stacks and unrelated process state are excluded.
-pub(super) fn payload_charge(quotient_payload: usize) -> Result<usize> {
-    let terms = [
-        COMMITTED_COLUMN_COUNT * TRACE_ROWS * 8,
-        COMMITTED_COLUMN_COUNT * LDE_ROWS * 8,
-        8 * LDE_ROWS * core::mem::size_of::<Digest>(),
-        LDE_ROWS * core::mem::size_of::<Result<Digest>>(),
-        8 * LDE_ROWS * F::BYTES,
-        8 * deep_proof::MAX_FRAME_BYTES,
-        8 * 256 * 1024,
-        quotient_payload,
-        hash_batch_payload_charge()?,
-    ];
-    terms.into_iter().try_fold(0usize, |sum, term| {
-        sum.checked_add(term)
-            .ok_or_else(|| invalid("DEEP prover payload charge overflow"))
-    })
-}
-
-// Includes at most one batch of caller raw rows, fixed encoded bodies,
-// frame/job preparation result slots, retained records and borrowed jobs.
-// The backend charge includes executor pages, returned digests and readiness.
-fn hash_batch_payload_charge() -> Result<usize> {
-    let body_bytes = HASH_BATCH_FRAMES
-        .checked_mul(MAX_PREPARED_HASH_FRAME_BYTES)
-        .ok_or_else(|| invalid("DEEP hash preparation charge overflow"))?;
-    let records = HASH_BATCH_FRAMES
-        .checked_mul(
-            core::mem::size_of::<Result<PreparedHashFrame>>()
-                + core::mem::size_of::<PreparedHashFrame>()
-                + core::mem::size_of::<Result<Digest384LastFieldJob<'_>>>()
-                + core::mem::size_of::<Digest384LastFieldJob<'_>>()
-                + 128 * F::BYTES,
-        )
-        .ok_or_else(|| invalid("DEEP hash preparation charge overflow"))?;
-    let backend = last_fields_payload_charge(HASH_BATCH_FRAMES, body_bytes)?;
-    body_bytes
-        .checked_add(records)
-        .and_then(|sum| sum.checked_add(backend))
-        .ok_or_else(|| invalid("DEEP hash preparation charge overflow"))
-}
-
-fn execute_prepared_frames(
-    frames: &[PreparedHashFrame],
-    execution: DigestExecutionV1,
-) -> Result<Vec<Digest>> {
-    if frames.len() > HASH_BATCH_FRAMES {
-        return Err(invalid(
-            "DEEP hash preparation exceeds its fixed batch count",
-        ));
-    }
-    let bytes = frames.iter().try_fold(0usize, |sum, frame| {
-        sum.checked_add(frame.payload_len())
-            .ok_or_else(|| invalid("DEEP prepared hash payload overflow"))
-    })?;
-    let digests = execute_last_fields_with_cpu(
-        frames.len(),
-        bytes,
-        execution,
-        |index| frames[index].hash_cpu(),
-        || prepare_hash_jobs(frames.len(), |index| frames[index].job()),
-    )?;
-    if digests.len() != frames.len() {
-        return Err(invalid("DEEP hash executor returned another digest count"));
-    }
-    Ok(digests)
-}
-
-// Domain-suffix absorption is CPU work even for a required-device batch. The
-// indexed parallel iterator preserves job positions; only the sequential pass
-// propagates errors, so the earliest failing input wins regardless of scheduling.
-// Reserve both descriptor arrays before work. Jobs borrow the fixed guarded
-// bodies, and the conservative batch charge includes both arrays' full extent.
-fn prepare_hash_jobs<'a>(
-    count: usize,
-    prepare: impl Fn(usize) -> Result<Digest384LastFieldJob<'a>> + Sync,
-) -> Result<Vec<Digest384LastFieldJob<'a>>> {
-    if count > HASH_BATCH_FRAMES {
-        return Err(invalid(
-            "DEEP hash preparation exceeds its fixed batch count",
-        ));
-    }
-    let mut results = super::polynomial_transform::reserved(count)?;
-    let mut jobs = super::polynomial_transform::reserved(count)?;
-    (0..count)
-        .into_par_iter()
-        .map(&prepare)
-        .collect_into_vec(&mut results);
-    for result in results {
-        jobs.push(result?);
-    }
-    Ok(jobs)
-}
-
-fn base_lde(geometry: &DeepGeometry, coefficients: &[u64]) -> Result<SecretPolynomial<u64>> {
-    let domain = PolynomialDomain::for_deep(geometry, 2 * LDE_ROWS * F::BYTES)?;
-    base_lde_on_domain(domain, coefficients)
-}
-
-// The fixed DEEP wrapper and small-domain checks share this exact u64
-// twist/FFT kernel. PolynomialDomain owns the root/order checks; a base-only
-// offset is required before allocating or interpreting its first coordinate.
-fn base_lde_on_domain(
-    domain: PolynomialDomain,
-    coefficients: &[u64],
-) -> Result<SecretPolynomial<u64>> {
-    if coefficients.len() > TRACE_ROWS || coefficients.len() > domain.rows() {
-        return Err(invalid("DEEP base polynomial exceeds its degree bound"));
-    }
-    for (index, &value) in coefficients.iter().enumerate() {
-        value.validate("deep_prover_base_lde", &[index])?;
-    }
-    let offset = domain.point(0)?.coefficients();
-    if offset[1..].iter().any(|&coordinate| coordinate != 0) {
-        return Err(invalid("DEEP base polynomial requires a base-field coset"));
-    }
-    let mut values = SecretPolynomial::zeroed(domain.rows())?;
-    let mut twist = 1;
-    for (destination, &coefficient) in values.iter_mut().zip(coefficients) {
-        *destination = mul_mod(coefficient, twist);
-        twist = mul_mod(twist, offset[0]);
-    }
-    cyclotomic::fft(
-        &mut values,
-        cyclotomic::Domain {
-            log_size: domain.rows().ilog2(),
-            generator: domain.generator(),
-        },
-    );
-    Ok(values)
-}
-
-struct Tree {
-    levels: Vec<Vec<Digest>>,
-    binding: Context,
-    oracle: Oracle,
-}
-
-impl Tree {
-    fn build(
-        binding: &Context,
-        oracle: Oracle,
-        leaves: usize,
-        execution: DigestExecutionV1,
-        leaf: impl Fn(usize) -> Result<PreparedHashFrame> + Sync,
-    ) -> Result<Self> {
-        let expected = match oracle {
-            Oracle::Row | Oracle::QuotientPair => LDE_ROWS,
-            Oracle::Fri(round @ 0..=4) => FRI_LENGTHS[round as usize + 1],
-            Oracle::Terminal => 1,
-            Oracle::Fri(_) => return Err(invalid("DEEP producer tree has an invalid round")),
-        };
-        if leaves != expected {
-            return Err(invalid("DEEP producer tree has another oracle geometry"));
-        }
-        let mut first = super::polynomial_transform::reserved(leaves.max(2))?;
-        for start in (0..leaves).step_by(HASH_BATCH_FRAMES) {
-            let end = (start + HASH_BATCH_FRAMES).min(leaves);
-            let frames = (start..end)
-                .into_par_iter()
-                .map(&leaf)
                 .collect::<Result<Vec<_>>>()?;
-            first.extend(execute_prepared_frames(&frames, execution)?);
+            rounds.push(FriRound {
+                groups,
+                siblings: opened.siblings.into_iter().map(Into::into).collect(),
+            });
         }
-        if leaves == 1 {
-            first.push(first[0]);
-        }
-        let mut levels = vec![first];
-        while levels.last().expect("tree has leaves").len() > 1 {
-            let level = levels.len();
-            let children = levels.last().unwrap();
-            let mut next = super::polynomial_transform::reserved(children.len() / 2)?;
-            for (chunk, pairs) in children.chunks(HASH_BATCH_FRAMES * 2).enumerate() {
-                let frames = pairs
-                    .par_chunks_exact(2)
-                    .enumerate()
-                    .map(|(local, pair)| {
-                        binding.prepare_parent(
-                            oracle,
-                            level as u32,
-                            (chunk * HASH_BATCH_FRAMES + local) as u32,
-                            pair[0],
-                            pair[1],
-                        )
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                next.extend(execute_prepared_frames(&frames, execution)?);
-            }
-            levels.push(next);
-        }
-        Ok(Self {
-            levels,
-            binding: binding.clone(),
-            oracle,
-        })
-    }
-
-    fn root(&self) -> Digest {
-        self.levels.last().expect("tree has root")[0]
-    }
-
-    fn frontier(&self, plan: &MultiproofPlan) -> Result<Vec<WireDigest>> {
-        plan.open_with(&self.levels, |level, index, left, right| {
-            self.binding
-                .hash_parent(self.oracle, level as u32, index as u32, left, right)
-                .map_err(binding_error)
-        })
-        .map(|siblings| siblings.into_iter().map(WireDigest::from).collect())
+        let proof = DeepProof {
+            row_root: row_root.into(),
+            quotient_root: quotient_root.into(),
+            fri_roots: roots.into_iter().map(Into::into).collect(),
+            ood,
+            rows: row.rows,
+            quotients,
+            row_siblings: row.siblings.into_iter().map(Into::into).collect(),
+            quotient_siblings: paired.siblings.into_iter().map(Into::into).collect(),
+            rounds,
+            terminal: terminal_commitment.terminal()?.to_vec(),
+        };
+        deep_proof::preflight(&proof, &queries)?;
+        let bytes = encode_bounded(&proof, limits.max_proof_bytes)?;
+        // Erase all private coefficient owners before the independent decoder and
+        // AIR verifier run. Only intentional proof disclosures survive this point.
+        drop(folded);
+        drop(composition);
+        drop(quotient);
+        drop(replay);
+        deep_engine::verify_committed(
+            relation,
+            &bytes,
+            VerifyLimits {
+                max_batch_bytes: relation.statement_bytes().len(),
+                max_proof_bytes: limits.max_proof_bytes,
+                ..VerifyLimits::default()
+            },
+            deep_proof::MAX_ALLOCATION_CHARGES,
+        )?;
+        Ok(bytes)
     }
 }
 
-fn fields(transcript: &mut Transcript, expected: usize) -> Result<Vec<F>> {
+fn commit(
+    plan: CoefficientReplayPlan,
+    binding: &Context,
+    oracle: Oracle,
+    queries: &[usize],
+    sources: &[&[F]],
+    limits: StreamLimits,
+) -> Result<CoefficientCommitment> {
+    let commitment = CoefficientCommitmentPlan::new(plan, binding, oracle, queries, limits)?;
+    let mut replay = CoefficientReplay::new(plan, sources)?;
+    commitment.build(&mut replay, binding)
+}
+fn fields(transcript: &mut Transcript, count: usize) -> Result<Vec<F>> {
     match transcript.challenge().map_err(binding_error)? {
-        Message::Fields(values) if values.len() == expected => Ok(values),
-        _ => Err(invalid("DEEP producer challenge has another dimension")),
+        Message::Fields(values) if values.len() == count => Ok(values),
+        _ => Err(invalid("DEEP producer transcript field count differs")),
     }
 }
-
-fn limit(name: &'static str, actual: usize, maximum: usize) -> Result<()> {
-    if actual > maximum {
+fn same_root(expected: Digest, actual: Digest) -> Result<()> {
+    if actual != expected {
+        return Err(invalid(
+            "DEEP replay opening root differs from committed root",
+        ));
+    }
+    Ok(())
+}
+fn encode_bounded(proof: &DeepProof, maximum: usize) -> Result<Vec<u8>> {
+    let bytes = norito::canonical_frame_len(proof)
+        .map_err(|error| invalid_owned(format!("DEEP canonical size: {error}")))?;
+    limit(
+        "max_deep_canonical_proof_bytes",
+        bytes,
+        maximum
+            .min(deep_proof::PROOF_BYTE_TARGET)
+            .min(deep_proof::MAX_FRAME_BYTES),
+    )?;
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(bytes)
+        .map_err(|_| invalid("DEEP canonical output allocation failed"))?;
+    output.resize(bytes, 0);
+    let mut target = &mut output[..];
+    norito::core::write_canonical_to_writer(proof, &mut target)
+        .map_err(|error| invalid_owned(format!("DEEP canonical encoding: {error}")))?;
+    if !target.is_empty() {
+        return Err(invalid("DEEP canonical writer did not fill exact frame"));
+    }
+    Ok(output)
+}
+fn stream_limits(limits: ConstructionLimits) -> StreamLimits {
+    StreamLimits {
+        digest_execution: limits.digest_execution,
+        max_payload_bytes: limits.max_payload_bytes,
+        max_hashes: limits.max_hash_calls,
+    }
+}
+fn maximal_queries() -> Vec<usize> {
+    // A preflight-only subset attaining all fixed tree frontier maxima together;
+    // proof queries are always sampled later from the complete transcript.
+    let mut indices: Vec<_> = (0..QUERY_COUNT)
+        .map(|i| (i | i << 6 | i << 12 | i << 18) & (LDE_ROWS - 1))
+        .collect();
+    indices.sort_unstable();
+    indices
+}
+fn limit(name: &'static str, actual: usize, max: usize) -> Result<()> {
+    if actual > max {
         return Err(Error::VerifierLimitExceeded {
             limit: name,
             actual,
-            max: maximum,
+            max,
         });
     }
     Ok(())
 }
-
 fn binding_error(error: BindingError) -> Error {
-    Error::InvalidTraceShape {
-        details: format!("DEEP producer binding: {error}"),
-    }
+    invalid_owned(format!("DEEP producer binding: {error}"))
 }
 fn invalid(details: &'static str) -> Error {
-    Error::InvalidTraceShape {
-        details: details.to_owned(),
-    }
+    invalid_owned(details.to_owned())
+}
+fn invalid_owned(details: String) -> Error {
+    Error::InvalidTraceShape { details }
 }
 
 #[cfg(test)]
@@ -633,5 +533,5 @@ fn invalid(details: &'static str) -> Error {
 mod tests;
 
 #[cfg(test)]
-#[path = "deep_prover/base_lde_tests.rs"]
-mod base_lde_tests;
+#[path = "deep_prover/integration_tests.rs"]
+mod integration_tests;

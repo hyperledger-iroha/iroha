@@ -1,6 +1,6 @@
 #[test]
 fn live_idle_decision_cleanup_reconciles_runner_frontier() {
-    let result = crate::sumeragi::sumeragi_thread_builder("live-idle-decision-cleanup")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("live-idle-decision-cleanup")
         .spawn(|| {
             for pacemaker_only in [false, true] {
                 let mut fixture = ready_body_fixture();
@@ -454,7 +454,7 @@ fn finish_current_decision_validate_and_reopen(
 
 #[test]
 fn cold_decision_fetch_publishes_first_network_body_through_completion_and_apply() {
-    let result = crate::sumeragi::sumeragi_thread_builder("cold-decision-first-body")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("cold-decision-first-body")
         .spawn(|| {
             for fail_publication in [false, true] {
                 let mut transport =
@@ -1294,7 +1294,7 @@ fn assert_active_prepare_linked_apply_cold_reopens(fixture: ReadyBodyFixture, ap
 
 #[test]
 fn active_prepare_body_owners_cold_reopen_under_durable_commit() {
-    let result = crate::sumeragi::sumeragi_thread_builder("active-prepare-decision-cold")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("active-prepare-decision-cold")
         .spawn(|| {
             for cut in [
                 LifecycleWorkClass::Fetch,
@@ -1313,7 +1313,7 @@ fn active_prepare_body_owners_cold_reopen_under_durable_commit() {
 
 #[test]
 fn active_prepare_validate_cold_reopen_after_timeout_and_durable_commit() {
-    let result = crate::sumeragi::sumeragi_thread_builder("active-prepare-tc-decision-cold")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("active-prepare-tc-decision-cold")
         .spawn(|| {
             active_prepare_body_survives_decision_crash_fixture(LifecycleWorkClass::Validate, true);
         })

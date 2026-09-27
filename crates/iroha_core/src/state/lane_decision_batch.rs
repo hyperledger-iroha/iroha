@@ -8,7 +8,8 @@
 //! scratch execution retains no such publication authority.
 
 use super::{
-    MergeLedgerCommitError, State, StateBlock, TransactionEntrypoint, VerifiedLaneDecisionGroupV1,
+    MergeLedgerCommitError, NativeExecutionResourceAdmission, State, StateBlock,
+    TransactionEntrypoint, VerifiedLaneDecisionGroupV1,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{BlockHeader, lane_decision_batch::LaneDecisionBatchV1};
@@ -62,6 +63,7 @@ pub(crate) struct PreparedLaneDecisionBatchV1<'state> {
     batch: Arc<LaneDecisionBatchV1>,
     executions: Vec<Execution>,
     sources: Vec<VerifiedLaneDecisionGroupV1>,
+    admission: NativeExecutionResourceAdmission,
 }
 
 /// Actual source-owned Native outputs and complete local execution witness.
@@ -109,6 +111,7 @@ impl<'state> RecordedNativeLaneBatchV1<'state> {
             overlay,
             executions,
             sources,
+            admission,
             ..
         } = self.prepared;
         Ok((
@@ -119,6 +122,7 @@ impl<'state> RecordedNativeLaneBatchV1<'state> {
                 sources,
                 executions,
                 context: self.context,
+                admission,
             },
         ))
     }
@@ -143,6 +147,7 @@ pub(crate) struct NativeExecutionCustody {
     sources: Vec<VerifiedLaneDecisionGroupV1>,
     executions: Vec<Execution>,
     context: crate::sumeragi::v2::VerifiedHeightContext,
+    admission: NativeExecutionResourceAdmission,
 }
 impl NativeExecutionCustody {
     /// Borrow the same privately authenticated sources retained by execution.
@@ -216,6 +221,7 @@ impl<'state> PreparedLaneDecisionBatchV1<'state> {
         overlay: Box<StateBlock<'state>>,
         executions: Vec<Execution>,
         sources: Vec<VerifiedLaneDecisionGroupV1>,
+        admission: NativeExecutionResourceAdmission,
     ) -> Result<Self> {
         overlay.validate_native_lane_stage_membership()?;
         let batch = Arc::clone(
@@ -234,6 +240,7 @@ impl<'state> PreparedLaneDecisionBatchV1<'state> {
             batch,
             executions,
             sources,
+            admission,
         };
         prepared.verify_source_binding()?;
         Ok(prepared)
@@ -313,6 +320,7 @@ impl State {
         &self,
         mut carrier: iroha_data_model::block::SignedBlock,
         groups: Vec<VerifiedLaneDecisionGroupV1>,
+        mut admission: NativeExecutionResourceAdmission,
         context: crate::sumeragi::v2::VerifiedHeightContext,
     ) -> Result<RecordedNativeLaneBatchV1<'_>> {
         crate::exec_witness::ensure_exec_witness_capture_available()
@@ -339,6 +347,7 @@ impl State {
             let (overlay, (executions, context)) = self.with_native_lane_execution_scope(
                 carrier.header(),
                 &groups,
+                &mut admission,
                 |overlay| {
                     let recorder = crate::exec_witness::begin_exec_witness_capture()
                         .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
@@ -371,7 +380,8 @@ impl State {
                     Ok((executions, context))
                 },
             )?;
-            let prepared = PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)?;
+            let prepared =
+                PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups, admission)?;
             Ok(RecordedNativeLaneBatchV1 {
                 prepared,
                 carrier,
@@ -409,11 +419,26 @@ impl State {
     /// Execute verified sources under their actual carrier, after shared start hooks.
     /// Full economic outputs are authenticated by global execution, never proposal claims.
     /// Move the authenticated groups into the result; no cloned wire projection replaces them.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn replay_lane_decision_batch(
         &self,
         carrier: &BlockHeader,
         batch: &LaneDecisionBatchV1,
         groups: Vec<VerifiedLaneDecisionGroupV1>,
+    ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
+        let admission = NativeExecutionResourceAdmission::for_test(groups.len());
+        self.replay_lane_decision_batch_with_admission(carrier, batch, groups, admission)
+    }
+
+    /// Scratch replay of one original source uses its same finite admission
+    /// through output execution and the retained prepared owner.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub(super) fn replay_lane_decision_batch_with_admission(
+        &self,
+        carrier: &BlockHeader,
+        batch: &LaneDecisionBatchV1,
+        groups: Vec<VerifiedLaneDecisionGroupV1>,
+        admission: NativeExecutionResourceAdmission,
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
         crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
@@ -426,7 +451,11 @@ impl State {
                         .into(),
                 ));
             }
-            let prepared = self.prepare_native_batch_on_carrier(carrier.clone(), groups)?;
+            let prepared = self.prepare_native_batch_on_carrier_with_admission(
+                carrier.clone(),
+                groups,
+                admission,
+            )?;
             if prepared.batch() != batch {
                 return Err(invalid(
                     "native applying pre-State changed before execution".into(),
@@ -440,21 +469,39 @@ impl State {
     /// containing proposal/source before invoking this private stage transition.
     /// Scratch isolation covers start hooks, native economics and private markers,
     /// and rejects recorder-owning callers before any State read or acquisition.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(super) fn prepare_native_batch_on_carrier(
         &self,
         header: BlockHeader,
         groups: Vec<VerifiedLaneDecisionGroupV1>,
+    ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
+        let admission = NativeExecutionResourceAdmission::for_test(groups.len());
+        self.prepare_native_batch_on_carrier_with_admission(header, groups, admission)
+    }
+
+    /// Preserve a caller's one original finite source pool through scratch
+    /// execution; direct standalone tests create that token in the wrapper.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    fn prepare_native_batch_on_carrier_with_admission(
+        &self,
+        header: BlockHeader,
+        groups: Vec<VerifiedLaneDecisionGroupV1>,
+        mut admission: NativeExecutionResourceAdmission,
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
         crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
             let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
             let batch = self.prepare_lane_decision_batch(&groups)?;
-            let (overlay, executions) =
-                self.with_native_lane_execution(header, &groups, |overlay, results| {
-                    overlay.seal_native_lane_decision_batch(results, batch)
-                })?;
-            PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups)
+            let (overlay, executions) = self.with_native_lane_execution_scope(
+                header,
+                &groups,
+                &mut admission,
+                |_| Ok(()),
+                |overlay, results| overlay.seal_native_lane_decision_batch(results, batch),
+                |_, result, ()| Ok(result),
+            )?;
+            PreparedLaneDecisionBatchV1::from_stage(overlay, executions, groups, admission)
         })
     }
 }

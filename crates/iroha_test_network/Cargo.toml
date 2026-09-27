@@ -46,3 +46,7 @@ petname = "2.0.2"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 nonzero_ext = { workspace = true }
+zeroize.workspace = true
+
+[dev-dependencies]
+irohad = { path = "../irohad", default-features = false, features = ["daemon"] }

@@ -567,13 +567,13 @@ where
         )
     }
 
-    /// Exact initial node/root/reader layouts used by node-custody construction.
-    /// Native lock and runtime control storage remain outside this demand.
+    /// Exact initial node/root/reader and notification control layouts.
+    /// Native lock internals and pending waiter storage remain outside this demand.
     pub fn node_custody_allocation_demand() -> Result<AllocationDemand, PlanningError> {
         let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
         let mut demand = AllocationDemand::new();
         demand.add_layout(Layout::new::<CachePadded<Leaf<K, V, P::Charge>>>())?;
-        for layout in [initial.root, initial.reader] {
+        for layout in [initial.root, initial.reader, initial.notification] {
             demand.add_layout(layout)?;
         }
         Ok(demand)
@@ -623,22 +623,28 @@ where
 {
     /// Construct an empty map with prepaid node, root and initial reader owners.
     ///
-    /// The callback runs before all three charged allocations and supplies the
+    /// The callback runs before all four charged allocations and supplies the
     /// original provider for their exact layouts. Platform-native mutex storage
     /// remains outside this demand.
     /// TODO: bind native lock/runtime storage before claiming complete map
     /// construction admission. This constructor does not claim that bound.
     pub fn try_new_with_node_custody<E>(
         admit: impl FnOnce(AllocationDemand) -> Result<P, E>,
-    ) -> Result<Self, E> {
+    ) -> Result<Self, E>
+    where
+        P::Charge: Send + Sync + 'static,
+    {
         let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
         let demand = Self::node_custody_allocation_demand()
-            .expect("three concrete initial layouts fit usize");
+            .expect("four concrete initial layouts fit usize");
         let mut provider = Prepaid(Some(admit(demand)?));
         // The initial node takes its own original charge immediately before
         // allocation. The still-owned SuperBlock reclaims it if setup unwinds.
         let source = unsafe { SuperBlock::new_with_funding(&mut provider) };
         let charges = InitialCharges {
+            notification: crate::release::ReleaseNotification::new_charged(
+                provider.take_node_charge(initial.notification),
+            ),
             root: provider.take_node_charge(initial.root),
             reader: provider.take_node_charge(initial.reader),
         };
@@ -879,7 +885,13 @@ where
         let mut required = AllocationDemand::new();
         let initial = MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts();
         let writer = MapCell::<K, V, Prepaid<P>>::writer_allocation_layouts();
-        for layout in [initial.root, initial.reader, writer.cursor, writer.reader] {
+        for layout in [
+            initial.root,
+            initial.reader,
+            initial.notification,
+            writer.cursor,
+            writer.reader,
+        ] {
             required.add_layout(layout)?;
         }
         let mut leaf = AllocationDemand::new();
@@ -1851,6 +1863,7 @@ where
 {
     let mut existing = AllocationDemand::new();
     existing.add_layout(MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts().root)?;
+    existing.add_layout(MapCell::<K, V, Prepaid<P>>::initial_allocation_layouts().notification)?;
     existing.add_layout(MapCell::<K, V, Prepaid<P>>::reader_allocation_layout())?;
     let (leaves, branches) = source.node_counts();
     let mut leaf = AllocationDemand::new();

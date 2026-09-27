@@ -4,7 +4,6 @@
     "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift": 28941,
     "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift": 20278,
     "ci/privacy_sdk_cargo_lockfile_test.sh": 4710,
-    "contracts/evm/sccp/test/sccp_message_bridge_smoke.js": 3858,
     "crates/connect_norito_bridge/src/lib.rs": 15076,
     "crates/fastpq_prover/src/metal.rs": 5862,
     "crates/iroha/src/client.rs": 29893,

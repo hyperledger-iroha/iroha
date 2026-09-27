@@ -1,5 +1,6 @@
 //! Native generation, idempotency and finite emergency capacity regressions.
 use super::*;
+use iroha_crypto::Hash;
 fn rows(tx: &StateTransaction<'_, '_>) -> Vec<(StatePath, Vec<u8>)> {
     tx.world
         .smart_contract_state

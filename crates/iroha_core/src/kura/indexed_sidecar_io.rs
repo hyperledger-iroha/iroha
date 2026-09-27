@@ -92,7 +92,6 @@ impl Kura {
             return FastpqProofEnqueueResult::RejectedPruneRecovery;
         }
         let telemetry = FastpqProofSidecarTelemetry;
-        let snapshot = snapshot.compact_for_sidecar();
         let max_bytes = self
             .fastpq_proof_sidecar_max_bytes
             .load(Ordering::Relaxed)
@@ -430,7 +429,7 @@ impl Kura {
             {
                 continue;
             }
-            sidecar.fastpq_proofs.push(snapshot.compact_for_sidecar());
+            sidecar.fastpq_proofs.push((*snapshot).clone());
             added = added.saturating_add(1);
         }
         if added == 0 {

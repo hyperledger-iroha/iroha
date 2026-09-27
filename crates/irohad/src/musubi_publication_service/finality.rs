@@ -860,13 +860,12 @@ mod tests {
         let genesis_account = AccountId::new(keypair(0x42).public_key().clone());
         let (_validation_clock, validation_time) =
             TimeSource::new_mock(Duration::from_millis(1_500));
-        ValidBlock::validate_signed_genesis_keep_voting_block(
+        ValidBlock::validate_signed_genesis(
             genesis,
             topology,
             &genesis_account,
             &validation_time,
             state,
-            &mut None,
             ConsensusMode::Permissioned,
         )
         .unpack(|_| {})

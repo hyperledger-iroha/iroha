@@ -36,8 +36,33 @@ thread_local! {
 
 struct RefundScope {
     pool: *const Pool,
-    previous: *const RefundScope,
+    previous: Cell<*const RefundScope>,
     pending: Cell<bool>,
+}
+
+impl RefundScope {
+    // Owned sibling scopes may finish in a different order from acquisition.
+    // Every linked record stays at its original stable address on this thread.
+    fn unlink(&self) {
+        REFUND_SCOPES.with(|head| {
+            let own = ptr::from_ref(self);
+            if head.get() == own {
+                head.set(self.previous.get());
+                return;
+            }
+            let mut current = head.get();
+            while !current.is_null() {
+                // SAFETY: all linked records are retained on this same thread.
+                let record = unsafe { &*current };
+                if record.previous.get() == own {
+                    record.previous.set(self.previous.get());
+                    return;
+                }
+                current = record.previous.get();
+            }
+            unreachable!("original refund scope remains registered until final custody drops");
+        });
+    }
 }
 
 // This borrow keeps the stack record at its registered address. Neither the
@@ -49,10 +74,7 @@ struct EnteredRefundScope<'scope> {
 
 impl Drop for EnteredRefundScope<'_> {
     fn drop(&mut self) {
-        REFUND_SCOPES.with(|head| {
-            debug_assert_eq!(head.get(), ptr::from_ref(self.scope));
-            head.set(self.scope.previous);
-        });
+        self.scope.unlink();
         // Unlink and end the TLS access before invoking any user callback. A
         // matching outer scope receives this wake; other threads are unaffected.
         if self.scope.pending.get() {
@@ -91,7 +113,7 @@ impl Pool {
                     scope.pending.set(true);
                     return true;
                 }
-                current = scope.previous;
+                current = scope.previous.get();
             }
             false
         });
@@ -128,6 +150,63 @@ pub struct AllocationScope<'scope> {
     // Refund deferral is thread-local. Even a scoped thread cannot borrow this
     // token to acquire writers whose refunds would notify on another thread.
     _thread: std::marker::PhantomData<*mut ()>,
+}
+
+/// Original prepaid thread-bound refund scope retained by physical owners.
+///
+/// Clones share the same admitted control allocation. The final owner unlinks
+/// the scope before freeing it or delivering deferred wakes. Retain a clone in
+/// every physical owner; release all sibling guards before their cleanup.
+///
+/// This owner cannot cross threads, including scoped threads:
+/// ```compile_fail
+/// let budget = mv::allocation::AllocationBudget::new(4096);
+/// let scope = budget.try_owned_refund_scope().unwrap();
+/// std::thread::scope(|threads| { threads.spawn(move || drop(scope)); });
+/// ```
+#[derive(Clone)]
+pub struct OwnedAllocationScope {
+    record: concread::shared::Shared<RefundScope, AllocationCharge>,
+    budget: AllocationBudget,
+}
+
+impl OwnedAllocationScope {
+    /// Exact original allocation retained until the last physical owner releases.
+    pub fn allocation_layout() -> Layout {
+        concread::shared::Shared::<RefundScope, AllocationCharge>::layout()
+    }
+
+    /// Borrow the exact finite pool backing this thread-bound refund scope.
+    /// Detached journals can retain a clone after their physical writers release,
+    /// then enter a new scope on the publication thread.
+    pub fn allocation_budget(&self) -> &AllocationBudget {
+        &self.budget
+    }
+
+    pub(crate) fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        self.budget.same_pool(budget)
+    }
+
+    /// Borrow the same active scope for a synchronous preparation operation.
+    pub fn borrowed(&self) -> AllocationScope<'_> {
+        AllocationScope {
+            budget: &self.budget,
+            _thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for OwnedAllocationScope {
+    fn drop(&mut self) {
+        if let Some(record) = concread::shared::Shared::get_mut(&mut self.record) {
+            record.unlink();
+            if record.pending.get() {
+                self.budget.pool.notify_refund();
+            }
+        }
+        // Automatic fields free the original record before refunding its charge.
+        // The budget itself survives until both operations have finished.
+    }
 }
 
 impl AllocationScope<'_> {
@@ -175,6 +254,30 @@ impl AllocationBudget {
         self.pool.reserved.load(Ordering::Acquire)
     }
 
+    /// Admit an original movable scope before acquiring any physical writer.
+    /// Its control storage comes from this same finite pool; refusal creates no
+    /// scope and does not authorize replacement allocation or a different pool.
+    pub fn try_owned_refund_scope(&self) -> Result<OwnedAllocationScope, AllocationRefusal> {
+        let layout = OwnedAllocationScope::allocation_layout();
+        let mut reservation = self.try_reserve(layout)?;
+        let charge = reservation
+            .try_split(layout)
+            .expect("original scope capacity");
+        let record = concread::shared::Shared::new(
+            RefundScope {
+                pool: Arc::as_ptr(&self.pool),
+                previous: Cell::new(REFUND_SCOPES.with(Cell::get)),
+                pending: Cell::new(false),
+            },
+            charge,
+        );
+        REFUND_SCOPES.with(|head| head.set(ptr::from_ref(&*record)));
+        Ok(OwnedAllocationScope {
+            record,
+            budget: self.clone(),
+        })
+    }
+
     /// Defer this thread's refund notifications through a synchronous operation.
     ///
     /// Freed allocation credits become available immediately. Only wakes for
@@ -195,7 +298,7 @@ impl AllocationBudget {
     ) -> R {
         let scope = RefundScope {
             pool: Arc::as_ptr(&self.pool),
-            previous: REFUND_SCOPES.with(Cell::get),
+            previous: Cell::new(REFUND_SCOPES.with(Cell::get)),
             pending: Cell::new(false),
         };
         let entered = EnteredRefundScope {
@@ -456,6 +559,11 @@ impl AllocationCharge {
     /// Return the exact layout whose requested bytes remain prepaid.
     pub fn layout(&self) -> Layout {
         self.layout
+    }
+
+    /// Whether this charge belongs to the exact finite pool, not an equal limit.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        Arc::ptr_eq(&self.pool, &budget.pool)
     }
 }
 

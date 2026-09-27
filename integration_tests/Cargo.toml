@@ -40,12 +40,26 @@ path = "tests/sora_parliament_lifecycle_smoke.rs"
 required-features = ["parliament-test-signers"]
 
 [[test]]
+name = "sorafs_publication_governance"
+path = "tests/sorafs_publication_governance.rs"
+required-features = ["parliament-test-signers"]
+
+[[test]]
+name = "sccp_lanes"
+path = "tests/sccp_lanes/main.rs"
+required-features = ["parliament-test-signers"]
+
+[[test]]
 name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 
 [[test]]
 name = "sumeragi"
 path = "tests/sumeragi.rs"
+
+[[test]]
+name = "sumeragi_npos_committee_transition"
+path = "tests/sumeragi_npos_committee_transition.rs"
 
 [[test]]
 name = "nexus_and_streaming"
@@ -91,6 +105,8 @@ iroha_model_base = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "process", "rt-multi-thread", "time"] }
 eyre = { workspace = true }
 iroha_test_network = { workspace = true }
+irohad = { path = "../crates/irohad", default-features = false, features = ["daemon"] }
+zeroize = { workspace = true }
 iroha_data_model = { workspace = true, features = ["application-model", "http", "transparent_api"], default-features = false }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_torii = { workspace = true, default-features = false, features = ["node-api", "ws_integration_tests"] }
@@ -114,6 +130,9 @@ iroha_config_base = { workspace = true }
 iroha_primitives = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_executor_data_model = { workspace = true }
+iroha_sccp = { workspace = true, features = ["test-fixtures"] }
+iroha_sccp_rpc = { workspace = true }
+iroha_sccp_wallet = { workspace = true }
 ivm = { workspace = true }
 base64 = { workspace = true }
 

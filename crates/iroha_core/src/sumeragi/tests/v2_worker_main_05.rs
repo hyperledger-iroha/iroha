@@ -285,7 +285,7 @@ fn merge_sidecar_reference(label: &[u8]) -> CertifiedMergeLedgerReference {
             9,
             1,
             HashOf::from_untyped_unchecked(Hash::new(b"merge parent")),
-            crate::sumeragi::synthetic_network_id("v2-worker-merge-sidecar"),
+            crate::unit_test_support::synthetic_network_id("v2-worker-merge-sidecar"),
             1,
             HashOf::new(&Vec::<PeerId>::new()),
             Vec::new(),

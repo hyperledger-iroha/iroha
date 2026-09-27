@@ -320,10 +320,10 @@ impl StrictReplayFixture {
         Self::new_with_options(ReplayFixtureOptions::default(), instructions)
     }
     fn staking_asset_definition() -> iroha_data_model::asset::AssetDefinitionId {
-        iroha_data_model::asset::AssetDefinitionId::derive_from_components(
-            iroha_genesis::GENESIS_DOMAIN_ID.clone(),
-            "replay_stake".parse().expect("fixture staking asset name"),
+        iroha_data_model::asset::AssetDefinitionId::parse_address_literal(
+            &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
         )
+        .expect("canonical network XOR identity")
     }
     fn new_with_options(
         options: ReplayFixtureOptions,
@@ -388,7 +388,7 @@ impl StrictReplayFixture {
                 .append_parameter(Parameter::Custom(npos.into_custom_parameter()))
                 .append_instruction(Register::asset_definition(AssetDefinition::numeric(
                     definition.clone(),
-                    "replay stake".to_owned(),
+                    "XOR".to_owned(),
                     AssetBalancePolicy::Global,
                     None,
                 )));
@@ -433,7 +433,7 @@ impl StrictReplayFixture {
         let policy_state = Self::new_state(
             Self::fresh_kura(options),
             chain_id.clone(),
-            crate::sumeragi::synthetic_network_id("strict-replay-policy-preview"),
+            crate::unit_test_support::synthetic_network_id("strict-replay-policy-preview"),
             genesis_account.clone(),
             &roster,
             options,
@@ -472,15 +472,13 @@ impl StrictReplayFixture {
             options,
         );
         let parameters = {
-            let mut voting_block = None;
             let (_valid, staged) =
-                crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+                crate::block::ValidBlock::validate_signed_genesis(
                     provisional.0,
                     &topology,
                     &genesis_account,
                     &TimeSource::new_system(),
                     &staging_state,
-                    &mut voting_block,
                     options.mode,
                 )
                 .unpack(|_| {})
@@ -508,15 +506,13 @@ impl StrictReplayFixture {
             options,
         ));
         let bootstrap = {
-            let mut voting_block = None;
             let (_valid, staged) =
-                crate::block::ValidBlock::validate_signed_genesis_keep_voting_block(
+                crate::block::ValidBlock::validate_signed_genesis(
                     genesis.0.clone(),
                     &topology,
                     &genesis_account,
                     &TimeSource::new_system(),
                     state.as_ref(),
-                    &mut voting_block,
                     options.mode,
                 )
                 .unpack(|_| {})
@@ -1397,7 +1393,7 @@ macro_rules! strict_replay_test {
     ($name:ident, $body:block) => {
         #[test]
         fn $name() {
-            let handle = crate::sumeragi::sumeragi_thread_builder(concat!(
+            let handle = crate::sumeragi::threads::sumeragi_thread_builder(concat!(
                 "strict-production-replay-",
                 stringify!($name)
             ))

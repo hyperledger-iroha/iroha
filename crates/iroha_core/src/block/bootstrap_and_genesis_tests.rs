@@ -496,14 +496,12 @@ async fn genesis_public_key_is_checked() {
     // Invalid genesis authority must be rejected before any execution or commit.
     let block: SignedBlock = unverified_block.into();
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-    let mut voting_block = None;
-    let (_, error) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (_, error) = ValidBlock::validate_signed_genesis(
         block,
         &topology,
         &genesis_correct_account_id,
         &time_source,
         &state,
-        &mut voting_block,
         iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
@@ -560,14 +558,12 @@ async fn genesis_asset_definition_registration_is_not_domain_gated() {
     );
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-    let mut voting_block = None;
-    let (valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, state_block) = ValidBlock::validate_signed_genesis(
         block,
         &topology,
         &genesis_account_id,
         &time_source,
         &state,
-        &mut voting_block,
         iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
@@ -604,14 +600,12 @@ async fn genesis_domain_registration_bootstraps_domain_name_lease() {
     );
     let topology = crate::sumeragi::network_topology::test_topology_with_keys([&genesis_key_pair]);
     let (_handle, time_source) = TimeSource::new_mock(block.header().creation_time());
-    let mut voting_block = None;
-    let (valid, state_block) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, state_block) = ValidBlock::validate_signed_genesis(
         block,
         &topology,
         &genesis_account_id,
         &time_source,
         &state,
-        &mut voting_block,
         iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})

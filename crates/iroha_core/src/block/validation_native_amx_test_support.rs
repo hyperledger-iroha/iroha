@@ -238,7 +238,7 @@ fn native_amx_test_catalog(
     .expect("dataspace catalog")
 }
 fn native_amx_test_network_id() -> iroha_data_model::NetworkId {
-    crate::sumeragi::synthetic_network_id("native-amx-test-genesis")
+    crate::unit_test_support::synthetic_network_id("native-amx-test-genesis")
 }
 fn native_amx_test_world_with_keys() -> (World, Vec<KeyPair>) {
     let world = World::new();

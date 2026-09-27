@@ -346,18 +346,36 @@ impl Ord for BigInt {
 
 impl SerializePayload for BigInt {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
-        let bytes = self.to_twos_bytes();
-        let len: u32 = bytes
-            .len()
-            .try_into()
-            .map_err(|_| NoritoError::Message("length overflow".into()))?;
-        let encoded_len = norito::codec::Encode::encode(&len);
-        writer
-            .write_all(&encoded_len)
-            .map_err(|e| NoritoError::Message(e.to_string()))?;
-        writer
-            .write_all(&bytes)
-            .map_err(|e| NoritoError::Message(e.to_string()))
+        // The signed domain is fixed at 4,096 bits. Materialize its minimal
+        // two's-complement representation in bounded stack storage while
+        // borrowing magnitude digits; no limb clone or encoded Vec is needed.
+        let len = self.twos_byte_len();
+        if len > MAX_ENCODED_BYTES {
+            return Err(NoritoError::LengthMismatch);
+        }
+        let mut bytes = [0_u8; MAX_ENCODED_BYTES];
+        for (index, digit) in self.inner.iter_u64_digits().enumerate() {
+            let offset = index
+                .checked_mul(core::mem::size_of::<u64>())
+                .ok_or(NoritoError::LengthMismatch)?;
+            let available = len.checked_sub(offset).ok_or(NoritoError::LengthMismatch)?;
+            let copied = available.min(core::mem::size_of::<u64>());
+            bytes[offset..offset + copied].copy_from_slice(&digit.to_le_bytes()[..copied]);
+        }
+        if self.is_negative() {
+            let mut carry = true;
+            for byte in &mut bytes[..len] {
+                let (twos_byte, overflow) = (!*byte).overflowing_add(u8::from(carry));
+                *byte = twos_byte;
+                carry = overflow;
+            }
+        }
+        // BigInt's length is always a fixed little-endian u32, independently
+        // of ambient compact flags, as in the canonical first-release layout.
+        let encoded_len = u32::try_from(len).map_err(|_| NoritoError::LengthMismatch)?;
+        writer.write_all(&encoded_len.to_le_bytes())?;
+        writer.write_all(&bytes[..len])?;
+        Ok(())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         core::mem::size_of::<u32>().checked_add(self.twos_byte_len())
@@ -525,6 +543,77 @@ mod tests {
                     requested_bytes: layout.size(),
                 })
             );
+        }
+    }
+    #[test]
+    fn streamed_norito_bigint_matches_signed_reference_at_every_width() {
+        fn check(inner: InnerBigInt) {
+            let reference = if inner.is_zero() {
+                Vec::new()
+            } else {
+                inner.to_signed_bytes_le()
+            };
+            let value = match BigInt::from_inner(inner) {
+                Ok(value) => value,
+                Err(error) => {
+                    assert_eq!(error, BigIntError::Overflow);
+                    assert!(reference.len() > MAX_ENCODED_BYTES);
+                    return;
+                }
+            };
+            assert!(reference.len() <= MAX_ENCODED_BYTES);
+            let mut expected = u32::try_from(reference.len())
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            expected.extend_from_slice(&reference);
+            let mut storage = [0_u8; core::mem::size_of::<u32>() + MAX_ENCODED_BYTES];
+            let actual_len = {
+                let mut output = std::io::Cursor::new(storage.as_mut_slice());
+                value
+                    .serialize(&mut norito::core::Encoder::new(&mut output))
+                    .unwrap();
+                usize::try_from(output.position()).unwrap()
+            };
+            assert_eq!(&storage[..actual_len], expected.as_slice());
+            assert_eq!(value.encoded_len_exact(), Some(actual_len));
+            assert_eq!(
+                norito::core::encoded_payload_len(&value).unwrap(),
+                actual_len
+            );
+            assert_eq!(
+                BigInt::from_twos_bytes(&storage[4..actual_len]).unwrap(),
+                value
+            );
+        }
+        check(InnerBigInt::zero());
+        for bit in 0..MAX_BITS {
+            let magnitude = InnerBigInt::one() << bit;
+            for offset in [-1_i8, 0, 1] {
+                check(&magnitude + offset);
+                check(-&magnitude + offset);
+            }
+        }
+    }
+    #[test]
+    fn streamed_norito_bigint_propagates_exact_output_refusal() {
+        let value = BigInt::from_inner(-(InnerBigInt::one() << (MAX_BITS - 1))).unwrap();
+        let exact = value.encoded_len_exact().unwrap();
+        for available in [0, 3, 4, exact - 1, exact] {
+            let mut bytes = [0_u8; core::mem::size_of::<u32>() + MAX_ENCODED_BYTES];
+            let mut output = std::io::Cursor::new(&mut bytes[..available]);
+            let result = value.serialize(&mut norito::core::Encoder::new(&mut output));
+            assert_eq!(result.is_ok(), available == exact);
+            if available < exact {
+                assert!(
+                    matches!(
+                        result,
+                        Err(NoritoError::Io(ref error)) if error.kind() == std::io::ErrorKind::WriteZero
+                    ),
+                    "the actual writer error kind must survive serialization"
+                );
+            }
+            assert!(usize::try_from(output.position()).unwrap() <= available);
         }
     }
     #[test]

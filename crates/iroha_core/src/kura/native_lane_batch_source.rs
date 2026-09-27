@@ -10,7 +10,7 @@ use iroha_data_model::block::{
     BlockHeader, SignedBlock, consensus_v2::finality::V2FinalityArtifact,
     decode_framed_signed_block, lane_decision_batch::LaneDecisionBatchV1,
 };
-use std::num::NonZeroUsize;
+use std::{num::NonZeroUsize, sync::Arc};
 type Result<T> = std::result::Result<T, String>;
 
 /// Included source constructed only through actual canonical Kura finality.
@@ -39,6 +39,12 @@ impl FinalizedNativeLaneBatchV1 {
             .execution_context()
             .and_then(|bundle| bundle.native_lane_decisions.as_deref())
             .expect("private constructor retains a complete authenticated Native carrier")
+    }
+
+    /// Consume the exact authenticated carrier after its finality has supplied
+    /// the source network binding; no nested proposal clone is made.
+    pub(crate) fn into_carrier(self) -> SignedBlock {
+        self.carrier
     }
 }
 
@@ -74,18 +80,13 @@ impl NativeLaneBatchRecoveryV1 {
         if !block.is_resultless_proposal() {
             return Err("native batch recovery response contains execution results".into());
         }
-        self.project(&block)
+        self.project(block)
     }
-    fn project(&self, block: &SignedBlock) -> Result<FinalizedNativeLaneBatchV1> {
+    fn project(&self, block: SignedBlock) -> Result<FinalizedNativeLaneBatchV1> {
         self.finality
             .validate_for_header(&block.header())
             .map_err(|error| error.to_string())?;
-        if block.hash() != self.finality.block_hash
-            || block
-                .canonical_proposal_wire_hash()
-                .map_err(|error| error.to_string())?
-                != self.finality.subject.payload_hash
-        {
+        if block.hash() != self.finality.block_hash {
             return Err("native batch body is not its exact finalized carrier".into());
         }
         if block.has_results() {
@@ -99,11 +100,19 @@ impl NativeLaneBatchRecoveryV1 {
         }
         // Retain every authenticated input/control. Scratch must refuse unsupported
         // work; recorded execution consumes it with the exact verified context.
-        crate::block::native_lane_batch_for_execution(block)?;
+        let carrier = block.into_resultless_proposal();
+        if carrier
+            .canonical_proposal_wire_hash()
+            .map_err(|error| error.to_string())?
+            != self.finality.subject.payload_hash
+        {
+            return Err("native batch body is not its exact finalized carrier".into());
+        }
+        crate::block::native_lane_batch_for_execution(&carrier)?;
         Ok(FinalizedNativeLaneBatchV1 {
             source: self.clone(),
-            carrier_header: block.header(),
-            carrier: block.canonical_resultless_proposal(),
+            carrier_header: carrier.header(),
+            carrier,
         })
     }
 }
@@ -132,8 +141,9 @@ impl Kura {
             finality: read.finality,
         };
         match read.body {
-            Some(body) => source
-                .project(&body)
+            Some(body) => Arc::try_unwrap(body)
+                .map_err(|_| "fresh canonical Native body gained a foreign Arc owner".to_owned())
+                .and_then(|body| source.project(body))
                 .map(NativeLaneBatchCarrierReadV1::Ready),
             None => Ok(NativeLaneBatchCarrierReadV1::CanonicalBodyRecoveryRequired(
                 source,

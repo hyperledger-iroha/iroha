@@ -9,8 +9,8 @@ use fastpq_prover::{
     offline_compact::{
         BundleVerificationLimits, ExpectedAxtContext, ExpectedStatement, ProvingError,
         ProvingLimits, VerificationError, VerificationLimits, prove_quantity_axt_artifact,
-        prove_quantity_ordinary_artifact, quantity_profile_id, verify_quantity_axt_artifact,
-        verify_quantity_ordinary_artifact,
+        prove_quantity_ordinary_artifact, quantity_artifact_resources, quantity_profile_id,
+        verify_quantity_axt_artifact, verify_quantity_ordinary_artifact,
     },
     verify_axt_proof_envelope,
 };
@@ -56,6 +56,22 @@ fn policy() -> VerificationLimits {
         max_segment_decode_allocation_charges: 4_000_000,
         total_decode: DecodeLimits::new(1_000_000, 1_000_000, 4_000_000, 16_000_000, 32),
     }
+}
+
+#[test]
+fn public_resource_plan_exposes_incompatible_caps_without_building_a_proof() {
+    let one = quantity_artifact_resources(1, 0).unwrap();
+    let two = quantity_artifact_resources(2, policy().bundle.max_total_statement_bytes).unwrap();
+    // Even the indispensable row payload cannot meet the unchanged 512 KiB
+    // single-proof or 1 MiB two-child AXT targets; framing only adds bytes.
+    assert!(one.minimum_segment_row_bytes > 512 * 1024);
+    assert!(two.minimum_bundle_row_bytes > 1024 * 1024);
+    assert!(one.maximum_segment_frame_bytes > one.minimum_segment_row_bytes);
+    assert!(two.maximum_bundle_frame_bytes > two.maximum_total_segment_frame_bytes);
+    assert_eq!(two.total_queries, 2 * one.queries_per_segment);
+    assert!(two.segment_charge_bytes > one.segment_charge_bytes);
+    assert!(quantity_artifact_resources(0, 0).is_err());
+    assert!(quantity_artifact_resources(usize::MAX, 0).is_err());
 }
 
 // These independent public roots are fixture expectations, not ledger authority.
@@ -475,7 +491,7 @@ fn public_verifier_never_accepts_missing_or_empty_child_occurrences() {
 }
 
 #[test]
-fn public_offline_facade_does_not_qualify_either_schema_at_existing_axt_ingress() {
+fn axt_ingress_rejects_truncated_canonical_artifacts_and_wrong_schemas() {
     for schema in [
         FASTPQ_ORDINARY_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
         FASTPQ_AXT_COMPACT_ARTIFACT_V1_SCHEMA_NAME,
@@ -495,7 +511,7 @@ fn public_offline_facade_does_not_qualify_either_schema_at_existing_axt_ingress(
         };
         assert!(matches!(
             verify_axt_proof_envelope(&envelope),
-            Err(Error::UnqualifiedCompactArtifact { schema: rejected }) if rejected == schema
+            Err(Error::InvalidAxtBinding { .. })
         ));
     }
 }

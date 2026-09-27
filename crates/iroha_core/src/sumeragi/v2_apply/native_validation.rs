@@ -11,8 +11,9 @@ use super::validation_custody::{
 use super::{V2ApplyError, V2ApplyService, VerifiedHeightContext};
 use crate::{
     state::{
-        AuthenticatedLaneAdmittedInputSourceV1, NativeLaneBatchSourcePreparationV1,
-        PreparedCarrier, RetainedCarrier, VerifiedFirstLaneAdmittedInputV1,
+        AuthenticatedLaneAdmittedInputSourceV1, NativeExecutionResourceAdmission,
+        NativeLaneBatchSourcePreparationV1, PendingNativeLaneSource, PreparedCarrier,
+        RetainedCarrier, VerifiedFirstLaneAdmittedInputV1,
     },
     sumeragi::{
         v2_body_store::{
@@ -28,7 +29,7 @@ use iroha_data_model::{
     transaction::{Executable, TransactionAdmissionIntent, TransactionEntrypoint},
 };
 use iroha_model_base::topology::DataSpaceId;
-use mv::allocation::{AllocationCharge, AllocationRefusal, AllocationReservation};
+use mv::allocation::{AllocationCharge, AllocationRefusal};
 use std::{alloc::Layout, collections::BTreeSet, convert::Infallible, sync::Arc};
 
 #[cfg(test)]
@@ -42,28 +43,15 @@ pub(crate) fn fail_next_post_publication_queue_tail_for_test() {
     FAIL_POST_PUBLICATION_QUEUE_TAIL.set(true);
 }
 
-/// Credits for both coexisting World wrapper sets and the actual effects box.
-/// The original pool reservation moves with the journals until final destruction.
+/// Prepaid journal shells travel with the candidate before execution. Journal
+/// capture consumes them once; the empty marker then travels with the retained
+/// admission so no second reservation can be manufactured during a retry.
 pub(crate) struct CarrierShellAdmission {
-    _reservation: AllocationReservation,
+    journal_shells: Option<crate::state::CarrierJournalShellReservation<Self>>,
 }
 
 /// The actual published Native carrier, including its original local shell owner.
 pub(crate) type PublishedNativeCarrier = crate::state::PublishedCarrier<CarrierShellAdmission>;
-
-impl CarrierShellAdmission {
-    fn requested_bytes() -> Result<usize, AllocationRefusal> {
-        PreparedCarrier::world_journal_shell_bytes()?
-            .checked_add(PreparedCarrier::retained_effects_layout().size())
-            .ok_or(AllocationRefusal::DemandOverflow)
-    }
-
-    /// Inspect the original finite pool and retained demand in custody tests.
-    #[cfg(test)]
-    pub(crate) fn reserved_bytes(&self) -> usize {
-        self._reservation.remaining_bytes()
-    }
-}
 
 /// One immutable application service and verified height context for BodyStore.
 pub(crate) struct OwnedNativeCarrierValidator {
@@ -89,6 +77,9 @@ struct AwaitingNativeSource {
     proposal_hash: iroha_crypto::Hash,
     recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>,
     pending: Option<PendingNativeSource>,
+    source_admission: Option<NativeExecutionResourceAdmission>,
+    source_pending: Option<PendingNativeLaneSource>,
+    retry_refusal: Option<LocalValidationRefusal>,
     // Payloads retire before the original shell reservation is refunded.
     shell_admission: Option<CarrierShellAdmission>,
 }
@@ -147,8 +138,10 @@ impl RetainedValidationOwner for NativeValidationCandidate {
             }
             NativeValidationPhase::Published { carrier, .. } => {
                 carrier.artifact().height_context == *context
-                    && carrier.block().canonical_proposal_wire_hash().ok()
-                        == body.canonical_proposal_wire_hash().ok()
+                    && carrier
+                        .block()
+                        .checked_resultless_proposal_eq(body)
+                        .unwrap_or(false)
             }
         }
     }
@@ -388,14 +381,12 @@ impl NativeValidationCandidate {
 impl V2ApplyService {
     /// Share one original finite pool across all candidates of this service.
     pub(super) fn reserve_carrier_shells(&self) -> Result<CarrierShellAdmission, V2ApplyError> {
-        let bytes = CarrierShellAdmission::requested_bytes()
-            .map_err(|error| self.carrier_allocation_refusal(error))?;
-        let reservation = self
-            .carrier_shell_budget
-            .try_reserve_bytes(bytes)
-            .map_err(|error| self.carrier_allocation_refusal(error))?;
+        let journal_shells = PreparedCarrier::reserve_journal_shells::<CarrierShellAdmission>(
+            &self.carrier_shell_budget,
+        )
+        .map_err(|error| self.carrier_allocation_refusal(error))?;
         Ok(CarrierShellAdmission {
-            _reservation: reservation,
+            journal_shells: Some(journal_shells),
         })
     }
 
@@ -665,7 +656,12 @@ impl OwnedNativeCarrierValidator {
             waiting.class,
             CurrentCarrierSourceClass::Genesis | CurrentCarrierSourceClass::Control
         ) {
-            if waiting.pending.is_some() || !waiting.recovered.is_empty() {
+            if waiting.pending.is_some()
+                || !waiting.recovered.is_empty()
+                || waiting.source_admission.is_some()
+                || waiting.source_pending.is_some()
+                || waiting.retry_refusal.is_some()
+            {
                 return Err(LocalValidationRefusal::RecoveryRequired(
                     "control carrier acquired a foreign Native source recovery owner".into(),
                 )
@@ -681,25 +677,86 @@ impl OwnedNativeCarrierValidator {
             )?;
             return Self::detach_prepared(prepared);
         }
-        let prepared = self
-            .service
-            .state
-            .prepare_proposed_native_lane_batch_source(proposal, &waiting.recovered)
-            .map_err(|reason| LocalValidationRefusal::RecoveryRequired(reason))?;
+        // A stable source may become stale while the service acquires archives or
+        // executes its scratch candidate. That consumed source releases its charge;
+        // retry the same retained proposal with a fresh finite admission.
+        if waiting.source_pending.is_none() && waiting.source_admission.is_none() {
+            let group_count = proposal
+                .execution_context()
+                .and_then(|context| context.native_lane_decisions.as_deref())
+                .expect("Native source retains its decision batch")
+                .groups
+                .len();
+            match NativeExecutionResourceAdmission::try_reserve_source(
+                &self.service.carrier_shell_budget,
+                group_count,
+            ) {
+                Ok(admission) => waiting.source_admission = Some(admission),
+                Err(error) => {
+                    let refusal = self.service.carrier_allocation_refusal(error);
+                    if let Some(retry @ LocalValidationRefusal::PhysicalBusy(_)) =
+                        refusal.local_refusal()
+                    {
+                        waiting.retry_refusal = Some(retry);
+                        return Ok(NativeValidationPhase::AwaitingSource(waiting));
+                    }
+                    return Err(refusal);
+                }
+            }
+        }
+        waiting.retry_refusal = None;
+        let prepared = if let Some(pending) = waiting.source_pending.take() {
+            self.service
+                .state
+                .resume_native_lane_batch_source(pending, &waiting.recovered)
+        } else {
+            self.service
+                .state
+                .prepare_proposed_native_lane_batch_source(
+                    proposal.clone(),
+                    &waiting.recovered,
+                    waiting
+                        .source_admission
+                        .take()
+                        .expect("original Native source admission is consumed once"),
+                )
+        };
+        let prepared = match prepared {
+            Ok(prepared) => prepared,
+            Err(error) if error.is_host_allocation() => {
+                // Source authentication did not execute the carrier. Retain its
+                // original proposal and charge for a later physical retry.
+                waiting.source_pending = Some(error.into_pending());
+                return Ok(NativeValidationPhase::AwaitingSource(waiting));
+            }
+            Err(error) => return Err(V2ApplyError::Validation(error.to_string())),
+        };
         let source = match prepared {
             NativeLaneBatchSourcePreparationV1::Ready(source) => source,
             NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired {
                 execution_index,
                 source,
+                pending,
             } => {
+                waiting.source_pending = Some(pending);
                 waiting.pending = Some(PendingNativeSource {
                     execution_index,
                     source: Arc::new(source),
                 });
                 return Ok(NativeValidationPhase::AwaitingSource(waiting));
             }
-            NativeLaneBatchSourcePreparationV1::ObservationChanged => {
+            NativeLaneBatchSourcePreparationV1::ObservationChanged { pending } => {
+                waiting.source_pending = Some(pending);
+                waiting.retry_refusal = Some(LocalValidationRefusal::ObservationChanged {
+                    wake: self.service.queue.sumeragi_waker(),
+                });
                 return Ok(NativeValidationPhase::AwaitingSource(waiting));
+            }
+            NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
+                return Err(LocalValidationRefusal::RecoveryRequired(
+                    "Native source admission differs from its original group count".into(),
+                )
+                .into());
             }
             NativeLaneBatchSourcePreparationV1::Superseded => {
                 return Err(LocalValidationRefusal::Superseded.into());
@@ -710,9 +767,26 @@ impl OwnedNativeCarrierValidator {
             source,
             waiting.context.clone(),
             &mut waiting.shell_admission,
-        )?;
-        let Some(prepared) = prepared else {
-            return Ok(NativeValidationPhase::AwaitingSource(waiting));
+        );
+        let prepared = match prepared {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => {
+                waiting.retry_refusal = Some(LocalValidationRefusal::ObservationChanged {
+                    wake: self.service.queue.sumeragi_waker(),
+                });
+                return Ok(NativeValidationPhase::AwaitingSource(waiting));
+            }
+            Err(error) => {
+                if let Some(
+                    retry @ (LocalValidationRefusal::PhysicalBusy(_)
+                    | LocalValidationRefusal::QueueRelease { .. }),
+                ) = error.local_refusal()
+                {
+                    waiting.retry_refusal = Some(retry);
+                    return Ok(NativeValidationPhase::AwaitingSource(waiting));
+                }
+                return Err(error);
+            }
         };
         Self::detach_prepared(prepared)
     }
@@ -720,10 +794,14 @@ impl OwnedNativeCarrierValidator {
     fn detach_prepared(
         prepared: super::native_preparation::PreparedNativeServiceCandidate<'_>,
     ) -> Result<NativeValidationPhase, V2ApplyError> {
-        let (carrier, provider, reputation, admission) = prepared.into_parts();
-        let carrier = match carrier
-            .prepare_journals(provider, reputation, |_| Ok::<_, Infallible>(admission))
-        {
+        let (carrier, provider, reputation, mut admission) = prepared.into_parts();
+        let journal_shells = admission
+            .journal_shells
+            .take()
+            .expect("original Native journal shells are consumed exactly once");
+        let carrier = match carrier.prepare_journals(journal_shells, provider, reputation, |_| {
+            Ok::<_, Infallible>(admission)
+        }) {
             Ok(journals) => RetainedCarrier::Validated(journals),
             Err(crate::state::CarrierJournalPreparationError::ArchivePreparation {
                 carrier,
@@ -815,6 +893,21 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
             .try_split(layout)
             .map_err(|error| LocalValidationRefusal::RecoveryRequired(error.to_string()))?;
         let shell_admission = self.service.reserve_carrier_shells()?;
+        let source_admission = if matches!(class, CurrentCarrierSourceClass::Native) {
+            let group_count = body
+                .execution_context()
+                .and_then(|context| context.native_lane_decisions.as_deref())
+                .map_or(0, |batch| batch.groups.len());
+            Some(
+                NativeExecutionResourceAdmission::try_reserve_source(
+                    &self.service.carrier_shell_budget,
+                    group_count,
+                )
+                .map_err(|error| self.service.carrier_allocation_refusal(error))?,
+            )
+        } else {
+            None
+        };
         let context_id = context.id();
         let proposal_hash = body
             .canonical_proposal_wire_hash()
@@ -826,6 +919,9 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 proposal_hash,
                 recovered: Vec::new(),
                 pending: None,
+                source_admission,
+                source_pending: None,
+                retry_refusal: None,
                 shell_admission: Some(shell_admission),
             },
             body,
@@ -891,6 +987,18 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 let context_id = waiting.context.context().id();
                 let proposal_hash = waiting.proposal_hash;
                 match self.execute_source(waiting, proposal) {
+                    Ok(NativeValidationPhase::AwaitingSource(waiting))
+                        if waiting.pending.is_none() =>
+                    {
+                        let refusal = waiting.retry_refusal.clone().unwrap_or_else(|| {
+                                LocalValidationRefusal::RecoveryRequired(
+                                    "original Native source is awaiting a stable observation or resource"
+                                        .into(),
+                                )
+                            });
+                        *owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));
+                        return Err((owner, refusal));
+                    }
                     Ok(phase) => phase,
                     Err(error)
                         if matches!(
@@ -939,7 +1047,9 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 Err((owner, refusal))
             }
             NativeValidationPhase::AwaitingSource(waiting) => {
-                let refusal = if let Some(pending) = waiting.pending.as_ref() {
+                let refusal = if let Some(retry) = waiting.retry_refusal.as_ref() {
+                    retry.clone()
+                } else if let Some(pending) = waiting.pending.as_ref() {
                     LocalValidationRefusal::NativeSourceRecovery {
                         execution_index: pending.execution_index,
                         authenticated_source: Arc::clone(&pending.source),

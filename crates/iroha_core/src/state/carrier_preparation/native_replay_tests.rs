@@ -60,7 +60,12 @@ fn published_native_replay_fixture(atomic: bool) -> Box<PublishedNativeReplayFix
     assert_eq!(batch.groups[0].decisions.len(), if atomic { 2 } else { 1 });
     let finality = fixture.finality(&block, prepared.execution_prefix_commitment());
     let journals = prepared
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .expect("capture the actual executed Native owner");
     let checkpoint = journals.checkpoint;
     let state = fixture.into_shared_state();
@@ -230,7 +235,7 @@ fn exercise_native_replay(atomic: bool, mismatch_checkpoint: bool) {
 }
 
 fn run_native_replay(name: &'static str, atomic: bool, mismatch_checkpoint: bool) {
-    let worker = crate::sumeragi::sumeragi_thread_builder(name)
+    let worker = crate::sumeragi::threads::sumeragi_thread_builder(name)
         .spawn(move || exercise_native_replay(atomic, mismatch_checkpoint))
         .expect("spawn Native replay on the consensus stack");
     if let Err(error) = worker.join() {

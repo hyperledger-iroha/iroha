@@ -1,11 +1,11 @@
 //! FASTPQ lane prover.
 //!
-//! This crate implements the FASTPQ-ISI prover and verifier under development.
-//! It exposes deterministic commitments, the sole first-release V1 parameter
-//! set, and the backend that drives the STARK pipeline. Production qualification
-//! is unavailable: verification still replays the complete statement because
-//! the transfer AIR and cryptographic qualification are incomplete. See the
-//! repository's `specs/fastpq_production_readiness.md` for the completion gates.
+//! This crate implements the FASTPQ-ISI prover and verifier with deterministic
+//! commitments and the sole first-release V1 parameter set. Canonical transfer
+//! artifacts use masked DEEP proofs and bounded verification in every build.
+//! Node and standalone callers share the same implementation and independently
+//! bind authenticated public statements, finality and replay policy.
+//! Validation evidence is recorded in `specs/fastpq_production_readiness.md`.
 //!
 //! The public API is intentionally narrow and uses Norito-friendly types so
 //! callers can persist artifacts without pulling in Serde.
@@ -13,7 +13,6 @@
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![allow(unexpected_cfgs)]
-mod artifact_dispatch;
 mod axt_binding;
 mod backend;
 mod batch;
@@ -63,7 +62,7 @@ pub use axt_binding::{
     AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, AXT_FASTPQ_BINDING_METADATA_KEY,
     AXT_FASTPQ_COMMITTED_AMOUNT_METADATA_KEY, AXT_FASTPQ_DA_COMMITMENT_METADATA_KEY,
     AXT_FASTPQ_EXPIRY_SLOT_METADATA_KEY, AXT_FASTPQ_MANIFEST_ROOT_METADATA_KEY,
-    AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY, AxtFastpqProofPayload, AxtVerifiedProof,
+    AXT_FASTPQ_REMOTE_SPEND_CLAIMS_METADATA_KEY, AxtVerifiedProof,
     DEFAULT_PARAMETER as AXT_DEFAULT_PARAMETER, MAX_AXT_PROOF_BLOB_PAYLOAD_BYTES,
     axt_proof_blob_from_bound_batch, axt_proof_envelope_from_bound_batch, batch_manifest_sha256,
     bind_axt_batch, bind_axt_batch_with_committed_amount, bind_axt_batch_with_proof_metadata,
@@ -73,7 +72,7 @@ pub use axt_binding::{
     verify_axt_proof_envelope, verify_axt_proof_envelope_against_anchor_v1,
     verify_axt_proof_envelope_with_outer_metadata,
 };
-/// Fixed offline quantity-artifact verification; no production admission is granted.
+/// Canonical masked quantity-artifact production and bounded verification.
 pub use backend::offline_compact;
 pub use backend::{
     ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
@@ -106,6 +105,8 @@ pub use digest384_benchmark::{
     Digest384BenchmarkDeviceV1, Digest384BenchmarkInputV1, Digest384BenchmarkReportV1,
     benchmark_digest384_v1,
 };
+#[cfg(feature = "fastpq-gpu")]
+pub use digest384_batch::preflight_digest384_continuation_v1;
 #[cfg(feature = "fastpq-gpu")]
 pub use digest384_gpu::{Digest384GpuBackendV1, Digest384GpuErrorV1, try_hash_digest384_frames_v1};
 pub use error::{Error, Result};

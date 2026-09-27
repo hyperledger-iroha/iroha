@@ -2995,6 +2995,13 @@ fn build_multi_fetch_error_payload(py: Python<'_>, err: MultiSourceError) -> PyR
     let payload = PyDict::new(py);
     payload.set_item("message", err.to_string())?;
     match err {
+        MultiSourceError::ResourceLimit(reason) => {
+            payload.set_item("kind", "resource_limit")?;
+            payload.set_item("reason", reason)?;
+        }
+        MultiSourceError::DeadlineExceeded => {
+            payload.set_item("kind", "deadline_exceeded")?;
+        }
         MultiSourceError::InvalidPlan(reason) => {
             payload.set_item("kind", "invalid_plan")?;
             payload.set_item("reason", reason.to_string())?;

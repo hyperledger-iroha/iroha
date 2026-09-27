@@ -57,12 +57,16 @@ impl crate::sumeragi::v2_apply::validation_custody::CarrierValidator for ActualP
         context: &HeightContext,
         body: &SignedBlock,
     ) -> Result<Self::Owner, Self::Error> {
+        let journal_shells = crate::state::PreparedCarrier::reserve_journal_shells_for_test();
         self.calls.fetch_add(1, Ordering::SeqCst);
         let prepared = prepare(&self.state, body.clone(), &self.topology, context)
             .map_err(|(_, error)| error.to_string())?;
-        match prepared.prepare_journals(self.provider.take(), self.reputation.take(), |_| {
-            Ok::<_, Infallible>(PhaseReservation(Arc::clone(&self.releases)))
-        }) {
+        match prepared.prepare_journals(
+            journal_shells,
+            self.provider.take(),
+            self.reputation.take(),
+            |_| Ok::<_, Infallible>(PhaseReservation(Arc::clone(&self.releases))),
+        ) {
             Ok(journals) => Ok(RetainedPhase::Validated(journals)),
             Err(super::super::super::CarrierJournalPreparationError::ArchivePreparation {
                 carrier,
@@ -840,7 +844,12 @@ fn decided<A>(
 ) -> CheckpointDecision<A> {
     let journals = prepare(state, proposal, topology, context)
         .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(admission))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(admission),
+        )
         .unwrap();
     bind_and_persist(state, context, journals)
 }
@@ -931,9 +940,12 @@ fn fixture_archive_decision() -> (
         .unwrap();
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("real archive execution: {error}"))
-        .prepare_journals(Some(provider_candidate), Some(reputation_candidate), |_| {
-            Ok::<_, Infallible>(())
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            Some(provider_candidate),
+            Some(reputation_candidate),
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let decision = bind_and_persist(&state, &context, journals);
     (directory, state, decision, provider, reputation)
@@ -1430,7 +1442,12 @@ fn source_substitution_refuses_before_state_acquisition_and_retains_original_ret
         ]);
     let mut foreign = prepare(&foreign_state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("foreign real execution: {error}"))
-        .prepare_journals(None, None, |_| Ok::<_, Infallible>(()))
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let before = crate::snapshot::canonical_state_snapshot_hash(&state).unwrap();
     let generation = state.state_view_generation();
@@ -1819,7 +1836,10 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     let world_probe = state
         .world
         .block()
-        .try_detach_journals(|_| Ok::<_, Infallible>(()))
+        .try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |_| Ok::<_, Infallible>(()),
+        )
         .unwrap();
     let runtime_probe = super::super::super::runtime_journals::RuntimeJournals::capture(
         state.canonical_runtime.block(),
@@ -1845,7 +1865,7 @@ fn aggregate_acquisition_holds_every_family_without_publishing_or_losing_origina
     assert_eq!(state.committed_height(), 0);
     assert_eq!(state.state_view_generation(), generation);
     assert!(matches!(
-        world_probe.try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(())),
+        world_probe.try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(())),
         Err((_, WorldPublicationError::Field(_), _))
     ));
     assert!(matches!(
@@ -2041,7 +2061,7 @@ fn geometry_backend_contention_releases_writers_and_waits_for_actual_backend_rel
 #[test]
 fn lifecycle_effect_refusal_precedes_storage_and_preserves_exact_retry() {
     let handle =
-        crate::sumeragi::sumeragi_thread_builder("lifecycle-effect-refusal-preserves-retry")
+        crate::sumeragi::threads::sumeragi_thread_builder("lifecycle-effect-refusal-preserves-retry")
             .spawn(lifecycle_effect_refusal_on_consensus_stack)
             .expect("spawn physical-publication test on the production consensus stack");
     if let Err(payload) = handle.join() {
@@ -2096,13 +2116,18 @@ fn original_capture_reservation_survives_physical_refusal_and_exact_retry() {
     let budget = AllocationBudget::new(64 << 20);
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
-        .prepare_journals(None, None, |inputs| {
-            let bytes = inputs
-                .world_journal_shell_bytes()?
-                .checked_add(inputs.retained_effects_layout.size())
-                .ok_or(AllocationRefusal::DemandOverflow)?;
-            budget.try_reserve_bytes(bytes)
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
+            None,
+            None,
+            |inputs| {
+                let bytes = inputs
+                    .world_journal_shell_bytes()?
+                    .checked_add(inputs.retained_effects_layout.size())
+                    .ok_or(AllocationRefusal::DemandOverflow)?;
+                budget.try_reserve_bytes(bytes)
+            },
+        )
         .unwrap();
     let reserved = budget.reserved_bytes();
     assert!(reserved > 0);
@@ -2291,18 +2316,23 @@ fn original_reservation_outlives_component_writers_and_state_fences_on_drop_and_
         let budget = mv::allocation::AllocationBudget::new(64 << 20);
         let journals = prepare(&state, proposal, &topology, &context)
             .unwrap_or_else(|(_, error)| panic!("real execution: {error}"))
-            .prepare_journals(None, None, |inputs| {
-                let bytes = inputs
-                    .world_journal_shell_bytes()?
-                    .checked_add(inputs.retained_effects_layout.size())
-                    .ok_or(mv::allocation::AllocationRefusal::DemandOverflow)?;
-                Ok::<_, mv::allocation::AllocationRefusal>(Reservation {
-                    state: &state,
-                    name: "capture",
-                    released: Arc::clone(&released),
-                    _allocation: budget.try_reserve_bytes(bytes)?,
-                })
-            })
+            .prepare_journals(
+                crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
+                None,
+                None,
+                |inputs| {
+                    let bytes = inputs
+                        .world_journal_shell_bytes()?
+                        .checked_add(inputs.retained_effects_layout.size())
+                        .ok_or(mv::allocation::AllocationRefusal::DemandOverflow)?;
+                    Ok::<_, mv::allocation::AllocationRefusal>(Reservation {
+                        state: &state,
+                        name: "capture",
+                        released: Arc::clone(&released),
+                        _allocation: budget.try_reserve_bytes(bytes)?,
+                    })
+                },
+            )
             .unwrap();
         let reserved = budget.reserved_bytes();
         assert!(reserved > 0);
@@ -2840,11 +2870,14 @@ fn carrier_abort_drop_and_unwind_release_all_original_fences_before_component_wa
         let competitor = state
             .world
             .block()
-            .try_detach_journals(|_| Ok::<_, Infallible>(()))
+            .try_detach_journals(
+                crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+                |_| Ok::<_, Infallible>(()),
+            )
             .unwrap();
         let prepared = acquire(decision, &state);
         let (competitor, error, _cleanup) = competitor
-            .try_prepare_publication(&state.world, None, |_, _| Ok::<_, Infallible>(()))
+            .try_prepare_publication(&state.world, |_, _| Ok::<_, Infallible>(()))
             .err()
             .unwrap();
         drop(_cleanup);
@@ -2951,13 +2984,18 @@ fn retained_publication_facade_refuses_foreign_authority_before_io_and_retries_o
     let budget = AllocationBudget::new(64 << 20);
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("actual original execution: {error}"))
-        .prepare_journals(None, None, |inputs| {
-            let bytes = inputs
-                .world_journal_shell_bytes()?
-                .checked_add(inputs.retained_effects_layout.size())
-                .ok_or(AllocationRefusal::DemandOverflow)?;
-            budget.try_reserve_bytes(bytes)
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
+            None,
+            None,
+            |inputs| {
+                let bytes = inputs
+                    .world_journal_shell_bytes()?
+                    .checked_add(inputs.retained_effects_layout.size())
+                    .ok_or(AllocationRefusal::DemandOverflow)?;
+                budget.try_reserve_bytes(bytes)
+            },
+        )
         .unwrap();
     let reserved = budget.reserved_bytes();
     assert!(reserved > 0);
@@ -3093,9 +3131,12 @@ fn retained_publication_orders_replay_metadata_before_finality_at_each_durable_c
     let releases = Arc::new(AtomicUsize::new(0));
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("original execution: {error}"))
-        .prepare_journals(None, None, |_| {
-            Ok::<_, Infallible>(PhaseReservation(Arc::clone(&releases)))
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(PhaseReservation(Arc::clone(&releases))),
+        )
         .unwrap();
     let finality = signed_finality(
         context,

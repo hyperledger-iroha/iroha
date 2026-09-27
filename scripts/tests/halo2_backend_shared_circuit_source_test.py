@@ -4,8 +4,12 @@
 The two audited shards reuse the fixed ``zk::pasta_tiny`` circuits instead of
 redeclaring equivalent Halo2 ``Circuit`` implementations inside individual
 tests.  This guard authenticates the historical preimages and the current
-post-migration test inventories, pins the shared circuit implementations, and
-tracks the callback-bearing permutation test separately across the migration.
+test inventories, pins the shared circuit implementations, and tracks
+the callback-bearing permutation test separately. Current token fingerprints
+retain every assertion while allowing comment/formatting edits. The reviewed
+inventory replaces removed runtime-key cache and toy authorization fixtures with
+packaged-key cache reuse, Kaigi authorization, and final confidential transfer
+acceptance plus rejection under the retired backend label.
 """
 
 from __future__ import annotations
@@ -16,6 +20,8 @@ import subprocess
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+
+from zk_source_tokens import token_hash
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +39,7 @@ class ShardContract:
     preimage_sha256: str
     opening_lines: int
     line_ceiling: int
-    postimage_sha256: str
+    code_sha256: str
     preimage_tests: tuple[str, ...]
     tests: tuple[str, ...]
 
@@ -46,9 +52,9 @@ SHARDS = (
             "f131f0e3c9efeeb90364bce5c6679bf8b2ca4b3d3d0b277e5e1307b2bcaa6fe6"
         ),
         opening_lines=1_710,
-        line_ceiling=1_065,
-        postimage_sha256=(
-            "ae11bcdbb3754eafe12d08c0e62e3409347f188502e8ba543f0522955d1863d2"
+        line_ceiling=1_045,
+        code_sha256=(
+            "64fa29d6673d488074651574bb36df679c2091655ea44a071ebb4ed6e9f4d4aa"
         ),
         preimage_tests=(
             "vote_bool_commit_merkle8_mock_prover_succeeds",
@@ -85,11 +91,10 @@ SHARDS = (
             "tiny_merkle2_rejects_additive_placeholder_root",
             "anon_transfer_commit_rejects_unshifted_placeholder_commitment",
             "vote_bool_merkle2_rejects_stale_merkle_shortcut",
-            "vk_cache_reuses_entries",
             "verifier_key_cache_rejects_parseable_key_for_another_circuit",
             "packaged_vk_cache_rejects_unparseable_key_without_runtime_keygen",
             "zk1_envelope_pasta_ipa_verify_add_public",
-            "kaigi_roster_backend_accepts_valid_proof",
+            "kaigi_authorization_backend_accepts_valid_proof",
             "kaigi_usage_backend_accepts_valid_proof",
             "proof_hash_stable",
             "proof_and_vk_hash_domains_are_distinct",
@@ -114,9 +119,9 @@ SHARDS = (
             "2bf04114dd343ce6533185813d3bd3dea1bb1bd393f65b67bdb85e351bc21858"
         ),
         opening_lines=1_904,
-        line_ceiling=906,
-        postimage_sha256=(
-            "945fa60cca5f019755a3cac229a4e2c529d5c69bbf44f2dc43d3acf8b4270948"
+        line_ceiling=926,
+        code_sha256=(
+            "2015073787262c35f9d304502906bff71fddb622f7d846ca672fb3a26e9579c2"
         ),
         preimage_tests=(
             "halo2_verify_anon_transfer_2x2_merkle8_poseidon_ipa_zk1_noncanonical",
@@ -156,7 +161,7 @@ SHARDS = (
             "halo2_verify_tiny_commit_open_ipa_zk1_permutation_harness",
             "halo2_verify_zk1_prof_length_exceeds_cap_rejected",
             "halo2_verify_add2inst_public_ipa",
-            "halo2_verify_anon_transfer_ipa",
+            "halo2_verify_final_confidential_transfer_ipa",
             "halo2_verify_vote_bool_ipa",
             "halo2_verify_id_public_ipa_with_and_without_inst",
             "halo2_verify_with_instance_add_ipa",
@@ -361,8 +366,8 @@ def _validate_sources(shard_sources: tuple[str, str], zk_source: str) -> None:
             raise GuardError(f"shared circuit contract drifted for {name}")
 
     for shard, source in zip(SHARDS, shard_sources):
-        if _sha256(source) != shard.postimage_sha256:
-            raise GuardError(f"postimage digest drifted for {shard.path}")
+        if token_hash(source) != shard.code_sha256:
+            raise GuardError(f"current code/assertion contract drifted for {shard.path}")
 
 
 class Halo2BackendSharedCircuitSourceTest(unittest.TestCase):
@@ -375,6 +380,11 @@ class Halo2BackendSharedCircuitSourceTest(unittest.TestCase):
 
     def test_shared_circuit_compaction_contract(self) -> None:
         _validate_sources(self.sources, self.zk_source)
+
+    def test_comments_do_not_pin_obsolete_source_bytes(self) -> None:
+        changed = self.sources[0].replace("//", "// Reviewed: ", 1)
+        self.assertNotEqual(changed, self.sources[0])
+        _validate_sources((changed, self.sources[1]), self.zk_source)
 
     def test_mutations_fail_closed(self) -> None:
         mutations: list[tuple[tuple[str, str], str]] = []
@@ -391,8 +401,39 @@ class Halo2BackendSharedCircuitSourceTest(unittest.TestCase):
         forbidden = self.sources[1] + "\nmacro_rules! body { () => {} }\n"
         mutations.append(((self.sources[0], forbidden), self.zk_source))
 
-        oversized = self.sources[0] + "\n" * 2
+        oversized = self.sources[0] + "\n" * SHARDS[0].line_ceiling
         mutations.append(((oversized, self.sources[1]), self.zk_source))
+
+        # Cache reuse remains covered after the retired runtime-key cache test
+        # disappeared; the final confidential fixture also rejects relabeling.
+        cache_assertion = self.sources[0].replace(
+            "assert!(Arc::ptr_eq(&packaged, &packaged_again));",
+            "assert!(Arc::ptr_eq(&packaged, &packaged));",
+            1,
+        )
+        self.assertNotEqual(cache_assertion, self.sources[0])
+        mutations.append(((cache_assertion, self.sources[1]), self.zk_source))
+        final_backend = self.sources[1].replace(
+            "halo2/pasta/tiny-anon-transfer-2x2", "halo2/pasta/unknown", 1
+        )
+        self.assertNotEqual(final_backend, self.sources[1])
+        mutations.append(((self.sources[0], final_backend), self.zk_source))
+
+        # The renamed public binding circuit retains the exact mismatch-key
+        # rejection; silently restoring an execution-proof label is forbidden.
+        retired_binding = self.sources[0].replace(
+            "IVM_REPLAY_BINDING_V1_HALO2_BACKEND", "IVM_EXECUTION_V1_HALO2_BACKEND", 1
+        )
+        self.assertNotEqual(retired_binding, self.sources[0])
+        mutations.append(((retired_binding, self.sources[1]), self.zk_source))
+
+        short_cid = self.sources[0].replace(
+            "circuit_id: IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID.to_owned()",
+            "circuit_id: IVM_REPLAY_BINDING_V1_CIRCUIT_ID.to_owned()",
+            1,
+        )
+        self.assertNotEqual(short_cid, self.sources[0])
+        mutations.append(((short_cid, self.sources[1]), self.zk_source))
 
         add_start = self.zk_source.index("impl Circuit<Scalar> for Add {")
         zk_mutation = self.zk_source[:add_start] + self.zk_source[add_start:].replace(

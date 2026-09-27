@@ -24,6 +24,38 @@ use std::{
     time::Duration,
 };
 
+// Admitted indexes publish an untouched replacement through their finite pool;
+// they deliberately have no unbudgeted Block::commit operation.
+macro_rules! commit_untouched_fixture_field {
+    ($world:ident, kagemusha_mint_credit_operations) => {
+        $world
+            .kagemusha_mint_credit_operations
+            .try_with_admitted_block(|_| Ok::<(), ()>(()))
+            .unwrap()
+    };
+    ($world:ident, kagemusha_issuance_operations) => {
+        $world
+            .kagemusha_issuance_operations
+            .try_with_admitted_block(|_| Ok::<(), ()>(()))
+            .unwrap()
+    };
+    ($world:ident, kagemusha_redemption_id_operations) => {
+        $world
+            .kagemusha_redemption_id_operations
+            .try_with_admitted_block(|_| Ok::<(), ()>(()))
+            .unwrap()
+    };
+    ($world:ident, kagemusha_terminal_nullifier_operations) => {
+        $world
+            .kagemusha_terminal_nullifier_operations
+            .try_with_admitted_block(|_| Ok::<(), ()>(()))
+            .unwrap()
+    };
+    ($world:ident, $field:ident) => {
+        $world.$field.block().commit()
+    };
+}
+
 #[path = "world_publication_tests.rs"]
 mod publication_tests;
 
@@ -32,7 +64,12 @@ fn path(value: &str) -> StatePath {
 }
 
 fn capture(block: WorldBlock<'_>) -> DetachedWorld<()> {
-    block.try_detach_journals(|_| Ok::<(), ()>(())).unwrap()
+    block
+        .try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |_| Ok::<(), ()>(()),
+        )
+        .unwrap()
 }
 
 fn fixture() -> Arc<World> {
@@ -150,32 +187,35 @@ fn ordinary_world_capture_retains_deltas_events_catalog_and_releases_every_write
     let dropped = Arc::new(AtomicBool::new(false));
     let calls = AtomicUsize::new(0);
     let detached = original
-        .try_detach_journals(|inputs| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(
-                inputs.smart_contract_state.get(&path("capture/value")),
-                Some(&vec![2])
-            );
-            assert!(
-                inputs
-                    .smart_contract_state
-                    .get(&path("capture/aborted"))
-                    .is_none()
-            );
-            assert_eq!(*inputs.soradns_last_publish_ms.get(), Some(20));
-            Ok::<_, ()>(Reservation(Arc::clone(&dropped)))
-        })
+        .try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |inputs| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(
+                    inputs.smart_contract_state.get(&path("capture/value")),
+                    Some(&vec![2])
+                );
+                assert!(
+                    inputs
+                        .smart_contract_state
+                        .get(&path("capture/aborted"))
+                        .is_none()
+                );
+                assert_eq!(*inputs.soradns_last_publish_ms.get(), Some(20));
+                Ok::<_, ()>(Reservation(Arc::clone(&dropped)))
+            },
+        )
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     assert_eq!(detached.mode(), BlockMode::Ordinary);
-    assert_eq!(detached.field_count(), 283);
+    assert_eq!(detached.field_count(), 285);
     assert_eq!(
         detached
             .fields()
             .map(|field| field.name)
             .collect::<BTreeSet<_>>()
             .len(),
-        283
+        285
     );
     assert_eq!(
         detached
@@ -382,14 +422,17 @@ fn admission_refusal_releases_all_writers_and_preserves_current_and_undo() {
             .insert(path("capture/value"), vec![7]);
         register_trigger(&mut original, "refused_trigger");
         let calls = AtomicUsize::new(0);
-        let result = original.try_detach_journals(|inputs| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            assert_eq!(
-                inputs.smart_contract_state.get(&path("capture/value")),
-                Some(&vec![7])
-            );
-            Err::<(), _>("resource bound")
-        });
+        let result = original.try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |inputs| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                assert_eq!(
+                    inputs.smart_contract_state.get(&path("capture/value")),
+                    Some(&vec![7])
+                );
+                Err::<(), _>("resource bound")
+            },
+        );
         assert!(matches!(
             result,
             Err(CaptureError::Admission("resource bound"))
@@ -416,10 +459,13 @@ fn mismatched_cell_or_trigger_mode_refuses_before_the_world_admission() {
             );
         }
         let calls = AtomicUsize::new(0);
-        let result = original.try_detach_journals(|_| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            Ok::<(), ()>(())
-        });
+        let result = original.try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), ()>(())
+            },
+        );
         match result {
             Err(CaptureError::InconsistentMode {
                 field,
@@ -452,13 +498,13 @@ fn every_inventory_field_binds_untouched_current_and_undo_publications() {
     macro_rules! invalidators {
         (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {
             [
-                $((stringify!($prefix), |world: &World| world.$prefix.block().commit()),)*
-                $((stringify!($privacy), |world: &World| world.$privacy.block().commit()),)*
-                $((stringify!($suffix), |world: &World| world.$suffix.block().commit()),)*
+                $((stringify!($prefix), |world: &World| commit_untouched_fixture_field!(world, $prefix)),)*
+                $((stringify!($privacy), |world: &World| commit_untouched_fixture_field!(world, $privacy)),)*
+                $((stringify!($suffix), |world: &World| commit_untouched_fixture_field!(world, $suffix)),)*
             ]
         };
     }
-    let owners: [(&str, fn(&World)); 283] = with_world_overlay_fields!(invalidators);
+    let owners: [(&str, fn(&World)); 285] = with_world_overlay_fields!(invalidators);
     let world = fixture();
     for (name, publish_same_values) in owners {
         let detached = capture(world.block());
@@ -484,7 +530,10 @@ fn detached_world_is_static_and_does_not_retain_its_original_world() {
         .smart_contract_state
         .insert(path("capture/value"), vec![8]);
     let detached = original
-        .try_detach_journals(|_| Ok::<_, ()>(Reservation(Arc::clone(&dropped))))
+        .try_detach_journals(
+            crate::state::world_journals::resources::WorldJournalShellReservation::for_test(),
+            |_| Ok::<_, ()>(Reservation(Arc::clone(&dropped))),
+        )
         .unwrap();
     assert_all_writers_released(&world);
     drop(world);

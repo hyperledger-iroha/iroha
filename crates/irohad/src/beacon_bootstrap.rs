@@ -1,9 +1,8 @@
-//! Native centralized fresh-DKG bootstrap under one deployment custody owner.
+//! Per-seat authenticated genesis and rotation beacon DKG with exact-quorum finalization.
 //!
-//! Dealer secrets remain process-local while the controller supplies authenticated
-//! committed heights. A failed ceremony is not resumable. Only public transcript
-//! material and final per-seat supervisor credentials are exported; no dealer
-//! polynomial or plaintext dealer-to-recipient exchange is persisted.
+//! Each provision process owns one dealer secret and one recipient key. Public
+//! frames are signed, phase heights are independently finality-verified, and a
+//! failed attempt is never rerolled in the same owner-private journal root.
 
 use crate::external_software_signer::{
     GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1, RuntimeGlobalBeaconShareProvisioningV1,
@@ -14,25 +13,25 @@ use crate::external_software_signer::{
 use clap::{Parser, Subcommand};
 use iroha_core::beacon::{
     AdaptiveGlobalThresholdBeaconDkgCryptoV1, FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    GlobalThresholdBeaconDkgPhaseV1, GlobalThresholdBeaconDkgStateV1,
-    global_threshold_beacon_roster_hash_v1,
+    GlobalThresholdBeaconDkgSnapshotV1, GlobalThresholdBeaconDkgStateV1,
+    LocalGlobalThresholdBeaconDkgSeatV1, global_threshold_beacon_roster_hash_v1,
 };
 use iroha_core::state::{
     THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
     threshold_key_lifecycle_certificate_preimage_v1, verify_threshold_key_lifecycle_certificate_v1,
 };
-use iroha_crypto::{
-    Algorithm, ExposedPrivateKey, KeyPair, PublicKey, Signature,
-    threshold_bls::{
-        AdaptiveThresholdBlsParameters, AdaptiveThresholdBlsPublicTranscript,
-        AdaptiveThresholdBlsSecretShare, BeaconPurpose, DasRenDealerSecret, ThresholdBlsSession,
-        ValidatedDealerCommitment,
-    },
+use iroha_core::validator_committee_evidence::{
+    COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1, ValidatorCommitteeSelectionEvidenceV1,
+    VerifiedValidatorCommitteeSelectionV1, verify_validator_committee_selection_evidence_v1,
 };
+use iroha_crypto::{Algorithm, ExposedPrivateKey, Hash, HashOf, KeyPair, PublicKey, Signature};
 use iroha_data_model::{
+    NetworkId,
+    block::consensus_v2::HeightContextId,
+    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::{
-        GlobalThresholdBeaconDkgConstantProofV1, GlobalThresholdBeaconDkgDealerCommitmentV1,
-        GlobalThresholdBeaconDkgSessionV1,
+        GlobalThresholdBeaconDkgSessionV1, GlobalThresholdBeaconKeySessionV1,
+        v2::is_valid_committee_size,
     },
     isi::{
         InstructionBox,
@@ -41,6 +40,7 @@ use iroha_data_model::{
             ThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleSignatureV1,
         },
     },
+    nexus::ValidatorCommitteePreparationV1,
 };
 use iroha_model_base::peer::PeerId;
 use norito::derive::{JsonDeserialize, JsonSerialize};
@@ -51,16 +51,21 @@ use std::{
     io::{Read as _, Write as _},
     os::{fd::BorrowedFd, unix::fs::MetadataExt as _},
     path::{Component, Path, PathBuf},
-    str::FromStr as _,
     time::{Duration, Instant},
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
+mod genesis_seat;
+mod rotation_seat;
+use rotation_seat::provision_rotation_seat_command;
+
 const MAX_PUBLIC_BYTES: usize = 32 * 1024 * 1024;
+const MAX_ROTATION_PHASE_PROOF_BYTES: usize = 4 * 1024 * 1024;
 const MAX_TIMEOUT_MS: u64 = 3_600_000;
+const ROTATION_PENDING_SHARE_NAME: &str = "pending-share.bin";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Error {
+pub(crate) enum Error {
     InvalidInput,
     InvalidCustody,
     Crypto,
@@ -85,7 +90,7 @@ type Result<T> = std::result::Result<T, Error>;
 #[derive(Parser)]
 #[command(
     name = "iroha3d_taira beacon-bootstrap",
-    about = "Prepare a fresh global beacon under centralized deployment custody; never submits a transaction"
+    about = "Run one-seat beacon DKG and exact-quorum lifecycle finalization; never submits a transaction"
 )]
 struct Args {
     #[command(subcommand)]
@@ -93,46 +98,145 @@ struct Args {
 }
 #[derive(Subcommand)]
 enum Command {
-    /// Keep fresh dealer secrets in memory across actual committed DKG heights.
-    Provision {
-        #[arg(long)]
-        request: PathBuf,
-        #[arg(long)]
-        genesis_manifest: PathBuf,
-        #[arg(long)]
-        genesis_signed: PathBuf,
-        #[arg(long)]
-        genesis_public_key: PathBuf,
-        #[arg(long)]
-        observed_height: u64,
-        #[arg(long)]
-        height_fd: i32,
-        #[arg(long)]
-        output: PathBuf,
-        #[arg(long, default_value_t = 180_000)]
-        timeout_ms: u64,
-    },
-    /// Sign the exact installation draft with one authorization-roster runtime key.
-    SignInstall {
-        #[arg(long)]
-        bundle: PathBuf,
+    /// Run one signed-genesis voting seat's authenticated, one-shot DKG process.
+    ProvisionGenesisSeat {
+        #[command(flatten)]
+        genesis: GenesisProofArgs,
         #[arg(long)]
         signer_index: u16,
-        /// Canonical BLS key record on the consumed supervisor descriptor 198.
         #[arg(
             long,
             conflicts_with = "config_fd",
             required_unless_present = "config_fd"
         )]
         key_fd: Option<i32>,
-        /// Native validator configuration on the consumed supervisor descriptor 198.
+        #[arg(long, conflicts_with = "key_fd", required_unless_present = "key_fd")]
+        config_fd: Option<i32>,
+        #[arg(long)]
+        public_fd: i32,
+        #[arg(long)]
+        finality_fd: i32,
+        #[arg(long)]
+        attempt_root: PathBuf,
+        #[arg(long, default_value_t = 180_000)]
+        timeout_ms: u64,
+    },
+    /// Assemble only the all-seat signed genesis DKG and unsigned install draft.
+    AssembleGenesisDkg {
+        #[command(flatten)]
+        genesis: GenesisProofArgs,
+        #[arg(long, required = true, num_args = 1..)]
+        phase_proof: Vec<PathBuf>,
+        #[arg(long)]
+        public_session: PathBuf,
+        #[arg(long, required = true, num_args = 1..)]
+        provider: Vec<PathBuf>,
+        #[arg(long)]
+        certificate_height: u64,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Sign one signed-genesis-roster FinalizeGlobalBeaconKey draft.
+    SignGenesisInstall {
+        #[arg(long)]
+        network_id: NetworkId,
+        #[arg(long)]
+        chain_discriminant: u16,
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        signer_index: u16,
+        #[arg(
+            long,
+            conflicts_with = "config_fd",
+            required_unless_present = "config_fd"
+        )]
+        key_fd: Option<i32>,
         #[arg(long, conflicts_with = "key_fd", required_unless_present = "key_fd")]
         config_fd: Option<i32>,
         #[arg(long)]
         output: PathBuf,
     },
-    /// Verify exact-roster lifecycle signatures and emit the actual native instruction.
-    AssembleInstall {
+    /// Verify the exact genesis quorum and emit only the native install instruction.
+    AssembleGenesisInstall {
+        #[arg(long)]
+        network_id: NetworkId,
+        #[arg(long)]
+        chain_discriminant: u16,
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long, required = true, num_args = 1..)]
+        signature: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Run one target seat's authenticated, one-shot rotation DKG process.
+    ProvisionRotationSeat {
+        #[command(flatten)]
+        proof: RotationProofArgs,
+        #[arg(long)]
+        signer_index: u16,
+        #[arg(
+            long,
+            conflicts_with = "config_fd",
+            required_unless_present = "config_fd"
+        )]
+        key_fd: Option<i32>,
+        #[arg(long, conflicts_with = "key_fd", required_unless_present = "key_fd")]
+        config_fd: Option<i32>,
+        #[arg(long)]
+        public_fd: i32,
+        #[arg(long)]
+        finality_fd: i32,
+        #[arg(long)]
+        provider_handle: String,
+        #[arg(long)]
+        provider_revision: u64,
+        /// Existing owner-private root; the exact attempt/seat child is derived by the daemon.
+        #[arg(long)]
+        attempt_root: PathBuf,
+        #[arg(long, default_value_t = 180_000)]
+        timeout_ms: u64,
+    },
+    /// Assemble only signed all-seat public DKG material for current-quorum review.
+    AssembleRotationDkg {
+        #[command(flatten)]
+        proof: RotationProofArgs,
+        #[arg(long)]
+        public_session: PathBuf,
+        /// Canonical finality proofs for every height after selection through DKG finalization.
+        #[arg(long, required = true, num_args = 1..)]
+        phase_proof: Vec<PathBuf>,
+        #[arg(long, required = true, num_args = 1..)]
+        provider: Vec<PathBuf>,
+        #[arg(long)]
+        certificate_height: u64,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Sign one exact current-quorum FinalizeGlobalBeaconKey draft.
+    SignRotation {
+        #[command(flatten)]
+        proof: RotationProofArgs,
+        #[arg(long)]
+        bundle: PathBuf,
+        #[arg(long)]
+        signer_index: u16,
+        #[arg(
+            long,
+            conflicts_with = "config_fd",
+            required_unless_present = "config_fd"
+        )]
+        key_fd: Option<i32>,
+        #[arg(long, conflicts_with = "key_fd", required_unless_present = "key_fd")]
+        config_fd: Option<i32>,
+        #[arg(long)]
+        output: PathBuf,
+    },
+    /// Verify the current exact quorum and emit only the native finalization instruction.
+    AssembleRotation {
+        #[command(flatten)]
+        proof: RotationProofArgs,
         #[arg(long)]
         bundle: PathBuf,
         #[arg(long, required = true, num_args = 1..)]
@@ -142,16 +246,40 @@ enum Command {
     },
 }
 
-#[derive(Clone, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct Request {
-    schema: String,
-    dkg_session: GlobalThresholdBeaconDkgSessionV1,
-    target_roster: Vec<PeerId>,
-    authorization_roster: Vec<PeerId>,
-    provider_handles: Vec<String>,
-    provider_revision: u64,
+#[derive(clap::Args)]
+struct GenesisProofArgs {
+    #[arg(long)]
+    network_id: NetworkId,
+    #[arg(long)]
+    chain_discriminant: u16,
+    #[arg(long)]
+    request: PathBuf,
+    #[arg(long)]
+    genesis_manifest: PathBuf,
+    #[arg(long)]
+    genesis_signed: PathBuf,
+    #[arg(long)]
+    genesis_public_key: PathBuf,
+    #[arg(long)]
+    genesis_finality: PathBuf,
 }
+
+#[derive(clap::Args)]
+struct RotationProofArgs {
+    #[arg(long)]
+    selection_evidence: PathBuf,
+    #[arg(long)]
+    network_id: NetworkId,
+    #[arg(long)]
+    trusted_context_id: Hash,
+    #[arg(long)]
+    anchor_height: u64,
+    #[arg(long)]
+    target_epoch: u64,
+    #[arg(long)]
+    transition_id: Hash,
+}
+
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct Provider {
@@ -163,20 +291,14 @@ struct Provider {
 }
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
-struct GenesisProof {
-    manifest: iroha_genesis::RawGenesisTransaction,
-    signed_wire: Vec<u8>,
-    public_key: PublicKey,
-}
-#[derive(Clone, JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct PublicBundle {
+struct RotationPublicBundle {
     schema: String,
-    genesis: GenesisProof,
-    request: Request,
+    preparation: ValidatorCommitteePreparationV1,
+    dkg_session: GlobalThresholdBeaconDkgSessionV1,
     finalized_observed_height: u64,
+    phase_proofs: Vec<BridgeFinalityProof>,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    certificate: ThresholdKeyLifecycleCertificateV1,
+    finalization_draft: ThresholdKeyLifecycleCertificateV1,
     providers: Vec<Provider>,
 }
 
@@ -192,37 +314,134 @@ pub(crate) fn dispatch_if_requested() -> bool {
     );
     let parsed = Args::parse_from(std::iter::once(OsString::from("beacon-bootstrap")).chain(args));
     let result = match parsed.command {
-        Command::Provision {
-            request,
-            genesis_manifest,
-            genesis_signed,
-            genesis_public_key,
-            observed_height,
-            height_fd,
-            output,
+        Command::ProvisionGenesisSeat {
+            genesis,
+            signer_index,
+            key_fd,
+            config_fd,
+            public_fd,
+            finality_fd,
+            attempt_root,
             timeout_ms,
-        } => provision_command(
-            &request,
-            &genesis_manifest,
-            &genesis_signed,
-            &genesis_public_key,
-            observed_height,
-            height_fd,
-            &output,
+        } => genesis_seat::provision_genesis_seat_command(
+            genesis.network_id,
+            genesis.chain_discriminant,
+            &genesis.request,
+            &genesis.genesis_manifest,
+            &genesis.genesis_signed,
+            &genesis.genesis_public_key,
+            &genesis.genesis_finality,
+            signer_index,
+            key_fd,
+            config_fd,
+            public_fd,
+            finality_fd,
+            &attempt_root,
             timeout_ms,
         ),
-        Command::SignInstall {
+        Command::AssembleGenesisDkg {
+            genesis,
+            phase_proof,
+            public_session,
+            provider,
+            certificate_height,
+            output,
+        } => genesis_seat::assemble_genesis_dkg_command(
+            genesis.network_id,
+            genesis.chain_discriminant,
+            &genesis.request,
+            &genesis.genesis_manifest,
+            &genesis.genesis_signed,
+            &genesis.genesis_public_key,
+            &genesis.genesis_finality,
+            &phase_proof,
+            &public_session,
+            &provider,
+            certificate_height,
+            &output,
+        ),
+        Command::SignGenesisInstall {
+            network_id,
+            chain_discriminant,
             bundle,
             signer_index,
             key_fd,
             config_fd,
             output,
-        } => sign_command(&bundle, signer_index, key_fd, config_fd, &output),
-        Command::AssembleInstall {
+        } => genesis_seat::sign_genesis_install_command(
+            network_id,
+            chain_discriminant,
+            &bundle,
+            signer_index,
+            key_fd,
+            config_fd,
+            &output,
+        ),
+        Command::AssembleGenesisInstall {
+            network_id,
+            chain_discriminant,
             bundle,
             signature,
             output,
-        } => assemble_command(&bundle, &signature, &output),
+        } => genesis_seat::assemble_genesis_install_command(
+            network_id,
+            chain_discriminant,
+            &bundle,
+            &signature,
+            &output,
+        ),
+        Command::ProvisionRotationSeat {
+            proof,
+            signer_index,
+            key_fd,
+            config_fd,
+            public_fd,
+            finality_fd,
+            provider_handle,
+            provider_revision,
+            attempt_root,
+            timeout_ms,
+        } => provision_rotation_seat_command(
+            &proof,
+            signer_index,
+            key_fd,
+            config_fd,
+            public_fd,
+            finality_fd,
+            &provider_handle,
+            provider_revision,
+            &attempt_root,
+            timeout_ms,
+        ),
+        Command::AssembleRotationDkg {
+            proof,
+            public_session,
+            phase_proof,
+            provider,
+            certificate_height,
+            output,
+        } => rotation_seat::assemble_rotation_dkg_command(
+            &proof,
+            &public_session,
+            &phase_proof,
+            &provider,
+            certificate_height,
+            &output,
+        ),
+        Command::SignRotation {
+            proof,
+            bundle,
+            signer_index,
+            key_fd,
+            config_fd,
+            output,
+        } => sign_rotation_command(&proof, &bundle, signer_index, key_fd, config_fd, &output),
+        Command::AssembleRotation {
+            proof,
+            bundle,
+            signature,
+            output,
+        } => assemble_rotation_command(&proof, &bundle, &signature, &output),
     };
     if let Err(error) = result {
         eprintln!("{error}");
@@ -238,359 +457,6 @@ fn require_budget(deadline: Instant) -> Result<()> {
         Ok(())
     }
 }
-fn validate_roster(roster: &[PeerId]) -> Result<()> {
-    // This owner is the current four-validator centralized deployment ceremony.
-    if roster.len() != 4 || roster.iter().collect::<BTreeSet<_>>().len() != 4 {
-        return Err(Error::InvalidInput);
-    }
-    Ok(())
-}
-fn validate_request(
-    request: &Request,
-    observed_height: u64,
-) -> Result<GlobalThresholdBeaconDkgStateV1> {
-    validate_roster(&request.target_roster)?;
-    validate_roster(&request.authorization_roster)?;
-    let session = &request.dkg_session;
-    if request.schema != "iroha.global-beacon.bootstrap.request.v1"
-        || session.committee_size != 4
-        || session.threshold != 2
-        || session.roster_hash != global_threshold_beacon_roster_hash_v1(&request.target_roster)
-        || request.provider_handles.len() != 4
-        || request.provider_revision == 0
-        || request
-            .provider_handles
-            .iter()
-            .collect::<BTreeSet<_>>()
-            .len()
-            != 4
-        || request
-            .provider_handles
-            .iter()
-            .any(|h| iroha_config::parameters::validate_production_runtime_handle(h).is_err())
-    {
-        return Err(Error::InvalidInput);
-    }
-    let state =
-        GlobalThresholdBeaconDkgStateV1::new(*session, &AdaptiveGlobalThresholdBeaconDkgCryptoV1)
-            .map_err(|_| Error::Crypto)?;
-    if observed_height == 0
-        || state.phase_at(observed_height) != GlobalThresholdBeaconDkgPhaseV1::Sharing
-    {
-        return Err(Error::Height);
-    }
-    Ok(state)
-}
-fn parameters(
-    session: &GlobalThresholdBeaconDkgSessionV1,
-) -> Result<AdaptiveThresholdBlsParameters<BeaconPurpose>> {
-    let typed = ThresholdBlsSession::<BeaconPurpose>::new(
-        *session.network_id.as_bytes(),
-        session.session_id,
-        session.roster_hash,
-        session.committee_size,
-        session.threshold,
-    )
-    .map_err(|_| Error::Crypto)?;
-    AdaptiveThresholdBlsParameters::derive(&typed).map_err(|_| Error::Crypto)
-}
-fn dealer_dto(
-    dealer: &ValidatedDealerCommitment<BeaconPurpose>,
-) -> GlobalThresholdBeaconDkgDealerCommitmentV1 {
-    GlobalThresholdBeaconDkgDealerCommitmentV1 {
-        dealer_index: dealer.dealer_index(),
-        coefficient_commitments: dealer
-            .coefficients()
-            .iter()
-            .map(|c| *c.as_bytes())
-            .collect(),
-        constant_term_proof: GlobalThresholdBeaconDkgConstantProofV1 {
-            commitment: *dealer.constant_proof().commitment_bytes(),
-            response: *dealer.constant_proof().response_bytes(),
-        },
-    }
-}
-
-// Fresh private values never implement serialization, Debug or Clone. The callback
-// runs only after all public commitments are validated and before finalization.
-fn ceremony(
-    request: Request,
-    genesis: GenesisProof,
-    observed_height: u64,
-    deadline: Instant,
-    mut progress: impl FnMut(&iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1) -> Result<()>,
-    mut next_height: impl FnMut(Instant) -> Result<u64>,
-) -> Result<(PublicBundle, Vec<Zeroizing<Vec<u8>>>)> {
-    require_budget(deadline)?;
-    let mut state = validate_request(&request, observed_height)?;
-    validate_genesis(&request, &genesis)?;
-    let parameters = parameters(&request.dkg_session)?;
-    let crypto = AdaptiveGlobalThresholdBeaconDkgCryptoV1;
-    let mut dealers = Vec::with_capacity(4);
-    let mut commitments = Vec::with_capacity(4);
-    for index in 1..=4 {
-        require_budget(deadline)?;
-        let (secret, commitment) =
-            DasRenDealerSecret::generate(&parameters, index).map_err(|_| Error::Crypto)?;
-        state
-            .record_dealer_commitment(observed_height, dealer_dto(&commitment), &crypto)
-            .map_err(|_| Error::Crypto)?;
-        dealers.push(secret);
-        commitments.push(commitment);
-    }
-    // Verify every private recipient contribution inside the sharing phase.
-    // No complaint is suppressed: any invalid contribution aborts the ceremony.
-    let mut recipient_shares = Vec::with_capacity(4);
-    for index in 1_u16..=4 {
-        require_budget(deadline)?;
-        recipient_shares.push(
-            dealers
-                .iter()
-                .zip(&commitments)
-                .map(|(secret, commitment)| secret.private_share(&parameters, commitment, index))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|_| Error::Crypto)?,
-        );
-    }
-    drop(dealers); // All polynomial secrets erase before waiting for phase heights.
-    require_budget(deadline)?;
-    progress(&state.public_snapshot().map_err(|_| Error::Crypto)?)?;
-    let mut height = observed_height;
-    while height < request.dkg_session.responses_end_height {
-        let next = next_height(deadline)?;
-        require_budget(deadline)?;
-        if next <= height {
-            return Err(Error::Height);
-        }
-        height = next;
-    }
-    let record = state
-        .finalize(height, &crypto)
-        .map_err(|_| Error::Crypto)?
-        .clone();
-    require_budget(deadline)?;
-    let transcript = AdaptiveThresholdBlsPublicTranscript::from_qualified_dealers(
-        &parameters,
-        &commitments,
-        &record.adaptive_dkg.qualified_dealers,
-        record.adaptive_dkg.event_hash,
-    )
-    .map_err(|_| Error::Crypto)?;
-    if transcript.transcript_hash() != &record.transcript_hash {
-        return Err(Error::Crypto);
-    }
-    let mut credentials = Vec::with_capacity(4);
-    let mut providers = Vec::with_capacity(4);
-    for (offset, shares) in recipient_shares.into_iter().enumerate() {
-        let index = u16::try_from(offset + 1).map_err(|_| Error::InvalidInput)?;
-        require_budget(deadline)?;
-        let aggregate = AdaptiveThresholdBlsSecretShare::from_dealer_shares(&transcript, &shares)
-            .map_err(|_| Error::Crypto)?;
-        drop(shares);
-        let inventory = vec![RuntimeGlobalBeaconShareProvisioningV1::new(
-            record.clone(),
-            index,
-            aggregate.into_components_for_runtime_custody(),
-        )];
-        let policy_digest =
-            global_beacon_partial_signer_inventory_digest_v1(record.network_id, &inventory)
-                .map_err(|_| Error::Crypto)?;
-        let handle = request.provider_handles[usize::from(index - 1)].clone();
-        credentials.push(
-            encode_global_beacon_partial_signer_credential_v1(
-                record.network_id,
-                &handle,
-                request.provider_revision,
-                policy_digest,
-                inventory,
-            )
-            .map_err(|_| Error::Crypto)?,
-        );
-        providers.push(Provider {
-            signer_index: index,
-            validator: request.target_roster[usize::from(index - 1)].clone(),
-            handle,
-            revision: request.provider_revision,
-            policy_digest,
-        });
-    }
-    let record =
-        FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(record).map_err(|_| Error::Crypto)?;
-    let certificate = draft_certificate(&request, &record, height)?;
-    let bundle = PublicBundle {
-        schema: "iroha.global-beacon.bootstrap.bundle.v1".into(),
-        genesis,
-        request,
-        finalized_observed_height: height,
-        record,
-        certificate,
-        providers,
-    };
-    validate_bundle(&bundle)?;
-    require_budget(deadline)?;
-    Ok((bundle, credentials))
-}
-
-fn validate_genesis(request: &Request, proof: &GenesisProof) -> Result<()> {
-    if proof.manifest.consensus_mode()
-        != iroha_data_model::parameter::system::SumeragiConsensusMode::Npos
-        || proof.manifest.chain_id().as_ref() != crate::taira_runtime_signer::TAIRA_CHAIN_ID_V1
-        || proof.manifest.chain_discriminant()
-            != crate::taira_runtime_signer::TAIRA_CHAIN_DISCRIMINANT_V1
-    {
-        return Err(Error::InvalidInput);
-    }
-    iroha_genesis::init_instruction_registry();
-    let expected_hash = request.dkg_session.network_id.into_genesis_hash();
-    let validated = iroha_genesis::validate_prepared_genesis_bundle(
-        &proof.signed_wire,
-        &proof.manifest,
-        &proof.public_key,
-        expected_hash,
-    )
-    .map_err(|_| Error::Crypto)?;
-    // Use the exact native height-context owner. Topology insertion order and
-    // caller ordering cannot select authorization indices.
-    let ordered = iroha_core::sumeragi::signed_genesis_voting_peers(&iroha_genesis::GenesisBlock(
-        validated.block().clone(),
-    ))
-    .map_err(|_| Error::Crypto)?;
-    let required_pulse = first_required_pulse_height(proof)?;
-    if ordered != request.target_roster
-        || ordered != request.authorization_roster
-        || request
-            .dkg_session
-            .responses_end_height
-            .checked_add(1)
-            .is_none_or(|installation| installation >= required_pulse)
-    {
-        return Err(Error::InvalidInput);
-    }
-    Ok(())
-}
-
-// Fresh-network ceremony authority is the genesis epoch roster only. Refuse an
-// installation at or beyond its first mandatory pulse; retained rotation needs
-// its own authenticated current context and is not this command's authority.
-fn first_required_pulse_height(proof: &GenesisProof) -> Result<u64> {
-    use iroha_data_model::parameter::system::SumeragiNposParameters;
-    let parameters = proof
-        .manifest
-        .effective_parameters()
-        .map_err(|_| Error::InvalidInput)?;
-    let npos = parameters
-        .custom()
-        .get(&SumeragiNposParameters::parameter_id())
-        .and_then(SumeragiNposParameters::from_custom_parameter)
-        .ok_or(Error::InvalidInput)?;
-    npos.epoch_length_blocks()
-        .get()
-        .checked_sub(1)
-        .ok_or(Error::Height)
-}
-
-fn draft_certificate(
-    request: &Request,
-    record: &FinalizedGlobalThresholdBeaconKeySessionRecordV1,
-    observed_height: u64,
-) -> Result<ThresholdKeyLifecycleCertificateV1> {
-    Ok(ThresholdKeyLifecycleCertificateV1 {
-        version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-        action: ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
-        expected_active_session_id: None,
-        effective_height: observed_height.checked_add(1).ok_or(Error::Height)?,
-        network_id: record.session.network_id,
-        roster_hash: global_threshold_beacon_roster_hash_v1(&request.authorization_roster),
-        committee_size: 4,
-        quorum: 3,
-        session_id: record.session.session_id,
-        transcript_hash: record.session.transcript_hash,
-        public_state: norito::encode_canonical(record).map_err(|_| Error::Crypto)?,
-        signatures: Vec::new(),
-    })
-}
-fn validate_bundle(bundle: &PublicBundle) -> Result<()> {
-    validate_genesis(&bundle.request, &bundle.genesis)?;
-    validate_roster(&bundle.request.authorization_roster)?;
-    let _ = validate_request(&bundle.request, bundle.request.dkg_session.start_height)?;
-    bundle.record.validate().map_err(|_| Error::Crypto)?;
-    if bundle.schema != "iroha.global-beacon.bootstrap.bundle.v1"
-        || bundle.record.activated_at_height.is_some()
-        || bundle.record.retired_at_height.is_some()
-        || bundle.record.session.adaptive_dkg.session != bundle.request.dkg_session
-        || bundle.record.session.adaptive_dkg.finalized_at_height
-            != bundle.finalized_observed_height
-        || bundle.certificate
-            != draft_certificate(
-                &bundle.request,
-                &bundle.record,
-                bundle.finalized_observed_height,
-            )?
-        || bundle.providers.len() != 4
-        || bundle.certificate.effective_height >= first_required_pulse_height(&bundle.genesis)?
-    {
-        return Err(Error::InvalidInput);
-    }
-    for (i, provider) in bundle.providers.iter().enumerate() {
-        if provider.signer_index != (i as u16) + 1
-            || provider.validator != bundle.request.target_roster[i]
-            || provider.handle != bundle.request.provider_handles[i]
-            || provider.revision != bundle.request.provider_revision
-            || provider.policy_digest
-                != global_beacon_partial_signer_public_inventory_digest_v1(
-                    bundle.record.session.network_id,
-                    &[(bundle.record.session.clone(), provider.signer_index)],
-                )
-                .map_err(|_| Error::Crypto)?
-        {
-            return Err(Error::InvalidInput);
-        }
-    }
-    Ok(())
-}
-fn sign_install(
-    bundle: &PublicBundle,
-    signer_index: u16,
-    key: &KeyPair,
-) -> Result<ThresholdKeyLifecycleSignatureV1> {
-    validate_bundle(bundle)?;
-    let peer = bundle
-        .request
-        .authorization_roster
-        .get(usize::from(signer_index))
-        .ok_or(Error::InvalidInput)?;
-    if peer.public_key() != key.public_key() {
-        return Err(Error::InvalidInput);
-    }
-    let preimage = threshold_key_lifecycle_certificate_preimage_v1(&bundle.certificate)
-        .map_err(|_| Error::Crypto)?;
-    let signature = Signature::try_new(key.private_key(), &preimage).map_err(|_| Error::Crypto)?;
-    signature
-        .verify(peer.public_key(), &preimage)
-        .map_err(|_| Error::Crypto)?;
-    Ok(ThresholdKeyLifecycleSignatureV1 {
-        signer_index,
-        signature,
-    })
-}
-fn assemble_install(
-    bundle: &PublicBundle,
-    signatures: Vec<ThresholdKeyLifecycleSignatureV1>,
-) -> Result<ThresholdKeyLifecycleCertificateV1> {
-    validate_bundle(bundle)?;
-    let mut certificate = bundle.certificate.clone();
-    certificate.signatures = signatures;
-    // Reject caller reordering, duplicates, extra/missing signatures and all altered bindings.
-    verify_threshold_key_lifecycle_certificate_v1(
-        &certificate,
-        &bundle.request.dkg_session.network_id,
-        certificate.effective_height,
-        &bundle.request.authorization_roster,
-    )
-    .map_err(|_| Error::Crypto)?;
-    Ok(certificate)
-}
-
 fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     a.is_file()
         && b.is_file()
@@ -609,12 +475,12 @@ fn same_file(a: &fs::Metadata, b: &fs::Metadata) -> bool {
 // Resolve each ancestor relative to its already opened directory. Holding the
 // selected directory keeps a concurrent pathname replacement from redirecting
 // credential writes; revalidation refuses to publish success after a replacement.
-struct Directory {
+pub(crate) struct Directory {
     path: PathBuf,
     file: File,
 }
 impl Directory {
-    fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
         use rustix::fs::{Mode, OFlags};
         if !path.is_absolute()
             || path
@@ -641,7 +507,7 @@ impl Directory {
             file,
         })
     }
-    fn revalidate(&self) -> Result<()> {
+    pub(crate) fn revalidate(&self) -> Result<()> {
         let current = Self::open(&self.path)?;
         let held = self.file.metadata().map_err(|_| Error::Io)?;
         let named = current.file.metadata().map_err(|_| Error::Io)?;
@@ -656,7 +522,7 @@ impl Directory {
         }
         Ok(())
     }
-    fn child(&self, name: &std::ffi::OsStr) -> Result<Self> {
+    pub(crate) fn child(&self, name: &std::ffi::OsStr) -> Result<Self> {
         use rustix::fs::{Mode, OFlags};
         single_name(name)?;
         self.revalidate()?;
@@ -683,7 +549,71 @@ impl Directory {
         child.revalidate()?;
         Ok(child)
     }
-    fn write_new(&self, name: &std::ffi::OsStr, bytes: &[u8], private: bool) -> Result<()> {
+    /// Publish a complete staged generation without replacing any prior name.
+    pub(crate) fn publish_child(&self, child: &Self, name: &std::ffi::OsStr) -> Result<()> {
+        single_name(name)?;
+        self.revalidate()?;
+        child.revalidate()?;
+        if child.path.parent() != Some(self.path.as_path()) {
+            return Err(Error::InvalidCustody);
+        }
+        let old_name = child.path.file_name().ok_or(Error::InvalidCustody)?;
+        child.file.sync_all().map_err(|_| Error::Io)?;
+        #[cfg(any(
+            target_os = "linux",
+            target_os = "android",
+            target_vendor = "apple",
+            target_os = "redox"
+        ))]
+        rustix::fs::renameat_with(
+            &self.file,
+            old_name,
+            &self.file,
+            name,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(|_| Error::Io)?;
+        #[cfg(not(any(
+            target_os = "linux",
+            target_os = "android",
+            target_vendor = "apple",
+            target_os = "redox"
+        )))]
+        return Err(Error::InvalidCustody);
+        self.file.sync_all().map_err(|_| Error::Io)?;
+        self.revalidate()?;
+        let published = Self::open(&self.path.join(name))?;
+        let held = child.file.metadata().map_err(|_| Error::Io)?;
+        let named = published.file.metadata().map_err(|_| Error::Io)?;
+        if held.dev() != named.dev() || held.ino() != named.ino() {
+            return Err(Error::InvalidCustody);
+        }
+        Ok(())
+    }
+    /// Remove only known staging files from a held child directory after failed publication.
+    pub(crate) fn discard_child(&self, child: &Self, names: &[&str]) {
+        if self.revalidate().is_err()
+            || child.revalidate().is_err()
+            || child.path.parent() != Some(self.path.as_path())
+        {
+            return;
+        }
+        for name in names {
+            if single_name(std::ffi::OsStr::new(name)).is_ok() {
+                let _ = rustix::fs::unlinkat(&child.file, *name, rustix::fs::AtFlags::empty());
+            }
+        }
+        if let Some(name) = child.path.file_name() {
+            let _ = rustix::fs::unlinkat(&self.file, name, rustix::fs::AtFlags::REMOVEDIR);
+            let _ = self.file.sync_all();
+        }
+    }
+    pub(crate) fn write_new(
+        &self,
+        name: &std::ffi::OsStr,
+        bytes: &[u8],
+        private: bool,
+    ) -> Result<()> {
         use rustix::fs::{Mode, OFlags};
         single_name(name)?;
         if bytes.is_empty() || bytes.len() > MAX_PUBLIC_BYTES {
@@ -745,6 +675,9 @@ fn validate_directory(m: &fs::Metadata) -> Result<()> {
     Ok(())
 }
 fn read_public_bytes(path: &Path) -> Result<Vec<u8>> {
+    read_public_bytes_bounded(path, MAX_PUBLIC_BYTES)
+}
+pub(crate) fn read_public_bytes_bounded(path: &Path, maximum: usize) -> Result<Vec<u8>> {
     use rustix::fs::{Mode, OFlags};
     let parent = Directory::open(path.parent().ok_or(Error::InvalidCustody)?)?;
     let name = path.file_name().ok_or(Error::InvalidCustody)?;
@@ -758,7 +691,7 @@ fn read_public_bytes(path: &Path) -> Result<Vec<u8>> {
         || before.nlink() != 1
         || before.mode() & 0o022 != 0
         || before.len() == 0
-        || before.len() > MAX_PUBLIC_BYTES as u64
+        || before.len() > maximum as u64
     {
         return Err(Error::InvalidInput);
     }
@@ -794,14 +727,9 @@ fn write_new(path: &Path, bytes: &[u8], private: bool) -> Result<()> {
         private,
     )
 }
-fn create_private_directory(path: &Path) -> Result<Directory> {
-    Directory::open(path.parent().ok_or(Error::InvalidCustody)?)?
-        .child(path.file_name().ok_or(Error::InvalidCustody)?)
-}
-fn read_observed_height(fd: BorrowedFd<'_>, deadline: Instant) -> Result<u64> {
-    let mut digits = [0u8; 20];
-    let mut used = 0;
-    loop {
+fn read_exact_until(fd: BorrowedFd<'_>, deadline: Instant, bytes: &mut [u8]) -> Result<()> {
+    let mut offset = 0;
+    while offset < bytes.len() {
         require_budget(deadline)?;
         let timeout =
             rustix::event::Timespec::try_from(deadline.saturating_duration_since(Instant::now()))
@@ -819,123 +747,292 @@ fn read_observed_height(fd: BorrowedFd<'_>, deadline: Instant) -> Result<u64> {
             Err(rustix::io::Errno::INTR) => continue,
             Err(_) => return Err(Error::Io),
         }
-        require_budget(deadline)?;
-        let mut byte = [0u8];
-        match rustix::io::read(fd, &mut byte) {
+        match rustix::io::read(fd, &mut bytes[offset..]) {
             Ok(0) => return Err(Error::Height),
-            Ok(_) if byte[0] == b'\n' => {
-                if used == 0 || (used > 1 && digits[0] == b'0') {
-                    return Err(Error::Height);
-                }
-                return std::str::from_utf8(&digits[..used])
-                    .map_err(|_| Error::Height)?
-                    .parse()
-                    .map_err(|_| Error::Height);
-            }
-            Ok(_) if used < digits.len() && byte[0].is_ascii_digit() => {
-                digits[used] = byte[0];
-                used += 1;
-            }
-            Ok(_) => return Err(Error::Height),
+            Ok(count) => offset += count,
             Err(rustix::io::Errno::INTR) => continue,
             Err(_) => return Err(Error::Io),
         }
     }
+    Ok(())
 }
-#[allow(
-    unsafe_code,
-    reason = "the controller lends an inherited public-only height pipe for this bounded command"
-)]
-fn provision_command(
-    request_path: &Path,
-    manifest_path: &Path,
-    wire_path: &Path,
-    key_path: &Path,
-    observed_height: u64,
-    height_fd: i32,
-    output: &Path,
-    timeout_ms: u64,
+
+fn read_rotation_phase_height(
+    fd: BorrowedFd<'_>,
+    deadline: Instant,
+    verifier: &mut BridgeFinalityVerifier,
+    last_height: &mut u64,
+    cutoff_height: u64,
+) -> Result<u64> {
+    // Each FIFO frame is a big-endian u32 byte length followed by one canonical
+    // BridgeFinalityProof. The proof chain, never the controller's claimed height,
+    // advances the DKG phase clock.
+    let mut length = [0_u8; 4];
+    read_exact_until(fd, deadline, &mut length)?;
+    let length = usize::try_from(u32::from_be_bytes(length)).map_err(|_| Error::Height)?;
+    if length == 0 || length > MAX_ROTATION_PHASE_PROOF_BYTES {
+        return Err(Error::Height);
+    }
+    let mut encoded = vec![0_u8; length];
+    read_exact_until(fd, deadline, &mut encoded)?;
+    let proof: BridgeFinalityProof = norito::decode_canonical_with_limits(
+        &encoded,
+        norito::canonical_decode_limits(encoded.len()),
+    )
+    .map_err(|_| Error::Crypto)?;
+    let height = proof.finality_artifact.height;
+    check_rotation_phase_height(
+        *last_height,
+        height,
+        proof.block_header.height().get(),
+        cutoff_height,
+    )?;
+    verifier.verify(&proof).map_err(|_| Error::Crypto)?;
+    *last_height = height;
+    Ok(height)
+}
+
+fn check_rotation_phase_height(
+    last_height: u64,
+    proof_height: u64,
+    header_height: u64,
+    cutoff_height: u64,
 ) -> Result<()> {
-    if height_fd < 3
-        || matches!(height_fd, 198 | 199 | 200)
-        || timeout_ms == 0
-        || timeout_ms > MAX_TIMEOUT_MS
+    if proof_height != last_height.checked_add(1).ok_or(Error::Height)?
+        || header_height != proof_height
+        || proof_height >= cutoff_height
+    {
+        return Err(Error::Height);
+    }
+    Ok(())
+}
+
+fn rotation_phase_verifier(
+    proof: &RotationProofArgs,
+    evidence: &ValidatorCommitteeSelectionEvidenceV1,
+) -> Result<BridgeFinalityVerifier> {
+    let mut verifier = BridgeFinalityVerifier::with_context(
+        proof.network_id,
+        HeightContextId(HashOf::from_untyped_unchecked(proof.trusted_context_id)),
+    );
+    for artifact in &evidence.finality_chain {
+        verifier.verify(artifact).map_err(|_| Error::Crypto)?;
+    }
+    Ok(verifier)
+}
+
+fn validate_rotation_phase_chain(
+    proof: &RotationProofArgs,
+    evidence: &ValidatorCommitteeSelectionEvidenceV1,
+    start_height: u64,
+    final_height: u64,
+    cutoff_height: u64,
+    chain: &[BridgeFinalityProof],
+) -> Result<()> {
+    let expected_count = usize::try_from(
+        final_height
+            .checked_sub(start_height)
+            .ok_or(Error::Height)?,
+    )
+    .map_err(|_| Error::Height)?;
+    if chain.len() != expected_count {
+        return Err(Error::Height);
+    }
+    let mut verifier = rotation_phase_verifier(proof, evidence)?;
+    let mut last_height = start_height;
+    for phase in chain {
+        let height = phase.finality_artifact.height;
+        check_rotation_phase_height(
+            last_height,
+            height,
+            phase.block_header.height().get(),
+            cutoff_height,
+        )?;
+        verifier.verify(phase).map_err(|_| Error::Crypto)?;
+        last_height = height;
+    }
+    if last_height != final_height {
+        return Err(Error::Height);
+    }
+    Ok(())
+}
+
+fn draft_rotation_certificate(
+    authorization_roster: &[PeerId],
+    incumbent_session_id: [u8; 32],
+    record: &FinalizedGlobalThresholdBeaconKeySessionRecordV1,
+    finalized_height: u64,
+    effective_height: u64,
+) -> Result<ThresholdKeyLifecycleCertificateV1> {
+    let seats = authorization_roster.len();
+    if effective_height <= finalized_height {
+        return Err(Error::Height);
+    }
+    if !is_valid_committee_size(seats)
+        || authorization_roster
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
     {
         return Err(Error::InvalidInput);
     }
-    let deadline = Instant::now()
-        .checked_add(Duration::from_millis(timeout_ms))
-        .ok_or(Error::Deadline)?;
-    // Only a pipe dedicated to public observations is accepted; never borrow a
-    // runtime credential descriptor or a regular file as a height stream.
-    let fd = unsafe { BorrowedFd::borrow_raw(height_fd) };
-    let metadata = rustix::fs::fstat(fd).map_err(|_| Error::InvalidInput)?;
-    if rustix::fs::FileType::from_raw_mode(metadata.st_mode) != rustix::fs::FileType::Fifo {
-        return Err(Error::InvalidInput);
-    }
-    iroha_genesis::init_instruction_registry();
-    let request: Request = read_json(request_path)?;
-    let public_key_bytes = read_public_bytes(key_path)?;
-    let public_key_text =
-        std::str::from_utf8(&public_key_bytes).map_err(|_| Error::InvalidInput)?;
-    let key_text = public_key_text
-        .strip_suffix('\n')
-        .ok_or(Error::InvalidInput)?;
-    let public_key = PublicKey::from_str(key_text).map_err(|_| Error::InvalidInput)?;
-    if public_key.to_string() != key_text {
-        return Err(Error::InvalidInput);
-    }
-    let genesis = GenesisProof {
-        manifest: read_json(manifest_path)?,
-        signed_wire: read_public_bytes(wire_path)?,
-        public_key,
-    };
-    validate_request(&request, observed_height)?;
-    validate_genesis(&request, &genesis)?;
-    require_budget(deadline)?;
-    let output = create_private_directory(output)?;
-    let (bundle, credentials) = ceremony(
-        request,
-        genesis,
-        observed_height,
-        deadline,
-        |snapshot| {
-            output.write_new(
-                std::ffi::OsStr::new("sharing-snapshot.json"),
-                &json_bytes(snapshot)?,
-                false,
-            )?;
-            println!(
-                "{{\"schema\":\"iroha.global-beacon.bootstrap.progress.v1\",\"state\":\"sharing-ready\",\"observed_height\":{observed_height}}}"
-            );
-            std::io::stdout().flush().map_err(|_| Error::Io)
-        },
-        |limit| read_observed_height(fd, limit),
-    )?;
-    for (index, bytes) in credentials.iter().enumerate() {
-        require_budget(deadline)?;
-        let seat = output.child(std::ffi::OsStr::new(&format!("seat-{}", index + 1)))?;
-        seat.write_new(
-            std::ffi::OsStr::new(GLOBAL_BEACON_PARTIAL_SIGNER_CREDENTIAL_NAME_V1),
-            bytes,
-            true,
-        )?;
-    }
-    drop(credentials);
-    require_budget(deadline)?;
-    // The public bundle is the completion marker, published only after all four credentials.
-    output.write_new(
-        std::ffi::OsStr::new("public-bundle.json"),
-        &json_bytes(&bundle)?,
-        false,
-    )?;
-    require_budget(deadline)?;
-    println!(
-        "{{\"schema\":\"iroha.global-beacon.bootstrap.progress.v1\",\"state\":\"prepared\",\"observed_height\":{},\"install_height\":{}}}",
-        bundle.finalized_observed_height, bundle.certificate.effective_height
-    );
-    Ok(())
+    Ok(ThresholdKeyLifecycleCertificateV1 {
+        version: THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
+        action: ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
+        expected_active_session_id: Some(incumbent_session_id),
+        effective_height,
+        network_id: record.session.network_id,
+        roster_hash: global_threshold_beacon_roster_hash_v1(authorization_roster),
+        committee_size: u16::try_from(seats).map_err(|_| Error::InvalidInput)?,
+        quorum: u16::try_from(2 * ((seats - 1) / 3) + 1).map_err(|_| Error::InvalidInput)?,
+        session_id: record.session.session_id,
+        transcript_hash: record.session.transcript_hash,
+        public_state: norito::encode_canonical(record).map_err(|_| Error::Crypto)?,
+        signatures: Vec::new(),
+    })
 }
+
+fn read_verified_rotation_selection(
+    proof: &RotationProofArgs,
+) -> Result<(
+    ValidatorCommitteeSelectionEvidenceV1,
+    VerifiedValidatorCommitteeSelectionV1,
+)> {
+    let bytes = read_public_bytes_bounded(
+        &proof.selection_evidence,
+        COMMITTEE_PROVISIONING_EVIDENCE_MAX_BYTES_V1,
+    )?;
+    let evidence: ValidatorCommitteeSelectionEvidenceV1 =
+        norito::decode_canonical_with_limits(&bytes, norito::canonical_decode_limits(bytes.len()))
+            .map_err(|_| Error::InvalidInput)?;
+    let selected = verify_validator_committee_selection_evidence_v1(
+        &evidence,
+        proof.network_id,
+        HeightContextId(HashOf::from_untyped_unchecked(proof.trusted_context_id)),
+        proof.anchor_height,
+        proof.target_epoch,
+        proof.transition_id.into(),
+    )
+    .map_err(|_| Error::Crypto)?;
+    Ok((evidence, selected))
+}
+
+fn validate_rotation_bundle(
+    bundle: &RotationPublicBundle,
+    proof: &RotationProofArgs,
+    evidence: &ValidatorCommitteeSelectionEvidenceV1,
+    selected: &VerifiedValidatorCommitteeSelectionV1,
+) -> Result<Vec<PeerId>> {
+    let preparation = selected.preparation();
+    let target_roster = preparation
+        .roster
+        .iter()
+        .map(|seat| seat.validator.clone())
+        .collect::<Vec<_>>();
+    let authorization_roster = selected
+        .incumbent_authority()
+        .validators
+        .iter()
+        .map(|seat| seat.validator.clone())
+        .collect::<Vec<_>>();
+    bundle.record.validate().map_err(|_| Error::Crypto)?;
+    if bundle.schema != "iroha.validator-committee.rotation-dkg.v1"
+        || bundle.preparation != *preparation
+        || bundle.dkg_session.network_id != preparation.network_id
+        || bundle.dkg_session.session_id
+            != preparation
+                .beacon_session_id()
+                .map_err(|_| Error::InvalidInput)?
+        || bundle.dkg_session.attempt_id
+            != preparation
+                .transition_id()
+                .map_err(|_| Error::InvalidInput)?
+        || bundle.dkg_session.authority_generation != preparation.authority_generation
+        || bundle.dkg_session.roster_hash != global_threshold_beacon_roster_hash_v1(&target_roster)
+        || usize::from(bundle.dkg_session.committee_size) != target_roster.len()
+        || usize::from(bundle.dkg_session.threshold) != (target_roster.len() - 1) / 3 + 1
+        || bundle.dkg_session.start_height != selected.observed_height()
+        || bundle.dkg_session.commitments_end_height
+            != bundle
+                .dkg_session
+                .start_height
+                .checked_add(1)
+                .ok_or(Error::Height)?
+        || bundle.dkg_session.deliveries_end_height
+            != bundle
+                .dkg_session
+                .start_height
+                .checked_add(2)
+                .ok_or(Error::Height)?
+        || bundle.dkg_session.acceptances_end_height
+            != bundle
+                .dkg_session
+                .start_height
+                .checked_add(3)
+                .ok_or(Error::Height)?
+        || bundle.dkg_session.acceptances_end_height != bundle.finalized_observed_height
+        || bundle.record.session.adaptive_dkg.session != bundle.dkg_session
+        || bundle.record.session.network_id != preparation.network_id
+        || bundle.record.session.session_id != bundle.dkg_session.session_id
+        || bundle.record.session.roster_hash != bundle.dkg_session.roster_hash
+        || bundle.record.session.adaptive_dkg.finalized_at_height
+            != bundle.finalized_observed_height
+        || bundle.record.activated_at_height.is_some()
+        || bundle.record.retired_at_height.is_some()
+        || selected.observed_height() >= bundle.finalized_observed_height
+        || selected.observed_height() >= bundle.finalization_draft.effective_height
+        || bundle.finalization_draft.effective_height >= preparation.first_height - 1
+        || bundle.providers.len() != target_roster.len()
+    {
+        return Err(Error::InvalidInput);
+    }
+    validate_rotation_phase_chain(
+        proof,
+        evidence,
+        selected.observed_height(),
+        bundle.finalized_observed_height,
+        preparation
+            .first_height
+            .checked_sub(1)
+            .ok_or(Error::Height)?,
+        &bundle.phase_proofs,
+    )?;
+    let mut handles = BTreeSet::new();
+    let revision = bundle
+        .providers
+        .first()
+        .ok_or(Error::InvalidInput)?
+        .revision;
+    for (offset, (provider, peer)) in bundle.providers.iter().zip(&target_roster).enumerate() {
+        if provider.signer_index != u16::try_from(offset + 1).map_err(|_| Error::InvalidInput)?
+            || provider.validator != *peer
+            || provider.revision == 0
+            || provider.revision != revision
+            || !handles.insert(&provider.handle)
+            || iroha_config::parameters::validate_production_runtime_handle(&provider.handle)
+                .is_err()
+            || provider.policy_digest
+                != global_beacon_partial_signer_public_inventory_digest_v1(
+                    bundle.record.session.network_id,
+                    &[(bundle.record.session.clone(), provider.signer_index)],
+                )
+                .map_err(|_| Error::Crypto)?
+        {
+            return Err(Error::InvalidInput);
+        }
+    }
+    let expected_certificate = draft_rotation_certificate(
+        &authorization_roster,
+        selected.incumbent_beacon().session_id,
+        &bundle.record,
+        bundle.finalized_observed_height,
+        bundle.finalization_draft.effective_height,
+    )?;
+    if bundle.finalization_draft != expected_certificate {
+        return Err(Error::InvalidInput);
+    }
+    Ok(authorization_roster)
+}
+
 fn load_lifecycle_key(file: File) -> Result<KeyPair> {
     use crate::taira_runtime_signer::{
         TairaRuntimeSignerErrorV1 as KeyError, load_private_record_from_file,
@@ -1049,7 +1146,8 @@ fn load_lifecycle_config(file: File, network: &iroha_data_model::NetworkId) -> R
     })
     .map_err(|_| Error::InvalidCustody)
 }
-fn sign_command(
+fn sign_rotation_command(
+    proof: &RotationProofArgs,
     bundle_path: &Path,
     signer_index: u16,
     key_fd: Option<i32>,
@@ -1062,26 +1160,82 @@ fn sign_command(
         _ => return Err(Error::InvalidInput),
     };
     iroha_genesis::init_instruction_registry();
-    let bundle: PublicBundle = read_json(bundle_path)?;
-    validate_bundle(&bundle)?;
+    let (evidence, selected) = read_verified_rotation_selection(proof)?;
+    let bundle: RotationPublicBundle = read_json(bundle_path)?;
+    let roster = validate_rotation_bundle(&bundle, proof, &evidence, &selected)?;
     let file = crate::taira_runtime_signer::take_inherited_private_file(fd)
         .map_err(|_| Error::InvalidCustody)?;
     let key = if config {
-        load_lifecycle_config(file, &bundle.request.dkg_session.network_id)?
+        load_lifecycle_config(file, &proof.network_id)?
     } else {
         load_lifecycle_key(file)?
     };
-    let signed = sign_install(&bundle, signer_index, &key)?;
+    let signed = sign_rotation_draft(&bundle.finalization_draft, &roster, signer_index, &key)?;
     write_new(output, &json_bytes(&signed)?, false)
 }
-fn assemble_command(bundle_path: &Path, signatures: &[PathBuf], output: &Path) -> Result<()> {
+
+fn sign_rotation_draft(
+    draft: &ThresholdKeyLifecycleCertificateV1,
+    roster: &[PeerId],
+    signer_index: u16,
+    key: &KeyPair,
+) -> Result<ThresholdKeyLifecycleSignatureV1> {
+    if !draft.signatures.is_empty() {
+        return Err(Error::InvalidInput);
+    }
+    let peer = roster
+        .get(usize::from(signer_index))
+        .ok_or(Error::InvalidInput)?;
+    if peer.public_key() != key.public_key() {
+        return Err(Error::InvalidCustody);
+    }
+    let preimage =
+        threshold_key_lifecycle_certificate_preimage_v1(draft).map_err(|_| Error::Crypto)?;
+    let signature = Signature::try_new(key.private_key(), &preimage).map_err(|_| Error::Crypto)?;
+    signature
+        .verify(peer.public_key(), &preimage)
+        .map_err(|_| Error::Crypto)?;
+    Ok(ThresholdKeyLifecycleSignatureV1 {
+        signer_index,
+        signature,
+    })
+}
+
+fn assemble_rotation_draft(
+    draft: &ThresholdKeyLifecycleCertificateV1,
+    roster: &[PeerId],
+    signatures: Vec<ThresholdKeyLifecycleSignatureV1>,
+) -> Result<ThresholdKeyLifecycleCertificateV1> {
+    if !draft.signatures.is_empty() {
+        return Err(Error::InvalidInput);
+    }
+    let mut certificate = draft.clone();
+    certificate.signatures = signatures;
+    verify_threshold_key_lifecycle_certificate_v1(
+        &certificate,
+        &certificate.network_id,
+        certificate.effective_height,
+        roster,
+    )
+    .map_err(|_| Error::Crypto)?;
+    Ok(certificate)
+}
+
+fn assemble_rotation_command(
+    proof: &RotationProofArgs,
+    bundle_path: &Path,
+    signatures: &[PathBuf],
+    output: &Path,
+) -> Result<()> {
     iroha_genesis::init_instruction_registry();
-    let bundle: PublicBundle = read_json(bundle_path)?;
+    let (evidence, selected) = read_verified_rotation_selection(proof)?;
+    let bundle: RotationPublicBundle = read_json(bundle_path)?;
+    let roster = validate_rotation_bundle(&bundle, proof, &evidence, &selected)?;
     let signatures = signatures
         .iter()
-        .map(|p| read_json(p))
+        .map(|path| read_json(path))
         .collect::<Result<Vec<_>>>()?;
-    let certificate = assemble_install(&bundle, signatures)?;
+    let certificate = assemble_rotation_draft(&bundle.finalization_draft, &roster, signatures)?;
     let instructions = vec![InstructionBox::from(
         ApplyThresholdKeyLifecycleCertificateV1 { certificate },
     )];

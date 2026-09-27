@@ -112,13 +112,12 @@ fn signed_genesis_execution<'state>(
     genesis: SignedBlock,
     topology: &Topology,
 ) -> (ValidBlock, Box<StateBlock<'state>>) {
-    ValidBlock::validate_signed_genesis_keep_voting_block(
+    ValidBlock::validate_signed_genesis(
         genesis,
         topology,
         &SAMPLE_GENESIS_ACCOUNT_ID,
         &TimeSource::new_system(),
         state,
-        &mut None,
         ConsensusMode::Permissioned,
     )
     .unpack(|_| {})
@@ -190,7 +189,6 @@ pub(super) fn prepare<'state>(
         state.sumeragi_block_cadence(),
         SumeragiV2ValidationContext::from_height_context(context),
         state,
-        &mut None,
     )
 }
 
@@ -207,7 +205,6 @@ fn candidate_preparation_retains_actual_prefix_and_context_without_publication()
             state.sumeragi_block_cadence(),
             SumeragiV2ValidationContext::from_height_context(&context),
             &state,
-            &mut None,
         )
         .unpack(|_| {})
         .unwrap_or_else(|(_, error)| panic!("candidate execution: {error}"));
@@ -349,7 +346,7 @@ fn production_candidate_admits_metadata_before_returning_execution_prefix() {
         iroha_config::parameters::actual::Queue::default(),
         events.clone(),
     ));
-    let pops = crate::sumeragi::signed_genesis_validator_pops(&GenesisBlock(proposal.clone()))
+    let pops = crate::sumeragi::schedule::genesis_validators(&GenesisBlock(proposal.clone()))
         .unwrap()
         .into_values()
         .collect();
@@ -414,7 +411,6 @@ fn candidate_prepares_exact_events_once_and_drop_does_not_deliver() {
             state.sumeragi_block_cadence(),
             SumeragiV2ValidationContext::from_height_context(&context),
             &state,
-            &mut None,
         )
         .unpack(|_| {})
         .unwrap_or_else(|(_, error)| panic!("candidate execution: {error}"));

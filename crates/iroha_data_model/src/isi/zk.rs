@@ -424,7 +424,7 @@ mod tests {
         )
     }
     fn backend() -> iroha_schema::Ident {
-        "halo2/pasta/ivm-execution-v1".into()
+        "halo2/pasta/ivm-replay-binding-v1".into()
     }
     fn verifying_key(name: &str) -> VerifyingKeyId {
         VerifyingKeyId::new(backend(), name)

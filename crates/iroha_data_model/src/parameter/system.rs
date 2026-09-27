@@ -3355,7 +3355,7 @@ mod tests {
     }
     #[test]
     fn sumeragi_npos_from_custom_parameter_rejects_trailing_comma_payload() {
-        let payload = r#"{"epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":3600,"epoch_length_blocks":3600,}"#;
+        let payload = r#"{"xor_asset_definition_id":"6TEAJqbb8oEPmLncoNiMRbLEK6tw","epoch_seed":"1111111111111111111111111111111111111111111111111111111111111111","max_validators":31,"min_self_bond":"1","min_nomination_bond":"1","max_nominator_concentration_pct":25,"seat_band_pct":100,"max_entity_correlation_pct":25,"finality_margin_blocks":8,"evidence_horizon_blocks":7200,"activation_lag_blocks":1,"slashing_delay_blocks":3600,"epoch_length_blocks":3600,}"#;
         assert!(
             Json::from_raw_json(payload.to_owned()).is_err(),
             "invalid JSON must be rejected before it can enter a custom parameter"

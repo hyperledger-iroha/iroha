@@ -33,6 +33,7 @@ norito = { workspace = true, default-features = false, features = ["node-codec"]
 base64 = { workspace = true }
 hex = { workspace = true }
 rand_core_06 = { workspace = true }
+zeroize = { workspace = true }
 sorafs_manifest = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 blake3 = { workspace = true }

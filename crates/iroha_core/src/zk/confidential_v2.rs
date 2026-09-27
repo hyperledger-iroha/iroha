@@ -36,13 +36,13 @@ pub const CONFIDENTIAL_UNSHIELD_V2_IPA_K: u32 = 13;
 pub const CONFIDENTIAL_UNSHIELD_V3_IPA_K: u32 = 13;
 /// Reviewed digest of the canonical full-unshield verifier key.
 pub const CONFIDENTIAL_UNSHIELD_V2_VK_DIGEST_V1: [u8; 32] = [
-    0xab, 0xd2, 0xc9, 0xf8, 0x0e, 0x4d, 0xea, 0xa9, 0x6d, 0xa6, 0xe2, 0x9c, 0xfc, 0x56, 0xcd, 0xf6,
-    0x7f, 0x07, 0xc6, 0xf1, 0x2e, 0x01, 0xd7, 0x3d, 0x8b, 0x51, 0xcf, 0x56, 0xc8, 0xd7, 0x01, 0xaa,
+    0x7a, 0x60, 0x9d, 0x2e, 0x33, 0x8f, 0x0d, 0x4f, 0xc7, 0x00, 0xd8, 0xb9, 0xc7, 0x36, 0xa7, 0x03,
+    0x00, 0xdd, 0x94, 0xfa, 0x1f, 0x30, 0x8a, 0xe8, 0x97, 0xfb, 0x74, 0xf9, 0x73, 0x30, 0xb6, 0x1e,
 ];
 /// Reviewed digest of the canonical change-unshield verifier key.
 pub const CONFIDENTIAL_UNSHIELD_V3_VK_DIGEST_V1: [u8; 32] = [
-    0xc6, 0x39, 0xe8, 0x67, 0x50, 0xc1, 0x8b, 0x20, 0x67, 0xae, 0x7d, 0x4f, 0x24, 0xa2, 0x23, 0xa4,
-    0xdd, 0x54, 0xde, 0x94, 0x78, 0x2c, 0xe8, 0xb2, 0x78, 0x15, 0x5e, 0x42, 0x28, 0xb4, 0x9d, 0x49,
+    0x20, 0x27, 0xa3, 0x64, 0x2b, 0xab, 0x3c, 0x13, 0x18, 0x4f, 0xb1, 0x74, 0xda, 0xeb, 0x66, 0x37,
+    0x59, 0xe3, 0x9e, 0xa0, 0x12, 0x34, 0xd6, 0x10, 0xa5, 0x63, 0x64, 0xf8, 0xb2, 0x51, 0xbb, 0xd8,
 ];
 /// Fixed depth of the confidential commitment tree.
 pub const CONFIDENTIAL_TREE_DEPTH_V2: usize = 16;
@@ -240,8 +240,19 @@ pub const CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3: u64 = u64::from_le_bytes(
 pub const CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfasst03");
 /// Domain word for network tags.
 pub const CONFIDENTIAL_POSEIDON_NETWORK_DOMAIN_V3: u64 = u64::from_le_bytes(*b"cfnet_03");
+// Secret openings and authentication paths must stay opaque in diagnostic logs.
+macro_rules! confidential_redacted_debug_v2 {
+    ($($name:ident),+ $(,)?) => {
+        $(impl core::fmt::Debug for $name {
+            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.debug_struct(stringify!($name)).finish_non_exhaustive()
+            }
+        })+
+    };
+}
 /// Canonical Merkle authentication path used by confidential circuits.
-#[derive(Debug, Clone)]
+/// Debug formatting redacts all path fields.
+#[derive(Clone)]
 pub struct ConfidentialMerklePathV2 {
     /// Sibling node at each tree level, from leaf to root.
     pub siblings: Vec<[u8; 32]>,
@@ -270,8 +281,9 @@ impl ConfidentialMerklePathV2 {
     }
 }
 /// Secret opening and tree position for one transfer input.
+/// Debug formatting redacts all opening fields.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConfidentialTransferInputV2 {
     /// Exact atomic amount opened by the note.
     pub amount: u128,
@@ -283,8 +295,9 @@ pub struct ConfidentialTransferInputV2 {
     pub leaf_index: usize,
 }
 /// Secret opening and owner binding for one transfer output.
+/// Debug formatting redacts all opening fields.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConfidentialTransferOutputV2 {
     /// Exact atomic output amount.
     pub amount: u128,
@@ -307,8 +320,9 @@ pub struct ConfidentialTransferProofV2 {
     pub proof: ProofBox,
 }
 /// Secret opening and tree position for one unshield input.
+/// Debug formatting redacts all opening fields.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConfidentialUnshieldInputV2 {
     /// Exact atomic amount opened by the note.
     pub amount: u128,
@@ -331,8 +345,9 @@ pub struct ConfidentialUnshieldProofV2 {
     pub proof: ProofBox,
 }
 /// Secret opening for the optional unshield-change output.
+/// Debug formatting redacts all opening fields.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ConfidentialUnshieldOutputV3 {
     /// Exact atomic change amount.
     pub amount: u128,
@@ -352,6 +367,17 @@ pub struct ConfidentialUnshieldProofV3 {
     /// Encoded Halo2 proof envelope.
     pub proof: ProofBox,
 }
+confidential_redacted_debug_v2!(ConfidentialMerklePathV2);
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+confidential_redacted_debug_v2!(
+    ConfidentialTransferInputV2,
+    ConfidentialTransferOutputV2,
+    ConfidentialUnshieldInputV2,
+    ConfidentialUnshieldOutputV3,
+    ConfidentialTransferWitnessV2,
+    ConfidentialUnshieldWitnessV2,
+    ConfidentialUnshieldWitnessV3,
+);
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 impl Zeroize for ConfidentialMerklePathV2 {
     fn zeroize(&mut self) {
@@ -1577,7 +1603,12 @@ pub(in crate::zk) mod secure_relation_v3 {
             public_input_1,
             witness.map(|value| &value.input_1_path),
         );
-        assert_equal(ctx, &range, root_0, root_1);
+        // An absent input has no membership claim against the ledger tree.
+        // Its private dummy path belongs to the canonical empty tree, which
+        // remains available even when every ledger-tree leaf is occupied.
+        let root_difference = gate.sub(ctx, root_0, root_1);
+        let present_root_difference = gate.mul(ctx, present_input_1, root_difference);
+        gate.assert_is_const(ctx, &present_root_difference, &Scalar::ZERO);
         let public_nullifier_1 = gate.mul(ctx, present_input_1, nullifiers[1]);
         let public_output_1 = gate.mul(ctx, present_output_1, commitments[3]);
         Ok(AssignedConfidentialTransferStepV4 {
@@ -1823,7 +1854,10 @@ pub(in crate::zk) mod secure_relation_v3 {
         };
         let root_0 = merkle_root::<DEPTH>(ctx, &range, &poseidon, input_commitments[0], paths[0]);
         let root_1 = merkle_root::<DEPTH>(ctx, &range, &poseidon, public_input_1, paths[1]);
-        assert_equal(ctx, &range, root_0, root_1);
+        // Only an actual second note must authenticate against the public anchor.
+        let root_difference = gate.sub(ctx, root_0, root_1);
+        let present_root_difference = gate.mul(ctx, present_input_1, root_difference);
+        gate.assert_is_const(ctx, &present_root_difference, &Scalar::ZERO);
         let public_nullifier_1 = gate.mul(ctx, present_input_1, nullifiers[1]);
         let input_sum = gate.add(ctx, input_amounts[0], input_amounts[1]);
         let mut change_commitment_0 = None;
@@ -2267,7 +2301,11 @@ pub(in crate::zk) mod secure_relation_v3 {
                 asset_tag: scalar_to_repr_bytes(asset),
                 network_tag: scalar_to_repr_bytes(Scalar::from(61)),
                 input_0_path: path_0,
-                input_1_path: path_1,
+                input_1_path: if include_input_1 {
+                    path_1
+                } else {
+                    super::super::confidential_absent_input_path_v3::<2>()
+                },
             }
         }
         fn sample_witness() -> ConfidentialTransferWitnessV2 {
@@ -2560,8 +2598,13 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         fn sample_full_unshield_witness() -> ConfidentialUnshieldWitnessV2 {
             let transfer = sample_witness_shape(true, false);
+            full_unshield_from_transfer(&transfer)
+        }
+        fn full_unshield_from_transfer(
+            transfer: &ConfidentialTransferWitnessV2,
+        ) -> ConfidentialUnshieldWitnessV2 {
             ConfidentialUnshieldWitnessV2 {
-                include_input_1: true,
+                include_input_1: transfer.include_input_1,
                 input_0_amount: transfer.input_0_amount,
                 input_1_amount: transfer.input_1_amount,
                 input_0_rho: transfer.input_0_rho,
@@ -2577,6 +2620,11 @@ pub(in crate::zk) mod secure_relation_v3 {
         }
         fn sample_change_unshield_witness() -> ConfidentialUnshieldWitnessV3 {
             let full = sample_full_unshield_witness();
+            change_unshield_from_full(&full)
+        }
+        fn change_unshield_from_full(
+            full: &ConfidentialUnshieldWitnessV2,
+        ) -> ConfidentialUnshieldWitnessV3 {
             ConfidentialUnshieldWitnessV3 {
                 include_input_1: full.include_input_1,
                 include_output_0: true,
@@ -2594,6 +2642,103 @@ pub(in crate::zk) mod secure_relation_v3 {
                 input_0_path: full.input_0_path.clone(),
                 input_1_path: full.input_1_path.clone(),
             }
+        }
+        #[test]
+        fn internal_witness_debug_redacts_spend_scalar_and_all_openings() {
+            let transfer = sample_witness();
+            let full = sample_full_unshield_witness();
+            let change = sample_change_unshield_witness();
+            let values: [(&dyn core::fmt::Debug, &str); 3] = [
+                (&transfer, "ConfidentialTransferWitnessV2"),
+                (&full, "ConfidentialUnshieldWitnessV2"),
+                (&change, "ConfidentialUnshieldWitnessV3"),
+            ];
+            for (value, name) in values {
+                for rendered in [format!("{value:?}"), format!("{value:#?}")] {
+                    let fields = rendered.strip_prefix(name).unwrap();
+                    assert!(fields.contains(".."));
+                    assert!(
+                        fields
+                            .bytes()
+                            .all(|byte| matches!(byte, b' ' | b'\n' | b'{' | b'}' | b'.'))
+                    );
+                }
+            }
+        }
+        #[test]
+        fn secure_single_input_relations_accept_full_trees() {
+            const K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
+            let mut transfer = sample_witness_shape(false, false);
+            let commitment = scalar_to_repr_bytes(expected_instances(&transfer)[0][0]);
+            transfer.input_0_path = super::super::tests::full_tree_input_path_v3::<2>(commitment);
+            assert_ne!(transfer.input_0_path.root, transfer.input_1_path.root);
+            let builder = transfer_builder::<2>(Some(&transfer), K).expect("single-input transfer");
+            MockProver::run(K as u32, &builder, expected_instances(&transfer))
+                .expect("full-tree single-input transfer")
+                .assert_satisfied();
+            let full = full_unshield_from_transfer(&transfer);
+            let builder = unshield_builder::<2>(UnshieldWitnessRef::Full(Some(&full)), K)
+                .expect("single-input full unshield");
+            MockProver::run(K as u32, &builder, expected_full_unshield_instances(&full))
+                .expect("full-tree single-input full unshield")
+                .assert_satisfied();
+            let mut change = change_unshield_from_full(&full);
+            for include_output_0 in [true, false] {
+                change.include_output_0 = include_output_0;
+                if !include_output_0 {
+                    change.output_0_amount = 0;
+                    change.output_0_rho = [0; 32];
+                }
+                let builder = unshield_builder::<2>(UnshieldWitnessRef::Change(Some(&change)), K)
+                    .expect("single-input change or terminal unshield");
+                MockProver::run(
+                    K as u32,
+                    &builder,
+                    expected_change_unshield_instances(&change),
+                )
+                .expect("full-tree single-input change or terminal unshield")
+                .assert_satisfied();
+            }
+        }
+        #[test]
+        fn secure_present_second_input_rejects_membership_in_another_tree() {
+            const K: usize = super::super::CONFIDENTIAL_TRANSFER_V2_IPA_K as usize;
+            let mut transfer = sample_witness_shape(true, false);
+            let commitment = scalar_to_repr_bytes(expected_instances(&transfer)[1][0]);
+            // This is a valid path for the correct second note, but against a
+            // different root. Rejection must come from the presence-gated
+            // common-root constraint, not from malformed path arithmetic.
+            transfer.input_1_path = super::super::tests::full_tree_input_path_v3::<2>(commitment);
+            assert_ne!(transfer.input_0_path.root, transfer.input_1_path.root);
+            let builder = transfer_builder::<2>(Some(&transfer), K).expect("canonical transfer");
+            assert!(
+                MockProver::run(K as u32, &builder, expected_instances(&transfer))
+                    .expect("different-root transfer")
+                    .verify()
+                    .is_err()
+            );
+            let full = full_unshield_from_transfer(&transfer);
+            let builder = unshield_builder::<2>(UnshieldWitnessRef::Full(Some(&full)), K)
+                .expect("canonical full unshield");
+            assert!(
+                MockProver::run(K as u32, &builder, expected_full_unshield_instances(&full))
+                    .expect("different-root full unshield")
+                    .verify()
+                    .is_err()
+            );
+            let change = change_unshield_from_full(&full);
+            let builder = unshield_builder::<2>(UnshieldWitnessRef::Change(Some(&change)), K)
+                .expect("canonical change unshield");
+            assert!(
+                MockProver::run(
+                    K as u32,
+                    &builder,
+                    expected_change_unshield_instances(&change)
+                )
+                .expect("different-root change unshield")
+                .verify()
+                .is_err()
+            );
         }
         fn expected_full_unshield_instances(
             witness: &ConfidentialUnshieldWitnessV2,
@@ -2986,6 +3131,64 @@ pub fn compute_confidential_merkle_path_v2(
     leaf_index: usize,
 ) -> Result<ConfidentialMerklePathV2, String> {
     compute_confidential_merkle_path_v3(commitments, leaf_index)
+}
+/// Construct the private empty-tree path used only for an absent input slot.
+///
+/// The circuit gates this slot's root equality by its constrained presence
+/// bit. The dummy root is never required to occur in the ledger's root history.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn confidential_absent_input_path_v3<const DEPTH: usize>() -> ConfidentialMerklePathV2 {
+    let mut node =
+        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
+    let mut siblings = Vec::with_capacity(DEPTH);
+    let mut witness_nodes = Vec::with_capacity(DEPTH);
+    for _ in 0..DEPTH {
+        siblings.push(scalar_to_repr_bytes(node));
+        node = merkle_parent_v3(node, node);
+        witness_nodes.push(scalar_to_repr_bytes(node));
+    }
+    ConfidentialMerklePathV2 {
+        siblings,
+        directions: vec![0; DEPTH],
+        witness_nodes,
+        root: scalar_to_repr_bytes(node),
+    }
+}
+/// Resolve an optional tree-backed input without requiring an unused ledger leaf.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn confidential_optional_input_path_v3(
+    commitments: &[[u8; 32]],
+    leaf_index: Option<usize>,
+) -> Result<ConfidentialMerklePathV2, String> {
+    match leaf_index {
+        Some(index) => compute_confidential_merkle_path_v2(commitments, index),
+        None => Ok(confidential_absent_input_path_v3::<
+            CONFIDENTIAL_TREE_DEPTH_V2,
+        >()),
+    }
+}
+/// Reject impossible public tree shapes before hashing leaves or generating keys.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn validate_confidential_tree_input_shape_v3(
+    commitment_count: usize,
+    leaf_indices: impl ExactSizeIterator<Item = usize>,
+) -> Result<(), String> {
+    if leaf_indices.len() == 0 || leaf_indices.len() > 2 {
+        return Err("confidential proofs support one or two inputs".to_owned());
+    }
+    if commitment_count > CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "confidential V3 tree supports at most {CONFIDENTIAL_TREE_CAPACITY_V2} leaves"
+        ));
+    }
+    for leaf_index in leaf_indices {
+        if leaf_index >= commitment_count {
+            return Err(
+                "confidential input leaf_index must identify a supplied tree commitment".to_owned(),
+            );
+        }
+    }
+    Ok(())
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn poseidon_tag_v3(domain: u64, label: &[u8], bytes: &[u8]) -> Result<Scalar, String> {
@@ -3881,7 +4084,7 @@ pub(super) fn normalize_supplied_confidential_merkle_path_v2(
     })
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 /// Secret openings and authenticated paths consumed by the secure transfer
 /// gadget when it is embedded in the recursive StepEq circuit.
 pub(crate) struct ConfidentialTransferWitnessV2 {
@@ -3936,7 +4139,7 @@ impl Drop for ConfidentialTransferWitnessV2 {
     }
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct ConfidentialUnshieldWitnessV2 {
     include_input_1: bool,
     input_0_amount: u128,
@@ -3975,7 +4178,7 @@ impl Drop for ConfidentialUnshieldWitnessV2 {
     }
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 /// Secret input openings, paths, and private change opening consumed by the
 /// secure change-unshield gadget embedded in recursive StepEq.
 pub(crate) struct ConfidentialUnshieldWitnessV3 {
@@ -4196,6 +4399,7 @@ where
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn encode_halo2_envelope(
+    required_relation: super::ProofRelation,
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
     schema_descriptor: Vec<u8>,
@@ -4216,10 +4420,23 @@ fn encode_halo2_envelope(
     };
     let encoded = norito::encode_canonical(&envelope)
         .map_err(|err| format!("failed to encode confidential proof envelope: {err}"))?;
-    Ok(ProofBox::new(
-        super::ZK_BACKEND_HALO2_IPA.to_owned(),
-        encoded,
-    ))
+    let proof = ProofBox::new(super::ZK_BACKEND_HALO2_IPA.to_owned(), encoded);
+    let cap = CONFIDENTIAL_V2_MAX_PROOF_BYTES as usize;
+    super::verify_for_relation(
+        required_relation,
+        &proof,
+        vk_box,
+        super::ZkVerifyGuardrails {
+            halo2_enabled: true,
+            halo2_max_envelope_bytes: cap,
+            halo2_max_proof_bytes: cap,
+            stark_enabled: false,
+            stark_max_envelope_bytes: 0,
+            stark_max_proof_bytes: 0,
+        },
+    )
+    .map_err(|err| format!("generated confidential proof failed local self-verification: {err}"))?;
+    Ok(proof)
 }
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 struct PreparedConfidentialTransferV3 {
@@ -4408,7 +4625,7 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
     >,
 ) -> Result<ConfidentialTransferProofV2, String> {
     ensure_confidential_transfer_v2_canonical_vk_box(vk_box)?;
-    let (params, parsed_vk) = parse_vk_for_transfer(circuit_id, vk_box)?;
+    let (params, _parsed_vk) = parse_vk_for_transfer(circuit_id, vk_box)?;
     let prepared = prepare_confidential_transfer_v3_resolved_paths(
         network_id,
         asset_definition_id,
@@ -4440,19 +4657,8 @@ fn build_confidential_transfer_proof_v2_resolved_paths(
         &instance_wrapper,
         "transfer",
     )?;
-    {
-        let proofs_instances = [&instance_refs[..]];
-        super::halo2_backend::verify_ipa_proof(
-            &params,
-            &parsed_vk,
-            proof_raw.as_slice(),
-            &proofs_instances,
-        )
-        .map_err(|err| {
-            format!("generated confidential transfer proof failed local self-verification: {err}")
-        })?;
-    }
     let proof = encode_halo2_envelope(
+        super::ProofRelation::ConfidentialTransfer,
         CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,
         vk_box,
         CONFIDENTIAL_TRANSFER_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
@@ -4479,6 +4685,13 @@ pub fn build_confidential_transfer_proof_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialTransferProofV2, String> {
+    validate_confidential_tree_input_shape_v3(
+        tree_commitments.len(),
+        inputs.iter().map(|input| input.leaf_index),
+    )?;
+    if outputs.is_empty() || outputs.len() > 2 {
+        return Err("confidential transfer v2 supports one or two outputs".to_owned());
+    }
     let computed_root = compute_confidential_root_v2(tree_commitments)?;
     if computed_root != root_hint {
         return Err("tree commitments do not match the supplied root_hint".to_owned());
@@ -4516,13 +4729,13 @@ pub fn build_confidential_transfer_proof_v2(
             }
             let input_0_path =
                 compute_confidential_merkle_path_v2(tree_commitments, input_0.leaf_index)?;
-            let input_1_path = compute_confidential_merkle_path_v2(
+            let input_1_path = confidential_optional_input_path_v3(
                 tree_commitments,
-                input_1
-                    .as_ref()
-                    .map_or(tree_commitments.len(), |note| note.leaf_index),
+                input_1.map(|note| note.leaf_index),
             )?;
-            if input_0_path.root != root_hint || input_1_path.root != root_hint {
+            if input_0_path.root != root_hint
+                || (input_1.is_some() && input_1_path.root != root_hint)
+            {
                 return Err("computed confidential Merkle path does not match root_hint".to_owned());
             }
             Ok((input_0_path, input_1_path))
@@ -4538,7 +4751,7 @@ fn normalize_confidential_transfer_paths_v3(
     input_0_commitment: [u8; 32],
     input_1_commitment: [u8; 32],
 ) -> Result<(ConfidentialMerklePathV2, ConfidentialMerklePathV2), String> {
-    let expected_paths = 2;
+    let expected_paths = 1 + usize::from(input_1.is_some());
     if input_paths.len() != expected_paths {
         return Err(format!(
             "confidential transfer v2 path mode requires exactly {expected_paths} input paths"
@@ -4560,17 +4773,12 @@ fn normalize_confidential_transfer_paths_v3(
             "transfer input 1 path",
         )?
     } else {
-        normalize_supplied_confidential_merkle_path_v2(
-            [0u8; 32],
-            None,
-            &input_paths[1],
-            root_hint,
-            "transfer dummy input 1 path",
-        )?
+        confidential_absent_input_path_v3::<CONFIDENTIAL_TREE_DEPTH_V2>()
     };
     Ok((input_0_path, input_1_path))
 }
-/// Build a confidential transfer proof using explicitly supplied input paths.
+/// Build a confidential transfer proof with one membership path per actual input.
+/// An absent second input is padded internally and needs no caller-supplied path.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_transfer_proof_v2_with_paths(
     network_id: &NetworkId,
@@ -4729,6 +4937,7 @@ fn build_confidential_unshield_proof_v2_resolved_paths(
         "unshield",
     )?;
     let proof = encode_halo2_envelope(
+        super::ProofRelation::ConfidentialFullUnshield,
         CONFIDENTIAL_UNSHIELD_V2_CIRCUIT_ID,
         vk_box,
         CONFIDENTIAL_UNSHIELD_V2_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
@@ -4758,6 +4967,10 @@ pub fn build_confidential_unshield_proof_v2(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV2, String> {
+    validate_confidential_tree_input_shape_v3(
+        tree_commitments.len(),
+        inputs.iter().map(|input| input.leaf_index),
+    )?;
     let computed_root = compute_confidential_root_v2(tree_commitments)?;
     if computed_root != root_hint {
         return Err("tree commitments do not match the supplied root_hint".to_owned());
@@ -4795,13 +5008,13 @@ pub fn build_confidential_unshield_proof_v2(
             }
             let input_0_path =
                 compute_confidential_merkle_path_v2(tree_commitments, input_0.leaf_index)?;
-            let input_1_path = compute_confidential_merkle_path_v2(
+            let input_1_path = confidential_optional_input_path_v3(
                 tree_commitments,
-                input_1
-                    .as_ref()
-                    .map_or(tree_commitments.len(), |note| note.leaf_index),
+                input_1.map(|note| note.leaf_index),
             )?;
-            if input_0_path.root != root_hint || input_1_path.root != root_hint {
+            if input_0_path.root != root_hint
+                || (input_1.is_some() && input_1_path.root != root_hint)
+            {
                 return Err("computed confidential Merkle path does not match root_hint".to_owned());
             }
             Ok((input_0_path, input_1_path))
@@ -4817,10 +5030,11 @@ fn normalize_confidential_unshield_full_paths_v3(
     input_0_commitment: [u8; 32],
     input_1_commitment: [u8; 32],
 ) -> Result<(ConfidentialMerklePathV2, ConfidentialMerklePathV2), String> {
-    if input_paths.len() != 2 {
-        return Err(
-            "full confidential unshield path mode requires exactly two input paths".to_owned(),
-        );
+    let expected_paths = 1 + usize::from(input_1.is_some());
+    if input_paths.len() != expected_paths {
+        return Err(format!(
+            "full confidential unshield path mode requires exactly {expected_paths} input paths"
+        ));
     }
     let input_0_path = normalize_supplied_confidential_merkle_path_v2(
         input_0_commitment,
@@ -4838,18 +5052,12 @@ fn normalize_confidential_unshield_full_paths_v3(
             "full unshield input 1 path",
         )?
     } else {
-        normalize_supplied_confidential_merkle_path_v2(
-            [0; 32],
-            None,
-            &input_paths[1],
-            root_hint,
-            "full unshield dummy input 1 path",
-        )?
+        confidential_absent_input_path_v3::<CONFIDENTIAL_TREE_DEPTH_V2>()
     };
     Ok((input_0_path, input_1_path))
 }
-/// Build a terminal full-redemption proof from two caller-supplied,
-/// canonically normalized membership paths. No private change output is
+/// Build a terminal full-redemption proof with one canonically normalized
+/// membership path per actual input. No private change output is
 /// invented and no change-preserving circuit is selected.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 #[allow(clippy::too_many_arguments)]
@@ -5103,6 +5311,7 @@ fn build_confidential_unshield_proof_v3_resolved_paths(
         "unshield",
     )?;
     let proof = encode_halo2_envelope(
+        super::ProofRelation::ConfidentialChangeUnshield,
         CONFIDENTIAL_UNSHIELD_V3_CIRCUIT_ID,
         vk_box,
         CONFIDENTIAL_UNSHIELD_V3_PUBLIC_INPUTS_SCHEMA_V1.to_vec(),
@@ -5133,6 +5342,15 @@ pub fn build_confidential_unshield_proof_v3(
     circuit_id: &str,
     vk_box: &VerifyingKeyBox,
 ) -> Result<ConfidentialUnshieldProofV3, String> {
+    validate_confidential_tree_input_shape_v3(
+        tree_commitments.len(),
+        inputs.iter().map(|input| input.leaf_index),
+    )?;
+    if outputs.len() > 1 {
+        return Err(
+            "confidential unshield v3 supports at most one private change output".to_owned(),
+        );
+    }
     let computed_root = compute_confidential_root_v2(tree_commitments)?;
     if computed_root != root_hint {
         return Err("tree commitments do not match the supplied root_hint".to_owned());
@@ -5171,13 +5389,13 @@ pub fn build_confidential_unshield_proof_v3(
             }
             let input_0_path =
                 compute_confidential_merkle_path_v2(tree_commitments, input_0.leaf_index)?;
-            let input_1_path = compute_confidential_merkle_path_v2(
+            let input_1_path = confidential_optional_input_path_v3(
                 tree_commitments,
-                input_1
-                    .as_ref()
-                    .map_or(tree_commitments.len(), |note| note.leaf_index),
+                input_1.map(|note| note.leaf_index),
             )?;
-            if input_0_path.root != root_hint || input_1_path.root != root_hint {
+            if input_0_path.root != root_hint
+                || (input_1.is_some() && input_1_path.root != root_hint)
+            {
                 return Err("computed confidential Merkle path does not match root_hint".to_owned());
             }
             Ok((input_0_path, input_1_path))
@@ -5193,7 +5411,7 @@ fn normalize_confidential_unshield_change_paths_v4(
     input_0_commitment: [u8; 32],
     input_1_commitment: [u8; 32],
 ) -> Result<(ConfidentialMerklePathV2, ConfidentialMerklePathV2), String> {
-    let expected_paths = 2;
+    let expected_paths = 1 + usize::from(input_1.is_some());
     if input_paths.len() != expected_paths {
         return Err(format!(
             "confidential unshield v3 path mode requires exactly {expected_paths} input paths"
@@ -5215,17 +5433,12 @@ fn normalize_confidential_unshield_change_paths_v4(
             "unshield input 1 path",
         )?
     } else {
-        normalize_supplied_confidential_merkle_path_v2(
-            [0u8; 32],
-            None,
-            &input_paths[1],
-            root_hint,
-            "unshield dummy input 1 path",
-        )?
+        confidential_absent_input_path_v3::<CONFIDENTIAL_TREE_DEPTH_V2>()
     };
     Ok((input_0_path, input_1_path))
 }
-/// Build a terminal-full or change-preserving V3 unshield using explicit paths.
+/// Build a terminal-full or change-preserving V3 unshield with one path per actual input.
+/// An absent second input is padded internally and needs no caller-supplied path.
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub fn build_confidential_unshield_proof_v3_with_paths(
     network_id: &NetworkId,

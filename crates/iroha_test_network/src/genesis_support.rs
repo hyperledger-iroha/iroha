@@ -224,7 +224,7 @@ pub fn sign_prepared_genesis_from_config(
             Some(config.genesis_confidential_policy_hash),
         )
         .wrap_err("build and sign canonical prepared genesis")?;
-    let topology = iroha_core::sumeragi::signed_genesis_voting_peers(&proposal)
+    let topology = iroha_core::sumeragi::startup::genesis_committee_peers(&proposal.0)
         .map_err(|error| eyre!("derive prepared genesis voting roster: {error}"))?;
     let genesis_account = AccountId::new(key_pair.public_key().clone());
     let (block, _) = crate::config::preexecute_genesis_with_runtime_config(

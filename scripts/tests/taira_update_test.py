@@ -402,7 +402,7 @@ class CoordinatorTests(unittest.TestCase):
             def root_stat(fd):
                 value=actual_fstat(fd)
                 return SimpleNamespace(st_mode=value.st_mode,st_uid=0,st_gid=0,st_nlink=value.st_nlink,
-                                       st_dev=value.st_dev,st_ino=value.st_ino)
+                                       st_dev=value.st_dev,st_ino=value.st_ino,st_size=value.st_size)
             def root_stamp(path,directory=False):
                 value=Path(path).lstat()
                 return [value.st_dev,value.st_ino,value.st_mode,0,0,value.st_nlink]
@@ -2161,7 +2161,8 @@ class DeploymentLockTests(unittest.TestCase):
             def owned(fd):
                 value = real_fstat(fd)
                 return SimpleNamespace(st_mode=value.st_mode, st_uid=0, st_gid=0,
-                    st_nlink=value.st_nlink, st_dev=value.st_dev, st_ino=value.st_ino)
+                    st_nlink=value.st_nlink, st_dev=value.st_dev, st_ino=value.st_ino,
+                    st_size=value.st_size)
             def stamped(path, directory=False):
                 value = Path(path).lstat()
                 return [value.st_dev, value.st_ino, value.st_mode, 0, 0, value.st_nlink]
@@ -2234,7 +2235,7 @@ class DeploymentLockTests(unittest.TestCase):
             def owned(fd):
                 info = real_fstat(fd)
                 return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_gid=0,
-                    st_nlink=info.st_nlink, st_dev=info.st_dev, st_ino=info.st_ino)
+                    st_nlink=info.st_nlink, st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size)
             def stamped(path, directory=False):
                 info = Path(path).lstat()
                 return [info.st_dev, info.st_ino, info.st_mode, 0, 0, info.st_nlink]
@@ -2253,6 +2254,119 @@ class DeploymentLockTests(unittest.TestCase):
                 self.assertTrue(marker.is_symlink())
                 apply.assert_not_called()
                 self.assertIsNone(guest.DEPLOYMENT_LOCK_FD)
+
+
+    def test_retired_worker_paths_reject_every_existing_kind_without_mutation(self):
+        value = fresh_guest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state, unit = root/'retired-state', root/'retired.service'
+            with patch.object(value, 'RETIRED_WORKER_STATE', state), \
+                 patch.object(value, 'RETIRED_WORKER_UNIT', unit), \
+                 patch.object(value.subprocess, 'run') as process:
+                value.reject_retired_epoch_worker()
+                for path in (state, unit):
+                    for kind in ('file', 'directory', 'dangling-link'):
+                        with self.subTest(path=path, kind=kind):
+                            if kind == 'file': path.write_bytes(b'opaque retained evidence')
+                            elif kind == 'directory': path.mkdir()
+                            else: path.symlink_to(root/'missing')
+                            before = path.lstat()
+                            with self.assertRaisesRegex(RuntimeError, 'retired epoch worker'):
+                                value.reject_retired_epoch_worker()
+                            self.assertEqual(path.lstat(), before)
+                            if kind == 'directory': path.rmdir()
+                            else: path.unlink()
+                process.assert_not_called()
+
+    def test_deployment_lock_must_exist_empty_and_retired_state_is_rejected_under_lock(self):
+        value = fresh_guest()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime, state = root/'runtime', root/'state'
+            runtime.mkdir(); state.mkdir()
+            lock, retired = state/'.deployment.lock', root/'retired'
+            plan = {'deployment': {'runtime_root': str(runtime)}}
+            actual_fstat = os.fstat
+            def owned(fd):
+                info = actual_fstat(fd)
+                return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_gid=0,
+                    st_nlink=info.st_nlink, st_dev=info.st_dev, st_ino=info.st_ino, st_size=info.st_size)
+            def stamped(path, directory=False):
+                info = Path(path).lstat()
+                return [info.st_dev, info.st_ino, info.st_mode, 0, 0, info.st_nlink]
+            original_reject = value.reject_retired_epoch_worker
+            def reject_while_held():
+                contender = os.open(lock, os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(contender)
+                original_reject()
+            with patch.object(value, 'DEPLOYMENT_STATE_ROOT', state), \
+                 patch.object(value, 'RETIRED_WORKER_STATE', retired), \
+                 patch.object(value, 'RETIRED_WORKER_UNIT', root/'retired.service'), \
+                 patch.object(value, 'reject_retired_epoch_worker', side_effect=reject_while_held), \
+                 patch.object(value.os, 'fstat', side_effect=owned), \
+                 patch.object(value, 'stamp', side_effect=stamped), patch.object(value, 'apply') as apply:
+                with self.assertRaises(FileNotFoundError): value.apply_locked(plan, CAPACITY_SOURCE)
+                self.assertFalse(lock.exists())
+                lock.write_bytes(b'not empty'); lock.chmod(0o600)
+                with self.assertRaisesRegex(RuntimeError, 'invalid guest deployment lock'):
+                    value.apply_locked(plan, CAPACITY_SOURCE)
+                lock.write_bytes(b'')
+                retired.symlink_to(root/'missing')
+                with self.assertRaisesRegex(RuntimeError, 'retired epoch worker'):
+                    value.apply_locked(plan, CAPACITY_SOURCE)
+                apply.assert_not_called()
+                self.assertTrue(retired.is_symlink())
+                self.assertIsNone(value.DEPLOYMENT_LOCK_FD)
+                retired.unlink()
+                value.apply_locked(plan, CAPACITY_SOURCE)
+                apply.assert_called_once_with(plan, CAPACITY_SOURCE)
+
+    def test_retired_worker_plans_and_receipts_are_rejected_without_host_actions(self):
+        for field in ('epoch_supervisor', 'epoch_supervisor_installed',
+                      'epoch_supervisor_renderer_sha256'):
+            with self.subTest(field=field), patch.object(runner.subprocess, 'run') as remote:
+                build, prior = fixture()
+                prior[field] = {'opaque': 'not decoded'}
+                with self.assertRaisesRegex(RuntimeError, 'retired epoch worker plan'):
+                    plan_for(build, prior)
+                plan = plan_for()
+                plan[field] = None
+                with self.assertRaisesRegex(RuntimeError, 'retired epoch worker plan'):
+                    fresh_guest().configure(plan)
+                remote.assert_not_called()
+        plan, records = failed_fixture()
+        records['epoch-supervisor-paused.json'] = {}
+        with tempfile.TemporaryDirectory() as directory:
+            reference = write_failed_reference(directory, records)
+            with self.assertRaisesRegex(RuntimeError, 'reference fields differ'):
+                plan_for(failed_start=reference)
+
+    def test_retired_worker_runner_and_schema_cannot_reappear(self):
+        self.assertFalse((SCRIPTS/'taira_epoch_supervisor_unit.py').exists())
+        self.assertFalse((SCRIPTS/'tests/taira_epoch_supervisor_unit_test.py').exists())
+        source = GUEST_FILE.read_text()
+        functions = {node.name for node in ast.walk(ast.parse(source))
+                     if isinstance(node, ast.FunctionDef)}
+        self.assertFalse(any(name.startswith('supervisor_') for name in functions))
+        for path in (GUEST_FILE, SCRIPTS/'taira_update.py'):
+            text = path.read_text()
+            for retired in ('epoch-maintenance', 'epoch-supervisor-host',
+                            'taira.epoch-supervisor-update.v1'):
+                self.assertNotIn(retired, text)
+        plan = plan_for()
+        source = runner.transfer_code('iroha', False, plan, admission_for(plan))
+        self.assertIn("state=Path('/var/lib/taira-deployment')", source)
+        self.assertIn('lock=os.open(lock_path,os.O_RDWR|os.O_NOFOLLOW)', source)
+        self.assertLess(source.index('fcntl.flock('), source.index("state/'.reset-owner.json'"))
+        self.assertLess(source.index('retired epoch worker service'), source.index('release=base/'))
+        self.assertNotIn('state.mkdir', source)
+        self.assertFalse(plan['transaction_submission'])
+        self.assertFalse(plan['python_transaction_submission'])
 
 
 class ArtifactPreparationPhaseTests(unittest.TestCase):
@@ -2297,7 +2411,7 @@ class ArtifactPreparationPhaseTests(unittest.TestCase):
             def owned(fd):
                 info=real_fstat(fd)
                 return SimpleNamespace(st_mode=info.st_mode,st_uid=0,st_gid=0,
-                    st_nlink=info.st_nlink,st_dev=info.st_dev,st_ino=info.st_ino)
+                    st_nlink=info.st_nlink,st_dev=info.st_dev,st_ino=info.st_ino,st_size=info.st_size)
             def stamp(path,directory=False):
                 path=Path(path); info=path.lstat()
                 if path.resolve()!=path or (not directory and info.st_nlink!=1):

@@ -774,7 +774,7 @@ mod tests {
     fn threshold_key_lifecycle_event_roundtrips() {
         assert_roundtrip(&GovernanceEvent::ThresholdKeyLifecycleApplied(
             GovernanceThresholdKeyLifecycleAppliedV1 {
-                action: crate::isi::consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+                action: crate::isi::consensus_keys::ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
                 session_id: [0x31; 32],
                 transcript_hash: [0x32; 32],
                 effective_height: 41,

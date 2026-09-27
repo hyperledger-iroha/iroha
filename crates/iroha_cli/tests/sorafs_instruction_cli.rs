@@ -26,18 +26,7 @@ fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
         BASE64_STD.encode(to_bytes(&sample_declaration()).expect("serialize declaration"));
     fs::write(
         &summary_path,
-        format!(
-            concat!(
-                "{{\n",
-                "  \"declaration_b64\": \"{declaration_b64}\",\n",
-                "  \"registered_epoch\": 580,\n",
-                "  \"metadata\": {{\n",
-                "    \"sorafs.owner_account_id\": \"testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"\n",
-                "  }}\n",
-                "}}\n"
-            ),
-            declaration_b64 = declaration_b64
-        ),
+        format!("{{\"declaration_b64\":\"{declaration_b64}\"}}\n"),
     )
     .expect("write declaration summary");
     let payload = run_builder([
@@ -49,32 +38,39 @@ fn tx_stdin_builder_wraps_capacity_declaration_summaries() {
         .as_any()
         .downcast_ref::<RegisterCapacityDeclaration>()
         .expect("register capacity declaration");
-    assert_eq!(declaration.record.provider_id.as_bytes(), &[0x11; 32],);
-    assert_eq!(declaration.record.registered_epoch, 580);
-    assert_eq!(declaration.record.valid_from_epoch, 1_700_000_000);
-    assert_eq!(declaration.record.valid_until_epoch, 1_700_086_400);
+    let decoded: CapacityDeclarationV1 = decode_from_bytes(&declaration.declaration).unwrap();
+    assert_eq!(decoded, sample_declaration());
+    assert_eq!(decoded.provider_id, [0x11; 32]);
+    assert_eq!(decoded.valid_from, 1_700_000_000);
+    assert_eq!(decoded.valid_until, 1_700_086_400);
 }
 #[test]
-fn tx_stdin_builder_rejects_redundant_capacity_validity_summary() {
+fn tx_stdin_builder_rejects_redundant_capacity_summary_fields() {
     let temp = tempdir().expect("tempdir");
     let summary_path = temp.path().join("redundant_declaration_summary.json");
-    let declaration_b64 =
-        BASE64_STD.encode(to_bytes(&sample_declaration()).expect("serialize declaration"));
-    fs::write(
-        &summary_path,
-        format!(
-            "{{\n  \"declaration_b64\": \"{declaration_b64}\",\n  \"registered_epoch\": 580,\n  \"valid_from_epoch\": 580\n}}\n"
-        ),
-    )
-    .expect("write declaration summary");
-    let stderr = run_builder_failure([
-        "capacity-declaration".to_owned(),
-        format!("--summary={}", summary_path.display()),
-    ]);
-    assert!(
-        stderr.contains("valid_from_epoch") && stderr.contains("must be omitted"),
-        "payload validity must be authoritative: {stderr}"
-    );
+    let declaration_b64 = BASE64_STD.encode(to_bytes(&sample_declaration()).unwrap());
+    for field in [
+        "registered_epoch",
+        "valid_from_epoch",
+        "valid_until_epoch",
+        "provider_id_hex",
+        "committed_capacity_gib",
+        "metadata",
+    ] {
+        fs::write(
+            &summary_path,
+            format!("{{\"declaration_b64\":\"{declaration_b64}\",\"{field}\":580}}\n"),
+        )
+        .unwrap();
+        let stderr = run_builder_failure([
+            "capacity-declaration".to_owned(),
+            format!("--summary={}", summary_path.display()),
+        ]);
+        assert!(
+            stderr.contains(field) && stderr.contains("must be omitted"),
+            "redundant {field} must be rejected: {stderr}"
+        );
+    }
 }
 #[test]
 fn tx_stdin_builder_wraps_replication_order_summaries() {

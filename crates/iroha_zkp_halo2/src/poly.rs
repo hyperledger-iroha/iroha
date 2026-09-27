@@ -1,4 +1,10 @@
 //! Polynomial representation and commit/open operations via IPA.
+//!
+//! These commitments and opening proofs are deterministic and unblinded. They
+//! establish a polynomial evaluation, not a zero-knowledge application relation.
+//! Coefficients use ordinary public storage; this API supplies neither hiding
+//! randomness nor secret-memory ownership. Private applications need a complete
+//! masking relation and its dedicated prover, not this standalone primitive.
 use crate::{
     IpaScalar, PolyOpenTranscriptMetadata,
     backend::{IpaBackend, traits::IpaGroup},
@@ -10,6 +16,9 @@ use crate::{
 };
 /// Dense polynomial over backend scalar field represented by its coefficients in
 /// ascending order, i.e., `coeffs[i]` is the coefficient of `x^i`.
+///
+/// This is an unblinded public polynomial. `Debug` prints coefficients, and
+/// `Clone` copies their ordinary allocation. It is not a secret witness owner.
 #[derive(Clone, Debug)]
 pub struct Polynomial<B: IpaBackend> {
     coeffs: Vec<B::Scalar>,
@@ -59,10 +68,12 @@ impl<B: IpaBackend> Polynomial<B> {
         acc
     }
     /// Commits to the coefficient vector using the `g` generators from `params`.
+    /// Equal coefficient vectors produce equal commitments; no blinding is added.
     pub fn commit(&self, params: &Params<B>) -> Result<B::Group, Error> {
         commit_vec::<B>(params.g(), &self.coeffs)
     }
     /// Creates an opening proof at point `z` that the committed polynomial evaluates to `t` at `z`.
+    /// This deterministic opening has no standalone zero-knowledge guarantee.
     pub fn open(
         &self,
         params: &Params<B>,

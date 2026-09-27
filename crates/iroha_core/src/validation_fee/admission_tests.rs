@@ -1219,7 +1219,7 @@ fn native_repo_ds_movements_fail_closed_at_top_level() {
     let treasury = account(3);
     let policy = policy(&treasury);
     let fee_asset = policy_fee_asset(&policy);
-    let xor = asset_definition("xor");
+    let xor = xor_asset();
     let blocked = [
         (
             InstructionBox::from(RepoInstructionBox::from(repo_initiate(
@@ -1300,7 +1300,7 @@ fn native_settlement_ds_movements_fail_closed_through_wrappers() {
     let multisig = account(4);
     let policy = policy(&treasury);
     let fee_asset = policy_fee_asset(&policy);
-    let xor = asset_definition("xor");
+    let xor = xor_asset();
     let dvp = DvpIsi::new(
         "wrapped_ds_dvp".parse().expect("settlement id"),
         settlement_leg(&xor, &initiator, &counterparty),
@@ -1370,7 +1370,7 @@ fn opaque_trigger_artifacts_reject_native_repo_ds_movement() {
     let treasury = account(3);
     let policy = policy(&treasury);
     let fee_asset = policy_fee_asset(&policy);
-    let xor = asset_definition("xor");
+    let xor = xor_asset();
     let trigger_id: iroha_data_model::trigger::TriggerId =
         "opaque_repo_ds_trigger".parse().expect("trigger id");
     let trigger = Trigger::new(
@@ -1685,7 +1685,7 @@ fn opaque_deferred_artifacts_reject_fee_asset_but_allow_generic_assets() {
     let treasury = account(3);
     let policy = policy(&treasury);
     let fee_asset = policy_fee_asset(&policy);
-    let xor = asset_definition("xor");
+    let xor = xor_asset();
     let mut instruction_groups = std::collections::BTreeMap::new();
     instruction_groups.insert(
         user.clone(),

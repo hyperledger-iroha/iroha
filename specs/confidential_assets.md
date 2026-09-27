@@ -13,6 +13,19 @@ SPDX-License-Identifier: Apache-2.0
 - Out of scope: off-ledger traffic analysis, quantum adversaries (tracked separately under PQ roadmap), ledger availability attacks.
 
 ## Design Overview
+The Rust wallet entrypoint is `iroha_core::zk::confidential::ConfidentialProver`.
+It binds a typed `NetworkId`, canonical `AssetDefinitionId`, and an owned
+`Zeroizing<[u8; 32]>` spend key. `prove_transfer` and `prove_unshield` select the
+canonical relation/key internally, consume zeroizing note openings, and
+self-verify the resulting proof. `ConfidentialTree` accepts a complete commitment
+prefix or one membership path per actual input; no dummy path is exposed.
+The executable source example is
+[`confidential_redemption.rs`](../crates/iroha_core/examples/confidential_redemption.rs),
+run with `cargo run -p iroha_core --example confidential_redemption`.
+It is local proof construction; active-key, authenticated-root, nullifier and
+transaction authority checks remain owned by ledger admission. Secret opening
+and prover `Debug` output is redacted; returned public proof material is inspectable.
+
 - Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
 - Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
   - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
@@ -28,7 +41,13 @@ SPDX-License-Identifier: Apache-2.0
 
 ### Deterministic Fixtures
 
-Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
+The Swift wallet's encrypted-payload codec uses the deterministic fixture at
+`fixtures/confidential/encrypted_payload_v1.json`. Its positive envelope and
+malformed samples are checked by
+`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift` for
+exact serialization, round trips, and decode errors. The Rust data model tests
+the current exact-eight-slot `ConfidentialMemoEnvelopeV1` separately in
+`crates/iroha_data_model/tests/confidential_memo_envelope_v1.rs`.
 
 The generic proofless `zk::Shield` instruction is not part of the first-release
 wire surface. KAGEMUSHA V1 is a separate aggregate-balance protocol: its
@@ -211,6 +230,17 @@ deterministic and wallets have time to adjust.
   metadata, and validate retained roots and checkpoints. Hot consensus writes
   never substitute that linear rebuild for incremental validation.
 - `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
+- Standalone confidential proof builders take one membership path per actual
+  input. Builders pad an absent slot with the canonical empty-tree path; the
+  fixed two-input circuit gates its common-root equality by the constrained
+  presence bit. A present second input must authenticate against
+  the first input's root. One-note full redemption therefore remains possible
+  when all 65,536 commitment leaves are occupied; no ledger empty leaf or
+  caller-supplied dummy path is required. These retained proof helpers do not
+  restore the retired generic monetary instructions. Tree-list builders reject
+  impossible cardinalities, capacities and indices before Merkle hashing. Every
+  generated envelope passes purpose-bound local verification for its fixed
+  transfer, full-unshield or change-unshield relation within the 192 KiB cap.
 - Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, network_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
 
 ### V1 public-amount proof scalars
@@ -510,23 +540,23 @@ Each phase updates roadmap milestones and associated tests to maintain determini
 
 ### SDK & Fixture Coverage (Phase M1)
 
-Encrypted payload v1 ships with canonical fixtures so every SDK produces the
-same Norito memo envelope. KAGEMUSHA transaction parity is exercised by its
-dedicated V1 suite; there is deliberately no generic confidential wallet-flow
-fixture or encoder:
+The local Swift encrypted-payload codec has an exact-byte fixture. Rust tests
+the exact-eight-slot confidential memo envelope. KAGEMUSHA transaction parity
+is exercised by its dedicated V1 suite; the first-release surface has no
+generic confidential wallet-flow fixture or encoder:
 
 ```bash
-# Rust memo-envelope parity
-cargo test -p iroha_data_model --test confidential_encrypted_payload_vectors
+# Rust exact-eight-slot memo envelope
+cargo test -p iroha_data_model --test confidential_memo_envelope_v1
 
-# Swift memo-envelope parity
+# Swift encrypted-payload fixture
 cd IrohaSwift && swift test --filter ConfidentialEncryptedPayloadTests
 ```
 
 The release-surface guards reject the retired generic and anonymous-escrow type
 names and wire fingerprints while retaining only the KAGEMUSHA V1
-instructions. Updating the encrypted-payload fixture without bumping its format
-version fails parity suites, keeping the SDKs and Rust codec in lock-step.
+instructions. The Swift fixture test checks exact bytes and malformed-input
+behavior; the Rust memo-envelope test checks its current wire shape.
 
 #### Wallet and SDK builders
 

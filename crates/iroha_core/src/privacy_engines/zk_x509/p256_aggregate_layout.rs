@@ -166,6 +166,8 @@ pub(crate) const P256_BINDING_SINK_FIXED_WIDTH_V1: usize =
 /// External-binding residue count.
 pub(crate) const P256_BINDING_SINK_CONSTRAINT_COUNT_V1: usize =
     P256_CROSS_TRACE_SINK_CONSTRAINT_COUNT_V1 + 41;
+/// Maximum sink degree including verifier-fixed gates and optional-input selection.
+pub(crate) const P256_BINDING_SINK_CONSTRAINT_DEGREE_V1: u8 = 3;
 /// Registered sink count including its terminal claim.
 pub(crate) const P256_BINDING_SINK_REGISTERED_CONSTRAINT_COUNT_V1: usize =
     P256_BINDING_SINK_CONSTRAINT_COUNT_V1 + P256_CROSS_TRACE_LANES_V1;

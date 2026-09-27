@@ -1,4 +1,4 @@
-//! Internal typed public-input dispatch for offline compact proof verification.
+//! Internal typed public-input dispatch for canonical masked compact verification.
 //!
 //! Ordinary transfers and AXT transfers have separate entry points. The caller
 //! supplies validated public transfer facts and independently expected PublicIO;
@@ -8,12 +8,10 @@
 //! Successful verification establishes the selected mathematical relation to
 //! the caller's expected inputs. It does not authenticate execution authority,
 //! source finality, permission membership, handle use or production qualification.
-//! Existing production APIs continue to require replay and their default limits.
+//! The caller authenticates execution context before using these typed routes.
 //!
-//! TODO: Complete independent protocol qualification and an authenticated core
-//! context before production admission. Proving integration must
-//! separate public claims from private witness material and retain distinct wire
-//! identity; it must not silently replace legacy `Proof` or AXT payload bytes.
+//! TODO: Complete independent protocol and resource qualification for the masked
+//! producer and bounded verifier; mathematical acceptance is not caller authority.
 
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 

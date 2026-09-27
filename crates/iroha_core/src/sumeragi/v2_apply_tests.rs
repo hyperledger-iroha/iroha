@@ -88,7 +88,7 @@ fn successful_apply_frontier_rendezvous_observes_both_gates_before_worker_comple
         let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
         let (completed, observed) = std::sync::mpsc::channel();
-        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-both-gates")
+        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-both-gates")
             .spawn_scoped(scope, move || {
                 let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
                 worker_pause.before_store.arrive_and_wait();
@@ -134,7 +134,7 @@ fn successful_apply_frontier_worker_exit_before_arrival_notifies_both_gates() {
         std::thread::scope(|scope| {
             let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
             let worker_pause = Arc::clone(&pause);
-            let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-early-exit")
+            let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-early-exit")
                 .spawn_scoped(scope, move || {
                     let _finished = NotifySuccessfulApplyExit(worker_pause);
                     match disposition {
@@ -181,7 +181,7 @@ fn successful_apply_frontier_worker_exit_between_gates_preserves_first_arrival()
     std::thread::scope(|scope| {
         let _release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
-        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-between-gates")
+        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-between-gates")
             .spawn_scoped(scope, move || {
                 let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
                 worker_pause.before_store.arrive_and_wait();
@@ -215,7 +215,7 @@ fn successful_apply_frontier_observer_unwind_releases_and_joins_worker() {
     std::thread::scope(|scope| {
         let release = ReleaseSuccessfulApply(Arc::clone(&pause));
         let worker_pause = Arc::clone(&pause);
-        let worker = crate::sumeragi::sumeragi_thread_builder("apply-frontier-observer-unwind")
+        let worker = crate::sumeragi::threads::sumeragi_thread_builder("apply-frontier-observer-unwind")
             .spawn_scoped(scope, move || {
                 let _finished = NotifySuccessfulApplyExit(Arc::clone(&worker_pause));
                 worker_pause.before_store.arrive_and_wait();
@@ -712,6 +712,34 @@ pub(in crate::sumeragi) fn production_recovered_decision_apply_fixture_v1()
 
 #[cfg(feature = "bls")]
 #[test]
+fn retained_carrier_shells_are_charged_before_execution_and_refunded_once() {
+    let mut fixture = ApplyFixture::new_with_lane_lifecycle();
+    let budget = fixture.service.carrier_shell_budget_for_test();
+    let shell = fixture
+        .service
+        .reserve_carrier_shells()
+        .expect("admit original Native journal shells");
+    let charged = budget.reserved_bytes();
+    assert!(charged > 0);
+    assert_eq!(fixture.service.candidate_executions_for_test(), 0);
+    drop(shell);
+    assert_eq!(budget.reserved_bytes(), 0);
+
+    fixture.service.carrier_shell_budget = mv::allocation::AllocationBudget::new(charged - 1);
+    let refusal = fixture
+        .service
+        .reserve_carrier_shells()
+        .err()
+        .expect("a smaller finite pool refuses before execution");
+    assert!(matches!(
+        refusal.local_refusal(),
+        Some(super::super::v2_body_store::LocalValidationRefusal::PhysicalBusy(_))
+    ));
+    assert_eq!(fixture.service.candidate_executions_for_test(), 0);
+}
+
+#[cfg(feature = "bls")]
+#[test]
 fn current_carrier_accepts_signed_direct_ordinary_route_without_local_queue() {
     let fixture = ApplyFixture::new_with_lane_lifecycle();
     let mut store = fixture.reopen_body_store();
@@ -760,7 +788,7 @@ fn current_carrier_accepts_signed_direct_ordinary_route_without_local_queue() {
 #[test]
 fn retained_current_genesis_executes_once_and_publishes_original_owner() {
     let handle =
-        crate::sumeragi::sumeragi_thread_builder("retained-current-genesis-original-owner")
+        crate::sumeragi::threads::sumeragi_thread_builder("retained-current-genesis-original-owner")
             .spawn(retained_current_genesis_on_consensus_stack)
             .expect("spawn retained genesis test on the production consensus stack");
     if let Err(payload) = handle.join() {

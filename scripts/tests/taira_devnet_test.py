@@ -2669,7 +2669,7 @@ class TairaDevnetTests(unittest.TestCase):
         start = next(command for command in runtime.commands if command[0] == "/bin/bash")
         self.assertTrue(start[1].endswith("network/start.sh"))
         self.assertIsNotNone(runtime.start_env)
-        self.assertEqual(runtime.start_env["IROHA_LOCALNET_FAUCET_RESERVE_RETRIES"], "0")
+        self.assertNotIn("IROHA_LOCALNET_FAUCET_RESERVE_RETRIES", runtime.start_env)
         mcp_methods = [
             payload.get("method")
             for url, payload in runtime.requests

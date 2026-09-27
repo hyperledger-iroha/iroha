@@ -109,6 +109,23 @@ fn exact_v2_fixture(network_id: NetworkId) -> (Arc<SignedBlock>, V2FinalityArtif
             })
             .collect(),
     };
+    let mint_authorization =
+        iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1 {
+            version: iroha_data_model::isi::kagemusha_v1::KAGEMUSHA_CHAIN_VERSION_V1,
+            network_id,
+            epoch: 0,
+            first_height: 1,
+            last_height: 10,
+            authority_generation: mint_roster.generation,
+            authority_id: mint_roster
+                .authority_id()
+                .expect("canonical fixture authority"),
+            beacon: iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Bootstrap,
+            previous_authorization_id: [0; 32],
+            transition_id: [0; 32],
+            decision:
+                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Genesis,
+        };
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,

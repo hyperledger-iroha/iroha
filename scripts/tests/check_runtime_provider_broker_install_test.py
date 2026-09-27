@@ -486,7 +486,7 @@ class RuntimeProviderBrokerInstallCheckerTests(unittest.TestCase):
 
 
 class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
-    def test_systemd_unit_uses_fixed_catalog_uid_and_runtime_directory(self) -> None:
+    def test_systemd_unit_uses_public_catalog_endpoint_uid_and_runtime_directory(self) -> None:
         unit = SYSTEMD_UNIT.read_text(encoding="utf-8")
         for required in (
             "Type=notify",
@@ -502,7 +502,8 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
             "PrivateTmp=true",
             (
                 "ExecStart=/usr/local/libexec/iroha-runtime-provider-broker-v1 "
-                "--catalog /etc/iroha/runtime-provider-broker/catalog.norito"
+                "--catalog /etc/iroha/runtime-provider-broker/catalog.norito "
+                "--broker-endpoint /run/iroha-runtime-provider-broker-v1/runtime-provider-broker-v1.sock"
             ),
         ):
             self.assertIn(required, unit)
@@ -526,7 +527,7 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
         )
         self.assertEqual(GOVERNANCE_DROP_IN.read_text(encoding="utf-8"), expected)
 
-    def test_launchd_plist_has_fixed_public_only_arguments(self) -> None:
+    def test_launchd_plist_has_exact_public_only_arguments(self) -> None:
         payload = plistlib.loads(LAUNCHD_PLIST.read_bytes())
         self.assertEqual(
             payload["Label"],
@@ -541,6 +542,8 @@ class RuntimeProviderBrokerSupervisorAssetTests(unittest.TestCase):
                 "/usr/local/libexec/iroha-runtime-provider-broker-v1",
                 "--catalog",
                 "/private/etc/iroha/runtime-provider-broker/catalog.norito",
+                "--broker-endpoint",
+                "/private/var/iroha/run/runtime-provider-broker-v1.sock",
             ],
         )
         self.assertEqual(

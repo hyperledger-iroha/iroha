@@ -1,9 +1,8 @@
 //! Durable, versioned finality records for canonical Sumeragi v2 blocks.
 //!
-//! These values are structural persistence records. Their validation checks
-//! every redundant protocol, context, height, subject, and block-hash binding,
-//! but deliberately leaves aggregate-signature verification to the consensus
-//! cryptography adapter.
+//! Structural validation checks every redundant protocol, context, height, subject and block
+//! binding. Cryptographic verification and portable predecessor/epoch checks are shared with
+//! the consensus adapter; callers retain their own independent trust anchors and resource bounds.
 use super::{
     BlockSubject, ConsensusMode, DualQuorum, GlobalPhase, Height, HeightContext, HeightContextId,
     PROTOCOL_VERSION, QuorumCertificate, ValidationError, ValidatorPower, Vote,
@@ -16,6 +15,10 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::vec::Vec;
 use thiserror::Error;
+mod lineage;
+pub use lineage::{
+    V2FinalityLineageError, validate_successor_height_context, verify_finality_successor,
+};
 /// Current Norito layout version of [`V2FinalityArtifact`].
 pub const V2_FINALITY_ARTIFACT_VERSION: u16 = 4;
 /// Maximum encoded BLS proof-of-possession bytes retained per validator.
@@ -42,6 +45,9 @@ pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
     name = "iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot"
 )]
 pub struct FinalizedNextEpochSnapshot {
+    /// Committee frozen two epochs ahead, prepared throughout the newly authorized epoch.
+    /// Absence is explicit when no valid future election is possible or mode is permissioned.
+    pub committee_preparation: Option<crate::nexus::ValidatorCommitteePreparationV1>,
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,
     /// Complete next scheduling authorization certified by the incumbent boundary quorum.
@@ -73,6 +79,17 @@ impl FinalizedNextEpochSnapshot {
         }
         let authority = &self.kagemusha_mint_finality_authority;
         let authorization = &self.kagemusha_mint_finality_authorization;
+        if let Some(preparation) = &self.committee_preparation {
+            if self.mode != ConsensusMode::Npos
+                || preparation
+                    .validate_against_preparing_authorization(authorization)
+                    .is_err()
+                || preparation.selection_height != context.height
+                || preparation.selection_epoch != context.epoch
+            {
+                return Err(ValidationError::InvalidNextEpoch);
+            }
+        }
         if authorization.validate_against_authority(authority).is_err()
             || authorization
                 .validate_successor(&context.kagemusha_mint_finality_authorization)
@@ -827,6 +844,7 @@ mod tests {
             KagemushaMintFinalityEpochDecisionV1::Retain,
         );
         let next_epoch_snapshot = FinalizedNextEpochSnapshot {
+            committee_preparation: None,
             epoch: next_authorization.epoch,
             kagemusha_mint_finality_authorization: next_authorization,
             kagemusha_mint_finality_authority: authority.clone(),

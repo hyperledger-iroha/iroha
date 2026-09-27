@@ -1,7 +1,7 @@
 //! Launcher-facing lifecycle, registry, backend-injection, and server boundary.
 //!
 //! This module owns only public provider bindings and injected runtime adapters;
-//! it never loads credentials, private keys, or endpoint overrides.
+//! it never loads credentials or private keys.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::protocol;
 use crate::{
@@ -16,6 +16,7 @@ use crate::{
         compose_provider_ingest_https_pool_v1,
     },
 };
+use iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath;
 use std::{fmt, sync::Arc};
 const BROKER_LIFECYCLE_STARTING_V1: u8 = 0;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -73,8 +74,8 @@ pub enum ParliamentTlePartialReleaseSignerBrokerBackendErrorV1 {
 
 /// Authenticated broker-server backend for global beacon partial signatures.
 ///
-/// The broker validates the complete public DKG transcript and canonical pulse
-/// slot before calling this trait, then independently verifies the returned
+/// The broker validates the complete public DKG transcript and either a canonical pulse
+/// slot or the exact prepared-seat readiness challenge, then independently verifies the returned
 /// proof. Provider diagnostics and private share material never cross the wire.
 pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
     /// Return the production runtime handle.
@@ -100,7 +101,7 @@ pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
         iroha_core::beacon::GlobalThresholdBeaconPartialSigningCapabilityV1,
         GlobalBeaconPartialSignerBrokerBackendErrorV1,
     >;
-    /// Sign one exact broker-validated canonical pulse payload.
+    /// Sign one exact broker-validated pulse or separately domain-bound readiness challenge.
     ///
     /// # Errors
     ///
@@ -307,17 +308,19 @@ impl Drop for RuntimeProviderBrokerCallPermitV1 {
             .fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
-/// Stock platform-fixed runtime-provider registry used by `main_entry`.
+/// Stock authenticated local runtime-provider registry used by `main_entry`.
 ///
-/// Construction performs no I/O. The registry connects to the fixed local
+/// Construction performs no I/O. The registry connects to the configured local
 /// endpoint only when the validated public binding catalog is non-empty.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct StockRuntimeProviderBrokerRegistryV1;
+#[derive(Clone, Debug)]
+pub struct StockRuntimeProviderBrokerRegistryV1 {
+    endpoint_path: RuntimeProviderBrokerEndpointPath,
+}
 impl StockRuntimeProviderBrokerRegistryV1 {
-    /// Construct the stock registry without connecting to the broker.
+    /// Construct the stock registry for one validated public endpoint.
     #[must_use]
-    pub(crate) const fn new() -> Self {
-        Self
+    pub(crate) const fn new(endpoint_path: RuntimeProviderBrokerEndpointPath) -> Self {
+        Self { endpoint_path }
     }
 }
 const fn stock_runtime_provider_slot_is_supported(slot: IrohaRuntimeProviderSlotV1) -> bool {
@@ -349,7 +352,7 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
         }
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            protocol::resolve(bindings)
+            protocol::resolve(bindings, &self.endpoint_path)
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
@@ -361,18 +364,28 @@ impl IrohaRuntimeProviderRegistryV1 for StockRuntimeProviderBrokerRegistryV1 {
 #[cfg(test)]
 mod stock_registry_tests {
     use super::*;
+    fn endpoint() -> RuntimeProviderBrokerEndpointPath {
+        RuntimeProviderBrokerEndpointPath::try_new(
+            iroha_config::parameters::defaults::runtime_provider_broker::endpoint_path(),
+        )
+        .expect("validated default broker endpoint")
+    }
     #[test]
     fn standalone_registry_retains_exact_network_identity() {
         let chain_id = iroha_model_base::chain::ChainId::from("standalone-governance-test");
         let network_id = crate::runtime_provider_registry::runtime_provider_test_network_id();
-        let registry =
-            StockGovernanceDagServiceRuntimeProviderRegistryV1::new(chain_id.clone(), network_id);
+        let registry = StockGovernanceDagServiceRuntimeProviderRegistryV1::new(
+            chain_id.clone(),
+            network_id,
+            endpoint(),
+        );
         assert_eq!(registry.chain_id, chain_id);
         assert_eq!(registry.network_id, network_id);
+        assert_eq!(registry.endpoint_path, endpoint());
     }
     #[test]
     fn reserved_musubi_attestation_slots_fail_before_broker_connection() {
-        let registry = StockRuntimeProviderBrokerRegistryV1::new();
+        let registry = StockRuntimeProviderBrokerRegistryV1::new(endpoint());
         for (slot, handle) in [
             (
                 IrohaRuntimeProviderSlotV1::MusubiProviderAttestationClockSeal,
@@ -409,6 +422,7 @@ mod stock_registry_tests {
 pub struct StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     chain_id: iroha_model_base::chain::ChainId,
     network_id: iroha_data_model::NetworkId,
+    endpoint_path: RuntimeProviderBrokerEndpointPath,
 }
 impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     /// Construct a standalone-service registry for one exact network.
@@ -416,10 +430,12 @@ impl StockGovernanceDagServiceRuntimeProviderRegistryV1 {
     pub const fn new(
         chain_id: iroha_model_base::chain::ChainId,
         network_id: iroha_data_model::NetworkId,
+        endpoint_path: RuntimeProviderBrokerEndpointPath,
     ) -> Self {
         Self {
             chain_id,
             network_id,
+            endpoint_path,
         }
     }
 }
@@ -441,7 +457,9 @@ impl sorafs_node::GovernanceDagServiceRuntimeProviderRegistryV1
         .map_err(map_governance_service_registry_error)?;
         let dependencies = resolve_runtime_deps_from_bindings(
             &bindings,
-            Some(&StockRuntimeProviderBrokerRegistryV1::new()),
+            Some(&StockRuntimeProviderBrokerRegistryV1::new(
+                self.endpoint_path.clone(),
+            )),
         )
         .map_err(map_governance_service_registry_error)?;
         let ipfs_authenticator = dependencies
@@ -963,7 +981,7 @@ pub enum RuntimeProviderBrokerServerErrorV1 {
     BackendSetMismatch,
     /// A backend's live public identity or qualification is not exact.
     BindingMismatch,
-    /// The fixed service-UID-owned local endpoint could not be secured.
+    /// The configured service-UID-owned local endpoint could not be secured.
     EndpointUnavailable,
     /// The broker could not prove and remove its bound endpoint entry without
     /// risking a path-substitution unlink.
@@ -1009,7 +1027,7 @@ impl fmt::Display for RuntimeProviderBrokerReadinessErrorV1 {
     }
 }
 impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
-/// Serve the exact qualified catalog on the platform-fixed service-UID-owned endpoint.
+/// Serve the exact qualified catalog on a validated service-UID-owned endpoint.
 ///
 /// This is the packaged launcher boundary for deployment-owned broker executables. It blocks in the
 /// authenticated accept loop and never loads credentials, private keys, environment overrides, or
@@ -1025,15 +1043,16 @@ impl std::error::Error for RuntimeProviderBrokerReadinessErrorV1 {}
 /// endpoint cannot be created with the required ownership and mode.
 pub fn serve_runtime_provider_broker_v1(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        protocol::serve(bindings, backends)
+        protocol::serve(bindings, endpoint_path, backends)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = (bindings, backends);
+        let _ = (bindings, endpoint_path, backends);
         Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
     }
 }
@@ -1041,7 +1060,7 @@ pub fn serve_runtime_provider_broker_v1(
 ///
 /// The caller retains a clone of `lifecycle` and requests shutdown through
 /// [`RuntimeProviderBrokerLifecycleV1::request_shutdown`]. `on_ready` runs exactly once, on the
-/// serving thread, after all requested backends have passed live qualification, the fixed endpoint
+/// serving thread, after all requested backends have passed live qualification, the configured endpoint
 /// has been securely bound, and the complete backend catalog has passed an immediate second
 /// qualification. A bounded gate linearizes the complete callback against shutdown: a shutdown that
 /// wins suppresses the callback, while a shutdown that loses waits for the callback to finish
@@ -1077,11 +1096,12 @@ pub fn serve_runtime_provider_broker_v1(
 /// # Errors
 ///
 /// Fails before readiness if the catalog/backend set is incomplete, any live public binding is
-/// missing, substituted, stale, revoked, or test-marked, the fixed endpoint cannot be created with
+/// missing, substituted, stale, revoked, or test-marked, the configured endpoint cannot be created with
 /// the required ownership and mode, or the readiness callback returns
 /// [`RuntimeProviderBrokerReadinessErrorV1`].
 pub fn serve_runtime_provider_broker_with_fallible_readiness_v1<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -1091,12 +1111,18 @@ where
 {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
-        protocol::serve_with_fallible_readiness(bindings, backends, lifecycle, on_ready)
+        protocol::serve_with_fallible_readiness(
+            bindings,
+            endpoint_path,
+            backends,
+            lifecycle,
+            on_ready,
+        )
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         lifecycle.request_shutdown();
-        let _ = (bindings, backends, on_ready);
+        let _ = (bindings, endpoint_path, backends, on_ready);
         Err(RuntimeProviderBrokerServerErrorV1::UnsupportedPlatform)
     }
 }
@@ -1111,6 +1137,7 @@ where
 /// Preserves every fail-closed server error from the fallible variant.
 pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -1118,8 +1145,14 @@ pub fn serve_runtime_provider_broker_with_lifecycle_v1<R>(
 where
     R: FnOnce(),
 {
-    serve_runtime_provider_broker_with_fallible_readiness_v1(bindings, backends, lifecycle, || {
-        on_ready();
-        Ok(())
-    })
+    serve_runtime_provider_broker_with_fallible_readiness_v1(
+        bindings,
+        endpoint_path,
+        backends,
+        lifecycle,
+        || {
+            on_ready();
+            Ok(())
+        },
+    )
 }

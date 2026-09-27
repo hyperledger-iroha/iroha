@@ -9,6 +9,8 @@
     <string>/usr/local/libexec/iroha-runtime-provider-broker-v1</string>
     <string>--catalog</string>
     <string>/private/etc/iroha/runtime-provider-broker/catalog.norito</string>
+    <string>--broker-endpoint</string>
+    <string>/private/var/iroha/run/runtime-provider-broker-v1.sock</string>
   </array>
   <key>StandardInPath</key>
   <string>/private/var/run/iroha-runtime-provider-broker-credentials-v1/threshold.bundle</string>

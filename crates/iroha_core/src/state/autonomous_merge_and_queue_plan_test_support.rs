@@ -352,7 +352,7 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
         .find(|keypair| keypair.public_key() == producer.public_key())
         .expect("fixture retains the deterministic producer key");
     let network_id = state.network_id;
-    let epoch = crate::sumeragi::epoch_for_height_from_world(
+    let epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
         &state.world.view(),
         proposal_height,
         ConsensusMode::Permissioned,
@@ -934,7 +934,11 @@ fn install_exact_merge_beacon_fixture(
     let height = parent.header().height().get() + 1;
     let (key, pulses) = crate::beacon::signed_pulses_fixture_for_roster_and_anchors(
         *state.network_id_ref(),
-        &roster,
+        &{
+            let mut signing_keys = validators.to_vec();
+            signing_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+            signing_keys
+        },
         &[
             GlobalThresholdBeaconChainAnchorV1 {
                 height: parent.header().height().get() - 1,

@@ -45,7 +45,7 @@ use iroha_data_model::block::consensus_v2::{
     SumeragiV2VoteQuorumStatus,
 };
 use std::{
-    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, Instant},
 };
 use thiserror::Error;
@@ -82,43 +82,10 @@ static SUMERAGI_V2_NETWORK_INGRESS: OnceLock<Mutex<Option<V2NetworkIngressRegist
 static SUMERAGI_V2_EFFECT_COMPLETION_OBSERVER: OnceLock<
     Mutex<Option<V2EffectCompletionRegistration>>,
 > = OnceLock::new();
-// Serializes destructive Kura transitions with consensus decisions that may
-// concurrently advance the same canonical chain boundary.
-static CONSENSUS_TRANSITION_GATE: OnceLock<Mutex<()>> = OnceLock::new();
 static MODE_TAG: OnceLock<Mutex<String>> = OnceLock::new();
 static STAGED_MODE_TAG: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 static STAGED_MODE_ACTIVATION_HEIGHT: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
 static MODE_ACTIVATION_LAG_BLOCKS: OnceLock<Mutex<Option<u64>>> = OnceLock::new();
-/// Guard serializing destructive canonical-chain transitions.
-pub(crate) struct ConsensusTransitionGuard {
-    _guard: MutexGuard<'static, ()>,
-}
-/// Serialize a Kura canonical-chain mutation with other consensus transitions.
-pub(crate) fn consensus_transition_guard() -> ConsensusTransitionGuard {
-    let guard = CONSENSUS_TRANSITION_GATE
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|_| fail_closed_after_consensus_transition_poison());
-    ConsensusTransitionGuard { _guard: guard }
-}
-/// Clear poison left by an intentionally caught canonical-transition panic.
-///
-/// Production treats transition-gate poison as process-fatal. Kura fault
-/// injection tests emulate a crash with `catch_unwind`, so they must explicitly
-/// reset only this process-global test latch before exercising restart recovery.
-#[cfg(test)]
-pub(crate) fn clear_consensus_transition_poison_for_tests() {
-    if let Some(gate) = CONSENSUS_TRANSITION_GATE.get() {
-        gate.clear_poison();
-    }
-}
-fn fail_closed_after_consensus_transition_poison() -> ! {
-    iroha_logger::error!("consensus transition gate was poisoned; refusing canonical mutation");
-    #[cfg(not(test))]
-    std::process::abort();
-    #[cfg(test)]
-    panic!("consensus transition gate poisoned; refusing canonical mutation");
-}
 #[cfg(test)]
 mod archival_status_tests {
     use crate::sumeragi::consensus::PERMISSIONED_TAG;

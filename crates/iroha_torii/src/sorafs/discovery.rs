@@ -1,4 +1,6 @@
 //! Provider advert ingestion and validation for Torii's SoraFS discovery pipeline.
+#[cfg(test)]
+mod finalized_admission_tests;
 use super::admission::{AdmissionCheckError, AdmissionRegistry, verify_advert_against_envelope};
 use crate::secure_file_metadata::{self, SecureMetadata};
 use blake3::hash as blake3_hash;
@@ -424,7 +426,7 @@ impl ReplayCheckpointStore {
                     provided: entry.network_id,
                 });
             }
-            if admission.entry(&entry.provider_id).is_none() {
+            if !admission.retains_identity(&entry.provider_id) {
                 return Err(ReplayCheckpointError::ProviderNotAdmitted {
                     provider_id: entry.provider_id,
                 });

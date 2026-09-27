@@ -1,24 +1,18 @@
-//! FASTPQ prover lane: converts execution witnesses into transition batches and
-//! drives the Stage 6 prover in the background.
+//! Canonical masked FASTPQ proving for finalized full-domain transfer statements.
 use crate::{
-    fastpq::{
-        ENTRY_HASH_METADATA_KEY, FASTPQ_CANONICAL_PARAMETER_SET, FastpqWitnessContext,
-        TranscriptBatchError, batches_from_bundles, batches_from_exec_witness,
-    },
+    fastpq::{FastpqWitnessContext, quantity_statement_from_finalized_transcripts},
     kura::{FastpqProofEnqueueResult, FastpqProofSnapshot, Kura},
 };
-#[cfg(feature = "fastpq-gpu")]
-use fastpq_prover::Planner;
 use fastpq_prover::{
-    ExecutionMode as ProverExecutionMode, MetalOverrides,
-    PoseidonExecutionMode as ProverPoseidonMode, Prover, TransitionBatch, apply_metal_overrides,
+    DigestExecutionV1, MetalOverrides, apply_metal_overrides,
+    offline_compact::{self, ExpectedStatement, ProvingError, ProvingLimits, VerificationLimits},
     set_metal_queue_policy,
 };
 use iroha_config::parameters::actual::{Fastpq, FastpqExecutionMode, FastpqPoseidonMode};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{BlockHeader, consensus::ExecWitness},
-    privacy::GoldilocksDigest384V1,
+    fastpq::{FastpqArtifactIdentityDescriptionV1, FastpqPublicTransferStatementV1},
 };
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, info, warn};
@@ -80,65 +74,61 @@ pub struct FastpqWitnessJob {
     /// Local-only batch construction context captured outside the witness wire payload.
     pub(crate) context: FastpqWitnessContext,
 }
-/// Proof bytes and digest produced by the FASTPQ lane.
+/// Canonical artifact bytes and their independently recomputed verified identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FastpqProofOutput {
-    /// FASTPQ proof payload encoded with the canonical V1 Norito layout.
+    /// Complete canonical ordinary compact artifact, including its public statement.
     pub proof_bytes: Vec<u8>,
-    /// Stable digest of `proof_bytes` for relay metadata and telemetry.
-    pub proof_digest: Hash,
-    /// Canonical six-lane batch trace commitment proven by the proof.
-    pub trace_commitment: GoldilocksDigest384V1,
+    /// Recomputed content identity and ordered AIR row commitments.
+    pub identity: FastpqArtifactIdentityDescriptionV1,
 }
-impl FastpqProofOutput {
-    /// Encode a generated proof within its byte budget and derive its canonical identity.
-    fn encode_proof(
-        proof: &fastpq_prover::Proof,
-        max_bytes: usize,
-    ) -> Result<Self, norito::core::BoundedEncodeError> {
-        let _canonical =
-            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-        let proof_bytes = norito::core::to_bytes_bounded(proof, max_bytes)?;
-        Ok(Self {
-            proof_digest: Hash::new(&proof_bytes),
-            trace_commitment: proof.commitment(),
-            proof_bytes,
-        })
-    }
-}
-/// Trait abstracting over the FASTPQ prover backend so tests can inject mocks.
+/// Prover abstraction for exact finalized public statements.
 pub trait FastpqProofEngine: Send + Sync + 'static {
-    /// Prove the supplied transition batch.
+    /// Prove the complete original quantities, identities and ordered occurrences.
     ///
     /// # Errors
-    /// Returns an error when the prover backend fails to generate a proof.
+    /// Returns errors for invalid statements, resource bounds or proving failures.
     fn prove(
         &self,
-        batch: &fastpq_prover::TransitionBatch,
-    ) -> fastpq_prover::Result<FastpqProofOutput>;
+        statement: &FastpqPublicTransferStatementV1,
+    ) -> Result<FastpqProofOutput, ProvingError>;
 }
 struct RealProofEngine {
-    prover: Prover,
-    max_proof_bytes: usize,
+    proving: ProvingLimits,
+    verification: VerificationLimits,
 }
 impl FastpqProofEngine for RealProofEngine {
     fn prove(
         &self,
-        batch: &fastpq_prover::TransitionBatch,
-    ) -> fastpq_prover::Result<FastpqProofOutput> {
-        let proof = self.prover.prove(batch)?;
-        FastpqProofOutput::encode_proof(&proof, self.max_proof_bytes).map_err(|error| match error {
-            norito::core::BoundedEncodeError::FrameTooLarge {
-                encoded_bytes,
-                max_bytes,
-            } => fastpq_prover::Error::VerifierLimitExceeded {
-                limit: "max_proof_bytes",
-                actual: encoded_bytes,
-                max: max_bytes,
-            },
-            error => fastpq_prover::Error::Encode(norito::Error::Message(error.to_string())),
+        statement: &FastpqPublicTransferStatementV1,
+    ) -> Result<FastpqProofOutput, ProvingError> {
+        let expected = expected_statement(statement)?;
+        let proof_bytes = offline_compact::prove_quantity_ordinary_artifact(
+            statement,
+            expected,
+            self.proving,
+            self.verification,
+        )?;
+        let verified = offline_compact::verify_quantity_ordinary_artifact(
+            &proof_bytes,
+            expected,
+            self.verification,
+        )?;
+        Ok(FastpqProofOutput {
+            proof_bytes,
+            identity: verified.identity().clone(),
         })
     }
+}
+fn expected_statement(
+    statement: &FastpqPublicTransferStatementV1,
+) -> fastpq_prover::Result<ExpectedStatement> {
+    let encoded = norito::encode_canonical(statement).map_err(fastpq_prover::Error::Encode)?;
+    Ok(ExpectedStatement {
+        inputs: statement.public_inputs,
+        ordering_hash: statement.ordering_hash,
+        public_statement_digest: Hash::new(encoded).into(),
+    })
 }
 struct RegisteredFastpqLane {
     generation: u64,
@@ -295,141 +285,54 @@ fn build_engine(cfg: &Fastpq) -> Option<Arc<dyn FastpqProofEngine>> {
     {
         warn!(%err, "fastpq lane: failed to apply Metal queue policy override");
     }
-    let mode = map_execution_mode(cfg.execution_mode);
-    let poseidon_mode = map_poseidon_mode(cfg.poseidon_mode);
-    let (mode, poseidon_mode) = preflight_prover_modes(cfg, mode, poseidon_mode)?;
-    match Prover::canonical_with_modes(FASTPQ_CANONICAL_PARAMETER_SET, mode, poseidon_mode) {
-        Ok(prover) => Some(Arc::new(RealProofEngine {
-            prover,
-            max_proof_bytes: usize::try_from(cfg.proof_sidecar_max_bytes.get())
-                .unwrap_or(usize::MAX)
-                .min(fastpq_prover::fastpq_isi_v1::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1),
-        })),
+    let digest_execution = match configured_digest_execution(cfg) {
+        Ok(execution) => execution,
         Err(err) => {
-            warn!(?err, "fastpq lane: failed to construct canonical prover");
-            None
-        }
-    }
-}
-#[cfg(not(feature = "fastpq-gpu"))]
-fn preflight_prover_modes(
-    _cfg: &Fastpq,
-    mode: ProverExecutionMode,
-    poseidon_mode: ProverPoseidonMode,
-) -> Option<(ProverExecutionMode, ProverPoseidonMode)> {
-    if matches!(mode, ProverExecutionMode::Gpu) || matches!(poseidon_mode, ProverPoseidonMode::Gpu)
-    {
-        warn!(
-            "fastpq lane: GPU execution requested but GPU support is not compiled; lane disabled"
-        );
-        return None;
-    }
-    Some((mode, poseidon_mode))
-}
-#[cfg(feature = "fastpq-gpu")]
-fn preflight_prover_modes(
-    cfg: &Fastpq,
-    mode: ProverExecutionMode,
-    poseidon_mode: ProverPoseidonMode,
-) -> Option<(ProverExecutionMode, ProverPoseidonMode)> {
-    preflight_prover_modes_with_preflights(
-        cfg,
-        mode,
-        poseidon_mode,
-        preflight_execution_gpu_backend,
-        fastpq_prover::preflight_native_v1_gpu_backend,
-        fastpq_prover::preflight_bn254_poseidon_word_batches,
-    )
-}
-#[cfg(feature = "fastpq-gpu")]
-fn preflight_execution_gpu_backend() -> bool {
-    let Some(params) = Prover::canonical_parameter_sets()
-        .iter()
-        .find(|params| params.name == FASTPQ_CANONICAL_PARAMETER_SET)
-    else {
-        warn!(
-            parameter = FASTPQ_CANONICAL_PARAMETER_SET,
-            "fastpq lane: canonical parameters unavailable during GPU preflight"
-        );
-        return false;
-    };
-    let planner = Planner::new(params);
-    let trace_log = params.trace_log_size.min(4);
-    let trace_len = 1usize << trace_log;
-    let mut gpu_coefficients = vec![
-        (0..trace_len)
-            .map(|index| u64::try_from(index).expect("preflight index fits u64") + 1)
-            .collect::<Vec<_>>(),
-    ];
-    let mut cpu_coefficients = gpu_coefficients.clone();
-    planner.ifft_columns(&mut cpu_coefficients);
-    // The pending APIs report dispatch failure instead of using the planner's
-    // ordinary CPU fallback, which makes them suitable for a fail-closed probe.
-    let Some(ifft) = planner.ifft_gpu_pending(&mut gpu_coefficients) else {
-        return false;
-    };
-    if ifft.wait().is_err() || gpu_coefficients != cpu_coefficients {
-        return false;
-    }
-
-    let cpu_lde = planner.lde_columns(&cpu_coefficients);
-    let Some(lde) = planner.lde_gpu_pending(&gpu_coefficients) else {
-        return false;
-    };
-    matches!(lde.wait(), Ok(Some(gpu_lde)) if gpu_lde == cpu_lde)
-}
-#[cfg(feature = "fastpq-gpu")]
-fn preflight_prover_modes_with_preflights(
-    cfg: &Fastpq,
-    mode: ProverExecutionMode,
-    poseidon_mode: ProverPoseidonMode,
-    execution_preflight: impl FnOnce() -> bool,
-    poseidon_preflight: impl FnOnce() -> bool,
-    digest_preflight: impl FnOnce() -> bool,
-) -> Option<(ProverExecutionMode, ProverPoseidonMode)> {
-    preflight_digest_acceleration(cfg, digest_preflight);
-    if matches!(mode, ProverExecutionMode::Gpu) {
-        let started_at = Instant::now();
-        let execution_ok = execution_preflight();
-        info!(
-            ok = execution_ok,
-            elapsed_ms = started_at.elapsed().as_millis(),
-            "fastpq lane: FFT/LDE GPU preflight completed"
-        );
-        if !execution_ok {
-            warn!("fastpq lane: GPU execution backend failed preflight; lane disabled");
+            warn!(%err, "fastpq lane: required digest device failed preflight");
             return None;
         }
-    }
-    if matches!(poseidon_mode, ProverPoseidonMode::Gpu) {
-        let started_at = Instant::now();
-        let poseidon_ok = poseidon_preflight();
-        info!(
-            ok = poseidon_ok,
-            elapsed_ms = started_at.elapsed().as_millis(),
-            "fastpq lane: Poseidon GPU preflight completed"
-        );
-        if !poseidon_ok {
-            warn!("fastpq lane: GPU Poseidon backend failed preflight; lane disabled");
-            return None;
-        }
-    }
-    Some((mode, poseidon_mode))
+    };
+    let mut verification = VerificationLimits::default();
+    verification.transport.max_wire_bytes = verification
+        .transport
+        .max_wire_bytes
+        .min(usize::try_from(cfg.proof_sidecar_max_bytes.get()).unwrap_or(usize::MAX));
+    Some(Arc::new(RealProofEngine {
+        proving: ProvingLimits {
+            digest_execution,
+            ..ProvingLimits::default()
+        },
+        verification,
+    }))
 }
-#[cfg(feature = "fastpq-gpu")]
-fn preflight_digest_acceleration(cfg: &Fastpq, preflight: impl FnOnce() -> bool) {
-    if !crate::fastpq::poseidon_digest_acceleration_configured(cfg) {
+fn configured_digest_execution(cfg: &Fastpq) -> fastpq_prover::Result<DigestExecutionV1> {
+    let required_device = matches!(cfg.execution_mode, FastpqExecutionMode::Gpu)
+        || matches!(cfg.poseidon_mode, FastpqPoseidonMode::Gpu);
+    if !required_device {
         crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
-        return;
+        return Ok(DigestExecutionV1::Cpu);
     }
-    let started_at = Instant::now();
-    let ok = preflight();
-    crate::fastpq::set_poseidon_digest_acceleration_enabled(ok);
-    info!(
-        ok,
-        elapsed_ms = started_at.elapsed().as_millis(),
-        "fastpq lane: BN254 Poseidon digest GPU preflight completed"
-    );
+    #[cfg(feature = "fastpq-gpu")]
+    {
+        let backend = if cfg!(target_os = "macos") {
+            fastpq_prover::Digest384GpuBackendV1::Metal
+        } else {
+            fastpq_prover::Digest384GpuBackendV1::Cuda
+        };
+        fastpq_prover::preflight_digest384_continuation_v1(backend).map_err(|error| {
+            fastpq_prover::Error::NativeDigestExecution {
+                details: error.to_string(),
+            }
+        })?;
+        let enabled = crate::fastpq::poseidon_digest_acceleration_configured(cfg)
+            && fastpq_prover::preflight_bn254_poseidon_word_batches();
+        crate::fastpq::set_poseidon_digest_acceleration_enabled(enabled);
+        Ok(DigestExecutionV1::Device(backend))
+    }
+    #[cfg(not(feature = "fastpq-gpu"))]
+    Err(fastpq_prover::Error::NativeDigestExecution {
+        details: "required FASTPQ digest device support is not compiled".into(),
+    })
 }
 fn spawn_worker(
     mut rx: mpsc::Receiver<FastpqWitnessJob>,
@@ -539,18 +442,6 @@ fn metal_overrides_from_config(cfg: &Fastpq) -> MetalOverrides {
         debug_enum: cfg.metal_debug_enum,
     }
 }
-fn map_execution_mode(mode: FastpqExecutionMode) -> ProverExecutionMode {
-    match mode {
-        FastpqExecutionMode::Cpu => ProverExecutionMode::Cpu,
-        FastpqExecutionMode::Gpu => ProverExecutionMode::Gpu,
-    }
-}
-fn map_poseidon_mode(mode: FastpqPoseidonMode) -> ProverPoseidonMode {
-    match mode {
-        FastpqPoseidonMode::Cpu => ProverPoseidonMode::Cpu,
-        FastpqPoseidonMode::Gpu => ProverPoseidonMode::Gpu,
-    }
-}
 fn process_job(
     engine: &Arc<dyn FastpqProofEngine>,
     job: &FastpqWitnessJob,
@@ -569,43 +460,40 @@ fn process_job(
         );
         return;
     }
-    let batches = match batches_for_job(job) {
-        Ok(batches) => batches,
+    let statements = match statements_for_job(job) {
+        Ok(statements) => statements,
         Err(err) => {
             warn!(
                 height = job.height,
                 view = job.view,
                 ?err,
-                "fastpq lane: failed to build batches"
+                "fastpq lane: failed to construct canonical statements"
             );
             return;
         }
     };
-    if batches.is_empty() {
+    if statements.is_empty() {
         debug!(
             height = job.height,
             view = job.view,
-            "fastpq lane: no batches produced from witness"
+            "fastpq lane: no statements produced from witness"
         );
         return;
     }
-    let batch_count = batches.len();
+    let batch_count = statements.len();
     let job_started = Instant::now();
     let mut proved = 0usize;
     let mut failed = 0usize;
     let mut persisted = 0usize;
     let mut transition_count = 0usize;
-    for (idx, batch) in batches.into_iter().enumerate() {
+    for (idx, (entry_hash, statement)) in statements.into_iter().enumerate() {
         if shutdown_requested(shutdown, external_shutdown) {
             break;
         }
-        let entry_hash = entry_hash_for_batch(idx, &job.witness, &batch);
-        let entry_hash_hex = entry_hash
-            .map(|hash| hex::encode(hash.as_ref()))
-            .unwrap_or_else(|| "unknown".to_string());
-        transition_count = transition_count.saturating_add(batch.transitions.len());
+        let entry_hash_hex = hex::encode(entry_hash.as_ref());
+        transition_count = transition_count.saturating_add(statement.transitions.len());
         let started = Instant::now();
-        let proof_result = engine.prove(&batch);
+        let proof_result = engine.prove(&statement);
         // `spawn_blocking` continues after its async JoinHandle is aborted. In particular,
         // the node supervisor may stop waiting for this lane after its shutdown timeout.
         // Discard a proof completed after either shutdown signal so the detached task cannot
@@ -623,18 +511,14 @@ fn process_job(
             Ok(output) => {
                 proved = proved.saturating_add(1);
                 if let Some(kura) = kura {
-                    if let Some((entry_hash, batch_index)) = entry_hash.and_then(|entry_hash| {
-                        let batch_index = u32::try_from(idx).ok()?;
-                        Some((entry_hash, batch_index))
-                    }) {
-                        let snapshot = FastpqProofSnapshot::compact_from_batch(
+                    if let Ok(batch_index) = u32::try_from(idx) {
+                        let snapshot = FastpqProofSnapshot::from_statement(
                             job.height,
                             job.block_hash,
                             entry_hash,
                             batch_index,
-                            &batch,
-                            output.trace_commitment,
-                            output.proof_digest,
+                            &statement,
+                            output.identity.clone(),
                         );
                         if shutdown_requested(shutdown, external_shutdown) {
                             break;
@@ -678,9 +562,9 @@ fn process_job(
                     height = job.height,
                     view = job.view,
                     entry_hash = entry_hash_hex,
-                    transitions = batch.transitions.len(),
+                    transitions = statement.transitions.len(),
                     proof_bytes = output.proof_bytes.len(),
-                    proof_digest = ?output.proof_digest,
+                    artifact_digest = ?output.identity.artifact_digest,
                     elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
                     "fastpq lane: generated proof"
                 );
@@ -715,23 +599,6 @@ fn shutdown_requested(
 ) -> bool {
     shutdown.is_sent() || external_shutdown.is_some_and(ShutdownSignal::is_sent)
 }
-fn entry_hash_for_batch(
-    idx: usize,
-    witness: &ExecWitness,
-    batch: &fastpq_prover::TransitionBatch,
-) -> Option<Hash> {
-    let bundle_entry_hash = witness
-        .fastpq_transcripts
-        .get(idx)
-        .map(|bundle| bundle.entry_hash)?;
-    let bytes = batch.metadata.get(ENTRY_HASH_METADATA_KEY)?;
-    let digest: [u8; 32] = bytes.as_slice().try_into().ok()?;
-    let metadata_entry_hash = Hash::prehashed(digest);
-    if bundle_entry_hash != metadata_entry_hash {
-        return None;
-    }
-    Some(metadata_entry_hash)
-}
 /// Install a deterministic FASTPQ engine for tests, bypassing the real prover backend.
 ///
 /// This lets unit tests inject a mock [`FastpqProofEngine`] so the lane can
@@ -744,9 +611,10 @@ pub fn install_test_engine(engine: Arc<dyn FastpqProofEngine>) {
 mod tests {
     use super::*;
     use crate::fastpq::{
-        DigestAccelerationTestGuard, FastpqPublicInputsTemplate, authority_digest,
-        batches_from_bundles, transition_batch_to_dto,
+        DigestAccelerationTestGuard, FASTPQ_CANONICAL_PARAMETER_SET, FastpqPublicInputsTemplate,
+        authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
+    use fastpq_prover::TransitionBatch;
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
@@ -755,103 +623,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use std::{collections::BTreeMap, sync::atomic::AtomicBool, time::Duration};
     static LANE_REGISTRY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    #[test]
-    fn persisted_proof_encoding_is_canonical_bounded_and_digest_bound() {
-        // This independently replayed raw proof exercises serialization only. Its size crosses
-        // the former arbitrary byte cap but fits the derived sidecar resource profile.
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../fastpq_prover/tests/fixtures/v1_raw_transcript_64.bin");
-        let expected = std::fs::read(path).expect("current raw proof fixture");
-        let proof: fastpq_prover::Proof =
-            norito::decode_canonical(&expected).expect("canonical raw proof fixture");
-        for flags in
-            (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
-        {
-            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
-            let effective_flags = norito::core::get_decode_flags();
-            let output = FastpqProofOutput::encode_proof(&proof, expected.len())
-                .expect("exact diagnostic serialization budget");
-            assert_eq!(output.proof_bytes, expected);
-            assert_eq!(output.proof_digest, Hash::new(&expected));
-            assert_eq!(output.trace_commitment, proof.commitment());
-            assert_eq!(norito::core::get_decode_flags(), effective_flags);
-        }
-        let default_frame_bytes =
-            fastpq_prover::fastpq_isi_v1::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_FRAME_BYTES_V1;
-        assert_eq!(
-            iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.get(),
-            default_frame_bytes as u64
-        );
-        assert_eq!(
-            FastpqProofOutput::encode_proof(&proof, default_frame_bytes)
-                .unwrap()
-                .proof_bytes,
-            expected
-        );
-        for max_bytes in [expected.len() - 1, 512 * 1024] {
-            assert!(max_bytes < expected.len());
-            assert!(matches!(
-                FastpqProofOutput::encode_proof(&proof, max_bytes),
-                Err(norito::core::BoundedEncodeError::FrameTooLarge {
-                    encoded_bytes,
-                    max_bytes: rejected_limit,
-                }) if encoded_bytes == expected.len() && rejected_limit == max_bytes
-            ));
-        }
-    }
-    #[test]
-    fn proof_output_uses_canonical_bytes_under_every_ambient_layout() {
-        // Codec-only fixture: this is not a valid mathematical proof. Exercise
-        // the exact post-prover production helper without running the prover.
-        let zero = GoldilocksDigest384V1::default();
-        let proof = fastpq_prover::Proof {
-            protocol_version: 1,
-            parameter: FASTPQ_CANONICAL_PARAMETER_SET.to_owned(),
-            trace_commitment: GoldilocksDigest384V1::new([7; 6]).unwrap(),
-            public_io: Default::default(),
-            trace_root: zero,
-            air_trace_root: zero,
-            air_composition_root: zero,
-            lde_root: zero,
-            lde_domain_size: 0,
-            lookup_grand_product: 15,
-            lookup_challenge: 16,
-            alphas: Vec::new(),
-            betas: Vec::new(),
-            fri_layers: Vec::new(),
-            queries: Vec::new(),
-            air_openings: Vec::new(),
-            fri_queries: Vec::new(),
-        };
-        let canonical = norito::encode_canonical(&proof).unwrap();
-        let expected_digest = Hash::new(&canonical);
-        let mut saw_noncanonical_encoding = false;
-        for flags in
-            (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
-        {
-            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
-            let ambient = norito::to_bytes(&proof).unwrap();
-            let decoded_ambient: fastpq_prover::Proof =
-                norito::decode_from_bytes(&ambient).unwrap();
-            assert_eq!(decoded_ambient, proof);
-            if ambient != canonical {
-                saw_noncanonical_encoding = true;
-                assert_ne!(Hash::new(&ambient), expected_digest);
-            }
-            let output = FastpqProofOutput::encode_proof(&proof, canonical.len()).unwrap();
-            assert_eq!(output.proof_bytes, canonical);
-            assert_eq!(output.proof_digest, expected_digest);
-            assert_eq!(output.trace_commitment, proof.commitment());
-            let decoded: fastpq_prover::Proof =
-                norito::decode_from_bytes(&output.proof_bytes).unwrap();
-            assert_eq!(decoded, proof);
-            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
-        }
-        assert!(
-            saw_noncanonical_encoding,
-            "fixture must expose the old ambient-sensitive behavior"
-        );
-    }
     fn gpu_execution_cpu_poseidon_config() -> Fastpq {
         Fastpq {
             execution_mode: FastpqExecutionMode::Gpu,
@@ -1185,265 +956,6 @@ mod tests {
         assert_eq!(queued.height, 42);
         assert_eq!(queued.view, 7);
     }
-    #[test]
-    fn job_context_builds_batches_for_transcript_only_witness() {
-        let bundle = sample_bundle();
-        let template = FastpqPublicInputsTemplate {
-            dsid: [0u8; 16],
-            slot: 123,
-            old_root: [0x11; 32],
-            new_root: [0x22; 32],
-            perm_root: [0x33; 32],
-        };
-        let tx_set_hash = [0x44; 32];
-        let dsid = [0x55; 16];
-        let mut entry_dataspaces = BTreeMap::new();
-        entry_dataspaces.insert(bundle.entry_hash, dsid);
-        let witness = ExecWitness {
-            reads: Vec::new(),
-            writes: Vec::new(),
-            fastpq_transcripts: vec![bundle],
-            fastpq_batches: Vec::new(),
-        };
-        let job = FastpqWitnessJob {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
-            height: 42,
-            view: 7,
-            witness,
-            context: FastpqWitnessContext {
-                public_inputs: Some(template),
-                tx_set_hash: Some(tx_set_hash),
-                entry_dataspaces,
-                _source_inventory: None,
-            },
-        };
-        let batches = batches_for_job(&job).expect("context builds batches");
-        assert_eq!(batches.len(), 1);
-        assert_eq!(batches[0].public_inputs.dsid, dsid);
-        assert_eq!(batches[0].public_inputs.tx_set_hash, tx_set_hash);
-        assert_eq!(batches[0].public_inputs.perm_root, template.perm_root);
-    }
-    #[test]
-    fn job_context_rebinds_prebuilt_non_root_public_inputs() {
-        let bundle = sample_bundle();
-        let mut batches = sample_batches(&bundle);
-        batches[0].public_inputs.dsid = [0xA1; 16];
-        batches[0].public_inputs.slot = 1;
-        batches[0].public_inputs.perm_root = [0xA2; 32];
-        batches[0].public_inputs.tx_set_hash = [0xA3; 32];
-        let template = FastpqPublicInputsTemplate {
-            dsid: [0xB1; 16],
-            slot: 23,
-            old_root: [0xB2; 32],
-            new_root: [0xB3; 32],
-            perm_root: [0xB4; 32],
-        };
-        let tx_set_hash = [0xB5; 32];
-        let entry_dsid = [0xB6; 16];
-        let entry_hash = bundle.entry_hash;
-        let job = FastpqWitnessJob {
-            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
-            height: 42,
-            view: 7,
-            witness: ExecWitness {
-                fastpq_transcripts: vec![bundle],
-                fastpq_batches: batches.iter().map(transition_batch_to_dto).collect(),
-                ..ExecWitness::default()
-            },
-            context: FastpqWitnessContext {
-                public_inputs: Some(template),
-                tx_set_hash: Some(tx_set_hash),
-                entry_dataspaces: BTreeMap::from([(entry_hash, entry_dsid)]),
-                _source_inventory: None,
-            },
-        };
-
-        let rebound = batches_for_job(&job).expect("prebuilt batch binds to finalized context");
-        assert_eq!(rebound[0].public_inputs.dsid, entry_dsid);
-        assert_eq!(rebound[0].public_inputs.slot, template.slot);
-        assert_eq!(rebound[0].public_inputs.perm_root, template.perm_root);
-        assert_eq!(rebound[0].public_inputs.tx_set_hash, tx_set_hash);
-        assert_eq!(
-            rebound[0].public_inputs.old_root, batches[0].public_inputs.old_root,
-            "transfer SMT roots remain transcript-bound"
-        );
-        assert_eq!(
-            rebound[0].public_inputs.new_root, batches[0].public_inputs.new_root,
-            "transfer SMT roots remain transcript-bound"
-        );
-        let mut missing = job;
-        missing.context.tx_set_hash = None;
-        assert!(matches!(
-            batches_for_job(&missing),
-            Err(TranscriptBatchError::MissingTransactionSetCommitment)
-        ));
-        missing.context.tx_set_hash = Some([0; 32]);
-        assert!(matches!(
-            batches_for_job(&missing),
-            Err(TranscriptBatchError::MissingTransactionSetCommitment)
-        ));
-        missing.context.tx_set_hash = None;
-        missing.witness.fastpq_transcripts.clear();
-        assert!(
-            matches!(
-                batches_for_job(&missing),
-                Err(TranscriptBatchError::MissingTransactionSetCommitment)
-            ),
-            "precomputed proof-only batches cannot supply their own transaction-set authority"
-        );
-    }
-    #[test]
-    fn entry_hash_for_batch_accepts_matching_bundle_and_metadata() {
-        let bundle = sample_bundle();
-        let batches = sample_batches(&bundle);
-        let witness = ExecWitness {
-            fastpq_transcripts: vec![bundle.clone()],
-            ..ExecWitness::default()
-        };
-
-        assert_eq!(
-            entry_hash_for_batch(0, &witness, &batches[0]),
-            Some(bundle.entry_hash)
-        );
-    }
-    #[test]
-    fn entry_hash_for_batch_rejects_conflicting_bundle_and_metadata() {
-        let bundle = sample_bundle();
-        let mut batches = sample_batches(&bundle);
-        batches[0].metadata.insert(
-            ENTRY_HASH_METADATA_KEY.into(),
-            Hash::prehashed([0x99; 32]).as_ref().to_vec(),
-        );
-        let witness = ExecWitness {
-            fastpq_transcripts: vec![bundle],
-            ..ExecWitness::default()
-        };
-
-        assert_eq!(entry_hash_for_batch(0, &witness, &batches[0]), None);
-    }
-    #[test]
-    fn entry_hash_for_batch_rejects_missing_metadata_even_with_bundle() {
-        let bundle = sample_bundle();
-        let mut batches = sample_batches(&bundle);
-        batches[0].metadata.remove(ENTRY_HASH_METADATA_KEY);
-        let witness = ExecWitness {
-            fastpq_transcripts: vec![bundle],
-            ..ExecWitness::default()
-        };
-
-        assert_eq!(entry_hash_for_batch(0, &witness, &batches[0]), None);
-    }
-    #[test]
-    fn entry_hash_for_batch_rejects_malformed_metadata_even_with_bundle() {
-        let bundle = sample_bundle();
-        let mut batches = sample_batches(&bundle);
-        batches[0]
-            .metadata
-            .insert(ENTRY_HASH_METADATA_KEY.into(), vec![0x11; 31]);
-        let witness = ExecWitness {
-            fastpq_transcripts: vec![bundle],
-            ..ExecWitness::default()
-        };
-
-        assert_eq!(entry_hash_for_batch(0, &witness, &batches[0]), None);
-    }
-    #[test]
-    fn entry_hash_for_batch_rejects_proof_only_metadata_identity() {
-        let bundle = sample_bundle();
-        let batches = sample_batches(&bundle);
-        let witness = ExecWitness::default();
-
-        assert_eq!(entry_hash_for_batch(0, &witness, &batches[0]), None);
-    }
-    #[test]
-    #[cfg(feature = "fastpq-gpu")]
-    fn prover_poseidon_preflight_failure_disables_explicit_gpu_lane() {
-        let _digest_guard = DigestAccelerationTestGuard::new();
-        crate::fastpq::set_poseidon_digest_acceleration_enabled(false);
-        let cfg = Fastpq {
-            execution_mode: FastpqExecutionMode::Gpu,
-            poseidon_mode: FastpqPoseidonMode::Gpu,
-            proof_sidecar_queue_cap:
-                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_QUEUE_CAP,
-            proof_sidecar_max_bytes:
-                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES,
-            proof_sidecar_max_retries:
-                iroha_config::parameters::defaults::zk::fastpq::PROOF_SIDECAR_MAX_RETRIES,
-            device_class: None,
-            chip_family: None,
-            gpu_kind: None,
-            metal_queue_fanout: None,
-            metal_queue_column_threshold: None,
-            metal_max_in_flight: None,
-            metal_threadgroup_width: None,
-            metal_trace: iroha_config::parameters::defaults::zk::fastpq::METAL_TRACE,
-            metal_debug_enum: iroha_config::parameters::defaults::zk::fastpq::METAL_DEBUG_ENUM,
-        };
-        let digest_preflight_calls = std::cell::Cell::new(0usize);
-        let preflight = preflight_prover_modes_with_preflights(
-            &cfg,
-            ProverExecutionMode::Gpu,
-            ProverPoseidonMode::Gpu,
-            || true,
-            || false,
-            || {
-                digest_preflight_calls.set(digest_preflight_calls.get() + 1);
-                true
-            },
-        );
-        assert!(
-            preflight.is_none(),
-            "explicit GPU preflight must fail closed"
-        );
-        assert!(
-            crate::fastpq::poseidon_digest_acceleration_enabled(),
-            "BN254 digest acceleration records its own successful preflight before lane disable"
-        );
-        assert_eq!(
-            digest_preflight_calls.get(),
-            1,
-            "one lane initialisation must run the digest hardware preflight exactly once"
-        );
-    }
-    #[test]
-    #[cfg(feature = "fastpq-gpu")]
-    fn execution_gpu_preflight_failure_disables_lane_with_cpu_poseidon() {
-        let _digest_guard = DigestAccelerationTestGuard::new();
-        let cfg = gpu_execution_cpu_poseidon_config();
-        let poseidon_preflight_called = std::cell::Cell::new(false);
-
-        let preflight = preflight_prover_modes_with_preflights(
-            &cfg,
-            ProverExecutionMode::Gpu,
-            ProverPoseidonMode::Cpu,
-            || false,
-            || {
-                poseidon_preflight_called.set(true);
-                true
-            },
-            || panic!("CPU Poseidon must not preflight digest acceleration"),
-        );
-
-        assert!(
-            preflight.is_none(),
-            "forced GPU execution must fail closed when FFT/LDE preflight fails"
-        );
-        assert!(
-            !poseidon_preflight_called.get(),
-            "CPU Poseidon must not mask or replace the execution backend preflight"
-        );
-    }
-    #[test]
-    #[cfg(not(feature = "fastpq-gpu"))]
-    fn forced_gpu_execution_without_gpu_feature_disables_lane() {
-        let cfg = gpu_execution_cpu_poseidon_config();
-
-        assert!(
-            preflight_prover_modes(&cfg, ProverExecutionMode::Gpu, ProverPoseidonMode::Cpu,)
-                .is_none(),
-            "forced GPU execution must fail closed when GPU support is not compiled"
-        );
-    }
     #[derive(Clone)]
     struct MockEngine {
         calls: Arc<std::sync::Mutex<usize>>,
@@ -1451,15 +963,13 @@ mod tests {
     impl FastpqProofEngine for MockEngine {
         fn prove(
             &self,
-            batch: &fastpq_prover::TransitionBatch,
-        ) -> fastpq_prover::Result<FastpqProofOutput> {
+            statement: &FastpqPublicTransferStatementV1,
+        ) -> Result<FastpqProofOutput, ProvingError> {
             *self.calls.lock().unwrap() += 1;
-            let _ = &batch.parameter;
+
             let proof_bytes = b"mock-fastpq-proof".to_vec();
             Ok(FastpqProofOutput {
-                proof_digest: Hash::new(&proof_bytes),
-                trace_commitment: GoldilocksDigest384V1::new([0x31; 6])
-                    .expect("canonical mock FASTPQ trace commitment"),
+                identity: mock_identity(statement, &proof_bytes),
                 proof_bytes,
             })
         }
@@ -1470,20 +980,18 @@ mod tests {
     impl FastpqProofEngine for ShutdownDuringProofEngine {
         fn prove(
             &self,
-            _batch: &fastpq_prover::TransitionBatch,
-        ) -> fastpq_prover::Result<FastpqProofOutput> {
+            _statement: &FastpqPublicTransferStatementV1,
+        ) -> Result<FastpqProofOutput, ProvingError> {
             self.shutdown.send();
             let proof_bytes = b"proof-completed-after-shutdown".to_vec();
             Ok(FastpqProofOutput {
-                proof_digest: Hash::new(&proof_bytes),
-                trace_commitment: GoldilocksDigest384V1::new([0x32; 6])
-                    .expect("canonical shutdown FASTPQ trace commitment"),
+                identity: mock_identity(_statement, &proof_bytes),
                 proof_bytes,
             })
         }
     }
     fn sample_bundle() -> TransferTranscriptBundle {
-        TransferTranscriptBundle {
+        let mut bundle = TransferTranscriptBundle {
             entry_hash: Hash::prehashed([0x11; 32]),
             transcripts: vec![TransferTranscript {
                 batch_hash: Hash::prehashed([0x22; 32]),
@@ -1506,7 +1014,13 @@ mod tests {
                 authority_digest: authority_digest(&ALICE_ID),
                 poseidon_preimage_digest: None,
             }],
-        }
+        };
+        let transcript = &mut bundle.transcripts[0];
+        transcript.poseidon_preimage_digest = Some(crate::fastpq::poseidon_preimage_digest(
+            &transcript.deltas[0],
+            &transcript.batch_hash,
+        ));
+        bundle
     }
     fn sample_batches(bundle: &TransferTranscriptBundle) -> Vec<TransitionBatch> {
         batches_from_bundles(
@@ -1532,18 +1046,6 @@ mod tests {
         });
         let bundle = sample_bundle();
         let batches = sample_batches(&bundle);
-        assert_eq!(
-            entry_hash_for_batch(
-                0,
-                &ExecWitness {
-                    fastpq_transcripts: vec![bundle.clone()],
-                    ..ExecWitness::default()
-                },
-                &batches[0]
-            ),
-            Some(bundle.entry_hash),
-            "fixture must carry a persistable entry identity"
-        );
         let template = FastpqPublicInputsTemplate {
             dsid: [0; 16],
             slot: 0,
@@ -1574,9 +1076,9 @@ mod tests {
                 _source_inventory: None,
             },
         };
-        let admitted = batches_for_job(&job).expect("shutdown fixture reaches the prover");
+        let admitted = statements_for_job(&job).expect("shutdown fixture reaches the prover");
         assert_eq!(admitted.len(), 1);
-        assert_eq!(admitted[0].public_inputs.tx_set_hash, tx_set_hash);
+        assert_eq!(admitted[0].1.public_inputs.tx_set_hash, tx_set_hash);
         let kura = Kura::blank_kura_for_testing();
 
         process_job(
@@ -1622,59 +1124,224 @@ mod tests {
         assert!(overrides.dispatch_trace);
         assert!(overrides.debug_enum);
     }
+    fn mock_identity(
+        statement: &FastpqPublicTransferStatementV1,
+        bytes: &[u8],
+    ) -> FastpqArtifactIdentityDescriptionV1 {
+        use iroha_data_model::fastpq::{
+            FastpqCommitmentDescriptionV1, FastpqOrderedCompactAirCommitmentsV1, FastpqProofKindV1,
+        };
+        FastpqArtifactIdentityDescriptionV1 {
+            proof_kind: FastpqProofKindV1::OrdinaryCompact,
+            profile_id: offline_compact::quantity_profile_id(),
+            public_statement_digest: expected_statement(statement)
+                .unwrap()
+                .public_statement_digest,
+            artifact_digest: Hash::new(bytes).into(),
+            inner_bundle_digest: Hash::new(b"mock inner bundle").into(),
+            artifact_bytes: bytes.len() as u64,
+            commitments: FastpqCommitmentDescriptionV1::OrderedCompactAir(
+                FastpqOrderedCompactAirCommitmentsV1 {
+                    segment_count: 1,
+                    segment_air_row_roots: vec![
+                        iroha_data_model::privacy::GoldilocksDigest384V1::new([0x31; 6]).unwrap(),
+                    ],
+                },
+            ),
+        }
+    }
+    fn sample_job() -> FastpqWitnessJob {
+        let bundle = sample_bundle();
+        let entry_hash = bundle.entry_hash;
+        FastpqWitnessJob {
+            block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32])),
+            height: 42,
+            view: 7,
+            witness: ExecWitness {
+                fastpq_transcripts: vec![bundle],
+                ..ExecWitness::default()
+            },
+            context: FastpqWitnessContext {
+                public_inputs: Some(FastpqPublicInputsTemplate {
+                    dsid: [1; 16],
+                    slot: 23,
+                    old_root: [2; 32],
+                    new_root: [3; 32],
+                    perm_root: [4; 32],
+                }),
+                tx_set_hash: Some([5; 32]),
+                entry_dataspaces: BTreeMap::from([(entry_hash, [6; 16])]),
+                _source_inventory: None,
+            },
+        }
+    }
+    #[test]
+    fn finalized_job_preserves_full_quantities_context_and_original_entry_identity() {
+        let mut job = sample_job();
+        let transcript = &mut job.witness.fastpq_transcripts[0].transcripts[0];
+        let delta = &mut transcript.deltas[0];
+        delta.from_balance_before = Quantity::from(u128::MAX);
+        delta.from_balance_after = delta.from_balance_before.try_sub(&delta.amount).unwrap();
+        transcript.poseidon_preimage_digest = Some(crate::fastpq::poseidon_preimage_digest(
+            delta,
+            &transcript.batch_hash,
+        ));
+        let original = norito::encode_canonical(&job.witness.fastpq_transcripts).unwrap();
+        let statements = statements_for_job(&job).unwrap();
+        assert_eq!(statements.len(), 1);
+        let (entry, statement) = &statements[0];
+        assert_eq!(*entry, job.witness.fastpq_transcripts[0].entry_hash);
+        assert_eq!(statement.public_inputs.dsid, [6; 16]);
+        assert_eq!(statement.public_inputs.slot, 23);
+        assert_eq!(statement.public_inputs.perm_root, [4; 32]);
+        assert_eq!(statement.public_inputs.tx_set_hash, [5; 32]);
+        assert_eq!(
+            statement.transcripts[0].deltas[0].from_balance_before,
+            Quantity::from(u128::MAX)
+        );
+        assert_eq!(statement.transitions.len(), 2);
+        assert_eq!(
+            norito::encode_canonical(&job.witness.fastpq_transcripts).unwrap(),
+            original
+        );
+    }
+    #[test]
+    fn finalized_job_requires_source_context_and_rejects_missing_digest_without_repair() {
+        let original = sample_job();
+        for mutation in 0..5 {
+            let mut job = original.clone();
+            match mutation {
+                0 => job.context.public_inputs = None,
+                1 => job.context.tx_set_hash = None,
+                2 => job.context.tx_set_hash = Some([0; 32]),
+                3 => {
+                    job.witness.fastpq_transcripts[0].transcripts[0].poseidon_preimage_digest = None
+                }
+                _ => {
+                    job.witness.fastpq_batches = sample_batches(&job.witness.fastpq_transcripts[0])
+                        .iter()
+                        .map(transition_batch_to_dto)
+                        .collect();
+                    job.witness.fastpq_transcripts.clear();
+                }
+            }
+            let before = norito::encode_canonical(&job.witness).unwrap();
+            assert!(statements_for_job(&job).is_err());
+            assert_eq!(norito::encode_canonical(&job.witness).unwrap(), before);
+        }
+        let mut empty = original;
+        empty.witness = ExecWitness::default();
+        assert!(statements_for_job(&empty).unwrap().is_empty());
+    }
+    #[test]
+    fn precomputed_batches_cannot_override_finalized_statement_or_entry() {
+        let mut job = sample_job();
+        let expected = statements_for_job(&job).unwrap();
+        let mut batch = sample_batches(&job.witness.fastpq_transcripts[0]).remove(0);
+        batch.public_inputs.tx_set_hash = [0xE1; 32];
+        batch.public_inputs.dsid = [0xE2; 16];
+        batch.metadata.clear();
+        job.witness.fastpq_batches = vec![transition_batch_to_dto(&batch)];
+        assert_eq!(statements_for_job(&job).unwrap(), expected);
+    }
+    #[test]
+    fn statement_expectations_are_canonical_and_bind_every_ambient_layout() {
+        let statement = statements_for_job(&sample_job()).unwrap().remove(0).1;
+        let canonical = norito::encode_canonical(&statement).unwrap();
+        let expected = expected_statement(&statement).unwrap();
+        assert_eq!(
+            expected.public_statement_digest,
+            <[u8; 32]>::from(Hash::new(&canonical))
+        );
+        for flags in
+            (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
+        {
+            let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(expected_statement(&statement).unwrap(), expected);
+            assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+        }
+        let mut changed = statement;
+        changed.ordering_hash[0] ^= 1;
+        assert_ne!(expected_statement(&changed).unwrap(), expected);
+    }
+    #[test]
+    fn real_engine_enforces_artifact_output_limit_before_proof_work() {
+        let statement = statements_for_job(&sample_job()).unwrap().remove(0).1;
+        let mut verification = VerificationLimits::default();
+        verification.transport.max_wire_bytes = 0;
+        let engine = RealProofEngine {
+            proving: ProvingLimits::default(),
+            verification,
+        };
+        assert!(engine.prove(&statement).is_err());
+    }
+    #[test]
+    fn cpu_policy_uses_canonical_producer_without_device_readiness() {
+        let _digest_guard = DigestAccelerationTestGuard::new();
+        let mut cfg = gpu_execution_cpu_poseidon_config();
+        cfg.execution_mode = FastpqExecutionMode::Cpu;
+        assert_eq!(
+            configured_digest_execution(&cfg).unwrap(),
+            DigestExecutionV1::Cpu
+        );
+    }
+    #[cfg(not(feature = "fastpq-gpu"))]
+    #[test]
+    fn explicit_device_policy_without_device_feature_fails_closed() {
+        let _digest_guard = DigestAccelerationTestGuard::new();
+        let mut cfg = gpu_execution_cpu_poseidon_config();
+        assert!(configured_digest_execution(&cfg).is_err());
+        cfg.execution_mode = FastpqExecutionMode::Cpu;
+        cfg.poseidon_mode = FastpqPoseidonMode::Gpu;
+        assert!(configured_digest_execution(&cfg).is_err());
+    }
 }
-fn batches_for_job(job: &FastpqWitnessJob) -> Result<Vec<TransitionBatch>, TranscriptBatchError> {
-    if (!job.witness.fastpq_batches.is_empty() || !job.witness.fastpq_transcripts.is_empty())
-        && job
-            .context
-            .tx_set_hash
-            .is_none_or(|digest| digest == [0; 32])
-    {
-        return Err(TranscriptBatchError::MissingTransactionSetCommitment);
-    }
-    let mut batches = match batches_from_exec_witness(&job.witness) {
-        Ok(batches) => batches,
-        Err(TranscriptBatchError::MissingFastpqBatches) => Vec::new(),
-        Err(err) => return Err(err),
+fn statements_for_job(
+    job: &FastpqWitnessJob,
+) -> fastpq_prover::Result<Vec<(Hash, FastpqPublicTransferStatementV1)>> {
+    let invalid = |details: &str| fastpq_prover::Error::InvalidTraceShape {
+        details: details.to_owned(),
     };
-    if batches.is_empty() && !job.witness.fastpq_transcripts.is_empty() {
-        let Some(public_inputs) = job.context.public_inputs else {
-            return Err(TranscriptBatchError::MissingFastpqBatches);
-        };
-        let Some(tx_set_hash) = job.context.tx_set_hash else {
-            return Err(TranscriptBatchError::MissingFastpqBatches);
-        };
-        batches = batches_from_bundles(
-            FASTPQ_CANONICAL_PARAMETER_SET,
-            public_inputs,
-            tx_set_hash,
-            job.witness.fastpq_transcripts.iter(),
-        )?;
-    }
     if job.witness.fastpq_transcripts.is_empty() {
-        return Ok(batches);
+        return if job.witness.fastpq_batches.is_empty() {
+            Ok(Vec::new())
+        } else {
+            Err(invalid(
+                "FASTPQ proving requires original finalized transcript bundles",
+            ))
+        };
     }
-    let Some(public_inputs) = job.context.public_inputs else {
-        return Err(TranscriptBatchError::MissingFastpqBatches);
-    };
-    let Some(tx_set_hash) = job.context.tx_set_hash else {
-        return Err(TranscriptBatchError::MissingFastpqBatches);
-    };
-    for (bundle, batch) in job
-        .witness
+    let public_inputs = job
+        .context
+        .public_inputs
+        .ok_or_else(|| invalid("FASTPQ source public inputs are missing"))?;
+    let tx_set_hash = job
+        .context
+        .tx_set_hash
+        .filter(|hash| *hash != [0; 32])
+        .ok_or_else(|| invalid("FASTPQ source transaction-set commitment is missing"))?;
+    let verification = VerificationLimits::default();
+    let proving = ProvingLimits::default();
+    job.witness
         .fastpq_transcripts
         .iter()
-        .zip(batches.iter_mut())
-    {
-        batch.public_inputs.dsid = job
-            .context
-            .entry_dataspaces
-            .get(&bundle.entry_hash)
-            .copied()
-            .unwrap_or(public_inputs.dsid);
-        batch.public_inputs.slot = public_inputs.slot;
-        batch.public_inputs.perm_root = public_inputs.perm_root;
-        batch.public_inputs.tx_set_hash = tx_set_hash;
-    }
-    Ok(batches)
+        .map(|bundle| {
+            let mut inputs = public_inputs.with_tx_set_hash(tx_set_hash);
+            inputs.dsid = job
+                .context
+                .entry_dataspaces
+                .get(&bundle.entry_hash)
+                .copied()
+                .unwrap_or(inputs.dsid);
+            let (statement, witnesses) = quantity_statement_from_finalized_transcripts(
+                inputs,
+                &bundle.transcripts,
+                verification.public_statement,
+                proving.private_smt,
+            )?
+            .into_parts();
+            drop(witnesses);
+            Ok((bundle.entry_hash, statement))
+        })
+        .collect()
 }

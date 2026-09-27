@@ -755,7 +755,7 @@ Alias binding payload approved alongside a manifest.
 
 ## `iroha.instruction.v1::sorafs::RegisterCapacityDeclaration`
 
-> Schema summary: struct fields: record: CapacityDeclarationRecord.
+> Schema summary: struct fields: declaration: Vec<u8>.
 
 - Rust type: `iroha_data_model::isi::sorafs::RegisterCapacityDeclaration`
 - Schema hash: `9c77b1011c33673c919ac9d0a4ba0808`
@@ -764,7 +764,7 @@ Alias binding payload approved alongside a manifest.
 
 | Field | Type |
 |-------|------|
-| `record` | `CapacityDeclarationRecord` |
+| `declaration` | `Vec<u8>` |
 
 ## `iroha.instruction.v1::sorafs::RegisterCapacityDispute`
 
@@ -1208,6 +1208,40 @@ Alias binding payload approved alongside a manifest.
 | `RefundFxCorridorEscrow` | 4 | `RefundFxCorridorEscrow` |
 | `SettleFxCorridor` | 5 | `SettleFxCorridor` |
 | `Atomic` | 6 | `SettleAtomic` |
+
+## `iroha.sorafs.v1.provider_admission.initialize`
+
+> Schema summary: struct fields: council: InitialProviderAdmissionCouncilV1, providers: Vec<InitialProviderAdmissionV1>.
+
+- Rust type: `iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1`
+- Schema hash: `e6426d837afb82dcce6c4404d3617ad5`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `council` | `InitialProviderAdmissionCouncilV1` |
+| `providers` | `Vec<InitialProviderAdmissionV1>` |
+
+## `iroha.sorafs.v1.publication.assert`
+
+> Schema summary: struct fields: manifest_digest: ManifestDigest, order_id: ReplicationOrderId, assignment_revision: u64, canonical_order_digest: Array<u8, 32>, require_complete: bool, challenge: Array<u8, 32>, minimum_height: u64, minimum_block_hash: Array<u8, 32>.
+
+- Rust type: `iroha_data_model::isi::sorafs::AssertSorafsPublicationV1`
+- Schema hash: `54d94007b9784e1c2c073cd4d695adce`
+
+**Layout:** `struct`
+
+| Field | Type |
+|-------|------|
+| `manifest_digest` | `ManifestDigest` |
+| `order_id` | `ReplicationOrderId` |
+| `assignment_revision` | `u64` |
+| `canonical_order_digest` | `Array<u8, 32>` |
+| `require_complete` | `bool` |
+| `challenge` | `Array<u8, 32>` |
+| `minimum_height` | `u64` |
+| `minimum_block_hash` | `Array<u8, 32>` |
 
 ## `iroha.transfer`
 

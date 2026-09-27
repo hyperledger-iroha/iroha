@@ -34,23 +34,27 @@ Pre-flight checklist:
 ### 1. Prepare the declaration bundle
 
 Create a human-readable spec that mirrors the canonical schema (see
-`fixtures/documentation/sorafs_capacity_declaration.spec.json`). Each spec must include a
-deterministic `provider_id_hex`, `chunker_capabilities`, stake pointer, per-lane
+`crates/sorafs_car/tests/fixtures/capacity_cli/spec.json`). Each spec must include a
+deterministic `provider_id_hex`, `chunker_commitments`, stake pointer, per-lane
 caps, and SLA contact information. Generate the canonical payloads via the CLI
-helper:
+helper. For ledger admission, metadata must include `sorafs.owner_account_id`
+with the admitted owner's exact canonical account text and `sorafs.storage_class`
+with one of `hot`, `warm`, or `cold`; the CLI test fixture demonstrates encoding,
+not a registered provider:
 
 ```bash
 mkdir -p artifacts/sorafs/providers/acme
 sorafs_manifest_builder capacity declaration \
-  --spec specs/providers/acme.json \
-  --json-out artifacts/sorafs/providers/acme/declaration.json \
-  --request-out artifacts/sorafs/providers/acme/request.json \
-  --norito-out artifacts/sorafs/providers/acme/declaration.to \
-  --base64-out artifacts/sorafs/providers/acme/declaration.b64
+  --spec=specs/providers/acme.json \
+  --json-out=artifacts/sorafs/providers/acme/declaration.json \
+  --norito-out=artifacts/sorafs/providers/acme/declaration.to \
+  --base64-out=artifacts/sorafs/providers/acme/declaration.b64
 ```
 
-This command validates the schema locally and emits every artefact required by
-`/v1/sorafs/capacity/declare`. Store the stdout/stderr in
+This command validates the schema locally. Its JSON summary contains only
+`declaration_b64`; provider metadata and validity remain inside the canonical
+declaration, and execution records the consensus registration time. No separate
+record window, epoch override or signing credential is accepted. Store stdout/stderr in
 `artifacts/sorafs/providers/acme/manifest_builder.log`.
 
 ### 2. Run admission smoke tests
@@ -59,7 +63,7 @@ Before sending the payload to Torii, re-run the CLI regression to prove the
 validator is deterministic:
 
 ```bash
-cargo test -p sorafs_car --test capacity_cli -- capacity_declaration
+cargo test -p sorafs_car --features cli --test sorafs_car_integration capacity_cli::capacity_declaration
 ```
 
 Attach the resulting `test-stdout.txt` to the onboarding packet. Reviewers use
@@ -68,20 +72,21 @@ invokes.
 
 ### 3. Submit to Torii and capture responses
 
-Submit the request JSON through Torii’s app API. Either call it manually:
+Prepare the canonical registration instruction and submit it with the configured
+authorized account through the ordinary signed transaction path:
 
 ```bash
-TORII="https://torii.example.net"
-curl -sS -X POST "$TORII/v1/sorafs/capacity/declare" \
-  -H 'Content-Type: application/json' \
-  --data-binary @artifacts/sorafs/providers/acme/request.json \
-  | tee artifacts/sorafs/providers/acme/declare_response.json
+iroha app sorafs toolkit instruction capacity-declaration \
+  --summary artifacts/sorafs/providers/acme/declaration.json \
+  > artifacts/sorafs/providers/acme/instruction.json
+iroha transaction stdin \
+  < artifacts/sorafs/providers/acme/instruction.json
 ```
 
-…or wrap the request by embedding it in a governance transaction if the
-provider must wait for a council vote. Capture the HTTP status, Torii log
-snippet, and app API correlation ID; governance reviewers expect those in the
-release ticket.
+If governance approval is required, retain the prepared instruction until that
+approval is finalized. Capture the committed transaction hash and finalized
+registration record for the release ticket; a submission response alone does
+not establish registration.
 
 ### 4. Verify registry state and publish evidence
 

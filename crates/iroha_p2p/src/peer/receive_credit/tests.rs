@@ -55,7 +55,7 @@ fn credit_geometry_preserves_all_count_and_byte_ceilings() {
         p.fallback[..Class::HIGH.len()].iter().sum::<usize>() + CONTROL_BYTES,
         p.frames.progress_reserve_bytes_per_peer
     );
-    assert!(Pool::new(p.frames.clone(), p.dispatch.clone(), 4, [1024; CLASS_COUNT]).is_err());
+    assert!(Pool::new(p.frames.clone(), p.dispatch.clone(), 2, [1024; CLASS_COUNT]).is_err());
     assert!(
         Pool::new(
             p.frames.clone(),
@@ -68,36 +68,31 @@ fn credit_geometry_preserves_all_count_and_byte_ceilings() {
 }
 
 #[test]
-fn private_geometry_exposes_reduced_maximum_and_rejects_unsupported_recovery_frames() {
-    let p = pool(6);
-    let expected = p.fallback[Class::RecoveryData.index()] / 3 - ENVELOPE_BYTES;
-    assert_eq!(p.private_maximum(Class::RecoveryData), Some(expected));
-    assert!(expected < p.frames.progress_reserve_bytes_per_peer / 6);
+fn private_geometry_exposes_reduced_maximum_and_rejects_unfunded_safety_frames() {
+    let p = pool(3);
+    let expected = p.fallback[Class::Safety.index()] / 3 - ENVELOPE_BYTES;
+    assert_eq!(p.private_maximum(Class::Safety), Some(expected));
+    assert!(expected < p.frames.progress_reserve_bytes_per_peer / 3);
     assert_eq!(p.private_maximum(Class::Low), None);
     // Use a new pool so this checks admission, not a changed-cache refusal.
     let frames = InboundFrameByteBudgets::new(2 * 1024 * 1024, 128 * 1024, 256 * 1024, 2).unwrap();
     let dispatch = InboundDispatchByteBudgets::new(2 * 1024 * 1024, 128 * 1024, 4096).unwrap();
     let mut maximum = [1024; CLASS_COUNT];
-    maximum[Class::RecoveryData.index()] = 100 * 1024;
-    assert!(Pool::new(frames, dispatch, 6, maximum).is_err());
+    maximum[Class::Safety.index()] = 100 * 1024;
+    assert!(Pool::new(frames, dispatch, 3, maximum).is_err());
 }
 
 #[test]
-fn protected_minima_fund_two_mib_safety_and_bounded_sidecar_without_raising_p() {
+fn protected_minimum_funds_two_mib_safety_without_raising_p() {
     let high = 128 * 1024 * 1024;
     let private = 17 * 1024 * 1024;
     let frames = InboundFrameByteBudgets::new(high, 64 * 1024 * 1024, private, 97).unwrap();
     let dispatch =
         InboundDispatchByteBudgets::new(high, 64 * 1024 * 1024, 2 * 1024 * 1024).unwrap();
-    // 128 KiB here is a conservative test declaration, not a replacement for
-    // Core's actual native complete-envelope witness.
     let maximum = [
         2 * 1024 * 1024,
         17 * 1024 * 1024,
         17 * 1024 * 1024,
-        512 * 1024,
-        128 * 1024,
-        128 * 1024,
         2 * 1024 * 1024,
         17 * 1024 * 1024,
         256 * 1024,
@@ -133,29 +128,25 @@ fn protected_minima_fund_two_mib_safety_and_bounded_sidecar_without_raising_p() 
         p.fallback[..Class::HIGH.len()].iter().sum::<usize>() + CONTROL_BYTES,
         private
     );
-    for class in [
-        Class::Safety,
-        Class::Availability,
-        Class::RecoveryControl,
-        Class::RecoveryData,
-    ] {
-        assert!(p.private_maximum(class).unwrap() >= maximum[class.index()]);
-    }
+    assert!(
+        p.private_maximum(Class::Safety).unwrap() >= maximum[Class::Safety.index()],
+        "the Safety maximum is fully funded from the private corridor"
+    );
 }
 
 #[test]
 fn credit_pool_cannot_duplicate_partitions_while_guards_are_alive() {
-    let p = pool(6);
-    let same = Pool::new(p.frames.clone(), p.dispatch.clone(), 6, [1024; CLASS_COUNT]).unwrap();
+    let p = pool(3);
+    let same = Pool::new(p.frames.clone(), p.dispatch.clone(), 3, [1024; CLASS_COUNT]).unwrap();
     assert!(Arc::ptr_eq(&p, &same));
-    assert!(Pool::new(p.frames.clone(), p.dispatch.clone(), 7, [1024; CLASS_COUNT]).is_err());
+    assert!(Pool::new(p.frames.clone(), p.dispatch.clone(), 4, [1024; CLASS_COUNT]).is_err());
     let foreign = InboundDispatchByteBudgets::new(256 * 1024, 128 * 1024, 4096).unwrap();
-    assert!(Pool::new(p.frames.clone(), foreign, 6, [1024; CLASS_COUNT]).is_err());
+    assert!(Pool::new(p.frames.clone(), foreign, 3, [1024; CLASS_COUNT]).is_err());
 }
 
 #[test]
 fn issued_grant_already_owns_scratch_dispatch_and_exact_count() {
-    let p = pool(6);
+    let p = pool(3);
     let sender = peer(1);
     let mut ledger = Ledger::new(p.bind(sender.id()).unwrap());
     ledger.request(request([1; 32], Class::Payload, 1)).unwrap();
@@ -179,7 +170,7 @@ fn issued_grant_already_owns_scratch_dispatch_and_exact_count() {
 
 #[test]
 fn failed_multiresource_reservation_releases_every_partial_owner() {
-    let p = pool(6);
+    let p = pool(3);
     let sender = peer(2);
     let source = p.bind(sender.id()).unwrap();
     let scratch = p
@@ -207,7 +198,7 @@ fn private_grant_survives_another_peers_same_class_and_global_scratch_reservatio
     let p = Pool::new(
         frames,
         InboundDispatchByteBudgets::new(high, 8192, 0).unwrap(),
-        6,
+        3,
         [maximum; CLASS_COUNT],
     )
     .unwrap();
@@ -223,15 +214,15 @@ fn private_grant_survives_another_peers_same_class_and_global_scratch_reservatio
             .unwrap()
             .expect("A's exact unspent grant");
     }
-    // Seven genuinely issued, still-unspent grants occupy the complete primary
-    // source/scratch/dispatch pools, including the same RecoveryData class.
+    // Four genuinely issued, still-unspent grants occupy the complete primary
+    // source/scratch/dispatch pools, including the same Safety class.
     assert_eq!(used(&p.frames.high), high);
     assert_eq!(used(&p.frames.high_decode_scratch), high);
     assert_eq!(used(&p.dispatch.high), high);
     let mut second = Ledger::new(p.bind(b.id()).unwrap());
     let before = used(&second.source.reserve);
     second
-        .request(Header::request([22; 32], Class::RecoveryData, 1, maximum).unwrap())
+        .request(Header::request([22; 32], Class::Safety, 1, maximum).unwrap())
         .unwrap();
     let grant = second
         .next_grant()
@@ -254,7 +245,7 @@ fn private_grant_survives_another_peers_same_class_and_global_scratch_reservatio
 
 #[test]
 fn replacement_control_owner_requires_old_reader_close_but_not_delivered_drain() {
-    let p = pool(6);
+    let p = pool(3);
     let sender = peer(23);
     let source = p.bind(sender.id()).unwrap();
     assert!(p.bind(sender.id()).is_err());
@@ -271,18 +262,17 @@ fn replacement_control_owner_requires_old_reader_close_but_not_delivered_drain()
 }
 
 #[test]
-fn ordinary_count_saturation_does_not_consume_recovery_or_safety_grants() {
-    let p = pool(6);
+fn ordinary_count_saturation_does_not_consume_other_class_or_safety_grants() {
+    let p = pool(3);
     let sender = peer(3);
     let source = p.bind(sender.id()).unwrap();
     let bulk = source.reserve(Class::Payload, 200).unwrap();
     assert!(source.reserve(Class::Payload, 200).is_none());
-    let availability = source.reserve(Class::Availability, 200).unwrap();
-    let control = source.reserve(Class::RecoveryControl, 200).unwrap();
-    let recovery = source.reserve(Class::RecoveryData, 200).unwrap();
+    let lane = source.reserve(Class::Lane, 200).unwrap();
+    let control = source.reserve(Class::Control, 200).unwrap();
     let safety = source.reserve(Class::Safety, 200).unwrap();
     let low = source.reserve(Class::Low, 200).unwrap();
-    drop((availability, control, recovery, safety, low));
+    drop((lane, control, safety, low));
     assert!(source.reserve(Class::Payload, 200).is_none());
     drop(bulk);
     assert!(source.reserve(Class::Payload, 200).is_some());
@@ -290,15 +280,13 @@ fn ordinary_count_saturation_does_not_consume_recovery_or_safety_grants() {
 
 #[test]
 fn dropping_tenure_reclaims_only_unspent_grants_not_delivered_owners() {
-    let p = pool(6);
+    let p = pool(3);
     let sender = peer(4);
     let source = p.bind(sender.id()).unwrap();
     let partition = Arc::downgrade(&source.partition);
     let mut ledger = Ledger::new(source);
     ledger.request(request([4; 32], Class::Payload, 1)).unwrap();
-    ledger
-        .request(request([4; 32], Class::RecoveryData, 1))
-        .unwrap();
+    ledger.request(request([4; 32], Class::Control, 1)).unwrap();
     let first = ledger.next_grant().unwrap().unwrap();
     assert_eq!(first.class().unwrap(), Class::Payload);
     ledger.next_grant().unwrap().unwrap(); // retained, never consumed
@@ -315,7 +303,7 @@ fn dropping_tenure_reclaims_only_unspent_grants_not_delivered_owners() {
         &partition.upgrade().unwrap()
     ));
     assert!(replacement.reserve(Class::Payload, 200).is_none());
-    assert!(replacement.reserve(Class::RecoveryData, 200).is_some());
+    assert!(replacement.reserve(Class::Control, 200).is_some());
     assert!(held.try_clone_retained().is_none());
     let (_, _, _, _, guard) = held.into_parts();
     assert!(replacement.reserve(Class::Payload, 200).is_none());
@@ -326,7 +314,7 @@ fn dropping_tenure_reclaims_only_unspent_grants_not_delivered_owners() {
 #[test]
 fn canonical_record_rejects_substitution_replay_and_extra_inner_frame() {
     let cipher = crypto();
-    let header = Header::request([8; 32], Class::RecoveryData, 1, 3)
+    let header = Header::request([8; 32], Class::Control, 1, 3)
         .unwrap()
         .with_kind(Kind::Data);
     let (encoded, mut encrypted) = record::seal(&cipher, &header, b"abc").unwrap();
@@ -345,34 +333,34 @@ fn canonical_record_rejects_substitution_replay_and_extra_inner_frame() {
     trailing.push(0);
     assert!(Header::decode(&trailing).is_err());
     assert!(Header::decode(&vec![0; record::HEADER_CAP + 1]).is_err());
-    let p = pool(6);
+    let p = pool(3);
     let sender = peer(5);
     let mut ledger = Ledger::new(p.bind(sender.id()).unwrap());
-    let original = request([8; 32], Class::RecoveryData, 1);
+    let original = request([8; 32], Class::Control, 1);
     ledger.request(original).unwrap();
     assert!(ledger.request(original).is_err());
     let grant = ledger.next_grant().unwrap().unwrap();
     assert!(
         ledger
-            .consume(&request([9; 32], Class::RecoveryData, 1).with_kind(Kind::Data))
+            .consume(&request([9; 32], Class::Control, 1).with_kind(Kind::Data))
             .is_err()
     );
     assert!(
         ledger
-            .consume(&request([8; 32], Class::RecoveryData, 2).with_kind(Kind::Data))
+            .consume(&request([8; 32], Class::Control, 2).with_kind(Kind::Data))
             .is_err()
     );
     drop(ledger.consume(&grant.with_kind(Kind::Data)).unwrap());
     assert!(ledger.request(original).is_err());
-    let value = Fixture::RecoveryData(7);
+    let value = Fixture::Control(7);
     let mut wire = Vec::new();
     run::receive_credit_encode(&value, &mut wire).unwrap();
     let caps = crate::network::TopicFrameCaps::uniform(1024);
-    assert!(run::receive_credit_decode::<Fixture>(&wire, Class::RecoveryData, caps).is_ok());
+    assert!(run::receive_credit_decode::<Fixture>(&wire, Class::Control, caps).is_ok());
     assert!(run::receive_credit_decode::<Fixture>(&wire, Class::Payload, caps).is_err());
     let original = wire.clone();
     wire.extend_from_slice(&original);
-    assert!(run::receive_credit_decode::<Fixture>(&wire, Class::RecoveryData, caps).is_err());
+    assert!(run::receive_credit_decode::<Fixture>(&wire, Class::Control, caps).is_err());
 }
 
 #[test]
@@ -412,7 +400,7 @@ fn full_session_binding_is_directional_and_rejects_foreign_transport_or_geometry
         [6; 32],
     )
     .unwrap();
-    let header = request(left.outgoing, Class::RecoveryControl, 1);
+    let header = request(left.outgoing, Class::Lane, 1);
     assert!(header.check(&changed.outgoing).is_err());
     let changed = record::Binding::verified(
         &network,
@@ -457,12 +445,11 @@ fn enqueue(stream: &mut CreditStream<Cipher, Fixture>, value: Fixture) -> onesho
 }
 
 #[tokio::test(start_paused = true)]
-async fn real_partial_duplex_grants_availability_and_recovery_past_blocked_body_then_services_body()
-{
+async fn real_partial_duplex_grants_other_classes_past_blocked_body_then_services_body() {
     let a = peer(10);
     let b = peer(11);
-    let pa = pool(6);
-    let pb = pool(6);
+    let pa = pool(3);
+    let pb = pool(3);
     let cipher = crypto();
     let network = test_network_id("partial duplex credits");
     let ba = record::Binding::verified(
@@ -552,9 +539,9 @@ async fn real_partial_duplex_grants_availability_and_recovery_past_blocked_body_
     .await
     .unwrap();
     let _bulk_ack = enqueue(&mut sa, Fixture::Payload(2));
-    let _control_ack = enqueue(&mut sa, Fixture::RecoveryControl(3));
-    let _data_ack = enqueue(&mut sa, Fixture::RecoveryData(4));
-    let _availability_ack = enqueue(&mut sa, Fixture::Availability(5));
+    let _lane_ack = enqueue(&mut sa, Fixture::Lane(3));
+    let _control_ack = enqueue(&mut sa, Fixture::Control(4));
+    let _safety_ack = enqueue(&mut sa, Fixture::Safety(5));
     let _block_sync_ack = enqueue(&mut sa, Fixture::BlockSync(6));
     let mut received = Vec::new();
     tokio::time::timeout(Duration::from_secs(5), async {
@@ -570,12 +557,12 @@ async fn real_partial_duplex_grants_availability_and_recovery_past_blocked_body_
     assert!(
         received
             .iter()
-            .any(|p| p.payload.admission_class() == Class::RecoveryControl)
+            .any(|p| p.payload.admission_class() == Class::Lane)
     );
     assert!(
         received
             .iter()
-            .any(|p| p.payload.admission_class() == Class::RecoveryData)
+            .any(|p| p.payload.admission_class() == Class::Control)
     );
     assert!(
         received
@@ -585,7 +572,7 @@ async fn real_partial_duplex_grants_availability_and_recovery_past_blocked_body_
     assert!(
         received
             .iter()
-            .any(|p| p.payload.admission_class() == Class::Availability)
+            .any(|p| p.payload.admission_class() == Class::Safety)
     );
     assert!(
         received
@@ -658,7 +645,7 @@ fn mandatory_writer_geometry_rejects_unfunded_bytes_counts_and_overflow() {
     bad.high_max_bytes = CONTROL_BYTES;
     assert!(writer_partitions([1024; CLASS_COUNT], bad).is_err());
     let mut bad = limits;
-    bad.low_max_bytes = bytes[6] - 1;
+    bad.low_max_bytes = bytes[Class::BlockSync.index()] - 1;
     assert!(writer_partitions([1024; CLASS_COUNT], bad).is_err());
     let mut bad = limits;
     bad.high_max_frames = Class::HIGH.len() - 1;

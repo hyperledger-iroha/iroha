@@ -4,8 +4,8 @@ use crate::{
     genesis::{
         ConsensusPolicy, generate_default,
         profile::{
-            PUBLIC_TAIRA_CHAIN_ID, known_chain_discriminant_for_chain_id,
-            reject_retired_public_chain_id,
+            PUBLIC_NEXUS_CHAIN_ID, PUBLIC_TAIRA_CHAIN_ID, TAIRA_XOR_ASSET_DEFINITION_ID,
+            known_chain_discriminant_for_chain_id, reject_retired_public_chain_id,
         },
         validate_consensus_mode,
     },
@@ -650,7 +650,6 @@ const LOCALNET_PRIVATE_SNS_LEASE_PAYMENT: &str = "0.5";
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
 const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
 const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
-const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_REQUESTED_ASSET_INITIAL_QUANTITY: u64 = 1_000_000_000;
@@ -667,10 +666,6 @@ const TAIRA_LANE_COUNT: i64 = 8;
 /// Match the canonical Taira template reserve while assigning it to the fresh generated operator.
 const TAIRA_DIGITAL_SHEKEL_INITIAL_QUANTITY: u64 = 1_000_000_000;
 const LOCALNET_GAS_ACCOUNT_DOMAIN: &[u8] = b"iroha:localnet:gas-custody:v1";
-/// Minimum faucet reserve before startup auto-mints a replenishment.
-const LOCALNET_FEE_ASSET_RESERVE_MIN: u128 = 1_000_000_000_000_000_000_000_000;
-/// Target faucet reserve restored by the startup wrapper when the floor is crossed.
-const LOCALNET_FEE_ASSET_RESERVE_TARGET: u128 = 10_000_000_000_000_000_000_000_000;
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
 /// Default localnet client status timeout (ms); must stay <= TTL.
@@ -830,17 +825,12 @@ fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId 
 pub(crate) fn canonical_asset_definition_literal(domain: &str, name: &str) -> String {
     canonical_asset_definition_id(domain, name).canonical_address()
 }
-fn localnet_stake_asset_definition_id() -> AssetDefinitionId {
-    canonical_asset_definition_id(LOCALNET_NEXUS_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
+fn localnet_xor_asset_definition_id() -> AssetDefinitionId {
+    AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)
+        .expect("canonical isolated-network XOR definition")
 }
-fn localnet_stake_asset_literal() -> String {
-    canonical_asset_definition_literal(LOCALNET_NEXUS_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
-}
-fn localnet_fee_asset_definition_id() -> AssetDefinitionId {
-    canonical_asset_definition_id(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
-}
-fn localnet_fee_asset_literal() -> String {
-    canonical_asset_definition_literal(LOCALNET_UNIVERSAL_DOMAIN, LOCALNET_STAKE_ASSET_NAME)
+fn localnet_xor_asset_literal() -> String {
+    localnet_xor_asset_definition_id().to_string()
 }
 fn localnet_fee_sponsor_program_id(sponsor: &AccountId) -> FeeSponsorProgramId {
     FeeSponsorProgramId::new(
@@ -1470,8 +1460,8 @@ fn generate_localnet_for_layout<T: Write>(
     };
     if taira {
         write_taira_runtime_signer_keys(&out_dir, &peers)?;
-        write_mint_finality_seeds(&out_dir, &peers)?;
     }
+    write_mint_finality_seeds(&out_dir, &peers)?;
     let sumeragi_body_bytes = localnet_sumeragi_body_bytes(peers.len())?;
     tui::status("Generating genesis manifest");
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode);
@@ -1826,7 +1816,7 @@ fn generate_localnet_for_layout<T: Write>(
     tui::status("Peer configs written and validated");
     if scaling.is_none() {
         tui::status("Writing start/stop scripts");
-        let fee_asset_definition_id = localnet_fee_asset_literal();
+        let fee_asset_definition_id = localnet_xor_asset_literal();
         write_scripts(
             &out_dir,
             opts.peers.get(),
@@ -2537,6 +2527,10 @@ fn resolve_localnet_chain_id(configured: Option<&str>) -> Result<String> {
         ));
     }
     reject_retired_public_chain_id(chain_id)?;
+    ensure!(
+        chain_id != PUBLIC_NEXUS_CHAIN_ID,
+        "disposable localnet cannot use the public Nexus chain identity; use genesis generate --profile iroha3-nexus --xor-asset-definition-id with the operator-selected mainnet XOR definition"
+    );
     chain_id
         .parse::<ChainId>()
         .wrap_err("`--chain-id` must be canonical")?;
@@ -2744,6 +2738,9 @@ fn render_peer_config(
     root.insert("tiered_state".into(), Value::Table(tiered_state));
     let mut sumeragi = Table::new();
     sumeragi.insert("role".into(), Value::String("validator".to_owned()));
+    if !taira {
+        sumeragi.insert("mint_finality_seed_fd".into(), Value::Integer(199));
+    }
     let mut queues = Table::new();
     queues.insert(
         "commands".into(),
@@ -2835,7 +2832,7 @@ fn render_peer_config(
         Value::Integer(i64::from(LOCALNET_LANE_TEU_CAPACITY)),
     );
     nexus.insert("fusion".into(), Value::Table(fusion));
-    let stake_asset_id = localnet_stake_asset_literal();
+    let stake_asset_id = localnet_xor_asset_literal();
     let mut staking = Table::new();
     staking.insert(
         "stake_asset_id".into(),
@@ -2851,7 +2848,7 @@ fn render_peer_config(
     );
     nexus.insert("staking".into(), Value::Table(staking));
     if npos_bootstrap {
-        let fee_asset_id = localnet_fee_asset_literal();
+        let fee_asset_id = localnet_xor_asset_literal();
         let mut fees = Table::new();
         fees.insert("fee_asset_id".into(), Value::String(fee_asset_id));
         fees.insert("base_fee".into(), Value::String("0".to_owned()));
@@ -3555,7 +3552,7 @@ fn render_peer_config(
         );
         faucet.insert(
             "asset_definition_id".into(),
-            Value::String(localnet_fee_asset_literal()),
+            Value::String(localnet_xor_asset_literal()),
         );
         faucet.insert(
             "amount".into(),
@@ -3815,7 +3812,7 @@ fn apply_localnet_ivm_gas_limit_override(parameters: &mut Parameters) {
     parameters.set_parameter(Parameter::Custom(gas_param));
 }
 fn apply_localnet_ivm_gas_fee_overrides(parameters: &mut Parameters) {
-    let fee_asset_id = localnet_fee_asset_literal();
+    let fee_asset_id = localnet_xor_asset_literal();
     let accepted_assets = CustomParameter::new(
         localnet_custom_parameter_id("ivm_gas_accepted_assets"),
         Json::new(vec![fee_asset_id.clone()]),
@@ -3847,7 +3844,7 @@ fn apply_parameter_overrides(
     let mut parameters = genesis
         .effective_parameters()
         .wrap_err("generated localnet genesis must have one structured parameter block")?;
-    let fee_asset_id = localnet_fee_asset_literal();
+    let fee_asset_id = localnet_xor_asset_literal();
     let gas_limit_param_id = localnet_custom_parameter_id("ivm_gas_limit_per_block");
     let block_max_transactions =
         NonZeroU64::new(block_max_transactions).expect("block_max_transactions must be non-zero");
@@ -3996,7 +3993,7 @@ fn append_localnet_alias_fee_bootstrap(
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)
         .expect("static universal domain must remain canonical");
-    let fee_asset_id = localnet_fee_asset_definition_id();
+    let fee_asset_id = localnet_xor_asset_definition_id();
     // Continue the service-account transaction: these universal fee instructions consume
     // those accounts, and sharing their boundary keeps staged genesis within the protocol cap.
     let mut builder = genesis.into_builder();
@@ -4014,6 +4011,13 @@ fn append_localnet_alias_fee_bootstrap(
         .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
     }
+    builder = builder.append_instruction(SetAssetDefinitionAlias::bind(
+        fee_asset_id.clone(),
+        crate::genesis::PUBLIC_XOR_ALIAS
+            .parse()
+            .expect("canonical XOR alias"),
+        None,
+    ));
     builder = builder.append_instruction(Mint::asset_quantity(
         LOCALNET_ALIAS_SETUP_PAYER_BALANCE,
         AssetId::new(fee_asset_id.clone(), genesis_account_id.clone()),
@@ -4023,14 +4027,6 @@ fn append_localnet_alias_fee_bootstrap(
         builder = builder.append_instruction(Mint::asset_quantity(
             LOCALNET_ALIAS_SETUP_PAYER_BALANCE,
             operator_fee_asset,
-        ));
-        // The generated start script maintains this reserve, and Torii's faucet
-        // transfers claims from it under the same operator authority.
-        builder = builder.append_instruction(Grant::account_permission(
-            CanMintAssetWithDefinition {
-                asset_definition: fee_asset_id.clone(),
-            },
-            operator_account_id.clone(),
         ));
     }
     if onboarding_account_id != genesis_account_id && onboarding_account_id != operator_account_id {
@@ -4063,7 +4059,7 @@ fn localnet_alias_setup_request(
         ResolvedAccountAliasV1::new(operator_alias.parse::<AccountAliasName>()?, dataspace_id);
     let guard = AliasQuoteGuardV1 {
         expected_policy_version: LOCALNET_ALIAS_SETUP_POLICY_VERSION,
-        expected_payment_asset: localnet_fee_asset_definition_id(),
+        expected_payment_asset: localnet_xor_asset_definition_id(),
         max_amount: Quantity::from(LOCALNET_ALIAS_SETUP_PAYER_BALANCE),
         valid_until_ms: u64::MAX,
     };
@@ -4317,8 +4313,8 @@ fn append_localnet_npos_bootstrap(
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
     let ivm_domain = DomainId::parse_fully_qualified(LOCALNET_IVM_DOMAIN)?;
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)?;
-    let stake_asset_id = localnet_stake_asset_definition_id();
-    let fee_asset_id = localnet_fee_asset_definition_id();
+    let stake_asset_id = localnet_xor_asset_definition_id();
+    let fee_asset_id = localnet_xor_asset_definition_id();
     let public_validator_lanes = localnet_public_validator_lanes(sora_profile);
     let lane_count = u64::try_from(public_validator_lanes.len())
         .expect("public validator lane count must fit in u64");
@@ -4348,8 +4344,8 @@ fn append_localnet_npos_bootstrap(
     if !registrations.asset_defs.contains(&stake_asset_id) {
         let definition = AssetDefinition::new(
             stake_asset_id.clone(),
-            "Localnet Stake".to_owned(),
-            NumericSpec::default(),
+            "XOR".to_owned(),
+            NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -4520,7 +4516,7 @@ fn append_localnet_permissioned_lane_authority_bootstrap(
     taira: bool,
 ) -> Result<RawGenesisTransaction> {
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
-    let stake_asset_id = localnet_stake_asset_definition_id();
+    let stake_asset_id = localnet_xor_asset_definition_id();
     let registrations = BootstrapRegistrations::from_manifest(&genesis);
     let mut builder = genesis.into_builder().next_transaction();
     if !registrations.domains.contains(&nexus_domain) {
@@ -4533,8 +4529,8 @@ fn append_localnet_permissioned_lane_authority_bootstrap(
     if !registrations.asset_defs.contains(&stake_asset_id) {
         let definition = AssetDefinition::new(
             stake_asset_id.clone(),
-            "Localnet Stake".to_owned(),
-            NumericSpec::default(),
+            "XOR".to_owned(),
+            NumericSpec::fractional(LOCALNET_FEE_ASSET_SCALE),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         )
@@ -4618,7 +4614,7 @@ fn append_private_dataspace_genesis_bootstrap_for_client(
     let acquisition = AliasLeaseAcquisitionV1::new(1, None);
     let quote_guard = AliasQuoteGuardV1 {
         expected_policy_version: LOCALNET_ALIAS_SETUP_POLICY_VERSION,
-        expected_payment_asset: localnet_fee_asset_definition_id(),
+        expected_payment_asset: localnet_xor_asset_definition_id(),
         max_amount: payment_amount,
         valid_until_ms: u64::MAX,
     };
@@ -5191,6 +5187,154 @@ done
     )?;
     Ok(())
 }
+
+const ORDINARY_MINT_FINALITY_LAUNCH_PY: &str = r#"
+import errno
+import stat
+import subprocess
+import time
+
+_MINT_SEED_BYTES = 32
+_MINT_SEED_FD = 199
+
+def _mint_identity(metadata):
+    return tuple(getattr(metadata, field) for field in (
+        "st_dev", "st_ino", "st_uid", "st_mode", "st_nlink", "st_size", "st_mtime_ns", "st_ctime_ns"))
+
+def _mint_validate(metadata, size):
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_nlink != 1
+            or metadata.st_size != size):
+        raise RuntimeError("untrusted localnet mint-finality seed descriptor")
+
+def _mint_erase_launch(descriptor, path, device, inode):
+    metadata = os.fstat(descriptor)
+    if (metadata.st_dev, metadata.st_ino) != (device, inode):
+        raise RuntimeError("localnet mint-finality launch inode changed")
+    named = os.lstat(path)
+    if (not stat.S_ISREG(named.st_mode) or (named.st_dev, named.st_ino) != (device, inode)
+            or named.st_uid != os.geteuid() or stat.S_IMODE(named.st_mode) != 0o600
+            or named.st_nlink != 1 or named.st_size > _MINT_SEED_BYTES):
+        raise RuntimeError("localnet mint-finality launch pathname changed")
+    if metadata.st_size:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        zeros = bytes(_MINT_SEED_BYTES)
+        if os.write(descriptor, zeros) != _MINT_SEED_BYTES:
+            raise RuntimeError("short localnet mint-finality launch erasure")
+        os.fsync(descriptor)
+        os.ftruncate(descriptor, 0)
+        os.fsync(descriptor)
+    os.unlink(path)
+
+def launch_ordinary_validator_with_mint_seed(cmd, env):
+    source = os.path.join(env["IROHA_NETWORK_DIR"], "runtime", "mint-finality-signers",
+                          "peer{}.seed".format(env["IROHA_PEER_INDEX"]))
+    launch = os.path.join(env["IROHA_NETWORK_DIR"], "runtime", "mint-finality-signers",
+                          "peer{}.fd199".format(env["IROHA_PEER_INDEX"]))
+    for directory in (env["IROHA_NETWORK_DIR"], os.path.dirname(os.path.dirname(source)), os.path.dirname(source)):
+        metadata = os.lstat(directory)
+        if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o700):
+            raise RuntimeError("untrusted localnet mint-finality seed directory")
+    if os.path.realpath(source) == os.path.realpath(launch):
+        raise RuntimeError("localnet retained and one-shot seed paths alias")
+    try:
+        os.fstat(_MINT_SEED_FD)
+    except OSError as error:
+        if error.errno != errno.EBADF:
+            raise
+    else:
+        raise RuntimeError("localnet private descriptor 199 is already occupied")
+    reserved = os.open(os.devnull, os.O_RDONLY | os.O_CLOEXEC)
+    source_fd = None
+    launch_fd = None
+    created = None
+    process = None
+    completed = False
+    try:
+        if reserved != _MINT_SEED_FD:
+            os.dup2(reserved, _MINT_SEED_FD, inheritable=False)
+        source_fd = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+        before = os.fstat(source_fd)
+        _mint_validate(before, _MINT_SEED_BYTES)
+        try:
+            stale = os.lstat(launch)
+        except FileNotFoundError:
+            stale = None
+        if stale is not None:
+            _mint_validate(stale, 0)
+            stale_fd = os.open(launch, os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW)
+            try:
+                if _mint_identity(os.fstat(stale_fd)) != _mint_identity(stale):
+                    raise RuntimeError("stale localnet seed changed before cleanup")
+                _mint_erase_launch(stale_fd, launch, stale.st_dev, stale.st_ino)
+            finally:
+                os.close(stale_fd)
+        launch_fd = os.open(launch, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600)
+        created = os.fstat(launch_fd)
+        _mint_validate(created, 0)
+        secret = bytearray(_MINT_SEED_BYTES)
+        view = memoryview(secret)
+        try:
+            offset = 0
+            while offset < _MINT_SEED_BYTES:
+                count = os.readv(source_fd, [view[offset:]])
+                if count <= 0:
+                    raise RuntimeError("short retained localnet mint-finality seed")
+                offset += count
+            if _mint_identity(os.fstat(source_fd)) != _mint_identity(before):
+                raise RuntimeError("retained localnet mint-finality seed changed during copy")
+            offset = 0
+            while offset < _MINT_SEED_BYTES:
+                count = os.write(launch_fd, view[offset:])
+                if count <= 0:
+                    raise RuntimeError("short localnet mint-finality child write")
+                offset += count
+        finally:
+            for index in range(_MINT_SEED_BYTES):
+                secret[index] = 0
+            view.release()
+        os.fsync(launch_fd)
+        os.lseek(launch_fd, 0, os.SEEK_SET)
+        ready = os.fstat(launch_fd)
+        _mint_validate(ready, _MINT_SEED_BYTES)
+        if (ready.st_dev, ready.st_ino) != (created.st_dev, created.st_ino):
+            raise RuntimeError("localnet mint-finality child inode changed")
+        os.dup2(launch_fd, _MINT_SEED_FD, inheritable=True)
+        with open(env["IROHA_PEER_LOG"], "ab", buffering=0) as log:
+            process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env,
+                close_fds=True, pass_fds=(_MINT_SEED_FD,), start_new_session=True)
+        deadline = time.monotonic() + 30.0
+        while os.fstat(launch_fd).st_size != 0:
+            if process.poll() is not None:
+                raise RuntimeError("validator exited before consuming its localnet mint-finality seed")
+            if time.monotonic() >= deadline:
+                raise RuntimeError("validator did not consume its localnet mint-finality seed")
+            time.sleep(0.05)
+        _mint_erase_launch(launch_fd, launch, created.st_dev, created.st_ino)
+        completed = True
+        return process
+    finally:
+        if process is not None and not completed:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5.0)
+            else:
+                process.wait(timeout=0)
+        if launch_fd is not None:
+            if not completed and created is not None:
+                _mint_erase_launch(launch_fd, launch, created.st_dev, created.st_ino)
+            os.close(launch_fd)
+        if source_fd is not None:
+            os.close(source_fd)
+        if reserved != _MINT_SEED_FD:
+            os.close(_MINT_SEED_FD)
+        os.close(reserved)
+"#;
 
 const TAIRA_RUNTIME_LAUNCH_PY: &str = r#"
 def _taira_file_identity(metadata):
@@ -5813,7 +5957,6 @@ fn write_start_script(
     let client_account_literal = crate::shell::single_quote(client_account_literal)?;
     let fee_asset_definition_id = crate::shell::single_quote(fee_asset_definition_id)?;
     let mut start_file = BufWriter::new(File::create(start)?);
-    let sora_flag = if sora_profile_enabled { "--sora " } else { "" };
     let sora_mode_env = if sora_profile_enabled { "1" } else { "0" };
     let taira_mode_env = if taira { "1" } else { "0" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
@@ -5928,20 +6071,12 @@ fn write_start_script(
         start_file,
         "FAUCET_ASSET_DEFINITION_ID={fee_asset_definition_id}"
     )?;
-    writeln!(
-        start_file,
-        "FAUCET_RESERVE_MIN=\"{}\"",
-        LOCALNET_FEE_ASSET_RESERVE_MIN
-    )?;
-    writeln!(
-        start_file,
-        "FAUCET_RESERVE_TARGET=\"{}\"",
-        LOCALNET_FEE_ASSET_RESERVE_TARGET
-    )?;
-    writeln!(
-        start_file,
-        "FAUCET_RESERVE_RETRIES=\"${{IROHA_LOCALNET_FAUCET_RESERVE_RETRIES:-30}}\""
-    )?;
+    if !taira {
+        writeln!(
+            start_file,
+            "command -v python3 >/dev/null 2>&1 || {{ echo \"python3 is required before starting validators with private FD 199\" >&2; exit 1; }}"
+        )?;
+    }
     writeln!(start_file, "for i in $SELECTED_PEERS; do")?;
     writeln!(
         start_file,
@@ -6030,13 +6165,10 @@ fn write_start_script(
             "process = launch_taira_process(cmd, env, records)"
         )?;
     } else {
+        start_file.write_all(ORDINARY_MINT_FINALITY_LAUNCH_PY.as_bytes())?;
         writeln!(
             start_file,
-            "log = open(env[\"IROHA_PEER_LOG\"], \"ab\", buffering=0)"
-        )?;
-        writeln!(
-            start_file,
-            "process = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, env=env, close_fds=True, start_new_session=True)"
+            "process = launch_ordinary_validator_with_mint_seed(cmd, env)"
         )?;
     }
     writeln!(start_file, "print(process.pid)")?;
@@ -6052,10 +6184,9 @@ fn write_start_script(
     } else {
         writeln!(
             start_file,
-            "    nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" LOG_LEVEL=${{LOG_LEVEL:-info}} LOG_FILTER=${{LOG_FILTER:-}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" $FRESH_KEY_ARG > \"$DIR/peer${{i}}.log\" 2>&1 &"
+            "    echo \"python3 is required to stage the validator's one-shot private FD 199\" >&2"
         )?;
-        writeln!(start_file, "    peer_pid=$!")?;
-        writeln!(start_file, "    disown \"$peer_pid\" 2>/dev/null || true")?;
+        writeln!(start_file, "    exit 1")?;
     }
     writeln!(start_file, "  fi")?;
     if taira {
@@ -6068,56 +6199,10 @@ fn write_start_script(
         writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
     }
     writeln!(start_file, "done")?;
-    writeln!(start_file, "ensure_faucet_reserve() {{")?;
     writeln!(
         start_file,
-        "  [ \"$FAUCET_RESERVE_RETRIES\" != \"0\" ] || {{ echo \"Skipping faucet reserve check: retries disabled\" >&2; return 0; }}"
+        "echo \"Faucet uses its explicit genesis allocation of $FAUCET_ASSET_DEFINITION_ID at $FAUCET_ACCOUNT; startup does not issue assets.\" >&2"
     )?;
-    writeln!(
-        start_file,
-        "  [ -n \"$IROHA_CLI\" ] || {{ echo \"Skipping faucet reserve check: iroha CLI unavailable\" >&2; return 0; }}"
-    )?;
-    writeln!(
-        start_file,
-        "  for _ in $(seq 1 \"$FAUCET_RESERVE_RETRIES\"); do"
-    )?;
-    writeln!(
-        start_file,
-        "    if asset_json=\"$(\"$IROHA_CLI\" --machine -c \"$DIR/client.toml\" --output-format json ledger asset get --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" 2>/dev/null)\"; then"
-    )?;
-    writeln!(
-        start_file,
-        "      current_value=\"$(printf '%s' \"$asset_json\" | python3 -c 'import json, sys; print(json.load(sys.stdin)[\"value\"])')\""
-    )?;
-    writeln!(
-        start_file,
-        "      mint_amount=\"$(python3 -c 'from decimal import Decimal; import sys; current = Decimal(sys.argv[1]); minimum = Decimal(sys.argv[2]); target = Decimal(sys.argv[3]); print(\"\" if current >= minimum else format(target - current, \"f\"))' \"$current_value\" \"$FAUCET_RESERVE_MIN\" \"$FAUCET_RESERVE_TARGET\")\""
-    )?;
-    writeln!(start_file, "      if [ -z \"$mint_amount\" ]; then")?;
-    writeln!(
-        start_file,
-        "        echo \"Faucet reserve healthy at $current_value\" >&2"
-    )?;
-    writeln!(start_file, "        return 0")?;
-    writeln!(start_file, "      fi")?;
-    writeln!(
-        start_file,
-        "      echo \"Faucet reserve $current_value below floor $FAUCET_RESERVE_MIN; minting $mint_amount to restore $FAUCET_RESERVE_TARGET\" >&2"
-    )?;
-    writeln!(
-        start_file,
-        "      \"$IROHA_CLI\" --machine -c \"$DIR/client.toml\" --fee-payer authority --output-format json ledger asset mint --definition \"$FAUCET_ASSET_DEFINITION_ID\" --account \"$FAUCET_ACCOUNT\" --quantity \"$mint_amount\" > \"$DIR/faucet-topup.last.json\""
-    )?;
-    writeln!(start_file, "      return 0")?;
-    writeln!(start_file, "    fi")?;
-    writeln!(start_file, "    sleep 1")?;
-    writeln!(start_file, "  done")?;
-    writeln!(
-        start_file,
-        "  echo \"Skipping faucet reserve check: Torii did not become readable in time\" >&2"
-    )?;
-    writeln!(start_file, "}}")?;
-    writeln!(start_file, "ensure_faucet_reserve")?;
     Ok(start_file.flush()?)
 }
 fn write_stop_script(stop: &Path, peers: u16, taira: bool) -> Result<()> {
@@ -6417,13 +6502,32 @@ fn write_taira_runtime_signer_keys(out_dir: &Path, peers: &[Peer]) -> Result<()>
     Ok(())
 }
 fn write_mint_finality_seeds(out_dir: &Path, peers: &[Peer]) -> Result<()> {
-    let directory = out_dir.join("runtime").join(MINT_FINALITY_SEED_DIRECTORY);
+    let runtime = out_dir.join("runtime");
+    if !runtime.exists() {
+        crate::secure_fs::prepare_empty_private_directory(&runtime)
+            .wrap_err("prepare localnet private runtime directory")?;
+    }
+    let directory = runtime.join(MINT_FINALITY_SEED_DIRECTORY);
     let directory = crate::secure_fs::prepare_empty_private_directory(&directory)
         .wrap_err("prepare private mint-finality signer directory")?;
     for (peer_index, peer) in peers.iter().enumerate() {
         let path = directory.join(format!("peer{peer_index}.seed"));
         crate::secure_fs::write_private_file_atomic(&path, peer.mint_finality_seed.as_ref())
             .wrap_err("write private mint-finality seed")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+            let metadata = fs::symlink_metadata(&path)
+                .wrap_err("inspect retained localnet mint-finality seed")?;
+            ensure!(
+                metadata.is_file()
+                    && metadata.uid() == rustix::process::geteuid().as_raw()
+                    && metadata.permissions().mode() & 0o7777 == 0o600
+                    && metadata.nlink() == 1
+                    && metadata.len() == 32,
+                "retained localnet mint-finality seed is not an exact owner-private single-link record"
+            );
+        }
     }
     Ok(())
 }
@@ -6570,6 +6674,7 @@ fn write_localnet_readme(
         .unwrap_or_default();
     let profile_notes = concat!(
         "- Generated peer configs enable structural `torii.account_onboarding` and KAGEMUSHA V1 reserve routing\n",
+        "- Each validator retains its owner-private `runtime/mint-finality-signers/peerN.seed`; `start.sh` requires Python 3 and stages a fresh consumed FD 199 on every start\n",
         "- Runtime credentials are owner-only files; read the token from its sidecar when calling sponsored onboarding\n\n",
         "Run `kagami docker` without `--seed` against this directory to validate the exact ",
         "validator identities, PoPs, signed body, verifier key, and expected hash as one ",
@@ -7094,6 +7199,10 @@ mod tests {
             let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read Taira peer config");
             let parsed = actual::Root::from_toml_source(source).expect("parse Taira peer config");
+            assert_eq!(
+                parsed.sumeragi.mint_finality_seed_fd, None,
+                "Taira launcher owns FD 199 and must reject a second configured source"
+            );
             assert!(parsed.torii.operator_signatures.enabled);
             assert!(parsed.torii.operator_signatures.allow_node_key);
             assert_eq!(
@@ -8241,7 +8350,7 @@ mod tests {
             "generated onboarding must use only exact execution capabilities"
         );
         let onboarding_fee_asset = AssetId::new(
-            localnet_fee_asset_definition_id(),
+            localnet_xor_asset_definition_id(),
             onboarding_identity.account_id.clone(),
         );
         assert!(manifest.instructions().any(|instruction| {
@@ -8480,6 +8589,20 @@ mod tests {
                 .any(|value| value.eq_ignore_ascii_case("bls_normal")),
             "allowed_signing must include bls_normal for NPoS localnet"
         );
+        assert_eq!(
+            peer_cfg["sumeragi"]["mint_finality_seed_fd"].as_integer(),
+            Some(199)
+        );
+        let retained = fs::metadata(temp.path().join("runtime/mint-finality-signers/peer0.seed"))
+            .expect("ordinary localnet retains the exact private Pasta seed");
+        assert_eq!(retained.len(), 32);
+        #[cfg(unix)]
+        assert_eq!(retained.permissions().mode() & 0o7777, 0o600);
+        let start = fs::read_to_string(temp.path().join("start.sh"))
+            .expect("read ordinary localnet start script");
+        assert!(start.contains("launch_ordinary_validator_with_mint_seed(cmd, env)"));
+        assert!(start.contains("pass_fds=(_MINT_SEED_FD,)"));
+        assert!(!start.contains("nohup env SNAPSHOT_STORE_DIR="));
     }
     #[test]
     fn generated_genesis_allows_bls_signing_for_npos() {
@@ -8887,6 +9010,11 @@ mod tests {
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
         let source = TomlSource::from_file(temp.path().join("peer0.toml")).expect("read config");
         let parsed = actual::Root::from_toml_source(source).expect("config should parse");
+        assert_eq!(
+            parsed.sumeragi.mint_finality_seed_fd,
+            Some(199),
+            "permissioned voters are seated in the signed Pasta authority too"
+        );
         assert_eq!(
             parsed.queue.capacity.get(),
             LOCALNET_PERF_QUEUE_CAPACITY,
@@ -9330,7 +9458,7 @@ mod tests {
             .map(|activate| activate.validator.clone())
             .collect();
         assert_eq!(activated_validators, registered_validators);
-        let stake_asset_id = localnet_stake_asset_definition_id();
+        let stake_asset_id = localnet_xor_asset_definition_id();
         for register in &validators {
             let stake_asset = AssetId::new(stake_asset_id.clone(), register.stake_account.clone());
             assert!(
@@ -9397,7 +9525,7 @@ mod tests {
         }
         assert_eq!(
             staking.get("stake_asset_id").and_then(toml::Value::as_str),
-            Some(localnet_stake_asset_literal().as_str())
+            Some(localnet_xor_asset_literal().as_str())
         );
         assert!(!nexus.contains_key("fees"));
         assert!(!nexus.contains_key("storage"));
@@ -9969,6 +10097,12 @@ mod tests {
         assert!(resolve_localnet_chain_id(Some("iroha3-taira")).is_err());
         assert!(resolve_localnet_chain_id(Some("iroha3-nexus")).is_err());
         assert!(resolve_localnet_chain_id(Some("cbdc16")).is_err());
+        assert!(
+            resolve_localnet_chain_id(Some(PUBLIC_NEXUS_CHAIN_ID))
+                .expect_err("disposable localnet cannot impersonate mainnet")
+                .to_string()
+                .contains("operator")
+        );
         for padded in [
             format!(" {PUBLIC_TAIRA_CHAIN_ID}"),
             format!("{PUBLIC_TAIRA_CHAIN_ID} "),
@@ -10075,7 +10209,7 @@ mod tests {
                 "duplicate-alias",
                 vec![
                     asset(localnet_sample_asset_literal(), Some("sample#localnet")),
-                    asset(localnet_fee_asset_literal(), Some("sample#localnet")),
+                    asset(localnet_xor_asset_literal(), Some("sample#localnet")),
                 ],
             ),
         ];
@@ -10729,7 +10863,7 @@ mod tests {
             .try_into_any_norito()
             .expect("gas limit payload should decode");
         assert_eq!(gas_limit, LOCALNET_IVM_GAS_LIMIT_PER_BLOCK);
-        let expected_fee_asset = localnet_fee_asset_literal();
+        let expected_fee_asset = localnet_xor_asset_literal();
         let accepted_assets: Vec<String> = params
             .custom()
             .get(&localnet_custom_parameter_id("ivm_gas_accepted_assets"))
@@ -10965,7 +11099,7 @@ mod tests {
                 Some(RegisterBox::Account(register)) if register.object().id() == &client_account_id
             )
         }));
-        let client_fee_asset = AssetId::new(localnet_fee_asset_definition_id(), client_account_id);
+        let client_fee_asset = AssetId::new(localnet_xor_asset_definition_id(), client_account_id);
         assert!(manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
@@ -10979,7 +11113,7 @@ mod tests {
         }));
     }
     #[test]
-    fn generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission() {
+    fn generated_permissioned_localnet_cannot_mint_additional_xor() {
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
             sora_profile: None,
@@ -11000,9 +11134,6 @@ mod tests {
         let operator =
             localnet_ephemeral_identity(opts.seed.as_deref().map(str::as_bytes), b"operator-root")
                 .expect("derive generated operator");
-        let expected_permission = CanMintAssetWithDefinition {
-            asset_definition: localnet_fee_asset_definition_id(),
-        };
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse generated genesis");
         let operator_mint_permissions = manifest
@@ -11015,7 +11146,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert_eq!(operator_mint_permissions, vec![expected_permission]);
+        assert!(operator_mint_permissions.is_empty());
         for peer_index in 0..opts.peers.get() {
             let source = TomlSource::from_file(temp.path().join(format!("peer{peer_index}.toml")))
                 .expect("read generated permissioned peer config");
@@ -11086,7 +11217,7 @@ mod tests {
                 .expect("derive generated operator");
         assert_eq!(client_public_key, operator.public_key);
         let client_fee_asset = AssetId::new(
-            localnet_fee_asset_definition_id(),
+            localnet_xor_asset_definition_id(),
             AccountId::new(client_public_key),
         );
         let manifest = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
@@ -11258,7 +11389,7 @@ mod tests {
         );
         assert_eq!(ledger_key.public_key(), &operator.public_key);
         assert_ne!(ledger_key.public_key(), http_key.public_key());
-        let expected_fee_asset = localnet_fee_asset_literal();
+        let expected_fee_asset = localnet_xor_asset_literal();
         assert_eq!(
             faucet.get("authority").and_then(toml::Value::as_str),
             Some(expected_authority.as_str())
@@ -11332,7 +11463,7 @@ mod tests {
         let manifest = genesis_json_from_path(&temp.path().join("genesis.json"));
         let raw_genesis = RawGenesisTransaction::from_path(temp.path().join("genesis.json"))
             .expect("parse genesis");
-        let fee_asset_id = localnet_fee_asset_literal();
+        let fee_asset_id = localnet_xor_asset_literal();
         let fee_asset = manifest
             .get("transactions")
             .and_then(json::Value::as_array)
@@ -11375,7 +11506,7 @@ mod tests {
             })
             .expect("generated fee asset must emit a RegisterZkAsset instruction");
         assert!(
-            zk_registration.asset() == &localnet_fee_asset_definition_id(),
+            zk_registration.asset() == &localnet_xor_asset_definition_id(),
             "generated fee asset must emit a RegisterZkAsset instruction for shield flows"
         );
         assert_eq!(
@@ -12083,8 +12214,8 @@ mod tests {
             .get("staking")
             .and_then(toml::Value::as_table)
             .expect("nexus staking table");
-        let expected_stake_asset_id = localnet_stake_asset_literal();
-        let expected_fee_asset_id = localnet_fee_asset_literal();
+        let expected_stake_asset_id = localnet_xor_asset_literal();
+        let expected_fee_asset_id = localnet_xor_asset_literal();
         assert_eq!(
             staking.get("stake_asset_id").and_then(toml::Value::as_str),
             Some(expected_stake_asset_id.as_str())
@@ -12283,7 +12414,7 @@ mod tests {
     fn start_script_includes_sora_flag_when_enabled() {
         let temp = tempfile::tempdir().expect("tmp dir");
         let client_account_literal = localnet_client_account_literal(None);
-        let fee_asset_definition_id = localnet_fee_asset_literal();
+        let fee_asset_definition_id = localnet_xor_asset_literal();
         write_scripts(
             temp.path(),
             1,
@@ -12296,8 +12427,11 @@ mod tests {
         let start_contents =
             fs::read_to_string(temp.path().join("start.sh")).expect("read start script");
         assert!(
-            start_contents.contains(" --sora --config "),
-            "start script should include --sora when profile enabled"
+            start_contents.contains("if env.get(\"IROHA_SORA_MODE\") == \"1\":")
+                && start_contents.contains("cmd.append(\"--sora\")")
+                && start_contents
+                    .contains("cmd.extend([\"--config\", env[\"IROHA_PEER_CONFIG\"]])"),
+            "private descriptor launcher must include --sora when profile enabled"
         );
     }
     // Keep the generated rANS table contract tests in a focused child under `localnet::tests`.

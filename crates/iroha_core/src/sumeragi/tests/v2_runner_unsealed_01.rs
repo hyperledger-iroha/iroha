@@ -72,7 +72,7 @@ fn open_height_lane_relay_delivers_drain_vote_to_native_owner_once() {
             version: 1,
             intent: iroha_data_model::merge::LaneDrainIntentV1 {
                 version: 1,
-                network_id: crate::sumeragi::synthetic_network_id("native-runner-drain-relay"),
+                network_id: crate::unit_test_support::synthetic_network_id("native-runner-drain-relay"),
                 lane_id: frontier.lane_id,
                 dataspace_id: frontier.dataspace_id,
                 lane_incarnation: incarnation,

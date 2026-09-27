@@ -9,7 +9,8 @@
     {
       "profile_handle": "sorafs.sf1@1.0.0",
       "profile_aliases": [
-        "sorafs.sf1@1.0.0"
+        "sorafs.sf1@1.0.0",
+        "sorafs-sf1"
       ],
       "committed_gib": 240,
       "capability_refs": [
@@ -35,10 +36,5 @@
   "metadata": {
     "region": "apac",
     "tier": "standby"
-  },
-  "record_window": {
-    "registered_epoch": 1700500000,
-    "valid_from_epoch": 1700500000,
-    "valid_until_epoch": 1701104800
   }
 }

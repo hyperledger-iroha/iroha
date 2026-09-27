@@ -165,3 +165,49 @@ pub(super) fn global_beacon_capability_attest(
         MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
     )
 }
+
+pub(super) fn global_beacon_seat_readiness(
+    state: &BrokerServerStateV1,
+    request: &OperationRequestV1,
+) -> Result<Vec<u8>, BrokerError> {
+    let (prepared, session) =
+        decode_global_beacon_seat_readiness_request(&request.payload, &state.network_id)?;
+    let (challenge, index) =
+        iroha_core::beacon::seat_readiness::global_threshold_beacon_seat_readiness_challenge_v1(
+            &session,
+            &prepared.authority,
+            &prepared.context,
+        )
+        .map_err(|_| BrokerError::Rejected)?;
+    let backend = broker_backend!(state, global_beacon_partial_signer);
+    let capability = backend
+        .attest_partial_signing_capability(&session, index)
+        .map_err(|error| match error {
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable => BrokerError::Unavailable,
+            GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected => BrokerError::Rejected,
+        })?;
+    if !capability.matches(&session, index) {
+        return Err(BrokerError::Rejected);
+    }
+    let partial =
+        backend
+            .sign_partial(&session, challenge.as_ref())
+            .map_err(|error| match error {
+                GlobalBeaconPartialSignerBrokerBackendErrorV1::Unavailable => {
+                    BrokerError::Unavailable
+                }
+                GlobalBeaconPartialSignerBrokerBackendErrorV1::Rejected => BrokerError::Rejected,
+            })?;
+    iroha_core::beacon::seat_readiness::verify_global_threshold_beacon_seat_readiness_v1(
+        &session,
+        &prepared.authority,
+        &prepared.context,
+        &partial,
+    )
+    .map_err(|_| BrokerError::StaleOrRevoked)?;
+    qualify_server_binding(state, &request.binding, request.provider_metadata_digest)?;
+    encode_canonical(
+        &GlobalBeaconPartialSignResultWireV1 { partial },
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )
+}

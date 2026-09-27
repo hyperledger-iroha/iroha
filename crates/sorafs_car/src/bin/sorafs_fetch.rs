@@ -27,8 +27,8 @@ use norito::{
     json::{Map, Value, from_slice, to_string_pretty},
 };
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarStreamingWriter, CarVerificationReport, CarVerifier, CarWriteStats,
-    ChunkFetchSpec, FilePlan, chunker_registry,
+    CarBuildPlan, CarChunk, CarStreamingWriter, CarWriteStats, ChunkFetchSpec, FilePlan,
+    chunker_registry,
     fetch_plan::{
         MANIFEST_BUILDER_REPORT_SCHEMA_V1, TOOLKIT_PACK_REPORT_SCHEMA_V1,
         chunk_fetch_plan_from_json, chunk_fetch_specs_from_embedded_array,
@@ -518,6 +518,13 @@ fn run() -> Result<(), String> {
             .collect(),
         files: vec![file_entry],
     };
+    multi_fetch::FetchOptions::default()
+        .validate_plan_limits(&plan)
+        .map_err(|error| error.to_string())?;
+    if let Some(manifest) = manifest.as_ref() {
+        plan.verify_manifest_metadata(manifest)
+            .map_err(|error| format!("manifest does not bind the native fetch plan: {error}"))?;
+    }
     let plan_profile_handle = chunker_registry::lookup_by_profile(
         plan.chunk_profile,
         chunker_registry::DEFAULT_MULTIHASH_CODE,
@@ -845,6 +852,10 @@ fn run() -> Result<(), String> {
             }
         }
     };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to initialise fetch runtime: {error}"))?;
     let streaming_writer = if let Some(path) = &output_path {
         Some(Arc::new(Mutex::new(StreamingWriter::create(path)?)))
     } else {
@@ -852,18 +863,22 @@ fn run() -> Result<(), String> {
     };
     let outcome = if let Some(writer) = streaming_writer.as_ref() {
         let observer = StreamingObserver::new(Arc::clone(writer));
-        match futures::executor::block_on(multi_fetch::fetch_plan_parallel_with_observer(
+        match runtime.block_on(multi_fetch::fetch_plan_parallel_with_observer(
             &plan,
             fetch_providers.clone(),
             fetcher,
             fetch_options.clone(),
             observer,
         )) {
-            Ok(outcome) => outcome,
+            Ok(outcome) => FetchOutcome {
+                chunks: Vec::new(),
+                chunk_receipts: outcome.chunk_receipts,
+                provider_reports: outcome.provider_reports,
+            },
             Err(err) => return Err(format_multi_source_error(err)?),
         }
     } else {
-        match futures::executor::block_on(multi_fetch::fetch_plan_parallel(
+        match runtime.block_on(multi_fetch::fetch_plan_parallel(
             &plan,
             fetch_providers,
             fetcher,
@@ -886,7 +901,6 @@ fn run() -> Result<(), String> {
     } else {
         None
     };
-    let mut payload_vec = None;
     let (payload_len, payload_digest_bytes) = if let Some((written, digest)) = streamed_stats {
         if written != plan.content_length {
             return Err(format!(
@@ -896,44 +910,55 @@ fn run() -> Result<(), String> {
         }
         (written, digest)
     } else {
-        let payload = outcome.assemble_payload();
-        let digest = blake3::hash(&payload);
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(digest.as_bytes());
-        let payload_len = payload.len() as u64;
-        payload_vec = Some(payload);
-        (payload_len, bytes)
+        let mut hasher = Hasher::new();
+        let mut length = 0u64;
+        for chunk in &outcome.chunks {
+            hasher.update(chunk);
+            length += chunk.len() as u64;
+        }
+        (length, hasher.finalize().into())
     };
     if let Some((_, digest)) = streamed_stats {
         if digest != payload_digest_bytes {
             return Err("streamed payload digest mismatch".into());
         }
-    } else if let Some(path) = &output_path
-        && let Some(payload) = payload_vec.as_ref()
-    {
-        write_binary(path, payload)?;
     }
-    let mut car_stats = if let Some(path) = &car_out {
-        Some(
-            write_car_archive(&plan, &outcome.chunks, path)
-                .map_err(|err| format!("failed to write CAR: {err}"))?,
-        )
+    let mut car_spool = car_out.as_deref().map(private_output_spool).transpose()?;
+    let mut car_stats = if let Some(spool) = car_spool.as_mut() {
+        let mut writer = BufWriter::new(spool);
+        let stats = if let Some(payload_writer) = streaming_writer.as_ref() {
+            let mut reader = payload_writer
+                .lock()
+                .map_err(|error| error.to_string())?
+                .reader()?;
+            let stats = CarStreamingWriter::new(&plan)
+                .write_from_reader(&mut reader, &mut writer)
+                .map_err(|error| error.to_string())?;
+            stats
+        } else {
+            let mut reader = sorafs_car::payload_verifier::ChunkPayloadReader::new(&outcome.chunks);
+            CarStreamingWriter::new(&plan)
+                .write_from_reader(&mut reader, &mut writer)
+                .map_err(|error| error.to_string())?
+        };
+        writer.flush().map_err(|error| error.to_string())?;
+        Some(stats)
     } else {
         None
     };
-    let mut car_verification: Option<CarVerificationReport> = None;
+    let mut car_verification = None;
     if let Some(manifest_ref) = manifest.as_ref() {
-        let car_bytes = if let Some(path) = &car_out {
-            fs::read(path).map_err(|err| format!("failed to read CAR archive {path:?}: {err}"))?
+        let verification = if let Some(payload_writer) = streaming_writer.as_ref() {
+            let mut reader = payload_writer
+                .lock()
+                .map_err(|error| error.to_string())?
+                .reader()?;
+            sorafs_car::payload_verifier::verify_payload_reader(manifest_ref, &plan, &mut reader)
         } else {
-            build_car_bytes(&plan, &outcome.chunks)?
-        };
-        let verification = CarVerifier::verify_full_car_with_plan(manifest_ref, &plan, &car_bytes)
-            .map_err(|err| format!("CAR verification failed: {err}"))?;
-        eprintln!(
-            "info: CAR verification succeeded (chunks={}, payload_bytes={})",
-            verification.stats.chunk_count, verification.stats.payload_bytes
-        );
+            let mut reader = sorafs_car::payload_verifier::ChunkPayloadReader::new(&outcome.chunks);
+            sorafs_car::payload_verifier::verify_payload_reader(manifest_ref, &plan, &mut reader)
+        }
+        .map_err(|error| format!("CAR verification failed: {error}"))?;
         if car_stats.is_none() {
             car_stats = Some(verification.stats.clone());
         }
@@ -954,6 +979,16 @@ fn run() -> Result<(), String> {
             to_hex(&payload_digest_bytes),
             to_hex(&expected_digest)
         ));
+    }
+    if let (Some(writer), Some(path)) = (streaming_writer, output_path.as_ref()) {
+        Arc::try_unwrap(writer)
+            .map_err(|_| "payload sink retained after fetch".to_owned())?
+            .into_inner()
+            .map_err(|_| "payload sink mutex poisoned".to_owned())?
+            .publish(path)?;
+    }
+    if let (Some(spool), Some(path)) = (car_spool, car_out.as_ref()) {
+        publish_output_spool(spool, path)?;
     }
     let car_stats_ref: Option<&CarWriteStats> = car_stats
         .as_ref()
@@ -1516,16 +1551,27 @@ fn load_json_file(path: &Path) -> Result<Value, String> {
     let bytes = fs::read(path).map_err(|err| format!("failed to read {path:?}: {err}"))?;
     from_slice(&bytes).map_err(|err| format!("failed to parse JSON from {path:?}: {err}"))
 }
-fn write_binary(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if path == Path::new("-") {
-        io::stdout()
-            .write_all(bytes)
-            .map_err(|err| format!("failed to write binary payload to stdout: {err}"))?;
-        return Ok(());
-    }
-    let mut file = open_output_file(path, "binary payload")?;
-    file.write_all(bytes)
-        .map_err(|err| format!("failed to write {path:?}: {err}"))
+fn private_output_spool(path: &Path) -> Result<tempfile::NamedTempFile, String> {
+    validate_output_path(path)?;
+    ensure_parent_dir(path)?;
+    validate_output_path(path)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| format!("failed to create private output spool: {error}"))
+}
+fn publish_output_spool(spool: tempfile::NamedTempFile, path: &Path) -> Result<(), String> {
+    validate_output_path(path)?;
+    spool
+        .as_file()
+        .sync_all()
+        .map_err(|error| error.to_string())?;
+    spool
+        .persist(path)
+        .map_err(|error| format!("failed to publish verified output: {}", error.error))?;
+    Ok(())
 }
 fn open_output_file(path: &Path, label: &str) -> Result<File, String> {
     validate_output_path(path)?;
@@ -1636,13 +1682,13 @@ fn platform_no_follow_flag() -> i32 {
     0
 }
 struct StreamingWriter {
-    writer: BufWriter<File>,
+    writer: BufWriter<tempfile::NamedTempFile>,
     hasher: Hasher,
     total: u64,
 }
 impl StreamingWriter {
     fn create(path: &Path) -> Result<Self, String> {
-        let file = open_output_file(path, "output file")?;
+        let file = private_output_spool(path)?;
         Ok(Self {
             writer: BufWriter::new(file),
             hasher: Hasher::new(),
@@ -1659,6 +1705,19 @@ impl StreamingWriter {
     }
     fn flush(&mut self) -> Result<(), std::io::Error> {
         self.writer.flush()
+    }
+    fn reader(&self) -> Result<File, String> {
+        self.writer
+            .get_ref()
+            .reopen()
+            .map_err(|error| error.to_string())
+    }
+    fn publish(self, path: &Path) -> Result<(), String> {
+        let spool = self
+            .writer
+            .into_inner()
+            .map_err(|error| error.to_string())?;
+        publish_output_spool(spool, path)
     }
     fn total_written(&self) -> u64 {
         self.total
@@ -1916,42 +1975,6 @@ fn decode_admission_envelope(
 fn verify_provider_advert_signature(advert: &ProviderAdvertV1) -> Result<(), String> {
     advert.verify_signature().map_err(|err| err.to_string())
 }
-fn write_car_archive(
-    plan: &CarBuildPlan,
-    chunks: &[Vec<u8>],
-    path: &Path,
-) -> Result<CarWriteStats, String> {
-    if chunks.len() != plan.chunks.len() {
-        return Err(format!(
-            "chunk count mismatch plan={} outcome={}",
-            plan.chunks.len(),
-            chunks.len()
-        ));
-    }
-    let file = open_output_file(path, "CAR file")?;
-    let mut writer = BufWriter::new(file);
-    let mut cursor = ChunkCursor::new(chunks);
-    let stats = CarStreamingWriter::new(plan)
-        .write_from_reader(&mut cursor, &mut writer)
-        .map_err(|err| err.to_string())?;
-    writer.flush().map_err(|err| err.to_string())?;
-    Ok(stats)
-}
-fn build_car_bytes(plan: &CarBuildPlan, chunks: &[Vec<u8>]) -> Result<Vec<u8>, String> {
-    if chunks.len() != plan.chunks.len() {
-        return Err(format!(
-            "chunk count mismatch plan={} outcome={}",
-            plan.chunks.len(),
-            chunks.len()
-        ));
-    }
-    let mut chunk_cursor = ChunkCursor::new(chunks);
-    let mut cursor = io::Cursor::new(Vec::new());
-    CarStreamingWriter::new(plan)
-        .write_from_reader(&mut chunk_cursor, &mut cursor)
-        .map_err(|err| err.to_string())?;
-    Ok(cursor.into_inner())
-}
 fn manifest_from_report(report: &Value) -> Result<Option<ManifestV1>, String> {
     if let Some(manifest_obj) = report.get("manifest")
         && let Some(hex) = manifest_obj.get("manifest_hex").and_then(Value::as_str)
@@ -1986,46 +2009,6 @@ fn load_manifest_from_source(source: &BinarySource) -> Result<ManifestV1, String
         }
     };
     decode_manifest_bytes(&bytes)
-}
-struct ChunkCursor<'a> {
-    chunks: &'a [Vec<u8>],
-    chunk_index: usize,
-    offset: usize,
-}
-impl<'a> ChunkCursor<'a> {
-    fn new(chunks: &'a [Vec<u8>]) -> Self {
-        Self {
-            chunks,
-            chunk_index: 0,
-            offset: 0,
-        }
-    }
-}
-impl Read for ChunkCursor<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-        let mut written = 0;
-        while written < buf.len() {
-            if self.chunk_index >= self.chunks.len() {
-                break;
-            }
-            let chunk = &self.chunks[self.chunk_index];
-            if self.offset >= chunk.len() {
-                self.chunk_index += 1;
-                self.offset = 0;
-                continue;
-            }
-            let available = chunk.len() - self.offset;
-            let to_copy = available.min(buf.len() - written);
-            buf[written..written + to_copy]
-                .copy_from_slice(&chunk[self.offset..self.offset + to_copy]);
-            self.offset += to_copy;
-            written += to_copy;
-        }
-        if written == 0 { Ok(0) } else { Ok(written) }
-    }
 }
 fn write_text(path: &Path, text: &str) -> Result<(), String> {
     if path == Path::new("-") {
@@ -2263,7 +2246,7 @@ struct ReportContext<'a> {
     payload_len: u64,
     digest: &'a [u8],
     car_stats: Option<&'a CarWriteStats>,
-    car_verification: Option<&'a CarVerificationReport>,
+    car_verification: Option<&'a sorafs_car::payload_verifier::PayloadVerification>,
     provider_count: u64,
     gateway_provider_count: u64,
     provider_mix: &'static str,
@@ -2292,7 +2275,7 @@ fn build_report(context: ReportContext<'_>) -> Value {
         transport_labels,
     } = context;
     let mut root = Map::new();
-    let chunk_count = outcome.chunks.len() as u64;
+    let chunk_count = outcome.chunk_receipts.len() as u64;
     let total_attempts: u64 = outcome
         .chunk_receipts
         .iter()
@@ -2451,7 +2434,7 @@ fn build_report(context: ReportContext<'_>) -> Value {
             car_obj.insert("verified".into(), Value::from(true));
             car_obj.insert(
                 "por_leaf_count".into(),
-                Value::from(verification.chunk_store.por_leaf_count() as u64),
+                Value::from(verification.por_leaf_count as u64),
             );
         }
         root.insert("car_archive".into(), Value::Object(car_obj));
@@ -2614,6 +2597,8 @@ fn to_hex(bytes: &[u8]) -> String {
 fn format_multi_source_error(error: MultiSourceError) -> Result<String, String> {
     use MultiSourceError::*;
     match error {
+        ResourceLimit(reason) => Ok(format!("fetch resource limit exceeded: {reason}")),
+        DeadlineExceeded => Ok("fetch session deadline exceeded".to_owned()),
         InvalidPlan(error) => Ok(format!("invalid chunk fetch plan: {error}")),
         NoProviders => Ok("no providers were supplied".to_string()),
         NoHealthyProviders {
@@ -2721,28 +2706,44 @@ impl ProviderSource {
     }
 }
 #[derive(Debug)]
-struct FetchIoError(String);
+enum FetchIoError {
+    Message(String),
+    Io(std::io::Error),
+    Gateway(GatewayFetchError),
+}
 impl FetchIoError {
-    fn new(msg: &str) -> Self {
-        Self(msg.to_string())
+    fn new(message: &str) -> Self {
+        Self::Message(message.to_owned())
     }
 }
 impl From<std::io::Error> for FetchIoError {
-    fn from(err: std::io::Error) -> Self {
-        Self(err.to_string())
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
     }
 }
 impl From<GatewayFetchError> for FetchIoError {
-    fn from(err: GatewayFetchError) -> Self {
-        Self(err.to_string())
+    fn from(error: GatewayFetchError) -> Self {
+        Self::Gateway(error)
     }
 }
 impl std::fmt::Display for FetchIoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Message(message) => formatter.write_str(message),
+            Self::Io(error) => error.fmt(formatter),
+            Self::Gateway(error) => error.fmt(formatter),
+        }
     }
 }
-impl std::error::Error for FetchIoError {}
+impl std::error::Error for FetchIoError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Message(_) => None,
+            Self::Io(error) => Some(error),
+            Self::Gateway(error) => Some(error),
+        }
+    }
+}
 #[derive(Debug)]
 struct CliScorePolicy {
     deny: HashSet<String>,

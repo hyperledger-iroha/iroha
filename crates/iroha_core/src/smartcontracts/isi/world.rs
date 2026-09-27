@@ -1466,7 +1466,7 @@ pub mod isi {
         envelope: ZkOpenVerifyEnvelope,
     }
     fn normalize_halo2_circuit_id(raw: &str) -> Option<String> {
-        crate::zk::normalize_halo2_ipa_circuit_id(raw)
+        crate::zk::canonical_halo2_ipa_circuit_id(raw)
     }
     fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
         let is_admissible = |circuit_id: &str| {
@@ -8637,7 +8637,26 @@ pub mod isi {
                 parliament_present_head_v1(subject_id, u64::from(registry.version), &registry)
             }
             ProposalKind::SorafsProviderGovernance(payload) => {
-                let provider_id = payload.action.provider_id();
+                if let iroha_data_model::isi::sorafs::SorafsProviderGovernanceActionV1::Admission(
+                    action,
+                ) = payload.action.as_ref()
+                {
+                    return super::sorafs_provider_admission::governed_head(
+                        state_transaction.world(),
+                        action,
+                    )?
+                    .map_or_else(
+                        || Ok(parliament_absent_head_v1(subject_id)),
+                        |(revision, bytes)| {
+                            parliament_present_head_v1(subject_id, revision, &bytes)
+                        },
+                    );
+                }
+                let provider_id = payload.action.provider_id().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "missing SoraFS provider identity".into(),
+                    )
+                })?;
                 state_transaction
                     .world
                     .provider_owners
@@ -11595,7 +11614,7 @@ pub mod isi {
                 )
             })?;
             let active_session_before = match certificate.action {
-                Action::InstallGlobalBeaconKey | Action::RetireGlobalBeaconKey => state_transaction
+                Action::FinalizeGlobalBeaconKey => state_transaction
                     .world
                     .global_beacon_active_session()
                     .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
@@ -11620,7 +11639,7 @@ pub mod isi {
             })?;
 
             match certificate.action {
-                Action::InstallGlobalBeaconKey => {
+                Action::FinalizeGlobalBeaconKey => {
                     let record = norito::decode_canonical::<
                         FinalizedGlobalThresholdBeaconKeySessionRecordV1,
                     >(&certificate.public_state)
@@ -11645,13 +11664,6 @@ pub mod isi {
                         )
                         .into());
                     }
-                    // The certificate roster is the exact block-H authorization
-                    // roster. Its signed canonical public-state hash independently
-                    // commits the installed DKG target roster and committee size;
-                    // the H+1 producer checks that target against its authenticated
-                    // HeightContext before producing any pulse. Keeping these two
-                    // bindings distinct permits an epoch-boundary successor roster
-                    // without weakening either exact-roster check.
                     if state_transaction
                         .world
                         .global_beacon_key_sessions()
@@ -11663,62 +11675,36 @@ pub mod isi {
                         )
                         .into());
                     }
-                    if let Some(previous) = state_transaction
-                        .world
-                        .global_beacon_active_session()
-                        .get(&GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY)
-                        .copied()
-                    {
-                        state_transaction
-                            .world
-                            .retire_global_beacon_key_session(previous, next_height)
-                            .map_err(|_| {
-                                threshold_key_lifecycle_error_v1(
-                                    "global-beacon predecessor cannot be retired",
-                                )
-                            })?;
-                    }
-                    state_transaction
-                        .world
-                        .put_finalized_global_beacon_key_session(record)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon public key session cannot be persisted",
-                            )
-                        })?;
-                    state_transaction
-                        .world
-                        .activate_global_beacon_key_session(certificate.session_id, next_height)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon public key session cannot be activated",
-                            )
-                        })?;
-                }
-                Action::RetireGlobalBeaconKey => {
-                    let record = state_transaction
-                        .world
-                        .global_beacon_key_sessions()
-                        .get(&certificate.session_id)
-                        .ok_or_else(|| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon retirement session is absent",
-                            )
-                        })?;
-                    if record.session.transcript_hash != certificate.transcript_hash {
-                        return Err(threshold_key_lifecycle_error_v1(
-                            "global-beacon retirement transcript does not match",
+                    let bootstrap =
+                        crate::state::validator_committee::validate_beacon_finalization(
+                            state_transaction,
+                            &record,
+                            &ordered_roster,
                         )
-                        .into());
+                        .map_err(|error| {
+                            InstructionExecutionError::InvariantViolation(error.into())
+                        })?;
+                    // Finish every fallible check before changing the original overlay.
+                    // Only bootstrap may activate here; successor activation is an
+                    // indivisible effect of the certified committee boundary.
+                    let mut record = record;
+                    if bootstrap {
+                        record.activate(next_height).map_err(|_| {
+                            threshold_key_lifecycle_error_v1(
+                                "bootstrap beacon key cannot activate at the next height",
+                            )
+                        })?;
                     }
                     state_transaction
                         .world
-                        .retire_global_beacon_key_session(certificate.session_id, next_height)
-                        .map_err(|_| {
-                            threshold_key_lifecycle_error_v1(
-                                "global-beacon key session is not exactly active",
-                            )
-                        })?;
+                        .global_beacon_key_sessions
+                        .insert(certificate.session_id, record);
+                    if bootstrap {
+                        state_transaction.world.global_beacon_active_session.insert(
+                            GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
+                            certificate.session_id,
+                        );
+                    }
                 }
                 Action::InstallParliamentTleKey => {
                     let public_state = norito::decode_canonical::<TleKeySessionPublicStateV1>(
@@ -20697,6 +20683,15 @@ pub mod isi {
                     )
                     .into());
                 }
+                if state_transaction
+                    .world
+                    .sumeragi_npos_parameters()
+                    .is_some_and(|params| &params.xor_asset_definition_id == asset_definition_id)
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("cannot unregister domain {domain_id}: asset definition {asset_definition_id} is the committed network XOR identity").into(),
+                    ).into());
+                }
                 if let Some(((lane_id, epoch), _)) = state_transaction
                     .world
                     .public_lane_rewards
@@ -21132,6 +21127,23 @@ pub mod isi {
                         ),
                     ));
                 }
+                match iroha_data_model::nexus::ValidatorCommitteeOperationV1::from_custom_parameter(
+                    custom,
+                ) {
+                    Ok(Some(operation)) => {
+                        return state_transaction
+                            .apply_validator_committee_operation(_authority, operation)
+                            .map_err(|error| {
+                                InstructionExecutionError::InvariantViolation(error.into())
+                            });
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        return Err(invalid_smart_contract_parameter(format!(
+                            "invalid validator committee command: {error}"
+                        )));
+                    }
+                }
                 if custom.id() == &iroha_data_model::nexus::NexusRuntimeCatalogV1::parameter_id() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
@@ -21347,6 +21359,12 @@ pub mod isi {
                                         )),
                                     )
                                 })?;
+                                if !state_transaction._curr_block.is_genesis()
+                                    && !state_transaction.world.parameters.get().custom().contains_key(next.id()) {
+                                    return Err(invalid_smart_contract_parameter(
+                                        "network XOR and NPoS authority must be installed by authenticated genesis",
+                                    ));
+                                }
                                 if let Some(previous_custom) = state_transaction
                                     .world
                                     .parameters
@@ -21363,6 +21381,13 @@ pub mod isi {
                                                 ),
                                             )
                                         })?;
+                                    if npos.xor_asset_definition_id != previous.xor_asset_definition_id {
+                                        return Err(InstructionExecutionError::InvalidParameter(
+                                            InvalidParameterError::SmartContract(
+                                                "SumeragiNposParameters.xor_asset_definition_id is immutable after installation".to_owned(),
+                                            ),
+                                        ));
+                                    }
                                     if npos.evidence_horizon_blocks
                                         != previous.evidence_horizon_blocks
                                     {
@@ -21604,9 +21629,9 @@ pub mod isi {
             str::FromStr,
             sync::Arc,
         };
-        const TEST_HALO2_CIRCUIT_ID: &str = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
-        const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-execution-v1";
-        const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-execution-v1";
+        const TEST_HALO2_CIRCUIT_ID: &str = crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID;
+        const TEST_HALO2_CIRCUIT_ALIAS: &str = "halo2/ipa:ivm-replay-binding-v1";
+        const TEST_HALO2_CIRCUIT_FULL_ID: &str = "halo2/pasta/ipa/ivm-replay-binding-v1";
         const TEST_OTHER_HALO2_CIRCUIT_ID: &str = "kaigi-roster-v1";
 
         #[test]
@@ -25410,7 +25435,7 @@ pub mod isi {
         fn canonical_test_halo2_vk_box() -> VerifyingKeyBox {
             #[cfg(feature = "zk-halo2-ipa")]
             {
-                crate::zk::halo2_ipa_ivm_execution_vk_box()
+                crate::zk::halo2_ipa_ivm_replay_binding_vk_box()
                     .expect("generate canonical IVM execution verifying key")
             }
             #[cfg(not(feature = "zk-halo2-ipa"))]
@@ -25419,7 +25444,7 @@ pub mod isi {
             }
         }
         fn test_halo2_vk_record(version: u32, vk_box: VerifyingKeyBox) -> VerifyingKeyRecord {
-            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
+            vk_record!(record, version, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("verifying key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".to_owned()));
             record
         }
         fn checked_signature(private_key: &iroha_crypto::PrivateKey, payload: &[u8]) -> Signature {
@@ -25639,8 +25664,7 @@ pub mod isi {
             let quorum =
                 u16::try_from((ordered_roster.len() - 1) / 3 * 2 + 1).expect("small test quorum");
             let expected_active_session_id = match action {
-                consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey
-                | consensus_keys::ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey => {
+                consensus_keys::ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey => {
                     state_transaction
                         .world
                         .global_beacon_active_session()
@@ -25820,7 +25844,7 @@ pub mod isi {
             assert_eq!(state_transaction.world.active_tle_key_session(), Some(key_b_id));
         });
 
-        world_test!(global_beacon_boundary_rotation_signs_the_successor_dkg_target {
+        world_test!(global_beacon_certificate_cannot_rotate_without_frozen_preparation {
             let state = blank_test_state();
             let header = BlockHeader::new(
                 NonZeroU64::new(40).expect("nonzero lifecycle height"),
@@ -25856,7 +25880,7 @@ pub mod isi {
                 crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                     state_transaction.network_id,
                     [0xA4; 32],
-                    authorization_roster_hash,
+                    &validator_keys,
                 );
             let key_a_activation = key_a.session.adaptive_dkg.finalized_at_height;
             key_a
@@ -25874,12 +25898,12 @@ pub mod isi {
             let key_b = crate::beacon::tests::finalized_key_session_fixture_for_context_v1(
                 state_transaction.network_id,
                 [0xB4; 32],
-                successor_roster_hash,
+                &successor_validator_keys,
             );
             let install_b = certified_threshold_key_lifecycle_instruction_v1(
                 &state_transaction,
                 &validator_keys,
-                consensus_keys::ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+                consensus_keys::ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
                 key_b.session.session_id,
                 key_b.session.transcript_hash,
                 norito::encode_canonical(&key_b).expect("encode canonical beacon key B"),
@@ -25892,49 +25916,18 @@ pub mod isi {
                 key_b.session.roster_hash, successor_roster_hash,
                 "the signed public state independently names the H+1 DKG target"
             );
-            install_b
+            state_transaction.apply();
+            let mut state_transaction = block.transaction();
+            let rejected = install_b
                 .execute(&ALICE_ID, &mut state_transaction)
-                .expect("block-H exact-roster QC schedules the successor DKG key");
-
-            let persisted_a = state_transaction
-                .world
-                .global_beacon_key_sessions
-                .get(&key_a.session.session_id)
-                .expect("predecessor key retained");
-            let persisted_b = state_transaction
-                .world
-                .global_beacon_key_sessions
-                .get(&key_b.session.session_id)
-                .expect("successor key persisted");
-            assert_eq!(persisted_a.retired_at_height, Some(41));
-            assert_eq!(persisted_b.activated_at_height, Some(41));
-            assert!(persisted_a.is_active_at(40));
-            assert!(!persisted_a.is_active_at(41));
-            assert!(!persisted_b.is_active_at(40));
-            assert!(persisted_b.is_active_at(41));
-            assert_eq!(
-                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
-                    &persisted_b.session,
-                    &successor_roster,
-                ),
-                Ok(successor_roster_hash),
-                "the installed key is usable by the authenticated successor roster"
-            );
-            assert_eq!(
-                crate::beacon::authenticated_global_threshold_beacon_roster_hash_v1(
-                    &persisted_b.session,
-                    &ordered_roster,
-                ),
-                Err(crate::beacon::GlobalThresholdBeaconError::RosterMismatch),
-                "the authorization roster cannot be substituted as the DKG target"
-            );
-            assert_eq!(
-                state_transaction
-                    .world
-                    .global_beacon_active_session
-                    .get(&crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY),
-                Some(&key_b.session.session_id)
-            );
+                .expect_err("a lifecycle QC cannot bypass authenticated committee preparation");
+            assert!(format!("{rejected:?}").contains("authenticated incumbent finality"));
+            drop(state_transaction);
+            let restored = block.transaction();
+            // Neither the candidate record nor a retirement escapes transaction rollback.
+            assert!(restored.world.global_beacon_key_sessions.get(&key_b.session.session_id).is_none());
+            assert_eq!(restored.world.global_beacon_active_session.get(&crate::state::GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY),Some(&key_a.session.session_id));
+            assert_eq!(restored.world.global_beacon_key_sessions.get(&key_a.session.session_id),Some(&key_a));
         });
 
         world_test!(parliament_tle_rotation_cuts_over_at_next_height_and_retains_bound_openings {
@@ -31439,12 +31432,12 @@ seiyaku GovernanceLifecycle {
             assert_eq!(normalize_halo2_circuit_id(""), None);
             assert!(circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa/ivm-execution-v1",
-                "halo2/ipa:ivm-execution-v1"
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
+                "halo2/ipa:ivm-replay-binding-v1"
             ));
             assert!(!circuit_id_matches(
                 "halo2/ipa",
-                "halo2/pasta/ipa/ivm-execution-v1",
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
                 "halo2/ipa:tiny-add"
             ));
             assert!(!circuit_id_matches(
@@ -31458,9 +31451,9 @@ seiyaku GovernanceLifecycle {
                 "halo2/ipa:zk-vote"
             ));
             assert!(!circuit_id_matches(
-                "halo2/ipa::ivm-execution-v1",
-                "halo2/pasta/ipa/ivm-execution-v1",
-                "halo2/ipa:ivm-execution-v1"
+                "halo2/ipa::ivm-replay-binding-v1",
+                "halo2/pasta/ipa/ivm-replay-binding-v1",
+                "halo2/ipa:ivm-replay-binding-v1"
             ));
             assert!(circuit_id_matches("groth16", "plain", "plain"));
             assert!(!circuit_id_matches("groth16", "plain", "plain "));
@@ -31512,7 +31505,7 @@ seiyaku GovernanceLifecycle {
                 "halo2/ipa:production-ready",
                 "halo2/ipa:release-ready",
                 "halo2/ipa:third-party-audited",
-                "halo2/ipa::ivm-execution-v1",
+                "halo2/ipa::ivm-replay-binding-v1",
             ] {
                 assert!(
                     !voting_circuit_matches(
@@ -32249,7 +32242,7 @@ seiyaku GovernanceLifecycle {
                 BackendTag::Halo2IpaPasta,
                 TEST_HALO2_CIRCUIT_ID,
                 [0x41u8; 32],
-                crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
+                crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
                 vec![1, 2, 3],
             );
             let proof = ProofBox::new(
@@ -32607,7 +32600,7 @@ seiyaku GovernanceLifecycle {
                 contract_artifact_sha256: [0xb1; 32],
                 vk_ref: iroha_data_model::proof::VerifyingKeyId::new(
                     "stark/fri/v1",
-                    "ivm-execution-v1",
+                    "ivm-replay-binding-v1",
                 ),
                 vk_version: 1,
                 vk_commitment: [0xb2; 32],
@@ -34826,6 +34819,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -35532,6 +35526,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -35644,6 +35639,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Exited,
                     activation_height: current_height,
+                    election_exit_height: Some(current_height),
                     deactivation_height: Some(current_height),
                     last_reward_epoch: None,
                 },
@@ -35686,6 +35682,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -35722,6 +35719,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -39237,7 +39235,7 @@ seiyaku GovernanceLifecycle {
                 .position(|window| window == b"IPAK")
                 .expect("canonical key carries IPAK");
             vk_box.bytes[ipa_offset + 8..ipa_offset + 12]
-                .copy_from_slice(&(crate::zk::IVM_EXECUTION_V1_IPA_K + 1).to_le_bytes());
+                .copy_from_slice(&(crate::zk::IVM_REPLAY_BINDING_V1_IPA_K + 1).to_le_bytes());
             let record = test_halo2_vk_record(1, vk_box);
             let mut stx = state_block.transaction();
             let error = Executor::default()
@@ -39312,7 +39310,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_missing_gas");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -39329,7 +39327,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_empty_window");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()), activation_height = Some(10), withdraw_height = Some(10));
             let instr: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -39350,7 +39348,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_bad_len");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let instr: InstructionBox =
                 verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
             let err = exec
@@ -39469,7 +39467,7 @@ seiyaku GovernanceLifecycle {
         world_test!(register_vk_reserves_every_exact12_privacy_circuit_label {
             fn halo2_record(circuit_id: String) -> VerifyingKeyRecord {
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(record, 1, circuit_id, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 record
             }
             alice_state_transaction!(state, block, state_block, stx);
@@ -39585,7 +39583,7 @@ seiyaku GovernanceLifecycle {
                 let mut stx = state_block.transaction();
                 let id = VerifyingKeyId::new(backend, "vk_trusted_setup_label");
                 let vk_box = VerifyingKeyBox::new(backend.into(), vec![1, 2, 3]);
-                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+                vk_record!(rec, 1, "vk_trusted_setup_label", BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
                 let instr: InstructionBox =
                     verifying_keys::RegisterVerifyingKey { id, record: rec }.into();
                 let err = exec
@@ -40051,6 +40049,7 @@ seiyaku GovernanceLifecycle {
                     metadata: Metadata::default(),
                     status: iroha_data_model::nexus::PublicLaneValidatorStatus::Active,
                     activation_height: block_height,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -40527,6 +40526,43 @@ seiyaku GovernanceLifecycle {
                 }
             }
         });
+        world_test!(set_parameter_cannot_install_network_currency_after_genesis {
+            let state = blank_state();
+            let predecessor = new_dummy_block();
+            let header = iroha_data_model::block::BlockHeader::new(
+                std::num::NonZeroU64::new(2).unwrap(),
+                Some(predecessor.as_ref().hash()), None, 1, 0,
+            );
+            let mut state_block = state.block(header);
+            {
+                let mut stx = state_block.transaction();
+                let error = SetParameter::new(Parameter::Custom(
+                    SumeragiNposParameters::default().into_custom_parameter(),
+                )).expect_execute_err(&ALICE_ID, &mut stx,
+                    "a post-genesis parameter transaction cannot choose the network currency");
+                assert_contains!(format!("{error:?}"),
+                    "network XOR and NPoS authority must be installed by authenticated genesis");
+            }
+            let stx = state_block.transaction();
+            assert!(stx.world.sumeragi_npos_parameters().is_none(),
+                "rejected installation must leave no currency pin after transaction rollback");
+        });
+        world_test!(set_parameter_keeps_network_xor_identity_immutable {
+            blank_state_transaction!(state, block, state_block, stx);
+            let initial = SumeragiNposParameters::default();
+            SetParameter::new(Parameter::Custom(initial.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "install network currency pin");
+            let mut replacement = initial.clone();
+            replacement.xor_asset_definition_id = AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("other.universal")
+                    .expect("domain"),
+                "currency".parse().expect("name"),
+            );
+            let error = SetParameter::new(Parameter::Custom(replacement.into_custom_parameter()))
+                .expect_execute_err(&ALICE_ID, &mut stx, "network currency substitution must reject");
+            assert_contains!(format!("{error:?}"), "xor_asset_definition_id is immutable", "exact currency pin must persist");
+            assert_eq!(stx.world.sumeragi_npos_parameters(), Some(initial));
+        });
         world_test!(set_parameter_keeps_npos_evidence_horizon_immutable {
             blank_state_transaction!(state, block, state_block, stx);
             let initial = SumeragiNposParameters {
@@ -40752,7 +40788,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_payload_confusion");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![1, 2, 3]);
-            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(record, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = 3, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let mut stx = state_block.transaction();
             let err = Executor::default()
                 .execute_instruction(
@@ -40833,7 +40869,7 @@ seiyaku GovernanceLifecycle {
             stx.apply();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_identity");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(current, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let exec = Executor::default();
             let mut stx = state_block.transaction();
             exec.execute_instruction(
@@ -40887,7 +40923,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -41035,7 +41071,7 @@ seiyaku GovernanceLifecycle {
             let exec = Executor::default();
             let id = VerifyingKeyId::new("halo2/ipa", "vk_update_bad_len");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: id.clone(),
                 record: rec,
@@ -41045,7 +41081,7 @@ seiyaku GovernanceLifecycle {
                 .expect("register vk");
             stx.apply();
             let mut stx = state_block.transaction();
-            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(new_rec, 2, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()) .expect("canonical key length fits u32") .saturating_add(1), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let update_instruction: InstructionBox = verifying_keys::UpdateVerifyingKey {
                 id,
                 record: new_rec,
@@ -41116,7 +41152,7 @@ seiyaku GovernanceLifecycle {
             let circuit = TEST_HALO2_CIRCUIT_ID;
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_live");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, circuit.to_string(), BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -41170,7 +41206,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_env");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,
@@ -41248,7 +41284,7 @@ seiyaku GovernanceLifecycle {
                 let vk_id = VerifyingKeyId::new("halo2/ipa", format!("vk_bad_record_tag_{idx}"));
                 let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![idx as u8, 2, 3]);
                 let vk_commitment = hash_vk(&vk_box);
-                let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+                let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
                 let circuit_id = TEST_HALO2_CIRCUIT_ID.to_owned();
                 vk_record!(rec, 1, circuit_id.clone(), backend_tag, if backend_tag == BackendTag::Stark {
@@ -41331,7 +41367,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_missing_bytes");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -41380,7 +41416,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_invalid_proof");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -41436,7 +41472,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_wrong_envelope_tag");
             let vk_box = canonical_test_halo2_vk_box();
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
@@ -41521,7 +41557,7 @@ seiyaku GovernanceLifecycle {
                 );
                 let vk_box = canonical_test_halo2_vk_box();
                 let vk_commitment = hash_vk(&vk_box);
-                let expected_public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+                let expected_public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] =
                     CryptoHash::new(&expected_public_inputs).into();
                 vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = if matches!(tamper, Tamper::InactiveKey) { ConfidentialStatus::Proposed } else { ConfidentialStatus::Active }, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
@@ -41574,7 +41610,7 @@ seiyaku GovernanceLifecycle {
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_replay_existing");
             let vk_box = VerifyingKeyBox::new("halo2/ipa".into(), vec![2, 4, 6, 8]);
             let vk_commitment = hash_vk(&vk_box);
-            let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+            let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
             let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
             vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = 4, status = ConfidentialStatus::Active, key = Some(vk_box), gas_schedule_id = Some("halo2_default".into()));
             let envelope = OpenVerifyEnvelope {
@@ -41658,7 +41694,7 @@ seiyaku GovernanceLifecycle {
                     }
                 };
                 let vk_commitment = hash_vk(&stored_vk);
-                let public_inputs = crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+                let public_inputs = crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
                 let public_inputs_schema_hash: [u8; 32] = CryptoHash::new(&public_inputs).into();
                 vk_record!(rec, 1, circuit_id.clone(), BackendTag::Halo2IpaPasta, "pallas", public_inputs_schema_hash, vk_commitment; vk_len = u32::try_from(stored_vk.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(stored_vk), gas_schedule_id = Some("halo2_default".into()));
                 let envelope = OpenVerifyEnvelope {
@@ -41705,7 +41741,7 @@ seiyaku GovernanceLifecycle {
             let mut stx = block.transaction();
             let vk_id = VerifyingKeyId::new("halo2/ipa", "vk_gas");
             let vk_box = canonical_test_halo2_vk_box();
-            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_execution_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
+            vk_record!(rec, 1, TEST_HALO2_CIRCUIT_ID, BackendTag::Halo2IpaPasta, "pallas", crate::zk::ivm_replay_binding_public_inputs_schema_hash(), hash_vk(&vk_box); vk_len = u32::try_from(vk_box.bytes.len()).expect("canonical key length fits u32"), status = ConfidentialStatus::Active, key = Some(vk_box.clone()), gas_schedule_id = Some("halo2_default".into()));
             let register_vk_instruction: InstructionBox = verifying_keys::RegisterVerifyingKey {
                 id: vk_id.clone(),
                 record: rec,

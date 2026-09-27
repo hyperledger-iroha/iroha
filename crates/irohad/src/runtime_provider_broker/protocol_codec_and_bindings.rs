@@ -1254,6 +1254,7 @@ fn read_operation_request_frame_inner<R: std::io::Read>(
                     | OPERATION_STREAM_TOKEN_SIGN_V1
                     | OPERATION_STREAM_TOKEN_RECOVER_V1
                     | OPERATION_STREAM_TOKEN_OBSERVE_V1
+                    | OPERATION_STREAM_TOKEN_CHECK_V1
             ))
     {
         // The slot-11 discriminator admits only its four bounded operations. Reject a known

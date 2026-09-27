@@ -187,10 +187,14 @@ pub use mint_finality::{
     build_kagemusha_mint_finality_seal_message_v1, decode_kagemusha_mint_finality_seal_bundle_v1,
     decode_kagemusha_mint_finality_seal_share_v1, derive_kagemusha_mint_finality_validator_keys_v1,
     kagemusha_mint_finality_empty_root_v1, kagemusha_top_up_leaf_from_receipt_v1,
-    sign_kagemusha_mint_finality_seal_v1, validate_kagemusha_mint_finality_authority_v1,
+    prove_kagemusha_mint_finality_candidate_possession_v1,
+    prove_kagemusha_mint_finality_seat_readiness_v1, sign_kagemusha_mint_finality_seal_v1,
+    validate_kagemusha_mint_finality_authority_v1,
     validate_kagemusha_mint_finality_genesis_parameter_keys_v1,
-    validate_kagemusha_mint_finality_roster_keys_v1, verify_kagemusha_mint_finality_seal_bundle_v1,
-    verify_kagemusha_mint_finality_seal_share_v1, verify_kagemusha_top_up_membership_v1,
+    validate_kagemusha_mint_finality_roster_keys_v1,
+    verify_kagemusha_mint_finality_candidate_possession_v1,
+    verify_kagemusha_mint_finality_seal_bundle_v1, verify_kagemusha_mint_finality_seal_share_v1,
+    verify_kagemusha_mint_finality_seat_readiness_v1, verify_kagemusha_top_up_membership_v1,
 };
 #[cfg(feature = "zk-halo2-ipa")]
 pub use mint_helper::{KagemushaMintAuthorityStepV1, KagemushaMintCertificateWitnessV1};

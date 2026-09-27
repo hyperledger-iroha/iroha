@@ -4051,7 +4051,7 @@ fn native_source_validate_ordinary_completion_fixture(decided_recovery: bool, ba
     // Reuse only the real authenticated global predecessor fixture. Native is
     // the sole active process in this test; the old fixture adapter never runs.
     drop(old_fixture_adapter);
-    let authenticated_source = crate::state::State::authenticated_native_source_for_lifecycle_test();
+    let authenticated_source = crate::state::authenticated_native_source_for_lifecycle_fixture();
 
     let context = verified.context();
     let parent = context

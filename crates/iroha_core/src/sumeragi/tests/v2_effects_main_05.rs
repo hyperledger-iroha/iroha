@@ -6683,7 +6683,7 @@ fn apply_rejects_matching_commit_qc_from_foreign_context_without_scheduling_work
     complete_local_proposal_fixture(&mut executor, &mut services);
     let mut foreign_context = fixture.context.clone();
     foreign_context.network_id =
-        crate::sumeragi::synthetic_network_id("foreign-v2-effect-executor-test");
+        crate::unit_test_support::synthetic_network_id("foreign-v2-effect-executor-test");
     (
         foreign_context.kagemusha_mint_finality_authorization,
         foreign_context.kagemusha_mint_finality_authority,

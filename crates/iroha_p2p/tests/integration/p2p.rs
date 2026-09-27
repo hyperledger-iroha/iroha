@@ -41,18 +41,6 @@ impl iroha_p2p::network::message::ClassifyTopic for TestMessage {
         // decoding remains the charged typed decoder's responsibility.
         Ok(Some(Topic::Other))
     }
-    // This synthetic type has no availability or recovery variants. Positive
-    // empty-class bounds fund mandatory transport geometry only for this fixture.
-    fn availability_frame_maximum(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<usize, norito::core::Error> {
-        Ok(1)
-    }
-    fn recovery_frame_maxima(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<[usize; 2], norito::core::Error> {
-        Ok([1, 1])
-    }
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         iroha_p2p::network::message::Topic::Other
     }
@@ -67,18 +55,6 @@ struct MultiTopic {
 impl iroha_p2p::network::message::ClassifyTopic for MultiTopic {
     fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
         fixed_fixture_topic::<Self>(payload, flags)
-    }
-    // This synthetic type has no availability or recovery variants. Positive
-    // empty-class bounds fund mandatory transport geometry only for this fixture.
-    fn availability_frame_maximum(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<usize, norito::core::Error> {
-        Ok(1)
-    }
-    fn recovery_frame_maxima(
-        _: &iroha_model_base::peer::PeerId,
-    ) -> Result<[usize; 2], norito::core::Error> {
-        Ok([1, 1])
     }
     fn topic(&self) -> iroha_p2p::network::message::Topic {
         match self.chan {

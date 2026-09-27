@@ -345,7 +345,7 @@ async fn assert_finalized_state_convergence(
     peers: &[&NetworkPeer],
 ) -> Result<()> {
     let genesis = network.genesis();
-    let voters = iroha_core::sumeragi::signed_genesis_validator_pops(&genesis)?;
+    let voters = iroha_core::sumeragi::schedule::genesis_validators(&genesis)?;
     ensure!(
         voters.len() == 4,
         "release gate must pin all four signed genesis validators"

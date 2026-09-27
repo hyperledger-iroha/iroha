@@ -139,13 +139,12 @@ fn execute_genesis<'state>(
     genesis: SignedBlock,
     topology: &Topology,
 ) -> (CommittedBlock, Box<StateBlock<'state>>) {
-    let (valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let (valid, staged) = ValidBlock::validate_signed_genesis(
         genesis,
         topology,
         &SAMPLE_GENESIS_ACCOUNT_ID,
         &TimeSource::new_system(),
         state,
-        &mut None,
         wire::ConsensusMode::Permissioned,
     )
     .unpack(|_| {})

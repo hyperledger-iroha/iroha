@@ -114,7 +114,7 @@ fn verified_context_for_policy_state(
 }
 fn verified_context() -> (VerifiedHeightContext, Vec<KeyPair>) {
     let keys = verified_keys();
-    let network_id = crate::sumeragi::synthetic_network_id("sumeragi-v2-recovery-test");
+    let network_id = crate::unit_test_support::synthetic_network_id("sumeragi-v2-recovery-test");
     let policy_kura = Kura::blank_kura_for_testing();
     let policy_state = state_for(&policy_kura, network_id);
     (
@@ -871,7 +871,7 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
     );
     kura.install_authenticated_snapshot_prefix_for_testing(&payload)
         .expect("retain authenticated imported hash vector");
-    let mut restored = crate::state::deserialize::KuraSeed {
+    let mut restored = crate::state::deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         lane_manifests: Arc::clone(&frozen_manifests),
         kura: Arc::clone(&kura),
         query_handle: LiveQueryStore::start_test(),
@@ -1322,6 +1322,7 @@ fn startup_plan_rejects_poisoned_height_two_that_ignores_npos_transition() {
     assert_eq!(transitioned_mint_finality_authorization.first_height, 2);
     assert_eq!(transitioned_mint_finality_authorization.last_height, 10);
     parent_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation: None,
         epoch: 1,
         kagemusha_mint_finality_authorization: transitioned_mint_finality_authorization,
         kagemusha_mint_finality_authority: transitioned_mint_finality_authority,
@@ -2039,6 +2040,7 @@ fn successor_pops_are_copied_only_from_the_durable_parent_artifact() {
             [0x73; 32],
         );
     boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+        committee_preparation: None,
         epoch: next_epoch,
         kagemusha_mint_finality_authorization: next_mint_finality_authorization,
         kagemusha_mint_finality_authority: next_mint_finality_authority,

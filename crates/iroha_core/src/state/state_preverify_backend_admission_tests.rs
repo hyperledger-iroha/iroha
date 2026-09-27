@@ -99,7 +99,7 @@ fn halo2_ipa_profile_labels_require_the_canonical_backend() {
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction.zk.halo2.curve = iroha_config::parameters::actual::ZkCurve::Pallas;
-    let backend = "halo2/ipa:ivm-execution-v1";
+    let backend = "halo2/ipa:ivm-replay-binding-v1";
     let vk = VerifyingKeyBox::new(backend.to_owned(), vec![0xA5, 0x5A, 0xC3]);
     let vk_commitment = crate::zk::hash_vk(&vk);
     let envelope = OpenVerifyEnvelope {

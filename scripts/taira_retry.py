@@ -758,7 +758,9 @@ RETIRE_BINS = None
 RETIRE_BINARY_MANIFEST = None
 RETIRE_PUBLIC_IMPORTS = ()
 RETIRE_PROTECTED_INPUTS = ()
-RETIRE_DEPLOYMENT_STATE = Path("/var/lib/taira-deployment")
+RETIRE_DEPLOYMENT_STATE = Path('/var/lib/taira-deployment')
+RETIRE_WORKER_STATE = Path('/var/lib/taira-epoch-supervisor')
+RETIRE_WORKER_UNIT = Path('/etc/systemd/system/iroha-taira-epoch-supervisor.service')
 
 
 class _retire_RebindError(Exception):
@@ -1412,6 +1414,9 @@ def _retire_deployment_lock():
                      and identity(os.fstat(fd)) == identity(before)
                      and identity(root.lstat()) == identity(root_info),
                      "deployment lock changed during acquisition")
+        _retire_need(not os.path.lexists(RETIRE_WORKER_STATE)
+                     and not os.path.lexists(RETIRE_WORKER_UNIT),
+                     "retired epoch worker must be removed before retirement")
         _retire_need(not os.path.lexists(root / ".reset-owner.json"),
                      "active reset owner forbids retirement")
         return fd
@@ -2855,8 +2860,10 @@ def _continuity_mint_finality_peers(manifest):
     authority = mint["authority_generation"]
     _continuity_need(
         isinstance(authority, dict)
-        and authority.get("version") == 1
-        and authority.get("generation") == 0
+        and type(authority.get("version")) is int
+        and authority["version"] == 1
+        and type(authority.get("generation")) is int
+        and authority["generation"] == 0
         and isinstance(authority.get("validators"), list),
         "Genesis must contain a generation-zero mint-finality authority",
     )
@@ -4551,6 +4558,8 @@ def guest_admit(request):
             inventory_path.parent / "native-local-args.json", owner=0, private=True
         ), inventory["qualification_scope"]
     )
+    require("epoch_supervisor" not in plan and "epoch_supervisor" not in inventory,
+            "retired epoch worker input is unsupported")
     plan = derive_runtime_paths(plan, request["binary"], inventory, arguments)
     plan["previous_terminal"] = str(
         find_terminal(
@@ -4794,6 +4803,8 @@ def guest_locked(request, capacity, root):
         arguments["--known-hosts"] == [plan["known_hosts"]],
         "native SSH authority differs",
     )
+    require("epoch_supervisor" not in plan and "epoch_supervisor" not in inventory,
+            "retired epoch worker input is unsupported")
     attempt_id = resume_id or (
         "retry-" + str(time.time_ns()) + "-" + secrets.token_hex(4)
     )

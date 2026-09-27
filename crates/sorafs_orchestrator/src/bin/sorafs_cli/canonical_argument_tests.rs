@@ -340,8 +340,8 @@ fn build_pin_register_transaction_signs_exact_native_instruction_locally() {
         .downcast_ref::<RegisterPinManifest>()
         .expect("RegisterPinManifest");
     assert_eq!(
-        register.manifest_payload,
-        manifest.encode().expect("canonical manifest payload")
+        register.manifest_payload(),
+        &manifest.encode().expect("canonical manifest payload")
     );
 }
 #[test]
@@ -517,8 +517,8 @@ fn gateway_provider_spec_requires_and_normalizes_public_key() {
 }
 #[test]
 fn fetch_summary_records_write_mode_hint() {
-    let outcome = sorafs_car::multi_fetch::FetchOutcome {
-        chunks: Vec::new(),
+    let outcome = sorafs_car::multi_fetch::StreamFetchOutcome {
+        peak_buffered_bytes: 0,
         chunk_receipts: Vec::new(),
         provider_reports: Vec::new(),
     };
@@ -539,7 +539,7 @@ fn fetch_summary_records_write_mode_hint() {
         chunks: Vec::new(),
         files: Vec::new(),
     };
-    let session = FetchSession {
+    let session = StreamFetchSession {
         outcome,
         policy_report,
         local_proxy_manifest: None,

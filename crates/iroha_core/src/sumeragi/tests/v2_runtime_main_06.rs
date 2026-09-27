@@ -801,7 +801,7 @@ fn stale_internal_callback_is_marker_free_and_malformed_callback_spends_no_ordin
         authenticated_network_runtime(&malformed_directory, RuntimeQueueConfig::new(8, 1, 1));
     let mut malformed_manifest = runtime_manifest(&malformed_context, 0x9F);
     let mut foreign_context = malformed_context.clone();
-    foreign_context.network_id = crate::sumeragi::synthetic_network_id("foreign-runtime-preflight");
+    foreign_context.network_id = crate::unit_test_support::synthetic_network_id("foreign-runtime-preflight");
     malformed_manifest.round.context_id = foreign_context.id();
     let next_ordinal = malformed_runtime.ingress.next_admission_ordinal;
     assert_eq!(

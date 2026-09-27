@@ -1627,7 +1627,7 @@ fn canonical_sealed_reveal_block_and_current_receipt_release_applied_participant
         &extended_activations,
     );
     let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
-    let network_id = crate::sumeragi::synthetic_network_id("geometry-retirement-committed");
+    let network_id = crate::unit_test_support::synthetic_network_id("geometry-retirement-committed");
     let transaction = TransactionBuilder::new(
         network_id,
         (*SAMPLE_GENESIS_ACCOUNT_ID).clone(),

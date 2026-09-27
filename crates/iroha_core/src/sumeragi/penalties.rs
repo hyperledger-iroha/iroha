@@ -122,7 +122,7 @@ impl<'a> PenaltyApplier<'a> {
             ));
         }
         let world = view.world();
-        let slashing_delay = crate::sumeragi::resolve_npos_slashing_delay_blocks_from_world(world)
+        let slashing_delay = crate::sumeragi::v2_npos::resolve_npos_slashing_delay_blocks_from_world(world)
             .ok_or_else(|| eyre!("NPoS penalty derivation requires signed NPoS parameters"))?;
         let due = |record: &EvidenceRecord| {
             !record.penalty_status.is_terminal()
@@ -256,7 +256,7 @@ impl<'a> PenaltyApplier<'a> {
         &self,
         block_header: &BlockHeader,
     ) -> Result<NposConsensusEffects> {
-        let (v2_evidence_admissions, penalty_actions) =
+        let (v2_evidence_admissions, penalty_actions, _index) =
             self.derive_from_stable_parent(block_header, true)?;
         Ok(NposConsensusEffects {
             finalized_global_beacon_pulse: None,
@@ -264,13 +264,14 @@ impl<'a> PenaltyApplier<'a> {
             penalty_actions,
         })
     }
-    /// Derive only deterministic penalty actions from pre-block state.
+    /// Derive deterministic parent-state actions and retain their original funded
+    /// stake index for pristine application. Dropping either rejects this attempt.
     pub(crate) fn derive_npos_penalty_actions(
         &self,
         block_header: &BlockHeader,
-    ) -> Result<Vec<NposPenaltyAction>> {
+    ) -> Result<(Vec<NposPenaltyAction>, PublicLaneStakeIndex)> {
         self.derive_from_stable_parent(block_header, false)
-            .map(|(_, actions)| actions)
+            .map(|(_, actions, index)| (actions, index))
     }
     fn derive_from_stable_parent(
         &self,
@@ -279,6 +280,7 @@ impl<'a> PenaltyApplier<'a> {
     ) -> Result<(
         Vec<iroha_data_model::block::consensus::SumeragiV2EquivocationEvidence>,
         Vec<NposPenaltyAction>,
+        PublicLaneStakeIndex,
     )> {
         loop {
             let generation_before = self.state.state_view_generation();
@@ -305,7 +307,7 @@ impl<'a> PenaltyApplier<'a> {
                 };
                 drop(view);
                 self.derive_consensus_penalty_actions(block_header, snapshot)
-                    .map(|actions| (admissions, actions))
+                    .map(|(actions, index)| (admissions, actions, index))
             });
             let generation_after = self.state.state_view_generation();
             if generation_before == generation_after && generation_after % 2 == 0 {
@@ -319,17 +321,16 @@ impl<'a> PenaltyApplier<'a> {
         &self,
         block_header: &BlockHeader,
         snapshot: ParentPenaltySnapshot,
-    ) -> Result<Vec<NposPenaltyAction>> {
+    ) -> Result<(Vec<NposPenaltyAction>, PublicLaneStakeIndex)> {
         let current_height = block_header.height().get();
         let mut pending = snapshot.pending;
         if pending.as_slice().is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), snapshot.stake_index));
         }
         pending
             .as_mut_slice()
             .sort_unstable_by(|left, right| left.0.0.cmp(&right.0.0));
-        let _witness_suppression =
-            crate::exec_witness::suppress_recording_for_current_thread();
+        let _witness_suppression = crate::exec_witness::suppress_recording_for_current_thread();
         let mut scratch = self
             .state
             .consensus_effects_probe_block(block_header.clone())?;
@@ -398,7 +399,7 @@ impl<'a> PenaltyApplier<'a> {
                             slash_id,
                             amount,
                         };
-                        let mut transaction = scratch.consensus_effects_transaction();
+                        let mut transaction = scratch.consensus_effects_transaction()?;
                         apply_indexed_slash_to_validator_without_observability(
                             &mut transaction,
                             slash.lane_id,
@@ -432,13 +433,14 @@ impl<'a> PenaltyApplier<'a> {
         }
         actions.sort();
         actions.dedup();
-        Ok(actions)
+        Ok((actions, snapshot.stake_index))
     }
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_npos_consensus_effects_to_transaction(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
+    stake_index: Option<&PublicLaneStakeIndex>,
     evidence_prune_keys: &[Hash],
     expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
     authenticated_roster: &[PeerId],
@@ -449,6 +451,7 @@ pub(crate) fn apply_npos_consensus_effects_to_transaction(
     apply_npos_consensus_effects_to_transaction_inner(
         tx,
         effects,
+        stake_index,
         evidence_prune_keys,
         expected_beacon_anchor,
         authenticated_roster,
@@ -476,10 +479,26 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
     current_view: u64,
     now_ms: u64,
 ) -> Result<()> {
-    let mut tx = state_block.consensus_effects_transaction();
+    let mut tx = state_block.consensus_effects_transaction()?;
+    // This test-only post-execution diagnostic has a different source overlay.
+    // Production consumes the original pre-State index through the same kernel.
+    let stake_index = effects
+        .penalty_actions
+        .iter()
+        .any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(_)))
+        .then(|| {
+            PublicLaneStakeIndex::from_world(
+                &tx.world,
+                tx.nexus.staking.max_stake_shares_per_validator.get(),
+                tx.nexus.staking.max_pending_unbonds_per_share.get(),
+                tx.stake_index_budget,
+            )
+        })
+        .transpose()?;
     apply_npos_consensus_effects_to_transaction_inner(
         &mut tx,
         effects,
+        stake_index.as_ref(),
         evidence_prune_keys,
         expected_beacon_anchor,
         authenticated_roster,
@@ -494,6 +513,7 @@ pub(crate) fn validate_npos_consensus_effects_after_execution(
 fn apply_npos_consensus_effects_to_transaction_inner(
     tx: &mut StateTransaction<'_, '_>,
     effects: &NposConsensusEffects,
+    stake_index: Option<&PublicLaneStakeIndex>,
     evidence_prune_keys: &[Hash],
     expected_beacon_anchor: Option<iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1>,
     authenticated_roster: &[PeerId],
@@ -502,6 +522,15 @@ fn apply_npos_consensus_effects_to_transaction_inner(
     now_ms: u64,
     mode: EffectsApplicationMode,
 ) -> Result<PenaltyOutcome> {
+    let requires_index = effects
+        .penalty_actions
+        .iter()
+        .any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(_)));
+    if requires_index != stake_index.is_some() {
+        return Err(eyre!(
+            "consensus effects differ from their prepared stake-index owner"
+        ));
+    }
     // These are finality effects, not transaction execution. Suppress the
     // process-global recorder in both commit and rollback-only validation so
     // concurrent in-process State instances cannot contaminate one another.
@@ -655,20 +684,6 @@ fn apply_npos_consensus_effects_to_transaction_inner(
             },
         );
     }
-    let stake_index = effects
-        .penalty_actions
-        .iter()
-        .any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(_)))
-        .then(|| {
-            PublicLaneStakeIndex::from_world(
-                &tx.world,
-                tx.nexus.staking.max_stake_shares_per_validator.get(),
-                tx.nexus.staking.max_pending_unbonds_per_share.get(),
-                tx.stake_index_budget,
-            )
-        })
-        .transpose()
-        .wrap_err("failed to index the exact consensus-effects staking overlay")?;
     for action in &effects.penalty_actions {
         match action {
             NposPenaltyAction::ConsensusSlash(action) => {
@@ -688,8 +703,7 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                     ));
                 }
                 let share_keys = stake_index
-                    .as_ref()
-                    .expect("a slash action constructs the staking index")
+                    .expect("validated slash controls carry their original stake index")
                     .share_keys(action.lane_id, &action.validator);
                 match mode {
                     EffectsApplicationMode::Commit => apply_indexed_consensus_slash_to_validator(
@@ -951,6 +965,7 @@ pub(crate) fn seed_penalty_validator_for_tests(
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -981,6 +996,18 @@ pub(crate) fn seed_penalty_validator_for_tests(
         .commit_world_overlay_for_testing()
         .expect("commit exactly backed penalty validator fixture");
     validator
+}
+
+/// Real due-slash source for pristine-control component tests. This fixture
+/// authenticates prior equivocation but does not admit its carrier as a block.
+#[cfg(test)]
+pub(crate) fn pristine_penalty_component_fixture_for_tests() -> (
+    State,
+    iroha_data_model::block::SignedBlock,
+    iroha_data_model::block::consensus_v2::HeightContext,
+    crate::smartcontracts::isi::staking::PublicLaneStakeShareKey,
+) {
+    tests::pristine_penalty_component_fixture()
 }
 
 #[cfg(test)]
@@ -1380,6 +1407,41 @@ mod tests {
             0,
         )
     }
+    pub(super) fn pristine_penalty_component_fixture() -> (
+        State,
+        SignedBlock,
+        HeightContext,
+        crate::smartcontracts::isi::staking::PublicLaneStakeShareKey,
+    ) {
+        let state = fresh_state();
+        install_one_block_delay_npos(&state);
+        let peers = roster();
+        let context = height_one_context(*state.network_id_ref(), &peers, test_block_hash(0xE3));
+        let validator = add_validator_record(&state, &peers[1]);
+        insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
+        let effects = PenaltyApplier::new(&state, None)
+            .derive_npos_consensus_effects(&penalty_header(2))
+            .expect("derive real due-slash component fixture");
+        assert!(
+            effects
+                .penalty_actions
+                .iter()
+                .any(|action| matches!(action, NposPenaltyAction::ConsensusSlash(_)))
+        );
+        let key = roster_keys().remove(0);
+        let mut block = SignedBlock::from(ValidBlock::new_dummy_and_modify_header(
+            key.private_key(),
+            |header| header.creation_time_ms = 2_000,
+        ));
+        block.set_npos_consensus_effects(Some(effects));
+        (
+            state,
+            block,
+            context,
+            (LaneId::SINGLE, validator.clone(), validator),
+        )
+    }
+
     fn height_two_state_block(state: &State) -> StateBlock<'_> {
         state.block(penalty_header(2))
     }
@@ -2051,6 +2113,7 @@ mod tests {
             None,
         )
         .derive_npos_penalty_actions(&penalty_header(2))
+        .map(|(actions, _index)| actions)
         .expect("only due parent evidence receives a penalty marker");
         assert_eq!(actions.len(), 1);
         assert!(matches!(
@@ -2108,6 +2171,7 @@ mod tests {
         );
         let error = applier
             .derive_npos_penalty_actions(&penalty_header(2))
+            .map(|(actions, _index)| actions)
             .expect_err("one byte below the exact due backing must refuse locally");
         let refusal = error
             .downcast_ref::<EvidencePreparationError>()
@@ -2129,6 +2193,7 @@ mod tests {
         drop(original_owner);
         let actions = applier
             .derive_npos_penalty_actions(&penalty_header(2))
+            .map(|(actions, _index)| actions)
             .expect("the same State retries after the original owner releases capacity");
         assert!(matches!(
             actions.as_slice(),
@@ -2174,6 +2239,7 @@ mod tests {
         );
         let error = applier
             .derive_npos_penalty_actions(&penalty_header(2))
+            .map(|(actions, _index)| actions)
             .expect_err("one byte below the exact nested key must refuse locally");
         let refusal = error
             .downcast_ref::<EvidencePreparationError>()
@@ -2195,6 +2261,7 @@ mod tests {
         drop(original_owner);
         let actions = applier
             .derive_npos_penalty_actions(&penalty_header(2))
+            .map(|(actions, _index)| actions)
             .expect("the same State retries after original pool release");
         assert!(matches!(
             actions.as_slice(),
@@ -2302,7 +2369,9 @@ mod tests {
             let mut scratch = state
                 .consensus_effects_probe_block(penalty_header(2))
                 .unwrap();
-            let mut transaction = scratch.consensus_effects_transaction();
+            let mut transaction = scratch
+                .consensus_effects_transaction()
+                .expect("fixture consensus-effects transaction admission");
             apply_slash_to_validator_without_observability(
                 &mut transaction,
                 LaneId::SINGLE,
@@ -2754,15 +2823,20 @@ mod tests {
         let offender = frozen_roster[1].clone();
         add_validator_record(&state, &offender);
         insert_evidence(&state, phase_vote_evidence(&context, 1, 0), 1);
-        let effects = PenaltyApplier::new(
+        let (penalty_actions, stake_index) = PenaltyApplier::new(
             &state,
             #[cfg(feature = "telemetry")]
             None,
             #[cfg(not(feature = "telemetry"))]
             None,
         )
-        .derive_npos_consensus_effects(&penalty_header(2))
+        .derive_npos_penalty_actions(&penalty_header(2))
         .expect("due evidence derives a complete penalty bundle");
+        let effects = NposConsensusEffects {
+            finalized_global_beacon_pulse: None,
+            v2_evidence_admissions: Vec::new(),
+            penalty_actions,
+        };
         let evidence_prune_keys =
             crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(&state, 2)
                 .expect("fund exact committed-evidence prune keys");
@@ -2770,10 +2844,13 @@ mod tests {
 
         let witness_guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
-        let mut transaction = state_block.consensus_effects_transaction();
+        let mut transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            Some(&stake_index),
             evidence_prune_keys.as_slice(),
             None,
             &frozen_roster,

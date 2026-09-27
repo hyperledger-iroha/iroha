@@ -13,7 +13,7 @@ use iroha_data_model::sorafs::{
     capacity::ProviderId,
     stream_token_custody::{
         STREAM_TOKEN_CUSTODY_MAX_RECORD_BYTES_V1, STREAM_TOKEN_CUSTODY_MAX_REVISIONS_V1,
-        STREAM_TOKEN_CUSTODY_RECORD_DOMAIN_V1, StreamTokenCustodyControlRecordV1,
+        StreamTokenCustodyControlRecordV1,
     },
 };
 use iroha_model_base::state_path::StatePath;
@@ -139,13 +139,9 @@ where
     .map_err(|_| Error::Invalid)
 }
 pub(crate) fn record_digest(record: &StreamTokenCustodyControlRecordV1) -> Result<[u8; 32], Error> {
-    let frame = encode(record)?;
-    let mut preimage =
-        Vec::with_capacity(STREAM_TOKEN_CUSTODY_RECORD_DOMAIN_V1.len() + frame.len());
-    preimage.extend_from_slice(STREAM_TOKEN_CUSTODY_RECORD_DOMAIN_V1);
-    preimage.extend_from_slice(&frame);
-    Ok(*Hash::new(preimage).as_ref())
+    record.canonical_digest().map_err(|_| Error::Invalid)
 }
+
 fn scope(provider: ProviderId) -> String {
     format!(
         "sorafs_stream_token_custody_v1_{}",

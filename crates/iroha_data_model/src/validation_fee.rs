@@ -482,7 +482,7 @@ impl std::error::Error for ValidationFeePolicyRegistryError {}
 pub enum ValidationFeeChargingMode {
     /// Disable validation-fee charging through the governed policy chain.
     Disabled,
-    /// Charge once per qualifying fee-asset transfer instruction or batch entry.
+    /// Charge per qualifying fee-asset transfer or exact signed monetary staking leg.
     PerQualifyingTransferInstruction,
 }
 /// Canonical Parliament certificate authorization for one enacted validation-fee proposal.

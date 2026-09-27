@@ -17878,6 +17878,7 @@ async fn enqueue_sorafs_finalized_native_repair_work(
                 let node = state.sorafs_node.clone();
                 let authority = authority.clone();
                 let transaction_context = transaction_context.clone();
+                let repair_state = Arc::clone(&state.state);
                 let execution = crate::panic_recovery::join_recoverable(
                     crate::panic_recovery::spawn_blocking_recoverable(move || {
                         node.execute_finalized_native_repair(
@@ -17885,6 +17886,17 @@ async fn enqueue_sorafs_finalized_native_repair_work(
                             &authority,
                             &transaction_context,
                             now_unix_ms,
+                            &|| {
+                                use iroha_core::query::repair_source::{authorize_repair_lease_v1, RepairLeaseExpectedV1};
+                                let task = &finalized_task.task;
+                                let lease = task.lease.as_ref().ok_or(sorafs_node::native_repair_worker::NativeRepairExecutionErrorV1::LeaseMissing)?;
+                                authorize_repair_lease_v1(&repair_state.view(), &authority, &RepairLeaseExpectedV1 {
+                                    floor: finalized_task.finalized_cursor, task_id: task.task_id,
+                                    ticket_id: &task.ticket_id, manifest_digest: task.manifest_digest,
+                                    target_provider: task.provider_id, task_revision: task.revision,
+                                    lease_generation: lease.generation,
+                                }, iroha_network_time_now_ms()).map_err(|_| sorafs_node::native_repair_worker::NativeRepairExecutionErrorV1::LeaseInvalid)
+                            },
                         )
                     }),
                 )
@@ -29095,7 +29107,9 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 || manifest.manifest_cid() != finalized_pin.manifest.root_cid.as_bytes()
                 || manifest.content_length() != finalized_pin.manifest.content_length
                 || manifest.chunk_profile_handle() != finalized_pin.manifest.chunker.to_handle()
-                || manifest.por_tree_ref().root() != &finalized_pin.manifest.por_root
+                || manifest
+                    .por_tree_ref()
+                    .map_or(true, |tree| tree.root() != &finalized_pin.manifest.por_root)
             {
                 warn!("local SoraFS manifest disagrees with finalized pin-manifest state");
                 return json_error(
@@ -30667,6 +30681,10 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::NOT_FOUND,
             format!("manifest {manifest_id} not found"),
         ),
+        StorageBackendError::PayloadUnavailable { .. } => json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "manifest payload is quarantined pending verified repair",
+        ),
         StorageBackendError::ManifestRetirementInProgress { manifest_id } => json_error(
             StatusCode::CONFLICT,
             format!("manifest {manifest_id} retirement is already in progress"),
@@ -30814,6 +30832,17 @@ mod storage_backend_error_tests {
         storage_backend_error,
     };
     use sorafs_manifest::retention::RetentionMetadataError;
+    #[tokio::test]
+    async fn quarantined_payload_is_unavailable_without_disclosing_manifest_metadata() {
+        let response = storage_backend_error(StorageBackendError::PayloadUnavailable {
+            manifest_id: "damaged-manifest".to_owned(),
+        });
+        assert_eq!(response.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        assert!(text.contains("quarantined"));
+        assert!(!text.contains("damaged-manifest"));
+    }
     use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
     use std::time::Duration;
     #[test]

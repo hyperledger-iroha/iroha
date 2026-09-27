@@ -1574,7 +1574,7 @@ fn validate_enqueue(
     challenge
         .validate()
         .map_err(|error| PdpProviderProtocolError::InvalidChallenge(error.to_string()))?;
-    if !admission.is_council_verified() {
+    if !(admission.is_council_verified() || admission.is_genesis_material()) {
         return Err(PdpProviderProtocolError::UntrustedAdmission);
     }
     if admission.provider_id() != &challenge.provider_id {
@@ -1643,7 +1643,7 @@ fn validate_active_admission(
     pending: &PendingChallengeV1,
     admission: &AdmissionRecord,
 ) -> Result<(), PdpProviderProtocolError> {
-    if !admission.is_council_verified() {
+    if !(admission.is_council_verified() || admission.is_genesis_material()) {
         return Err(PdpProviderProtocolError::UntrustedAdmission);
     }
     if admission.provider_id() != &pending.challenge.provider_id {

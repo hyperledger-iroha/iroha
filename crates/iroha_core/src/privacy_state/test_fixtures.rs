@@ -1,5 +1,4 @@
 // Shared signed and persisted-state fixtures for the current privacy regressions.
-
 fn nonzero(byte: u8) -> [u8; 32] {
     [byte; 32]
 }

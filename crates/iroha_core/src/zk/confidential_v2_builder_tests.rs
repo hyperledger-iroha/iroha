@@ -51,16 +51,15 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
             "exact full-unshield registry label should reach the full-unshield verifier"
         );
     }
-    let input_path = super::compute_confidential_merkle_path_v2(&tree_commitments, 0)
-        .expect("input membership path");
-    let dummy_path =
-        super::compute_confidential_merkle_path_v2(&tree_commitments, tree_commitments.len())
-            .expect("dummy membership path");
+    let input_path =
+        full_tree_input_path_v3::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>(input_commitment);
+    let full_root = input_path.root;
+    assert_ne!(full_root, root_hint);
     let explicit_path_proof = super::build_confidential_unshield_proof_v2_with_paths(
         &network_id,
         asset_definition_id,
         &spend_key,
-        &[input_path.clone(), dummy_path],
+        std::slice::from_ref(&input_path),
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
             rho: input_rho,
@@ -68,13 +67,13 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
             leaf_index: 0,
         }],
         9,
-        root_hint,
+        full_root,
         &vk_record.circuit_id,
         &vk_box,
     )
-    .expect("build terminal full-redemption proof from explicit paths");
+    .expect("build one-note full-redemption proof against a full-capacity tree");
     assert_eq!(explicit_path_proof.nullifiers.len(), 1);
-    assert_eq!(explicit_path_proof.root, root_hint);
+    assert_eq!(explicit_path_proof.root, full_root);
     assert!(
         crate::zk::verify_backend(
             crate::zk::ZK_BACKEND_HALO2_IPA,
@@ -90,14 +89,7 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
             &network_id,
             asset_definition_id,
             &spend_key,
-            &[
-                wrong_leaf_path,
-                super::compute_confidential_merkle_path_v2(
-                    &tree_commitments,
-                    tree_commitments.len(),
-                )
-                .expect("dummy membership path")
-            ],
+            &[wrong_leaf_path],
             &[super::ConfidentialUnshieldInputV2 {
                 amount: 9,
                 rho: input_rho,
@@ -105,7 +97,7 @@ fn generated_confidential_unshield_v2_proof_verifies_against_cached_canonical_vk
                 leaf_index: 0,
             }],
             9,
-            root_hint,
+            full_root,
             &vk_record.circuit_id,
             &vk_box,
         )
@@ -172,16 +164,14 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         ),
         "terminal full unshield must verify under the deployed V3 verifier",
     );
-    let input_path = super::compute_confidential_merkle_path_v2(&tree_commitments, 0)
-        .expect("terminal input membership path");
-    let dummy_path =
-        super::compute_confidential_merkle_path_v2(&tree_commitments, tree_commitments.len())
-            .expect("terminal dummy membership path");
+    let input_path =
+        full_tree_input_path_v3::<{ super::CONFIDENTIAL_TREE_DEPTH_V2 }>(input_commitment);
+    let full_root = input_path.root;
     let terminal_with_paths = super::build_confidential_unshield_proof_v3_with_paths(
         &network_id,
         asset_definition_id,
         &spend_key,
-        &[input_path, dummy_path],
+        &[input_path],
         &[super::ConfidentialUnshieldInputV2 {
             amount: 9,
             rho: input_rho,
@@ -190,11 +180,11 @@ fn generated_confidential_unshield_v3_proof_verifies_and_rejects_bad_change() {
         }],
         &[],
         9,
-        root_hint,
+        full_root,
         &vk_record.circuit_id,
         &vk_box,
     )
-    .expect("build terminal full unshield from explicit paths under V3");
+    .expect("build terminal one-note unshield against a full-capacity tree under V3");
     assert!(terminal_with_paths.output_commitments.is_empty());
     assert!(crate::zk::verify_backend(
         crate::zk::ZK_BACKEND_HALO2_IPA,

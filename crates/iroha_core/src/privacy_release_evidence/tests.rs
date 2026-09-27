@@ -966,7 +966,7 @@ fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
     ));
 }
 #[test]
-fn zk_x509_projected_artifact_bound_exceeds_cap_and_cannot_qualify() {
+fn zk_x509_codec_bound_fits_cap_without_qualifying_the_engine() {
     let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
     let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
     let exact_x5s1_ceiling = u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1);
@@ -974,21 +974,26 @@ fn zk_x509_projected_artifact_bound_exceeds_cap_and_cannot_qualify() {
         privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0),
         Some(exact_x5s1_ceiling)
     );
-    assert_eq!(exact_x5s1_ceiling, 19_156_074);
-    assert!(exact_x5s1_ceiling > PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
+    assert_eq!(exact_x5s1_ceiling, 9_204_362);
+    assert_eq!(
+        PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1 - exact_x5s1_ceiling,
+        232_822
+    );
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
-    assert!(descriptor.contains("projected-X5S1-maximum=19156074 bytes"));
+    assert!(descriptor.contains("projected-X5S1-maximum=9204362 bytes"));
     assert!(descriptor.contains("outer-action-proof-cap=9437184 bytes"));
-    assert!(descriptor.contains("activation=unavailable-proof-cap"));
-    let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];
+    assert!(descriptor.contains("activation=unavailable-qualification"));
+    assert!(crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id).is_err());
+    let canonical_proof_bytes = vec![0x58; usize::try_from(exact_x5s1_ceiling).unwrap()];
     let mut artifact = PrivacyReleaseProofArtifactEvidenceV1 {
         artifact_ordinal: 0,
         proof_sha256: sha256_v1(&canonical_proof_bytes),
         canonical_proof_bytes,
         proof_bytes_ceiling: exact_x5s1_ceiling,
     };
-    // Even a tiny artifact cannot qualify under an unsupported declared ceiling.
-    assert!(!validate_privacy_release_proof_artifacts_v1(
+    // This validates artifact framing and size only. Arbitrary bytes do not
+    // establish cryptographic validity, a passing stage, or engine activation.
+    assert!(validate_privacy_release_proof_artifacts_v1(
         protocol_id,
         case_kind,
         core::slice::from_ref(&artifact),
@@ -1005,9 +1010,17 @@ fn zk_x509_projected_artifact_bound_exceeds_cap_and_cannot_qualify() {
                 case_kind,
                 core::slice::from_ref(&artifact),
             ),
-            "substituting a lower, higher, or outer action ceiling cannot qualify the oversized X5S1 profile"
+            "substituting a lower, higher, or outer action ceiling must reject"
         );
     }
+    artifact.proof_bytes_ceiling = exact_x5s1_ceiling;
+    artifact.canonical_proof_bytes.push(0);
+    artifact.proof_sha256 = sha256_v1(&artifact.canonical_proof_bytes);
+    assert!(!validate_privacy_release_proof_artifacts_v1(
+        protocol_id,
+        case_kind,
+        core::slice::from_ref(&artifact),
+    ));
 }
 #[test]
 fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {

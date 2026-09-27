@@ -10,8 +10,8 @@ fault or advanced product qualification.
 
 Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
-production. Linux additionally selects OpenSSH descriptor custody. The runner's selected regression census is
-authoritative for the current source and platform.
+production. Linux additionally selects OpenSSH descriptor custody, native process
+identity, and credential custody controls. The runner's selected regression census isauthoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
@@ -30,13 +30,14 @@ Before the four-peer fixture, both scopes check that paid lane authorities come
 from registered and activated accounts bound to peers in signed genesis, and
 that failure summaries retain public phase status without transaction payloads.
 
-Both scopes reject the retired Kagami epoch-key derivation commands and verify
+Both scopes reject retired Kagami epoch-key derivation commands and verify
 authenticated current-height observations. Before starting peers, retention
 fixtures require exact compiled source identity and reject changed authority
 generations, beacon bindings, predecessor authorizations and height intervals.
 The same real four-peer scenario runs on every platform. Its four independently
 genesis-anchored finality chains verify that certified scheduling transitions
-retain the original validator keys and authenticated beacon session.
+retain original validator keys and the authenticated beacon session, alongside
+a fresh verified pulse and exact fee-paid deployment effects.
 
 Both scopes qualify production beacon capability against the exact public session
 and validator seat, consumed runtime credentials, genesis-bound bootstrap and
@@ -97,6 +98,19 @@ Configuration must still pass before the overall diagnostic succeeds, including
 portable-only requests. Each phase reports its own feature graph; these results
 provide no release qualification or independent-checkpoint credit. Immutable
 qualification continues to compile and test its complete graph.
+
+The source census includes charged Concread notification custody and the current
+native State source, recorded-execution and allocation owners. Archive refusal,
+retained dispatch and publication controls remain selected under their owning
+modules. Exact selector checks also bind staking's atomic failed-payout control
+and Kagami's permissioned-genesis prohibition on additional XOR minting.
+Before peers start, both scopes verify that only the original fixture launch may
+assert fresh consensus signing keys; restart cannot repeat that assertion.
+The generic test-network harness also rejects this assertion after history loss.
+They also check that stock beacon configuration retains existing providers and
+sets the inherited descriptor for mint finality seed custody.
+The daemon selection checks exact broker catalog composition and rejects changed
+credentials, substituted catalogs and unsupported provider slots.
 
 Focused development checks validate an explicitly forwarded `TMPDIR` in the
 execution environment before invoking the compiler. Set it to an existing,

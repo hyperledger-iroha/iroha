@@ -289,7 +289,7 @@ fn ordinary_view_one_validate_fixture() -> (ReadyBodyFixture, u128, FakeServices
 
 #[test]
 fn same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_owner() {
-    let result = crate::sumeragi::sumeragi_thread_builder("terminal-validate-sign-cold-reopen")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("terminal-validate-sign-cold-reopen")
         .spawn(|| {
             let (mut fixture, validate_ordinal, mut current_services, now) =
                 ordinary_view_one_validate_fixture();

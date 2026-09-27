@@ -71,10 +71,8 @@ impl Offer {
             {
                 return Err(Error::Format);
             }
-            if matches!(
-                class,
-                Class::Safety | Class::Availability | Class::RecoveryControl | Class::RecoveryData
-            ) && offer.private_bytes[i]
+            if class == Class::Safety
+                && offer.private_bytes[i]
                 < charged.checked_mul(3).ok_or(Error::FrameTooLarge)? as u64
             {
                 return Err(Error::Format);
@@ -217,7 +215,7 @@ mod tests {
     use crate::peer::receive_credit::tests::{crypto, peer, pool};
     #[test]
     fn canonical_geometry_rejects_missing_classes_and_unfunded_protected_maximum() {
-        let offer = Offer::from_pool(&pool(6));
+        let offer = Offer::from_pool(&pool(3));
         assert_eq!(Offer::parse(&offer.bytes().unwrap()).unwrap(), offer);
         for index in 0..CLASS_COUNT {
             let mut bad = offer.clone();
@@ -227,23 +225,16 @@ mod tests {
             bad.counts[index] = 0;
             assert!(Offer::parse(&bad.bytes().unwrap()).is_err());
         }
-        for class in [
-            Class::Safety,
-            Class::Availability,
-            Class::RecoveryControl,
-            Class::RecoveryData,
-        ] {
-            let mut bad = offer.clone();
-            bad.private_bytes[class.index()] = 0;
-            assert!(Offer::parse(&bad.bytes().unwrap()).is_err());
-        }
+        let mut bad = offer.clone();
+        bad.private_bytes[Class::Safety.index()] = 0;
+        assert!(Offer::parse(&bad.bytes().unwrap()).is_err());
     }
     #[tokio::test]
     async fn tiny_duplex_geometry_exchange_binds_both_directions_and_holds_tenure() {
         let a = peer(41);
         let b = peer(42);
-        let pa = pool(6);
-        let pb = pool(6);
+        let pa = pool(3);
+        let pb = pool(3);
         let crypto = crypto();
         let network = test_network_id("credit geometry exchange");
         let (left, right) = tokio::io::duplex(7);
@@ -284,7 +275,7 @@ mod tests {
         use iroha_crypto::encryption::ChaCha20Poly1305;
         let a = peer(45);
         let b = peer(46);
-        let pa = pool(6);
+        let pa = pool(3);
         let frames = InboundFrameByteBudgets::new(256 * 1024, 128 * 1024, 256 * 1024, 2).unwrap();
         assert!(frames.install_protected_sources(HashSet::new()));
         let pb = Pool::new(
@@ -409,7 +400,7 @@ mod tests {
     async fn cancelled_geometry_exchange_closes_reader_before_reclaiming_tenure() {
         let a = peer(45);
         let b = peer(46);
-        let pa = pool(6);
+        let pa = pool(3);
         let cipher = crypto();
         let network = test_network_id("cancelled geometry exchange");
         let (left, _unserviced_remote) = tokio::io::duplex(7);
@@ -444,7 +435,7 @@ mod tests {
         let network = test_network_id("foreign geometry transport");
         let correct = authority(&network, a.id(), b.id(), cipher.session_binding, [4; 32]).unwrap();
         let foreign = authority(&network, a.id(), b.id(), cipher.session_binding, [5; 32]).unwrap();
-        let offer = Offer::from_pool(&pool(6));
+        let offer = Offer::from_pool(&pool(3));
         let (mut read, mut write) = tokio::io::duplex(7);
         let (sent, received) = tokio::join!(
             write_offer(&mut write, &cipher, &correct, &offer),

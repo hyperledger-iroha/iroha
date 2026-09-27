@@ -422,7 +422,7 @@ fn verified_store_context(marker: u8) -> (VerifiedHeightContext, wire::HeightCon
         })
         .collect::<Vec<_>>();
     let network_id =
-        crate::sumeragi::synthetic_network_id(&format!("durable-store-registry-{marker}"));
+        crate::unit_test_support::synthetic_network_id(&format!("durable-store-registry-{marker}"));
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
         crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
     let context = wire::HeightContext {
@@ -906,7 +906,7 @@ fn detached_validation_merge_reference(
             7,
             durable.round().height,
             HashOf::from_untyped_unchecked(Hash::new(b"detached Validate merge parent")),
-            crate::sumeragi::synthetic_network_id("detached Validate merge chain"),
+            crate::unit_test_support::synthetic_network_id("detached Validate merge chain"),
             1,
             HashOf::new(&Vec::<PeerId>::new()),
             Vec::new(),

@@ -102,7 +102,13 @@ pub fn verify_authorization(
         commitment.commitment.as_bytes(),
         nullifier.digest.as_bytes(),
     )?;
-    verify_with_config(state, proof, configured, "kaigi authorization")
+    verify_with_config(
+        state,
+        proof,
+        configured,
+        "kaigi authorization",
+        zk::ProofRelation::KaigiAuthorization,
+    )
 }
 
 /// Check the final usage relation against the stored host and ledger segment.
@@ -183,7 +189,13 @@ pub fn verify_usage_commitment(
             "Kaigi usage differs from authenticated call, host, root, segment or billed tuple",
         ));
     }
-    verify_with_config(state, proof, configured, "kaigi usage")
+    verify_with_config(
+        state,
+        proof,
+        configured,
+        "kaigi usage",
+        zk::ProofRelation::KaigiUsage,
+    )
 }
 fn validate_configured_verifier(
     state_transaction: &StateTransaction<'_, '_>,
@@ -214,6 +226,7 @@ fn verify_with_config(
     proof_bytes: &[u8],
     vk_cfg: Option<VerifyingKeyRef>,
     purpose: &str,
+    required_relation: zk::ProofRelation,
 ) -> Result<(), Error> {
     let Some(vk_cfg) = vk_cfg.as_ref() else {
         return Err(privacy_error(format!("{purpose} verifier not configured")));
@@ -249,20 +262,25 @@ fn verify_with_config(
     let backend_ident = Ident::from_str(backend_tag.as_str())
         .map_err(|_| privacy_error("invalid verifier backend identifier"))?;
     let proof_box = ProofBox::new(backend_ident, proof_bytes.to_vec());
-    let report = zk::verify_backend_with_timing_checked(
-        backend_tag.as_str(),
+    let key = record_key
+        .as_ref()
+        .ok_or_else(|| privacy_error(format!("{purpose} verifier has no key material")))?;
+    #[cfg(feature = "telemetry")]
+    let started = std::time::Instant::now();
+    let result = zk::verify_for_relation(
+        required_relation,
         &proof_box,
-        record_key.as_ref(),
-        &state_transaction.zk,
+        key,
+        zk::ZkVerifyGuardrails::from_cfg(&state_transaction.zk),
     );
     #[cfg(feature = "telemetry")]
     {
-        let status = if report.ok {
+        let status = if result.is_ok() {
             iroha_data_model::proof::ProofStatus::Verified
         } else {
             iroha_data_model::proof::ProofStatus::Rejected
         };
-        let latency_ms = u64::try_from(report.elapsed.as_millis()).unwrap_or(u64::MAX);
+        let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         state_transaction.telemetry.record_zk_verify(
             backend_tag.as_str(),
             status,
@@ -270,9 +288,8 @@ fn verify_with_config(
             latency_ms,
         );
     }
-    if !report.ok {
-        return Err(privacy_error("privacy proof verification failed"));
-    }
+    result
+        .map_err(|error| privacy_error(format!("{purpose} proof verification failed: {error}")))?;
     Ok(())
 }
 fn enforce_verifier_proof_size(

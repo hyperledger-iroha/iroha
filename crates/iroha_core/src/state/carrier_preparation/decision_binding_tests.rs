@@ -28,9 +28,12 @@ fn captured(
 ) -> PreparedCarrierJournals<Reservation> {
     super::super::super::tests::prepare(state, proposal, topology, context)
         .unwrap_or_else(|(_, error)| panic!("actual carrier execution: {error}"))
-        .prepare_journals(None, None, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(released)))
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(Reservation(Arc::clone(released))),
+        )
         .unwrap_or_else(|error| panic!("capture original journals: {error}"))
 }
 
@@ -352,13 +355,18 @@ fn original_capture_pool_remains_reserved_through_decision_binding_and_handoff()
     // This real finite pool funds the exact World wrapper and effects layouts.
     // It deliberately makes no claim to cover nested execution payloads.
     let journals = prepared
-        .prepare_journals(None, None, |inputs| {
-            let bytes = inputs
-                .world_journal_shell_bytes()?
-                .checked_add(inputs.retained_effects_layout.size())
-                .ok_or(AllocationRefusal::DemandOverflow)?;
-            budget.try_reserve_bytes(bytes)
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells(&budget).unwrap(),
+            None,
+            None,
+            |inputs| {
+                let bytes = inputs
+                    .world_journal_shell_bytes()?
+                    .checked_add(inputs.retained_effects_layout.size())
+                    .ok_or(AllocationRefusal::DemandOverflow)?;
+                budget.try_reserve_bytes(bytes)
+            },
+        )
         .unwrap();
     let reserved = budget.reserved_bytes();
     assert!(reserved > 0);

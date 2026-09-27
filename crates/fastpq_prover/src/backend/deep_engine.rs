@@ -1,16 +1,15 @@
-//! Bounded verification of the exact DEEP compact replacement candidate.
+//! Bounded verification of the canonical masked DEEP compact protocol.
 //!
 //! This owner joins the full statement, typed whole-message transcript, one OOD
 //! AIR identity, exact authenticated fibers and the complete linear terminal.
 //! It constructs neither a witness nor a trace/FFT/LDE. Its inputs are the
 //! caller-prepared transfer relation and the canonical bounded proof frame.
-//! The offline Quantity facade joins an unmasked producer whose constant
+//! The Quantity facade joins the bounded masked producer, whose complete
 //! terminal satisfies this fixed profile's degree-below-two terminal bound.
 //! Checking the complete terminal enforces polynomial geometry; it cannot
 //! establish masking, source authority or FRI soundness.
-//! TODO: Complete the masked producer and qualify generated artifacts,
-//! source/finality authentication, privacy and cryptographic/resource bounds
-//! before production admission.
+//! TODO: Qualify generated artifacts and independently review source/finality
+//! authentication, privacy and cryptographic/resource bounds.
 
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
@@ -28,7 +27,7 @@ use super::{
 };
 use crate::{Error, Result, VerifyLimits, field::GoldilocksFp4V1 as F};
 
-/// Actual bounded work of one fully accepted candidate; no admission authority.
+/// Actual bounded work of one fully verified proof; no caller authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct VerificationWork {
     /// Complete canonical input frame length.
@@ -176,7 +175,7 @@ fn verify_decoded(
         .map_err(binding_error)?;
     let alphas = fields(&mut transcript, CONSTRAINTS)?;
     transcript
-        .commit_root(Oracle::QuotientPair, proof.quotient_root.as_fastpq())
+        .commit_root(Oracle::QuotientAndMask, proof.quotient_root.as_fastpq())
         .map_err(binding_error)?;
     let z = fields(&mut transcript, 1)?[0];
     let composition = geometry.check_ood(
@@ -265,17 +264,18 @@ fn authenticate(
         .quotients
         .iter()
         .map(|pair| {
-            let mut bytes = [0_u8; 64];
+            let mut bytes = [0_u8; 96];
             bytes[..32].copy_from_slice(&pair.low.to_le_bytes());
-            bytes[32..].copy_from_slice(&pair.high.to_le_bytes());
+            bytes[32..64].copy_from_slice(&pair.high.to_le_bytes());
+            bytes[64..].copy_from_slice(&pair.composition_mask.to_le_bytes());
             binding
-                .hash_leaf(Oracle::QuotientPair, pair.index, &bytes)
+                .hash_leaf(Oracle::QuotientAndMask, pair.index, &bytes)
                 .map_err(binding_error)
         })
         .collect::<Result<Vec<_>>>()?;
     parents += verify_tree(
         binding,
-        Oracle::QuotientPair,
+        Oracle::QuotientAndMask,
         &plans.initial,
         proof.quotient_root,
         &pairs,
@@ -375,12 +375,15 @@ fn check_chains(
     check_terminal_degree(domain, &proof.terminal)?;
     for (ordinal, &initial) in queries.iter().enumerate() {
         let pair = &proof.quotients[ordinal];
-        let mut value = composition.base_value_at(
-            geometry.domain().point(initial),
-            &proof.rows[ordinal].values,
-            &[pair.low, pair.high],
-            lambda,
-        )?;
+        let mut value = composition
+            .base_value_at(
+                geometry.domain().point(initial),
+                &proof.rows[ordinal].values,
+                &[pair.low, pair.high],
+                lambda,
+            )?
+            .mul(lambda)
+            .add(pair.composition_mask);
         let mut index = initial;
         for round in 0..FRI_ARITIES.len() {
             let next_len = FRI_LENGTHS[round + 1];

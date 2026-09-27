@@ -935,7 +935,7 @@ fn resolved_validate_owner_retries_commit_fixture(
 
 #[test]
 fn resolved_live_validate_retained_terminal_publishes_one_current_commit_apply() {
-    let result = crate::sumeragi::sumeragi_thread_builder("resolved-live-validate-terminal")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("resolved-live-validate-terminal")
         .spawn(|| {
             resolved_validate_owner_retries_commit_fixture(
                 ValidateRetryOriginForTest::Live,
@@ -953,7 +953,7 @@ fn resolved_live_validate_retained_terminal_publishes_one_current_commit_apply()
 
 #[test]
 fn resolved_recovered_validate_retained_terminal_publishes_one_current_commit_apply() {
-    let result = crate::sumeragi::sumeragi_thread_builder("resolved-recovered-validate-terminal")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("resolved-recovered-validate-terminal")
         .spawn(|| {
             resolved_validate_owner_retries_commit_fixture(
                 ValidateRetryOriginForTest::Recovered,
@@ -971,7 +971,7 @@ fn resolved_recovered_validate_retained_terminal_publishes_one_current_commit_ap
 
 #[test]
 fn resolved_validate_retained_terminal_rejects_changed_outcome_digest_before_apply() {
-    let result = crate::sumeragi::sumeragi_thread_builder("resolved-validate-terminal-digest")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("resolved-validate-terminal-digest")
         .spawn(|| {
             resolved_validate_owner_retries_commit_fixture(
                 ValidateRetryOriginForTest::Live,
@@ -995,7 +995,7 @@ fn resolved_validate_retained_terminal_rejects_changed_outcome_digest_before_app
 
 #[test]
 fn resolved_validate_historical_prepare_repair_then_same_tag_commit_publishes_once() {
-    let result = crate::sumeragi::sumeragi_thread_builder("resolved-validate-prepare-commit")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("resolved-validate-prepare-commit")
         .spawn(|| {
             resolved_validate_owner_retries_commit_fixture(
                 ValidateRetryOriginForTest::Live,
@@ -1019,7 +1019,7 @@ fn resolved_validate_historical_prepare_repair_then_same_tag_commit_publishes_on
 
 #[test]
 fn physical_validate_busy_retains_exact_result_until_timeout_quorum_then_commit() {
-    let result = crate::sumeragi::sumeragi_thread_builder("resolved-validate-busy-commit")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("resolved-validate-busy-commit")
         .spawn(|| {
             resolved_validate_owner_retries_commit_fixture(
                 ValidateRetryOriginForTest::Live,
@@ -1334,7 +1334,7 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
 
 #[test]
 fn resolved_rejected_validate_replays_report_once_without_revalidation_or_apply() {
-    let result = crate::sumeragi::sumeragi_thread_builder("resolved-validate-rejected-report")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("resolved-validate-rejected-report")
         .spawn(|| {
             for origin in [
                 ValidateRetryOriginForTest::Live,
@@ -1355,7 +1355,7 @@ fn resolved_rejected_validate_replays_report_once_without_revalidation_or_apply(
 
 #[test]
 fn resolved_published_validate_retained_terminal_publishes_one_current_commit_apply() {
-    let result = crate::sumeragi::sumeragi_thread_builder("resolved-published-validate-terminal")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("resolved-published-validate-terminal")
         .spawn(|| {
             resolved_validate_owner_retries_commit_fixture(
                 ValidateRetryOriginForTest::Published,
@@ -1391,7 +1391,7 @@ fn resolved_published_validate_retained_terminal_publishes_one_current_commit_ap
 
 #[test]
 fn already_terminal_validate_cold_reopen_preserves_success_and_rejection() {
-    let result = crate::sumeragi::sumeragi_thread_builder("terminal-validate-cold-reopen")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("terminal-validate-cold-reopen")
         .spawn(|| {
             resolved_validate_owner_retries_commit_fixture(
                 ValidateRetryOriginForTest::ColdTerminal,
@@ -1414,7 +1414,7 @@ fn already_terminal_validate_cold_reopen_preserves_success_and_rejection() {
 
 #[test]
 fn resolved_validate_survives_unprotected_view_until_current_commit() {
-    let result = crate::sumeragi::sumeragi_thread_builder("terminal-validate-unprotected-view")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("terminal-validate-unprotected-view")
         .spawn(|| {
             for origin in [
                 ValidateRetryOriginForTest::UnprotectedTerminal,
@@ -1432,7 +1432,7 @@ fn resolved_validate_survives_unprotected_view_until_current_commit() {
 
 #[test]
 fn rejected_terminal_and_published_report_cold_reopen_preserves_one_output_owner() {
-    let result = crate::sumeragi::sumeragi_thread_builder("terminal-report-cold-reopen")
+    let result = crate::sumeragi::threads::sumeragi_thread_builder("terminal-report-cold-reopen")
         .spawn(|| {
             for origin in [
                 ValidateRetryOriginForTest::Live,

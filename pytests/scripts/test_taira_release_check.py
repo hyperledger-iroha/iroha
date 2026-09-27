@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1597 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1761 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1612 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1776 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -51,7 +51,7 @@ REWARD_ACCOUNTING_SOURCE_TESTS = {
         'reward_obligation_audit_rejects_corrupt_record_keys',
         'reward_claim_uses_recorded_custody_after_fee_policy_changes',
         'reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
-        'reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+        'reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback',
     )),
     'staking.rs': ('smartcontracts::isi::staking::tests::', (
         'claim_rewards_transfers_and_marks_epoch',
@@ -284,16 +284,21 @@ class BeaconGateTests(unittest.TestCase):
             'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
             'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
             'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
-            'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
-            'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
-            'state::tests::native_service_preparation_index_busy_precedes_execution',
-            'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
-            'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
-            'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
-            'state::tests::native_service_preparation_recorder_conflict_releases_archives',
-            'state::tests::native_service_single_body_store_retries_reuse_original_execution',
-            'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
-            'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+            'state::tests::native_consumer_source_custody_moves_original_all_route_owners',
+            'state::tests::native_recorded_execution_retains_sources_results_aliases_and_complete_witness',
+            'state::tests::native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer',
+            'state::tests::native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged',
+            'state::tests::native_consumer_source_preparation_retains_exact_recovery_positions_then_stages',
+            'state::tests::native_consumer_source_refuses_authentically_resigned_first_carrier_substitution',
+            'state::tests::native_recorded_execution_nested_recorder_refuses_without_mutation_or_reset',
+            'state::tests::native_recorded_execution_late_failure_discards_hook_effects_and_recorder',
+            'state::tests::native_completed_history_rejects_reapplication_after_second_economic_commit',
+            'state::native_execution_resources::tests::source_layouts_reserve_and_refund_exact_original_bytes',
+            'state::native_execution_resources::tests::final_execution_charge_remains_with_source_admission',
+            'sumeragi::v2_apply::tests::native_preparation_errors::local_admission_retains_original_release_and_runner_through_all_native_origins',
+            'sumeragi::v2_apply::tests::native_preparation_errors::npos_application_semantic_error_remains_a_deterministic_rejection',
+            'sumeragi::v2_apply::tests::native_preparation_errors::evidence_preparation_refusal_is_local_and_keeps_its_original_release',
+            'sumeragi::v2_apply::tests::native_preparation_errors::evidence_decode_scope_refusal_is_local_recovery_without_consensus_rejection',
             'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
             'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
             'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
@@ -310,7 +315,7 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
             'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
         )
-        self.assertEqual(len(required), 59)
+        self.assertEqual(len(required), 64)
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("native_connection_gate", gate.__file__)
             selected_gate = importlib.util.module_from_spec(spec)
@@ -381,17 +386,46 @@ class BeaconGateTests(unittest.TestCase):
         ):
             self.assertRegex(control_source, r"state_test!\s*\{\s*sync\s+" + name + r"\b")
             required.add("state::tests::" + name)
-        self.assertIn('include!("native_lane_service_preparation_tests.rs");', source("state/tests.rs"))
-        service_names = re.findall(r"state_test!\s*\{\s*sync\s+(native_service_preparation_\w+)",
-                                   source("state/native_lane_service_preparation_tests.rs"))
-        self.assertEqual(len(service_names), 7)
-        required.update("state::tests::" + name for name in service_names)
+        # Source custody lives in the maintained State owners. Archive waits and
+        # retained dispatch/publication are checked in their own modules below.
+        self.assertFalse((root / "state/native_lane_service_preparation_tests.rs").exists())
+        source_owners = {
+            "native_lane_consumer_stage_tests.rs": (
+                "native_consumer_source_custody_moves_original_all_route_owners",
+                "native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged",
+                "native_consumer_source_preparation_retains_exact_recovery_positions_then_stages",
+                "native_consumer_source_refuses_authentically_resigned_first_carrier_substitution",
+            ),
+            "native_lane_recorded_execution_tests.rs": (
+                "native_recorded_execution_retains_sources_results_aliases_and_complete_witness",
+                "native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer",
+                "native_recorded_execution_nested_recorder_refuses_without_mutation_or_reset",
+                "native_recorded_execution_late_failure_discards_hook_effects_and_recorder",
+            ),
+            "native_completed_history_tests.rs": (
+                "native_completed_history_rejects_reapplication_after_second_economic_commit",
+            ),
+        }
+        for filename, names in source_owners.items():
+            self.assertIn('include!("' + filename + '");', source("state/tests.rs"))
+            for name in names:
+                self.assertEqual(len(re.findall(
+                    r"state_test!\s*[({]\s*(?:sync|consensus_stack)\s+" + re.escape(name) + r"\b",
+                    source("state/" + filename))), 1)
+                required.add("state::tests::" + name)
+        self.assertIn("mod native_execution_resources;", source("state.rs"))
+        resources = source("state/native_execution_resources.rs")
+        self.assertRegex(resources, r"#\[cfg\(test\)\]\s*mod tests\s*\{")
+        resource_names = re.findall(r"#\[test\]\s*fn\s+(\w+)", resources)
+        self.assertEqual(len(resource_names), 2)
+        required.update("state::native_execution_resources::tests::" + name
+                        for name in resource_names)
         self.assertRegex(source("sumeragi/v2_apply.rs"),
                          r'#\[path = "v2_apply_tests\.rs"\]\s*mod tests;')
         apply_tests = source("sumeragi/v2_apply_tests.rs")
         for filename, module, count in (
             ("archive_reservations_tests.rs", "archive_reservations", 7),
-            ("native_preparation_error_tests.rs", "native_preparation_errors", 4),
+            ("native_preparation_error_tests.rs", "native_preparation_errors", 7),
         ):
             self.assertIn('include!("v2_apply/' + filename + '");', apply_tests)
             leaf = source("sumeragi/v2_apply/" + filename)
@@ -407,6 +441,8 @@ class BeaconGateTests(unittest.TestCase):
         required.update("query::archive_capture::tests::" + name for name in capture_names)
         registered = {name for _, names in gate.CORE_NATIVE_CONNECTION_STAGES for name in names}
         self.assertEqual(required - registered, set())
+        self.assertFalse(any(name.startswith("state::tests::native_service_")
+                             for name in registered))
 
     def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
         required = ('queue::tests::lane_retirement_observer::refused_cut_retains_original_notifications_through_outer_fence', 'state::carrier_geometry_preparation::tests::queue_retirement_tests::route_refusal_retains_original_cut_cleanup_through_lifecycle', 'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::state_fence_refusal_defers_callbacks_through_original_queue_and_kura', 'sumeragi::v2_apply::retirement_release_tests::autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake')
@@ -729,17 +765,49 @@ class BeaconGateTests(unittest.TestCase):
         real = EXPECTED_BEACON_NETWORK_TEST
         root = "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody"
         exact_height = "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip"
+        launch_controls = (
+            "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
+            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
+        )
         seam = "taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity"
+        fixture_root = SCRIPT.resolve().parents[1] / "crates/iroha_test_network/tests"
+        self.assertRegex((fixture_root / "taira_consensus_contracts.rs").read_text(),
+                         r'#\[path = "support/production_beacon_bootstrap\.rs"\]\s*mod production_beacon_bootstrap;')
+        for control in launch_controls:
+            self.assertEqual(len(re.findall(
+                r"#\[test\]\s*fn\s+" + control.rsplit("::", 1)[1] + r"\s*\(",
+                (fixture_root / "support/production_beacon_bootstrap.rs").read_text())), 1)
+        first_boot = "tests::consensus_first_boot_never_reasserts_a_key_after_history_loss"
+        self.assertEqual(len(re.findall(
+            r"#\[test\]\s*fn\s+" + first_boot.rsplit("::", 1)[1] + r"\s*\(",
+            (fixture_root.parent / "src/lib.rs").read_text())), 1)
         self.assertEqual([name for _, names in gate.BEACON_NETWORK_STAGES for name in names], [real])
         self.assertIn(root, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
         self.assertIn(exact_height, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
+        for control in launch_controls:
+            self.assertIn(control, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
+            harness = [name for _, names in selected["test-network"] for name in names]
+            self.assertEqual(harness.count(first_boot), 1)
+            focus = gate.focused_regression_stages(scope, ("test-network=" + first_boot,))
+            self.assertEqual([name for _, names in focus["test-network"] for name in names], [first_boot])
+            listing = "\n".join(name + ": test" for name in harness if name != first_boot)
+            with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                gate.require_tests(listing, selected["test-network"])
             network = [name for _, names in selected["network"] for name in names]
             self.assertEqual(network.count(real), 1)
             self.assertEqual(network.count(root), 1)
             self.assertEqual(network.count(exact_height), 1)
             self.assertLess(network.index(exact_height), network.index(real))
+            for control in launch_controls:
+                self.assertEqual(network.count(control), 1)
+                self.assertLess(network.index(control), network.index(real))
+                focus = gate.focused_regression_stages(scope, ("network=" + control,))
+                self.assertEqual([name for _, names in focus["network"] for name in names], [control])
+                listing = "\n".join(name + ": test" for name in network if name != control)
+                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                    gate.require_tests(listing, selected["network"])
             focused = gate.focused_regression_stages(scope, ("network=" + exact_height,))
             self.assertEqual(tuple(focused), ("network",))
             self.assertEqual([name for _, names in focused["network"] for name in names], [exact_height])
@@ -754,8 +822,25 @@ class BeaconGateTests(unittest.TestCase):
             self.assertEqual([name for _, names in selected["daemon"] for name in names].count(seam), 1)
 
     def test_beacon_setup_and_custody_run_once_in_startup_for_every_scope(self):
+        broker_controls = (
+            'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',
+            'taira_runtime_signer::tests::disposable_broker_rejects_catalog_and_credential_substitution',
+            'taira_runtime_signer::tests::disposable_broker_rejects_unsupported_slots_before_reading_credentials',
+        )
+        broker_source = (SCRIPT.resolve().parents[1] / "crates/irohad/src/taira_runtime_signer.rs").read_text()
+        for name in broker_controls:
+            self.assertEqual(len(re.findall(
+                r"#\[test\]\s*fn\s+" + name.rsplit("::", 1)[1] + r"\s*\(", broker_source)), 1)
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
+            daemon = [name for _, names in selected["daemon"] for name in names]
+            for control in broker_controls:
+                self.assertEqual(daemon.count(control), 1)
+                focus = gate.focused_regression_stages(scope, ("daemon=" + control,))
+                self.assertEqual([name for _, names in focus["daemon"] for name in names], [control])
+                listing = "\n".join(name + ": test" for name in daemon if name != control)
+                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                    gate.require_tests(listing, selected["daemon"])
             for harness, required, startup in (
                 ("core", gate.CORE_BEACON_STAGES, gate.CORE_STARTUP_STAGES),
                 ("daemon", gate.DAEMON_BEACON_STAGES, gate.DAEMON_STARTUP_STAGES),
@@ -904,7 +989,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(len(library), 98)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 151)):
+                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 152)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -1651,6 +1736,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "status_observation_tests::status_observation_propagates_auth_other_service_and_decode_failures",
             "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
             "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
+            "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
+            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
             'production_beacon_bootstrap::epoch_retention::production_epoch_retention_requires_exact_source_identity_before_setup',
             'production_beacon_bootstrap::epoch_retention::production_epoch_retention_binds_exact_generation_beacon_and_interval',
             'production_beacon_bootstrap::epoch_retention::production_epoch_retention_rejects_changed_generation_beacon_parent_and_schedule',
@@ -1835,7 +1922,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "kagami": (
                 "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
                 "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
-                "localnet::tests::generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission",
+                "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
             ),
             "cli": (
@@ -2553,7 +2640,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 350)
+            self.assertEqual(len(requested), 351)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2579,7 +2666,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("350 focused regressions", output.getvalue())
+            self.assertIn("351 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
@@ -3669,9 +3756,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             self.assertEqual(len(records), len(expected_names))
             self.assertEqual("-p" in command and "sorafs_node" in command, not focused)
 
-    def test_beacon_fixture_daemon_has_a_separate_explicit_feature_build(self):
-        event = {"reason": "compiler-artifact", "target": {"name": "iroha3d", "kind": ["bin"]},
-                 "profile": {"test": False}, "executable": "/warm/iroha3d"}
+    def test_beacon_fixture_broker_has_a_separate_explicit_feature_build(self):
+        event = {"reason": "compiler-artifact", "target": {"name": "iroha_test_runtime_provider_broker", "kind": ["bin"]},
+                 "profile": {"test": False}, "executable": "/warm/broker"}
         child = MagicMock()
         child.stdout = io.StringIO(json.dumps(event))
         child.wait.return_value = 0
@@ -3681,22 +3768,45 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows), \
              contextlib.redirect_stdout(io.StringIO()):
             records = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"},
-                                                     (77,), beacon_custody=True)
-        self.assertEqual(set(records), {"iroha3d-beacon-custody"})
+                                                     (77,), disposable_broker=True)
+        self.assertEqual(set(records), {"iroha_test_runtime_provider_broker"})
         command = spawn.call_args.args[0]
         self.assertEqual(command[command.index("--features") + 1],
-                         "irohad/test-network-production-beacon-custody")
+                         "irohad/test-network-disposable-broker")
         self.assertEqual(command.count("--bin"), 1)
+        self.assertEqual(command[command.index("--bin") + 1], "iroha_test_runtime_provider_broker")
+        self.assertNotIn("iroha3d", command)
         self.assertNotIn("iroha3d_taira", command)
         self.assertNotIn("--target-dir", command)
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
 
-    def test_message_control_rejects_focused_shipping_graph(self):
-        with patch.object(gate.subprocess, "Popen") as spawn:
-            with self.assertRaisesRegex(gate.CheckError, "feature-isolated daemon codegen"):
-                gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
-                                              message_control=True, focused_fixture=True)
-        spawn.assert_not_called()
+    def test_disposable_broker_rejects_daemon_and_test_artifacts(self):
+        for name, is_test in (("iroha3d", False), ("iroha_test_runtime_provider_broker", True)):
+            event = {"reason": "compiler-artifact", "target": {"name": name, "kind": ["bin"]},
+                     "profile": {"test": is_test}, "executable": "/warm/" + name}
+            child = MagicMock()
+            child.stdout = io.StringIO(json.dumps(event))
+            child.wait.return_value = 0
+            process = MagicMock()
+            process.__enter__.return_value = child
+            with self.subTest(name=name, is_test=is_test), \
+                 patch.object(gate.subprocess, "Popen", return_value=process), \
+                 patch.object(gate, "isolate_native_artifacts") as isolate, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, "every required executable artifact"):
+                    gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
+                                                  disposable_broker=True)
+            isolate.assert_not_called()
+
+    def test_fixture_codegen_rejects_combined_feature_graphs(self):
+        for options in ({"message_control": True, "focused_fixture": True},
+                        {"disposable_broker": True, "focused_fixture": True},
+                        {"message_control": True, "disposable_broker": True}):
+            with self.subTest(options=options), patch.object(gate.subprocess, "Popen") as spawn:
+                with self.assertRaisesRegex(gate.CheckError, "feature-isolated codegen"):
+                    gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
+                                                  **options)
+            spawn.assert_not_called()
 
     def test_focused_fixture_requires_audited_runtime_shipping_inputs(self):
         with patch.object(gate, "shipping_harnesses", return_value=("taira-launcher", "cli", "sorafs-bin")), \
@@ -3731,7 +3841,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_network_gate_forbids_fallback_builds_and_sandbox_skips(self):
         env = {"CARGO_TARGET_DIR": "/warm"}
-        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client", "taira-launcher": "/warm/taira", "kagami": "/warm/kagami", "iroha3d-beacon-custody": "/warm/beacon"})) as binaries, \
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client", "taira-launcher": "/warm/taira", "kagami": "/warm/kagami", "iroha_test_runtime_provider_broker": "/warm/broker"})) as binaries, \
              patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")) as private, \
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/network")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
@@ -3749,15 +3859,16 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                          gate.BASIC_NETWORK_STAGES)
         self.assertTrue(all(call.args[4] == (77, 88) for call in run.call_args_list))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
-        self.assertEqual([call.kwargs for call in binaries.call_args_list], [{}, {"beacon_custody": True}])
+        self.assertEqual([call.kwargs for call in binaries.call_args_list], [{}, {"disposable_broker": True}])
         private.assert_called_once_with()
         for call in run.call_args_list:
             beacon = call.args[3] == gate.BEACON_NETWORK_STAGES
             self.assertEqual("KAGAMI_BIN" in call.args[2], beacon)
-            self.assertEqual("TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY" in call.args[2], beacon)
+            self.assertEqual("TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER" in call.args[2], beacon)
             if beacon:
+                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD"], "/warm/node")
                 self.assertEqual(call.args[2]["KAGAMI_BIN"], "/warm/kagami")
-                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD_BEACON_CUSTODY"], "/warm/beacon")
+                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER"], "/warm/broker")
                 self.assertEqual(call.args[2]["TAIRA_TESTNET_BEACON_FIXTURE_DIR"], "/private/beacon")
 
     def test_beacon_fixture_missing_kagami_stops_without_build_fallback(self):
@@ -3806,7 +3917,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                   "test result: ok. 1 passed; 0 failed; 0 ignored;\n")
                     return subprocess.CompletedProcess(command, 0, output, "")
                 with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                        "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-beacon-custody": "/beacon"})), \
+                        "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha_test_runtime_provider_broker": "/broker"})), \
                      patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
                      patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
                      patch.object(gate.subprocess, "run", side_effect=native), \
@@ -3829,7 +3940,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0,
                 f"test {command[1]} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")
         with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-beacon-custody": "/beacon"})), \
+                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha_test_runtime_provider_broker": "/broker"})), \
              patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
              patch.object(gate.subprocess, "run", side_effect=native), \
@@ -5460,6 +5571,18 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         self.assertEqual(set(copied), {"iroha3d", "iroha", "taira-launcher"})
         for selection, path in copied.items():
             self.assertNotEqual(path, str(self.target / "debug" / selection))
+        self.assert_profile_unlocked()
+
+    def test_disposable_broker_uses_an_isolated_execution_path(self):
+        selection = "iroha_test_runtime_provider_broker"
+        executable, _, event = self.artifact(selection, shipping=True)
+        with patch.object(gate.subprocess, "Popen", return_value=self.process([event])):
+            with gate.compile_network_binaries(self.source, self.env, (77,),
+                                               disposable_broker=True) as copied:
+                self.assertEqual(set(copied), {selection})
+                self.assertNotEqual(copied[selection], str(executable))
+                self.assertEqual(Path(copied[selection]).read_bytes(), executable.read_bytes())
+                self.assertTrue(Path(copied[selection]).parent.name.startswith("taira-native-artifacts-"))
         self.assert_profile_unlocked()
 
     def test_batched_libraries_and_integrations_copy_every_accepted_artifact_before_returning(self):

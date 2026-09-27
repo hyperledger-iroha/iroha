@@ -10614,7 +10614,7 @@ mod tests {
                 7,
                 2,
                 HashOf::from_untyped_unchecked(Hash::new(b"carrier-parent")),
-                crate::sumeragi::synthetic_network_id("merge-sidecar-test"),
+                crate::unit_test_support::synthetic_network_id("merge-sidecar-test"),
                 1,
                 HashOf::new(&validator_set),
                 validator_set,

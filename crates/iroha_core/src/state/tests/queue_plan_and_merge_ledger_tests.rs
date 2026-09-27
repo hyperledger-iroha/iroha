@@ -1154,6 +1154,7 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -1173,6 +1174,7 @@ state_test! { sync apply_without_execution_keeps_world_peer_append_scoped_to_che
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -1287,6 +1289,7 @@ state_test! { sync apply_without_execution_widens_npos_commit_topology_with_acti
                     metadata: Metadata::default(),
                     status: PublicLaneValidatorStatus::Active,
                     activation_height: 1,
+                    election_exit_height: None,
                     deactivation_height: None,
                     last_reward_epoch: None,
                 },
@@ -2770,7 +2773,7 @@ state_test! { sync commit_merge_entry_rejects_invalid_aggregate_signature
 state_test! { sync commit_merge_entry_rejects_qc_for_another_network
     setup_merge_qc_test!(kura, query, state, keypairs, candidate);
     let mut qc = merge_qc_for_candidate(&state, &candidate, &keypairs, &[0]);
-    qc.network_id = crate::sumeragi::synthetic_network_id("foreign-merge-qc-genesis");
+    qc.network_id = crate::unit_test_support::synthetic_network_id("foreign-merge-qc-genesis");
     let_row! { err = state .commit_merge_entry(merge_entry_from_candidate(candidate, qc)) .expect_err("cross-network QC must fail closed") };
     assert!(matches!(
         err,
@@ -3094,7 +3097,7 @@ state_test! { sync state_rehydrates_merge_ledger_from_kura_snapshot
         assert!(fresh.world.merge_hint_roots.view().is_empty());
         assert!(fresh.world.merge_global_state_root.view().is_none());
     }
-    let state = deserialize::KuraSeed {
+    let state = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         kura: Arc::clone(&kura),
         lane_manifests,
         query_handle: LiveQueryStore::start_test(),
@@ -3178,7 +3181,7 @@ state_test! { sync state_rehydrates_multi_lane_merge_ledger_from_kura_snapshot
         assert!(fresh.world.merge_hint_roots.view().is_empty());
         assert!(fresh.world.merge_global_state_root.view().is_none());
     }
-    let state = deserialize::KuraSeed {
+    let state = deserialize::KuraSeed { operation_index_budget: crate::state::kagemusha_operation_indexes::default_budget(),
         kura: Arc::clone(&kura),
         lane_manifests,
         query_handle: LiveQueryStore::start_test(),

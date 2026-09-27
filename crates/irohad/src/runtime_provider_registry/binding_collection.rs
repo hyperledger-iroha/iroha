@@ -430,7 +430,12 @@ fn collect_storage_security_bindings(
         IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(
             IrohaRuntimeProviderSlotV1::StreamTokenSigner,
         )
-    })? {
+    })? && storage
+        .stream_tokens
+        .signer
+        .as_ref()
+        .is_some_and(|signer| signer.native.is_none())
+    {
         let signer_backend = StreamTokenSignerRuntimeBindingV1::new(
             pins.binding().clone(),
             pins.observer_handle().to_owned(),
@@ -600,6 +605,11 @@ fn collect_native_transaction_signer_bindings(
             qualification,
         )
         .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+        // Native credentials are resolved only after the daemon's State exists.
+        // The external broker must neither resolve nor receive these role bindings.
+        if binding.software_credential.is_some() {
+            continue;
+        }
         bindings.push(IrohaRuntimeProviderBindingV1::try_new_native_signer(
             slot, exact,
         )?);
@@ -735,7 +745,10 @@ fn collect_pop_potr_gateway_bindings(
             Some(binding.policy_digest),
         )?;
     }
-    if let Some(compliance) = config.torii.sorafs_gateway.compliance.as_ref() {
+    if let Some(compliance) = config.torii.sorafs_gateway.compliance.as_ref()
+        && compliance.feed_transport_provider.provider_handle
+            != iroha_torii::sorafs::gateway::GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1
+    {
         let binding = &compliance.feed_transport_provider;
         append_binding(
             bindings,
@@ -853,6 +866,9 @@ fn collect_provider_ingest_bindings(
     let Some(ingest) = config.torii.sorafs_storage.provider_ingest_runtime.as_ref() else {
         return Ok(());
     };
+    if ingest.native_completion_credential.is_some() {
+        return Ok(());
+    }
     if ingest.outbox.max_signed_transaction_bytes.0
         < provider_ingest_outbox_defaults::MAX_SIGNED_TRANSACTION_BYTES_MIN
         || ingest.outbox.max_signed_transaction_bytes.0

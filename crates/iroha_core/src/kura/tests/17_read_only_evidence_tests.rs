@@ -799,18 +799,13 @@ mod canonical_evidence_reader_tests {
         let mut data = Vec::new();
         let mut index = Vec::new();
         for block in &fixture.blocks {
-            let wire = block
-                .canonical_wire()
-                .expect("real canonical two representations");
-            assert_ne!(wire.as_framed(), wire.as_versioned());
+            let wire = block.canonical_wire().expect("real canonical frame");
+            let bare = iroha_version::codec::EncodeVersioned::encode_versioned(block.as_ref());
+            assert_ne!(wire.as_framed(), bare.as_slice());
             assert!(
                 iroha_data_model::block::decode_versioned_signed_block(wire.as_framed()).is_ok()
             );
-            assert!(
-                iroha_data_model::block::decode_versioned_signed_block(wire.as_versioned())
-                    .is_err()
-            );
-            let bare = wire.as_versioned();
+            assert!(iroha_data_model::block::decode_versioned_signed_block(&bare).is_err());
             index.extend_from_slice(
                 &BlockIndex {
                     start: data.len() as u64,
@@ -818,7 +813,7 @@ mod canonical_evidence_reader_tests {
                 }
                 .encode(),
             );
-            data.extend_from_slice(bare);
+            data.extend_from_slice(&bare);
         }
         // Preserve the valid count/tip/hash association and complete contiguous
         // lengths so the negative reaches the actual carrier wire decoder.

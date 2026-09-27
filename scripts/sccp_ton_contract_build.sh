@@ -1,11 +1,17 @@
 #!/bin/sh
-# Compatibility entry point for the fail-closed TON SCCP builder.
+# Builds and checks the SCCP v1 TON contracts (contracts/ton/sccp) with the
+# pinned native Acton 1.2.0 / Tolk 1.4.2 toolchain (specs/sccp.md §5.5).
+#
+# Without a command it runs `all`: the Tolk test-vector freshness check,
+# `acton fmt --check`, `acton build` (with the Tolk stdlib version check), the
+# wrapper freshness check, the Acton emulator suite `tests/unit`, and the
+# StateInit golden check of fixtures/sccp/ton_stateinit_v1.json. On first use
+# the pinned Acton release archive is downloaded and verified by SHA-256 (see
+# scripts/ton_sccp_builder.py). No Docker or Rosetta is involved.
+#
+# Usage: scripts/sccp_ton_contract_build.sh [--acton /abs/acton] [--offline] [command ...]
+#   see `python3 scripts/ton_sccp_builder.py --help` for the commands.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-python_bin=${SCCP_TON_BUILDER_PYTHON:-python3}
-
-# Acton is never resolved here. Development callers must pass an absolute
-# executable after `development-local --acton`; production callers use the
-# digest-pinned, network-disabled container path in ton_sccp_builder.py.
-exec "$python_bin" "$script_dir/ton_sccp_builder.py" "$@"
+exec python3 "$script_dir/ton_sccp_builder.py" "$@"

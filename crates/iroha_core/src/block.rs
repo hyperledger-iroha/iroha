@@ -17,33 +17,20 @@
 //!    validation before execution to transition to [`ValidBlock`].
 //! 3. [`ValidBlock`] pairs with [`crate::state::StateBlock`] containing applied state changes and
 //!    transaction errors.
-//! 4. Voting block ([`VotingBlock`]). Valid block might not have sufficient signatures to be committed.
-//!    Voting block is a wrappper around [`ValidBlock`] and its [`crate::state::StateBlock`] intended to
-//!    collect the signatures in order to transition to [`CommittedBlock`]
-//! 5. Block is committed ([`CommittedBlock`]). Created from [`ValidBlock`], ensuring the
-//!    signatures meet the conditions for commit (e.g. quorum across Set A + Set B validators).
+//! 4. Block is committed ([`CommittedBlock`]). Created from [`ValidBlock`] once the consensus core
+//!    has certified it; the certificate travels beside the block, never inside it.
 //!
-//! ### Scenario: this node creates a block
+//! ### Scenario: a block ordered by the Sumeragi core
 //!
-//! Flow: [`BlockBuilder::new`], [`BlockBuilder::chain`], [`BlockBuilder::sign`],
-//! [`NewBlock::validate_and_record_transactions`] (infallible), [`VotingBlock::new`], [`ValidBlock::commit`]
-//!
-//! ### Scenario: receive a created block
-//!
-//! Flow: authenticate the Sumeragi-v2 height context and exact proposal body, then call
-//! [`ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block`], [`VotingBlock::new`], and
-//! [`ValidBlock::commit_with_verified_v2_artifact`].
-//!
-//! ### Scenario: receive a block via block sync
-//!
-//! Flow: authenticate the archived Sumeragi-v2 height context and finality artifact, execute the
-//! exact body with [`ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block`], then commit it
-//! with [`ValidBlock::commit_with_verified_v2_artifact`].
+//! Flow: the leader builds the payload with [`BlockBuilder`] (`sumeragi::payload`); every node
+//! executes the ordered payload with [`ValidBlock::validate_sumeragi_block`] against its
+//! committed parent and commits it with [`ValidBlock::commit_unchecked`] after the core's
+//! `CommitBlock` (`sumeragi::executor`).
 //!
 //! ### Scenario: genesis (init or receive)
 //!
 //! Flow: authenticate the signed genesis handshake mode, call
-//! [`ValidBlock::validate_signed_genesis_keep_voting_block`], then [`ValidBlock::commit`].
+//! [`ValidBlock::validate_signed_genesis`], then [`ValidBlock::commit`].
 //!
 //! ### Scenario: plain block execution
 //!
@@ -51,9 +38,9 @@
 //! [`ValidBlock::commit_unchecked`] (infallible)
 mod native_amx_certified_coordinator_authority;
 mod native_lane_carrier;
-pub(crate) use native_lane_carrier::{
-    native_lane_batch_for_execution, native_lane_batch_for_scratch,
-};
+pub(crate) use native_lane_carrier::native_lane_batch_for_execution;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub(crate) use native_lane_carrier::native_lane_batch_for_scratch;
 
 use core::fmt;
 use iroha_crypto::{Hash, HashOf, KeyPair, MerkleTree, PublicKey};
@@ -1595,9 +1582,7 @@ use crate::{
         State, StateBlock, StatelessValidationContext, WorldReadOnly,
         compute_confidential_feature_digest,
     },
-    sumeragi::{
-        VotingBlock, network_topology::Topology, v2_candidate::candidate_block_has_proposal_work,
-    },
+    sumeragi::{network_topology::Topology, v2_candidate::candidate_block_has_proposal_work},
     tx::{AcceptTransactionFail, SignatureRejectionCode, SignatureVerificationFail},
 };
 use std::sync::Arc;
@@ -1816,6 +1801,66 @@ pub(crate) fn parse_asset_definition_literal_with_world(
                 .ok()
                 .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
         })
+}
+/// Resolve an exact fee selector against the network's committed XOR identity.
+/// Chains without NPoS use the canonical default identity, never an arbitrary
+/// locally configured token. Staking itself additionally requires signed NPoS.
+pub(crate) fn resolve_network_xor_asset_definition(
+    world: &impl WorldReadOnly,
+    input: &str,
+    now_ms: u64,
+) -> Option<AssetDefinitionId> {
+    if input.trim() != input
+        || (input != "xor#universal" && AssetDefinitionId::parse_address_literal(input).is_err())
+    {
+        return None;
+    }
+    let asset = parse_asset_definition_literal_with_world(world, input, now_ms)?;
+    let pin = match world.sumeragi_npos_parameters() {
+        Some(params) => params.xor_asset_definition_id,
+        None => {
+            if world.parameters().custom().contains_key(
+                &iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id(),
+            ) {
+                return None;
+            }
+            AssetDefinitionId::parse_address_literal(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+            )
+            .ok()?
+        }
+    };
+    (asset == pin).then_some(asset)
+}
+#[cfg(test)]
+#[test]
+fn network_xor_resolver_requires_exact_committed_identity() {
+    use iroha_data_model::parameter::{Parameter, system::SumeragiNposParameters};
+    let world = crate::state::World::new();
+    let canonical = iroha_config::parameters::defaults::nexus::fees::fee_asset_id();
+    let other = AssetDefinitionId::derive_from_components(
+        iroha_model_base::domain::DomainId::try_new("test", "universal").expect("test domain"),
+        "currency".parse().expect("name"),
+    );
+    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_some());
+    assert!(resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0).is_none());
+    let mut parameters = world.parameters.block();
+    parameters.get_mut().set_parameter(Parameter::Custom(
+        SumeragiNposParameters {
+            xor_asset_definition_id: other.clone(),
+            ..Default::default()
+        }
+        .into_custom_parameter(),
+    ));
+    parameters.commit();
+    assert_eq!(
+        resolve_network_xor_asset_definition(&world.view(), &other.to_string(), 0),
+        Some(other)
+    );
+    assert!(resolve_network_xor_asset_definition(&world.view(), &canonical, 0).is_none());
+    assert!(
+        resolve_network_xor_asset_definition(&world.view(), &format!(" {canonical}"), 0).is_none()
+    );
 }
 #[cfg(test)]
 fn parse_account_from_access_key(
@@ -2661,6 +2706,9 @@ impl fmt::Display for AxtEnvelopeValidationDetails {
 impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockValidationError {
     fn from(error: crate::state::StateBlockStartError<Self>) -> Self {
         match error {
+            crate::state::StateBlockStartError::Storage(error) => {
+                Self::StateStorageAdmission(error)
+            }
             crate::state::StateBlockStartError::History(error) => Self::BlockHashAdmission(error),
             crate::state::StateBlockStartError::Membership(error) => {
                 Self::MembershipAdmission(error)
@@ -2672,6 +2720,8 @@ impl From<crate::state::StateBlockStartError<BlockValidationError>> for BlockVal
 /// Errors occurred on block validation
 #[derive(Debug, displaydoc::Display, PartialEq, Eq, Error)]
 pub enum BlockValidationError {
+    /// Local World storage admission failed before State execution: {0}
+    StateStorageAdmission(crate::state::StateStorageAdmissionError),
     /// Local evidence or stake-index penalty preparation failed: {0}
     EvidencePreparation(crate::state::EvidencePreparationError),
     /// Local hash-history admission failed before State execution: {0}
@@ -2873,13 +2923,19 @@ impl BlockValidationError {
     ) -> Self {
         use crate::state::MergeLedgerCommitError;
         match error {
+            MergeLedgerCommitError::StateStorageAdmission(error) => {
+                Self::StateStorageAdmission(error)
+            }
             MergeLedgerCommitError::BlockHashAdmission(error) => Self::BlockHashAdmission(error),
             MergeLedgerCommitError::MembershipAdmission(error) => Self::MembershipAdmission(error),
             MergeLedgerCommitError::NativeControlValidation(error) => *error,
             MergeLedgerCommitError::MissingCertifiedMergeSidecar { entry_hash } => {
                 Self::MissingCertifiedMergeSidecar { entry_hash }
             }
-            local @ (MergeLedgerCommitError::Persistence(_)
+            local @ (MergeLedgerCommitError::NativeResourceAdmission(_)
+            | MergeLedgerCommitError::ExecutionObservationChanged
+            | MergeLedgerCommitError::ExecutionRecorderConflict(_)
+            | MergeLedgerCommitError::Persistence(_)
             | MergeLedgerCommitError::LocalDrainObservation(_)) => {
                 Self::LocalStorageRecoveryRequired {
                     reason: format!("certified merge entry could not be staged: {local}"),
@@ -2890,6 +2946,30 @@ impl BlockValidationError {
             )),
         }
     }
+
+    /// Keep local resource refusal outside the deterministic NPoS verdict channel.
+    pub(crate) fn from_npos_application_error(error: eyre::Report, stage: &str) -> Self {
+        if let Some(local) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+            match local {
+                crate::state::StateAdmissionError::Storage(error) => {
+                    Self::StateStorageAdmission(error.clone())
+                }
+                crate::state::StateAdmissionError::History(error) => {
+                    Self::BlockHashAdmission(error.clone())
+                }
+                crate::state::StateAdmissionError::Membership(error) => {
+                    Self::MembershipAdmission(error.clone())
+                }
+            }
+        } else if let Some(local) = error.downcast_ref::<crate::state::StateStorageAdmissionError>()
+        {
+            Self::StateStorageAdmission(local.clone())
+        } else if let Some(local) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
+            Self::EvidencePreparation(local.clone())
+        } else {
+            Self::NposEffectsInvalid(format!("{stage}: {error}"))
+        }
+    }
 }
 impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
     fn from(error: crate::state::DaIndexHydrationError) -> Self {
@@ -2897,6 +2977,36 @@ impl From<crate::state::DaIndexHydrationError> for BlockValidationError {
         // including its cursors. Preserve that context so the v2 validator does
         // not mistake local reconstruction failure for a malformed candidate.
         Self::DaIndexHydration(error.to_string())
+    }
+}
+#[cfg(test)]
+#[test]
+fn native_resource_refusal_is_a_local_certified_merge_staging_error() {
+    let error = BlockValidationError::from_certified_merge_stage_error(
+        crate::state::MergeLedgerCommitError::NativeResourceAdmission(
+            mv::allocation::AllocationRefusal::DemandOverflow,
+        ),
+    );
+    assert!(matches!(
+        error,
+        BlockValidationError::LocalStorageRecoveryRequired { .. }
+    ));
+}
+#[cfg(test)]
+#[test]
+fn native_execution_observation_and_recorder_conflicts_require_local_recovery() {
+    for error in [
+        crate::state::MergeLedgerCommitError::ExecutionObservationChanged,
+        crate::state::MergeLedgerCommitError::ExecutionRecorderConflict(
+            "recorder is already owned".to_owned(),
+        ),
+    ] {
+        let classified = BlockValidationError::from_certified_merge_stage_error(error);
+        assert!(matches!(
+            &classified,
+            BlockValidationError::LocalStorageRecoveryRequired { .. }
+        ));
+        assert!(event::map_block_err_to_reason(&classified).is_none());
     }
 }
 /// Error during signature verification
@@ -3166,13 +3276,14 @@ fn check_genesis_execution_results(block: &SignedBlock) -> Result<(), InvalidGen
 }
 /// Canonical millisecond time strictly after every timed execution input.
 /// Admission controls are not execution inputs and do not advance this clock.
-fn creation_time_after_inputs(
-    minimum: Duration,
-    inputs: impl IntoIterator<Item = impl std::ops::Deref<Target = TransactionEntrypoint>>,
-) -> Option<Duration> {
+fn creation_time_after_inputs<I, T>(minimum: Duration, inputs: I) -> Option<Duration>
+where
+    I: IntoIterator<Item = T>,
+    T: core::borrow::Borrow<TransactionEntrypoint>,
+{
     let mut milliseconds = u64::try_from(minimum.as_millis()).ok()?;
     for input in inputs {
-        if let Some(created) = input.creation_time_ms() {
+        if let Some(created) = input.borrow().creation_time_ms() {
             milliseconds = milliseconds.max(created.checked_add(1)?);
         }
     }
@@ -3193,7 +3304,7 @@ mod input_clock_tests {
     fn timed_input(milliseconds: u64) -> (SignedTransaction, KeyPair) {
         let key = KeyPair::from_seed(vec![0x91; 32], iroha_crypto::Algorithm::Ed25519);
         let mut builder = TransactionBuilder::new(
-            crate::sumeragi::synthetic_network_id("input-clock"),
+            crate::unit_test_support::synthetic_network_id("input-clock"),
             AccountId::new(key.public_key().clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         );
@@ -3269,7 +3380,7 @@ mod input_clock_tests {
         assert_eq!(
             creation_time_after_inputs(
                 Duration::from_millis(u64::MAX),
-                std::iter::empty::<&TransactionEntrypoint>()
+                std::iter::empty::<&TransactionEntrypoint>(),
             ),
             Some(Duration::from_millis(u64::MAX))
         );
@@ -4485,7 +4596,10 @@ pub(crate) mod valid {
             matches!(self, Self::SumeragiV2 { .. })
         }
         const fn enforce_local_wall_clock(&self) -> bool {
-            matches!(self, Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. })
+            matches!(
+                self,
+                Self::SignedGenesis { .. } | Self::SumeragiGenesis { .. }
+            )
         }
         const fn v2_block_cadence(&self) -> Option<Duration> {
             match self {
@@ -4537,9 +4651,8 @@ pub(crate) mod valid {
                     context.consensus_mode
                 }
                 Self::VerifiedReplay { authority, .. } => authority.context.consensus_mode,
-                Self::Sumeragi { consensus_mode, .. } | Self::SumeragiGenesis { consensus_mode } => {
-                    *consensus_mode
-                }
+                Self::Sumeragi { consensus_mode, .. }
+                | Self::SumeragiGenesis { consensus_mode } => *consensus_mode,
             }
         }
     }
@@ -6168,7 +6281,7 @@ pub(crate) mod valid {
         generation: u64,
         header: BlockHeader,
         admissions: Vec<Vec<u8>>,
-        npos: Option<PreparedPristineConsensusEffects>,
+        npos: Option<PreparedPristineConsensusEffects<'state>>,
         context: crate::sumeragi::v2::VerifiedHeightContext,
     }
     impl PreparedNativeExecutionControls<'_> {
@@ -6181,6 +6294,16 @@ pub(crate) mod valid {
             overlay
                 .validate_native_pristine_control_owner(self.state, self.generation, &self.header)
                 .map_err(ValidBlock::execution_context_error)?;
+            if let Some(npos) = self.npos.as_ref() {
+                if !std::ptr::eq(npos.penalty_index.state, self.state)
+                    || npos.penalty_index.generation != self.generation
+                    || npos.penalty_index.header != self.header
+                {
+                    return Err(ValidBlock::execution_context_error(
+                        "Native pristine penalty index differs from its original control owner",
+                    ));
+                }
+            }
             if !self.admissions.is_empty() {
                 overlay
                     .stage_queue_plan_admissions_for_carrier(&self.admissions)
@@ -6764,8 +6887,7 @@ pub(crate) mod valid {
                     "pre-staged controls require their original recorded constructor",
                 ));
             }
-            crate::exec_witness::begin_exec_witness_capture()
-                .map_err(Self::execution_context_error)
+            crate::exec_witness::begin_exec_witness_capture().map_err(Self::execution_context_error)
         }
 
         /// Execute a strict Sumeragi-v2 test fixture through the current validation profile.
@@ -6948,13 +7070,12 @@ pub(crate) mod valid {
         /// The mode must come from the canonical signed genesis handshake metadata. It is threaded
         /// explicitly because the pre-execution world cannot yet contain genesis parameters.
         #[allow(clippy::too_many_arguments)]
-        pub fn validate_signed_genesis_keep_voting_block<'state>(
+        pub fn validate_signed_genesis<'state>(
             block: SignedBlock,
             topology: &Topology,
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             consensus_mode: iroha_data_model::block::consensus_v2::ConsensusMode,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             if !block.header().is_genesis() {
@@ -6971,7 +7092,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 None,
                 false,
@@ -6980,7 +7100,7 @@ pub(crate) mod valid {
                 None,
             )
         }
-        /// Validate the signed genesis of a Sumeragi chain: [`Self::validate_signed_genesis_keep_voting_block`]
+        /// Validate the signed genesis of a Sumeragi chain: [`Self::validate_signed_genesis`]
         /// that also installs the consensus schedule (`specs/sumeragi.md` §10).
         pub(crate) fn validate_sumeragi_genesis<'state>(
             block: SignedBlock,
@@ -6998,14 +7118,12 @@ pub(crate) mod valid {
                     )),
                 )));
             }
-            let mut voting_block = None;
             Self::validate_keep_voting_block_inner(
                 block,
                 topology,
                 genesis_account,
                 time_source,
                 state,
-                &mut voting_block,
                 false,
                 None,
                 false,
@@ -7028,7 +7146,6 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             block_cadence: Duration,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             skip_block_signatures: bool,
             validation_context: SumeragiV2ValidationContext,
@@ -7043,7 +7160,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 soft_fork,
                 None,
                 skip_block_signatures,
@@ -7083,7 +7199,6 @@ pub(crate) mod valid {
             consensus_mode: iroha_data_model::parameter::system::ConsensusMode,
             state: &'state State,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
-            let mut voting_block = None;
             let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
             Self::validate_keep_voting_block_inner(
                 block,
@@ -7091,7 +7206,6 @@ pub(crate) mod valid {
                 genesis_account,
                 &time_source,
                 state,
-                &mut voting_block,
                 false,
                 None,
                 true,
@@ -7112,7 +7226,6 @@ pub(crate) mod valid {
             block_cadence: Duration,
             validation_context: SumeragiV2ValidationContext,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
         ) -> WithEvents<Result<(ValidBlock, Box<StateBlock<'state>>), Error>> {
             Self::validate_keep_voting_block_inner(
                 block,
@@ -7120,7 +7233,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 None,
                 true,
@@ -7145,7 +7257,6 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             block_cadence: Duration,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
         ) -> Result<ValidatedReplayExecution<'state>, Error> {
             let authority = match VerifiedReplayProposal::new(&executed, verified, merge_entry) {
                 Ok(authority) => authority,
@@ -7188,14 +7299,50 @@ pub(crate) mod valid {
                             frozen.clone(), verified.validator_set_pops.clone(), &parent, &receipt, &parent.validator_set_pops,
                         )
                     }.map_err(|error| Self::execution_context_error(error.to_string()))?;
-                        let source = match state.prepare_proposed_native_lane_batch_source(&proposal, &[])
-                        .map_err(Self::execution_context_error)? {
+                        let group_count = super::native_lane_batch_for_execution(&proposal)
+                            .map_err(Self::execution_context_error)?
+                            .groups
+                            .len();
+                        let budget = mv::allocation::AllocationBudget::new(
+                            state.nexus.read().storage.retained_carrier_shell_bytes,
+                        );
+                        let admission =
+                            crate::state::NativeExecutionResourceAdmission::try_reserve_source(
+                                &budget,
+                                group_count,
+                            )
+                            .map_err(|error| {
+                                BlockValidationError::LocalStorageRecoveryRequired {
+                                    reason: format!(
+                                        "Native replay source admission refused: {error}"
+                                    ),
+                                }
+                            })?;
+                        let source = match state.prepare_proposed_native_lane_batch_source(
+                            proposal,
+                            &[],
+                            admission,
+                        )
+                        .map_err(|error| {
+                            BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: format!("Native replay source preparation: {error}"),
+                            }
+                        })? {
                         crate::state::NativeLaneBatchSourcePreparationV1::Ready(source) => source,
                         crate::state::NativeLaneBatchSourcePreparationV1::FirstInputRecoveryRequired { .. } => {
-                            return Err(Self::execution_context_error("Native replay first input body is unavailable"));
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay first input body is unavailable".to_owned(),
+                            });
                         }
-                        crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged => {
-                            return Err(Self::execution_context_error("Native replay pre-State observation changed"));
+                        crate::state::NativeLaneBatchSourcePreparationV1::ObservationChanged { .. } => {
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay pre-State observation changed".to_owned(),
+                            });
+                        }
+                        crate::state::NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
+                            return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay source reservation differs from its exact batch".to_owned(),
+                            });
                         }
                         crate::state::NativeLaneBatchSourcePreparationV1::Superseded => {
                             return Err(Self::execution_context_error("Native replay carrier was superseded by finalized State"));
@@ -7208,11 +7355,19 @@ pub(crate) mod valid {
                             time_source,
                             block_cadence,
                         )
-                        .map_err(|error| Self::execution_context_error(error.to_string()))?
+                        .map_err(|error| match error {
+                            NativeCandidatePreparationError::Preflight(error) => *error,
+                            NativeCandidatePreparationError::Execution(error) => {
+                                BlockValidationError::from_certified_merge_stage_error(error)
+                            }
+                            NativeCandidatePreparationError::Preparation(error) => {
+                                classify_carrier_preparation_error(error)
+                            }
+                        })?
                         .ok_or_else(|| {
-                            Self::execution_context_error(
-                                "Native replay source observation changed",
-                            )
+                            BlockValidationError::LocalStorageRecoveryRequired {
+                                reason: "Native replay source observation changed".to_owned(),
+                            }
                         })?;
                         Ok(ValidatedReplayExecution {
                             valid: input.valid,
@@ -7228,7 +7383,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 None,
                 true,
@@ -7266,7 +7420,6 @@ pub(crate) mod valid {
             time_source: &TimeSource,
             block_cadence: Duration,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             validation_context: SumeragiV2ValidationContext,
             timings: &mut ValidationTimings,
             mut send_events: F,
@@ -7281,7 +7434,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 false,
                 Some(timings),
                 true,
@@ -7350,13 +7502,15 @@ pub(crate) mod valid {
             Self::validate_sccp_commitment_root(&block)?;
             Ok(root)
         }
-        fn prepare_pristine_consensus_effects(
+        fn prepare_pristine_consensus_effects<'state>(
             block: &SignedBlock,
-            state: &State,
+            state: &'state State,
+            penalty_index: ValidatedNposPenaltyIndex<'state>,
             authenticated_height_context: Option<
                 &iroha_data_model::block::consensus_v2::HeightContext,
             >,
-        ) -> Result<Option<PreparedPristineConsensusEffects>, BlockValidationError> {
+        ) -> Result<Option<PreparedPristineConsensusEffects<'state>>, BlockValidationError>
+        {
             crate::smartcontracts::ivm::active_runtime_abi_hash(
                 &state.world_view(),
                 block.header().height().get(),
@@ -7366,6 +7520,12 @@ pub(crate) mod valid {
                     "persisted active runtime ABI is incompatible with this node: {error:?}"
                 ))
             })?;
+            let header = block.header();
+            if !std::ptr::eq(penalty_index.state, state) || penalty_index.header != header {
+                return Err(Self::npos_effects_error(
+                    "pristine index belongs to another State or carrier",
+                ));
+            }
             let Some(effects) = block.npos_consensus_effects() else {
                 return Ok(None);
             };
@@ -7374,13 +7534,14 @@ pub(crate) mod valid {
                     "NPoS finality effects require the authenticated height context",
                 )
             })?;
-            let header = block.header();
             let height = header.height().get();
             Ok(Some(PreparedPristineConsensusEffects {
-                prune_keys: crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
-                    state, height,
-                )
-                .map_err(BlockValidationError::EvidencePreparation)?,
+                penalty_index,
+                prune_keys:
+                    crate::sumeragi::v2_evidence::v2_committed_evidence_prune_keys_from_state(
+                        state, height,
+                    )
+                    .map_err(BlockValidationError::EvidencePreparation)?,
                 expected_anchor: header.prev_block_hash().map(|block_hash| {
                     iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1 {
                         height: height.saturating_sub(1),
@@ -7455,8 +7616,18 @@ pub(crate) mod valid {
                     "Native applying context differs from the committed Nexus or execution policy",
                 ));
             }
-            Self::validate_npos_effects_with_state(block, state, Some(frozen.mode), Some(frozen))?;
-            let npos = Self::prepare_pristine_consensus_effects(block, state, Some(frozen))?;
+            let penalty_index = Self::validate_npos_effects_with_state(
+                block,
+                state,
+                Some(frozen.mode),
+                Some(frozen),
+            )?;
+            let npos = Self::prepare_pristine_consensus_effects(
+                block,
+                state,
+                penalty_index,
+                Some(frozen),
+            )?;
             Ok(PreparedNativeExecutionControls {
                 state,
                 generation,
@@ -7489,6 +7660,7 @@ pub(crate) mod valid {
         fn state_block_for_execution<'state>(
             block: &SignedBlock,
             state: &'state State,
+            penalty_index: ValidatedNposPenaltyIndex<'state>,
             soft_fork: bool,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
             authenticated_height_context: Option<
@@ -7505,11 +7677,23 @@ pub(crate) mod valid {
             crate::exec_witness::ensure_exec_witness_capture_available()
                 .map_err(Self::execution_context_error)?;
             Self::validate_npos_soft_fork_composition(block, soft_fork)?;
+            // Absence of due actions is also a parent-state observation. Retain
+            // its binding even when preparation has no effects/index to keep.
+            let npos_source = (
+                penalty_index.state,
+                penalty_index.generation,
+                penalty_index.header,
+            );
             let mut prepared_npos = Self::prepare_pristine_consensus_effects(
                 block,
                 state,
+                penalty_index,
                 authenticated_height_context,
             )?;
+            let check_npos_source = |overlay: &StateBlock<'_>| {
+                let (state, generation, header) = npos_source;
+                ValidatedNposPenaltyIndex::validate_source(state, generation, &header, overlay)
+            };
             let execution_context = block.execution_context();
             if execution_context.is_some_and(|bundle| bundle.native_lane_decisions.is_some()) {
                 return Err(Self::execution_context_error(
@@ -7524,12 +7708,6 @@ pub(crate) mod valid {
                 .is_some_and(|reference| reference.execution_batch_hash.is_some())
                 && prepared_npos.is_some()
             {
-                Self::validate_npos_effects_with_state(
-                    block,
-                    state,
-                    authoritative_mode,
-                    authenticated_height_context,
-                )?;
                 let context = authenticated_height_context.ok_or_else(|| {
                     Self::npos_effects_error(
                         "merge beacon composition requires an authenticated height context",
@@ -7546,6 +7724,8 @@ pub(crate) mod valid {
                 None
             };
             let apply_npos = |state_block: &mut StateBlock<'_>| {
+                // Each constructor callback checks this before its first effect;
+                // do not reread diagnostic generation after QueuePlan staging.
                 prepared_npos.map_or(Ok(()), |prepared| prepared.apply(state_block))
             };
             let queue_plan_admissions = execution_context
@@ -7566,6 +7746,7 @@ pub(crate) mod valid {
                     .block_with_recorded_pristine_carrier_stage(
                         block,
                         |state_block| {
+                            check_npos_source(state_block)?;
                             state_block
                                 .stage_queue_plan_admissions_for_carrier(queue_plan_admissions)
                                 .map_err(|error| {
@@ -7594,6 +7775,7 @@ pub(crate) mod valid {
                     .block_with_recorded_pristine_carrier_stage(
                         block,
                         |state_block| {
+                            check_npos_source(state_block)?;
                             let stage = match replay {
                                 Some(authority) => state_block
                                     .stage_certified_merge_reference_for_verified_replay(
@@ -7610,9 +7792,10 @@ pub(crate) mod valid {
                                 state_block
                                     .apply_verified_merge_beacon_pulse(capability)
                                     .map_err(|error| {
-                                        Self::npos_effects_error(format!(
-                                            "certified merge beacon composition failed: {error}"
-                                        ))
+                                        BlockValidationError::from_npos_application_error(
+                                            error,
+                                            "certified merge beacon composition failed",
+                                        )
                                     })
                             } else {
                                 apply_npos(state_block)
@@ -7622,16 +7805,20 @@ pub(crate) mod valid {
                     )
                     .map_err(BlockValidationError::from);
             }
+            let apply_pristine = |state_block: &mut StateBlock<'_>| {
+                check_npos_source(state_block)?;
+                apply_npos(state_block)
+            };
             let state_block = if soft_fork {
                 state.block_and_revert_with_recorded_pristine_carrier_stage(
                     block,
-                    apply_npos,
+                    apply_pristine,
                     Self::execution_context_error,
                 )
             } else {
                 state.block_with_recorded_pristine_carrier_stage(
                     block,
-                    apply_npos,
+                    apply_pristine,
                     Self::execution_context_error,
                 )
             }?;
@@ -7650,9 +7837,11 @@ pub(crate) mod valid {
             ),
             BlockValidationError,
         > {
+            let penalty_index = Self::validate_npos_effects_with_state(block, state, None, None)?;
             Self::state_block_for_execution(
                 block,
                 state,
+                penalty_index,
                 false,
                 Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned),
                 None,
@@ -7781,7 +7970,6 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             timings: Option<&mut ValidationTimings>,
             skip_block_signatures: bool,
@@ -7908,7 +8096,14 @@ pub(crate) mod valid {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             let consensus_effects = if validation_profile.sumeragi_schedule().is_some() {
-                Self::validate_sumeragi_consensus_effects(&block)
+                Self::validate_sumeragi_consensus_effects(&block).map(|()| {
+                    ValidatedNposPenaltyIndex {
+                        state,
+                        generation: state.state_view_generation(),
+                        header: block.header(),
+                        index: None,
+                    }
+                })
             } else {
                 Self::validate_npos_effects_with_state(
                     &block,
@@ -7919,12 +8114,15 @@ pub(crate) mod valid {
                         .and_then(SumeragiV2ValidationContext::authenticated_height_context),
                 )
             };
-            if let Err(error) = consensus_effects {
-                let stateless_elapsed = stateless_start.elapsed();
-                record_timings(&mut timings, stateless_elapsed, None);
-                emit_rejection(&block, &error);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
-            }
+            let penalty_index = match consensus_effects {
+                Ok(index) => index,
+                Err(error) => {
+                    let stateless_elapsed = stateless_start.elapsed();
+                    record_timings(&mut timings, stateless_elapsed, None);
+                    emit_rejection(&block, &error);
+                    return WithEvents::new(Err((Box::new(block), Box::new(error))));
+                }
+            };
             if let Some(block_cadence) = validation_profile
                 .v2_block_cadence()
                 .filter(|_| validation_profile.enforces_proposal_work())
@@ -7945,6 +8143,9 @@ pub(crate) mod valid {
                     Ok(has_work) => has_work,
                     Err(error) => {
                         let error = match error {
+                            crate::state::StateBlockStartError::Storage(error) => {
+                                BlockValidationError::StateStorageAdmission(error)
+                            }
                             crate::state::StateBlockStartError::History(error) => {
                                 BlockValidationError::BlockHashAdmission(error)
                             }
@@ -8006,7 +8207,6 @@ pub(crate) mod valid {
             let stateless_elapsed = stateless_start.elapsed();
             let execution_start = Instant::now();
             // Release block writer before creating new one
-            let _ = voting_block.take();
             let da_indexes_start = Instant::now();
             if let Err(error) = state.ensure_da_indexes_hydrated() {
                 if let Some(timings) = timings.as_deref_mut() {
@@ -8024,6 +8224,7 @@ pub(crate) mod valid {
             let (mut state_block, exec_witness_guard) = match Self::state_block_for_execution(
                 &block,
                 state,
+                penalty_index,
                 soft_fork,
                 Some(validation_profile.authoritative_consensus_mode()),
                 validation_profile
@@ -8184,7 +8385,6 @@ pub(crate) mod valid {
             genesis_account: &AccountId,
             time_source: &TimeSource,
             state: &'state State,
-            voting_block: &mut Option<VotingBlock>,
             soft_fork: bool,
             validation_context: SumeragiV2ValidationContext,
             timings: &mut ValidationTimings,
@@ -8200,7 +8400,6 @@ pub(crate) mod valid {
                 genesis_account,
                 time_source,
                 state,
-                voting_block,
                 soft_fork,
                 Some(timings),
                 false,
@@ -8467,22 +8666,10 @@ pub(crate) mod valid {
             BlockValidationError::NposEffectsInvalid(message.into())
         }
         fn classify_npos_penalty_derivation_error(error: eyre::Report) -> BlockValidationError {
-            if let Some(local) = error.downcast_ref::<crate::state::StateAdmissionError>() {
-                match local {
-                    crate::state::StateAdmissionError::History(error) => {
-                        BlockValidationError::BlockHashAdmission(error.clone())
-                    }
-                    crate::state::StateAdmissionError::Membership(error) => {
-                        BlockValidationError::MembershipAdmission(error.clone())
-                    }
-                }
-            } else if let Some(local) =
-                error.downcast_ref::<crate::state::EvidencePreparationError>()
-            {
-                BlockValidationError::EvidencePreparation(local.clone())
-            } else {
-                Self::npos_effects_error(format!("failed to derive NPoS effects: {error}"))
-            }
+            BlockValidationError::from_npos_application_error(
+                error,
+                "failed to derive NPoS effects",
+            )
         }
         fn validate_da_sidecar_hashes(block: &SignedBlock) -> Result<(), BlockValidationError> {
             let expected_policies = block.da_proof_policies().map(HashOf::new);
@@ -8656,7 +8843,8 @@ pub(crate) mod valid {
         fn validate_sumeragi_consensus_effects(
             block: &SignedBlock,
         ) -> Result<(), BlockValidationError> {
-            if block.header().npos_effects_hash().is_some() || block.npos_consensus_effects().is_some()
+            if block.header().npos_effects_hash().is_some()
+                || block.npos_consensus_effects().is_some()
             {
                 return Err(Self::npos_effects_error(
                     "Sumeragi blocks carry no consensus effects",
@@ -8664,132 +8852,160 @@ pub(crate) mod valid {
             }
             Ok(())
         }
-        fn validate_npos_effects_with_state(
+        fn validate_npos_effects_with_state<'state>(
             block: &SignedBlock,
-            state: &State,
+            state: &'state State,
             authoritative_mode: Option<iroha_data_model::block::consensus_v2::ConsensusMode>,
             authenticated_height_context: Option<
                 &iroha_data_model::block::consensus_v2::HeightContext,
             >,
-        ) -> Result<(), BlockValidationError> {
-            Self::validate_npos_effects_header(block)?;
-            let block_height = block.header().height().get();
-            let actual_effects = block.npos_consensus_effects();
-            if block.header().is_genesis() {
-                return if actual_effects.is_none() {
-                    Ok(())
-                } else {
-                    Err(Self::npos_effects_error(
-                        "genesis must not carry NPoS effects without committed pre-block state",
-                    ))
-                };
-            }
-            if authoritative_mode
-                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
-            {
-                let context = authenticated_height_context.ok_or_else(|| {
+        ) -> Result<ValidatedNposPenaltyIndex<'state>, BlockValidationError> {
+            let generation = state.state_view_generation();
+            let result = (|| {
+                Self::validate_npos_effects_header(block)?;
+                let block_height = block.header().height().get();
+                let actual_effects = block.npos_consensus_effects();
+                if block.header().is_genesis() {
+                    return if actual_effects.is_none() {
+                        Ok(None)
+                    } else {
+                        Err(Self::npos_effects_error(
+                            "genesis must not carry NPoS effects without committed pre-block state",
+                        ))
+                    };
+                }
+                if authoritative_mode
+                    == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned)
+                {
+                    let context = authenticated_height_context.ok_or_else(|| {
                     Self::npos_effects_error(
                         "permissioned candidate validation requires its authenticated height context",
                     )
                 })?;
-                if context.mode
-                    != iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
-                    || context.height != block_height
-                {
-                    return Err(Self::npos_effects_error(
-                        "permissioned candidate differs from its authenticated height context",
-                    ));
-                }
-                if let Some(effects) = actual_effects
-                    && (!effects.v2_evidence_admissions.is_empty()
-                        || !effects.penalty_actions.is_empty())
-                {
-                    return Err(Self::npos_effects_error(
-                        "permissioned consensus blocks may carry only a requested global beacon pulse",
-                    ));
-                }
-                return Self::validate_global_beacon_pulse_effect(
-                    block,
-                    state,
-                    context,
-                    actual_effects
-                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
-                );
-            }
-            if authoritative_mode
-                == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
-            {
-                let context = authenticated_height_context.ok_or_else(|| {
-                    Self::npos_effects_error(
-                        "NPoS candidate validation requires its authenticated height context",
+                    if context.mode
+                        != iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned
+                        || context.height != block_height
+                    {
+                        return Err(Self::npos_effects_error(
+                            "permissioned candidate differs from its authenticated height context",
+                        ));
+                    }
+                    if let Some(effects) = actual_effects
+                        && (!effects.v2_evidence_admissions.is_empty()
+                            || !effects.penalty_actions.is_empty())
+                    {
+                        return Err(Self::npos_effects_error(
+                            "permissioned consensus blocks may carry only a requested global beacon pulse",
+                        ));
+                    }
+                    return Self::validate_global_beacon_pulse_effect(
+                        block,
+                        state,
+                        context,
+                        actual_effects
+                            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
                     )
-                })?;
-                if context.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
-                    || context.height != block_height
+                    .map(|()| None);
+                }
+                if authoritative_mode
+                    == Some(iroha_data_model::block::consensus_v2::ConsensusMode::Npos)
                 {
+                    let context = authenticated_height_context.ok_or_else(|| {
+                        Self::npos_effects_error(
+                            "NPoS candidate validation requires its authenticated height context",
+                        )
+                    })?;
+                    if context.mode != iroha_data_model::block::consensus_v2::ConsensusMode::Npos
+                        || context.height != block_height
+                    {
+                        return Err(Self::npos_effects_error(
+                            "NPoS candidate differs from its authenticated height context",
+                        ));
+                    }
+                    crate::sumeragi::v2_npos::validate_candidate_context(context).map_err(
+                        |error| {
+                            Self::npos_effects_error(format!(
+                                "invalid authenticated NPoS context: {error}"
+                            ))
+                        },
+                    )?;
+                    Self::validate_global_beacon_pulse_effect(
+                        block,
+                        state,
+                        context,
+                        actual_effects
+                            .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
+                    )?;
+                }
+                let admission_keys = if let Some(effects) = actual_effects {
+                    crate::sumeragi::v2_evidence::validate_v2_evidence_admissions(
+                        state,
+                        block_height,
+                        &effects.v2_evidence_admissions,
+                    )
+                    .map_err(|err| {
+                        Self::npos_effects_error(format!(
+                            "invalid Sumeragi v2 evidence admissions: {err}"
+                        ))
+                    })?
+                } else {
+                    Vec::new()
+                };
+                if let Some(effects) = actual_effects {
+                    let mut sorted_actions = effects.penalty_actions.clone();
+                    sorted_actions.sort();
+                    sorted_actions.dedup();
+                    if sorted_actions != effects.penalty_actions {
+                        return Err(Self::npos_effects_error(
+                            "NPoS penalty actions are not canonical",
+                        ));
+                    }
+                    crate::sumeragi::v2_evidence::validate_v2_admission_penalty_separation(
+                        &admission_keys,
+                        &effects.penalty_actions,
+                    )
+                    .map_err(|err| Self::npos_effects_error(err.to_string()))?;
+                }
+                let applier = crate::sumeragi::penalties::PenaltyApplier::new(
+                    state,
+                    #[cfg(feature = "telemetry")]
+                    Some(state.metrics()),
+                    #[cfg(not(feature = "telemetry"))]
+                    None,
+                );
+                let (expected_actions, index) = applier
+                    .derive_npos_penalty_actions(&block.header())
+                    .map_err(Self::classify_npos_penalty_derivation_error)?;
+                let actual_actions = actual_effects
+                    .map(|effects| effects.penalty_actions.as_slice())
+                    .unwrap_or(&[]);
+                if expected_actions.as_slice() != actual_actions {
                     return Err(Self::npos_effects_error(
-                        "NPoS candidate differs from its authenticated height context",
+                        "NPoS penalty actions do not match pre-block state",
                     ));
                 }
-                crate::sumeragi::v2_npos::validate_candidate_context(context).map_err(|error| {
-                    Self::npos_effects_error(format!("invalid authenticated NPoS context: {error}"))
-                })?;
-                Self::validate_global_beacon_pulse_effect(
-                    block,
-                    state,
-                    context,
-                    actual_effects
-                        .and_then(|effects| effects.finalized_global_beacon_pulse.as_ref()),
-                )?;
+                let requires_index = actual_actions.iter().any(|action| {
+                    matches!(
+                        action,
+                        iroha_data_model::consensus::NposPenaltyAction::ConsensusSlash(_)
+                    )
+                });
+                Ok(requires_index.then_some(index))
+            })();
+            if !crate::state::is_stable_state_view_generation(
+                generation,
+                state.state_view_generation(),
+            ) {
+                return Err(BlockValidationError::LocalStorageRecoveryRequired {
+                    reason: "pristine NPoS source observation changed before effects".into(),
+                });
             }
-            let admission_keys = if let Some(effects) = actual_effects {
-                crate::sumeragi::v2_evidence::validate_v2_evidence_admissions(
-                    state,
-                    block_height,
-                    &effects.v2_evidence_admissions,
-                )
-                .map_err(|err| {
-                    Self::npos_effects_error(format!(
-                        "invalid Sumeragi v2 evidence admissions: {err}"
-                    ))
-                })?
-            } else {
-                Vec::new()
-            };
-            if let Some(effects) = actual_effects {
-                let mut sorted_actions = effects.penalty_actions.clone();
-                sorted_actions.sort();
-                sorted_actions.dedup();
-                if sorted_actions != effects.penalty_actions {
-                    return Err(Self::npos_effects_error(
-                        "NPoS penalty actions are not canonical",
-                    ));
-                }
-                crate::sumeragi::v2_evidence::validate_v2_admission_penalty_separation(
-                    &admission_keys,
-                    &effects.penalty_actions,
-                )
-                .map_err(|err| Self::npos_effects_error(err.to_string()))?;
-            }
-            let applier = crate::sumeragi::penalties::PenaltyApplier::new(
+            result.map(|index| ValidatedNposPenaltyIndex {
                 state,
-                #[cfg(feature = "telemetry")]
-                Some(state.metrics()),
-                #[cfg(not(feature = "telemetry"))]
-                None,
-            );
-            let expected_actions = applier
-                .derive_npos_penalty_actions(&block.header())
-                .map_err(Self::classify_npos_penalty_derivation_error)?;
-            let actual_actions = actual_effects
-                .map(|effects| effects.penalty_actions.as_slice())
-                .unwrap_or(&[]);
-            if expected_actions.as_slice() != actual_actions {
-                return Err(Self::npos_effects_error(
-                    "NPoS penalty actions do not match pre-block state",
-                ));
-            }
-            Ok(())
+                generation,
+                header: block.header(),
+                index,
+            })
         }
         fn validate_global_beacon_pulse_effect(
             block: &SignedBlock,
@@ -12040,10 +12256,15 @@ pub(crate) mod valid {
                 crate::smartcontracts::isi::sorafs::expire_pin_manifests_at_consensus_time(
                     state_block,
                 )
-                .map_err(|error| {
-                    Self::execution_context_error(format!(
+                .map_err(|error| match error {
+                    crate::smartcontracts::isi::sorafs::PinExpiryMaintenanceError::Storage(
+                        error,
+                    ) => BlockValidationError::StateStorageAdmission(error),
+                    crate::smartcontracts::isi::sorafs::PinExpiryMaintenanceError::Instruction(
+                        error,
+                    ) => Self::execution_context_error(format!(
                         "SoraFS pin expiry maintenance failed: {error}"
-                    ))
+                    )),
                 })?;
             if expired != 0 {
                 iroha_logger::debug!(
@@ -12073,6 +12294,9 @@ pub(crate) mod valid {
                 .map_err(Self::execution_context_error)?;
             let result = state_block.execute_and_seal_ordinary_outputs(block, genesis, finalize);
             result.map_err(|error| match error {
+                crate::state::ExecutionOutputSealError::Storage(error) => {
+                    BlockValidationError::StateStorageAdmission(error)
+                }
                 crate::state::ExecutionOutputSealError::Owner(reason) => {
                     Self::execution_context_error(reason)
                 }
@@ -12611,7 +12835,7 @@ pub(crate) mod valid {
             };
         }
         macro_rules! validate_voting_test_block {
-            ($block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr, $keys:expr, $cadence:expr) => {{
+            ($block:expr, $topology:expr, $time_source:expr, $state:expr, $keys:expr, $cadence:expr) => {{
                 let context = authenticated_permissioned_successor_context($state, $keys);
                 ValidBlock::validate_sumeragi_v2_fixture_keep_voting_block(
                     $block,
@@ -12620,13 +12844,12 @@ pub(crate) mod valid {
                     $time_source,
                     $cadence,
                     $state,
-                    $voting_block,
                     false,
                     false,
                     SumeragiV2ValidationContext::from_height_context(&context),
                 )
             }};
-            (without_authenticated_context; $block:expr, $topology:expr, $time_source:expr, $state:expr, $voting_block:expr, $cadence:expr) => {{
+            (without_authenticated_context; $block:expr, $topology:expr, $time_source:expr, $state:expr, $cadence:expr) => {{
                 let block = $block;
                 let context =
                     SumeragiV2ValidationContext::for_body_without_context_bound_attachments(&block);
@@ -12637,7 +12860,6 @@ pub(crate) mod valid {
                     $time_source,
                     $cadence,
                     $state,
-                    $voting_block,
                     false,
                     false,
                     context,
@@ -12675,8 +12897,7 @@ pub(crate) mod valid {
             };
         }
         macro_rules! validate_signed_voting_test_block {
-            ($signed:ident, $topology:ident, $state:ident, $voting_block:ident, $time_source:ident, $result:ident, $keys:ident, $cadence:expr) => {
-                let mut $voting_block = None;
+            ($signed:ident, $topology:ident, $state:ident, $time_source:ident, $result:ident, $keys:ident, $cadence:expr) => {
                 let (_handle, $time_source) =
                     TimeSource::new_mock($signed.header().creation_time());
                 let $result = validate_voting_test_block!(
@@ -12684,7 +12905,6 @@ pub(crate) mod valid {
                     &$topology,
                     &$time_source,
                     &$state,
-                    &mut $voting_block,
                     &$keys,
                     $cadence
                 )
@@ -15503,7 +15723,7 @@ pub(crate) mod valid {
                     },
                 )
                 .collect::<Vec<_>>();
-            let network_id = crate::sumeragi::synthetic_network_id("v2-artifact-bound-commit");
+            let network_id = crate::unit_test_support::synthetic_network_id("v2-artifact-bound-commit");
             let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
                 crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
                     network_id,
@@ -16639,7 +16859,7 @@ pub(crate) mod valid {
             let (authority, signer) = gen_account_in("lifecycle-control-coverage-cert");
             let certificate = ThresholdKeyLifecycleCertificateV1 {
                 version: 1,
-                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
                 expected_active_session_id: Some([0x31; 32]),
                 effective_height: block.header().height().get(),
                 network_id: state.network_id,
@@ -18722,7 +18942,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18795,7 +19014,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18857,7 +19075,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18927,7 +19144,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -18978,7 +19194,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19029,7 +19244,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19081,7 +19295,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19142,7 +19355,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19199,7 +19411,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19266,7 +19477,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19349,14 +19559,12 @@ pub(crate) mod valid {
                         .sign(leader.private_key())
                         .unpack(|_| {})
                         .into();
-                let mut voting_block = None;
                 let (_handle, time_source) = TimeSource::new_mock(signed.header().creation_time());
                 let result = validate_voting_test_block!(
                     signed,
                     &topology,
                     &time_source,
                     &state,
-                    &mut voting_block,
                     &validator_keys,
                     now
                 )
@@ -19437,7 +19645,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19515,7 +19722,6 @@ pub(crate) mod valid {
                 signed,
                 topology,
                 state,
-                voting_block,
                 time_source,
                 result,
                 validator_keys,
@@ -19592,13 +19798,11 @@ pub(crate) mod valid {
                 ))
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 0);
-            let mut voting_block = None;
             let result = validate_voting_test_block!(
                 signed,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(2)
             )
@@ -19698,13 +19902,11 @@ pub(crate) mod valid {
                 ))
                 .expect("proxy tail signature");
             assert_eq!(signed.external_transactions().count(), 1);
-            let mut voting_block = None;
             let result = validate_voting_test_block!(
                 signed,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(2)
             )
@@ -19763,13 +19965,11 @@ pub(crate) mod valid {
                 &[(0, leader.private_key()), (1, proxy_tail.private_key())],
             );
             let (_handle, time_source) = TimeSource::new_mock(Duration::from_millis(2));
-            let mut voting_block = None;
             let result = validate_voting_test_block!(
                 signed,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(1)
             )
@@ -20032,7 +20232,6 @@ pub(crate) mod valid {
                     )
                 }));
             }
-            let mut v2_voting_block: Option<super::super::VotingBlock> = None;
             let v2_cadence = Duration::from_millis(1);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate_block.clone(),
@@ -20044,7 +20243,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let error = match v2_result {
@@ -20052,13 +20250,11 @@ pub(crate) mod valid {
                 Err(error) => error,
             };
             assert!(matches!(error.1.as_ref(), BlockValidationError::EmptyBlock));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 candidate_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(1)
             )
@@ -20112,7 +20308,6 @@ pub(crate) mod valid {
             };
             let candidate: SignedBlock = candidate_at(1_000_000, "v2-wall-clock-work");
             let (_clock, local_time) = TimeSource::new_mock(Duration::ZERO);
-            let mut v2_voting_block = None;
             let v2 = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 candidate.clone(),
                 &topology,
@@ -20123,7 +20318,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let (valid, staged) = v2.expect(
@@ -20138,7 +20332,6 @@ pub(crate) mod valid {
             );
             drop(staged);
             let noncanonical: SignedBlock = candidate_at(1_000_001, "v2-noncanonical-time-work");
-            let mut noncanonical_voting_block = None;
             let rejected = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 noncanonical.clone(),
                 &topology,
@@ -20149,7 +20342,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut noncanonical_voting_block,
             )
             .unpack(|_| {});
             let error = match rejected {
@@ -20265,7 +20457,6 @@ pub(crate) mod valid {
                 .into()
             };
             let validate = |candidate: SignedBlock, context: &consensus_v2::HeightContext| {
-                let mut voting_block = None;
                 ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                     candidate,
                     &topology,
@@ -20274,7 +20465,6 @@ pub(crate) mod valid {
                     Duration::from_millis(10),
                     SumeragiV2ValidationContext::from_height_context(context),
                     &state,
-                    &mut voting_block,
                 )
                 .unpack(|_| {})
             };
@@ -20376,13 +20566,11 @@ pub(crate) mod valid {
                 assert!(events.borrow().is_empty(), "no rejection events expected");
             }
             {
-                let mut voting_block: Option<super::super::VotingBlock> = None;
                 validate_voting_test_block!(
                     signed_block.clone(),
                     &topology,
                     &validation_time_source,
                     &state,
-                    &mut voting_block,
                     &validator_keys,
                     Duration::from_millis(1)
                 )
@@ -20412,13 +20600,11 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -20487,13 +20673,11 @@ pub(crate) mod valid {
                     &crate::execution_output_test_support::structural_output_limits(),
                 )
                 .expect("fixture result roots match external entrypoint");
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -20564,13 +20748,11 @@ pub(crate) mod valid {
                 )
                 .expect("fixture result roots match external entrypoint");
             assert_eq!(signed_block.committed_fragment_count(), Some(0));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -20804,14 +20986,12 @@ pub(crate) mod valid {
         fn validate_queue_plan_ttl_fixture(
             fixture: &QueuePlanTtlFixture,
         ) -> Result<(ValidBlock, Box<StateBlock<'_>>), Error> {
-            let mut voting_block = None;
             // External QueuePlan roles are rejected before height-context validation.
             validate_voting_test_block!(without_authenticated_context;
                 fixture.block.clone(),
                 &fixture.topology,
                 &fixture.block_time_source,
                 &fixture.state,
-                &mut voting_block,
                 Duration::from_millis(1)
             )
             .unpack(|_| {})
@@ -20986,13 +21166,11 @@ pub(crate) mod valid {
             let signed_block: SignedBlock = SignedBlock::from(new_block);
             // Validate using a clock far in the future; TTL should be evaluated at block time.
             let (_handle, validation_time_source) = TimeSource::new_mock(Duration::from_secs(10));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &validation_time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(50)
             )
@@ -21014,13 +21192,11 @@ pub(crate) mod valid {
                 block_time_source,
                 signed_block
             );
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &block_time_source,
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(1)
             )
@@ -21059,13 +21235,11 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let valid_signed_block: SignedBlock = valid_block.into();
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             validate_voting_test_block!(
                 valid_signed_block,
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -21093,7 +21267,6 @@ pub(crate) mod valid {
                     "test setup should present the invalid transaction as cache-warmed",
                 );
             }
-            let mut v2_voting_block: Option<super::super::VotingBlock> = None;
             let v2_cadence = Duration::from_millis(20);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 invalid_signed_block.clone(),
@@ -21105,7 +21278,6 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let Err(v2_error) = v2_result else {
@@ -21117,13 +21289,11 @@ pub(crate) mod valid {
                     AcceptTransactionFail::SignatureVerification(_)
                 )
             ));
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let result = validate_voting_test_block!(
                 invalid_signed_block,
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(20)
             )
@@ -21187,7 +21357,6 @@ pub(crate) mod valid {
                 block_time_source,
                 signed_block
             );
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
             let height_context =
@@ -21198,7 +21367,6 @@ pub(crate) mod valid {
                 &ALICE_ID,
                 &block_time_source,
                 &state,
-                &mut voting_block,
                 false,
                 SumeragiV2ValidationContext::from_height_context(&height_context),
                 &mut timings,
@@ -21245,14 +21413,13 @@ pub(crate) mod valid {
                     &[(0, &leader_private)],
                 );
                 for prevalidated in [false, true] {
-                    let mut voting_block = None;
                     let mut timings = ValidationTimings::new();
                     let validation_context =
                         SumeragiV2ValidationContext::from_height_context(&context);
                     let result = if prevalidated {
                         ValidBlock::validate_sumeragi_v2_fixture_prevalidated_with_events_and_timing(
                             candidate.clone(), &topology, &ALICE_ID, &block_time_source,
-                            Duration::from_millis(1), &state, &mut voting_block,
+                            Duration::from_millis(1), &state,
                             validation_context, &mut timings, |_| {},
                         ).unpack(|_| {})
                     } else {
@@ -21263,7 +21430,6 @@ pub(crate) mod valid {
                             &block_time_source,
                             Duration::from_millis(1),
                             &state,
-                            &mut voting_block,
                             false,
                             false,
                             validation_context,
@@ -21311,13 +21477,11 @@ pub(crate) mod valid {
                 .sign(wrong_leader.private_key())
                 .unpack(|_| {});
             let signed_block: SignedBlock = SignedBlock::from(new_block);
-            let mut full_voting_block: Option<super::super::VotingBlock> = None;
             let full_result = validate_voting_test_block!(
                 signed_block.clone(),
                 &topology,
                 &block_time_source,
                 &state,
-                &mut full_voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -21326,7 +21490,6 @@ pub(crate) mod valid {
                 full_result.is_err(),
                 "ordinary validation should reject the intentionally wrong leader signature"
             );
-            let mut v2_voting_block: Option<super::super::VotingBlock> = None;
             let v2_cadence = Duration::from_millis(10);
             let v2_result = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
                 signed_block.clone(),
@@ -21338,14 +21501,12 @@ pub(crate) mod valid {
                     &authenticated_permissioned_successor_context(&state, &validator_keys),
                 ),
                 &state,
-                &mut v2_voting_block,
             )
             .unpack(|_| {});
             let (_validated, staged_state) = v2_result.expect(
                 "v2 candidate validation trusts only the separately checked origin block signature",
             );
             drop(staged_state);
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let mut events = Vec::new();
             let mut timings = ValidationTimings::new();
             let result =
@@ -21356,7 +21517,6 @@ pub(crate) mod valid {
                     &block_time_source,
                     Duration::from_millis(10),
                     &state,
-                    &mut voting_block,
                     SumeragiV2ValidationContext::from_height_context(
                         &authenticated_permissioned_successor_context(&state, &validator_keys),
                     ),
@@ -21394,7 +21554,6 @@ pub(crate) mod valid {
             let invalid_block = with_current_state_da_sidecars(invalid_builder, &state)
                 .sign(wrong_leader.private_key())
                 .unpack(|_| {});
-            let mut invalid_voting_block: Option<super::super::VotingBlock> = None;
             let mut invalid_events = Vec::new();
             let mut invalid_timings = ValidationTimings::new();
             let invalid_result =
@@ -21405,7 +21564,6 @@ pub(crate) mod valid {
                     &block_time_source,
                     Duration::from_millis(10),
                     &state,
-                    &mut invalid_voting_block,
                     SumeragiV2ValidationContext::from_height_context(
                         &authenticated_permissioned_successor_context(&state, &validator_keys),
                     ),
@@ -21547,13 +21705,11 @@ pub(crate) mod valid {
                 .sign(&leader_private)
                 .unpack(|_| {});
             let signed_block = SignedBlock::from(new_block);
-            let mut voting_block: Option<super::super::VotingBlock> = None;
             let (valid_block, _) = validate_voting_test_block!(
                 signed_block,
                 &topology,
                 &TimeSource::new_system(),
                 &state,
-                &mut voting_block,
                 &validator_keys,
                 Duration::from_millis(10)
             )
@@ -21749,7 +21905,7 @@ pub(crate) mod valid {
                 .build_and_sign(&genesis_keypair)
                 .expect("ordered genesis parameters should build");
             let topology = Topology::new(
-                crate::sumeragi::signed_genesis_voting_peers(&genesis)
+                crate::sumeragi::startup::genesis_committee_peers(&genesis.0)
                     .expect("signed genesis must expose its exact voting roster"),
             );
             let genesis_domain =
@@ -21773,14 +21929,12 @@ pub(crate) mod valid {
                 &[(0, genesis_keypair.private_key())],
             );
             let time_source = TimeSource::new_system();
-            let mut voting_block = None;
-            let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+            let result = ValidBlock::validate_signed_genesis(
                 genesis_block,
                 &topology,
                 &genesis_account,
                 &time_source,
                 &state,
-                &mut voting_block,
                 ConsensusMode::Permissioned,
             )
             .unpack(|_| {});
@@ -22228,6 +22382,7 @@ mod commit {
                 "entry_hash".to_owned(),
                 source_tx_commitment.as_ref().to_vec(),
             );
+            crate::fastpq::quantity_fixture::materialize(&mut batch);
             fastpq_prover::bind_axt_batch_with_proof_metadata(
                 &mut batch,
                 &binding,
@@ -24955,6 +25110,7 @@ mod event {
         use iroha_data_model::block::error::BlockRejectionReason as Reason;
         Some(match err {
             BlockValidationError::LocalStorageRecoveryRequired { .. }
+            | BlockValidationError::StateStorageAdmission(_)
             | BlockValidationError::EvidencePreparation(_)
             | BlockValidationError::BlockHashAdmission(_)
             | BlockValidationError::MembershipAdmission(_) => return None,
@@ -26975,7 +27131,7 @@ pub(crate) mod tests {
             .expect("empty SCCP state accepts focused confidential limits");
 
         let fixture = crate::zk::test_utils::halo2_fixture_envelope(
-            crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,
             [0_u8; 32],
         );
         let proof = fixture.proof_box("halo2/ipa");

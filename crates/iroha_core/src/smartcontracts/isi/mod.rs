@@ -48,6 +48,8 @@ pub mod soracloud;
 pub mod soradns;
 /// `SoraFS` pin registry instruction handlers.
 pub mod sorafs;
+/// Certified Parliament provider-admission effects.
+pub mod sorafs_provider_admission;
 pub mod sorafs_final_promotion_account_custody;
 /// Governed deployment custody and durable final-promotion signer-operation authority.
 pub mod sorafs_final_promotion_authority;
@@ -308,6 +310,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::defi::RegisterDefiRwaMarket>,
     dispatch_instruction::<iroha_data_model::isi::defi::ReportDefiRwaNav>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::AssertSorafsPublicationV1> => CoreAuthorized,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest> => CoreAuthorized,
     dispatch_instruction::<iroha_data_model::isi::sorafs::BindManifestAlias> => CoreAuthorized,
@@ -1400,6 +1404,7 @@ mod tests {
         let da_commitment = envelope
             .da_commitment_hash
             .map(|commitment| iroha_crypto::Hash::from(commitment).into());
+        crate::fastpq::quantity_fixture::materialize(&mut batch);
         fastpq_prover::bind_axt_batch_with_proof_metadata(
             &mut batch,
             &binding,
@@ -1507,6 +1512,7 @@ mod tests {
             "entry_hash".to_owned(),
             source_tx_commitment.as_ref().to_vec(),
         );
+        crate::fastpq::quantity_fixture::materialize(&mut batch);
         fastpq_prover::bind_axt_batch_with_proof_metadata(
             &mut batch,
             &binding,

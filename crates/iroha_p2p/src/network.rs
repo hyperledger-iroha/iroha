@@ -1023,12 +1023,6 @@ impl<T: message::ClassifyTopic> message::ClassifyTopic for RelayMessage<T> {
     fn admission_class(&self) -> message::TransportAdmissionClass {
         self.payload.admission_class()
     }
-    fn availability_frame_maximum(local_peer: &PeerId) -> Result<usize, ncore::Error> {
-        T::availability_frame_maximum(local_peer)
-    }
-    fn recovery_frame_maxima(local_peer: &PeerId) -> Result<[usize; 2], ncore::Error> {
-        T::recovery_frame_maxima(local_peer)
-    }
     fn inbound_admission_class(
         payload: &[u8],
         flags: u8,
@@ -3463,28 +3457,15 @@ enum ActorProgressClass {
     Safety,
     Lane,
     Bulk,
-    Availability,
-    RecoveryControl,
-    RecoveryData,
 }
 impl ActorProgressClass {
-    const COUNT: usize = 6;
-    const ALL: [Self; Self::COUNT] = [
-        Self::Safety,
-        Self::Lane,
-        Self::Bulk,
-        Self::Availability,
-        Self::RecoveryControl,
-        Self::RecoveryData,
-    ];
+    const COUNT: usize = 3;
+    const ALL: [Self; Self::COUNT] = [Self::Safety, Self::Lane, Self::Bulk];
     const fn index(self) -> usize {
         match self {
             Self::Safety => 0,
             Self::Lane => 1,
             Self::Bulk => 2,
-            Self::Availability => 3,
-            Self::RecoveryControl => 4,
-            Self::RecoveryData => 5,
         }
     }
     fn for_payload<T: message::ClassifyTopic>(payload: &T) -> Option<Self> {
@@ -3496,22 +3477,15 @@ impl ActorProgressClass {
             Class::Safety => Some(Self::Safety),
             Class::Lane => Some(Self::Lane),
             Class::Payload | Class::BlockSync => Some(Self::Bulk),
-            Class::Availability => Some(Self::Availability),
-            Class::RecoveryControl => Some(Self::RecoveryControl),
-            Class::RecoveryData => Some(Self::RecoveryData),
             Class::Control | Class::Low => None,
         }
     }
-    // Explicit ordinary-message fixture only: production never infers a
-    // recovery owner from Topic or caller-supplied priority.
+    // Explicit ordinary-message fixture only: production classifies the payload.
     #[cfg(test)]
     fn for_route(topic: message::Topic, route: message::SubscriberRoute) -> Option<Self> {
         match reliable_progress_class(topic, route)? {
             ReliableProgressClass::Safety => Some(Self::Safety),
             ReliableProgressClass::Lane => Some(Self::Lane),
-            ReliableProgressClass::Bulk if topic == message::Topic::ConsensusChunk => {
-                Some(Self::Availability)
-            }
             ReliableProgressClass::Bulk => Some(Self::Bulk),
         }
     }
@@ -3521,9 +3495,6 @@ struct ActorProgressByteLimits {
     safety: usize,
     lane: usize,
     bulk: usize,
-    availability: usize,
-    recovery_control: usize,
-    recovery_data: usize,
 }
 impl ActorProgressByteLimits {
     fn uniform(bytes: usize) -> Self {
@@ -3531,9 +3502,6 @@ impl ActorProgressByteLimits {
             safety: bytes,
             lane: bytes,
             bulk: bytes,
-            availability: bytes,
-            recovery_control: bytes,
-            recovery_data: bytes,
         }
     }
     fn for_class(self, class: ActorProgressClass) -> usize {
@@ -3541,9 +3509,6 @@ impl ActorProgressByteLimits {
             ActorProgressClass::Safety => self.safety,
             ActorProgressClass::Lane => self.lane,
             ActorProgressClass::Bulk => self.bulk,
-            ActorProgressClass::Availability => self.availability,
-            ActorProgressClass::RecoveryControl => self.recovery_control,
-            ActorProgressClass::RecoveryData => self.recovery_data,
         }
     }
     fn checked_per_target_total(self) -> Option<usize> {
@@ -3552,22 +3517,14 @@ impl ActorProgressByteLimits {
             .try_fold(0usize, |sum, class| sum.checked_add(self.for_class(class)))
     }
 }
-/// Repartition the existing three-class waiter envelope. The 64-envelope
+/// The three-class waiter envelope: every class keeps all 65 ranks per source,
+/// independently of blocked work in another class. The 64-envelope
 /// `LaneRelayBroadcaster` emits Lane only; the other producer is the bounded
-/// exact-output scheduler. Preserve all 65 Lane ranks and give each of the
-/// other five classes 26 ranks, independently of blocked payload work.
+/// exact-output scheduler.
 fn actor_waiter_limits() -> Option<[usize; ActorProgressClass::COUNT]> {
-    let lane = RELIABLE_PROGRESS_WAITERS_PER_SOURCE;
-    let residual = lane.checked_mul(2)?;
-    let mut result = [residual / (ActorProgressClass::COUNT - 1); ActorProgressClass::COUNT];
-    result[ActorProgressClass::Lane.index()] = lane;
-    // Deterministic remainder goes to Safety; current 130 / 5 is exact.
-    result[ActorProgressClass::Safety.index()] =
-        result[0].checked_add(residual % (ActorProgressClass::COUNT - 1))?;
-    result
-        .into_iter()
-        .all(|limit| limit >= RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE)
-        .then_some(result)
+    let limit = RELIABLE_PROGRESS_WAITERS_PER_SOURCE;
+    (limit >= RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE)
+        .then_some([limit; ActorProgressClass::COUNT])
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ActorProgressSource {
@@ -3765,9 +3722,6 @@ impl NetworkActorAdmittedTicketIdentity {
             ActorProgressClass::Safety => 1,
             ActorProgressClass::Lane => 2,
             ActorProgressClass::Bulk => 3,
-            ActorProgressClass::Availability => 4,
-            ActorProgressClass::RecoveryControl => 5,
-            ActorProgressClass::RecoveryData => 6,
         });
         Hash::new_from_chunks(&[DOMAIN, projection.as_slice()])
     }
@@ -5208,31 +5162,14 @@ pub(crate) struct TopicFrameCaps {
 }
 impl TopicFrameCaps {
     /// Complete canonical plaintext maxima, not encrypted-frame or payload-only sizes.
-    pub(crate) fn admission_maxima<T: message::ClassifyTopic>(
+    pub(crate) fn admission_maxima(
         self,
-        local_peer: &PeerId,
         max_plaintext: usize,
     ) -> Result<[usize; message::TransportAdmissionClass::COUNT], Error> {
-        let [recovery_control, recovery_data] = T::recovery_frame_maxima(local_peer)?;
-        let availability = T::availability_frame_maximum(local_peer)?;
-        if availability == 0
-            || availability > self.block_sync
-            || recovery_control == 0
-            || recovery_data == 0
-            || recovery_control > self.consensus
-            || recovery_data > self.block_sync
-        {
-            return Err(invalid_transport_geometry(
-                "native recovery maxima exceed their unchanged Topic caps",
-            ));
-        }
         let maximum = [
             self.control,
             self.consensus,
             self.block_sync,
-            availability,
-            recovery_control,
-            recovery_data,
             self.control,
             self.block_sync,
             self.tx_gossip
@@ -5248,7 +5185,7 @@ impl TopicFrameCaps {
         }
         Ok(maximum)
     }
-    #[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(test)]
     pub(crate) const fn uniform(bytes: usize) -> Self {
         Self {
             consensus: bytes,
@@ -6084,21 +6021,8 @@ impl SubscriberFilter {
                     && message::TransportAdmissionClass::ALL
                         .into_iter()
                         .any(|class| {
-                            // Exhaustive semantic/topic relationship, including the two
-                            // recovery subvariants of existing Consensus/Chunk topics.
-                            let possible = class
-                                == message::TransportAdmissionClass::ordinary_for_topic(topic)
-                                || matches!(
-                                    (class, topic),
-                                    (
-                                        message::TransportAdmissionClass::RecoveryControl,
-                                        message::Topic::Consensus
-                                    ) | (
-                                        message::TransportAdmissionClass::RecoveryData,
-                                        message::Topic::ConsensusChunk
-                                    )
-                                );
-                            possible
+                            // Exhaustive semantic/topic relationship.
+                            class == message::TransportAdmissionClass::ordinary_for_topic(topic)
                                 && self.matches(topic, route, class)
                                 && other.matches(topic, route, class)
                         })
@@ -6715,7 +6639,7 @@ mod inbound_source_memory_bound_tests {
     #[test]
     fn reliable_actor_source_geometry_counts_targets_broadcasts_and_classes() {
         assert_eq!(network_actor_progress_target_capacity(4), Some(8));
-        assert_eq!(network_actor_progress_source_capacity(4), Some(48));
+        assert_eq!(network_actor_progress_source_capacity(4), Some(24));
         let configured_per_source = RELIABLE_PROGRESS_LANE_RELAY_OWNER_CAPACITY
             + RELIABLE_PROGRESS_EXACT_OUTPUT_PRODUCERS_PER_SOURCE;
         assert_eq!(RELIABLE_PROGRESS_WAITERS_PER_SOURCE, configured_per_source);
@@ -6915,60 +6839,7 @@ fn validate_transport_queue_geometry<E: Enc>(
             safety: safety_reserve_bytes,
             lane: lane_reserve_bytes,
             bulk: bulk_reserve_bytes,
-            // Native semantic bounds are mandatory in startup before a pool
-            // is constructed; this function validates Topic geometry only.
-            availability: 0,
-            recovery_control: 0,
-            recovery_data: 0,
         },
-    })
-}
-#[derive(Debug)]
-struct SemanticActorGeometry {
-    progress: ActorProgressByteLimits,
-    ordinary_high_bytes: usize,
-    ordinary_high_count: usize,
-}
-fn semantic_actor_geometry<E: Enc>(
-    mut progress: ActorProgressByteLimits,
-    maximum: [usize; message::TransportAdmissionClass::COUNT],
-    targets: usize,
-    high_bytes: usize,
-    high_count: usize,
-) -> Result<SemanticActorGeometry, Error> {
-    use message::TransportAdmissionClass as Class;
-    let charge = |class: Class| {
-        crate::frame_queue_charge_for::<E>(maximum[class.index()])
-            .filter(|charge| *charge > 0)
-            .ok_or(Error::FrameTooLarge)
-    };
-    progress.availability = charge(Class::Availability)?;
-    progress.recovery_control = charge(Class::RecoveryControl)?;
-    progress.recovery_data = charge(Class::RecoveryData)?;
-    let extra = progress
-        .availability
-        .checked_add(progress.recovery_control)
-        .and_then(|n| n.checked_add(progress.recovery_data))
-        .and_then(|n| n.checked_mul(targets))
-        .ok_or_else(|| invalid_transport_geometry("semantic actor byte transfer overflows"))?;
-    let ordinary_high_bytes = high_bytes.checked_sub(extra).filter(|bytes|
-        *bytes >= progress.safety.max(progress.lane).max(progress.bulk))
-        .ok_or_else(|| invalid_transport_geometry("ordinary actor bytes cannot fund complete availability/recovery reserves while retaining one ordinary maximum"))?;
-    let extra_count = targets
-        .checked_mul(ActorProgressClass::COUNT - 3)
-        .ok_or_else(|| invalid_transport_geometry("semantic actor count transfer overflows"))?;
-    let ordinary_high_count = high_count
-        .checked_sub(extra_count)
-        .filter(|count| *count > 0)
-        .ok_or_else(|| {
-            invalid_transport_geometry(
-                "ordinary actor count cannot fund mandatory semantic sources",
-            )
-        })?;
-    Ok(SemanticActorGeometry {
-        progress,
-        ordinary_high_bytes,
-        ordinary_high_count,
     })
 }
 fn network_actor_byte_budget(
@@ -7447,21 +7318,14 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 )
             })?;
         let self_id = PeerId::from(key_pair.public_key().clone());
-        let receive_maximum = topic_frame_caps.admission_maxima::<T>(
-            &self_id,
-            crate::frame_plaintext_cap_for::<E>(max_frame_bytes),
-        )?;
-        let semantic_actor = semantic_actor_geometry::<E>(
-            transport_geometry.actor_progress_bytes,
-            receive_maximum,
-            network_actor_progress_targets,
+        let receive_maximum = topic_frame_caps
+            .admission_maxima(crate::frame_plaintext_cap_for::<E>(max_frame_bytes))?;
+        let network_actor_byte_budget = network_actor_byte_budget(
             p2p_outbound_frame_queue_max_high_bytes.get(),
-            p2p_queue_cap_high.get(),
+            safety_reserve_bytes,
         )?;
-        let network_actor_byte_budget =
-            network_actor_byte_budget(semantic_actor.ordinary_high_bytes, safety_reserve_bytes)?;
         let network_actor_progress_budget = NetworkActorProgressBudget::new_classed(
-            semantic_actor.progress,
+            transport_geometry.actor_progress_bytes,
             network_actor_progress_targets,
             network_actor_progress_waiters,
         )
@@ -7701,7 +7565,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         // Bounded queue capacities are supplied from node configuration so the
         // default build enforces backpressure without relying on feature flags.
         let (network_message_high_sender, network_message_high_receiver) =
-            net_channel::channel_with_capacity(semantic_actor.ordinary_high_count);
+            net_channel::channel_with_capacity(p2p_queue_cap_high.get());
         let (network_message_safety_sender, network_message_safety_receiver) =
             net_channel::channel_with_capacity(p2p_queue_cap_high.get());
         let (network_message_progress_sender, network_message_progress_receiver) =
@@ -7727,12 +7591,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
         let (peer_message_high_sender, peer_message_high_receiver) =
             peer_message_channel::<T>(lane_share);
         let (peer_message_payload_sender, peer_message_payload_receiver) =
-            peer_message_channel::<T>(share);
-        let (peer_message_availability_sender, peer_message_availability_receiver) =
-            peer_message_channel::<T>(share);
-        let (peer_message_recovery_control_sender, peer_message_recovery_control_receiver) =
-            peer_message_channel::<T>(share);
-        let (peer_message_recovery_data_sender, peer_message_recovery_data_receiver) =
             peer_message_channel::<T>(share);
         let (peer_message_control_sender, peer_message_control_receiver) =
             peer_message_channel::<T>(share);
@@ -7905,9 +7763,6 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             peer_message_high_receiver,
             peer_message_payload_sender, peer_message_payload_receiver,
             peer_message_block_sync_sender, peer_message_block_sync_receiver,
-            peer_message_availability_sender, peer_message_availability_receiver,
-            peer_message_recovery_control_sender, peer_message_recovery_control_receiver,
-            peer_message_recovery_data_sender, peer_message_recovery_data_receiver,
             peer_message_control_sender, peer_message_control_receiver,
             peer_message_safety_receiver,
             peer_message_low_receiver,
@@ -9317,20 +9172,6 @@ mod accept_stream_tests {
         P2pIdentityKeys::new(node, test_transport_key_pair()).expect("test P2P identity roles")
     }
     impl crate::network::message::ClassifyTopic for Dummy {
-        // This explicit synthetic payload has no Availability or sidecar variants.
-        // A positive bound for each empty variant set funds mandatory geometry;
-        // no production payload owner uses these fixture-only declarations.
-        fn availability_frame_maximum(
-            _: &iroha_model_base::peer::PeerId,
-        ) -> Result<usize, norito::core::Error> {
-            Ok(1)
-        }
-        fn recovery_frame_maxima(
-            _: &iroha_model_base::peer::PeerId,
-        ) -> Result<[usize; 2], norito::core::Error> {
-            Ok([1, 1])
-        }
-
         fn inbound_topic(
             payload: &[u8],
             flags: u8,
@@ -9740,9 +9581,6 @@ mod accept_stream_tests {
                     safety,
                     lane,
                     bulk: max_ordinary,
-                    availability: 0,
-                    recovery_control: 0,
-                    recovery_data: 0,
                 },
             }
         );
@@ -12113,14 +11951,6 @@ struct NetworkBase<T: Pload, E: Enc> {
     peer_message_payload_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
     peer_message_block_sync_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
     peer_message_block_sync_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
-    peer_message_availability_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
-    peer_message_availability_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
-    /// Dedicated semantic recovery control delivery owner.
-    peer_message_recovery_control_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
-    peer_message_recovery_control_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
-    /// Dedicated semantic recovery data delivery owner.
-    peer_message_recovery_data_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
-    peer_message_recovery_data_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
     /// Dedicated semantic control delivery owner.
     peer_message_control_receiver: mpsc::Receiver<PeerMessage<WireMessage<T>>>,
     peer_message_control_sender: mpsc::Sender<PeerMessage<WireMessage<T>>>,
@@ -13119,16 +12949,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 Some(peer_message) = self.peer_message_payload_receiver.recv() => {
                     self.peer_message(peer_message).await;
                 }
-                Some(peer_message) = self.peer_message_availability_receiver.recv() => {
-                    self.peer_message(peer_message).await;
-                }
                 Some(peer_message) = self.peer_message_block_sync_receiver.recv() => {
-                    self.peer_message(peer_message).await;
-                }
-                Some(peer_message) = self.peer_message_recovery_control_receiver.recv() => {
-                    self.peer_message(peer_message).await;
-                }
-                Some(peer_message) = self.peer_message_recovery_data_receiver.recv() => {
                     self.peer_message(peer_message).await;
                 }
                 Some(peer_message) = self.peer_message_control_receiver.recv() => {
@@ -15210,9 +15031,6 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
                 safety: self.peer_message_safety_sender.clone(),
                 payload: self.peer_message_payload_sender.clone(),
                 block_sync: self.peer_message_block_sync_sender.clone(),
-                availability: self.peer_message_availability_sender.clone(),
-                recovery_control: self.peer_message_recovery_control_sender.clone(),
-                recovery_data: self.peer_message_recovery_data_sender.clone(),
                 control: self.peer_message_control_sender.clone(),
 
                 high: self.peer_message_high_sender.clone(),
@@ -16683,8 +16501,6 @@ mod tests {
                 expected.map(|class| match class {
                     ReliableProgressClass::Safety => ActorProgressClass::Safety,
                     ReliableProgressClass::Lane => ActorProgressClass::Lane,
-                    ReliableProgressClass::Bulk if topic == message::Topic::ConsensusChunk =>
-                        ActorProgressClass::Availability,
                     ReliableProgressClass::Bulk => ActorProgressClass::Bulk,
                 })
             );
@@ -19645,12 +19461,6 @@ mod tests {
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (peer_message_block_sync_sender, peer_message_block_sync_receiver) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
-        let (peer_message_availability_sender, peer_message_availability_receiver) =
-            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
-        let (peer_message_recovery_control_sender, peer_message_recovery_control_receiver) =
-            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
-        let (peer_message_recovery_data_sender, peer_message_recovery_data_receiver) =
-            mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (peer_message_control_sender, peer_message_control_receiver) =
             mpsc::channel::<PeerMessage<WireMessage<T>>>(1);
         let (peer_message_lo_tx, peer_message_lo_rx) =
@@ -19738,12 +19548,6 @@ mod tests {
                 peer_message_payload_receiver,
                 peer_message_block_sync_sender,
                 peer_message_block_sync_receiver,
-                peer_message_availability_sender,
-                peer_message_availability_receiver,
-                peer_message_recovery_control_sender,
-                peer_message_recovery_control_receiver,
-                peer_message_recovery_data_sender,
-                peer_message_recovery_data_receiver,
                 peer_message_control_sender,
                 peer_message_control_receiver,
 
@@ -27389,188 +27193,6 @@ mod tests {
         );
     }
 }
-/// Validate the complete mandatory native class maxima against the shipping
-/// default byte/count geometry, without opening a socket or spawning a task.
-/// Intended for native codec fixtures; successful construction is not a native
-/// memory measurement or workload qualification.
-#[cfg(any(test, feature = "test-fixtures"))]
-pub fn assert_native_semantic_geometry_for_test<T: Pload + message::ClassifyTopic>(peer: &PeerId) {
-    use iroha_config::parameters::defaults::network as d;
-    use iroha_crypto::encryption::ChaCha20Poly1305 as Cipher;
-    let caps = TopicFrameCaps {
-        consensus: d::MAX_FRAME_BYTES_CONSENSUS.get(),
-        control: d::MAX_FRAME_BYTES_CONTROL.get(),
-        block_sync: d::MAX_FRAME_BYTES_BLOCK_SYNC.get(),
-        tx_gossip: d::MAX_FRAME_BYTES_TX_GOSSIP.get(),
-        peer_gossip: d::MAX_FRAME_BYTES_PEER_GOSSIP.get(),
-        health: d::MAX_FRAME_BYTES_HEALTH.get(),
-        connect: d::MAX_FRAME_BYTES_CONNECT.get(),
-        other: d::MAX_FRAME_BYTES_OTHER.get(),
-    };
-    let high = d::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_BYTES.get();
-    let low = d::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_BYTES.get();
-    let connections = d::lane_profile::CORE_MAX_TOTAL_CONNECTIONS;
-    let old = validate_transport_queue_geometry::<Cipher>(
-        d::MAX_FRAME_BYTES.get(),
-        caps,
-        high,
-        low,
-        d::DEFERRED_SEND_MAX_BYTES_TOTAL,
-        d::DEFERRED_SEND_MAX_BYTES_PER_PEER,
-        d::DEFERRED_SEND_MAX_PER_PEER,
-        d::P2P_QUEUE_CAP_HIGH.get(),
-        d::P2P_QUEUE_CAP_LOW.get(),
-        d::P2P_POST_QUEUE_CAP.get(),
-        d::P2P_SUBSCRIBER_QUEUE_CAP.get(),
-    )
-    .unwrap();
-    let maxima = caps
-        .admission_maxima::<T>(
-            peer,
-            crate::frame_plaintext_cap_for::<Cipher>(d::MAX_FRAME_BYTES.get()),
-        )
-        .unwrap();
-    let targets = network_actor_progress_target_capacity(connections).unwrap();
-    let actor = semantic_actor_geometry::<Cipher>(
-        old.actor_progress_bytes,
-        maxima,
-        targets,
-        high,
-        d::P2P_QUEUE_CAP_HIGH.get(),
-    )
-    .unwrap();
-    assert_eq!(
-        actor.ordinary_high_bytes + actor.progress.checked_per_target_total().unwrap() * targets,
-        high + old.actor_progress_bytes.checked_per_target_total().unwrap() * targets
-    );
-    let _actor = NetworkActorProgressBudget::new_classed(
-        actor.progress,
-        targets,
-        network_actor_progress_waiter_capacity(connections).unwrap(),
-    )
-    .unwrap();
-    let source_geometry = crate::peer::AuthenticatedSourceGeometry::new(connections);
-    let source = crate::peer::InboundFrameByteBudgets::new_with_source_geometry(
-        high,
-        low,
-        old.progress_reserve_bytes,
-        source_geometry.clone(),
-    )
-    .unwrap();
-    let dispatch =
-        crate::peer::InboundDispatchByteBudgets::new(high, low, old.safety_reserve_bytes).unwrap();
-    let _receive = crate::peer::receive_credit::Pool::new(
-        source,
-        dispatch,
-        inbound_source_credit_capacity(d::P2P_SUBSCRIBER_QUEUE_CAP.get(), connections).unwrap(),
-        maxima,
-    )
-    .unwrap();
-    let posts = crate::peer::OutboundPostByteBudgets::new_with_source_geometry(
-        high,
-        low,
-        old.progress_reserve_bytes,
-        source_geometry,
-    )
-    .unwrap();
-    let _post = posts.install_semantic(maxima).unwrap();
-    let writer = OutboundFrameQueueLimits::new_with_progress_reserve(
-        high,
-        low,
-        old.progress_reserve_bytes,
-        d::P2P_OUTBOUND_FRAME_QUEUE_MAX_HIGH_FRAMES.get(),
-        d::P2P_OUTBOUND_FRAME_QUEUE_MAX_LOW_FRAMES.get(),
-    );
-    crate::peer::receive_credit::writer_partitions(maxima, writer).unwrap();
-}
-/// Exercise mandatory post/grant ownership with two actual signed native message
-/// shapes on a partial Tokio duplex stream. The fixture retains a Payload while
-/// an ordinary RS16 Availability frame progresses, then proves eventual Payload
-/// service and physical byte release. It starts no node or real network.
-#[cfg(any(test, feature = "test-fixtures"))]
-pub async fn assert_payload_availability_progress_for_test<T: Pload + message::ClassifyTopic>(
-    key: &KeyPair,
-    payload: T,
-    availability: T,
-) {
-    // Use actual typed inputs at the actor boundary before exercising the
-    // physical post/AEAD/receive pipeline. The blocked owner keeps its ticket
-    // until exact release; a second body cannot leapfrog it.
-    assert_eq!(
-        ActorProgressClass::for_payload(&payload),
-        Some(ActorProgressClass::Bulk)
-    );
-    assert_eq!(
-        ActorProgressClass::for_payload(&availability),
-        Some(ActorProgressClass::Availability)
-    );
-    let budget = NetworkActorProgressBudget::new_classed(
-        ActorProgressByteLimits::uniform(1024 * 1024),
-        1,
-        3 * RELIABLE_PROGRESS_WAITERS_PER_SOURCE,
-    )
-    .unwrap();
-    let source = |class| ActorProgressSource {
-        target: Some(key.public_key().clone().into()),
-        class,
-    };
-    let shape = |tag: u8, topic| ProgressTicketShape {
-        topic,
-        stream_wire_bytes: 1,
-        broadcast: false,
-        reply_writer_timeout_attempt: None,
-        request_digest: Hash::new([tag]),
-        authority: None,
-    };
-    let first = shape(0, payload.topic());
-    let body_source = source(ActorProgressClass::Bulk);
-    let ProgressLeaseAttempt::Ready {
-        lease: blocked,
-        mut ticket,
-    } = budget.try_reserve_for_source(1, first, body_source.clone(), None, None)
-    else {
-        panic!("first body must own its actor source");
-    };
-    ticket.commit();
-    let second = shape(1, payload.topic());
-    let ProgressLeaseAttempt::Waiting {
-        ticket: Some(waiter),
-        rank: 1,
-    } = budget.try_reserve_for_source(1, second, body_source.clone(), None, None)
-    else {
-        panic!("second body must wait with an exact rank");
-    };
-    let ProgressLeaseAttempt::Ready {
-        lease: independent,
-        mut ticket,
-    } = budget.try_reserve_for_source(
-        1,
-        shape(2, availability.topic()),
-        source(ActorProgressClass::Availability),
-        None,
-        None,
-    )
-    else {
-        panic!("availability must bypass a retained body actor owner");
-    };
-    ticket.commit();
-    crate::peer::receive_credit::progress_fixture::exercise(key, payload, availability).await;
-    drop(independent);
-    drop(blocked);
-    let ProgressLeaseAttempt::Ready {
-        lease: eventual,
-        mut ticket,
-    } = budget.try_reserve_for_source(1, second, body_source, None, Some(waiter))
-    else {
-        panic!("ordinary body must resume at its original rank");
-    };
-    ticket.commit();
-    drop(eventual);
-    let state = budget.state.lock().unwrap();
-    assert!(state.retained_by_source.is_empty());
-    assert_eq!(state.waiter_count, 0);
-}
-
 pub mod message {
     //! Module for network messages
     use super::*;
@@ -27698,24 +27320,18 @@ pub mod message {
     }
     /// Semantic application admission class, independent of unchanged Topic caps.
     ///
-    /// Ordinary RS16 availability has its own owner, separate from large bodies,
-    /// low-priority `BlockSync`, and certified sidecar recovery. These classes do
-    /// not grant origin, committee, finality or execution authority. Fixed credit
-    /// records use their independently precharged parser, never an application class.
+    /// Safety, lane control, large bodies, application control, low-priority `BlockSync` and
+    /// other low-priority traffic each have their own owner. These classes do not grant origin,
+    /// committee, finality or execution authority. Fixed credit records use their independently
+    /// precharged parser, never an application class.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub enum TransportAdmissionClass {
         /// Authoritative consensus safety messages.
         Safety,
-        /// Ordinary consensus lane control, excluding sidecar control.
+        /// Ordinary consensus lane control.
         Lane,
-        /// Large ordinary consensus bodies, excluding availability chunks.
+        /// Large ordinary consensus bodies and chunks.
         Payload,
-        /// Mandatory ordinary RS16 availability chunks; never sidecar recovery.
-        Availability,
-        /// Certified sidecar Request, Close, `CloseAck` and `GenerationHint`.
-        RecoveryControl,
-        /// Certified sidecar Chunk only.
-        RecoveryData,
         /// Non-consensus application control, with no progress authority.
         Control,
         /// Reliable block synchronization in the existing low-priority lane.
@@ -27725,57 +27341,33 @@ pub mod message {
     }
     impl TransportAdmissionClass {
         /// Exact first-release application-class cardinality.
-        pub const COUNT: usize = 9;
+        pub const COUNT: usize = 6;
         /// Complete class order bound by mandatory geometry and record framing.
         pub const ALL: [Self; Self::COUNT] = [
             Self::Safety,
             Self::Lane,
             Self::Payload,
-            Self::Availability,
-            Self::RecoveryControl,
-            Self::RecoveryData,
             Self::Control,
             Self::BlockSync,
             Self::Low,
         ];
         /// Classes sharing the existing high byte ceiling.
-        pub const HIGH: [Self; 7] = [
-            Self::Safety,
-            Self::Lane,
-            Self::Payload,
-            Self::Availability,
-            Self::RecoveryControl,
-            Self::RecoveryData,
-            Self::Control,
-        ];
+        pub const HIGH: [Self; 4] = [Self::Safety, Self::Lane, Self::Payload, Self::Control];
         /// Non-safety classes partitioning the existing high occurrence ceiling.
-        pub const ORDINARY_HIGH: [Self; 6] = [
-            Self::Lane,
-            Self::Payload,
-            Self::Availability,
-            Self::RecoveryControl,
-            Self::RecoveryData,
-            Self::Control,
-        ];
+        pub const ORDINARY_HIGH: [Self; 3] = [Self::Lane, Self::Payload, Self::Control];
         /// Classes partitioning the existing low byte and occurrence ceilings.
         pub const LOW: [Self; 2] = [Self::BlockSync, Self::Low];
         /// Deterministic weighted service cycle. High classes each receive two
         /// ranks, low classes one; every eligible low class retains finite service.
         /// A rank is one complete record, never a permission to skip missing TCP bytes.
-        pub const SCHEDULE: [Self; 16] = [
+        pub const SCHEDULE: [Self; 10] = [
             Self::Safety,
             Self::Lane,
             Self::Payload,
-            Self::Availability,
-            Self::RecoveryControl,
-            Self::RecoveryData,
             Self::Control,
             Self::Safety,
             Self::Lane,
             Self::Payload,
-            Self::Availability,
-            Self::RecoveryControl,
-            Self::RecoveryData,
             Self::Control,
             Self::BlockSync,
             Self::Low,
@@ -27792,12 +27384,9 @@ pub mod message {
                 Self::Safety => 0,
                 Self::Lane => 1,
                 Self::Payload => 2,
-                Self::Availability => 3,
-                Self::RecoveryControl => 4,
-                Self::RecoveryData => 5,
-                Self::Control => 6,
-                Self::BlockSync => 7,
-                Self::Low => 8,
+                Self::Control => 3,
+                Self::BlockSync => 4,
+                Self::Low => 5,
             }
         }
         /// Whether this class belongs to the existing low scheduling/resource lane.
@@ -27805,14 +27394,13 @@ pub mod message {
         pub const fn is_low(self) -> bool {
             matches!(self, Self::BlockSync | Self::Low)
         }
-        /// Map an ordinary topic without ever granting sidecar recovery status.
+        /// Map an ordinary topic to its admission class.
         #[must_use]
         pub const fn ordinary_for_topic(topic: Topic) -> Self {
             match topic {
                 Topic::ConsensusSafety => Self::Safety,
                 Topic::Consensus => Self::Lane,
-                Topic::ConsensusPayload => Self::Payload,
-                Topic::ConsensusChunk => Self::Availability,
+                Topic::ConsensusPayload | Topic::ConsensusChunk => Self::Payload,
                 Topic::BlockSync => Self::BlockSync,
                 Topic::Control => Self::Control,
                 Topic::TxGossip
@@ -27843,9 +27431,6 @@ pub mod message {
             Topic::Other
         }
         /// Return the semantic application admission class.
-        ///
-        /// The ordinary mapping never grants recovery status. Payload owners
-        /// with sidecar variants and envelopes must override this method.
         fn admission_class(&self) -> TransportAdmissionClass {
             TransportAdmissionClass::ordinary_for_topic(self.topic())
         }
@@ -27871,33 +27456,6 @@ pub mod message {
                 )
             })?;
             Ok(TransportAdmissionClass::ordinary_for_topic(topic))
-        }
-        /// Maximum complete canonical ordinary RS16 availability frame.
-        /// Native owners derive this from the protocol chunk/signature bounds,
-        /// including the signed relay and peer envelopes. A missing witness is
-        /// rejected; the broad Topic cap is not a per-source progress guarantee.
-        fn availability_frame_maximum(_local_peer: &PeerId) -> Result<usize, ncore::Error> {
-            Err(ncore::Error::Message(
-                "missing native availability frame witness".to_owned(),
-            ))
-        }
-        /// Exact maximum complete canonical peer/relay frames for the two
-        /// semantic recovery classes, under the mandatory transport writer layout.
-        ///
-        /// The concrete application owner must derive these from its actual
-        /// native message shapes. Envelope types delegate unchanged because the
-        /// result already includes the complete outer peer and relay encoding.
-        /// This is independent of Topic caps and never includes ordinary RS16 chunks.
-        ///
-        /// # Errors
-        /// Refuses startup when a payload owner has not supplied the bound, or
-        /// when its native serialization/identity witness cannot be constructed.
-        fn recovery_frame_maxima(
-            _local_peer: &iroha_model_base::peer::PeerId,
-        ) -> Result<[usize; 2], norito::core::Error> {
-            Err(norito::core::Error::Message(
-                "application owner must declare exact native recovery frame maxima".to_owned(),
-            ))
         }
         /// Return the locally trusted delivery priority for scheduling.
         ///

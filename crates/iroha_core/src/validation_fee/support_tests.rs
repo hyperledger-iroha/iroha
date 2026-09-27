@@ -100,7 +100,17 @@ fn hijiri_parameters(default_account_risk: Q16) -> HijiriParametersV1 {
         .expect("Hijiri parameters")
 }
 fn xor_asset() -> AssetDefinitionId {
-    asset_definition("xor")
+    iroha_config::parameters::defaults::nexus::staking::stake_asset_id()
+        .parse()
+        .expect("canonical network XOR asset definition")
+}
+#[test]
+fn validator_payout_fixture_uses_network_xor_and_a_distinct_fee_asset() {
+    let canonical_xor: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+        .parse()
+        .expect("canonical Taira XOR address");
+    assert_eq!(xor_asset(), canonical_xor);
+    assert_ne!(xor_asset(), fee_asset());
 }
 fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
     iroha_data_model::smart_contract::ContractAddress::derive(
@@ -404,6 +414,9 @@ fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
             .build(deployer);
     let fee_domain = Domain::new(DomainId::try_new("fees", "paynet").expect("fee-asset domain id"))
         .build(deployer);
+    let xor_domain =
+        Domain::new(DomainId::try_new("universal", "universal").expect("canonical XOR domain id"))
+            .build(deployer);
     let mut accounts = vec![Account::new(deployer.clone()).build(deployer)];
     accounts.extend((2..=7).map(|seed| Account::new(account(seed)).build(deployer)));
     let fee_definition = AssetDefinition::new(
@@ -431,7 +444,7 @@ fn validation_fee_payout_world(deployer: &AccountId) -> crate::state::World {
     )
     .build(deployer);
     crate::state::World::with(
-        [contract_domain, fee_domain],
+        [contract_domain, fee_domain, xor_domain],
         accounts,
         [fee_definition, successor_fee_definition, xor_definition],
     )

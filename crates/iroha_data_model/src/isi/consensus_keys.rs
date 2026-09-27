@@ -90,18 +90,12 @@ pub struct DisableConsensusKey {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleActionV1")]
 pub enum ThresholdKeyLifecycleActionV1 {
-    /// Install a finalized global-beacon key session for next-height activation.
+    /// Finalize the exact frozen committee's pending global-beacon transcript.
     ///
-    /// The signed public state carries the target DKG roster independently of
-    /// the certificate's effective-height authorization roster. Pulse
-    /// production accepts that target only when it matches the next height's
-    /// authenticated consensus context.
-    InstallGlobalBeaconKey,
-    /// Retire the exact active global-beacon key at the next height.
-    ///
-    /// Retirement authority is the certificate's effective-height roster and
-    /// the expected active session remains an exact compare-and-set guard.
-    RetireGlobalBeaconKey,
+    /// A pending key stays inactive until the all-seat-ready committee boundary
+    /// is certified. The first bootstrap transcript activates at the next height
+    /// only when it matches the unchanged authenticated genesis authority.
+    FinalizeGlobalBeaconKey,
     /// Install a finalized Parliament TLE key session for next-height activation.
     ///
     /// Unlike the global beacon, the TLE session persists the same exact
@@ -162,21 +156,22 @@ pub struct ThresholdKeyLifecycleCertificateV1 {
     pub version: u16,
     /// Exact lifecycle action.
     pub action: ThresholdKeyLifecycleActionV1,
-    /// Exact active session that this action must replace or retire.
+    /// Exact active session against which this action is authorized.
     ///
     /// `None` is valid only for the first install in this key family. This is
     /// a committee-certified compare-and-set guard, not a registrar hint.
     pub expected_active_session_id: Option<[u8; 32]>,
     /// Block height `H` at which authorization is verified and the action executes.
     ///
-    /// Lifecycle activation or retirement takes effect at `H + 1`.
+    /// Pending beacon finalization does not activate the key. Bootstrap and TLE
+    /// lifecycle activation or retirement take effect at `H + 1`.
     pub effective_height: u64,
     /// Exact genesis-derived network identity.
     pub network_id: crate::NetworkId,
     /// Hash of the exact ordered validator roster authorizing this action at `H`.
     ///
-    /// For a global-beacon install, the signed `public_state` independently
-    /// commits the DKG target roster used at `H + 1`.
+    /// For global-beacon finalization, `public_state` commits the exact frozen
+    /// future roster, without changing the current authorization roster.
     pub roster_hash: [u8; 32],
     /// Exact authorization-roster committee size at `H`.
     pub committee_size: u16,
@@ -307,7 +302,7 @@ mod tests {
         ApplyThresholdKeyLifecycleCertificateV1 {
             certificate: ThresholdKeyLifecycleCertificateV1 {
                 version: 1,
-                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
                 expected_active_session_id: Some([0x63; 32]),
                 effective_height: 19,
                 network_id: crate::NetworkId::from_genesis_hash(

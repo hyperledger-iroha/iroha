@@ -24,7 +24,7 @@ use super::{
 use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1 as F};
 
 /// Complete protocol identity; every fixed geometry field is also in the context.
-pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:h6:g-field-blocks:row301:qpair:ood604:components606:lambda-powers:trace-shift2:quotient-shift1:arity16-16-8-8-4:fri-degree2n:terminal-degree2-128:q64:c74:fixed-fri-fiber-wire:v1";
+pub(super) const IDENTITY: &[u8] = b"fastpq:compact:deep-ali:h6:g-field-blocks:row301:qpair+composition-mask:ood604:components606:mask-lambda0+terms-lambda1-606:trace-shift2:quotient-shift1:arity16-16-8-8-4:fri-degree2n:terminal-degree2-128:q64:c74:fixed-fri-fiber-wire:v1";
 const MAX_STATEMENT_BYTES: usize = 240 * 1024;
 const MAX_RELATION_IDENTITY_BYTES: usize = 256;
 #[cfg(test)]
@@ -109,8 +109,8 @@ pub(super) enum Message {
 pub(super) enum Oracle {
     /// The 301 retained base-field trace cells.
     Row,
-    /// Both extension-field coefficient-half evaluations in one leaf.
-    QuotientPair,
+    /// Both quotient chunks and the independent composition mask in one leaf.
+    QuotientAndMask,
     /// Complete fibers of arity 16,16,8,8,4 for source layers zero through four.
     Fri(u8),
     /// All 128 terminal extension-field values in one complete leaf.
@@ -121,7 +121,7 @@ impl Oracle {
     pub(super) fn shape(self) -> Result<(u8, u8, usize, usize)> {
         match self {
             Self::Row => Ok((1, 0, LDE_ROWS, COMMITTED_COLUMN_COUNT * 8)),
-            Self::QuotientPair => Ok((3, 0, LDE_ROWS, 2 * F::BYTES)),
+            Self::QuotientAndMask => Ok((3, 0, LDE_ROWS, 3 * F::BYTES)),
             Self::Fri(round @ 0..=4) => {
                 let i = usize::from(round);
                 Ok((4, round, FRI_LENGTHS[i + 1], FRI_ARITIES[i] * F::BYTES))
@@ -230,6 +230,38 @@ impl Context {
         Ok(Self {
             framing: FramingContext::new_deep(&encoded)?,
         })
+    }
+
+    /// Retained shared public context/cache payload, including actual owner layouts.
+    pub(super) fn maximum_retained_payload_bytes(&self) -> Result<usize> {
+        Ok(self.framing.maximum_retained_payload_bytes()?)
+    }
+
+    /// Exact maximum canonical frame scratch for one fixed-shape leaf or parent.
+    /// Public zeros serve length counting only; no commitment or entropy is made.
+    pub(super) fn tree_frame_bytes(&self, oracle: Oracle) -> Result<usize> {
+        let (tag, round, _, bytes) = oracle.shape()?;
+        let zero = vec![0; bytes];
+        let child = [0; 48];
+        let leaf = norito::canonical_frame_len(&self.framing.frame(
+            1,
+            tag,
+            round,
+            0,
+            0,
+            48,
+            BodyFields::One(&zero),
+        ))?;
+        let parent = norito::canonical_frame_len(&self.framing.frame(
+            2,
+            tag,
+            round,
+            1,
+            0,
+            48,
+            BodyFields::Two(&child, &child),
+        ))?;
+        Ok(leaf.max(parent))
     }
 
     /// Hash only canonical complete fixed-shape leaves at valid positions.
@@ -498,7 +530,7 @@ impl Transcript {
         };
         let expected = match round.0 {
             1 => Oracle::Row,
-            2 => Oracle::QuotientPair,
+            2 => Oracle::QuotientAndMask,
             4..=8 => Oracle::Fri(round.0 - 4),
             9 => Oracle::Terminal,
             _ => return Err(BindingError::Phase),

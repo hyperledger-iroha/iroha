@@ -21,14 +21,6 @@ use tokio::time::Duration;
 #[derive(Clone, Debug, Decode, Encode)]
 struct Dummy;
 impl ClassifyTopic for Dummy {
-    // The unit fixture has no Availability or recovery variants. These positive
-    // maxima describe empty fixture variant sets, never production messages.
-    fn availability_frame_maximum(_: &PeerId) -> Result<usize, norito::core::Error> {
-        Ok(1)
-    }
-    fn recovery_frame_maxima(_: &PeerId) -> Result<[usize; 2], norito::core::Error> {
-        Ok([1, 1])
-    }
     fn inbound_topic(payload: &[u8], flags: u8) -> Result<Option<Topic>, norito::core::Error> {
         norito::core::validate_header_flags(flags)?;
         // A unit struct is bounded by the one-entry nonhybrid offset table.
@@ -94,34 +86,6 @@ fn cfg(addr: iroha_primitives::addr::SocketAddr) -> Config {
             TRUST_GOSSIP,
         )
     }
-}
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn capability_fixture_rejects_unfunded_default_connection_geometry() {
-    let mut config = cfg(super::next_addr());
-    config.max_total_connections = None;
-    // Exercise real startup admission. Rejection precedes replay-store and
-    // listener creation; an unrelated socket failure must not satisfy this test.
-    let result = NetworkHandle::<Dummy>::start(
-        super::p2p_identity_keys(super::random_node_key_pair()),
-        config,
-        super::test_network_id("capability-invalid-count-geometry"),
-        None,
-        None,
-        ShutdownSignal::new(),
-    )
-    .await;
-    let error = match result {
-        Err(error) => error,
-        Ok(_) => panic!("128 actor ranks must not admit the default 97-connection source geometry"),
-    };
-    let iroha_p2p::Error::Io(error) = error else {
-        panic!("unexpected capability fixture admission error: {error:?}");
-    };
-    assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
-    assert_eq!(
-        error.to_string(),
-        "ordinary actor count cannot fund mandatory semantic sources"
-    );
 }
 const MATCH_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const MISMATCH_OBSERVATION: Duration = Duration::from_secs(1);

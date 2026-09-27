@@ -5,10 +5,10 @@
 //! columns reconstruct at the actual extension points before the unchanged
 //! 923-slot AIR is checked. The offline engine binds roots, transcript order
 //! and complete bounded openings. The doubled FRI bound accommodates the
-//! screened masking degrees; the integrated producer remains unmasked, and
+//! fixed masking degrees used by the integrated bounded producer;
 //! the bound itself supplies no hiding or soundness argument.
-//! TODO: Complete masked row/quotient and composition commitments, authenticate
-//! ledger context and qualify concrete protocol bounds before node admission.
+//! TODO: Independently qualify concrete protocol bounds and authenticated ledger
+//! context for the complete masked row/quotient and composition commitments.
 
 use fastpq_isi::{FASTPQ_FINAL_V1, StarkParameterSet};
 

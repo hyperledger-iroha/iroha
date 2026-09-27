@@ -2621,7 +2621,7 @@ pub(super) mod tests {
             .expect("deterministic transaction key");
         let authority = AccountId::new(key.public_key().clone());
         let tx = TransactionBuilder::new(
-            crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+            crate::unit_test_support::synthetic_network_id("v2-candidate-test"),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2636,7 +2636,7 @@ pub(super) mod tests {
             .expect("deterministic transaction key");
         let authority = AccountId::new(key.public_key().clone());
         let tx = TransactionBuilder::new(
-            crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+            crate::unit_test_support::synthetic_network_id("v2-candidate-test"),
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
@@ -2665,7 +2665,7 @@ pub(super) mod tests {
         let instruction = ApplyThresholdKeyLifecycleCertificateV1 {
             certificate: ThresholdKeyLifecycleCertificateV1 {
                 version: 1,
-                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
                 expected_active_session_id: Some([0x31; 32]),
                 effective_height,
                 network_id: context.network_id,
@@ -2852,7 +2852,7 @@ pub(super) mod tests {
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
             ChainId::from("v2-candidate-snapshot-parent"),
-            crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+            crate::unit_test_support::synthetic_network_id("v2-candidate-test"),
         );
         let mut parent_hash = None;
         for height in 1..=parent_height {
@@ -4775,7 +4775,7 @@ pub(super) mod tests {
                 ),
             );
             let transaction = TransactionBuilder::new_with_time_source(
-                crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+                crate::unit_test_support::synthetic_network_id("v2-candidate-test"),
                 authority,
                 &time_source,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -5335,7 +5335,7 @@ pub(super) mod tests {
         NposConsensusEffects {
             finalized_global_beacon_pulse: Some(FinalizedGlobalThresholdBeaconPulseV1 {
                 version: 1,
-                network_id: crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+                network_id: crate::unit_test_support::synthetic_network_id("v2-candidate-test"),
                 session_id: [1; 32],
                 roster_hash: [2; 32],
                 transcript_hash: [3; 32],
@@ -5386,7 +5386,7 @@ pub(super) mod tests {
             ),
         );
         let transaction = TransactionBuilder::new_with_time_source(
-            crate::sumeragi::synthetic_network_id("v2-candidate-test"),
+            crate::unit_test_support::synthetic_network_id("v2-candidate-test"),
             authority,
             &time_source,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

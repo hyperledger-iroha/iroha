@@ -54,7 +54,8 @@ use super::{
     io_air::ZkX509IoEndpointV1,
 };
 use crate::privacy_engines::transparent_stark::{
-    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, TransparentStarkErrorV1, TransparentTranscriptV1,
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1, TransparentStarkErrorV1,
+    TransparentTranscriptV1,
 };
 #[cfg(test)]
 use crate::privacy_engines::transparent_stark::{
@@ -1131,16 +1132,18 @@ const ZK_X509_RFC5280_GRAMMAR_RULES_V1: &[ZkX509Rfc5280GrammarRuleV1] =
     &ZK_X509_RFC5280_GRAMMAR_RULE_ARRAY_V1;
 const ZK_X509_RFC5280_GRAMMAR_RULE_COUNT_V1: usize = ZK_X509_RFC5280_GRAMMAR_RULES_V1.len();
 const _: () = assert!(ZK_X509_RFC5280_GRAMMAR_RULE_COUNT_V1 == 86);
-fn grammar_tag_pack_v1(tag_class: F, constructed: F, tag_number: F) -> F {
+fn grammar_tag_pack_v1<A: PolynomialAirFieldV1>(tag_class: A, constructed: A, tag_number: A) -> A {
     tag_class
-        .add(constructed.mul(F(4)))
-        .add(tag_number.mul(F(8)))
+        .add(constructed.mul(A::from_base(F(4))))
+        .add(tag_number.mul(A::from_base(F(8))))
 }
-fn grammar_ordinal_pack_v1(exact: F, last: F, parameter: F) -> F {
-    exact.add(last.mul(F(2))).add(parameter.mul(F(4)))
+fn grammar_ordinal_pack_v1<A: PolynomialAirFieldV1>(exact: A, last: A, parameter: A) -> A {
+    exact
+        .add(last.mul(A::from_base(F(2))))
+        .add(parameter.mul(A::from_base(F(4))))
 }
-fn grammar_count_pack_v1(exact: F, parameter: F) -> F {
-    exact.add(parameter.mul(F(2)))
+fn grammar_count_pack_v1<A: PolynomialAirFieldV1>(exact: A, parameter: A) -> A {
+    exact.add(parameter.mul(A::from_base(F(2))))
 }
 fn grammar_rule_expected_cells_v1(rule: ZkX509Rfc5280GrammarRuleV1) -> [F; 10] {
     [
@@ -1378,12 +1381,12 @@ pub(crate) fn validate_zk_x509_rfc5280_provenance_v1(
     }
     Ok(())
 }
-fn compress_tuple_v1(values: [F; 12], challenge: [F; 12]) -> F {
+fn compress_tuple_v1<A: PolynomialAirFieldV1>(values: [A; 12], challenge: [F; 12]) -> A {
     values
         .into_iter()
         .zip(challenge)
-        .fold(F::ZERO, |sum, (value, coefficient)| {
-            sum.add(value.mul(coefficient))
+        .fold(A::ZERO, |sum, (value, coefficient)| {
+            sum.add(value.mul_base(coefficient))
         })
 }
 /// Exact strict-DER source terminals consumed by this adapter.
@@ -1629,17 +1632,19 @@ pub(crate) fn zk_x509_rfc5280_opened_output_factor_fields_v1(
 /// This avoids repeating the full 48-scalar validation on every row and lane
 /// of a multi-million-row adapter. The lane bound remains checked here.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn zk_x509_rfc5280_opened_output_factor_fields_after_challenge_validation_v1(
-    role: F,
-    channel: F,
-    endpoint_role: F,
-    endpoint_instance: F,
-    offset: F,
-    value: F,
-    is_write: F,
+pub(crate) fn zk_x509_rfc5280_opened_output_factor_fields_after_challenge_validation_v1<
+    A: PolynomialAirFieldV1,
+>(
+    role: A,
+    channel: A,
+    endpoint_role: A,
+    endpoint_instance: A,
+    offset: A,
+    value: A,
+    is_write: A,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> Result<F, ZkX509Rfc5280StarkErrorV1> {
+) -> Result<A, ZkX509Rfc5280StarkErrorV1> {
     let challenge = challenges
         .tuple
         .get(lane)
@@ -1647,7 +1652,7 @@ pub(crate) fn zk_x509_rfc5280_opened_output_factor_fields_after_challenge_valida
         .ok_or(ZkX509Rfc5280StarkErrorV1::Challenge)?;
     Ok(compress_tuple_v1(
         [
-            F(80),
+            A::from_base(F(80)),
             role,
             channel,
             endpoint_role,
@@ -1655,10 +1660,10 @@ pub(crate) fn zk_x509_rfc5280_opened_output_factor_fields_after_challenge_valida
             offset,
             value,
             is_write,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenge,
     ))
@@ -3150,9 +3155,9 @@ pub(crate) fn build_zk_x509_rfc5280_stark_shape_v1(
     build_zk_x509_rfc5280_stark_private_shape_v1(trace)?;
     ZkX509Rfc5280StarkShapeV1::from_statement(&trace.statement)
 }
-pub(crate) type ZkX509Rfc5280StarkBaseRowV1 = [F; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
-pub(crate) type ZkX509Rfc5280StarkAuxRowV1 = [F; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
-pub(crate) type ZkX509Rfc5280StarkFixedRowV1 = [F; ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1];
+pub(crate) type ZkX509Rfc5280StarkBaseRowV1<A = F> = [A; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
+pub(crate) type ZkX509Rfc5280StarkAuxRowV1<A = F> = [A; ZK_X509_RFC5280_STARK_AUX_WIDTH_V1];
+pub(crate) type ZkX509Rfc5280StarkFixedRowV1<A = F> = [A; ZK_X509_RFC5280_STARK_FIXED_WIDTH_V1];
 /// One byte in the verifier-owned closed-profile pattern table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ZkX509Rfc5280ProfileByteEntryV1 {
@@ -5543,44 +5548,44 @@ pub(crate) fn replay_zk_x509_p256_terminal_claims_v1(
         ZkX509P256TerminalClaimsV1::decode_x5v1_v1(encoded_claims)?,
     )
 }
-fn pack_bits_v1(bits: &[F]) -> F {
+fn pack_bits_v1<A: PolynomialAirFieldV1>(bits: &[A]) -> A {
     bits.iter()
         .copied()
         .enumerate()
-        .fold(F::ZERO, |sum, (bit, value)| {
-            sum.add(value.mul(F(1_u64 << bit)))
+        .fold(A::ZERO, |sum, (bit, value)| {
+            sum.add(value.mul(A::from_base(F(1_u64 << bit))))
         })
 }
-fn push_boolean_v1(residues: &mut Vec<F>, gate: F, value: F) {
-    residues.push(gate.mul(value).mul(value.sub(F::ONE)));
+fn push_boolean_v1<A: PolynomialAirFieldV1>(residues: &mut Vec<A>, gate: A, value: A) {
+    residues.push(gate.mul(value).mul(value.sub(A::ONE)));
 }
-fn push_gated_zero_safe_inverse_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    denominator: F,
-    zero: F,
-    inverse: F,
+fn push_gated_zero_safe_inverse_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    denominator: A,
+    zero: A,
+    inverse: A,
 ) {
-    residues.push(zero.mul(zero.sub(F::ONE)));
-    residues.push(F::ONE.sub(gate).mul(zero));
-    residues.push(F::ONE.sub(gate).mul(inverse));
+    residues.push(zero.mul(zero.sub(A::ONE)));
+    residues.push(A::ONE.sub(gate).mul(zero));
+    residues.push(A::ONE.sub(gate).mul(inverse));
     residues.push(denominator.mul(zero));
-    residues.push(denominator.mul(inverse).sub(gate.mul(F::ONE.sub(zero))));
+    residues.push(denominator.mul(inverse).sub(gate.mul(A::ONE.sub(zero))));
     residues.push(zero.mul(inverse));
 }
-fn push_reused_gated_zero_safe_inverse_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    denominator: F,
-    zero: F,
-    inverse: F,
+fn push_reused_gated_zero_safe_inverse_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    denominator: A,
+    zero: A,
+    inverse: A,
 ) {
     // These helper cells are shared by several mutually exclusive row
     // families. Canonicalize the zero flag and inverse only while this family
     // is active; another family may legitimately assign both cells.
-    residues.push(gate.mul(zero).mul(zero.sub(F::ONE)));
+    residues.push(gate.mul(zero).mul(zero.sub(A::ONE)));
     residues.push(gate.mul(denominator).mul(zero));
-    residues.push(gate.mul(denominator.mul(inverse).sub(F::ONE.sub(zero))));
+    residues.push(gate.mul(denominator.mul(inverse).sub(A::ONE.sub(zero))));
     residues.push(gate.mul(zero).mul(inverse));
 }
 #[inline]
@@ -5597,16 +5602,16 @@ fn assert_residue_section_v1(
     );
     *section_start = residues_len;
 }
-fn private_geometry_residues_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
-    next: &ZkX509Rfc5280StarkBaseRowV1,
-    fixed: &ZkX509Rfc5280StarkFixedRowV1,
-) -> Vec<F> {
+fn private_geometry_residues_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    next: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
+) -> Vec<A> {
     let mut residues = Vec::with_capacity(121);
     let active = current[BASE_ACTIVE];
     let cert2_active = current[BASE_CERT2_ACTIVE];
-    push_boolean_v1(&mut residues, F::ONE, active);
-    push_boolean_v1(&mut residues, F::ONE, cert2_active);
+    push_boolean_v1(&mut residues, A::ONE, active);
+    push_boolean_v1(&mut residues, A::ONE, cert2_active);
     residues.push(
         fixed[FIX_CERT2_OUTPUT]
             .mul(active)
@@ -5615,9 +5620,9 @@ fn private_geometry_residues_v1(
     residues.push(
         fixed[FIX_ACTIVATION_CONTINUE]
             .mul(next[BASE_ACTIVE])
-            .mul(F::ONE.sub(active)),
+            .mul(A::ONE.sub(active)),
     );
-    residues.push(fixed[FIX_REQUIRED_ACTIVE].mul(active.sub(F::ONE)));
+    residues.push(fixed[FIX_REQUIRED_ACTIVE].mul(active.sub(A::ONE)));
     residues.push(fixed[FIX_CERT2_SLOT_FIRST].mul(active.sub(cert2_active)));
     let decimal_grouped = family_gate_v1(fixed, ZkX509Rfc5280StarkFamilyV1::Decimal);
     let fixed_grouped = family_gate_v1(fixed, ZkX509Rfc5280StarkFamilyV1::SerialSource)
@@ -5629,44 +5634,47 @@ fn private_geometry_residues_v1(
     residues.push(
         fixed_grouped
             .mul(active)
-            .mul(F::ONE.sub(next[BASE_ACTIVE]))
-            .mul(F::ONE.sub(fixed[FIX_LOCAL_LAST])),
+            .mul(A::ONE.sub(next[BASE_ACTIVE]))
+            .mul(A::ONE.sub(fixed[FIX_LOCAL_LAST])),
     );
     residues.push(
         decimal_grouped
             .mul(active)
-            .mul(F::ONE.sub(next[BASE_ACTIVE]))
-            .mul(F::ONE.sub(current[BASE_STRICT])),
+            .mul(A::ONE.sub(next[BASE_ACTIVE]))
+            .mul(A::ONE.sub(current[BASE_STRICT])),
     );
     let padding = family_gate_v1(fixed, ZkX509Rfc5280StarkFamilyV1::Padding);
     residues.push(padding.mul(active));
     for (column, value) in current.iter().copied().enumerate() {
         if !matches!(column, BASE_ACTIVE | BASE_CERT2_ACTIVE) {
-            residues.push(F::ONE.sub(active).mul(value));
+            residues.push(A::ONE.sub(active).mul(value));
         }
     }
     residues.push(fixed[FIX_CONTINUE].mul(next[BASE_CERT2_ACTIVE].sub(cert2_active)));
     debug_assert_eq!(residues.len(), 121);
     residues
 }
-fn family_gate_v1(fixed: &ZkX509Rfc5280StarkFixedRowV1, family: ZkX509Rfc5280StarkFamilyV1) -> F {
+fn family_gate_v1<A: PolynomialAirFieldV1>(
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
+    family: ZkX509Rfc5280StarkFamilyV1,
+) -> A {
     fixed[family as usize]
 }
-fn active_family_gate_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
-    fixed: &ZkX509Rfc5280StarkFixedRowV1,
+fn active_family_gate_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
     family: ZkX509Rfc5280StarkFamilyV1,
-) -> F {
+) -> A {
     current[BASE_ACTIVE].mul(family_gate_v1(fixed, family))
 }
-fn output_row_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn output_row_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(80),
+            A::from_base(F(80)),
             current[BASE_ROLE],
             current[BASE_INSTANCE],
             current[BASE_ENDPOINT_ROLE],
@@ -5674,10 +5682,10 @@ fn output_row_factor_v1(
             current[BASE_OFFSET],
             current[BASE_VALUE],
             current[BASE_IS_WRITE],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
@@ -5708,62 +5716,62 @@ fn serial_copy_factor_v1(
         challenges.tuple[lane],
     )
 }
-fn normalized_copy_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn normalized_copy_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
             current[BASE_COPY_DOMAIN],
             current[BASE_COPY_KEY_1],
             current[BASE_COPY_KEY_2],
             current[BASE_COPY_VALUE],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
 }
-fn serial_byte_lookup_factor_v1(
-    document: F,
-    address: F,
-    value: F,
+fn serial_byte_lookup_factor_v1<A: PolynomialAirFieldV1>(
+    document: A,
+    address: A,
+    value: A,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(91),
+            A::from_base(F(91)),
             document,
             address,
             value,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
 }
-fn profile_byte_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn profile_byte_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(96),
+            A::from_base(F(96)),
             current[BASE_ROLE],
             current[BASE_ENDPOINT_ROLE],
             current[BASE_PARENT],
@@ -5772,67 +5780,67 @@ fn profile_byte_factor_v1(
             current[BASE_VALUE],
             current[BASE_ENDPOINT_INSTANCE],
             current[BASE_CHILD],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
 }
-fn profile_topology_source_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn profile_topology_source_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(97),
+            A::from_base(F(97)),
             current[BASE_ROLE],
             current[BASE_DOCUMENT],
             current[BASE_NODE],
             current[BASE_START],
             current[BASE_CONTENT_START],
             current[BASE_CONTENT_END],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
 }
-fn profile_topology_query_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn profile_topology_query_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(97),
+            A::from_base(F(97)),
             current[BASE_PARENT],
             current[BASE_DOCUMENT],
             current[BASE_NODE],
             current[BASE_CONTENT_START],
             current[BASE_DEPTH],
             current[BASE_TAG_NUMBER],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
 }
-fn serial_node_lookup_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn serial_node_lookup_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(92),
+            A::from_base(F(92)),
             current[BASE_DOCUMENT],
             current[BASE_NODE],
             current[BASE_START],
@@ -5848,14 +5856,14 @@ fn serial_node_lookup_factor_v1(
         challenges.tuple[lane],
     )
 }
-fn grammar_rule_table_factor_v1(
-    fixed: &ZkX509Rfc5280StarkFixedRowV1,
+fn grammar_rule_table_factor_v1<A: PolynomialAirFieldV1>(
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(93),
+            A::from_base(F(93)),
             fixed[FIX_EXPECTED],
             fixed[FIX_EXPECTED + 1],
             fixed[FIX_EXPECTED + 2],
@@ -5871,14 +5879,14 @@ fn grammar_rule_table_factor_v1(
         challenges.tuple[lane],
     )
 }
-fn grammar_rule_query_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn grammar_rule_query_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(93),
+            A::from_base(F(93)),
             current[BASE_B],
             current[BASE_ROLE],
             grammar_tag_pack_v1(
@@ -5902,74 +5910,74 @@ fn grammar_rule_query_factor_v1(
         challenges.tuple[lane],
     )
 }
-fn grammar_parent_table_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn grammar_parent_table_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(94),
+            A::from_base(F(94)),
             current[BASE_DOCUMENT],
             current[BASE_NODE],
             current[BASE_ROLE],
             current[BASE_INSTANCE],
             current[BASE_D],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
 }
-fn grammar_parent_query_factor_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
+fn grammar_parent_query_factor_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(94),
+            A::from_base(F(94)),
             current[BASE_DOCUMENT],
             current[BASE_PARENT],
             current[BASE_B],
             current[BASE_C],
             current[BASE_G],
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
 }
-fn grammar_ordinal_factor_v1(
-    document: F,
-    parent: F,
-    child: F,
-    child_count: F,
+fn grammar_ordinal_factor_v1<A: PolynomialAirFieldV1>(
+    document: A,
+    parent: A,
+    child: A,
+    child_count: A,
     lane: usize,
     challenges: ZkX509Rfc5280StarkChallengesV1,
-) -> F {
+) -> A {
     compress_tuple_v1(
         [
-            F(95),
+            A::from_base(F(95)),
             document,
             parent,
             child,
             child_count,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
-            F::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
+            A::ZERO,
         ],
         challenges.tuple[lane],
     )
@@ -6961,9 +6969,9 @@ pub(crate) fn build_zk_x509_rfc5280_stark_base_material_v1(
         family_rows,
     })
 }
-fn populate_degree_normalization_helpers_v1(
-    row: &mut ZkX509Rfc5280StarkBaseRowV1,
-    fixed: &ZkX509Rfc5280StarkFixedRowV1,
+fn populate_degree_normalization_helpers_v1<A: PolynomialAirFieldV1>(
+    row: &mut ZkX509Rfc5280StarkBaseRowV1<A>,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
 ) {
     let family = |candidate: ZkX509Rfc5280StarkFamilyV1| fixed[candidate as usize];
     let active = row[BASE_ACTIVE];
@@ -6971,22 +6979,24 @@ fn populate_degree_normalization_helpers_v1(
     let root = fixed[FIX_EXPECTED + 2];
     row[BASE_GRAMMAR_ORDINAL] = source_node.mul(
         root.mul(row[BASE_DOCUMENT])
-            .add(F::ONE.sub(root).mul(row[BASE_CHILD])),
+            .add(A::ONE.sub(root).mul(row[BASE_CHILD])),
     );
     row[BASE_EXPECTED_ROOT_KIND] = source_node.mul(
         fixed[FIX_EXPECTED + 3]
             .add(
-                fixed[FIX_EXPECTED + 4]
-                    .mul(row[BASE_CERT2_ACTIVE].add(F::ONE.sub(row[BASE_CERT2_ACTIVE]).mul(F(2)))),
+                fixed[FIX_EXPECTED + 4].mul(
+                    row[BASE_CERT2_ACTIVE]
+                        .add(A::ONE.sub(row[BASE_CERT2_ACTIVE]).mul(A::from_base(F(2)))),
+                ),
             )
             .add(
                 fixed[FIX_EXPECTED + 5].mul(
                     row[BASE_CERT2_ACTIVE]
-                        .mul(F(2))
-                        .add(F::ONE.sub(row[BASE_CERT2_ACTIVE]).mul(F(3))),
+                        .mul(A::from_base(F(2)))
+                        .add(A::ONE.sub(row[BASE_CERT2_ACTIVE]).mul(A::from_base(F(3)))),
                 ),
             )
-            .add(fixed[FIX_EXPECTED + 6].mul(F(3))),
+            .add(fixed[FIX_EXPECTED + 6].mul(A::from_base(F(3)))),
     );
     let profile = fixed[FIX_PROFILE_TABLE].mul(active);
     let topology = source_node.mul(active).mul(row[BASE_INVERSE]);
@@ -7006,7 +7016,7 @@ fn populate_degree_normalization_helpers_v1(
         ZkX509Rfc5280StarkFamilyV1::SemanticConsumer,
     ]
     .into_iter()
-    .fold(F::ZERO, |sum, candidate| sum.add(family(candidate)))
+    .fold(A::ZERO, |sum, candidate| sum.add(family(candidate)))
     .mul(active);
     row[BASE_SERIAL_BYTE_QUERY_ACTIVE] = serial_query.add(direct_query);
     row[BASE_SERIAL_BYTE_QUERY_VALUE] = serial_query
@@ -7038,7 +7048,7 @@ fn populate_degree_normalization_helpers_v1(
     let calendar_phases = fixed[FIX_CALENDAR_PHASES..FIX_CALENDAR_PHASES + CALENDAR_COPY_PHASES_V1]
         .iter()
         .copied()
-        .fold(F::ZERO, F::add);
+        .fold(A::ZERO, A::add);
     let calendar_consumer = calendar_phases.mul(active);
     let range_consumer = fixed[FIX_RANGE_TERMINAL].mul(active);
     row[BASE_COPY_SOURCE_ACTIVE] = serial_source.add(decimal_source).add(relation_source);
@@ -7049,9 +7059,13 @@ fn populate_degree_normalization_helpers_v1(
     row[BASE_COPY_DOMAIN] = serial_source
         .add(serial_left)
         .add(serial_right)
-        .mul(F(90))
-        .add(decimal_source.add(calendar_consumer).mul(F(98)))
-        .add(relation_source.add(range_consumer).mul(F(99)));
+        .mul(A::from_base(F(90)))
+        .add(
+            decimal_source
+                .add(calendar_consumer)
+                .mul(A::from_base(F(98))),
+        )
+        .add(relation_source.add(range_consumer).mul(A::from_base(F(99))));
     row[BASE_COPY_KEY_1] = serial_source
         .mul(row[SERIAL_SOURCE_LOGICAL_ID])
         .add(decimal_source.mul(row[BASE_INSTANCE]))
@@ -7070,10 +7084,10 @@ fn populate_degree_normalization_helpers_v1(
                 .iter()
                 .copied()
                 .enumerate()
-                .fold(F::ZERO, |sum, (component, selector)| {
-                    sum.add(selector.mul(active).mul(F(
+                .fold(A::ZERO, |sum, (component, selector)| {
+                    sum.add(selector.mul(active).mul(A::from_base(F(
                         u64::try_from(component).expect("six calendar components fit u64"),
-                    )))
+                    ))))
                 }),
         )
         .add(range_consumer.mul(row[BASE_INSTANCE]));
@@ -7095,7 +7109,7 @@ fn populate_degree_normalization_helpers_v1(
                     row[BASE_E],
                     row[BASE_F],
                 ])
-                .fold(F::ZERO, |sum, (selector, value)| {
+                .fold(A::ZERO, |sum, (selector, value)| {
                     sum.add(selector.mul(active).mul(value))
                 }),
         )
@@ -7269,11 +7283,11 @@ pub(crate) fn compile_zk_x509_rfc5280_stark_terminal_claims_v1(
 }
 /// Bind every proof-carried relation and role terminal to its independently
 /// committed final auxiliary product in verifier-fixed address order.
-pub(crate) fn evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(
-    last_aggregate: F,
-    aux: &ZkX509Rfc5280StarkAuxRowV1,
+pub(crate) fn evaluate_zk_x509_rfc5280_terminal_claim_residues_v1<A: PolynomialAirFieldV1>(
+    last_aggregate: A,
+    aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
     claims: ZkX509Rfc5280StarkTerminalClaimsV1,
-) -> Result<[F; RFC5280_TERMINAL_CLAIM_RECORDS_V1], ZkX509Rfc5280StarkErrorV1> {
+) -> Result<[A; RFC5280_TERMINAL_CLAIM_RECORDS_V1], ZkX509Rfc5280StarkErrorV1> {
     claims.validate_v1()?;
     Ok(core::array::from_fn(|claim_index| {
         let claimed = claims
@@ -7283,7 +7297,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(
             let relation_index = claim_index / ZK_X509_RFC5280_STARK_BUS_LANES_V1;
             let lane = claim_index % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
             let (_, _, auxiliary_after) = RFC5280_TERMINAL_CLAIM_RELATIONS_V1[relation_index];
-            last_aggregate.mul(aux[auxiliary_after + lane].sub(claimed))
+            last_aggregate.mul(aux[auxiliary_after + lane].sub(A::from_base(claimed)))
         } else {
             let local = claim_index - RFC5280_AGGREGATE_TERMINAL_CLAIM_RECORDS_V1;
             let role_index =
@@ -7293,8 +7307,10 @@ pub(crate) fn evaluate_zk_x509_rfc5280_terminal_claim_residues_v1(
             let consumer = endpoint_lane / ZK_X509_RFC5280_STARK_BUS_LANES_V1
                 == output_endpoint_index_v1(true);
             let lane = endpoint_lane % ZK_X509_RFC5280_STARK_BUS_LANES_V1;
-            last_aggregate
-                .mul(aux[output_role_aux_column_v1(role_index, consumer, lane)].sub(claimed))
+            last_aggregate.mul(
+                aux[output_role_aux_column_v1(role_index, consumer, lane)]
+                    .sub(A::from_base(claimed)),
+            )
         }
     }))
 }
@@ -7883,33 +7899,33 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
 /// Fixed family selectors are verifier-preprocessed. Every family contributes the same residue
 /// inventory on every row, so neither witness values nor roles can alter the composition shape.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
-    current: &ZkX509Rfc5280StarkBaseRowV1,
-    next: &ZkX509Rfc5280StarkBaseRowV1,
-    current_aux: &ZkX509Rfc5280StarkAuxRowV1,
-    next_aux: &ZkX509Rfc5280StarkAuxRowV1,
-    fixed: &ZkX509Rfc5280StarkFixedRowV1,
+pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    next: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    current_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
+    next_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
     der_challenges: ZkX509DerStarkChallengesV1,
     challenges: ZkX509Rfc5280StarkChallengesV1,
     terminal_claims: ZkX509Rfc5280StarkTerminalClaimsV1,
-) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1> {
+) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
     der_challenges.validate()?;
     challenges.validate()?;
+    terminal_claims.validate_v1()?;
     if current
         .iter()
         .chain(next)
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .chain(terminal_claims.relations.iter().flatten())
-        .any(|value| value.0 >= GOLDILOCKS_MODULUS_V1 || F::canonical(value.0).is_none())
+        .any(|value| !value.is_canonical())
     {
         return Err(ZkX509Rfc5280StarkErrorV1::Semantic);
     }
     let mut residues = Vec::with_capacity(ZK_X509_RFC5280_STARK_CONSTRAINT_COUNT_V1);
     let mut residue_section_start = 0;
     for bit in &current[BASE_BYTE_BITS..BASE_BYTE_BITS + 8] {
-        push_boolean_v1(&mut residues, F::ONE, *bit);
+        push_boolean_v1(&mut residues, A::ONE, *bit);
     }
     residues
         .push(current[BASE_VALUE].sub(pack_bits_v1(&current[BASE_BYTE_BITS..BASE_BYTE_BITS + 8])));
@@ -7919,7 +7935,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         current[BASE_STRICT],
         current[BASE_EQUAL],
     ] {
-        push_boolean_v1(&mut residues, F::ONE, value);
+        push_boolean_v1(&mut residues, A::ONE, value);
     }
     assert_residue_section_v1(
         residues.len(),
@@ -7987,7 +8003,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     let grammar_rule_table = current[BASE_ACTIVE].mul(fixed[FIX_GRAMMAR_RULE_TABLE]);
     let grammar_ordinal_table = current[BASE_ACTIVE].mul(fixed[FIX_GRAMMAR_ORDINAL_TABLE]);
     let root_node = fixed[FIX_EXPECTED + 2];
-    let non_root_node = F::ONE.sub(root_node);
+    let non_root_node = A::ONE.sub(root_node);
     for bit in &current[BASE_SMALL_BITS..BASE_SMALL_BITS + 24] {
         push_boolean_v1(&mut residues, source_node, *bit);
     }
@@ -8015,7 +8031,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(
         source_node.mul(
             current[BASE_C]
-                .sub(current[BASE_VALUE].mul(F(256)))
+                .sub(current[BASE_VALUE].mul(A::from_base(F(256))))
                 .sub(current[BASE_ADDRESS]),
         ),
     );
@@ -8039,7 +8055,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(
         source_node
             .mul(current[BASE_STRICT])
-            .mul(grammar_ordinal.add(F::ONE).sub(current[BASE_G])),
+            .mul(grammar_ordinal.add(A::ONE).sub(current[BASE_G])),
     );
     residues.push(
         source_node
@@ -8088,7 +8104,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(
         grammar_ordinal_table.mul(
             current[BASE_A]
-                .sub(current[BASE_DOCUMENT].mul(F(2_048)))
+                .sub(current[BASE_DOCUMENT].mul(A::from_base(F(2_048))))
                 .sub(current[BASE_PARENT]),
         ),
     );
@@ -8120,7 +8136,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(
         grammar_ordinal_table
             .mul(current[BASE_ORDINAL_EQUAL_CONTINUE])
-            .mul(next[BASE_CHILD].sub(current[BASE_CHILD].add(F::ONE))),
+            .mul(next[BASE_CHILD].sub(current[BASE_CHILD].add(A::ONE))),
     );
     residues.push(
         grammar_ordinal_table
@@ -8135,26 +8151,26 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(
         grammar_ordinal_table
             .mul(ordinal_next_active.sub(current[BASE_ORDINAL_EQUAL_CONTINUE]))
-            .mul(current[BASE_CHILD].add(F::ONE).sub(current[BASE_D])),
+            .mul(current[BASE_CHILD].add(A::ONE).sub(current[BASE_D])),
     );
     residues.push(
         grammar_ordinal_table
             .mul(ordinal_next_active.sub(current[BASE_ORDINAL_EQUAL_CONTINUE]))
-            .mul(current[BASE_B].sub(F::ONE).sub(current[BASE_C])),
+            .mul(current[BASE_B].sub(A::ONE).sub(current[BASE_C])),
     );
     residues.push(
         grammar_ordinal_table
-            .mul(F::ONE.sub(ordinal_next_active))
-            .mul(current[BASE_CHILD].add(F::ONE).sub(current[BASE_D])),
+            .mul(A::ONE.sub(ordinal_next_active))
+            .mul(current[BASE_CHILD].add(A::ONE).sub(current[BASE_D])),
     );
     residues.push(
         grammar_ordinal_table
-            .mul(F::ONE.sub(ordinal_next_active))
+            .mul(A::ONE.sub(ordinal_next_active))
             .mul(current[BASE_B]),
     );
     residues.push(
         grammar_ordinal_table
-            .mul(F::ONE.sub(ordinal_next_active))
+            .mul(A::ONE.sub(ordinal_next_active))
             .mul(current[BASE_C]),
     );
     assert_residue_section_v1(
@@ -8175,7 +8191,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         current[BASE_IS_WRITE],
         current[BASE_INVERSE],
     );
-    let fixed_byte_remaining = current[BASE_B].sub(current[BASE_OFFSET]).sub(F::ONE);
+    let fixed_byte_remaining = current[BASE_B].sub(current[BASE_OFFSET]).sub(A::ONE);
     push_reused_gated_zero_safe_inverse_v1(
         &mut residues,
         fixed_byte,
@@ -8199,8 +8215,8 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
             .mul(current[BASE_CHILD])
             .mul(current[BASE_CONTENT_END].sub(current[BASE_TAG_NUMBER])),
     );
-    let fixed_byte_continue = fixed_byte.mul(F::ONE.sub(current[BASE_STRICT]));
-    residues.push(fixed_byte_continue.mul(next[BASE_ACTIVE].sub(F::ONE)));
+    let fixed_byte_continue = fixed_byte.mul(A::ONE.sub(current[BASE_STRICT]));
+    residues.push(fixed_byte_continue.mul(next[BASE_ACTIVE].sub(A::ONE)));
     for (current_value, next_value) in [
         (current[BASE_ROLE], next[BASE_ROLE]),
         (current[BASE_INSTANCE], next[BASE_INSTANCE]),
@@ -8221,9 +8237,9 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     ] {
         residues.push(fixed_byte_continue.mul(next_value.sub(current_value)));
     }
-    residues.push(fixed_byte_continue.mul(next[BASE_OFFSET].sub(current[BASE_OFFSET]).sub(F::ONE)));
+    residues.push(fixed_byte_continue.mul(next[BASE_OFFSET].sub(current[BASE_OFFSET]).sub(A::ONE)));
     residues
-        .push(fixed_byte_continue.mul(next[BASE_ADDRESS].sub(current[BASE_ADDRESS]).sub(F::ONE)));
+        .push(fixed_byte_continue.mul(next[BASE_ADDRESS].sub(current[BASE_ADDRESS]).sub(A::ONE)));
     let equal_byte = active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::EqualByte);
     residues.push(equal_byte.mul(current[BASE_A].sub(current[BASE_B])));
     let decimal = active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::Decimal);
@@ -8234,10 +8250,16 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         .push(decimal.mul(
             current[BASE_A].sub(pack_bits_v1(&current[BASE_SMALL_BITS..BASE_SMALL_BITS + 4])),
         ));
-    residues.push(decimal.mul(current[BASE_VALUE].sub(F(48).add(current[BASE_A]))));
-    residues.push(decimal.mul(
-        current[BASE_STATE_AFTER].sub(current[BASE_STATE_BEFORE].mul(F(10)).add(current[BASE_A])),
-    ));
+    residues.push(decimal.mul(current[BASE_VALUE].sub(A::from_base(F(48)).add(current[BASE_A]))));
+    residues.push(
+        decimal.mul(
+            current[BASE_STATE_AFTER].sub(
+                current[BASE_STATE_BEFORE]
+                    .mul(A::from_base(F(10)))
+                    .add(current[BASE_A]),
+            ),
+        ),
+    );
     push_reused_gated_zero_safe_inverse_v1(
         &mut residues,
         decimal,
@@ -8248,7 +8270,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     push_reused_gated_zero_safe_inverse_v1(
         &mut residues,
         decimal,
-        current[BASE_B].sub(current[BASE_OFFSET]).sub(F::ONE),
+        current[BASE_B].sub(current[BASE_OFFSET]).sub(A::ONE),
         current[BASE_STRICT],
         current[BASE_G],
     );
@@ -8257,12 +8279,12 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
             .mul(current[BASE_IS_WRITE])
             .mul(current[BASE_STATE_BEFORE]),
     );
-    let decimal_continue = decimal.mul(F::ONE.sub(current[BASE_STRICT]));
-    residues.push(decimal_continue.mul(next[BASE_ACTIVE].sub(F::ONE)));
+    let decimal_continue = decimal.mul(A::ONE.sub(current[BASE_STRICT]));
+    residues.push(decimal_continue.mul(next[BASE_ACTIVE].sub(A::ONE)));
     residues.push(decimal_continue.mul(next[BASE_ROLE].sub(current[BASE_ROLE])));
     residues.push(decimal_continue.mul(next[BASE_INSTANCE].sub(current[BASE_INSTANCE])));
     residues.push(decimal_continue.mul(next[BASE_B].sub(current[BASE_B])));
-    residues.push(decimal_continue.mul(next[BASE_OFFSET].sub(current[BASE_OFFSET]).sub(F::ONE)));
+    residues.push(decimal_continue.mul(next[BASE_OFFSET].sub(current[BASE_OFFSET]).sub(A::ONE)));
     residues.push(decimal_continue.mul(next[BASE_STATE_BEFORE].sub(current[BASE_STATE_AFTER])));
     assert_residue_section_v1(
         residues.len(),
@@ -8275,7 +8297,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         [FIX_CALENDAR_PHASES..FIX_CALENDAR_PHASES + CALENDAR_COPY_PHASES_V1 - 1]
         .iter()
         .copied()
-        .fold(F::ZERO, F::add);
+        .fold(A::ZERO, A::add);
     for column in [
         BASE_ACTIVE,
         BASE_A,
@@ -8337,41 +8359,41 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
             month_selectors
                 .iter()
                 .copied()
-                .fold(F::ZERO, F::add)
-                .sub(F::ONE),
+                .fold(A::ZERO, A::add)
+                .sub(A::ONE),
         ),
     );
     residues.push(calendar.mul(
         current[BASE_B].sub(month_selectors.iter().copied().enumerate().fold(
-            F::ZERO,
+            A::ZERO,
             |sum, (month, selector)| {
-                sum.add(selector.mul(F(
+                sum.add(selector.mul(A::from_base(F(
                     u64::try_from(month + 1).expect("calendar month fits u64"),
-                )))
+                ))))
             },
         )),
     ));
     residues.push(
         calendar.mul(
             current[BASE_A]
-                .sub(F(1969))
-                .sub(current[CAL_Q4].mul(F(4)))
+                .sub(A::from_base(F(1969)))
+                .sub(current[CAL_Q4].mul(A::from_base(F(4))))
                 .sub(current[BASE_DOCUMENT]),
         ),
     );
     residues.push(
         calendar.mul(
             current[BASE_A]
-                .sub(F(1901))
-                .sub(current[CAL_Q100].mul(F(100)))
+                .sub(A::from_base(F(1901)))
+                .sub(current[CAL_Q100].mul(A::from_base(F(100))))
                 .sub(current[BASE_ADDRESS]),
         ),
     );
     residues.push(
         calendar.mul(
             current[BASE_A]
-                .sub(F(1901))
-                .sub(current[CAL_Q400].mul(F(400)))
+                .sub(A::from_base(F(1901)))
+                .sub(current[CAL_Q400].mul(A::from_base(F(400))))
                 .sub(current[BASE_NODE]),
         ),
     );
@@ -8385,7 +8407,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         (current[BASE_NODE], current[CAL_Z400], current[CAL_INV400]),
     ] {
         push_boolean_v1(&mut residues, calendar, zero);
-        residues.push(calendar.mul(remainder.mul(inverse).sub(F::ONE.sub(zero))));
+        residues.push(calendar.mul(remainder.mul(inverse).sub(A::ONE.sub(zero))));
         residues.push(calendar.mul(zero).mul(remainder));
     }
     push_boolean_v1(&mut residues, calendar, current[CAL_LEAP]);
@@ -8393,7 +8415,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         calendar.mul(
             current[CAL_LEAP].sub(
                 current[CAL_Z4]
-                    .mul(F::ONE.sub(current[CAL_Z100]))
+                    .mul(A::ONE.sub(current[CAL_Z100]))
                     .add(current[CAL_Z400]),
             ),
         ),
@@ -8402,8 +8424,8 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         calendar.mul(
             current[BASE_H].sub(
                 current[BASE_A]
-                    .sub(F(1970))
-                    .mul(F(365))
+                    .sub(A::from_base(F(1970)))
+                    .mul(A::from_base(F(365)))
                     .add(current[CAL_Q4])
                     .sub(current[CAL_Q100])
                     .add(current[CAL_Q400]),
@@ -8417,13 +8439,13 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
             .iter()
             .copied()
             .enumerate()
-            .fold(F::ZERO, |sum, (month, selector)| {
+            .fold(A::ZERO, |sum, (month, selector)| {
                 let leap = if month >= 2 {
                     current[CAL_LEAP]
                 } else {
-                    F::ZERO
+                    A::ZERO
                 };
-                sum.add(selector.mul(F(MONTH_PREFIX[month]).add(leap)))
+                sum.add(selector.mul(A::from_base(F(MONTH_PREFIX[month])).add(leap)))
             });
     residues.push(calendar.mul(current[CAL_PREFIX].sub(selected_prefix)));
     let selected_days =
@@ -8431,27 +8453,27 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
             .iter()
             .copied()
             .enumerate()
-            .fold(F::ZERO, |sum, (month, selector)| {
+            .fold(A::ZERO, |sum, (month, selector)| {
                 let leap = if month == 1 {
                     current[CAL_LEAP]
                 } else {
-                    F::ZERO
+                    A::ZERO
                 };
-                sum.add(selector.mul(F(MONTH_DAYS[month]).add(leap)))
+                sum.add(selector.mul(A::from_base(F(MONTH_DAYS[month])).add(leap)))
             });
     residues.push(calendar.mul(current[CAL_MONTH_DAYS].sub(selected_days)));
-    residues.push(calendar.mul(current[BASE_C].sub(current[CAL_DAY_MINUS_ONE].add(F::ONE))));
+    residues.push(calendar.mul(current[BASE_C].sub(current[CAL_DAY_MINUS_ONE].add(A::ONE))));
     residues.push(
         calendar.mul(current[CAL_MONTH_DAYS].sub(current[BASE_C].add(current[CAL_MONTH_SLACK]))),
     );
     let timestamp = current[BASE_H]
         .add(current[CAL_PREFIX])
         .add(current[CAL_DAY_MINUS_ONE])
-        .mul(F(24))
+        .mul(A::from_base(F(24)))
         .add(current[BASE_D])
-        .mul(F(60))
+        .mul(A::from_base(F(60)))
         .add(current[BASE_E])
-        .mul(F(60))
+        .mul(A::from_base(F(60)))
         .add(current[BASE_F]);
     residues.push(calendar.mul(current[BASE_G].sub(timestamp)));
     assert_residue_section_v1(
@@ -8470,7 +8492,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     );
     residues.push(
         relation
-            .mul(F::ONE.sub(current[BASE_STRICT]))
+            .mul(A::ONE.sub(current[BASE_STRICT]))
             .mul(current[BASE_INVERSE]),
     );
     let bit_flags = active_family_gate_v1(current, fixed, ZkX509Rfc5280StarkFamilyV1::BitFlags);
@@ -8497,7 +8519,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     }
     residues.push(serial_source.mul(current[BASE_TAG_CLASS]));
     residues.push(serial_source.mul(current[BASE_CONSTRUCTED]));
-    residues.push(serial_source.mul(current[BASE_TAG_NUMBER].sub(F(2))));
+    residues.push(serial_source.mul(current[BASE_TAG_NUMBER].sub(A::from_base(F(2)))));
     residues.push(
         serial_source.mul(
             current[BASE_CONTENT_END]
@@ -8515,7 +8537,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(serial_source_first.mul(current[BASE_VALUE].sub(current[SERIAL_SOURCE_LENGTH])));
     residues.push(
         serial_source
-            .mul(F::ONE.sub(fixed[FIX_LOCAL_LAST]))
+            .mul(A::ONE.sub(fixed[FIX_LOCAL_LAST]))
             .mul(next[SERIAL_SOURCE_LENGTH].sub(current[SERIAL_SOURCE_LENGTH])),
     );
     residues.push(
@@ -8529,18 +8551,18 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(serial_source_first.mul(current[BASE_EQUAL]));
     residues.push(
         serial_source
-            .mul(F::ONE.sub(fixed[FIX_LOCAL_LAST]))
+            .mul(A::ONE.sub(fixed[FIX_LOCAL_LAST]))
             .mul(next[SERIAL_SOURCE_COUNT_BEFORE].sub(current[SERIAL_SOURCE_COUNT_AFTER])),
     );
-    residues.push(serial_source_first.mul(next[BASE_EQUAL].sub(F::ONE)));
+    residues.push(serial_source_first.mul(next[BASE_EQUAL].sub(A::ONE)));
     residues.push(
         serial_source_interior
             .mul(next[BASE_EQUAL])
-            .mul(F::ONE.sub(current[BASE_EQUAL])),
+            .mul(A::ONE.sub(current[BASE_EQUAL])),
     );
     residues.push(
         serial_source_not_first
-            .mul(F::ONE.sub(current[BASE_EQUAL]))
+            .mul(A::ONE.sub(current[BASE_EQUAL]))
             .mul(current[BASE_VALUE]),
     );
     residues.push(
@@ -8552,12 +8574,12 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         serial_source_first_payload.mul(
             current[BASE_VALUE]
                 .mul(current[SERIAL_SOURCE_FIRST_INVERSE])
-                .sub(F::ONE),
+                .sub(A::ONE),
         ),
     );
     residues.push(
         serial_source
-            .mul(F::ONE.sub(fixed[FIX_EXPECTED + 4]))
+            .mul(A::ONE.sub(fixed[FIX_EXPECTED + 4]))
             .mul(current[SERIAL_SOURCE_FIRST_INVERSE]),
     );
     residues.push(
@@ -8581,14 +8603,14 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     );
     residues.push(
         serial_source
-            .mul(F::ONE.sub(current[BASE_IS_WRITE]))
+            .mul(A::ONE.sub(current[BASE_IS_WRITE]))
             .mul(current[SERIAL_SOURCE_QUERY_VALUE]),
     );
     residues.push(
         serial_source.mul(current[BASE_EQUAL]).mul(
             current[BASE_ADDRESS]
                 .add(current[SERIAL_SOURCE_LENGTH])
-                .add(F::ONE)
+                .add(A::ONE)
                 .sub(current[BASE_CONTENT_END])
                 .sub(current[BASE_OFFSET]),
         ),
@@ -8600,7 +8622,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     );
     residues.push(
         serial_source
-            .mul(F::ONE.sub(current[BASE_IS_WRITE]))
+            .mul(A::ONE.sub(current[BASE_IS_WRITE]))
             .mul(current[BASE_ADDRESS]),
     );
     assert_residue_section_v1(
@@ -8695,24 +8717,24 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     ] {
         residues.push(serial_not_last.mul(next_length.sub(length)));
         residues.push(serial_not_last.mul(next_count_before.sub(count_after)));
-        residues.push(serial_first.mul(next_active.sub(F::ONE)));
-        residues.push(serial_interior.mul(next_active).mul(F::ONE.sub(active)));
-        residues.push(serial_not_first.mul(F::ONE.sub(active)).mul(value));
+        residues.push(serial_first.mul(next_active.sub(A::ONE)));
+        residues.push(serial_interior.mul(next_active).mul(A::ONE.sub(active)));
+        residues.push(serial_not_first.mul(A::ONE.sub(active)).mul(value));
         residues.push(serial_last.mul(count_after.sub(length)));
     }
     for (value, inverse) in [
         (current[BASE_A], current[SERIAL_LEFT_FIRST_INVERSE]),
         (current[BASE_B], current[SERIAL_RIGHT_FIRST_INVERSE]),
     ] {
-        residues.push(serial_first_payload.mul(value.mul(inverse).sub(F::ONE)));
-        residues.push(serial.mul(F::ONE.sub(fixed[FIX_EXPECTED + 4])).mul(inverse));
+        residues.push(serial_first_payload.mul(value.mul(inverse).sub(A::ONE)));
+        residues.push(serial.mul(A::ONE.sub(fixed[FIX_EXPECTED + 4])).mul(inverse));
     }
     let difference = current[BASE_A].sub(current[BASE_B]);
     residues.push(
         serial.mul(
             difference
                 .mul(current[BASE_INVERSE])
-                .sub(F::ONE.sub(current[BASE_EQUAL])),
+                .sub(A::ONE.sub(current[BASE_EQUAL])),
         ),
     );
     residues.push(serial.mul(current[BASE_EQUAL]).mul(difference));
@@ -8722,34 +8744,34 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
             current[BASE_STATE_AFTER].sub(current[BASE_STATE_BEFORE].mul(current[BASE_EQUAL])),
         ),
     );
-    residues.push(serial_first.mul(current[BASE_STATE_BEFORE].sub(F::ONE)));
+    residues.push(serial_first.mul(current[BASE_STATE_BEFORE].sub(A::ONE)));
     residues.push(serial_not_last.mul(next[BASE_STATE_BEFORE].sub(current[BASE_STATE_AFTER])));
     residues.push(
         serial_last
-            .mul(F::ONE.sub(current[BASE_STRICT]))
+            .mul(A::ONE.sub(current[BASE_STRICT]))
             .mul(current[BASE_STATE_AFTER]),
     );
     residues.push(
         serial
             .mul(current[SERIAL_LESS])
-            .mul(F::ONE.sub(current[BASE_STRICT])),
+            .mul(A::ONE.sub(current[BASE_STRICT])),
     );
     residues.push(serial.mul(current[SERIAL_LESS]).mul(current[BASE_EQUAL]));
     residues.push(
         serial
             .mul(current[SERIAL_LESS])
-            .mul(F::ONE.sub(current[BASE_STATE_BEFORE])),
+            .mul(A::ONE.sub(current[BASE_STATE_BEFORE])),
     );
     residues.push(
         serial
             .mul(current[BASE_C])
-            .mul(F::ONE.sub(current[SERIAL_LESS])),
+            .mul(A::ONE.sub(current[SERIAL_LESS])),
     );
     residues.push(
         serial.mul(current[SERIAL_LESS]).mul(
             current[BASE_B]
                 .sub(current[BASE_A])
-                .sub(F::ONE)
+                .sub(A::ONE)
                 .sub(current[BASE_C]),
         ),
     );
@@ -8761,7 +8783,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     residues.push(
         serial_last
             .mul(current[BASE_STRICT])
-            .mul(current[SERIAL_ORDER_AFTER].sub(F::ONE)),
+            .mul(current[SERIAL_ORDER_AFTER].sub(A::ONE)),
     );
     assert_residue_section_v1(
         residues.len(),
@@ -8773,7 +8795,7 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         range.mul(
             current[BASE_STATE_AFTER].sub(
                 current[BASE_STATE_BEFORE]
-                    .mul(F(256))
+                    .mul(A::from_base(F(256)))
                     .add(current[BASE_VALUE]),
             ),
         ),
@@ -8785,12 +8807,12 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     );
     residues.push(
         range
-            .mul(F::ONE.sub(fixed[FIX_LOCAL_LAST]))
+            .mul(A::ONE.sub(fixed[FIX_LOCAL_LAST]))
             .mul(next[BASE_ROLE].sub(current[BASE_ROLE])),
     );
     residues.push(
         range
-            .mul(F::ONE.sub(fixed[FIX_LOCAL_LAST]))
+            .mul(A::ONE.sub(fixed[FIX_LOCAL_LAST]))
             .mul(next[BASE_INSTANCE].sub(current[BASE_INSTANCE])),
     );
     let profile_table =
@@ -8881,9 +8903,9 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         ] {
             residues.push(
                 current_aux[after]
-                    .sub(current_aux[before].mul(F::ONE.add(gate.mul(factor.sub(F::ONE))))),
+                    .sub(current_aux[before].mul(A::ONE.add(gate.mul(factor.sub(A::ONE))))),
             );
-            residues.push(first.mul(current_aux[before].sub(F::ONE)));
+            residues.push(first.mul(current_aux[before].sub(A::ONE)));
             residues.push(continue_gate.mul(next_aux[before].sub(current_aux[after])));
         }
     }
@@ -8916,10 +8938,10 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
                         )
                         .sub(
                             gate.mul(product)
-                                .mul(output_row_factor_v1(current, lane, challenges).sub(F::ONE)),
+                                .mul(output_row_factor_v1(current, lane, challenges).sub(A::ONE)),
                         ),
                 );
-                residues.push(first.mul(product.sub(F::ONE)));
+                residues.push(first.mul(product.sub(A::ONE)));
             }
         }
     }
@@ -8934,18 +8956,18 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         residues.push(
             current_aux[AUX_SERIAL_SOURCE_AFTER + lane]
                 .sub(current_aux[AUX_SERIAL_SOURCE_BEFORE + lane].mul(
-                    F::ONE.add(current[BASE_COPY_SOURCE_ACTIVE].mul(copy_factor.sub(F::ONE))),
+                    A::ONE.add(current[BASE_COPY_SOURCE_ACTIVE].mul(copy_factor.sub(A::ONE))),
                 )),
         );
         residues.push(
             current_aux[AUX_SERIAL_CONSUMER_AFTER + lane].sub(
                 current_aux[AUX_SERIAL_CONSUMER_BEFORE + lane].mul(
-                    F::ONE.add(current[BASE_COPY_CONSUMER_ACTIVE].mul(copy_factor.sub(F::ONE))),
+                    A::ONE.add(current[BASE_COPY_CONSUMER_ACTIVE].mul(copy_factor.sub(A::ONE))),
                 ),
             ),
         );
-        residues.push(first.mul(current_aux[AUX_SERIAL_SOURCE_BEFORE + lane].sub(F::ONE)));
-        residues.push(first.mul(current_aux[AUX_SERIAL_CONSUMER_BEFORE + lane].sub(F::ONE)));
+        residues.push(first.mul(current_aux[AUX_SERIAL_SOURCE_BEFORE + lane].sub(A::ONE)));
+        residues.push(first.mul(current_aux[AUX_SERIAL_CONSUMER_BEFORE + lane].sub(A::ONE)));
         residues.push(
             continue_gate.mul(
                 next_aux[AUX_SERIAL_SOURCE_BEFORE + lane]
@@ -9004,9 +9026,9 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
         ] {
             residues.push(
                 current_aux[after]
-                    .sub(current_aux[before].mul(F::ONE.add(gate.mul(factor.sub(F::ONE))))),
+                    .sub(current_aux[before].mul(A::ONE.add(gate.mul(factor.sub(A::ONE))))),
             );
-            residues.push(first.mul(current_aux[before].sub(F::ONE)));
+            residues.push(first.mul(current_aux[before].sub(A::ONE)));
             residues.push(continue_gate.mul(next_aux[before].sub(current_aux[after])));
         }
         residues.push(
@@ -9288,6 +9310,9 @@ pub(crate) fn evaluate_zk_x509_rfc5280_stark_residues_v1(
     }
     Ok(residues)
 }
+#[cfg(test)]
+#[path = "rfc5280_stark_fp4_tests.rs"]
+mod fp4_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

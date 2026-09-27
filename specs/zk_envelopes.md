@@ -61,6 +61,10 @@ Wire types (as implemented in `crates/iroha_zkp_halo2`)
   - `a_final: [u8; 32]` — final reduced scalar for witness vector
   - `b_final: [u8; 32]` — final reduced scalar for public vector
 
+- The standalone polynomial commitment and opening are deterministic and
+  unblinded. Their coefficients belong in public storage. They establish the
+  stated evaluation only; this envelope is not a confidential application proof.
+
 - `PolyOpenPublic`
   - `version: u16` — format version, currently 1
   - `curve_id: u16` — backend identifier
@@ -275,7 +279,7 @@ Verifier behavior (native STARK)
 - `OpenVerifyEnvelope` STARK verification rejects inner `comp_root`/`comp_values`
   sidecars. The high-level verifier reconstructs the V1 binding-AIR digest from
   backend, circuit id, VK hash, schema descriptor, and public input columns.
-  The reserved canonical `ivm-execution-v1` circuit uses a dedicated IVM binding
+  The reserved canonical `ivm-replay-binding-v1` circuit uses a dedicated IVM binding
   context with that reconstructed digest and the same full-root, AIR-opening and
   FRI checks. Generic binding verification rejects reserved IVM circuits, and
   IVM admission still requires deterministic execution replay.

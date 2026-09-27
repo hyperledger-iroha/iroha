@@ -11040,7 +11040,7 @@ impl V2LaneWorkAdapter {
                 let descriptor = &session.proposal.descriptor;
                 let Ok(expected_epoch) = ({
                     let world = self.state.world_view();
-                    crate::sumeragi::epoch_for_height_from_world(
+                    crate::sumeragi::v2_npos::epoch_for_height_from_world(
                         &world,
                         descriptor.proposal_height,
                         self.context.mode,
@@ -11322,7 +11322,7 @@ impl V2LaneWorkAdapter {
                 };
                 let Ok(expected_epoch) = ({
                     let world = self.state.world_view();
-                    crate::sumeragi::epoch_for_height_from_world(
+                    crate::sumeragi::v2_npos::epoch_for_height_from_world(
                         &world,
                         descriptor.proposal_height,
                         self.context.mode,
@@ -15830,7 +15830,7 @@ impl V2LaneWorkAdapter {
                 hydration_capacity.saturating_add(1),
                 move |proposal_height| {
                     let world = state.world_view();
-                    let epoch = crate::sumeragi::epoch_for_height_from_world(
+                    let epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
                         &world,
                         proposal_height,
                         frozen_mode,
@@ -17185,7 +17185,7 @@ impl V2LaneWorkAdapter {
     }
     fn epoch_for_proposal_height(&self, proposal_height: u64) -> Result<u64, String> {
         let world = self.state.world_view();
-        let epoch = crate::sumeragi::epoch_for_height_from_world(
+        let epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
             &world,
             proposal_height,
             self.context.mode,
@@ -18690,18 +18690,22 @@ impl V2LaneWorkAdapter {
         match validation {
             Ok(()) => Ok(MergeCandidateValidation::Ready),
             Err(
-                error @ (crate::state::MergeLedgerCommitError::BlockHashAdmission(_)
+                error @ (crate::state::MergeLedgerCommitError::StateStorageAdmission(_)
+                | crate::state::MergeLedgerCommitError::BlockHashAdmission(_)
                 | crate::state::MergeLedgerCommitError::MembershipAdmission(_)),
             ) => {
                 self.validated_merge_execution_candidate = None;
                 let wait = match &error {
+                    crate::state::MergeLedgerCommitError::StateStorageAdmission(error) => {
+                        error.release_wait()
+                    }
                     crate::state::MergeLedgerCommitError::BlockHashAdmission(error) => {
                         error.release_wait()
                     }
                     crate::state::MergeLedgerCommitError::MembershipAdmission(error) => {
                         error.release_wait()
                     }
-                    _ => unreachable!("matched original local admission"),
+                    _ => None,
                 };
                 let Some(wait) = wait else {
                     return Err(MergeCandidateValidationError::Frontier(error.to_string()));
@@ -18720,6 +18724,16 @@ impl V2LaneWorkAdapter {
                     super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), &wake),
                 ));
                 Ok(MergeCandidateValidation::Deferred)
+            }
+            Err(
+                error @ (crate::state::MergeLedgerCommitError::NativeResourceAdmission(_)
+                | crate::state::MergeLedgerCommitError::LocalDrainObservation(_)
+                | crate::state::MergeLedgerCommitError::ExecutionObservationChanged
+                | crate::state::MergeLedgerCommitError::ExecutionRecorderConflict(_)
+                | crate::state::MergeLedgerCommitError::Persistence(_)),
+            ) => {
+                self.validated_merge_execution_candidate = None;
+                Err(MergeCandidateValidationError::Frontier(error.to_string()))
             }
             Err(error) => Err(MergeCandidateValidationError::Invalid(error.to_string())),
         }
@@ -21912,7 +21926,7 @@ pub(super) mod tests {
         initial_lane_keys: Option<Vec<KeyPair>>,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-display-name".into();
-        let network_id = crate::sumeragi::synthetic_network_id("v2-lane-work-test");
+        let network_id = crate::unit_test_support::synthetic_network_id("v2-lane-work-test");
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -22080,7 +22094,7 @@ pub(super) mod tests {
         });
         let context_epoch = {
             let world = state.world_view();
-            crate::sumeragi::epoch_for_height_from_world(&world, height, mode)
+            crate::sumeragi::v2_npos::epoch_for_height_from_world(&world, height, mode)
                 .expect("lane-work fixture has an authenticated epoch schedule")
         };
         let context_epoch_end_height = npos_epoch_length.map_or(u64::MAX, |epoch_length| {
@@ -22258,7 +22272,7 @@ pub(super) mod tests {
                 parent_context.parent_commit_qc = durable_parent_qc.clone();
                 parent_context.epoch = {
                     let world = state.world_view();
-                    crate::sumeragi::epoch_for_height_from_world(&world, block_height, mode)
+                    crate::sumeragi::v2_npos::epoch_for_height_from_world(&world, block_height, mode)
                         .expect("parent epoch follows the committed schedule")
                 };
                 parent_context.epoch_end_height = npos_epoch_length.map_or(u64::MAX, |length| {
@@ -22267,6 +22281,9 @@ pub(super) mod tests {
                         .saturating_add(1)
                         .saturating_mul(length)
                 });
+                parent_context
+                    .kagemusha_mint_finality_authorization
+                    .last_height = parent_context.epoch_end_height;
                 (
                     parent_context.kagemusha_mint_finality_authorization,
                     parent_context.kagemusha_mint_finality_authority,
@@ -22299,6 +22316,7 @@ pub(super) mod tests {
                         .expect("durable parent authorizes its exact scheduled successor");
                     parent_context.next_epoch_snapshot =
                         Some(wire::finality::FinalizedNextEpochSnapshot {
+                            committee_preparation: None,
                             epoch: authorization.epoch,
                             kagemusha_mint_finality_authorization: authorization,
                             kagemusha_mint_finality_authority: authority,
@@ -22714,6 +22732,46 @@ pub(super) mod tests {
             ),
             Err(MergeCandidateValidationError::Frontier(_))
         ));
+        for error in [
+            crate::state::MergeLedgerCommitError::ExecutionObservationChanged,
+            crate::state::MergeLedgerCommitError::ExecutionRecorderConflict(
+                "recorder belongs to another State owner".to_owned(),
+            ),
+            crate::state::MergeLedgerCommitError::LocalDrainObservation(Box::new(
+                crate::state::MergeLedgerCommitError::ExecutionObservationChanged,
+            )),
+            crate::state::MergeLedgerCommitError::Persistence(
+                crate::kura::Error::MergeCarrierConflict("history is unavailable".to_owned()),
+            ),
+        ] {
+            assert!(matches!(
+                adapter.classify_merge_state_validation(3, Err(error)),
+                Err(MergeCandidateValidationError::Frontier(_))
+            ));
+            assert!(adapter.validated_merge_execution_candidate.is_none());
+        }
+        let world_storage = concread::release::ReleaseNotification::default();
+        assert_eq!(
+            adapter
+                .classify_merge_state_validation(
+                    5,
+                    Err(crate::state::MergeLedgerCommitError::StateStorageAdmission(
+                        crate::state::StateStorageAdmissionError::World(
+                            mv::storage::AdmittedStorageError::Busy {
+                                role: mv::storage::StorageRole::Current,
+                                release: world_storage.observe(),
+                            },
+                        )
+                    ))
+                )
+                .unwrap(),
+            MergeCandidateValidation::Deferred
+        );
+        let (view, wait) = adapter.merge_history_wait.as_mut().unwrap();
+        assert_eq!(*view, 5);
+        assert!(!wait.is_ready(&queue.sumeragi_waker()));
+        drop(world_storage.guard(()));
+        assert!(wait.is_ready(&queue.sumeragi_waker()));
         let membership = concread::release::ReleaseNotification::default();
         assert_eq!(
             adapter
@@ -22746,6 +22804,17 @@ pub(super) mod tests {
                 Err(crate::state::MergeLedgerCommitError::EmptyEntry)
             ),
             Err(MergeCandidateValidationError::Invalid(_))
+        ));
+        assert!(matches!(
+            adapter.classify_merge_state_validation(
+                3,
+                Err(
+                    crate::state::MergeLedgerCommitError::NativeResourceAdmission(
+                        mv::allocation::AllocationRefusal::DemandOverflow,
+                    )
+                )
+            ),
+            Err(MergeCandidateValidationError::Frontier(_))
         ));
     }
     #[test]

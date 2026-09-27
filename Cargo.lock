@@ -3172,6 +3172,9 @@ dependencies = [
 [[package]]
 name = "fastpq_isi"
 version = "2.0.0-rc.2.0"
+dependencies = [
+ "zeroize",
+]
 
 [[package]]
 name = "fastpq_prover"
@@ -3193,6 +3196,7 @@ dependencies = [
  "iroha_zkp_halo2",
  "metal",
  "norito",
+ "rand 0.9.4",
  "rayon",
  "sha2",
  "smallvec",
@@ -4731,6 +4735,9 @@ dependencies = [
  "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
+ "iroha_sccp",
+ "iroha_sccp_rpc",
+ "iroha_sccp_wallet",
  "iroha_service_model",
  "iroha_sumeragi",
  "iroha_telemetry",
@@ -4738,6 +4745,7 @@ dependencies = [
  "iroha_test_samples",
  "iroha_torii",
  "iroha_torii_shared",
+ "irohad",
  "ivm",
  "mint_rose_trigger_data_model",
  "nonzero_ext",
@@ -4755,6 +4763,7 @@ dependencies = [
  "tokio",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
+ "zeroize",
  "zk_ace_prover",
 ]
 
@@ -4854,6 +4863,8 @@ dependencies = [
  "iroha_model_base",
  "iroha_primitives",
  "iroha_sccp",
+ "iroha_sccp_rpc",
+ "iroha_sccp_wallet",
  "iroha_service_model",
  "iroha_storage_client",
  "iroha_test_samples",
@@ -5397,6 +5408,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "windows-sys 0.61.2",
+ "zeroize",
  "zk_ace_prover",
 ]
 
@@ -5649,6 +5661,46 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_sccp_rpc"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "aes",
+ "ctr",
+ "curve25519-dalek",
+ "ed25519-dalek",
+ "hex",
+ "iroha_config",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_sccp",
+ "norito",
+ "reqwest",
+ "sha2",
+ "tiny-keccak",
+ "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "iroha_sccp_wallet"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "ed25519-dalek",
+ "hex",
+ "iroha_config",
+ "iroha_crypto",
+ "iroha_data_model",
+ "iroha_sccp",
+ "iroha_sccp_rpc",
+ "iroha_wallet",
+ "k256",
+ "norito",
+ "sha2",
+ "tiny-keccak",
+ "zeroize",
+]
+
+[[package]]
 name = "iroha_schema"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5848,6 +5900,7 @@ dependencies = [
  "iroha_test_samples",
  "iroha_torii_shared",
  "iroha_version",
+ "irohad",
  "nix 0.30.1",
  "nonzero_ext",
  "norito",
@@ -5859,6 +5912,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "zeroize",
 ]
 
 [[package]]
@@ -6085,6 +6139,7 @@ name = "irohad"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "assertables",
+ "base64 0.22.1",
  "blake3",
  "build-support",
  "clap",
@@ -6104,6 +6159,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_p2p",
  "iroha_primitives",
+ "iroha_sccp_rpc",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",
@@ -10417,7 +10473,9 @@ dependencies = [
  "eyre",
  "flate2",
  "futures",
+ "futures-timer",
  "hex",
+ "httpdate",
  "httpmock",
  "iroha_crypto",
  "iroha_data_model",
@@ -10528,6 +10586,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_service_model",
  "iroha_telemetry",
+ "iroha_torii_shared",
  "iroha_version",
  "norito",
  "prost 0.14.3",

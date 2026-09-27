@@ -3037,7 +3037,7 @@ mod tests {
     ) -> Hash {
         let keys = verified_keys();
         let network_id =
-            crate::sumeragi::synthetic_network_id("committed-nexus-tenure-boundary-test");
+            crate::unit_test_support::synthetic_network_id("committed-nexus-tenure-boundary-test");
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_consensus_keys(&kura, network_id, &keys);
         let context = verified_context_for_policy_state(&state, network_id, &keys);
@@ -3058,6 +3058,7 @@ mod tests {
                 metadata: iroha_model_base::metadata::Metadata::default(),
                 status,
                 activation_height,
+                election_exit_height: deactivation_height,
                 deactivation_height,
                 last_reward_epoch: None,
             };

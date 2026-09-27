@@ -2,8 +2,8 @@
 """Screen current zk-X509 proof bytes against the fixed V1 cap.
 
 This reads the pinned Rust geometry instead of treating a Python copy of the
-profile as release evidence. It checks arithmetic and rejects a narrow class
-of partial redesigns; it does not prove a replacement AIR or its soundness.
+profile as release evidence. It independently counts the complete reduced
+wire; it does not prove the AIR or its soundness.
 """
 
 from __future__ import annotations
@@ -72,6 +72,20 @@ def _asserted_value(source: str, name: str) -> int:
     return int(match.group(1).replace("_", ""))
 
 
+def _maximum_frontier(leaf_count: int, maximum_opened: int) -> int:
+    """Exact maximal binary frontier over at most this many opened leaves."""
+    if leaf_count <= 0 or leaf_count & (leaf_count - 1) or not 0 < maximum_opened <= leaf_count:
+        raise GeometryError("invalid Merkle geometry")
+    if leaf_count == 1:
+        return 0
+    # Above half the leaves, the frontier only shrinks. Below that point,
+    # maximally dispersed leaves fill each ancestor level before sharing paths.
+    opened = min(maximum_opened, leaf_count // 2)
+    height = leaf_count.bit_length() - 1
+    occupied_height = (opened - 1).bit_length()
+    return opened * (height - occupied_height) + (1 << occupied_height) - opened
+
+
 def screen(
     profile: str, stark: str, credential: str, accumulator: str, native_test: str
 ) -> dict[str, int | bool]:
@@ -87,10 +101,10 @@ def screen(
     trace_bytes = _constant(
         profile, "ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1"
     )
-    per_column = q * 2 * 8
+    per_column = q * 8
     columns, remainder = divmod(trace_bytes, per_column)
     test_width = re.search(
-        r"assert!\(\s*136\s*\*\s*2\s*\*\s*([\d_]+)\s*\*\s*8\s*>",
+        r"assert!\(\s*136\s*\*\s*([\d_]+)\s*\*\s*8\s*<",
         native_test,
     )
     if remainder or test_width is None or columns != int(test_width.group(1).replace("_", "")):
@@ -121,6 +135,46 @@ def screen(
         or combined != main_pre_deep + ca_pre_deep + deep + main_claim + ca_claim + outer
     ):
         raise GeometryError("X5S1 component sizes disagree with the canonical maximum")
+    if any("AggregateFriCommitmentLayoutV1::Paired" not in source for source in (profile, stark, accumulator)):
+        raise GeometryError("X509 paired FRI commitment layout is missing")
+
+    main_log = _constant(profile, "ZK_X509_MAX_NATIVE_TRACE_LOG2_V1") + blowup.bit_length() - 1
+    if main_log != _constant(profile, "ZK_X509_SHARED_STARK_MAIN_LDE_LOG2_V1"):
+        raise GeometryError("MAIN shared-domain logarithm disagrees with the profile")
+    ca_log = _constant(profile, "ZK_X509_CA_FRI_LDE_LOG2_V1")
+    terminal_log = _constant(profile, "ZK_X509_CA_FRI_TERMINAL_LOG2_V1")
+    groups = _constant(profile, "ZK_X509_TRACE_GROUPS_V1")
+    ca_chunks = _constant(profile, "ZK_X509_CA_COMPOSITION_DEGREE_CHUNKS_V1")
+    ca_deep = deep - (wide_main - main_pre_deep)
+    ca_columns, ca_remainder = divmod(ca_deep // 32 - ca_chunks, 2)
+    if ca_deep % 32 or ca_remainder:
+        raise GeometryError("CA DEEP opening width is inconsistent")
+
+    main_chunks = _constant(profile, "ZK_X509_COMPOSITION_DEGREE_CHUNKS_V1")
+    if "AggregateTraceLayoutV1::JoinedCurrent" not in stark or "AggregateTraceLayoutV1::GroupedCurrent," not in accumulator:
+        raise GeometryError("complete OODS current-only commitment layout is missing")
+
+    def exact_inner(width: int, log: int, chunks: int) -> int:
+        rounds = log - terminal_log
+        # One base and auxiliary root, one quotient and mask root, every FRI
+        # root including terminal. Both DEEP values of all columns remain.
+        roots = 2 + 2 + rounds + 1
+        fields = 8 + roots * 48 + (1 << terminal_log) * 32 + 8
+        fields += q * (4 + width * 8 + (chunks + 1 + 2 * rounds) * 32)
+        fields += (2 * width + chunks) * 32
+        frontiers = 4 * _maximum_frontier(1 << log, q)
+        frontiers += sum(_maximum_frontier(1 << (layer_log - 1), q)
+                         for layer_log in range(log, terminal_log, -1))
+        return fields + frontiers * 48
+
+    if exact_inner(columns, main_log, main_chunks) != wide_main or exact_inner(ca_columns, ca_log, ca_chunks) != ca_inner:
+        raise GeometryError("independent codec count disagrees with pinned component sizes")
+    paired_saving = sum(
+        (_maximum_frontier(1 << layer_log, 2 * q)
+         - _maximum_frontier(1 << (layer_log - 1), q)) * 48
+        for log in (main_log, ca_log)
+        for layer_log in range(log, terminal_log, -1)
+    )
 
     log19_columns = _constant(stark, "MAIN_LOG19_BASE_WIDTH_V1") + _constant(
         stark, "MAIN_LOG19_AUX_WIDTH_V1"
@@ -149,54 +203,29 @@ def screen(
     if p256_columns > log19_columns or log19_columns > columns or all_p256_columns > columns:
         raise GeometryError("P-256 width is not within the MAIN opening inventory")
 
-    other_bytes = combined - trace_bytes
-    opening_headroom = cap - other_bytes
-    if opening_headroom < 0:
-        raise GeometryError("non-trace proof components alone exceed the cap")
-    remaining_after_log19_p256 = combined - p256_columns * per_column
-    remaining_after_all_p256 = combined - all_p256_columns * per_column
-    remaining_after_log19 = combined - log19_columns * per_column
-    remaining_non_log19_columns = columns - log19_columns
     main_section_cap = cap - outer - ca_section_cap
-    if (
-        main_section_cap <= 0
-        or remaining_after_log19_p256 <= cap
-        or remaining_after_all_p256 <= cap
-        or remaining_after_log19 <= cap
-    ):
-        raise GeometryError("audited partial-redesign rejection no longer applies")
-
+    if combined > cap or wide_main + main_claim > main_section_cap:
+        raise GeometryError("complete relation exceeds the unchanged proof ceiling")
     return {
         "proof_cap_bytes": cap,
         "combined_current_max_bytes": combined,
-        "combined_excess_bytes": combined - cap,
+        "headroom_bytes": cap - combined,
+        "implemented_paired_fri_saving_bytes": paired_saving,
         "current_main_inner_max_bytes": wide_main,
+        "current_ca_inner_max_bytes": ca_inner,
         "main_section_cap_bytes": main_section_cap,
         "current_trace_columns": columns,
         "current_trace_opening_bytes": trace_bytes,
-        "non_trace_current_max_bytes": other_bytes,
-        "max_columns_if_non_trace_fixed": opening_headroom // per_column,
-        "minimum_columns_to_remove_if_non_trace_fixed": columns
-        - opening_headroom // per_column,
-        "log19_opening_bytes": log19_columns * per_column,
-        "remaining_non_log19_trace_columns": remaining_non_log19_columns,
+        "complete_deep_opening_bytes": deep,
+        "logical_main_groups": groups,
+        "physical_main_base_roots": 1,
+        "log19_trace_columns": log19_columns,
         "p256_signature_count": signature_count,
-        "p256_log19_opening_bytes": p256_columns * per_column,
-        "combined_after_hypothetically_removing_log19_p256_openings_bytes": remaining_after_log19_p256,
-        "remaining_excess_after_log19_p256_removal_bytes": remaining_after_log19_p256 - cap,
         "p256_all_group_trace_columns": all_p256_columns,
-        "p256_all_group_opening_bytes": all_p256_columns * per_column,
         "remaining_non_p256_trace_columns": columns - all_p256_columns,
-        "combined_after_hypothetically_removing_all_p256_trace_openings_bytes": remaining_after_all_p256,
-        "remaining_excess_after_all_p256_trace_opening_removal_bytes": remaining_after_all_p256 - cap,
-        "minimum_additional_non_p256_columns_to_replace_if_other_bytes_fixed":
-            (remaining_after_all_p256 - cap + per_column - 1) // per_column,
-        "combined_after_hypothetically_removing_all_log19_openings_bytes": remaining_after_log19,
-        "remaining_excess_after_log19_removal_bytes": remaining_after_log19 - cap,
-        "minimum_additional_non_log19_columns_to_replace_if_other_bytes_fixed":
-            remaining_non_log19_columns - opening_headroom // per_column,
         "production_qualified": False,
     }
+
 
 
 def main() -> None:

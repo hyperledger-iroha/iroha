@@ -1,7 +1,7 @@
 //! Provider-scoped retained role-11 operation rows and permanent admission indexes.
 //!
 //! This reader authenticates the adjacent immutable State history only. Kura/QC finality and
-//! successful execution proofs remain a separate, currently closed Check gate.
+//! successful execution proofs are consumed by the purpose-owned [`observation`] Check boundary.
 
 use crate::state::WorldReadOnly;
 use iroha_crypto::Hash;
@@ -410,7 +410,10 @@ pub(crate) fn read_slot(
     read_history(world, provider, id).map(|history| history.map(|history| history.current))
 }
 
+pub(crate) mod eligibility;
 mod historical_execution;
+/// One-use signed Check execution and same-cut current-authority consumer.
+pub mod observation;
 pub use historical_execution::{
     STREAM_TOKEN_HISTORY_FINALITY_MAX_BYTES_V1, STREAM_TOKEN_HISTORY_MAX_BLOCKS_V1,
     VerifiedStreamTokenHistoryV1, authenticate_stream_token_history_to_floor_v1,
@@ -419,3 +422,7 @@ pub use historical_execution::{
 #[cfg(test)]
 #[path = "stream_token_authority/tests.rs"]
 mod tests;
+
+/// Test-only signed native custody execution fixture with fixed-roster real finality.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub mod test_fixture;

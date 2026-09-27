@@ -742,6 +742,7 @@ fn configured_single_lane_merge_state_with_network(
         .expect("enable single-lane Nexus merge fixture");
     let (validator_ids, validator_keypairs) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validator_keypairs);
+    seed_committee_consensus_keys_with_pops(&state, &validator_keypairs);
     install_lane_manifest_registry(
         &state,
         &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, validator_ids)],

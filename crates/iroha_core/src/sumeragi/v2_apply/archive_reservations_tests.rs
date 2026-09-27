@@ -273,7 +273,7 @@ mod archive_reservations {
             let mut context = fixture.context.clone();
             if network_mismatch {
                 context.network_id =
-                    crate::sumeragi::synthetic_network_id("foreign archive network");
+                    crate::unit_test_support::synthetic_network_id("foreign archive network");
             } else {
                 context.height += 1;
             }

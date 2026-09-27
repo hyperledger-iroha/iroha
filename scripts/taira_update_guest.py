@@ -3,7 +3,8 @@
 
 Python reads public units/status and metadata only. Retained file metadata binds
 private configuration; the native daemon alone consumes config/key contents.
-No ledger removal, key/config rewrite, reset, or Python signing.
+No ledger removal, key/config rewrite, reset, or Python signing. Retired epoch
+worker services and state are rejected without process or journal mutation.
 Startup replay may expose a lower prefix; success still requires each retained
 checkpoint and a fresh anchored quorum. Heights within one process never regress.
 """
@@ -35,6 +36,21 @@ FAILED_START_RECORDS = ('intent.json', 'before.json', 'checkpoint-stopped.json',
                       'start-intent.json', 'failure.json')
 BOUND = False
 DEPLOYMENT_LOCK_FD = None
+RETIRED_WORKER_STATE = Path('/var/lib/taira-epoch-supervisor')
+RETIRED_WORKER_UNIT = Path('/etc/systemd/system/iroha-taira-epoch-supervisor.service')
+
+
+def reject_retired_worker_plan(plan):
+    """Reject retired worker inputs instead of decoding or silently discarding them."""
+    need(not any(key.startswith('epoch_supervisor') for key in plan),
+         'retired epoch worker plan fields are not accepted')
+
+
+def reject_retired_epoch_worker():
+    """Fail closed on any old worker service or state, including dangling links."""
+    need(not os.path.lexists(RETIRED_WORKER_STATE)
+         and not os.path.lexists(RETIRED_WORKER_UNIT),
+         'retired epoch worker service or state must be reconciled before update')
 
 
 def configure(plan):
@@ -43,6 +59,7 @@ def configure(plan):
     global ATTEMPT, NETWORK, ROLES, UNITS, REPLAY_BARRIER, PUBLIC_ORIGIN
     global STATE_ROOT, CONFIG_ROOT, GENESIS_MANIFEST, PORTS, PREDECESSOR
     need(not BOUND, 'one deployment per guest process')
+    reject_retired_worker_plan(plan)
     deployment = plan['deployment']
     BASE = Path(deployment['runtime_root'])
     STATE_ROOT = Path(deployment['state_root'])
@@ -151,6 +168,7 @@ def storage_capacity(plan, capacity_source, phase):
 def storage_capacity_locked(request):
     """Return a metadata-only allocation observation under the existing update locks."""
     plan = request['plan']
+    reject_retired_worker_plan(plan)
     with deployment_locks(plan):
         result = storage_capacity(plan, base64.b64decode(request['capacity_source'], validate=True),
                                   request['phase'])
@@ -160,6 +178,8 @@ def storage_capacity_locked(request):
 def validate_failed_start_inputs(deployment, baseline, failed, records, operation,
                                 previous_plan, previous_installed):
     """Authenticate public failed-start lineage without inventing a completed runtime."""
+    reject_retired_worker_plan(failed)
+    reject_retired_worker_plan(baseline)
     validate_update_plan_shape(failed)
     current = deployment['current']
     roles = deployment['roles']
@@ -1167,6 +1187,7 @@ def retained_attempt(plan):
         return retained_public_record(directory, name)
 
     intent = public_record('intent.json')
+    reject_retired_worker_plan(intent)
     digest = hashlib.sha256(json.dumps(intent, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     need(digest == prior['intent_sha256'], 'predecessor intent differs')
     need(intent.get('schema') == PREDECESSOR['plan_schema']
@@ -1439,6 +1460,7 @@ def verify_prepared_artifacts(plan):
     """Observe all three preprovisioned binaries; never create or replace one."""
     import fcntl
     need(os.geteuid() == 0, 'artifact verification requires root')
+    reject_retired_worker_plan(plan)
     identity = artifact_identity(plan['artifacts'])
     need(re.fullmatch('[0-9a-f]{40}', plan['commit'])
          and re.fullmatch('update-[0-9a-f]{32}', plan['operation']), 'invalid prepared operation')
@@ -1449,10 +1471,11 @@ def verify_prepared_artifacts(plan):
     try:
         before = os.fstat(fd)
         need(stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0
-             and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o600,
+             and before.st_nlink == 1 and before.st_size == 0 and stat.S_IMODE(before.st_mode) == 0o600,
              'invalid prepared artifact deployment lock')
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         need((before.st_dev, before.st_ino) == tuple(stamp(path)[:2]), 'artifact deployment lock changed')
+        reject_retired_epoch_worker()
         need(not os.path.lexists(DEPLOYMENT_STATE_ROOT / '.reset-owner.json'),
              'retained reset owner blocks artifact admission')
         base = Path(plan['deployment']['runtime_root'])
@@ -1495,12 +1518,13 @@ def deployment_locks(plan):
             held.append(fd)
             before = os.fstat(fd)
             need(stat.S_ISREG(before.st_mode) and before.st_uid == before.st_gid == 0
-                 and before.st_nlink == 1 and stat.S_IMODE(before.st_mode) == 0o600,
+                 and before.st_nlink == 1 and before.st_size == 0 and stat.S_IMODE(before.st_mode) == 0o600,
                  'invalid guest deployment lock')
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             need((before.st_dev, before.st_ino) == tuple(stamp(path)[:2]),
                  'guest deployment lock changed')
         DEPLOYMENT_LOCK_FD = held[-1]
+        reject_retired_epoch_worker()
         need(not os.path.lexists(DEPLOYMENT_STATE_ROOT / '.reset-owner.json'),
              'retained reset owner blocks updater; never reclaim or clear it')
         yield

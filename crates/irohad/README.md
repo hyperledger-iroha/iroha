@@ -87,6 +87,36 @@ pass startup. Fresh-network bootstrap can start before installation; height-boun
 production readiness remains unavailable until the committed key and exact
 runtime custody are present.
 
+`iroha3d beacon-prepare-custody` (also available in `iroha3d_taira`) consumes
+canonical `staking committee export-custody-evidence` output plus independent
+`--network-id`, `--trusted-context-id`, `--anchor-height`, `--target-epoch` and
+`--transition-id` pins. It requires the incumbent quorum's exact
+`FinalizeGlobalBeaconKey` certificate and the selecting/current finality chain.
+Its output proves pending custody preparation only; it does not prove certificate
+inclusion, refresh the supplied chain tip, submit an instruction or activate a session.
+
+The pending share arrives as three canonical 32-byte scalar components on
+owner-only disposable inherited FD 198, which is consumed and scrubbed. Existing
+members also supply `--current-catalog` and the complete retained credential on
+FD 200, which is read without modifying its file. The import verifies the exact
+current session and local seat, preserves all retained sessions and appends the
+exact frozen target session. `--handle`, `--revision`, `--chain-id` and `--output`
+produce a strictly advanced catalog, private credential and public receipt in a
+new fsynced generation directory through a no-replace atomic rename. The output's
+parent must already exist under non-writable, non-symlink ancestors. The command
+never replaces an existing generation or changes a running provider. Deployment
+must retain the other configured roles' credentials when assembling a complete
+broker generation; the output catalog preserves their public qualifications.
+
+Restart imports both sessions under the matched catalog revision and inventory
+digest. The authenticated consensus boundary controls session selection and
+retirement. Retention across scheduling epochs keeps the current authority's
+credential. Append-only preparation does not implement secret pruning; the
+existing 64-session bound fails closed rather than removing credentials without
+retirement evidence. Secret owners and final frame buffers are zeroized on drop;
+this software custody does not establish allocator-wide erasure of temporary
+codec allocations, process-memory compromise resistance or physical disk erasure.
+
 An enabled Musubi provider-attestation journal projects its combined durability
 seal, approval-only signer, and authenticated coordinator inventory as three
 independent public bindings in exact slots 57, 58, and 59. Slot 57 exposes
@@ -160,6 +190,11 @@ provider implementations, and call `run_with_runtime_provider_registry`.
 Standard `irohad` startup instead projects the non-secret configured binding
 catalog and, when that catalog is non-empty, creates the stock authenticated
 local-broker client registry before starting Tokio or node-owned durable state.
+The public `[runtime_provider_broker].endpoint_path` selects that registry's
+Unix socket; the default is the packaged Linux or macOS path. Configuration
+rejects relative, ambiguous, oversized, or wrongly named paths before provider
+resolution. Connection and server bind still require exact service UID, socket
+mode, inode, and safe ancestor ownership.
 An explicitly injected registry remains authoritative. There is no
 process-global registry, plugin loader, environment selector, or executable
 provider selector in configuration.
@@ -176,18 +211,19 @@ adapter remains requalified at Torii construction and around every operation.
 The source tree provides `RuntimeProviderBrokerDeploymentV1` as the standard
 deployment assembly around the injected `serve_runtime_provider_broker_v1`
 server boundary. `RuntimeProviderBrokerExecutableV1` adds the common process
-shell: a one-argument `RuntimeProviderBrokerExecutableArgsV1` CLI, secure
+shell: a two-public-argument `RuntimeProviderBrokerExecutableArgsV1` CLI
+(`--catalog` and required `--broker-endpoint`), secure
 bounded canonical-catalog loading, redacted failures, supervisor-owned
 readiness/lifecycle hooks, and SIGINT/SIGTERM shutdown. Its
 `RuntimeProviderBrokerBackendRegistryV1` receives only the sanitized non-empty
 public catalog, and the assembled launch performs exact live server
 qualification before readiness.
 The server accepts canonical non-empty client subsets of that catalog so the
-stock daemon and packaged standalone services can share the fixed endpoint;
+stock daemon and packaged standalone services can share one configured endpoint;
 the handshake requires the same exact genesis-derived `NetworkId` and every
 binding byte-for-byte, and a session cannot invoke a provider outside its
 authenticated subset. The packaged `sorafs_governance_dag` launcher therefore
-requires both `--chain-id` and `--network-id`. Deployment launchers can
+requires `--chain-id`, `--network-id`, and `--broker-endpoint`. Deployment launchers can
 handoff that projection without sharing `actual::Config` by calling
 `IrohaRuntimeProviderBindingsV1::export_canonical_v1`; the broker side loads it
 with `load_canonical_v1`, or uses
@@ -196,20 +232,21 @@ absolute-path handoff. The explicitly versioned canonical Norito artifact is
 bounded, non-empty, strictly ordered, and contains only the chain identity plus
 the mandatory exact `NetworkId`, public handles, identities, revisions, bounds,
 and policy digests already held by the sanitized projection. The common CLI has
-no socket override, plugin, private-key, credential, or test-provider argument;
-Linux and macOS use the platform-fixed authenticated endpoint, while Windows
+no plugin, private-key, credential, or test-provider argument; Linux and macOS
+use the required validated authenticated endpoint, while Windows
 and other platforms fail before catalog filesystem access because V1 has no
 equivalent authenticated transport.
 
-No checked-in binary or registry supplies deployment-specific signing, custody,
-authentication, sealed-store, network, or immutable-query implementations. Under the current static
-injection architecture, a deployment must link its reviewed concrete registry
-into a thin owned binary that parses `RuntimeProviderBrokerExecutableArgsV1`
-and calls `RuntimeProviderBrokerExecutableV1`; credentials remain inside those
-provider objects. A generic in-tree binary would first require an explicitly
-approved and versioned authenticated provider-plugin/IPC ABI, which V1 does not
-define. Client wiring, the common executable shell, or an empty/dummy registry
-alone is not production-adapter or deployment qualification.
+The common shell does not supply provider implementations. The stock external
+software signer supplies its supported roles through supervisor-provided
+credentials; deployments needing other backends link a reviewed concrete
+registry into a binary that parses `RuntimeProviderBrokerExecutableArgsV1` and
+calls `RuntimeProviderBrokerExecutableV1`. Credentials stay inside those
+provider objects. The feature-isolated `iroha_test_runtime_provider_broker`
+qualifies disposable peer networks with the same canonical credential decoder
+and broker server. It takes one exact bundle through inherited standard input
+and never appears in shipping builds. Client wiring or an empty registry alone
+does not qualify a production adapter.
 
 Registry resolution itself validates the sanitized binding catalog and rejects
 missing or unrequested dependency objects. It cannot independently attest to a

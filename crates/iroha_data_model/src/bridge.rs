@@ -1331,6 +1331,7 @@ fn verify_successor_bridge_finality_proof(
     if context.network_id != parent.height_context.network_id
         || context.mode != parent.height_context.mode
         || context.da_layout != parent.height_context.da_layout
+        || context.execution_policy_hash != parent.height_context.execution_policy_hash
         || !parent_qc
             .as_ref()
             .same_commit_decision(parent.commit_qc.as_ref())
@@ -1349,6 +1350,10 @@ fn verify_successor_bridge_finality_proof(
                     && context.kagemusha_mint_finality_authority
                         == parent.height_context.kagemusha_mint_finality_authority
                     && context.epoch_end_height == parent.height_context.epoch_end_height
+                    && context.kagemusha_mint_finality_authorization
+                        == parent.height_context.kagemusha_mint_finality_authorization
+                    && context.kagemusha_mint_finality_authority
+                        == parent.height_context.kagemusha_mint_finality_authority
                     && context.roster == parent.height_context.roster
                     && context.quorum == parent.height_context.quorum
                     && context.leader_seed == parent.height_context.leader_seed
@@ -1361,6 +1366,10 @@ fn verify_successor_bridge_finality_proof(
                     && context.kagemusha_mint_finality_authority
                         == snapshot.kagemusha_mint_finality_authority
                     && context.epoch_end_height == snapshot.epoch_end_height
+                    && context.kagemusha_mint_finality_authorization
+                        == snapshot.kagemusha_mint_finality_authorization
+                    && context.kagemusha_mint_finality_authority
+                        == snapshot.kagemusha_mint_finality_authority
                     && context.mode == snapshot.mode
                     && context.roster == snapshot.roster
                     && context.quorum == snapshot.quorum
@@ -1601,6 +1610,7 @@ mod tests {
             (
                 Some(
                     crate::block::consensus_v2::finality::FinalizedNextEpochSnapshot {
+                        committee_preparation: None,
                         epoch: 1,
                         kagemusha_mint_finality_authorization: next_authorization,
                         kagemusha_mint_finality_authority: next_authority,

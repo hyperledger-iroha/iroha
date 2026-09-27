@@ -58,9 +58,12 @@ fn witness_fixture(foreign: bool) -> Box<Fixture> {
     let released = Arc::new(AtomicUsize::new(0));
     let journals = prepare(&state, proposal, &topology, &context)
         .unwrap_or_else(|(_, error)| panic!("actual original execution: {error}"))
-        .prepare_journals(None, None, |_| {
-            Ok::<_, Infallible>(Reservation(Arc::clone(&released)))
-        })
+        .prepare_journals(
+            crate::state::PreparedCarrier::reserve_journal_shells_for_test(),
+            None,
+            None,
+            |_| Ok::<_, Infallible>(Reservation(Arc::clone(&released))),
+        )
         .unwrap();
     let finality = super::super::tests::signed_finality(
         context,

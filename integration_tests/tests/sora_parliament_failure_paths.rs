@@ -85,7 +85,7 @@ async fn install_threshold_sessions(
             InstructionBox::from(lifecycle_certificate(
                 network,
                 &ordered_roster,
-                ThresholdKeyLifecycleActionV1::InstallGlobalBeaconKey,
+                ThresholdKeyLifecycleActionV1::FinalizeGlobalBeaconKey,
                 beacon_record.session.session_id,
                 beacon_record.session.transcript_hash,
                 norito::encode_canonical(&beacon_record)?,

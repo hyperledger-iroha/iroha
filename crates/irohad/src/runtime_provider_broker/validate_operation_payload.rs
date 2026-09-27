@@ -143,6 +143,12 @@ fn validate_operation_payload(
             let _ =
                 decode_global_beacon_partial_sign_request(&request.payload, session_network_id)?;
         }
+        (slot, OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1)
+            if slot == global_beacon_partial_signer_slot =>
+        {
+            let _ =
+                decode_global_beacon_seat_readiness_request(&request.payload, session_network_id)?;
+        }
         (slot, OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1)
             if slot == parliament_tle_partial_release_signer_slot =>
         {
@@ -626,6 +632,9 @@ fn validate_operation_payload(
         }
         (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
             decode_stream_token_observer_request(&request.binding, &request.payload)?;
+        }
+        (slot, OPERATION_STREAM_TOKEN_CHECK_V1) if slot == stream_token_slot => {
+            decode_stream_token_check_request(&request.binding, &request.payload)?;
         }
         (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
             if slot == stream_token_gateway_admission_slot =>

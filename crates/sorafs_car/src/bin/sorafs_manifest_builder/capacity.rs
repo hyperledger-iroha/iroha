@@ -59,10 +59,7 @@ fn declaration_usage() -> &'static str {
 
 Options:
   --spec=<file>                Path to the declaration spec JSON (required).
-  --registered-epoch=<u64>     Override the registered epoch recorded in the summary.
-  --valid-from-epoch=<u64>     Override the declaration activation epoch in the summary.
-  --valid-until-epoch=<u64>    Override the declaration expiry epoch in the summary.
-  --json-out=<file>            Write a Norito JSON summary to <file>.
+  --json-out=<file>            Write a JSON object containing only declaration_b64.
   --norito-out=<file>          Write the canonical Norito bytes to <file>.
   --base64-out=<file>          Write the canonical Norito payload (base64) to <file>.
   --quiet                      Suppress stdout (otherwise prints the base64 payload).
@@ -134,9 +131,6 @@ where
             .ok_or_else(|| format!("expected key=value option, got `{arg}`"))?;
         match key {
             "--spec" => opts.spec = Some(PathBuf::from(value)),
-            "--registered-epoch" => opts.registered_epoch = Some(parse_u64(value, key)?),
-            "--valid-from-epoch" => opts.valid_from_epoch = Some(parse_u64(value, key)?),
-            "--valid-until-epoch" => opts.valid_until_epoch = Some(parse_u64(value, key)?),
             "--json-out" => opts.json_out = Some(PathBuf::from(value)),
             "--norito-out" => opts.norito_out = Some(PathBuf::from(value)),
             "--base64-out" => opts.base64_out = Some(PathBuf::from(value)),
@@ -151,8 +145,8 @@ where
         .map_err(|err| format!("failed to read spec `{}`: {err}", spec_path.display()))?;
     let spec_value: Value = norito::json::from_slice(&spec_bytes)
         .map_err(|err| format!("failed to parse spec JSON `{}`: {err}", spec_path.display()))?;
-    let artefacts = build_artefacts(spec_value, &opts)?;
-    let canonical_bytes = norito::to_bytes(&artefacts.declaration)
+    let declaration = build_declaration(spec_value)?;
+    let canonical_bytes = norito::to_bytes(&declaration)
         .map_err(|err| format!("failed to encode capacity declaration: {err}"))?;
     let declaration_b64 = BASE64_STD.encode(&canonical_bytes);
     if let Some(path) = opts.norito_out.as_ref() {
@@ -161,7 +155,7 @@ where
     if let Some(path) = opts.base64_out.as_ref() {
         write_text(path, &declaration_b64)?;
     }
-    let summary = build_declaration_summary(&artefacts, &declaration_b64)?;
+    let summary = build_declaration_summary(&declaration_b64);
     if let Some(path) = opts.json_out.as_ref() {
         let json_text = json::to_string_pretty(&summary)
             .map_err(|err| format!("failed to serialize summary JSON: {err}"))?
@@ -341,20 +335,10 @@ where
 #[derive(Debug, Default)]
 struct DeclarationOptions {
     spec: Option<PathBuf>,
-    registered_epoch: Option<u64>,
-    valid_from_epoch: Option<u64>,
-    valid_until_epoch: Option<u64>,
     json_out: Option<PathBuf>,
     norito_out: Option<PathBuf>,
     base64_out: Option<PathBuf>,
     quiet: bool,
-}
-struct DeclarationArtefacts {
-    declaration: CapacityDeclarationV1,
-    metadata: Vec<CapacityMetadataEntry>,
-    registered_epoch: u64,
-    valid_from_epoch: u64,
-    valid_until_epoch: u64,
 }
 #[derive(Debug, Default)]
 struct TelemetryOptions {
@@ -384,13 +368,24 @@ struct DisputeOptions {
     base64_out: Option<PathBuf>,
     quiet: bool,
 }
-fn build_artefacts(
-    value: Value,
-    opts: &DeclarationOptions,
-) -> Result<DeclarationArtefacts, String> {
+fn build_declaration(value: Value) -> Result<CapacityDeclarationV1, String> {
     let map = value
         .as_object()
         .ok_or_else(|| "capacity declaration spec must be a JSON object".to_string())?;
+    const FIELDS: &[&str] = &[
+        "provider_id_hex",
+        "stake",
+        "committed_capacity_gib",
+        "chunker_commitments",
+        "lane_commitments",
+        "pricing",
+        "valid_from",
+        "valid_until",
+        "metadata",
+    ];
+    if let Some(field) = map.keys().find(|key| !FIELDS.contains(&key.as_str())) {
+        return Err(format!("unknown capacity declaration field `{field}`"));
+    }
     let provider_id_hex = require_string(map, "provider_id_hex")?;
     let provider_id = parse_fixed_hex::<32>(provider_id_hex, "provider_id_hex")?;
     let stake_value = require_object(map, "stake")?;
@@ -479,53 +474,12 @@ fn build_artefacts(
         pricing,
         valid_from,
         valid_until,
-        metadata: metadata_entries.clone(),
+        metadata: metadata_entries,
     };
     declaration
         .validate()
         .map_err(|err| format!("capacity declaration validation failed: {err}"))?;
-    let (registered_epoch, valid_from_epoch, valid_until_epoch) =
-        parse_record_window(map, opts, valid_from, valid_until)?;
-    Ok(DeclarationArtefacts {
-        declaration,
-        metadata: metadata_entries,
-        registered_epoch,
-        valid_from_epoch,
-        valid_until_epoch,
-    })
-}
-fn parse_record_window(
-    map: &Map,
-    opts: &DeclarationOptions,
-    default_from: u64,
-    default_until: u64,
-) -> Result<(u64, u64, u64), String> {
-    if let Some(window_value) = map.get("record_window") {
-        let window = window_value
-            .as_object()
-            .ok_or_else(|| "`record_window` must be an object when provided".to_string())?;
-        let registered = parse_u64_value(
-            window.get("registered_epoch"),
-            "record_window.registered_epoch",
-        )?;
-        let valid_from = parse_u64_value(
-            window.get("valid_from_epoch"),
-            "record_window.valid_from_epoch",
-        )?;
-        let valid_until = parse_u64_value(
-            window.get("valid_until_epoch"),
-            "record_window.valid_until_epoch",
-        )?;
-        return Ok((
-            opts.registered_epoch.unwrap_or(registered),
-            opts.valid_from_epoch.unwrap_or(valid_from),
-            opts.valid_until_epoch.unwrap_or(valid_until),
-        ));
-    }
-    let registered = opts.registered_epoch.unwrap_or(default_from);
-    let valid_from_epoch = opts.valid_from_epoch.unwrap_or(default_from);
-    let valid_until_epoch = opts.valid_until_epoch.unwrap_or(default_until);
-    Ok((registered, valid_from_epoch, valid_until_epoch))
+    Ok(declaration)
 }
 fn parse_capability_array(value: &Value) -> Result<Vec<CapabilityType>, String> {
     let array = value
@@ -620,134 +574,13 @@ fn parse_metadata_entries(value: &Value) -> Result<Vec<CapacityMetadataEntry>, S
     }
     Ok(entries)
 }
-fn build_declaration_summary(
-    artefacts: &DeclarationArtefacts,
-    declaration_b64: &str,
-) -> Result<Value, String> {
+fn build_declaration_summary(declaration_b64: &str) -> Value {
     let mut root = Map::new();
-    root.insert(
-        "provider_id_hex".into(),
-        Value::String(hex::encode(artefacts.declaration.provider_id)),
-    );
-    root.insert(
-        "stake_pool_hex".into(),
-        Value::String(hex::encode(artefacts.declaration.stake.pool_id)),
-    );
-    root.insert(
-        "stake_amount".into(),
-        Value::String(artefacts.declaration.stake.stake_amount.to_string()),
-    );
-    root.insert(
-        "committed_capacity_gib".into(),
-        json::to_value(&artefacts.declaration.committed_capacity_gib)
-            .map_err(|err| format!("failed to serialize committed_capacity_gib: {err}"))?,
-    );
-    root.insert(
-        "valid_from".into(),
-        json::to_value(&artefacts.declaration.valid_from)
-            .map_err(|err| format!("failed to serialize valid_from: {err}"))?,
-    );
-    root.insert(
-        "valid_until".into(),
-        json::to_value(&artefacts.declaration.valid_until)
-            .map_err(|err| format!("failed to serialize valid_until: {err}"))?,
-    );
-    root.insert(
-        "registered_epoch".into(),
-        json::to_value(&artefacts.registered_epoch)
-            .map_err(|err| format!("failed to serialize registered_epoch: {err}"))?,
-    );
-    root.insert(
-        "valid_from_epoch".into(),
-        json::to_value(&artefacts.valid_from_epoch)
-            .map_err(|err| format!("failed to serialize valid_from_epoch: {err}"))?,
-    );
-    root.insert(
-        "valid_until_epoch".into(),
-        json::to_value(&artefacts.valid_until_epoch)
-            .map_err(|err| format!("failed to serialize valid_until_epoch: {err}"))?,
-    );
     root.insert(
         "declaration_b64".into(),
         Value::String(declaration_b64.to_owned()),
     );
-    let mut commitments = Vec::with_capacity(artefacts.declaration.chunker_commitments.len());
-    for commitment in &artefacts.declaration.chunker_commitments {
-        let mut item = Map::new();
-        item.insert(
-            "profile_handle".into(),
-            Value::String(commitment.profile_id.clone()),
-        );
-        item.insert(
-            "committed_gib".into(),
-            json::to_value(&commitment.committed_gib)
-                .map_err(|err| format!("failed to serialize committed_gib: {err}"))?,
-        );
-        if let Some(aliases) = &commitment.profile_aliases {
-            item.insert(
-                "profile_aliases".into(),
-                json::to_value(aliases)
-                    .map_err(|err| format!("failed to serialize profile_aliases: {err}"))?,
-            );
-        }
-        if !commitment.capability_refs.is_empty() {
-            let caps = commitment
-                .capability_refs
-                .iter()
-                .map(capability_label)
-                .map(|label| Value::String(label.to_string()))
-                .collect::<Vec<_>>();
-            item.insert("capability_refs".into(), Value::Array(caps));
-        }
-        commitments.push(Value::Object(item));
-    }
-    root.insert("chunker_commitments".into(), Value::Array(commitments));
-    if !artefacts.declaration.lane_commitments.is_empty() {
-        let lanes = artefacts
-            .declaration
-            .lane_commitments
-            .iter()
-            .map(|lane| {
-                let mut entry = Map::new();
-                entry.insert("lane_id".into(), Value::String(lane.lane_id.clone()));
-                entry.insert(
-                    "max_gib".into(),
-                    json::to_value(&lane.max_gib)
-                        .map_err(|err| format!("failed to serialize lane max_gib: {err}"))?,
-                );
-                Ok(Value::Object(entry))
-            })
-            .collect::<Result<Vec<_>, String>>()?;
-        root.insert("lane_commitments".into(), Value::Array(lanes));
-    }
-    if let Some(pricing) = &artefacts.declaration.pricing {
-        let mut pricing_map = Map::new();
-        pricing_map.insert("currency".into(), Value::String(pricing.currency.clone()));
-        pricing_map.insert(
-            "rate_per_gib_hour_milliu".into(),
-            json::to_value(&pricing.rate_per_gib_hour_milliu)
-                .map_err(|err| format!("failed to serialize pricing rate: {err}"))?,
-        );
-        pricing_map.insert(
-            "min_commitment_hours".into(),
-            json::to_value(&pricing.min_commitment_hours)
-                .map_err(|err| format!("failed to serialize pricing min commitment: {err}"))?,
-        );
-        pricing_map.insert(
-            "notes".into(),
-            json::to_value(&pricing.notes)
-                .map_err(|err| format!("failed to serialize pricing notes: {err}"))?,
-        );
-        root.insert("pricing".into(), Value::Object(pricing_map));
-    }
-    if !artefacts.metadata.is_empty() {
-        let mut metadata_map = Map::new();
-        for entry in &artefacts.metadata {
-            metadata_map.insert(entry.key.clone(), Value::String(entry.value.clone()));
-        }
-        root.insert("metadata".into(), Value::Object(metadata_map));
-    }
-    Ok(Value::Object(root))
+    Value::Object(root)
 }
 fn build_telemetry(telemetry_value: Value) -> Result<TelemetryArtefacts, String> {
     let map = telemetry_value
@@ -1239,22 +1072,6 @@ fn dispute_kind_to_str(kind: CapacityDisputeKind) -> &'static str {
         CapacityDisputeKind::Other => "other",
     }
 }
-fn capability_label(cap: &CapabilityType) -> &'static str {
-    match cap {
-        CapabilityType::ToriiGateway => "torii_gateway",
-        CapabilityType::QuicNoise => "quic_noise",
-        CapabilityType::SoraNetHybridPq => "soranet_pq",
-        CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
-        CapabilityType::PotrMlDsa => "potr_mldsa",
-        CapabilityType::VendorReserved => "vendor_reserved",
-    }
-}
-fn parse_u64(value: &str, context: &str) -> Result<u64, String> {
-    require_canonical_unsigned_decimal(context, value)?;
-    value
-        .parse::<u64>()
-        .map_err(|err| format!("invalid {context}: {err}"))
-}
 fn parse_u64_value(value: Option<&Value>, context: &str) -> Result<u64, String> {
     let val = value.ok_or_else(|| format!("missing `{context}` field"))?;
     if let Some(num) = val.as_u64() {
@@ -1467,7 +1284,7 @@ mod tests {
         (temp, path)
     }
     #[test]
-    fn capability_names_round_trip_only_the_v1_canonical_labels() {
+    fn capability_names_accept_only_the_v1_canonical_labels() {
         let canonical = [
             ("torii_gateway", CapabilityType::ToriiGateway),
             ("quic_noise", CapabilityType::QuicNoise),
@@ -1478,7 +1295,6 @@ mod tests {
         ];
         for (name, capability) in canonical {
             assert_eq!(parse_capability_name(name), Some(capability));
-            assert_eq!(capability_label(&capability), name);
         }
         for alias in [
             "torii",
@@ -1515,8 +1331,10 @@ mod tests {
     }
     #[test]
     fn numeric_string_parsers_reject_noncanonical_tokens() {
-        assert_eq!(parse_u64("0", "--registered-epoch").expect("zero"), 0);
-        assert_eq!(parse_u64("42", "--registered-epoch").expect("u64"), 42);
+        assert_eq!(
+            parse_u64_value(Some(&Value::String("0".into())), "valid_from").expect("zero"),
+            0
+        );
         assert_eq!(
             parse_u64_value(Some(&Value::String("42".into())), "valid_from").expect("string u64"),
             42
@@ -1556,10 +1374,10 @@ mod tests {
                 .expect_err("noncanonical or non-string XOR quantity must fail");
         }
         for value in ["", "01", "+1", "-1", "1 ", "1_000", "18446744073709551616"] {
-            let err =
-                parse_u64(value, "--registered-epoch").expect_err("noncanonical decimal must fail");
+            let err = parse_u64_value(Some(&Value::String(value.into())), "valid_from")
+                .expect_err("noncanonical decimal must fail");
             assert!(
-                err.contains("--registered-epoch"),
+                err.contains("valid_from"),
                 "error should name context for {value:?}: {err}"
             );
         }

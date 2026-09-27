@@ -17,6 +17,7 @@ default = ["cli-orchestrator"]
 dev-tools = []
 cli-orchestrator = [
     "dep:iroha_config",
+    "dep:iroha_torii_shared",
     "dep:sha2",
     "dep:sorafs_chunker",
     "dep:sorafs_manifest",
@@ -49,6 +50,7 @@ reqwest = { workspace = true, features = ["rustls-tls", "blocking"] }
 quinn = { version = "0.11.9", default-features = false, features = ["rustls", "runtime-tokio"], optional = true }
 rcgen = { version = "=0.14.5", optional = true }
 futures = { workspace = true }
+tempfile = "3.23.0"
 sha2 = { version = "0.10.9", default-features = false, features = ["std"], optional = true }
 sha3 = { version = "0.10.8", default-features = false, features = ["std"] }
 url = { workspace = true }
@@ -57,6 +59,7 @@ sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", optional = true }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["application"] }
 iroha_config = { path = "../iroha_config", optional = true }
+iroha_torii_shared = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
@@ -65,7 +68,6 @@ rustix = { version = "1.1.4", features = ["fs"] }
 [dev-dependencies]
 iroha_logger = { workspace = true }
 futures = "0.3.31"
-tempfile = "3.23.0"
 hex = "0.4.3"
 assert_cmd = "2.1.1"
 httpmock = "0.8.2"

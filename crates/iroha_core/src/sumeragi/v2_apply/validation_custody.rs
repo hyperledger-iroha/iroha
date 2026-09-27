@@ -228,6 +228,12 @@ pub(crate) struct RetainedBodyValidationService<P: CarrierValidator> {
 }
 
 impl<P: CarrierValidator> RetainedBodyValidationService<P> {
+    /// Let a typed producer fill its already-funded descriptor once, without
+    /// exposing candidate or marker vectors to a second allocator.
+    pub(super) fn with_validator_mut<R>(&mut self, update: impl FnOnce(&mut P) -> R) -> R {
+        update(&mut self.validator)
+    }
+
     fn descriptor_layouts(limit: usize) -> Result<[Layout; 2], AllocationRefusal> {
         Ok([
             Layout::array::<Candidate<P::Owner>>(limit)
@@ -459,8 +465,11 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
         decoded_body: Option<&SignedBlock>,
     ) -> Result<Option<LocalValidationRefusal>, CarrierCustodyError> {
         let candidate = &mut self.candidates[index];
-        let body = candidate
-            .body
+        // Move the nested allocations into this consuming frame as well. An
+        // unwind must retain the subject tombstone without retaining a body
+        // whose execution owner has already been destroyed.
+        let retained_body = candidate.body.take();
+        let body = retained_body
             .as_ref()
             .or(decoded_body)
             .ok_or(CarrierCustodyError::MissingOwner)?;
@@ -486,8 +495,10 @@ impl<P: CarrierValidator> RetainedBodyValidationService<P> {
             .as_ref()
             .expect("capture completion restored its current original phase");
         let matches = owner.matches_candidate(context, body);
-        if !owner.needs_decoded_body() {
-            drop(candidate.body.take());
+        if owner.needs_decoded_body() {
+            candidate.body = retained_body;
+        } else {
+            drop(retained_body);
         }
         if !matches {
             return Err(CarrierCustodyError::Identity);

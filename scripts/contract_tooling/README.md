@@ -1,56 +1,75 @@
-# SCCP native compiler policy
+# SCCP contract toolchain (EVM and TRON)
 
-`compiler-lock.json` admits separate native compiler owners: Ethereum Solidity
-`0.7.6+commit.7338295f` for EVM and TRON Solidity `0.7.6+commit.d1802f25` for TVM.
-The corridor checks the complete compiler record against its reviewed constants
-before downloading or executing anything. Source pragmas require exact `0.7.6`;
-the optimizer, opcode target, source map, ABI, metadata, bytecode and size checks
-remain part of artifact admission. `artifact-lock.json` binds the resulting
-platform-independent manifest, including all approved platform compiler pins.
+`specs/sccp.md` §5.5. One Solidity source, `contracts/evm/sccp/SccpTairaXor.sol`,
+is compiled by two pinned native compilers:
 
-The download SHA-256 values are published in the owners' release lists:
+| Target | Compiler | Platforms pinned in `compiler-lock.json` |
+|---|---|---|
+| `evm` (ETH, BSC) | Ethereum solc `0.8.31+commit.fd3a2265` | macOS universal (arm64 + x86-64), Linux x86-64, Linux arm64 |
+| `tron` | tronprotocol `tv_0.8.31` `0.8.31+commit.c2812a3d` | `solc-macos` universal, `solc-static-linux`, `solc-static-linux-arm` |
 
-- [Ethereum Linux x86-64](https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/linux-amd64/list.json)
-- [Ethereum macOS x86-64](https://raw.githubusercontent.com/ethereum/solc-bin/gh-pages/macosx-amd64/list.json)
-- [TRON Linux x86-64](https://raw.githubusercontent.com/tronprotocol/solc-bin/main/linux-amd64/list.json)
-- [TRON macOS x86-64](https://raw.githubusercontent.com/tronprotocol/solc-bin/main/macosx-amd64/list.json)
+Settings (both targets): `evmVersion: "cancun"` (explicit, because both
+compilers default to `osaka`), `optimizer: {enabled: true, runs: 200}`,
+`viaIR: false` (legacy pipeline), `metadata.bytecodeHash: "none"`,
+`metadata.appendCBOR: false`. The source must keep the exact
+`pragma solidity 0.8.31;`, declare no imports or custom storage layout, and
+never use `delete` (the 0.8.31 legacy-pipeline bug patterns); the corridor
+rejects a violating source before compiling it.
 
-TRON publishes ZIP archives. Each download is authenticated before parsing; the
-selected regular executable member is also pinned by its independently measured
-SHA-256. Paths, duplicate names, special files, and member sizes are checked.
-Only the selected member is read into memory, and no archive path is extracted.
-These are reviewed digest pins; the corridor does not claim GPG verification.
+## Compiler authentication
 
-Linux requires x86-64. macOS requires x86-64 execution, including Rosetta on
-arm64; unsupported hosts fail before execution. The runner reads a stable regular
-file without following symlinks, authenticates its bytes and native format, then
-creates a private mode-0700 directory containing a mode-0500 verified copy.
-Version and standard-JSON compilation use that same retained copy with a clean
-environment and bounded execution/output. Inputs contain source text directly,
-and output selection is limited to the exact admitted EVM artifact fields.
+The Ethereum SHA-256 pins match `binaries.soliditylang.org/<platform>/list.json`;
+the TRON pins match the `tv_0.8.31` release `shasum.txt` and the GitHub asset
+digests. `scripts/contract_artifact_corridor.py` checks the complete compiler
+record against its reviewed constants before downloading anything, then
+authenticates each download (SHA-256, ELF machine or universal Mach-O slices)
+and caches it by digest under `target/sccp-contract-tooling/compilers`. Every
+execution re-reads a stable regular file without following symlinks,
+re-authenticates it, copies it into a private mode-0700 directory as mode 0500,
+checks the exact `--version` banner (`solc` vs `solc.tron`) and runs
+`--standard-json` with a clean environment and bounded output. Compilers run
+natively on macOS arm64/x86-64 and Linux x86-64/arm64; a Python process under
+Rosetta translation (or one whose Rosetta probe cannot run) is refused and
+Docker is never used. An EVM/TRON compiler alias (shared identity or executable
+digest) is refused before anything is downloaded or run. Compiler warnings fail
+the build.
 
-Rebuild and verify the reviewed artifacts:
+## Commands
 
 ```sh
-python3 scripts/contract_artifact_corridor.py build --output-dir /tmp/sccp-artifacts
-python3 scripts/contract_artifact_corridor.py verify \
-  --manifest /tmp/sccp-artifacts/sccp-contract-artifacts-v1.json --check-source-inputs
+python3 scripts/contract_artifact_corridor.py build    # compile, check against artifact-lock.json, publish
+python3 scripts/contract_artifact_corridor.py verify   # re-authenticate a manifest against both locks and the sources
+python3 scripts/contract_artifact_corridor.py lock     # recompile and rewrite artifact-lock.json (review the diff)
+python3 scripts/contract_artifact_corridor.py materialize --target evm --output <new path>
+python3 scripts/contract_artifact_corridor.py compile-input --target tron --compiler <path> < input.json
 ```
 
-Updating the reviewed artifact lock requires an explicit new output path via
-the `lock` command and review of its source, size and manifest changes.
-`materialize` and `compile-input` provide the same authenticated native execution
-to the Node test harnesses. Compiler/runtime substitutions are not supported.
+`build` writes `target/sccp-contract-artifacts/sccp-contract-artifacts-v1.json`
+(override with `--output-dir`); `verify` defaults to that manifest. The
+manifest carries, per target, the compiler identity, settings digest, source
+inventory, ABI, creation and runtime bytecode with SHA-256 and Keccak-256,
+metadata, and the named runtime immutable references. `artifact-lock.json`
+records for each contract the creation digest, the complete runtime template,
+its `immutable_references` (`name`, AST id, `start`, `length`) and the ABI
+digest, plus the digests of the compiler lock and the whole manifest. Any
+drift fails closed. The TRON runtime must differ from the EVM runtime, which
+proves that the TRON compiler (with its `CALLTOKENID`/`CALLTOKENVALUE`
+guards) produced it. `iroha sccp deployment verify` fills the eight §5.2.3
+immutables into the locked template and compares it with the deployed code.
 
-Native compilation is distinct from deployment qualification. The EVM smoke's
-TRON-source diagnostic compilation uses the EVM compiler and must differ from
-the governed TVM output. Actual TVM deployment, precompile semantics and receipts
-require `contract_tvm_runner.sh` on the pinned real TRE runtime. macOS Rosetta
-compiler execution alone supplies no Linux execution or TVM deployment evidence.
+`scripts/contract_native_solc.js` exposes `compile-input` to Node harnesses,
+and `snapshot` hands a manifest to the java-tron (TRE) runner.
 
-The EVM diagnostic runtime uses the pinned native EDR `0.12.1` Node-API engine
-directly. Its adapter keeps chain instances isolated, enforces contract and gas
-limits, and reports mined transaction failures. The unused Hardhat CLI/compiler
-package was removed because its `adm-zip` dependency has an unpatched extraction
-advisory, [GHSA-vwc7-r8mq-g2x9](https://github.com/advisories/GHSA-vwc7-r8mq-g2x9).
-Both runtime dependency trees still require a clean low-severity npm audit.
+## EVM runtime
+
+`evm-runtime/` pins the native EDR `0.12.1` Node-API engine and ethers
+`6.16.0` for the EDR suite (`contracts/evm/sccp/test/sccp_taira_xor.test.js`).
+Install it with `npm ci --ignore-scripts` in that directory; `node_modules/`
+is ignored by git. `edr-provider.js` creates isolated in-memory chains with
+explicit chain ids, gas limits and Hardhat-style time control. The
+`scripts/sccp_evm_contract_smoke.sh` smoke installs and audits a private copy
+(`npm audit --omit=dev --audit-level=low`) before running the suite.
+`package.json` at this level holds the TVM (TRE) runtime dependencies.
+EDR execution is never TVM evidence: TRON deployment, energy and precompile
+semantics are qualified on the pinned TRE image (`tvm_runner` in
+`compiler-lock.json`).

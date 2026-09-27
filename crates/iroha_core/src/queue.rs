@@ -30459,7 +30459,7 @@ pub mod tests {
         let (authority, keypair) = gen_account_in("wonderland");
         register_test_authority(&state, &authority);
         let wrong_network_id =
-            crate::sumeragi::synthetic_network_id("wrong-network-for-queue-journal-replay");
+            crate::unit_test_support::synthetic_network_id("wrong-network-for-queue-journal-replay");
         let signed = TransactionBuilder::new_with_time_source(
             wrong_network_id,
             authority,

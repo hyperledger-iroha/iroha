@@ -1,7 +1,7 @@
 // Disabled-backend coverage for the public node storage handle.
 #[test]
 fn node_handle_storage_methods_error_when_disabled() {
-    let cfg = StorageConfig::builder().enabled(false).build();
+    let (cfg, _dir) = validator_storage_config_with_temp_dir();
     let handle = NodeHandle::new(cfg);
     let payload = b"disabled storage payload";
     let plan = CarBuildPlan::single_file(payload).expect("plan");

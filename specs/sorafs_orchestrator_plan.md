@@ -107,7 +107,10 @@ During execution the orchestrator tracks per-provider state (`ProviderState`):
   `max_concurrent_chunks` and optional `stream_budget.max_in_flight`.
 - `bytes_inflight`: Guardrail for burst budgets when `stream_budget.burst_bytes`
   is present.
-- `consecutive_failures`: Incremented on every failed attempt; reset on success.
+- `consecutive_failures`: Incremented on failed payload attempts; reset on success.
+- Signed token quotas: request dispatch consumes one request in a 60-second window
+  and the planned bytes in a one-second window. Completing a request does not refund
+  either time-based quota. The separate in-flight burst budget is released on completion.
 - `disabled`: Flag set when `consecutive_failures` reaches the configured
   `provider_failure_threshold`.
 
@@ -122,6 +125,11 @@ Failover policy:
 - Retry attempts per chunk are bounded by `FetchOptions::per_chunk_retry_limit`.
   When the limit is exceeded the orchestrator returns
   `MultiSourceError::ExhaustedRetries`.
+- HTTP 429 preserves the gateway's numeric `Retry-After` delay and cools down that
+  provider without consuming its health-failure or payload-retry budget. Missing or
+  malformed delays use one second. Repeated throttling is bounded by the absolute
+  session deadline. Governed policy denials retain their structured code, source,
+  and catalog digest through the transport and scheduler boundary.
 
 # 4. API Surface
 
@@ -136,10 +144,12 @@ following types (non-exhaustive list of significant items):
 | `ProviderMetadata` | Structured form of provider advert data consumed by capability checks. |
 | `FetchOptions` | Runtime configuration knobs (verification flags, retry limits, global concurrency caps). |
 | `FetchRequest` / `ChunkResponse` | Payload passed to caller-supplied fetchers and their responses. |
-| `ChunkObserver` | Optional streaming callback invoked after each verified chunk. |
-| `FetchOutcome` | Aggregate result containing chunk payloads, receipts, and per-provider reports. |
+| `ChunkObserver` | Consuming callback invoked in plan order; delivered bytes are then released. Callbacks must return promptly. |
+| `FetchOutcome` | Eager result containing payload chunks, receipts, and reports; limited to 64 MiB. |
+| `StreamFetchOutcome` | Consuming result containing receipts, reports, and the peak reserved payload-buffer size. |
 | `fetch_plan_parallel` | Primary entry point that consumes a `CarBuildPlan`, provider list, and async fetcher. |
-| `fetch_plan_parallel_with_observer` | Variant that enables streamed delivery via `ChunkObserver`. |
+| `fetch_plan_parallel_with_observer` | Consuming retrieval returning `StreamFetchOutcome`, without retained payload chunks. |
+| `fetch_via_gateway_to_writer` | Gateway retrieval into an empty, caller-owned seekable spool; returns `StreamFetchSession` and the verified spool. |
 | `MultiSourceError` | Error enum covering capability mismatches, retry exhaustion, disabled providers, and observer failures. |
 
 Bindings for TypeScript and Go MUST wrap the same semantics without altering
@@ -230,10 +240,28 @@ The defaults shipped in `FetchOptions::default()` are normative:
 | `provider_failure_threshold` | `3` | Disable provider within the session after this many consecutive failures. |
 | `global_parallel_limit` | `None` | Optional hard cap on concurrent requests; defaults to the sum of provider capacities. |
 | `score_policy` | `None` | Deterministic hook that can adjust provider priority or veto eligibility during scheduling. |
+| `max_payload_bytes` | 8 GiB | Reject a larger complete object before payload dispatch. |
+| `max_metadata_entries` | 262144 | Bound the sum of chunks, files, and logical path components before derived scheduler or CAR allocations; at most 4194304. |
+| `max_buffered_bytes` | 16 MiB | Bound reserved request bytes plus completed chunks awaiting ordered sink delivery. |
+| `session_timeout` | 15 minutes | Bound transport waits and quota cooldowns; check elapsed time after synchronous sink and verification work. |
 
 `verify_lengths` and `verify_digests` are mandatory in the first release; JSON
-config that sets either field to `false` is rejected before an orchestrator is
-constructed.
+config or programmatic options that disable either check are rejected. JSON uses
+`max_payload_bytes`, `max_metadata_entries`, `max_buffered_bytes`, and `session_timeout_secs`; the latter is
+bounded to 1–86,400 seconds and the buffer to 1–256 MiB.
+
+Both retrieval forms use one scheduler. The consuming form bounds its reorder
+window by concurrency and reserved bytes, so a stalled first chunk cannot retain
+the remaining object. Plan metadata, receipts and canonical CAR geometry remain proportional to
+the separately admitted metadata inventory. `peak_buffered_bytes` measures payload reservations,
+not total process memory; transport buffers and bounded metadata are additional allocations.
+The eager convenience form retains at most 64 MiB and rejects larger objects before
+dispatch. Gateway retrieval authenticates and binds the manifest to native plan
+metadata before downloading. Final verification runs the canonical CAR writer into
+a non-retaining sink, then reconstructs PoR with one chunk subtree and a logarithmic
+Merkle frontier. It never concatenates the payload or builds a complete CAR buffer.
+Consumers own spool quotas and cleanup and must publish temporary files only after
+the returned verification succeeds.
 
 Callers may override these fields, but doing so MUST remain deterministic across
 identical inputs.

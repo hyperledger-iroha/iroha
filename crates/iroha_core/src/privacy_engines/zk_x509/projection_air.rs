@@ -23,7 +23,9 @@ use super::profile::{
     ZK_X509_NULLIFIER_DOMAIN_V1, ZK_X509_OWNERSHIP_DOMAIN_V1, ZK_X509_RELATION_VERSION_V1,
     ZK_X509_SCOPED_KEY_DOMAIN_V1, ZK_X509_SOURCE_PROFILE_V1, ZK_X509_SUITE_V1,
 };
-use crate::privacy_engines::transparent_stark::{GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F};
+use crate::privacy_engines::transparent_stark::{
+    GOLDILOCKS_MODULUS_V1, GoldilocksFieldV1 as F, PolynomialAirFieldV1,
+};
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyStatementV1, ZK_X509_MAX_DISCLOSED_ATTRIBUTES_V1,
     ZK_X509_MAX_PRESENTATION_WINDOW_SECONDS_V1,
@@ -52,7 +54,7 @@ pub(crate) const ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1: usize = 25;
 /// Exact fixed-width opened-row residue vector used by the aggregate STARK.
 pub(crate) const ZK_X509_PROJECTION_STARK_CONSTRAINT_COUNT_V1: usize =
     243 + 14 * ZK_X509_PROJECTION_COPY_LANES_V1;
-/// Maximum algebraic degree in committed projection columns.
+/// Maximum total algebraic degree, including verifier-fixed selectors.
 pub(crate) const ZK_X509_PROJECTION_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 const VALUE: usize = 0;
 const VALUE_BITS: usize = 1;
@@ -2662,42 +2664,50 @@ pub(crate) fn evaluate_zk_x509_projection_constraint_residues_v1(
     }
     Ok(residues)
 }
-fn push_projection_stark_residue_v1(residues: &mut Vec<F>, gate: F, residue: F) {
+fn push_projection_stark_residue_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    residue: A,
+) {
     residues.push(gate.mul(residue));
 }
-fn push_projection_stark_zero_base_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    row: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+fn push_projection_stark_zero_base_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    row: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
 ) {
     for value in row {
         push_projection_stark_residue_v1(residues, gate, *value);
     }
 }
-fn push_projection_stark_zero_fields_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    row: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+fn push_projection_stark_zero_fields_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    row: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
     fields: &[usize],
 ) {
     for field in fields {
         push_projection_stark_residue_v1(residues, gate, row[*field]);
     }
 }
-fn push_projection_stark_length_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    first: F,
-    last: F,
-    current: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+fn push_projection_stark_length_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    first: A,
+    last: A,
+    current: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
 ) {
-    let not_last = F::ONE.sub(last);
+    let not_last = A::ONE.sub(last);
     push_projection_stark_residue_v1(residues, gate.mul(first), current[LENGTH_ACC_BEFORE]);
     push_projection_stark_residue_v1(
         residues,
         gate,
-        current[LENGTH_ACC_AFTER].sub(current[LENGTH_ACC_BEFORE].mul(F(256)).add(current[VALUE])),
+        current[LENGTH_ACC_AFTER].sub(
+            current[LENGTH_ACC_BEFORE]
+                .mul(A::from_base(F(256)))
+                .add(current[VALUE]),
+        ),
     );
     push_projection_stark_residue_v1(
         residues,
@@ -2721,16 +2731,16 @@ fn push_projection_stark_length_v1(
         next[DECLARED_LENGTH].sub(current[DECLARED_LENGTH]),
     );
 }
-fn push_projection_stark_variable_v1(
-    residues: &mut Vec<F>,
-    gate: F,
-    first: F,
-    last: F,
-    monotone_transition: F,
-    current: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+fn push_projection_stark_variable_v1<A: PolynomialAirFieldV1>(
+    residues: &mut Vec<A>,
+    gate: A,
+    first: A,
+    last: A,
+    monotone_transition: A,
+    current: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
 ) {
-    let not_last = F::ONE.sub(last);
+    let not_last = A::ONE.sub(last);
     push_projection_stark_residue_v1(
         residues,
         gate,
@@ -2739,10 +2749,10 @@ fn push_projection_stark_variable_v1(
     push_projection_stark_residue_v1(
         residues,
         gate,
-        current[VALUE].mul(F::ONE.sub(current[USED])),
+        current[VALUE].mul(A::ONE.sub(current[USED])),
     );
     push_projection_stark_residue_v1(residues, gate.mul(first), current[REGION_BEFORE]);
-    push_projection_stark_residue_v1(residues, gate.mul(first), current[USED].sub(F::ONE));
+    push_projection_stark_residue_v1(residues, gate.mul(first), current[USED].sub(A::ONE));
     push_projection_stark_residue_v1(
         residues,
         gate.mul(last),
@@ -2761,28 +2771,29 @@ fn push_projection_stark_variable_v1(
     push_projection_stark_residue_v1(
         residues,
         monotone_transition,
-        next[USED].mul(F::ONE.sub(current[USED])),
+        next[USED].mul(A::ONE.sub(current[USED])),
     );
 }
 /// Evaluate the projection AIR as one fixed-width polynomial vector.
 ///
 /// Unlike the test-only native projection constraint evaluator, this evaluator has no native
 /// fixed-row branch. Every branch selector, public output byte, copy label, and boundary flag is a
-/// verifier-preprocessed polynomial opening, so the same function is valid on the extension domain.
+/// verifier-preprocessed polynomial opening. The same polynomial implementation
+/// evaluates both base-field queries and genuine Fp4 out-of-domain points.
 ///
 /// # Errors
 ///
 /// Returns an error for malformed challenge or field encodings, or if the
 /// compiled fixed-width constraint inventory changes unexpectedly.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
-    current: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
-    next: &[F; ZK_X509_PROJECTION_BASE_WIDTH_V1],
-    current_aux: &[F; ZK_X509_PROJECTION_AUX_WIDTH_V1],
-    next_aux: &[F; ZK_X509_PROJECTION_AUX_WIDTH_V1],
-    fixed: &[F; ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1],
+pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1<A: PolynomialAirFieldV1>(
+    current: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+    next: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1],
+    current_aux: &[A; ZK_X509_PROJECTION_AUX_WIDTH_V1],
+    next_aux: &[A; ZK_X509_PROJECTION_AUX_WIDTH_V1],
+    fixed: &[A; ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1],
     challenges: ZkX509ProjectionChallengesV1,
-) -> Result<Vec<F>, ZkX509ProjectionAirErrorV1> {
+) -> Result<Vec<A>, ZkX509ProjectionAirErrorV1> {
     challenges.validate()?;
     if current
         .iter()
@@ -2790,27 +2801,27 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         .chain(current_aux)
         .chain(next_aux)
         .chain(fixed)
-        .any(|value| value.0 >= GOLDILOCKS_MODULUS_V1)
+        .any(|value| !value.is_canonical())
     {
         return Err(ZkX509ProjectionAirErrorV1::NonCanonicalField);
     }
     let mut residues = Vec::with_capacity(ZK_X509_PROJECTION_STARK_CONSTRAINT_COUNT_V1);
     let active = fixed[FIX_ACTIVE];
-    let inactive = F::ONE.sub(active);
+    let inactive = A::ONE.sub(active);
     let first = fixed[FIX_FIRST];
     let last = fixed[FIX_LAST];
-    let not_last = F::ONE.sub(last);
-    residues.push(current[USED].mul(current[USED].sub(F::ONE)));
-    let mut reconstructed = F::ZERO;
+    let not_last = A::ONE.sub(last);
+    residues.push(current[USED].mul(current[USED].sub(A::ONE)));
+    let mut reconstructed = A::ZERO;
     for bit in 0..8 {
         let value = current[VALUE_BITS + bit];
-        residues.push(value.mul(value.sub(F::ONE)));
-        reconstructed = reconstructed.add(value.mul(F(1_u64 << bit)));
+        residues.push(value.mul(value.sub(A::ONE)));
+        reconstructed = reconstructed.add(value.mul(A::from_base(F(1_u64 << bit))));
     }
     residues.push(current[VALUE].sub(reconstructed));
     let input_spki = fixed[FIX_INPUT_SPKI];
     let input_spki_active = input_spki.mul(active);
-    push_projection_stark_residue_v1(&mut residues, input_spki_active, current[USED].sub(F::ONE));
+    push_projection_stark_residue_v1(&mut residues, input_spki_active, current[USED].sub(A::ONE));
     push_projection_stark_zero_fields_v1(
         &mut residues,
         input_spki_active,
@@ -2900,7 +2911,7 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         ],
     );
     let source_constant = active.mul(fixed[FIX_SOURCE_CONSTANT]);
-    push_projection_stark_residue_v1(&mut residues, source_constant, current[USED].sub(F::ONE));
+    push_projection_stark_residue_v1(&mut residues, source_constant, current[USED].sub(A::ONE));
     push_projection_stark_residue_v1(
         &mut residues,
         source_constant,
@@ -2919,7 +2930,7 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         ],
     );
     let source_copy = active.mul(fixed[FIX_SOURCE_COPY]);
-    push_projection_stark_residue_v1(&mut residues, source_copy, current[USED].sub(F::ONE));
+    push_projection_stark_residue_v1(&mut residues, source_copy, current[USED].sub(A::ONE));
     push_projection_stark_zero_fields_v1(
         &mut residues,
         source_copy,
@@ -2933,7 +2944,7 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
         ],
     );
     let source_length = active.mul(fixed[FIX_SOURCE_LENGTH]);
-    push_projection_stark_residue_v1(&mut residues, source_length, current[USED].sub(F::ONE));
+    push_projection_stark_residue_v1(&mut residues, source_length, current[USED].sub(A::ONE));
     push_projection_stark_zero_fields_v1(
         &mut residues,
         source_length,
@@ -3012,7 +3023,7 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
     push_projection_stark_residue_v1(
         &mut residues,
         output_active,
-        current[VALUE].mul(F::ONE.sub(current[USED])),
+        current[VALUE].mul(A::ONE.sub(current[USED])),
     );
     push_projection_stark_zero_fields_v1(
         &mut residues,
@@ -3033,7 +3044,7 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
     push_projection_stark_residue_v1(
         &mut residues,
         output_active.mul(first),
-        current[USED].sub(F::ONE),
+        current[USED].sub(A::ONE),
     );
     push_projection_stark_residue_v1(
         &mut residues,
@@ -3053,12 +3064,12 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
     push_projection_stark_residue_v1(
         &mut residues,
         fixed[FIX_USED_MONOTONE_TRANSITION],
-        next[USED].mul(F::ONE.sub(current[USED])),
+        next[USED].mul(A::ONE.sub(current[USED])),
     );
     push_projection_stark_zero_base_v1(&mut residues, output.mul(inactive), current);
     let digest = fixed[FIX_DIGEST];
     let digest_active = digest.mul(active);
-    push_projection_stark_residue_v1(&mut residues, digest_active, current[USED].sub(F::ONE));
+    push_projection_stark_residue_v1(&mut residues, digest_active, current[USED].sub(A::ONE));
     push_projection_stark_residue_v1(
         &mut residues,
         digest_active,
@@ -3082,14 +3093,12 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
     push_projection_stark_zero_base_v1(&mut residues, fixed[FIX_PADDING], current);
     for lane in 0..COPY_LANES {
         let copy = challenges.copy[lane];
-        let identity_term = copy
-            .gamma
+        let identity_term = A::from_base(copy.gamma)
             .add(current[VALUE])
-            .add(copy.beta.mul(fixed[FIX_COPY_IDENTITY]));
-        let sigma_term = copy
-            .gamma
+            .add(A::from_base(copy.beta).mul(fixed[FIX_COPY_IDENTITY]));
+        let sigma_term = A::from_base(copy.gamma)
             .add(current[VALUE])
-            .add(copy.beta.mul(fixed[FIX_COPY_SIGMA]));
+            .add(A::from_base(copy.beta).mul(fixed[FIX_COPY_SIGMA]));
         residues.push(
             current_aux[AUX_COPY_NUMERATOR_AFTER + lane]
                 .sub(current_aux[AUX_COPY_NUMERATOR_BEFORE + lane].mul(sigma_term)),
@@ -3099,14 +3108,13 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
                 .sub(current_aux[AUX_COPY_DENOMINATOR_BEFORE + lane].mul(identity_term)),
         );
         let compact = challenges.compaction[lane];
-        let tuple = compact
-            .active
-            .add(compact.invocation.mul(fixed[FIX_INVOCATION]))
-            .add(compact.position.mul(current[MESSAGE_BEFORE]))
-            .add(compact.value.mul(current[VALUE]));
-        let term = compact.gamma.add(current[USED].mul(tuple));
-        let source_factor = F::ONE.add(source.mul(term.sub(F::ONE)));
-        let output_factor = F::ONE.add(output.mul(term.sub(F::ONE)));
+        let tuple = A::from_base(compact.active)
+            .add(A::from_base(compact.invocation).mul(fixed[FIX_INVOCATION]))
+            .add(A::from_base(compact.position).mul(current[MESSAGE_BEFORE]))
+            .add(A::from_base(compact.value).mul(current[VALUE]));
+        let term = A::from_base(compact.gamma).add(current[USED].mul(tuple));
+        let source_factor = A::ONE.add(source.mul(term.sub(A::ONE)));
+        let output_factor = A::ONE.add(output.mul(term.sub(A::ONE)));
         residues.push(
             current_aux[AUX_SOURCE_AFTER + lane]
                 .sub(current_aux[AUX_SOURCE_BEFORE + lane].mul(source_factor)),
@@ -3116,10 +3124,10 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
                 .sub(current_aux[AUX_OUTPUT_BEFORE + lane].mul(output_factor)),
         );
         let first_row = fixed[FIX_FIRST_ROW];
-        residues.push(first_row.mul(current_aux[AUX_COPY_NUMERATOR_BEFORE + lane].sub(F::ONE)));
-        residues.push(first_row.mul(current_aux[AUX_COPY_DENOMINATOR_BEFORE + lane].sub(F::ONE)));
-        residues.push(first_row.mul(current_aux[AUX_SOURCE_BEFORE + lane].sub(F::ONE)));
-        residues.push(first_row.mul(current_aux[AUX_OUTPUT_BEFORE + lane].sub(F::ONE)));
+        residues.push(first_row.mul(current_aux[AUX_COPY_NUMERATOR_BEFORE + lane].sub(A::ONE)));
+        residues.push(first_row.mul(current_aux[AUX_COPY_DENOMINATOR_BEFORE + lane].sub(A::ONE)));
+        residues.push(first_row.mul(current_aux[AUX_SOURCE_BEFORE + lane].sub(A::ONE)));
+        residues.push(first_row.mul(current_aux[AUX_OUTPUT_BEFORE + lane].sub(A::ONE)));
         let last_row = fixed[FIX_LAST_ROW];
         residues.push(
             last_row.mul(
@@ -3132,7 +3140,7 @@ pub(crate) fn evaluate_zk_x509_projection_stark_residues_v1(
                 current_aux[AUX_SOURCE_AFTER + lane].sub(current_aux[AUX_OUTPUT_AFTER + lane]),
             ),
         );
-        let transition = F::ONE.sub(last_row);
+        let transition = A::ONE.sub(last_row);
         residues.push(
             transition.mul(
                 next_aux[AUX_COPY_NUMERATOR_BEFORE + lane]
@@ -3885,3 +3893,7 @@ pub(crate) mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "projection_air_fp4_tests.rs"]
+mod fp4_tests;

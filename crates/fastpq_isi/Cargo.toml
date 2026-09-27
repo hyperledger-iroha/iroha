@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+zeroize = { workspace = true }
 
 [lints]
 workspace = true

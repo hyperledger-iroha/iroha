@@ -389,6 +389,41 @@ typed `buildConfidentialTransferProofV2()` API remains available when the
 caller supplies that complete witness material; it is not an automatic Private
 Kaigi fee-spend adapter.
 
+For local wallet proving, use `ConfidentialProver` with a network, canonical asset
+ID and mutable 32-byte spend key. `proveTransfer()` and `proveRedemption()` select
+the canonical circuit and key in Core and verify the generated proof before
+returning. Full redemption omits `change`; partial redemption supplies one exact
+change note. Supply `rootHex`, `treeCommitments` and the actual `inputs` from your
+authenticated wallet snapshot. No dummy note, circuit ID or verifying-key record
+is needed.
+
+```js
+const prover = new ConfidentialProver({ networkId, assetDefinitionId, spendKey });
+try {
+  const proof = prover.proveRedemption({
+    rootHex, treeCommitments, inputs, publicAmount: 42n,
+  });
+  // A local proof is not ledger authorization; use an implemented protocol's admission path.
+} finally {
+  prover.dispose(); // clears its owned key copy; the caller owns the original spendKey
+}
+```
+
+`ConfidentialProverError.code` distinguishes `INVALID_INPUT`, `NATIVE_UNAVAILABLE`,
+`PROVING_FAILED` and `DISPOSED`. Use bigint or exact decimal strings for amounts
+outside JavaScript's safe integer range. Note openings expressed as JavaScript
+strings remain managed by the JavaScript runtime; this API does not promise
+secure erasure of those strings. The native runtime must be rebuilt from the
+current source to expose these wallet methods.
+
+Confidential proof builders take one or two actual input notes. Transfers take
+one or two output notes; V3 unshield accepts zero or one change output. The SDK
+checks these counts and the 65,536-leaf tree capacity before native proving.
+Supply only the actual inputs, including when spending the final leaf of a full
+tree: the native prover supplies any absent second input internally. These APIs
+derive membership paths from `treeCommitments`; path-based proving is currently
+available through Core's Rust API.
+
 `PRIVACY_PROTOCOL_IDS_V1` is the closed registry of exactly twelve identities,
 in wire order: `zk-ace-pq-authorization-v1`,
 `anonymous-pgc-k-out-of-n-v1`, `verange-transparent-range-v1`,
@@ -3393,7 +3428,7 @@ transfer exactly once inside the proved overlay.
 
 The deployed artifact must be compiled in ZK mode with `koto build --zk`; its
 manifest and bytecode must already be registered, and the
-node must have an active `ivm-execution-v1` verifying-key record plus the
+node must have an active `halo2/pasta/ivm-replay-binding-v1` verifying-key record plus the
 matching proving key. A conventional non-ZK deployed artifact cannot be
 retrofitted by this client helper; it must be rebuilt and deployed by its owner.
 The helper is asset- and venue-neutral and does not create pools, choose asset
@@ -3562,6 +3597,8 @@ truncation, and trailing bytes fail closed.
 The codec is exported by the package root and the browser-safe `./norito` leaf.
 It is intentionally absent from the broad `./browser` facade so applications
 that do not inspect release fixtures do not retain the complete Exact12 codec.
+
+The exact IVM verifier label is `halo2/pasta/ivm-replay-binding-v1`. It proves a public statement binding; execution validity requires authenticated VM replay. The retired `halo2/pasta/ivm-execution-v1` label is rejected.
 
 Verifying-key registry helpers mirror the Torii app API (`/v1/zk/vk/*`). Read
 methods validate the canonical response before returning it; there is no parallel

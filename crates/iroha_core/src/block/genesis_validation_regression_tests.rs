@@ -52,14 +52,12 @@ fn block_authenticated_genesis_rejects_invalid_per_transaction_bls_proof() {
         &[(0, genesis_keypair.private_key())],
     );
     let topology = Topology::new(vec![PeerId::new(genesis_keypair.public_key().clone())]);
-    let mut voting_block = None;
-    let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let result = ValidBlock::validate_signed_genesis(
         block,
         &topology,
         &genesis_account,
         &TimeSource::new_system(),
         &state,
-        &mut voting_block,
         iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {});
@@ -174,14 +172,12 @@ fn signed_genesis_validation_rejects_a_non_genesis_header() {
     let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let topology = Topology::new(vec![PeerId::new(leader.public_key().clone())]);
     let block: SignedBlock = ValidBlock::new_dummy(leader.private_key()).into();
-    let mut voting_block = None;
-    let result = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let result = ValidBlock::validate_signed_genesis(
         block,
         &topology,
         &ALICE_ID,
         &TimeSource::new_system(),
         &state,
-        &mut voting_block,
         iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
     )
     .unpack(|_| {});

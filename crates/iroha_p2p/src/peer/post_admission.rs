@@ -58,13 +58,7 @@ impl Pool {
                 return Err(Error::FrameTooLarge);
             }
             if !class.is_low() {
-                private[i] = if matches!(
-                    class,
-                    Class::Safety
-                        | Class::Availability
-                        | Class::RecoveryControl
-                        | Class::RecoveryData
-                ) {
+                private[i] = if class == Class::Safety {
                     bytes
                 } else {
                     1 + receive_credit::ENVELOPE_BYTES
@@ -226,12 +220,8 @@ mod tests {
             .try_reserve(pool.budgets.high.max_bytes, false)
             .unwrap();
         let mut held = Vec::new();
-        for class in [
-            Class::Safety,
-            Class::Availability,
-            Class::RecoveryControl,
-            Class::RecoveryData,
-        ] {
+        {
+            let class = Class::Safety;
             let quota = a.private[class.index()].max_bytes;
             held.push(a.private[class.index()].try_reserve(quota, false).unwrap());
             assert!(a.reserve(class, 1024).is_none());
@@ -262,7 +252,7 @@ mod tests {
         assert_eq!(pool.budgets.retained_high_total(), 0);
     }
     #[test]
-    fn blocked_payload_cannot_consume_availability_or_low_block_sync_post_bytes() {
+    fn blocked_payload_cannot_consume_control_or_low_block_sync_post_bytes() {
         let pool = pool();
         let source = pool.bind(&peer(74)).unwrap();
         let i = Class::Payload.index();
@@ -273,15 +263,15 @@ mod tests {
             .try_reserve(source.private[i].max_bytes, false)
             .unwrap();
         assert!(source.reserve(Class::Payload, 1024).is_none());
-        let availability = source.reserve(Class::Availability, 1024).unwrap();
+        let control = source.reserve(Class::Control, 1024).unwrap();
         let sync = source.reserve(Class::BlockSync, 1024).unwrap();
         assert_eq!(
             pool.budgets.retained_low_total(),
             1024 + receive_credit::ENVELOPE_BYTES
         );
-        assert_eq!(availability.class, Class::Availability);
+        assert_eq!(control.class, Class::Control);
         assert_eq!(sync.class, Class::BlockSync);
-        drop((shared, private, availability, sync));
+        drop((shared, private, control, sync));
         assert!(source.reserve(Class::Payload, 1024).is_some());
     }
     #[test]

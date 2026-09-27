@@ -109,6 +109,7 @@ async fn snapshot_read_buffer_strict_restore_retains_charge_through_initializati
             #[cfg(feature = "telemetry")]
             StateTelemetry::new(<_>::default(), true),
             &budget,
+            state.world.operation_index_budget(),
         )
     };
     assert!(matches!(
@@ -601,6 +602,7 @@ where
         #[cfg(feature = "telemetry")]
         StateTelemetry::new(<_>::default(), true),
         budget,
+        source.world.operation_index_budget(),
     )
 }
 

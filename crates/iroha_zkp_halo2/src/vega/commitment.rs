@@ -1,7 +1,13 @@
 //! Hyrax row commitments over the canonical T256 group.
+//!
+//! Witness rows and their blindings use the shared fixed-window, zeroizing
+//! secret MSM. Only public row lengths may omit a padded suffix; scalar values
+//! never select work or allocation sizes. Verifier-only MSM remains separate.
 use super::{
-    VegaCurveError, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar, derive_t256_generators_v1,
+    VegaCurveError, VegaT256PointV1 as Point, VegaT256ScalarV1 as Scalar,
+    bulletproof_t256::ZkAmsT256BulletproofSuiteV1, derive_t256_generators_v1,
 };
+use crate::generalized_bulletproof::SecretMultiexpBuilder;
 use halo2curves::{
     group::{Curve as _, prime::PrimeCurveAffine as _},
     msm::msm_best,
@@ -19,6 +25,8 @@ pub(super) enum CommitmentError {
     InvalidDimension,
     #[error("Vega commitment key contains a duplicate or inverse point")]
     GeneratorCollision,
+    #[error("Vega secret commitment workspace could not be allocated or evaluated")]
+    SecretWorkspace,
     #[error(transparent)]
     Curve(#[from] VegaCurveError),
 }
@@ -61,7 +69,6 @@ impl Commitment {
 #[derive(Clone, Debug)]
 pub(super) struct CommitmentKey {
     generators: Vec<Point>,
-    generator_affines: Vec<T256Affine>,
     hiding_generator: Point,
     worker_count: usize,
     #[cfg(test)]
@@ -79,10 +86,8 @@ impl CommitmentKey {
                 .ok_or(CommitmentError::InvalidDimension)?,
         )?;
         let hiding_generator = points.pop().ok_or(CommitmentError::InvalidDimension)?;
-        let generator_affines = batch_normalize(&points);
         let key = Self {
             generators: points,
-            generator_affines,
             hiding_generator,
             worker_count: 1,
             #[cfg(test)]
@@ -127,10 +132,7 @@ impl CommitmentKey {
         if row_blindings.len() != row_count {
             return Err(CommitmentError::InvalidDimension);
         }
-        let worker_count = self.worker_count;
-        if worker_count > row_count {
-            return Err(CommitmentError::InvalidDimension);
-        }
+        let worker_count = self.worker_count.min(row_count);
         let points = std::thread::scope(|scope| {
             let mut workers = Vec::with_capacity(worker_count);
             for worker_index in 0..worker_count {
@@ -274,7 +276,7 @@ impl CommitmentKey {
         first_row: usize,
     ) -> Result<Vec<Point>, CommitmentError> {
         let mut points = Vec::with_capacity(row_blindings.len());
-        for (offset, blinding) in row_blindings.iter().copied().enumerate() {
+        for (offset, blinding) in row_blindings.iter().enumerate() {
             let row = first_row
                 .checked_add(offset)
                 .ok_or(CommitmentError::InvalidDimension)?;
@@ -290,23 +292,7 @@ impl CommitmentKey {
             } else {
                 &[]
             };
-            let populated = populated
-                .iter()
-                .rposition(|value| !value.is_zero())
-                .map_or(&[][..], |last| &populated[..=last]);
-            let hiding = self.hiding_generator.mul_scalar(blinding);
-            let committed = if populated.is_empty() {
-                hiding
-            } else {
-                Point(msm_best(
-                    &populated.iter().map(|scalar| scalar.0).collect::<Vec<_>>(),
-                    &self.generator_affines[..populated.len()],
-                )) + hiding
-            };
-            if committed.is_identity() {
-                return Err(CommitmentError::InvalidDimension);
-            }
-            points.push(committed);
+            points.push(self.commit_row(populated, blinding)?);
         }
         Ok(points)
     }
@@ -317,20 +303,53 @@ impl CommitmentKey {
         row_blindings: &[Scalar],
     ) -> Result<Vec<Point>, CommitmentError> {
         let mut points = Vec::with_capacity(row_blindings.len());
-        for (row, blinding) in values
-            .chunks(self.columns())
-            .zip(row_blindings.iter().copied())
-        {
-            let committed = Point(msm_best(
-                &row.iter().map(|scalar| scalar.0).collect::<Vec<_>>(),
-                &self.generator_affines[..row.len()],
-            )) + self.hiding_generator.mul_scalar(blinding);
-            if committed.is_identity() {
-                return Err(CommitmentError::InvalidDimension);
-            }
-            points.push(committed);
+        for (row, blinding) in values.chunks(self.columns()).zip(row_blindings) {
+            points.push(self.commit_row(row, blinding)?);
         }
         Ok(points)
+    }
+    fn row_terms(
+        &self,
+        row: &[Scalar],
+        blinding: &Scalar,
+    ) -> Result<SecretMultiexpBuilder<ZkAmsT256BulletproofSuiteV1>, CommitmentError> {
+        if row.len() > self.columns() {
+            return Err(CommitmentError::InvalidDimension);
+        }
+        let count = row
+            .len()
+            .checked_add(1)
+            .ok_or(CommitmentError::InvalidDimension)?;
+        // The shared T256 suite disables ambient Rayon fan-out. Each scoped
+        // commitment worker evaluates its own chunks serially, with all
+        // scalar encodings and retained copies under clearing owners. MSM
+        // does not consult the suite's membership-circuit generator basis:
+        // the actual Hyrax bases are the borrowed points supplied here.
+        let mut terms =
+            SecretMultiexpBuilder::new(count).map_err(|_| CommitmentError::SecretWorkspace)?;
+        for (scalar, point) in row.iter().zip(&self.generators) {
+            terms
+                .push(scalar, point)
+                .map_err(|_| CommitmentError::SecretWorkspace)?;
+        }
+        terms
+            .push(blinding, &self.hiding_generator)
+            .map_err(|_| CommitmentError::SecretWorkspace)?;
+        Ok(terms)
+    }
+    fn commit_row(&self, row: &[Scalar], blinding: &Scalar) -> Result<Point, CommitmentError> {
+        let committed = self
+            .row_terms(row, blinding)?
+            .evaluate()
+            .map_err(|_| CommitmentError::SecretWorkspace)?;
+        if committed.is_identity() {
+            return Err(CommitmentError::InvalidDimension);
+        }
+        // This is the public Pedersen commitment publication boundary. All
+        // witness/blinding copies remain private to the clearing MSM owner.
+        let mut published = Point::identity();
+        committed.move_into(&mut published);
+        Ok(published)
     }
     fn validate_independence(&self) -> Result<(), CommitmentError> {
         let mut points = self.generators.clone();
@@ -348,6 +367,8 @@ impl CommitmentKey {
         Ok(())
     }
 }
+/// Variable-time MSM for public transcript weights and disclosed proof values.
+/// Private witness rows must go through `CommitmentKey::commit`.
 pub(super) fn msm(scalars: &[Scalar], points: &[Point]) -> Result<Point, CommitmentError> {
     if scalars.len() != points.len() {
         return Err(CommitmentError::InvalidDimension);
@@ -395,9 +416,148 @@ pub(super) fn fold(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vega::bulletproof_t256::secret_msm_test_observations_v1;
+
     fn s(value: u64) -> Scalar {
         Scalar::from_u64(value)
     }
+    fn independent_row_commitment(key: &CommitmentKey, row: &[Scalar], blinding: Scalar) -> Point {
+        row.iter().zip(key.generators()).fold(
+            key.hiding_generator().mul_scalar(blinding),
+            |sum, (value, base)| sum + base.mul_scalar(*value),
+        )
+    }
+
+    #[test]
+    fn secret_rows_use_identical_selection_schedules_and_erase_retained_scalars() {
+        let key = CommitmentKey::derive(b"vega-secret-row-schedule", 4).expect("key");
+        let blinding = s(19);
+        for row in [
+            [Scalar::zero(); 4],
+            [s(7), Scalar::zero(), Scalar::zero(), Scalar::zero()],
+            [s(1), -s(1), s(2), -s(2)],
+        ] {
+            let before = secret_msm_test_observations_v1();
+            let result = key.commit_row(&row, &blinding).expect("hidden row");
+            let after = secret_msm_test_observations_v1();
+            assert_eq!(
+                after.0 - before.0,
+                5,
+                "erase every retained scalar, including blinding"
+            );
+            assert_eq!(
+                after.1 - before.1,
+                5 * 64 * 16,
+                "all scalar digits scan the complete table"
+            );
+            assert_eq!(result, independent_row_commitment(&key, &row, blinding));
+        }
+        assert_eq!(
+            blinding,
+            s(19),
+            "the caller retains ownership of its borrowed secret"
+        );
+    }
+
+    #[test]
+    fn padded_and_partial_rows_match_independent_arithmetic_across_worker_counts() {
+        let key = CommitmentKey::derive(b"vega-secret-padded-row", 4).expect("key");
+        let parallel = key.clone().with_worker_count(3).expect("three workers");
+        let blindings = [s(17), s(19), s(23)];
+        let source = [
+            s(3),
+            Scalar::zero(),
+            -s(1),
+            Scalar::zero(),
+            s(5),
+            s(6),
+            Scalar::zero(),
+            Scalar::zero(),
+            s(9),
+            s(10),
+            s(11),
+            Scalar::zero(),
+        ];
+        for len in [0, 1, 3, 4, 5, 8, 11, 12] {
+            let values = &source[..len];
+            let sequential = key
+                .commit_padded_prefix(values, 12, &blindings)
+                .expect("padded rows");
+            assert_eq!(
+                sequential,
+                parallel
+                    .commit_padded_prefix(values, 12, &blindings)
+                    .expect("parallel rows")
+            );
+            let mut padded = values.to_vec();
+            padded.resize(12, Scalar::zero());
+            assert_eq!(
+                sequential,
+                key.commit(&padded, &blindings)
+                    .expect("explicit public padding")
+            );
+            for (index, row) in padded.chunks(4).enumerate() {
+                assert_eq!(
+                    sequential.points()[index],
+                    independent_row_commitment(&key, row, blindings[index])
+                );
+            }
+            if !values.is_empty() {
+                let row_count = len.div_ceil(4);
+                let partial = key
+                    .commit(values, &blindings[..row_count])
+                    .expect("partial final row");
+                assert_eq!(partial.points(), &sequential.points()[..row_count]);
+            }
+        }
+    }
+
+    #[test]
+    fn secret_row_error_and_unwind_clear_copies_without_mutating_inputs() {
+        let key = CommitmentKey::derive(b"vega-secret-row-cleanup", 4).expect("key");
+        let row = [s(2), s(3), s(5), s(7)];
+        let blinding = s(11);
+        let before = secret_msm_test_observations_v1();
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _terms = key
+                    .row_terms(&row, &blinding)
+                    .expect("retained secret terms");
+                panic!("test unwind after accepting witness values");
+            })
+            .is_err()
+        );
+        let after = secret_msm_test_observations_v1();
+        assert_eq!(after.0 - before.0, 5, "unwind clears every retained term");
+        assert_eq!(after.1, before.1, "unwind occurred before evaluation");
+        assert_eq!(row, [s(2), s(3), s(5), s(7)]);
+        assert_eq!(blinding, s(11));
+
+        let before = secret_msm_test_observations_v1();
+        assert_eq!(
+            key.commit_row(&[Scalar::zero(); 4], &Scalar::zero()),
+            Err(CommitmentError::InvalidDimension)
+        );
+        let after = secret_msm_test_observations_v1();
+        assert_eq!(
+            after.0 - before.0,
+            5,
+            "identity rejection clears accepted secrets"
+        );
+        assert_eq!(after.1 - before.1, 5 * 64 * 16);
+
+        let before = secret_msm_test_observations_v1();
+        assert!(matches!(
+            key.row_terms(&[s(1); 5], &blinding),
+            Err(CommitmentError::InvalidDimension)
+        ));
+        assert_eq!(
+            secret_msm_test_observations_v1(),
+            before,
+            "shape rejection precedes copying caller secrets"
+        );
+    }
+
     #[test]
     fn canonical_ck_derivation_matches_independent_vector() {
         let key = CommitmentKey::derive(b"ck", 4).expect("canonical key");
@@ -447,13 +607,13 @@ mod tests {
                 .with_worker_count(MAX_COMMITMENT_WORKERS + 1)
                 .is_err()
         );
-        assert!(
+        assert_eq!(
             key.clone()
                 .with_worker_count(2)
                 .expect("two workers")
-                .commit(&[s(1), s(2)], &[s(3)])
-                .is_err(),
-            "worker count greater than the row count must fail"
+                .commit(&[s(1), s(2)], &[s(3)]),
+            key.commit(&[s(1), s(2)], &[s(3)]),
+            "the worker limit is clamped to the public row count"
         );
         assert_eq!(
             key.with_worker_count(2)

@@ -15,10 +15,9 @@ fn canonical_block_fixture_roundtrips_via_wire_helpers() {
         .canonical_wire()
         .expect("emit canonical wire representation");
     assert_eq!(canonical_wire.as_framed(), BLOCK_WIRE_FIXTURE);
-    assert_eq!(
-        canonical_wire.as_versioned(),
-        block.encode_versioned().as_slice()
-    );
+    let versioned = block.encode_versioned();
+    assert_eq!(canonical_wire.version(), versioned[0]);
+    assert_eq!(canonical_wire.payload(), &versioned[1..]);
 }
 #[test]
 fn canonical_event_fixture_produces_expected_category() {

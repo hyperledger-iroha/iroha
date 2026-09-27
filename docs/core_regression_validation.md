@@ -620,12 +620,14 @@ four-validator network suites were not rerun.
   transcript, and STARK geometry. Test verifier dispatch checks supplied key
   bytes through the same circuit-specific cache validation as production.
 
-ZK-X509 diagnostic registration uses the shared 136-query, eightfold-LDE
-geometry. Its combined maximum proof projection is 19,156,074 bytes, exceeding
-the unchanged 9,437,184-byte production ceiling. Full MAIN proving rejects this resource
-preflight before witness preparation or entropy. Activation remains unavailable;
-no soundness certificate is installed. BFV arithmetic diagnostics likewise do
-not confer production qualification. See the
+ZK-X509 retains the shared 136-query, eightfold-LDE geometry. Joined MAIN
+commitments, current-row queries with complete current/next Fp4 DEEP checks,
+and paired FRI leaves now yield a combined codec bound of 9,204,362 bytes
+under the unchanged 9,437,184-byte ceiling. Native proof and mutation tests for
+this layout are pending; codec geometry does not establish actual maximum-shape
+proof generation or resource qualification. Activation remains unavailable
+pending independent soundness/hiding and final-candidate evidence. BFV arithmetic
+diagnostics likewise do not confer production qualification. See the
 [privacy closure record](../specs/privacy_first_release_closure.md).
 
 The provider-ingest failures were already corrected in the starting revision:
@@ -642,10 +644,11 @@ cargo test --locked -p iroha_core --lib \
   --features expensive-telemetry,iroha-core-tests,sumeragi-main-loop-tests --no-run
 ```
 
-Compilation also passes with `privacy-release-evidence` added to that feature
-list. Its five focused checks pass: the exact 54-artifact bound matrix, rejection
-of the oversized X509 projection, the unchanged 9-MiB boundary, unavailable
-profile/resource facts, and distinct protocol descriptors.
+The preceding candidate also compiled with `privacy-release-evidence` added to
+that feature list. Its five focused checks covered the exact 54-artifact bound
+matrix, the then-oversized X509 projection, the unchanged 9-MiB boundary,
+unavailable profile/resource facts, and distinct protocol descriptors. Those
+results do not validate the new joined X509 layout; its fresh checks are pending.
 
 The resulting executable is copied before focused runs so subsequent Cargo
 builds cannot replace a running artifact. Heavy proof selections use bounded

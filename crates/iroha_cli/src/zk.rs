@@ -521,7 +521,7 @@ impl Run for IvmDerivePkArgs {
         let vk_bytes =
             read_zk_file_bounded(&self.vk, ZK_CLI_VK_MAX_BYTES_V1, "Halo2 IPA verifying key")?;
         let vk_box = iroha::data_model::proof::VerifyingKeyBox::new(self.backend, vk_bytes);
-        let pk = iroha_core::zk::derive_halo2_ipa_ivm_execution_proving_key_bytes(&vk_box)
+        let pk = iroha_core::zk::derive_halo2_ipa_ivm_replay_binding_proving_key_bytes(&vk_box)
             .map_err(|err| {
                 eyre::eyre!("failed to derive proving key bytes from verifying key bytes: {err}")
             })?;
@@ -962,11 +962,11 @@ mod tests {
             "halo2/ipa\n",
             "HALO2/IPA",
             "stark/FRI",
-            "halo2/ipa::ivm-execution-v1",
+            "halo2/ipa::ivm-replay-binding-v1",
             "halo2//ipa",
             "halo2/ipa:",
             "halo2/ipa.",
-            "halo2/ipa/.ivm-execution-v1",
+            "halo2/ipa/.ivm-replay-binding-v1",
             "halo2/ipa:ivm..execution-v1",
             "halo2/ipa/orchard",
             "halo2/kzg",
@@ -994,7 +994,7 @@ mod tests {
             "halo2/ipa :vk_transfer",
             "HALO2/IPA:vk_transfer",
             "stark/FRI:vk_transfer",
-            "halo2/ipa::ivm-execution-v1:vk_transfer",
+            "halo2/ipa::ivm-replay-binding-v1:vk_transfer",
             "halo2//ipa:vk_transfer",
             "halo2/ipa.:vk_transfer",
             "halo2/ipa:ivm..execution-v1:vk_transfer",
@@ -1004,7 +1004,7 @@ mod tests {
             "stark/fri/boi-audited:vk_transfer",
             "halo2/ipa:release-ready:vk_transfer",
             "halo2/ipa:tiny-add:vk_transfer",
-            "halo2/ipa:ivm-execution-v1:vk_ivm",
+            "halo2/ipa:ivm-replay-binding-v1:vk_ivm",
             "mock/dev:vk_transfer",
             "halo2/ipa:",
             "halo2/ipa:vk:shadow",
@@ -1014,9 +1014,9 @@ mod tests {
                 "{literal:?} must reject before building a verifying-key id"
             );
         }
-        let parsed = parse_vk_id_pair("halo2/pasta/ivm-execution-v1:vk_ivm")
+        let parsed = parse_vk_id_pair("halo2/pasta/ivm-replay-binding-v1:vk_ivm")
             .expect("canonical IVM execution vk id");
-        assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-execution-v1");
+        assert_eq!(parsed.backend.as_str(), "halo2/pasta/ivm-replay-binding-v1");
         assert_eq!(parsed.name.as_str(), "vk_ivm");
         let parsed = parse_vk_id_pair("stark/fri/poseidon-x7-goldilocks-6x64-v1:vk_stark")
             .expect("stark vk id");

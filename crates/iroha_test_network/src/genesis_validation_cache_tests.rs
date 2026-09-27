@@ -68,6 +68,7 @@ fn validated_genesis_cache_reuses_exact_block_and_network_identity() {
                 ValidatedNetworkGenesis::new(
                     validated.block.clone(),
                     bad,
+                    validated.raw_manifest.clone(),
                     &network.consensus_profile,
                     &topology,
                 )

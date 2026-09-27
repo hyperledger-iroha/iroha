@@ -1306,8 +1306,10 @@ impl ArchivedProviderIngestFinalizedLedgerV1 {
     ///
     /// Rejects an invalid or no-longer-pending assignment binding; fails closed when current
     /// finality, archive qualification, or a stable head cannot be authenticated.
-    // TODO: connect this exact source to a separately governed admission/advert/pin/token
-    // resolver before enabling production HTTPS grant issuance.
+    // The stock native source transport authorizes signed assignment requests through
+    // `iroha_core::query::provider_ingest_source`; it does not issue gateway grants.
+    // TODO: an independently administered HTTPS gateway-grant resolver must still join
+    // this observation to its governed admission, advert, pin and token authority.
     pub(crate) fn lookup_current_assignment(
         &self,
         network_id: NetworkId,

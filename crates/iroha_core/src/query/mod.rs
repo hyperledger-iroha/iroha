@@ -26,6 +26,9 @@ pub mod signer_check_test_fixture;
 pub(crate) mod signer_custody_history;
 /// Same-State durable block and revision-4 finality verification for signer consumers.
 pub mod signer_finality;
+/// Finalized governed provider-admission authority.
+pub mod provider_admission;
+pub mod provider_ingest_source;
 pub mod snapshot;
 /// Explicit funded public-ballot setup; never production admission or finalized evidence.
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -278,3 +281,6 @@ pub fn insert_gov_locks_for_test(
         .commit_world_overlay_for_testing()
         .expect("commit query fixture governance overlay");
 }
+
+/// Current finalized native lease authorization for remote repair chunk sources.
+pub mod repair_source;

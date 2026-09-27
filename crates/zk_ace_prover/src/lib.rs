@@ -3,7 +3,8 @@
 //! The typed policy, witness, and transaction shapes remain available for validation and future
 //! migration, but no compiled native verifier profile is activatable. Every otherwise valid
 //! preparation or build attempt therefore returns
-//! [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before entropy or proof work.
+//! [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before private-witness
+//! hashing, entropy or proof work.
 use core::{num::NonZeroU32, time::Duration};
 pub use iroha_core::privacy_engines::zk_ace::{
     ZkAcePrivacyWitnessV1, ZkAcePrivacyWitnessValidationErrorV1,
@@ -573,11 +574,9 @@ where
     if transfer.policy.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
         return Err(ZkAcePrivacyActionBuildErrorV1::PolicyNotActive);
     }
-    if witness.identity_commitment_v1() != transfer.policy.identity_commitment {
-        return Err(ZkAcePrivacyActionBuildErrorV1::IdentityCommitmentMismatch);
-    }
     let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1)
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
+    validate_identity_commitment_v1(&transfer, witness)?;
     let native_statement = ZkAcePqAuthorizationStatementV1 {
         context: PrivacyStatementContextV1 {
             network_id: context.network_id,
@@ -683,14 +682,24 @@ where
         effect,
     })
 }
+fn validate_identity_commitment_v1(
+    transfer: &ZkAcePrivacyTransferV1,
+    witness: &ZkAcePrivacyWitnessV1,
+) -> Result<(), ZkAcePrivacyActionBuildErrorV1> {
+    if witness.identity_commitment_v1() != transfer.policy.identity_commitment {
+        return Err(ZkAcePrivacyActionBuildErrorV1::IdentityCommitmentMismatch);
+    }
+    Ok(())
+}
+
 /// Validate one direct ZK-ACE candidate transfer and fail closed before proving.
 ///
 /// # Errors
 ///
-/// Fails closed for invalid policy, context, witness binding, or genesis. An
-/// otherwise valid request returns
-/// [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before using
-/// `randomness` while the final qROM Fiat-Shamir reduction, six-lane collision
+/// Fails closed for invalid public policy, context or genesis. While the profile
+/// is unavailable, returns
+/// [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before hashing
+/// the witness or using `randomness`. The final qROM Fiat-Shamir reduction, six-lane collision
 /// and multi-target accounting, and independent implementation review remain
 /// unregistered for the exact compiled profile.
 #[expect(
@@ -1046,7 +1055,7 @@ mod tests {
                 [0x77; 32],
                 &mut PanicEntropyRng,
             ),
-            Err(ZkAcePrivacyActionBuildErrorV1::IdentityCommitmentMismatch)
+            Err(ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)
         ));
         let (transfer, witness) = transfer_and_witness();
         assert!(matches!(
@@ -1070,6 +1079,15 @@ mod tests {
                 &mut PanicEntropyRng,
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::AuthorityKeyMismatch)
+        ));
+    }
+    #[test]
+    fn identity_binding_rejects_wrong_witness_independently_of_engine_availability() {
+        let (transfer, valid_witness) = transfer_and_witness();
+        assert!(validate_identity_commitment_v1(&transfer, &valid_witness).is_ok());
+        assert!(matches!(
+            validate_identity_commitment_v1(&transfer, &witness(0x31)),
+            Err(ZkAcePrivacyActionBuildErrorV1::IdentityCommitmentMismatch)
         ));
     }
     #[test]

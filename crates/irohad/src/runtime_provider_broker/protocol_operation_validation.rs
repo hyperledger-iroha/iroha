@@ -2,7 +2,8 @@ const fn operation_decode_policy(operation: u16) -> DecodeResourcePolicyV1 {
     match operation {
         OPERATION_STREAM_TOKEN_SIGN_V1
         | OPERATION_STREAM_TOKEN_RECOVER_V1
-        | OPERATION_STREAM_TOKEN_OBSERVE_V1 => STREAM_TOKEN_HARDWARE_DECODE_POLICY_V1,
+        | OPERATION_STREAM_TOKEN_OBSERVE_V1
+        | OPERATION_STREAM_TOKEN_CHECK_V1 => STREAM_TOKEN_HARDWARE_DECODE_POLICY_V1,
         OPERATION_BILLING_IDENTITY_V1
         | OPERATION_BILLING_READINESS_V1
         | OPERATION_BILLING_QUERY_CAPABILITIES_V1
@@ -81,7 +82,8 @@ const fn operation_semantic_frame_limit(operation: u16) -> usize {
         }
         OPERATION_STREAM_TOKEN_SIGN_V1
         | OPERATION_STREAM_TOKEN_RECOVER_V1
-        | OPERATION_STREAM_TOKEN_OBSERVE_V1 => MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1,
+        | OPERATION_STREAM_TOKEN_OBSERVE_V1
+        | OPERATION_STREAM_TOKEN_CHECK_V1 => MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1,
         OPERATION_APPEAL_FINANCE_CHECKPOINT_SIGN_V1 => MAX_STREAM_TOKEN_FRAME_BYTES_V1,
         OPERATION_APPEAL_FINANCE_TRANSACTION_SIGN_V1 => {
             MAX_APPEAL_FINANCE_TRANSACTION_FRAME_BYTES_V1
@@ -222,7 +224,8 @@ const fn operation_semantic_frame_limit(operation: u16) -> usize {
         OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
         | OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1
         | OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1
-        | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1 => MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+        | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1 => MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
         _ => MAX_BROKER_UNARY_FRAME_BYTES_V1,
     }
 }
@@ -233,7 +236,8 @@ const fn operation_frame_limit(operation: u16) -> usize {
         OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1
         | OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1
         | OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1
-        | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1 => MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+        | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+        | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1 => MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
         OPERATION_SEALED_LOAD_V1
         | OPERATION_SEALED_COMPARE_AND_SWAP_V1
         | OPERATION_SEALED_DELETE_V1 => MAX_GOVERNANCE_SEALED_STATE_FRAME_BYTES_V1,
@@ -304,6 +308,7 @@ const fn operation_is_known(operation: u16) -> bool {
             | OPERATION_STREAM_TOKEN_SIGN_V1
             | OPERATION_STREAM_TOKEN_RECOVER_V1
             | OPERATION_STREAM_TOKEN_OBSERVE_V1
+            | OPERATION_STREAM_TOKEN_CHECK_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_PENDING_V1
             | OPERATION_STREAM_TOKEN_GATEWAY_ACKNOWLEDGE_V1
@@ -411,6 +416,7 @@ const fn operation_is_known(operation: u16) -> bool {
             | OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1
             | OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1
             | OPERATION_GLOBAL_BEACON_CAPABILITY_ATTEST_V1
+            | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1
     )
 }
 fn provider_ingest_signer_context_from_wire(
@@ -1065,6 +1071,43 @@ fn decode_global_beacon_partial_sign_request(
     Ok((request, aggregator))
 }
 
+fn decode_global_beacon_seat_readiness_request(
+    payload: &[u8],
+    session_network_id: &NetworkId,
+) -> Result<
+    (
+        GlobalBeaconSeatReadinessRequestWireV1,
+        iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
+    ),
+    BrokerError,
+> {
+    let request = decode_canonical::<GlobalBeaconSeatReadinessRequestWireV1>(
+        payload,
+        MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+    )?;
+    if request.session.network_id != *session_network_id {
+        return Err(BrokerError::BindingMismatch);
+    }
+    let binding = iroha_core::beacon::GlobalThresholdBeaconSessionBindingV1 {
+        network_id: *session_network_id,
+        session_id: request.session.session_id,
+        roster_hash: request.session.roster_hash,
+        transcript_hash: request.session.transcript_hash,
+    };
+    let session = iroha_core::beacon::validate_global_threshold_beacon_session_v1(
+        request.session.clone(),
+        &binding,
+    )
+    .map_err(|_| BrokerError::Rejected)?;
+    iroha_core::beacon::seat_readiness::global_threshold_beacon_seat_readiness_challenge_v1(
+        &session,
+        &request.authority,
+        &request.context,
+    )
+    .map_err(|_| BrokerError::Rejected)?;
+    Ok((request, session))
+}
+
 fn decode_parliament_tle_partial_release_sign_request(
     payload: &[u8],
     session_network_id: &NetworkId,
@@ -1241,7 +1284,7 @@ fn validate_operation_response_for_client(
     validate_operation_response_envelope(request, response)?;
     let threshold_typed_caller = matches!(
         (request.binding.slot, request.operation),
-        (slot, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1)
+        (slot, OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1 | OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1)
             if slot == IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
     ) || matches!(
         (request.binding.slot, request.operation),
@@ -1359,6 +1402,7 @@ fn validate_operation_result(
         && !matches!(
             request.operation,
             OPERATION_STREAM_TOKEN_SIGN_V1
+                | OPERATION_STREAM_TOKEN_CHECK_V1
                 | OPERATION_MODERATION_QUARANTINE_WRAP_DEK_V1
                 | OPERATION_REPUTATION_JOURNAL_SUBMIT_V1
                 | OPERATION_REPUTATION_THRESHOLD_RECONCILE_V1
@@ -1664,6 +1708,22 @@ fn validate_operation_result(
                 aggregator
                     .accept_partial(signed.partial)
                     .map_err(|_| BrokerError::Protocol)?;
+            }
+            OPERATION_GLOBAL_BEACON_SEAT_READINESS_V1 => {
+                if request.binding.slot
+                    != IrohaRuntimeProviderSlotV1::GlobalBeaconPartialSigner.wire_id()
+                {
+                    return Err(BrokerError::BindingMismatch);
+                }
+                let (prepared, session) = decode_global_beacon_seat_readiness_request(
+                    &request.payload,
+                    session_network_id,
+                )?;
+                let signed = decode_canonical::<GlobalBeaconPartialSignResultWireV1>(
+                    result,
+                    MAX_CONSENSUS_SIGNER_FRAME_BYTES_V1,
+                )?;
+                iroha_core::beacon::seat_readiness::verify_global_threshold_beacon_seat_readiness_v1(&session, &prepared.authority, &prepared.context, &signed.partial).map_err(|_| BrokerError::Protocol)?;
             }
             OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1 => {
                 if request.binding.slot
@@ -2199,6 +2259,9 @@ fn validate_operation_result(
             }
             OPERATION_STREAM_TOKEN_OBSERVE_V1 => {
                 decode_stream_token_observer_reply(&request.binding, &request.payload, result)?;
+            }
+            OPERATION_STREAM_TOKEN_CHECK_V1 => {
+                decode_stream_token_check_result(&request.binding, &request.payload, result)?;
             }
             OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1 => {
                 let admission = decode_canonical::<
@@ -3026,22 +3089,28 @@ fn moderation_quarantine_operation_error(
 mod platform {
     include!("platform.rs");
 }
-/// Resolve the stock catalog through the platform-fixed production endpoint.
+/// Resolve the stock catalog through one validated production endpoint.
 pub(super) fn resolve(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
 ) -> Result<IrohaRuntimeDeps, IrohaRuntimeProviderRegistryErrorV1> {
-    platform::resolve(bindings, &platform::EndpointPolicy::production())
+    platform::resolve(
+        bindings,
+        &platform::EndpointPolicy::production(endpoint_path),
+    )
 }
-/// Serve the exact stock catalog on the platform-fixed production endpoint.
+/// Serve the exact stock catalog on one validated production endpoint.
 pub(super) fn serve(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
 ) -> Result<(), RuntimeProviderBrokerServerErrorV1> {
-    platform::serve(bindings, backends)
+    platform::serve(bindings, endpoint_path, backends)
 }
 /// Serve the stock catalog with a fallible readiness publication.
 pub(super) fn serve_with_fallible_readiness<R>(
     bindings: &IrohaRuntimeProviderBindingsV1,
+    endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
     backends: RuntimeProviderBrokerBackendsV1,
     lifecycle: Arc<RuntimeProviderBrokerLifecycleV1>,
     on_ready: R,
@@ -3049,5 +3118,5 @@ pub(super) fn serve_with_fallible_readiness<R>(
 where
     R: FnOnce() -> Result<(), RuntimeProviderBrokerReadinessErrorV1>,
 {
-    platform::serve_with_fallible_readiness(bindings, backends, lifecycle, on_ready)
+    platform::serve_with_fallible_readiness(bindings, endpoint_path, backends, lifecycle, on_ready)
 }

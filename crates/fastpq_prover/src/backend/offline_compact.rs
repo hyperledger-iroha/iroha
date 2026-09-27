@@ -1,4 +1,6 @@
 //! Fixed quantity-artifact production and verification for offline callers.
+//! Masked trace rows use fresh cryptographic entropy; a complete reviewed
+//! zero-knowledge guarantee remains a separate qualification requirement.
 //!
 //! The two routes verify complete ordered bundles under the fixed six-lane DEEP
 //! implementation with 64 bounded queries and one OOD AIR evaluation per segment. The caller supplies independent expected public inputs and AXT
@@ -6,8 +8,8 @@
 //! Success establishes mathematical consistency with those expectations, not
 //! their authority, ledger finality, replay admission or production qualification.
 //! Proving uses explicit work limits and constructs one segment at a time.
-//! No profile registry or production ingress is enabled by this module.
-//! TODO: Complete independent protocol qualification and authenticated admission.
+//! The fixed canonical profile is available in every build. Callers bind their
+//! authenticated statement and enforce finality and replay policy at use.
 
 use iroha_data_model::{
     fastpq::{
@@ -31,6 +33,13 @@ use crate::{
     gadgets::public_transfer_statement::{PublicTransferLimits, TransferSmtBuildLimits},
     proof::PublicIO,
 };
+
+#[path = "offline_compact/resources.rs"]
+mod resources;
+#[cfg(test)]
+pub(super) use resources::QUANTITY_QUERY_COUNT;
+pub(super) use resources::QUANTITY_SHARED_FRAME_BOUND;
+pub use resources::{QuantityArtifactResources, quantity_artifact_resources};
 
 /// Independently expected public inputs, ordering and complete canonical statement identity.
 ///
@@ -110,7 +119,7 @@ impl<'a> ExpectedAxtContext<'a> {
 
 /// Explicit limits for a complete ordered bundle in addition to every child cap.
 ///
-/// No defaults or production workload profile are selected by this policy.
+/// The default policy fits two complete segments in the canonical one-MiB envelope.
 #[derive(Debug, Clone, Copy)]
 pub struct BundleVerificationLimits {
     /// Maximum complete delta occurrences, each represented by one segment.
@@ -162,6 +171,39 @@ pub struct VerificationLimits {
     pub total_decode: DecodeLimits,
 }
 
+impl Default for VerificationLimits {
+    fn default() -> Self {
+        const MIB: usize = 1024 * 1024;
+        Self {
+            transport: FastpqCompactArtifactDecodeLimits {
+                max_wire_bytes: MIB,
+                max_bundle_frame_bytes: MIB,
+                norito: DecodeLimits::new(20 * MIB, 20 * MIB, 25 * MIB, 96 * MIB, 32),
+            },
+            public_statement: PublicTransferLimits::default(),
+            bundle: BundleVerificationLimits {
+                max_segments: 2,
+                max_wire_bytes: MIB,
+                max_total_segment_bytes: MIB,
+                max_total_statement_bytes: MIB / 2,
+                max_total_queries: 2 * super::deep_geometry::QUERY_COUNT,
+                max_total_decode_allocation_charges: 128 * MIB,
+                segment: VerifyLimits {
+                    max_proof_bytes: super::deep_proof::MAX_FRAME_BYTES,
+                    max_queries: super::deep_geometry::QUERY_COUNT,
+                    max_fri_layers: super::deep_geometry::FRI_LENGTHS.len(),
+                    max_query_path_len: super::deep_geometry::LDE_ROWS.ilog2() as usize,
+                    max_fri_round_values: 16,
+                    max_air_row_values: super::compact_public_columns::COMMITTED_COLUMN_COUNT,
+                    ..VerifyLimits::default()
+                },
+            },
+            max_segment_decode_allocation_charges: 64 * MIB,
+            total_decode: DecodeLimits::new(20 * MIB, 20 * MIB, 30 * MIB, 192 * MIB, 32),
+        }
+    }
+}
+
 impl VerificationLimits {
     fn internal(self) -> ArtifactLimits {
         ArtifactLimits {
@@ -176,14 +218,15 @@ impl VerificationLimits {
 
 /// Explicit additional work policy for producing a complete quantity artifact.
 ///
-/// No defaults or node admission profile are selected. At most one call to either
+/// The default policy bounds one two-segment artifact. At most one call to either
 /// producer runs at a time in this process; a concurrent call returns `Busy`.
 /// Private witnesses are bounded separately, and physical columns are constructed
 /// and dropped one segment at a time. Verification limits also constrain output.
 #[derive(Debug, Clone, Copy)]
 pub struct ProvingLimits {
-    /// Explicit local commitment hashing. CPU is deterministic; selected devices
-    /// must pass primitive readiness and errors do not silently choose CPU.
+    /// Explicit bulk-leaf hashing; streamed parents and transcript hashes use CPU.
+    /// Selected devices must pass public readiness before private work; execution
+    /// errors never silently choose CPU. Both policies preserve canonical bytes.
     pub digest_execution: crate::DigestExecutionV1,
     /// Limits on private touched-tree construction and retained path material.
     pub private_smt: TransferSmtBuildLimits,
@@ -197,10 +240,27 @@ pub struct ProvingLimits {
     /// unrelated process memory are excluded. Public inputs, retained child
     /// frames, private SMT work and decoder charges have separate limits.
     pub max_segment_charge_bytes: usize,
-    /// Maximum structural arithmetic and inspection work in each coefficient
-    /// conversion or exact quotient phase. Checked before that phase allocates
-    /// transform buffers; this is local work policy, not consensus gas.
+    /// Maximum structural arithmetic and inspection work for one masked attempt.
+    ///
+    /// The same ceiling independently bounds hash calls. Transform accounting
+    /// charges field-lane operations across every planned replay; these units
+    /// are neither bytes nor consensus gas. Checked before private allocation.
     pub max_segment_work_units: usize,
+}
+
+impl Default for ProvingLimits {
+    fn default() -> Self {
+        Self {
+            digest_execution: crate::DigestExecutionV1::Cpu,
+            private_smt: TransferSmtBuildLimits::for_update_limit(4)
+                .expect("fixed two-segment SMT geometry fits usize"),
+            max_total_trace_cells: 2
+                * crate::gadgets::compact_smt_air::COLUMN_COUNT
+                * super::deep_geometry::TRACE_ROWS,
+            max_segment_charge_bytes: 2 * 1024 * 1024 * 1024,
+            max_segment_work_units: usize::try_from(1_u64 << 42).unwrap_or(usize::MAX),
+        }
+    }
 }
 
 /// A producer failure; no partial artifact is returned.
@@ -311,7 +371,8 @@ pub struct VerificationWork {
 /// Complete offline verification and recomputed artifact identity.
 ///
 /// Private fields prevent constructing a success from advertised metadata. A
-/// successful value grants no source authority, finality or ingress admission.
+/// successful value establishes proof validity; source authority and finality
+/// come from the caller's independently authenticated expectations.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifiedArtifact {
     inner: candidate_artifact::VerifiedArtifact,
@@ -376,9 +437,9 @@ impl VerifiedArtifact {
     }
 }
 
-/// Return the exact fixed DEEP quantity candidate profile identifier.
+/// Return the exact fixed DEEP quantity profile identifier.
 ///
-/// This equality filter does not register or qualify a production profile. A
+/// A
 /// count-one quantity bundle retains its bundle schema and relation identity.
 pub fn quantity_profile_id() -> FastpqCompactProfileIdV1 {
     candidate_artifact::quantity_diagnostic_profile_id()
@@ -387,7 +448,7 @@ pub fn quantity_profile_id() -> FastpqCompactProfileIdV1 {
 /// Verify a complete ordinary quantity artifact against independent caller inputs.
 ///
 /// The entry point fixes the quantity value domain, ordinary semantics and the six-lane
-/// candidate. It does not accept a generic AIR, profile selector or private witness.
+/// profile. It does not accept a generic AIR, profile selector or private witness.
 ///
 /// # Errors
 /// Rejects canonical transport or policy failures, mismatched expected inputs,

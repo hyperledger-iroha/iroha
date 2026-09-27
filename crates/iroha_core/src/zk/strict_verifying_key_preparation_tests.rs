@@ -31,10 +31,10 @@ mod strict_verifying_key_preparation_tests {
     fn portable_off_ledger_record() -> VerifyingKeyRecord {
         let mut record = VerifyingKeyRecord::new(
             1,
-            IVM_EXECUTION_V1_CIRCUIT_ID,
+            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
-            ivm_execution_public_inputs_schema_hash(),
+            ivm_replay_binding_public_inputs_schema_hash(),
             [0x42; 32],
         );
         record.gas_schedule_id = Some("halo2_default".to_owned());
@@ -67,10 +67,10 @@ mod strict_verifying_key_preparation_tests {
         let id = VerifyingKeyId::new(ZK_BACKEND_HALO2_IPA, "oversized-off-ledger");
         let mut record = VerifyingKeyRecord::new(
             1,
-            IVM_EXECUTION_V1_CIRCUIT_ID,
+            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pallas",
-            ivm_execution_public_inputs_schema_hash(),
+            ivm_replay_binding_public_inputs_schema_hash(),
             [0x42; 32],
         );
         record.vk_len =
@@ -113,7 +113,7 @@ mod strict_verifying_key_preparation_tests {
         );
         let error = validate_and_prepare_verifying_key_material_v1(
             ZK_BACKEND_HALO2_IPA,
-            IVM_EXECUTION_V1_CIRCUIT_ID,
+            IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             &vk,
         )
@@ -129,7 +129,7 @@ mod strict_verifying_key_preparation_tests {
         assert!(
             validate_and_prepare_verifying_key_material_v1(
                 ZK_BACKEND_HALO2_IPA,
-                IVM_EXECUTION_V1_CIRCUIT_ID,
+                IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 iroha_data_model::zk::BackendTag::Halo2IpaPasta,
                 &vk,
             )

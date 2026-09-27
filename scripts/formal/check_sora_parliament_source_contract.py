@@ -508,7 +508,7 @@ def require_block_start_construction(state: str) -> None:
     prefix = (
         "letcanonical_runtime::AcquiredRuntimeBlockFields{world,transactions,"
         "commit_topology,prev_commit_topology,lane_consensus_contexts,canonical_runtime,"
-        "projection,sccp_registry,block_hashes,}=original.take()"
+        "projection,sccp_registry,block_hashes,da_rewind_releases,}=original.take()"
         '.expect("originalacquiredStateblock").into_fields();'
         "letblock=StateBlock::from_fields(StateBlockFields{"
     )
@@ -546,10 +546,16 @@ def require_block_start_construction(state: str) -> None:
             raise RuntimeError(f"{path}: start construction has duplicate or invalid original fields")
         bindings[name] = value if separator else name
     expected = {name: name for name in (
-        "world", "transactions", "commit_topology", "prev_commit_topology",
-        "lane_consensus_contexts", "canonical_runtime", "sccp_registry", "block_hashes",
+        "world", "sccp_registry", "da_rewind_releases",
     )}
     expected.update({
+        "canonical_runtime": "block_field::BlockField::new(canonical_runtime)",
+        "block_hashes": "block_hash_field::BlockHashField::new(block_hashes)",
+        "transactions": "storage_transactions::TransactionsBlockField::new(transactions)",
+        "commit_topology": "block_field::BlockField::new(commit_topology)",
+        "prev_commit_topology": "block_field::BlockField::new(prev_commit_topology)",
+        "lane_consensus_contexts": "block_field::BlockField::new(lane_consensus_contexts)",
+        "local_storage_refusal": "None",
         "state_ref": "self", "_curr_block": "curr_block",
         "nexus": "projection.nexus", "start_of_block_effects_applied": "false",
         "pending_parliament_telemetry_events":
@@ -588,8 +594,10 @@ def require_block_start_enactment_phases(state: str) -> None:
     phases = re.sub(r"//[^\n]*", "", phases)
     expected = (
         "let now_h = sb._curr_block.height().get();"
-        "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h);"
-        "Self::apply_block_start_parliament_enactments(&mut sb, now_h);"
+        "Self::apply_block_start_private_settlement_expiry(&mut sb, now_h)"
+        ".map_err(StateBlockStartError::Storage)?;"
+        "Self::apply_block_start_parliament_enactments(&mut sb, now_h)"
+        ".map_err(StateBlockStartError::Storage)?;"
     )
     if re.sub(r"\s+", "", phases) != re.sub(r"\s+", "", expected):
         raise RuntimeError(f"{state_path}: start phases must use the original block and height in order")
@@ -598,8 +606,8 @@ def require_block_start_enactment_phases(state: str) -> None:
         "letacquired=self.acquire_canonical_runtime_block(false)?;",
         "letmutsb=self.construct_acquired_block(acquired,curr_block,Box::new);",
         "letcontinuation=before_start(&mutsb).map_err(StateBlockStartError::Stage)?;",
-        "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h);",
-        "Self::apply_block_start_parliament_enactments(&mutsb,now_h);",
+        "Self::apply_block_start_private_settlement_expiry(&mutsb,now_h).map_err(StateBlockStartError::Storage)?;",
+        "Self::apply_block_start_parliament_enactments(&mutsb,now_h).map_err(StateBlockStartError::Storage)?;",
         "sb.start_of_block_effects_applied=true;",
         "sb.capture_execution_output_capacity();",
         "letresult=after_start(&mutsb,continuation).map_err(StateBlockStartError::Stage)?;",
@@ -616,7 +624,7 @@ def require_block_start_enactment_phases(state: str) -> None:
     )
     require_all(state_path, expiry, (
         "barrier.manifest.expiry_height < now_h",
-        "let mut expiry = sb.transaction();",
+        "let mut expiry = sb.try_transaction()?;",
         ".reconcile_expired_private_settlement_staged_locks_v1()",
         "expiry.apply();",
     ))
@@ -647,11 +655,11 @@ def require_block_start_enactment_phases(state: str) -> None:
 
     compact_due = re.sub(r"\s+", "", due_enactment)
     ordered_due = (
-        "letmutenactment=sb.transaction();",
+        "letmutenactment=sb.try_transaction()?;",
         "execute_due_parliament_certificate_v1(",
         "DueParliamentCertificateExecutionV1::EffectFailed",
         "drop(enactment);",
-        "letmutfailure=sb.transaction();",
+        "letmutfailure=sb.try_transaction()?;",
         "record_due_parliament_execution_failure_v1(",
         "failure.apply();",
     )
@@ -710,43 +718,57 @@ def require_parliament_commit_publication(state: str) -> None:
     path = "crates/iroha_core/src/state.rs"
     commit = section(state, "    fn commit_inner(",
                      "    fn mint_canonical_carrier_commit_metadata_authorization(", path)
-    # These bindings cover the current fail-before-publication protocol. There is
-    # no deferred commit_error or block_metadata_committed flag: every fallible
-    # World/geometry step precedes the original State publication scope.
+    # All fallible World/geometry work precedes the original State writer and
+    # visibility interval. The prepared World effects are consumed under that
+    # same writer, after the original World journal publishes.
     compact = re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", commit))
-    prepare = section(compact, "letworld=world_commit::PreparedWorldCommit::prepare(",
-                      "lettiered_snapshot=", path)
-    if not prepare.endswith("TransactionsBlockError::WorldCommitPreparation})?;"):
+    prepare = section(compact,
+                      "world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay(",
+                      "tiered_snapshot=Some(", path)
+    if not prepare.endswith("TransactionsBlockError::WorldCommitPreparation})?);"):
         raise RuntimeError(f"{path}: World preparation must propagate refusal before publication")
     geometry = section(compact, "ifletErr(err)=geometry_result{", "autoscale_start.elapsed()", path)
     if not geometry.endswith("returnErr(TransactionsBlockError::from(err));}"):
         raise RuntimeError(f"{path}: geometry refusal must return before State publication")
     ordered = (
         "letcommitted_parliament_attempt_counts=world.parliament_attempt_counts.is_dirty()",
-        "lethash_retirement;",
-        "let_state_commit_lock=state_ref.state_commit_lock.lock();",
-        "letworld=world_commit::PreparedWorldCommit::prepare(",
+        "let_state_commit_lock=commit_fence.lock();",
+        "world_effects=Some(world_commit::PreparedWorldCommit::prepare_overlay(",
         "ifletErr(err)=geometry_result{",
-        "letmutlifecycle_post_publication=None;{",
-        "transactions.publish();",
-        "canonical_runtime.commit();",
-        "world.commit();",
-        "hash_retirement=block_hashes.publish();",
+        "letstate_write_lock_wait_start=Instant::now();let_state_write_lock=write_fence.lock();",
+        "block_hashes.try_prepare_publication().map_err(|_|{",
+        "world.prepare_publication();",
+        "let_view_generation=publication_notice.begin();",
+        "transactions.publish_prepared();",
+        "world.publish_prepared();",
+        "block_hashes.publish_prepared();",
+        "world_effects.take().expect(\"originalpreparedWorldeffects\").publish(",
         "drop(autoscale_lifecycle_guard);",
         "drop(_state_commit_lock);",
-        "drop(hash_retirement);",
     )
     positions = [compact.find(token) for token in ordered]
-    if any(compact.count(token) != 1 for token in ordered) or positions != sorted(positions):
+    # The same State writer is also acquired once during the earlier preflight.
+    # Bind this occurrence to the one after geometry refusal, where publication
+    # starts, while retaining exactly one match for every other stage.
+    writer = "letstate_write_lock_wait_start=Instant::now();let_state_write_lock=write_fence.lock();"
+    writer_index = ordered.index(writer)
+    positions[writer_index] = compact.rfind(writer)
+    if (compact.count(writer) != 2
+            or any(compact.count(token) != 1 for token in ordered if token != writer)
+            or positions != sorted(positions)):
         raise RuntimeError(f"{path}: Parliament telemetry requires ordered prepared State publication")
-    publication = section(compact, "letmutlifecycle_post_publication=None;{",
-                          "ifletSome(post)=lifecycle_post_publication{", path)
+    publication = section(compact, "letautoscale_storage_hold=",
+                          "ifletSome(post)=lifecycle_post_publication.as_mut(){", path)
     writer_order = (
-        "let_state_write_lock=state_write_lock.lock();",
-        "letblock_hashes=block_hashes.detach().try_prepare_publication(",
-        ".map_err(|(_,_,cleanup)|{hash_refusal_cleanup=Some(cleanup);TransactionsBlockError::SnapshotObservationChanged})?;",
+        "let_state_write_lock=write_fence.lock();",
+        "block_hashes.try_prepare_publication().map_err(|_|{TransactionsBlockError::SnapshotObservationChanged})?;",
+        "world.prepare_publication();",
+        "canonical_runtime.prepare_publication();",
+        "effect_locks.prepare_blocking();",
         "let_view_generation=publication_notice.begin();",
-        "transactions.publish();", "world.commit();", "hash_retirement=block_hashes.publish();",
+        "transactions.publish_prepared();", "world.publish_prepared();",
+        "block_hashes.publish_prepared();",
+        "world_effects.take().expect(\"originalpreparedWorldeffects\").publish(",
     )
     writer_positions = [publication.find(token) for token in writer_order]
     if any(publication.count(token) != 1 for token in writer_order) or writer_positions != sorted(writer_positions):
@@ -755,22 +777,25 @@ def require_parliament_commit_publication(state: str) -> None:
     # statement nested in a conditional, or an explicitly released guard, is not
     # the modeled successful commit boundary. Ignore string braces in logging.
     lexical = re.sub(r'"(?:\\.|[^"\\])*"', '""', publication)
+    if lexical.count("{") != lexical.count("}"):
+        raise RuntimeError(f"{path}: original State writer scope must close before post-publication")
     for token in writer_order:
-        before = lexical[:lexical.index(token)]
-        if before.count("{") != before.count("}"):
+        lexical_token = re.sub(r'"(?:\\.|[^"\\])*"', '""', token)
+        before = lexical[:lexical.index(lexical_token)]
+        if before.count("{") - before.count("}") != 1:
             raise RuntimeError(f"{path}: State publication must be unconditional under its original writer")
     if "drop(_state_write_lock);" in publication or "drop(_view_generation);" in publication:
         raise RuntimeError(f"{path}: State publication must retain its original writer and generation")
     # Match the exact nested control-flow region, not independent tokens which
     # could survive while replay guards or the publisher move to another scope.
-    telemetry = section(compact, 'ifletSome(post)=da_post_publication{post.publish(state_ref);}',
+    telemetry = section(compact, 'ifletSome(post)=da_post_publication.take(){post.publish(state_ref);}',
                         "if!verified_lane_relay_records.is_empty(){", path)
-    start = telemetry.find('#[cfg(feature="telemetry")]if!replay_prevalidation{')
+    start = telemetry.find('#[cfg(feature="telemetry")]if!*replay_prevalidation{')
     expected = """
         #[cfg(feature="telemetry")]
-        if !replay_prevalidation {
-            if !authenticated_replay_commit {
-                for (transition, no_result_kind) in pending_parliament_telemetry_events {
+        if !*replay_prevalidation {
+            if !*authenticated_replay_commit {
+                for &(transition, no_result_kind) in pending_parliament_telemetry_events.iter() {
                     state_ref.telemetry.record_committed_parliament_transition(transition, no_result_kind);
                 }
             }
@@ -782,6 +807,16 @@ def require_parliament_commit_publication(state: str) -> None:
                 state_ref.telemetry.record_citizens_total(citizens_total);
             }
         }
+        tiered_snapshot.take().expect("original prepared tiered snapshot").publish(state_ref, *replay_prevalidation);
+        if !*replay_prevalidation {
+            state_ref.enforce_nexus_storage_budget(block_height);
+            if *authenticated_replay_commit {
+                state_ref.set_query_index_status(block_height, state_ref.latest_block_hash_fast());
+            } else {
+                state_ref.persist_query_index_status(block_height, state_ref.latest_block_hash_fast());
+            }
+        }
+        drop(_state_commit_lock);
     """
     expected = re.sub(r"\s+", "", expected)
     if start < 0 or telemetry[start:] != expected:
@@ -872,6 +907,139 @@ def require_parliament_beacon_requirement(beacon: str) -> None:
             "effects.finalized_global_beacon_pulse = pulse;",
         ),
     )
+
+def require_encrypted_beacon_dkg_source(model: str, core: str) -> None:
+    """Bind the public DKG layout and fail-closed all-edge finalization to source."""
+    model_path = "crates/iroha_data_model/src/consensus.rs"
+    core_path = "crates/iroha_core/src/beacon.rs"
+    fields = {
+        "GlobalThresholdBeaconDkgSessionV1": (
+            "version", "network_id", "session_id", "attempt_id",
+            "authority_generation", "roster_hash", "committee_size", "threshold",
+            "start_height", "commitments_end_height", "deliveries_end_height",
+            "acceptances_end_height",
+        ),
+        "GlobalThresholdBeaconDkgDealerCommitmentV1": (
+            "dealer_index", "coefficient_commitments", "constant_term_proof", "signature",
+        ),
+        "GlobalThresholdBeaconDkgRecipientKeyV1": (
+            "recipient_index", "validator", "x25519_public_key",
+            "mlkem768_public_key", "signature",
+        ),
+        "GlobalThresholdBeaconDkgEncryptedShareV1": (
+            "dealer_index", "recipient_index", "dealer_commitment_hash",
+            "recipient_key_hash", "delivery_height", "ephemeral_x25519_public_key",
+            "mlkem768_ciphertext", "encrypted_share", "signature",
+        ),
+        "GlobalThresholdBeaconDkgShareAcceptanceV1": (
+            "dealer_index", "recipient_index", "dealer_commitment_hash",
+            "encrypted_share_hash", "accepted_height", "signature",
+        ),
+        "GlobalThresholdBeaconDkgTranscriptV1": (
+            "session", "generator_h", "generator_v", "dealer_commitments",
+            "recipient_keys", "encrypted_shares", "share_acceptances",
+            "qualified_dealers", "event_hash", "finalized_at_height",
+        ),
+    }
+    for name, expected in fields.items():
+        body = section(model, f"pub struct {name} {{", "\n}", model_path)
+        actual = public_field_names(body)
+        if actual != expected:
+            raise RuntimeError(
+                f"{model_path}: {name} must have exact signed encrypted DKG fields; "
+                f"expected {expected!r}, found {actual!r}"
+            )
+    for retired in (
+        "GlobalThresholdBeaconDkgComplaintV1",
+        "GlobalThresholdBeaconDkgComplaintResponseV1",
+        "complaint_responses",
+        "revealed_share",
+    ):
+        if retired in model:
+            raise RuntimeError(f"{model_path}: retired public DKG layout remains: {retired}")
+
+    finalization = section(
+        core, "    /// Finalize only after every frozen dealer/recipient edge is accepted.",
+        "\n}\n\nfn validate_dkg_session(", core_path,
+    )
+    require_all(core_path, finalization, (
+        "let all_edges = seats\n            .checked_mul(seats)",
+        "self.recipient_keys.len() != seats",
+        "|| self.dealer_commitments.len() != seats",
+        "|| self.encrypted_shares.len() != all_edges",
+        "|| self.share_acceptances.len() != all_edges",
+        "self.aborted = true;",
+        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);",
+        "&encrypted_shares,\n            &share_acceptances,",
+        "GlobalThresholdBeaconDkgTranscriptV1 {",
+    ))
+    verification = section(
+        core, "fn validate_adaptive_dkg_shape(",
+        "\nfn reconstruct_adaptive_beacon_transcript(", core_path,
+    )
+    require_all(core_path, verification, (
+        "snapshot.validate()?;",
+        "transcript.recipient_keys.len() != seats",
+        "|| transcript.dealer_commitments.len() != seats",
+        "|| transcript.encrypted_shares.len() != all_edges",
+        "|| transcript.share_acceptances.len() != all_edges",
+        "return Err(GlobalThresholdBeaconError::IncompleteDkgEdges);",
+        "&transcript.encrypted_shares,\n        &transcript.share_acceptances,",
+        "!= transcript.event_hash",
+    ))
+
+
+def require_signed_staking_fee_boundary(
+    fee: str, committee: str, staking: str
+) -> None:
+    """Reject opaque staking before policy lookup and count its actual transfer legs."""
+    fee_path = "crates/iroha_core/src/validation_fee.rs"
+    committee_path = "crates/iroha_core/src/validation_fee/committee_effects.rs"
+    staking_path = "crates/iroha_core/src/validation_fee/staking_effects.rs"
+    deferred = section(
+        fee, "pub(crate) fn enforce_opaque_deferred_instruction_groups(",
+        "\n#[cfg(test)]\nfn enforce_opaque_deferred_policy(", fee_path,
+    )
+    before_policy = section(
+        deferred, "    let mut committee_proposals =", "    let registry = validated_policy_registry(",
+        fee_path,
+    )
+    require_all(fee_path, before_policy, (
+        "for instructions in instruction_groups.values()",
+        "committee_effects::reject_opaque_committee_operations_with(",
+        "live_proposal_instructions_for_approval(",
+        ".map_err(admission_rejection)?;",
+    ))
+    require_all(committee_path, committee, (
+        "staking_effects::monetary_staking_wire_id(instruction)",
+        "ValidationFeeAdmissionError::OpaqueDeferredStakingOperation",
+        "MultisigInstructionBox::Propose(proposal)",
+        "MultisigInstructionBox::Approve(approval)",
+        "Executable::Instructions(nested)",
+        "Executable::IvmProved(proved)",
+        "Executable::Batch(items)",
+    ))
+    classifier = section(
+        staking, "pub(super) fn monetary_staking_wire_id(",
+        "\nfn registration_plan(", staking_path,
+    )
+    require_all(staking_path, classifier, (
+        "RegisterPublicLaneCandidate,", "RegisterPublicLaneValidator,",
+        "BondPublicLaneStake,", "FinalizePublicLaneUnbond,",
+        "SlashPublicLaneValidator,", "RecordPublicLaneRewards,",
+        "ClaimPublicLaneRewards,",
+    ))
+    require_all(staking_path, staking, ("native_staking_leg: true,",))
+    context_policy = section(
+        fee, "fn enforce_context_policy(", "\nfn ", fee_path,
+    )
+    require_all(fee_path, context_policy, (
+        "transfer.native_staking_leg",
+        "&& &transfer.asset_definition_id != fee_asset_definition_id",
+        "qualifying_transfer_count += 1;",
+        "required_fee_minor_units(qualifying_transfer_count, policy, hijiri_multiplier)?",
+    ))
+
 
 def main() -> int:
     ivm_executable_path = "crates/iroha_data_model/src/transaction/executable.rs"
@@ -1919,11 +2087,11 @@ def main() -> int:
         state,
         (
             "due_parliament_certificates",
-            "let mut enactment = sb.transaction();",
+            "let mut enactment = sb.try_transaction()?;",
             "execute_due_parliament_certificate_v1(",
             "DueParliamentCertificateExecutionV1::EffectFailed",
             "drop(enactment);",
-            "let mut failure = sb.transaction();",
+            "let mut failure = sb.try_transaction()?;",
             "record_due_parliament_execution_failure_v1(",
             "failure.apply();",
             "crate::telemetry::parliament_lifecycle_metric_projection(event)",
@@ -4174,43 +4342,74 @@ def main() -> int:
 
     lifecycle_world_path = "crates/iroha_core/src/smartcontracts/isi/world.rs"
     lifecycle_world = read(lifecycle_world_path)
-    global_beacon_install = section(
+    global_beacon_finalize = section(
         lifecycle_world,
-        "                Action::InstallGlobalBeaconKey => {",
-        "                Action::RetireGlobalBeaconKey => {",
+        "                Action::FinalizeGlobalBeaconKey => {",
+        "                Action::InstallParliamentTleKey => {",
         lifecycle_world_path,
     )
     require_all(
         lifecycle_world_path,
-        global_beacon_install,
+        global_beacon_finalize,
         (
             "norito::decode_canonical::<",
             "FinalizedGlobalThresholdBeaconKeySessionRecordV1,",
             "record.session.network_id != certificate.network_id",
-            ".put_finalized_global_beacon_key_session(record)",
-            ".activate_global_beacon_key_session(certificate.session_id, next_height)",
-            "the H+1 producer checks that target against its authenticated",
+            "record.activated_at_height.is_some()",
+            "record.retired_at_height.is_some()",
+            "validator_committee::validate_beacon_finalization(",
+            "if bootstrap {",
+            "record.activate(next_height)",
+            "global_beacon_active_session.insert(",
         ),
     )
     for conflated_binding in (
         "record.session.roster_hash != certificate.roster_hash",
         "record.session.committee_size != certificate.committee_size",
     ):
-        if conflated_binding in global_beacon_install:
+        if conflated_binding in global_beacon_finalize:
             raise RuntimeError(
                 f"{lifecycle_world_path}: global-beacon target DKG roster was conflated "
                 f"with block-height authorization: {conflated_binding!r}"
             )
-    require_all(
-        lifecycle_world_path,
-        lifecycle_world,
-        (
-            "global_beacon_boundary_rotation_signs_the_successor_dkg_target",
-            "the block-H roster remains the sole lifecycle-signature authority",
-            "the signed public state independently names the H+1 DKG target",
-            "the authorization roster cannot be substituted as the DKG target",
-        ),
-    )
+    lifecycle_model_path = "crates/iroha_data_model/src/isi/consensus_keys.rs"
+    for path, source in ((lifecycle_world_path, lifecycle_world),
+                         (lifecycle_model_path, read(lifecycle_model_path))):
+        for retired in ("Action::InstallGlobalBeaconKey", "RetireGlobalBeaconKey"):
+            if retired in source:
+                raise RuntimeError(f"{path}: standalone beacon rotation remains: {retired}")
+
+    committee_path = "crates/iroha_core/src/state/validator_committee.rs"
+    committee = read(committee_path)
+    finalization = section(committee, "pub(crate) fn validate_beacon_finalization(",
+                           "impl StateBlock<'_> {", committee_path)
+    require_all(committee_path, finalization, (
+        "current_authority(state)?", "validate_against_authority(authority)",
+        "authority.generation != 0 || authorization.beacon != BeaconEpochBindingV1::Bootstrap",
+        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, authorizing_roster)",
+        "validator_committee_transitions()", "validate_against_preparing_authorization(authorization)?",
+        "active != Some(incumbent.session_id)", "current.session.transcript_hash != incumbent.transcript_hash",
+        "transition.outcome.is_some()", "height >= authorization.last_height",
+        "record.session.session_id != preparation.beacon_session_id()?",
+        "record.session.adaptive_dkg.session.start_height <= preparation.selection_height",
+        "record.session.adaptive_dkg.finalized_at_height >= preparation.first_height - 1",
+        "authenticated_global_threshold_beacon_roster_hash_v1(&record.session, &target_roster)",
+        "Ok(false)",
+    ))
+    boundary = section(committee, "pub(crate) fn finalize_validator_committee_boundary(",
+                       "fn owns_validator(", committee_path)
+    require_all(committee_path, boundary, (
+        "context.validate()", "context.next_epoch_snapshot", "verify_progress(&self.world, &transition)?",
+        "transition.outcome = Some(*outcome)", "transition.validate()?",
+        "credentials.authority != snapshot.kagemusha_mint_finality_authority",
+        "transition.preparation.roster != snapshot.roster",
+        "transition.preparation.validator_set_pops != snapshot.validator_set_pops",
+        "active_global_beacon_key_session() != Some(previous.session_id)",
+        "old.retire(outcome.first_height)", "next.activate(outcome.first_height)",
+        "beacon_rotation = Some((old, next))", "if let Some((old, next)) = beacon_rotation",
+        "KagemushaMintFinalityEpochDecisionV1::RetainAndCancel",
+        "retention must cancel the exact frozen attempt",
+    ))
 
     certificate_state_path = "crates/iroha_core/src/state.rs"
     certificate_state = read(certificate_state_path)
@@ -4236,6 +4435,14 @@ def main() -> int:
     require_parliament_beacon_requirement(beacon_runtime)
     beacon_state_path = "crates/iroha_core/src/beacon.rs"
     beacon_state = read(beacon_state_path)
+    require_encrypted_beacon_dkg_source(
+        read("crates/iroha_data_model/src/consensus.rs"), beacon_state
+    )
+    require_signed_staking_fee_boundary(
+        read("crates/iroha_core/src/validation_fee.rs"),
+        read("crates/iroha_core/src/validation_fee/committee_effects.rs"),
+        read("crates/iroha_core/src/validation_fee/staking_effects.rs"),
+    )
     require_all(
         beacon_state_path,
         beacon_state,

@@ -1355,6 +1355,38 @@ fn replace_account_id_in_public_lane(
             .public_lane_reward_accruals
             .insert(new_key, amount);
     }
+    let accrual_updates: Vec<_> = state_transaction
+        .world
+        .public_lane_reward_accruals
+        .iter()
+        .filter(|((_, account, asset), _)| account == old || asset.account() == old)
+        .map(|(key, value)| {
+            let recipient = if &key.1 == old {
+                new.clone()
+            } else {
+                key.1.clone()
+            };
+            (
+                key.clone(),
+                (
+                    key.0,
+                    recipient,
+                    replace_account_id_in_asset_id(&key.2, old, new),
+                ),
+                value.clone(),
+            )
+        })
+        .collect();
+    for (old_key, new_key, value) in accrual_updates {
+        state_transaction
+            .world
+            .public_lane_reward_accruals
+            .remove(old_key);
+        state_transaction
+            .world
+            .public_lane_reward_accruals
+            .insert(new_key, value);
+    }
     let reserve_updates = state_transaction
         .world
         .public_lane_reward_reserves
@@ -5790,6 +5822,7 @@ mod tests {
                 metadata: Metadata::default(),
                 status: active.clone(),
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
             },
@@ -5808,6 +5841,7 @@ mod tests {
                 metadata: Metadata::default(),
                 status: active,
                 activation_height: 1,
+                election_exit_height: None,
                 deactivation_height: None,
                 last_reward_epoch: None,
             },

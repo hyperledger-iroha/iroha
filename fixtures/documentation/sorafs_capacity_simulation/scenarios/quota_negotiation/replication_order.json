@@ -1,6 +1,6 @@
 {
   "order_id_hex": "9999999999999999999999999999999999999999999999999999999999999999",
-  "manifest_cid_hex": "0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210",
+  "manifest_cid_hex": "01711f20abababababababababababababababababababababababababababababababab",
   "manifest_digest_hex": "abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd",
   "chunking_profile": "sorafs.sf1@1.0.0",
   "target_replicas": 3,

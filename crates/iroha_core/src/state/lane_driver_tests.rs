@@ -243,6 +243,16 @@ state_test! { sync native_driver_retains_exact_ingress_and_instance_across_globa
         native_process_key(&fixture, lane, 0), limits).unwrap();
     let control = native_driver_control_for_test(&fixture, lane, 1);
     assert!(matches!(driver.admit(&observed, NativeLaneInput::Control(control.clone())), NativeLaneAdmission::Accepted));
+    for _ in 0..32 {
+        assert!(matches!(driver.admit(&observed, NativeLaneInput::Control(control.clone())), NativeLaneAdmission::Accepted),
+            "exact retransmission rejoins the one original queued reducer input even at capacity");
+    }
+    let mut forged = control.clone();
+    if let iroha_data_model::block::lane_consensus::LaneMessageV1::TimeoutVote(vote) = &mut forged.message {
+        vote.share.signature[0] ^= 1;
+    }
+    assert!(matches!(driver.admit(&observed, NativeLaneInput::Control(forged)), NativeLaneAdmission::Rejected { .. }),
+        "capacity and coalescing never bypass native authentication");
     let second = native_driver_control_for_test(&fixture, lane, 2);
     let NativeLaneAdmission::Retry(NativeLaneInput::Control(retained)) = driver.admit(&observed, NativeLaneInput::Control(second.clone())) else { panic!("full queue retains exact input"); };
     assert_eq!(retained, second);
@@ -1457,7 +1467,10 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
     assert!(!source.is_current_in(&closed));
     if buffered_response {
         let mut completed_candidate = NativeSourceRequestTestProbe::non_instance(
-            Arc::clone(&source), &source_keys[0], now, false,
+            Arc::clone(&source),
+            &source_keys[0],
+            now,
+            false,
         );
         completed_candidate.accept(response.response().clone(), &request.request().requester);
         assert_eq!(
@@ -1569,14 +1582,12 @@ fn native_source_retirement_fixture(buffered_response: bool, hold_body: bool) {
     assert!(!validation.retains_request());
     assert_eq!(validation_ticket.waiter_count(), 0);
     assert_eq!(validation_ticket.ticket_drop_cancellations(), 1);
-    let mut different_source = NativeSourceRequestTestProbe::non_instance(
-        Arc::clone(&source), &source_keys[0], now, true,
-    );
+    let mut different_source =
+        NativeSourceRequestTestProbe::non_instance(Arc::clone(&source), &source_keys[0], now, true);
     let copied_source = (exact_validate.0, 0, Arc::new(source.as_ref().clone()));
     assert!(different_source.retire_released_validation(Some(&copied_source)));
-    let mut superseded = NativeSourceRequestTestProbe::non_instance(
-        Arc::clone(&source), &source_keys[0], now, true,
-    );
+    let mut superseded =
+        NativeSourceRequestTestProbe::non_instance(Arc::clone(&source), &source_keys[0], now, true);
     let superseded_ticket = superseded.backpressure();
     assert!(superseded.retire_released_validation(None));
     assert_eq!(superseded_ticket.waiter_count(), 0);

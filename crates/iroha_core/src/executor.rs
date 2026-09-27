@@ -1293,7 +1293,7 @@ fn successful_claim_fee_exempt_instructions(
     ) else {
         return false;
     };
-    let Some(asset_def) = crate::block::parse_asset_definition_literal_with_world(
+    let Some(asset_def) = crate::block::resolve_network_xor_asset_definition(
         world,
         &nexus.fees.fee_asset_id,
         observation_time_ms,
@@ -4013,7 +4013,7 @@ fn evaluate_nexus_fee_admission_payload(
     {
         reject_authority_lane_relay_burn_fee(&payload.authority)?;
     }
-    let asset_definition_id = crate::block::parse_asset_definition_literal_with_world(
+    let asset_definition_id = crate::block::resolve_network_xor_asset_definition(
         world,
         &nexus.fees.fee_asset_id,
         observation_time_ms,
@@ -5148,7 +5148,7 @@ impl Executor {
         } else {
             NexusFeePayer::Payer
         };
-        let asset_def = crate::block::parse_asset_definition_literal_with_world(
+        let asset_def = crate::block::resolve_network_xor_asset_definition(
             &state_transaction.world,
             &cfg.fee_asset_id,
             state_transaction.block_unix_timestamp_ms(),
@@ -5483,6 +5483,32 @@ impl Executor {
             ValidationFail::NotPermitted("signed stream-token instruction index exceeds u32".into())
         })
     }
+    /// Recognize only the exact direct instruction in the original signed genesis transaction.
+    pub(crate) fn direct_sorafs_admission_initialization(
+        state_transaction: &StateTransaction<'_, '_>,
+        transaction: &SignedTransaction,
+        instruction: &InstructionBox,
+        index: usize,
+        direct_body: bool,
+    ) -> bool {
+        use iroha_data_model::isi::sorafs::InitializeSorafsProviderAdmissionV1;
+        if !direct_body || !is_initial_genesis_context(state_transaction) {
+            return false;
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return false;
+        };
+        let outer = transaction.hash_as_entrypoint();
+        instructions.get(index) == Some(instruction)
+            && instruction
+                .as_any()
+                .is::<InitializeSorafsProviderAdmissionV1>()
+            && state_transaction.current_network_entrypoint_hash == Some(outer)
+            && state_transaction.tx_call_hash == Some(iroha_crypto::Hash::from(outer))
+            && state_transaction.current_tx_hash == Some(transaction.hash())
+            && state_transaction.current_entrypoint_index.is_some()
+            && transaction.network_id().is_none()
+    }
     /// Bind one role-15 operation to its sole direct signed External Network entry.
     ///
     /// Contract, IVM, sealed-reveal and mixed-batch effects cannot acquire this token.
@@ -5795,6 +5821,15 @@ impl Executor {
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     )?;
                     state_transaction.current_direct_stream_token_instruction_index = direct_index;
+                    state_transaction.current_direct_sorafs_admission_initialization =
+                        Self::direct_sorafs_admission_initialization(
+                            state_transaction,
+                            transaction,
+                            &isi,
+                            index,
+                            contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none(),
+                        );
                     state_transaction.current_direct_final_promotion_operation_origin =
                         Self::direct_final_promotion_operation_origin(
                             state_transaction,
@@ -5810,6 +5845,7 @@ impl Executor {
                         contract_runtime_context,
                     );
                     state_transaction.current_direct_stream_token_instruction_index = None;
+                    state_transaction.current_direct_sorafs_admission_initialization = false;
                     state_transaction.current_direct_final_promotion_operation_origin = None;
                     result?;
                     if let Some(authorization) = entrypoint_authorization {
@@ -10099,7 +10135,7 @@ mod tests {
         let instruction: InstructionBox = ApplyThresholdKeyLifecycleCertificateV1 {
             certificate: ThresholdKeyLifecycleCertificateV1 {
                 version: crate::state::THRESHOLD_KEY_LIFECYCLE_CERTIFICATE_VERSION_V1,
-                action: ThresholdKeyLifecycleActionV1::RetireGlobalBeaconKey,
+                action: ThresholdKeyLifecycleActionV1::RetireParliamentTleKey,
                 expected_active_session_id: Some([0x31; 32]),
                 effective_height: 2,
                 network_id: executor_test_network_id(b"initial threshold lifecycle admission"),
@@ -10317,7 +10353,17 @@ mod tests {
 
         let validator = checked_account_id();
         let staker = checked_account_id();
-        let peer = iroha_model_base::peer::PeerId::new(checked_keypair().public_key().clone());
+        let rebind_key = checked_keypair();
+        let peer = iroha_model_base::peer::PeerId::new(rebind_key.public_key().clone());
+        let rebind_consent =
+            iroha_data_model::isi::staking::PublicLanePeerBindingAuthorization::new(
+                executor_test_network_id(b"staking-classification-rebind"),
+                iroha_model_base::topology::LaneId::SINGLE,
+                validator.clone(),
+                peer.clone(),
+                1,
+                iroha_model_base::peer::PeerId::new(validator.expect_single_signatory().clone()),
+            );
         let request_id = Hash::prehashed([0xA5; Hash::LENGTH]);
         use iroha_data_model::nexus::{
             PublicLaneMonetaryBondV1, PublicLaneMonetaryPlanV1, PublicLaneMonetaryPreconditionV1,
@@ -10369,7 +10415,9 @@ mod tests {
             RebindPublicLaneValidatorPeer::new(
                 iroha_model_base::topology::LaneId::SINGLE,
                 validator.clone(),
-                peer.clone(),
+                peer,
+                iroha_crypto::SignatureOf::try_new(rebind_key.private_key(), &rebind_consent)
+                    .expect("staking classification peer consent"),
             )
             .into(),
             BondPublicLaneStake {
@@ -13562,6 +13610,19 @@ mod tests {
         state_transaction.nexus.fees.settlement_mode = settlement_mode;
         configure_pipeline_fee_snapshot(state_transaction, tech_account, asset_definition_id, 1);
     }
+    fn install_fee_fixture_network_currency(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        fee_asset: &AssetDefinitionId,
+    ) {
+        let mut parameters = state_transaction
+            .world
+            .sumeragi_npos_parameters()
+            .unwrap_or_default();
+        parameters.xor_asset_definition_id = fee_asset.clone();
+        state_transaction.world.parameters.get_mut().set_parameter(
+            iroha_data_model::parameter::Parameter::Custom(parameters.into_custom_parameter()),
+        );
+    }
     fn configure_direct_nexus_fee_snapshot(
         state_transaction: &mut StateTransaction<'_, '_>,
         fee_asset: &AssetDefinitionId,
@@ -13569,6 +13630,7 @@ mod tests {
         state_transaction.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::Direct;
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        install_fee_fixture_network_currency(state_transaction, fee_asset);
         state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
         state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
         state_transaction.nexus.fees.per_instruction_fee = Quantity::zero();
@@ -14534,6 +14596,13 @@ mod tests {
         nexus.fees.per_instruction_fee = Quantity::zero();
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.fees.fee_asset_id = nexus_asset.canonical_address();
+        let mut params = iroha_data_model::parameter::system::SumeragiNposParameters::default();
+        params.xor_asset_definition_id = nexus_asset.clone();
+        let mut parameter_block = world.parameters.block();
+        parameter_block.set_parameter(iroha_data_model::parameter::Parameter::Custom(
+            params.into_custom_parameter(),
+        ));
+        parameter_block.commit();
         nexus.fees.fee_sink_account_id = sink.to_string();
         let mut pipeline = Pipeline::default();
         pipeline.gas.accepted_assets = vec![gas_asset.canonical_address()];
@@ -14695,6 +14764,7 @@ mod tests {
         state_tx.nexus.fees.settlement_mode =
             iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
         state_tx.nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        install_fee_fixture_network_currency(&mut state_tx, &fee_asset);
         state_tx.nexus.fees.base_fee = Quantity::from(1_u32);
         state_tx.nexus.fees.per_byte_fee = Quantity::zero();
         state_tx.nexus.fees.per_instruction_fee = Quantity::zero();
@@ -14776,6 +14846,7 @@ mod tests {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 0, 0));
         let mut state_transaction = block.transaction();
         state_transaction.nexus.fees.fee_asset_id = fee_asset.canonical_address();
+        install_fee_fixture_network_currency(&mut state_transaction, &fee_asset);
         state_transaction.nexus.fees.base_fee = Quantity::from(2_u32);
         state_transaction.nexus.fees.per_byte_fee = Quantity::zero();
         state_transaction.nexus.fees.per_instruction_fee = Quantity::zero();
@@ -15497,12 +15568,12 @@ mod tests {
         let vk_commitment = crate::zk::hash_vk(&vk);
         let mut vk_record = VerifyingKeyRecord::new_with_owner(
             1,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             None,
             "test",
             iroha_data_model::zk::BackendTag::Halo2IpaPasta,
             "pasta",
-            crate::zk::ivm_execution_public_inputs_schema_hash(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
             vk_commitment,
         );
         vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -15519,9 +15590,9 @@ mod tests {
         // exercises deduplication after production-shaped proof admission.
         let envelope = OpenVerifyEnvelope::new(
             BackendTag::Halo2IpaPasta,
-            crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+            crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             vk_commitment,
-            crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
+            crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
             vec![1u8, 2, 3],
         );
         let proof = ProofBox::new(
@@ -15598,12 +15669,12 @@ mod tests {
             let vk_commitment = crate::zk::hash_vk(&vk);
             let mut vk_record = VerifyingKeyRecord::new_with_owner(
                 1,
-                crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+                crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 None,
                 "test",
                 BackendTag::Halo2IpaPasta,
                 "pasta",
-                crate::zk::ivm_execution_public_inputs_schema_hash(),
+                crate::zk::ivm_replay_binding_public_inputs_schema_hash(),
                 vk_commitment,
             );
             vk_record.status = iroha_data_model::confidential::ConfidentialStatus::Active;
@@ -15615,9 +15686,9 @@ mod tests {
             world.verifying_keys.insert(vk_id.clone(), vk_record);
             let envelope = OpenVerifyEnvelope::new(
                 BackendTag::Halo2IpaPasta,
-                crate::zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+                crate::zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
                 vk_commitment,
-                crate::zk::ivm_execution_public_inputs_schema_descriptor().to_vec(),
+                crate::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec(),
                 vec![1u8, 2, 3],
             );
             let proof = ProofBox::new(

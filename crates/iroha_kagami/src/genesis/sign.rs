@@ -18,7 +18,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::isi::Registrable as _,
     state::{State, World},
-    sumeragi::{VotingBlock, network_topology::Topology},
+    sumeragi::network_topology::Topology,
 };
 use iroha_crypto::{ExposedPrivateKey, Hash, KeyPair, PublicKey};
 use iroha_data_model::{
@@ -99,8 +99,8 @@ pub struct Args {
     #[clap(long, value_name = "PATH")]
     config: Option<PathBuf>,
 }
-const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
-const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
+const RETIRED_SYNTHETIC_STAKE_DOMAIN: &str = "nexus.universal";
+const RETIRED_SYNTHETIC_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const MAX_GENESIS_NETWORK_IDENTITY_BYTES: u64 = 4 * 1024;
 struct ResolvedArtifactPaths {
@@ -557,11 +557,11 @@ fn collect_topology_peers(manifest: &RawGenesisTransaction) -> Vec<PeerId> {
     }
     peers
 }
-fn default_npos_bootstrap_stake_asset_id() -> AssetDefinitionId {
+fn retired_synthetic_stake_asset_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
-        DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_DOMAIN)
+        DomainId::parse_fully_qualified(RETIRED_SYNTHETIC_STAKE_DOMAIN)
             .expect("static stake asset domain must remain valid"),
-        DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME
+        RETIRED_SYNTHETIC_STAKE_ASSET_NAME
             .parse()
             .expect("static stake asset name must remain valid"),
     )
@@ -618,19 +618,26 @@ fn configured_npos_bootstrap_stake_asset_id(
     config: Option<&actual::Root>,
 ) -> Result<AssetDefinitionId, color_eyre::eyre::Error> {
     let public_profile = public_xor_profile_for_manifest(manifest);
+    let parameters = manifest.effective_parameters()?;
+    let pinned = parameters
+        .custom()
+        .get(&iroha_data_model::parameter::system::SumeragiNposParameters::parameter_id())
+        .and_then(
+            iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter,
+        )
+        .ok_or_else(|| eyre!("NPoS bootstrap requires the committed XOR asset identity"))?
+        .xor_asset_definition_id;
     let stake_asset_id = if let Some(config) = config {
         resolve_npos_bootstrap_stake_asset_id(manifest, &config.nexus.staking.stake_asset_id)
             .map_err(|err| eyre!("failed to resolve nexus.staking.stake_asset_id: {err}"))?
-    } else if public_profile.is_some() {
-        let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
-        resolve_asset_definition_alias(manifest, &public_xor_alias)?.ok_or_else(|| {
-            eyre!(
-                "public NPoS bootstrap requires `{PUBLIC_XOR_ALIAS}` to be bound to a canonical XOR asset in genesis; regenerate with `kagami genesis generate --xor-asset-definition-id <BASE58>` or pass a config with an explicit canonical stake asset"
-            )
-        })?
     } else {
-        default_npos_bootstrap_stake_asset_id()
+        pinned.clone()
     };
+    if stake_asset_id != pinned || stake_asset_id == retired_synthetic_stake_asset_id() {
+        return Err(eyre!(
+            "NPoS stake asset must equal the committed canonical XOR definition `{pinned}`; synthetic stake assets are forbidden"
+        ));
+    }
     if let Some(profile) = public_profile {
         let public_xor_alias: AssetDefinitionAlias = PUBLIC_XOR_ALIAS.parse()?;
         let public_xor_asset_id =
@@ -647,9 +654,16 @@ fn configured_npos_bootstrap_stake_asset_id(
                 crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
             ));
         }
-        if public_xor_asset_id == default_npos_bootstrap_stake_asset_id() {
+        if profile == crate::genesis::GenesisProfile::Iroha3Nexus
+            && public_xor_asset_id.to_string() == crate::genesis::TAIRA_XOR_ASSET_DEFINITION_ID
+        {
             return Err(eyre!(
-                "public NPoS bootstrap for {profile:?} cannot use synthetic `{DEFAULT_NPOS_BOOTSTRAP_DOMAIN}/{DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME}`; bind `{PUBLIC_XOR_ALIAS}` to the real XOR asset or configure a canonical stake asset id"
+                "public Nexus cannot substitute the Taira XOR definition for its operator-provisioned mainnet asset"
+            ));
+        }
+        if public_xor_asset_id == retired_synthetic_stake_asset_id() {
+            return Err(eyre!(
+                "public NPoS bootstrap for {profile:?} cannot use synthetic `{RETIRED_SYNTHETIC_STAKE_DOMAIN}/{RETIRED_SYNTHETIC_STAKE_ASSET_NAME}`; bind `{PUBLIC_XOR_ALIAS}` to the real XOR asset or configure a canonical stake asset id"
             ));
         }
         if stake_asset_id != public_xor_asset_id {
@@ -688,44 +702,24 @@ fn append_npos_bootstrap(
     if topology.is_empty() {
         return Ok(builder);
     }
-    let default_stake_asset_id = default_npos_bootstrap_stake_asset_id();
-    let mut builder = builder.next_transaction();
-    if stake_asset_id == &default_stake_asset_id {
-        let nexus_domain = DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_DOMAIN)?;
-        if !registrations.domains.contains(&nexus_domain) {
-            builder =
-                builder.append_instruction(Register::domain(Domain::new(nexus_domain.clone())));
-            registrations.domains.insert(nexus_domain);
-        }
+    if !registrations.asset_defs.contains(stake_asset_id) {
+        return Err(eyre!(
+            "NPoS bootstrap requires the genesis XOR definition `{stake_asset_id}` and explicit validator allocations before signing"
+        ));
     }
+    let mut builder = builder.next_transaction();
     if !registrations.accounts.contains(escrow_account_id) {
         builder =
             builder.append_instruction(Register::account(Account::new(escrow_account_id.clone())));
         registrations.accounts.insert(escrow_account_id.clone());
     }
-    if !registrations.asset_defs.contains(stake_asset_id) {
-        let definition = AssetDefinition::new(
-            stake_asset_id.clone(),
-            "NPOS Stake".to_owned(),
-            NumericSpec::default(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )
-        .with_metadata(Metadata::default());
-        builder = builder.append_instruction(Register::asset_definition(definition));
-        registrations.asset_defs.insert(stake_asset_id.clone());
-    }
     for peer in topology {
         let validator_id = AccountId::new(peer.public_key().clone());
         if !registrations.accounts.contains(&validator_id) {
-            builder =
-                builder.append_instruction(Register::account(Account::new(validator_id.clone())));
-            registrations.accounts.insert(validator_id.clone());
+            return Err(eyre!(
+                "NPoS validator `{validator_id}` must be registered and explicitly funded with XOR in genesis before signing"
+            ));
         }
-        builder = builder.append_instruction(Mint::asset_quantity(
-            DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT,
-            AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-        ));
         builder = builder.append_instruction(RegisterPublicLaneValidator {
             lane_id: LaneId::SINGLE,
             validator: validator_id.clone(),
@@ -1142,22 +1136,20 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
     )
     .map_err(|error| eyre!("initialize isolated State for staged genesis: {error}"))?;
     configure_staged_genesis_state(&mut state, genesis, config, nexus)?;
-    let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
-        .map_err(|error| eyre!("invalid signed Sumeragi v2 genesis roster: {error}"))?;
+    let voters = iroha_core::sumeragi::schedule::genesis_validators(&provisional)
+        .map_err(|error| eyre!("invalid signed Sumeragi genesis roster: {error}"))?;
     if voters.is_empty() {
         return Err(eyre!(
-            "Sumeragi v2 genesis roster is empty; inject BLS topology entries and PoPs before signing"
+            "Sumeragi genesis roster is empty; inject BLS topology entries and PoPs before signing"
         ));
     }
-    let topology = Topology::new(voters);
-    let mut voting_block: Option<VotingBlock> = None;
-    let (valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
+    let topology = Topology::new(voters.into_keys());
+    let (valid, staged) = ValidBlock::validate_signed_genesis(
         provisional.0,
         &topology,
         &authority,
         &TimeSource::new_system(),
         &state,
-        &mut voting_block,
         consensus_mode,
     )
     .unpack(|_| {})
@@ -1249,8 +1241,7 @@ fn staged_default_nexus(
     let mut nexus = actual::Nexus::default();
     if public_xor_profile_for_manifest(genesis).is_some() {
         // The public bootstrap and the State that executes it must select the same
-        // signed XOR alias binding. Generic synthetic staking/fee defaults remain
-        // specific to private profiles.
+        // signed XOR binding and immutable NPoS asset identity.
         let public_xor = configured_npos_bootstrap_stake_asset_id(genesis, None)?.to_string();
         nexus.staking.stake_asset_id = public_xor.clone();
         nexus.fees.fee_asset_id = public_xor;
@@ -1280,8 +1271,9 @@ fn staged_default_nexus(
     if genesis.consensus_mode() == SumeragiConsensusMode::Npos {
         // Bootstrap and the offline execution that authenticates it must use
         // the same manifest-selected asset, including public XOR alias bindings.
-        nexus.staking.stake_asset_id =
-            configured_npos_bootstrap_stake_asset_id(genesis, None)?.to_string();
+        let xor_asset = configured_npos_bootstrap_stake_asset_id(genesis, None)?.to_string();
+        nexus.staking.stake_asset_id = xor_asset.clone();
+        nexus.fees.fee_asset_id = xor_asset;
     }
     Ok(nexus)
 }
@@ -1447,9 +1439,9 @@ pub(super) fn prepare_genesis_for_signing(
         }
     };
     let bootstrap_stake_asset_id = if needs_npos_bootstrap {
-        configured_npos_bootstrap_stake_asset_id(&genesis, config)?
+        Some(configured_npos_bootstrap_stake_asset_id(&genesis, config)?)
     } else {
-        default_npos_bootstrap_stake_asset_id()
+        None
     };
     let bootstrap_escrow_account_id = if needs_npos_bootstrap {
         Some(configured_npos_bootstrap_escrow_account_id(
@@ -1478,7 +1470,9 @@ pub(super) fn prepare_genesis_for_signing(
                 bootstrap_escrow_account_id
                     .as_ref()
                     .expect("NPoS bootstrap escrow resolved above"),
-                &bootstrap_stake_asset_id,
+                bootstrap_stake_asset_id
+                    .as_ref()
+                    .expect("NPoS XOR identity resolved above"),
             )?;
         }
         builder
@@ -2735,6 +2729,65 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             .map(|(peer, pop)| GenesisTopologyEntry::new(peer, pop))
             .collect()
     }
+    fn with_explicit_test_xor_allocations(
+        manifest: RawGenesisTransaction,
+        topology: &[PeerId],
+    ) -> RawGenesisTransaction {
+        if manifest.consensus_mode() != SumeragiConsensusMode::Npos {
+            return manifest;
+        }
+        let parameters = manifest.effective_parameters().expect("fixture parameters");
+        let asset = parameters
+            .custom()
+            .get(&SumeragiNposParameters::parameter_id())
+            .and_then(SumeragiNposParameters::from_custom_parameter)
+            .expect("fixture NPoS asset pin")
+            .xor_asset_definition_id;
+        let mut registrations = BootstrapRegistrations::from_manifest(&manifest);
+        let funded = manifest
+            .instructions()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<MintBox>() {
+                    Some(MintBox::Asset(mint)) if mint.destination.definition() == &asset => {
+                        Some(mint.destination.account().clone())
+                    }
+                    _ => None,
+                },
+            )
+            .collect::<BTreeSet<_>>();
+        let mut builder = manifest.into_builder().next_transaction();
+        let domain =
+            DomainId::parse_fully_qualified(crate::genesis::profile::PUBLIC_XOR_DOMAIN).unwrap();
+        if registrations.domains.insert(domain.clone()) {
+            builder = builder.append_instruction(Register::domain(Domain::new(domain)));
+        }
+        if registrations.asset_defs.insert(asset.clone()) {
+            builder = builder.append_instruction(Register::asset_definition(AssetDefinition::new(
+                asset.clone(),
+                "XOR".to_owned(),
+                NumericSpec::fractional(9),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )));
+        }
+        for peer in topology {
+            let account = AccountId::new(peer.public_key().clone());
+            if registrations.accounts.insert(account.clone()) {
+                builder =
+                    builder.append_instruction(Register::account(Account::new(account.clone())));
+            }
+            if !funded.contains(&account) {
+                builder = builder.append_instruction(Mint::asset_quantity(
+                    DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT,
+                    AssetId::new(asset.clone(), account),
+                ));
+            }
+        }
+        builder
+            .build_raw()
+            .expect("explicit isolated fixture allocations")
+            .with_consensus_meta()
+    }
     fn with_test_authority_for_topology(path: PathBuf, topology: &[PeerId]) -> PathBuf {
         let manifest =
             RawGenesisTransaction::from_path(&path).expect("parse test genesis manifest");
@@ -2749,6 +2802,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .with_consensus_mode(consensus_mode)
         .with_chain_discriminant(chain_discriminant)
         .with_consensus_meta();
+        let manifest = with_explicit_test_xor_allocations(manifest, topology);
         fs::write(
             &path,
             norito::json::to_vec_pretty(&manifest).expect("encode topology-bound fixture"),
@@ -3511,6 +3565,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         .expect("complete topology-override fixture")
         .with_consensus_mode(SumeragiConsensusMode::Npos)
         .with_consensus_meta();
+        let manifest = with_explicit_test_xor_allocations(manifest, &new_peers);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let topology_json = norito::json::to_json(&new_peers).unwrap();
@@ -3812,6 +3867,52 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         );
     }
     #[test]
+    fn npos_bootstrap_requires_explicit_asset_and_never_mints_allocations() {
+        let (peers, _) = valid_test_topology(4);
+        let asset = SumeragiNposParameters::default().xor_asset_definition_id;
+        let escrow = iroha_test_samples::ALICE_ID.clone();
+        let make_builder = || {
+            GenesisBuilder::new_without_executor(
+                ChainId::from("explicit-xor-allocation-test"),
+                PathBuf::from("."),
+            )
+            .complete_for_test()
+        };
+        let mut registrations = BootstrapRegistrations {
+            domains: BTreeSet::new(),
+            accounts: peers
+                .iter()
+                .map(|peer| AccountId::new(peer.public_key().clone()))
+                .collect(),
+            asset_defs: BTreeSet::new(),
+        };
+        assert!(
+            append_npos_bootstrap(make_builder(), &mut registrations, &peers, &escrow, &asset)
+                .is_err()
+        );
+        registrations.asset_defs.insert(asset.clone());
+        let manifest =
+            append_npos_bootstrap(make_builder(), &mut registrations, &peers, &escrow, &asset)
+                .expect("explicit allocations owned by caller")
+                .build_raw()
+                .expect("raw bootstrap");
+        assert_eq!(
+            manifest
+                .instructions()
+                .filter(|instruction| instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_some())
+                .count(),
+            4
+        );
+        assert!(
+            manifest
+                .instructions()
+                .all(|instruction| instruction.as_any().downcast_ref::<MintBox>().is_none())
+        );
+    }
+    #[test]
     fn sign_auto_bootstraps_npos_validators_for_topology() {
         let (peers, peer_pops) = valid_test_topology(4);
         let genesis_file = with_test_authority_for_topology(npos_genesis_file(), &peers);
@@ -3820,6 +3921,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
         let expected_escrow = configured_npos_bootstrap_escrow_account_id(&manifest, None)
             .expect("resolve default staking escrow");
+        let expected_stake_asset = configured_npos_bootstrap_stake_asset_id(&manifest, None)
+            .expect("resolve genesis-pinned staking asset");
         let genesis_key_pair = test_genesis_key_pair();
         let private_key_file = test_private_key_file_for(&genesis_key_pair);
         let public_key_derived_orphan = AccountId::new(
@@ -3872,13 +3975,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                             register.monetary_plan,
                             PublicLaneMonetaryPlanV1::genesis_registration(
                                 AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
+                                    expected_stake_asset.clone(),
                                     register.validator.clone(),
                                 ),
-                                AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
-                                    expected_escrow.clone(),
-                                ),
+                                AssetId::new(expected_stake_asset.clone(), expected_escrow.clone(),),
                                 register.initial_stake.clone(),
                             ),
                             "signed bootstrap must bind its configured stake custody",
@@ -3888,13 +3988,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                             register.monetary_plan,
                             PublicLaneMonetaryPlanV1::genesis_registration(
                                 AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
+                                    expected_stake_asset.clone(),
                                     register.stake_account.clone(),
                                 ),
-                                AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
-                                    expected_escrow.clone(),
-                                ),
+                                AssetId::new(expected_stake_asset.clone(), expected_escrow.clone(),),
                                 register.initial_stake.clone(),
                             ),
                             "bootstrap consent must bind the configured custody transfer",
@@ -3917,8 +4014,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "expected NPoS bootstrap to register topology validators"
         );
         assert!(
-            minted_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
-            "private NPoS bootstrap should keep using the synthetic local stake asset"
+            minted_asset_ids.contains(
+                &iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                    .parse()
+                    .unwrap()
+            ),
+            "isolated NPoS fixture allocations must use the canonical XOR definition"
         );
         assert!(
             registered_accounts.contains(&expected_escrow),
@@ -4189,7 +4290,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "expected bootstrap mint to target configured stake asset"
         );
         assert!(
-            !registered_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
+            !registered_asset_ids.contains(&retired_synthetic_stake_asset_id()),
             "alias-backed stake asset should not force the synthetic localnet bootstrap asset"
         );
     }
@@ -4295,7 +4396,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             "public Taira bootstrap should mint to canonical XOR"
         );
         assert!(
-            !registered_asset_ids.contains(&default_npos_bootstrap_stake_asset_id()),
+            !registered_asset_ids.contains(&retired_synthetic_stake_asset_id()),
             "public Taira bootstrap must not register the synthetic NPoS stake asset"
         );
     }
@@ -4751,6 +4852,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .expect("complete NPoS signing fixture")
                 .with_consensus_mode(SumeragiConsensusMode::Npos)
                 .with_consensus_meta();
+        let manifest = with_explicit_test_xor_allocations(manifest, &valid_test_topology(4).0);
         let json = norito::json::to_json_pretty(&manifest).expect("serialize genesis manifest");
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
@@ -4773,7 +4875,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             AssetDefinition::new(
                 asset_definition_id.clone(),
                 "xor".to_owned(),
-                NumericSpec::default(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -4816,7 +4918,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             AssetDefinition::new(
                 asset_definition_id.clone(),
                 "xor".to_owned(),
-                NumericSpec::default(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -4886,7 +4988,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             AssetDefinition::new(
                 canonical_xor.clone(),
                 "xor".to_owned(),
-                NumericSpec::default(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )
@@ -4896,7 +4998,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             AssetDefinition::new(
                 wrong_xor.clone(),
                 "xor-shadow".to_owned(),
-                NumericSpec::default(),
+                NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             )

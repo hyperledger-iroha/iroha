@@ -368,7 +368,7 @@ LaneConfigEntry {
   ledger entries keyed by a retired handle target lane while preserving
   cross-lane replay guards whose handles target surviving lanes. Public-lane
   cleanup reaches this point only after every owned tenure, custody balance,
-  pending unbond, and evidence lien passes the retirement preflight. It then
+  and pending unbond passes the retirement preflight. It then
   removes stake-share rows and reward records keyed by or carrying the reset
   lane, plus reward-claim cursors keyed by the reset lane, as live economic
   indices so a fresh incarnation can start reward epochs and claim accounting
@@ -795,8 +795,8 @@ LaneConfigEntry {
   `(lane_id, epoch)` economic record fields.
   A lane reset, rebind, or autoscale scale-in must not manufacture an early
   terminal state. It waits until every reset-owned validator tenure has reached
-  its exact deactivation height, stake-share and pending-unbond custody is
-  drained, and no pending evidence lien can still debit that tenure. Only then
+  its exact deactivation height and stake-share and pending-unbond custody is
+  drained. Only then
   may reset cleanup remove the terminal records and economic indexes, treating
   either the storage key lane or embedded record lane as reset ownership. This
   prevents a recreated lane id from inheriting an old tenure without erasing a

@@ -87,6 +87,7 @@ fn replay_probe_keeps_configured_governance_before_manifest_rebind() {
     let captured = crate::snapshot::CapturedStateSnapshot::capture(&live)
         .expect("capture exact pre-replay State");
     let unseeded = super::deserialize::KuraSeed {
+        operation_index_budget: live.world.operation_index_budget().clone(),
         kura: std::sync::Arc::clone(&kura),
         lane_manifests: live.lane_manifests.read().clone(),
         query_handle: live.query_handle.clone(),

@@ -31,9 +31,10 @@ uses that exact retained class and never substitutes the pricing schedule defaul
 telemetry submissions also include an `egress_bytes`
 counter so the ledger-authoritative economics services can apply the corresponding egress fees alongside storage charges.
 
-The retained declaration summary must exactly match the canonical payload's
-`valid_from`, `valid_until`, and committed capacity, while `registered_epoch`
-must equal the transaction's consensus Unix second. The payload's
+`RegisterCapacityDeclaration` carries only canonical `CapacityDeclarationV1` bytes.
+Execution derives the retained provider, metadata, validity and capacity summary from
+that payload and sets `registered_epoch` to the block's consensus Unix second. Clients
+never predict the future commit time or submit a second copy of those fields. The payload's
 `sorafs.owner_account_id` is the governed owner's exact canonical `AccountId`
 text; aliases, padding, and normalization are not valid capacity identities.
 Automatic replication

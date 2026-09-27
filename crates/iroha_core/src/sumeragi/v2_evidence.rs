@@ -19,7 +19,6 @@ use iroha_data_model::{
         consensus_v2 as wire_v2,
     },
     consensus::NposPenaltyAction,
-    nexus::PublicLaneValidatorRecord,
 };
 use iroha_model_base::peer::PeerId;
 use mv::allocation::{AllocationBudget, ChargedBuffer};
@@ -224,29 +223,6 @@ fn v2_evidence_offender_roster_key(
         epoch_end_height: evidence.context.epoch_end_height,
         roster_hash,
     })
-}
-/// Return whether unresolved evidence belongs to this exact retained validator tenure.
-pub(crate) fn has_pending_v2_evidence_for_validator_tenure(
-    world: &impl WorldReadOnly,
-    validator_record: &PublicLaneValidatorRecord,
-) -> bool {
-    world
-        .consensus_evidence()
-        .iter()
-        .any(|(_, evidence_record)| {
-            matches!(
-                evidence_record.penalty_status,
-                EvidencePenaltyStatus::Pending
-            ) && v2_evidence_offender(&evidence_record.evidence.equivocation).as_ref()
-                == Some(&validator_record.peer_id)
-                && crate::smartcontracts::isi::staking::validator_tenure_contains_height(
-                    validator_record,
-                    evidence_record.evidence.equivocation.context.height,
-                )
-                // Cleanup must fail closed: a malformed retained row cannot prove
-                // that unresolved evidence belongs to some other tenure.
-                .unwrap_or(true)
-        })
 }
 fn evidence_record_is_terminal(record: &EvidenceRecord) -> bool {
     record.penalty_status.is_terminal()
@@ -1577,7 +1553,6 @@ mod tests {
         NetworkId,
         block::BlockHeader,
         parameter::{Parameter, Parameters, system::SumeragiNposParameters},
-        prelude::AccountId,
     };
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::peer::PeerId;
@@ -2146,10 +2121,13 @@ mod tests {
         };
         let evidence_prune_keys = v2_committed_evidence_prune_keys_from_state(state, height)
             .expect("fund exact committed-evidence prune keys");
-        let mut transaction = state_block.consensus_effects_transaction();
+        let mut transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut transaction,
             &effects,
+            None,
             evidence_prune_keys.as_slice(),
             None,
             &[],
@@ -2204,51 +2182,6 @@ mod tests {
             iroha_model_base::topology::LaneId::SINGLE,
             peer,
             iroha_primitives::numeric::Quantity::from(100_u64),
-        );
-    }
-    #[test]
-    fn malformed_validator_tenure_cannot_escape_pending_evidence_lien() {
-        let fixture = V2EvidenceFixture::new();
-        let mut state = test_state_for_v2_fixture(&fixture);
-        super::super::penalties::configure_penalty_staking_state_for_tests(&mut state);
-        let offender = fixture.context.roster[1].validator.clone();
-        add_v2_penalty_validator(&state, &offender);
-        let evidence = canonical_v2_phase_vote_evidence(&fixture, 0x41, 0x42);
-        let evidence_key = v2_evidence_admission_key(&evidence);
-        let mut evidence_records = state.world.consensus_evidence.block();
-        evidence_records.insert(
-            evidence_key,
-            EvidenceRecord {
-                evidence: canonical_v2_evidence(&evidence),
-                recorded_at_height: 1,
-                recorded_at_view: 0,
-                recorded_at_ms: 1,
-                penalty_status: EvidencePenaltyStatus::Pending,
-            },
-        );
-        evidence_records.commit();
-
-        let validator = AccountId::new(offender.public_key().clone());
-        let validator_key = (iroha_model_base::topology::LaneId::SINGLE, validator);
-        let mut validators = state.world.public_lane_validators.block();
-        let mut malformed = validators
-            .get(&validator_key)
-            .cloned()
-            .expect("validator fixture exists");
-        malformed.activation_height = 2;
-        malformed.deactivation_height = Some(1);
-        validators.insert(validator_key.clone(), malformed);
-        validators.commit();
-
-        let view = state.view();
-        let record = view
-            .world()
-            .public_lane_validators()
-            .get(&validator_key)
-            .expect("malformed retained validator row remains visible");
-        assert!(
-            has_pending_v2_evidence_for_validator_tenure(view.world(), record),
-            "malformed tenure metadata must not release unresolved evidence custody"
         );
     }
     #[test]
@@ -3446,11 +3379,14 @@ mod tests {
             state_block.world.consensus_evidence.get(&key).is_some(),
             "post-execution validation must roll its prune simulation back"
         );
-        let mut effects_transaction = state_block.consensus_effects_transaction();
+        let mut effects_transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         let application_error =
             match super::super::penalties::apply_npos_consensus_effects_to_transaction(
                 &mut effects_transaction,
                 &effects,
+                None,
                 evidence_prune_keys.as_slice(),
                 None,
                 &[],
@@ -3533,10 +3469,13 @@ mod tests {
             state_block.world.consensus_evidence.get(&key).is_some(),
             "post-execution validation must leave the retained evidence intact"
         );
-        let mut effects_transaction = state_block.consensus_effects_transaction();
+        let mut effects_transaction = state_block
+            .consensus_effects_transaction()
+            .expect("fixture consensus-effects transaction admission");
         super::super::penalties::apply_npos_consensus_effects_to_transaction(
             &mut effects_transaction,
             &effects,
+            None,
             evidence_prune_keys.as_slice(),
             None,
             &[],

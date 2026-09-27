@@ -63,6 +63,10 @@ use std::{
 };
 use thiserror::Error;
 mod app_routed_read_config;
+mod sccp;
+pub use sccp::{
+    SccpAttestor, SccpLightClientKeeper, SccpLightClientKeeperEndpoints, SccpNode, SccpSecretHeader,
+};
 type Result<T, E> = core::result::Result<T, Report<[E]>>;
 type KyberKeyInputs = (Vec<u8>, ParameterOrigin, Vec<u8>, ParameterOrigin);
 const MIN_TIMER_INTERVAL: Duration = Duration::from_millis(100);
@@ -120,7 +124,7 @@ fn validate_nexus_fee_asset_selector_literal(value: &str) -> core::result::Resul
     }
     let value = validate_asset_definition_selector_literal(value)?;
     let is_xor_selector =
-        value == defaults::nexus::fees::fee_asset_id() || value == "xor#universal";
+        AssetDefinitionId::parse_address_literal(&value).is_ok() || value == "xor#universal";
     if !is_xor_selector {
         return Err(
             "Nexus fees must be charged in XOR; use exact `xor#universal` or the canonical XOR asset definition id"
@@ -820,6 +824,14 @@ mod chain_id_config_tests {
         }
     }
 }
+/// Public location of the authenticated local runtime-provider broker.
+#[derive(Debug, ReadConfig)]
+pub struct RuntimeProviderBroker {
+    /// Absolute path to the canonical broker Unix socket.
+    #[config(default = "defaults::runtime_provider_broker::endpoint_path()")]
+    endpoint_path: WithOrigin<PathBuf>,
+}
+
 /// User-level configuration container for `Root`.
 #[derive(Debug, ReadConfig)]
 pub struct Root {
@@ -863,6 +875,8 @@ pub struct Root {
     sumeragi: Sumeragi,
     #[config(nested)]
     network: Network,
+    #[config(nested)]
+    runtime_provider_broker: RuntimeProviderBroker,
     #[config(nested)]
     logger: Logger,
     #[config(nested)]
@@ -926,6 +940,9 @@ pub struct Root {
     /// Concurrency settings for thread pools.
     #[config(nested)]
     concurrency: Concurrency,
+    /// Node-local SCCP attestor and light-client keeper (`[sccp.*]`, file-only).
+    #[config(nested)]
+    sccp: SccpNode,
 }
 /// User-level enumeration translating `ParseError` settings.
 #[derive(thiserror::Error, Debug, Copy, Clone)]
@@ -945,6 +962,9 @@ pub enum ParseError {
     /// Peer-to-peer network parameters failed validation.
     #[error("Invalid network configuration")]
     InvalidNetworkConfig,
+    /// The public runtime-provider broker endpoint path is invalid.
+    #[error("Invalid runtime-provider broker configuration")]
+    InvalidRuntimeProviderBrokerConfig,
     /// Transaction pipeline parameters failed validation.
     #[error("Invalid pipeline configuration")]
     InvalidPipelineConfig,
@@ -993,6 +1013,9 @@ pub enum ParseError {
     /// Genesis trust-root configuration was absent, ambiguous, or invalid.
     #[error("Invalid genesis trust-root configuration")]
     InvalidGenesisConfig,
+    /// Node-local SCCP attestor or light-client keeper configuration was invalid.
+    #[error("Invalid SCCP node configuration")]
+    InvalidSccpConfig,
 }
 struct AccountAddressParseScope {
     _chain_discriminant: iroha_data_model::account::address::ChainDiscriminantGuard,
@@ -1195,6 +1218,19 @@ impl Root {
             emitter.emit(report);
         }
         let (network, block_sync, transaction_gossiper) = self.network.parse(&mut emitter);
+        let (endpoint_path, endpoint_origin) =
+            self.runtime_provider_broker.endpoint_path.into_tuple();
+        let runtime_provider_broker =
+            actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint_path)
+                .map(|endpoint_path| actual::RuntimeProviderBroker { endpoint_path })
+                .map_err(|error| {
+                    Report::new(ParseError::InvalidRuntimeProviderBrokerConfig)
+                        .attach(error)
+                        .attach(format!(
+                            "runtime_provider_broker.endpoint_path origin: {endpoint_origin:?}"
+                        ))
+                })
+                .ok_or_emit(&mut emitter);
         let peer = Peer::new(network.address.value().clone(), peer_public_key);
         let trusted_peers = self.trusted_peers.map(|x| {
             let others = x.0.into_iter().filter(|p| p.id() != peer.id()).collect();
@@ -1209,6 +1245,7 @@ impl Root {
         });
         let genesis = self.genesis.parse(&mut emitter);
         let kura = self.kura.parse(&mut emitter);
+        let sccp = self.sccp.parse(&kura.store_dir, &mut emitter);
         let logger = self.logger;
         let queue = self.queue;
         let mut snapshot = self.snapshot;
@@ -1448,6 +1485,8 @@ impl Root {
         let compute = compute.expect("compute configuration should be valid when emitter succeeds");
         let gov = gov.expect("governance provider binding should be valid when emitter succeeds");
         let genesis = genesis.expect("genesis configuration should be valid when emitter succeeds");
+        let runtime_provider_broker = runtime_provider_broker
+            .expect("runtime-provider broker endpoint should be valid when emitter succeeds");
         let key_pair = key_pair.unwrap();
         let soranet_transport_key_pair = soranet_transport_key_pair
             .expect("SoraNet transport identity should be valid when emitter succeeds");
@@ -1461,6 +1500,7 @@ impl Root {
         };
         let mut root = actual::Root {
             common: peer,
+            runtime_provider_broker,
             network,
             genesis,
             torii,
@@ -1495,6 +1535,7 @@ impl Root {
             crypto,
             settlement,
             confidential,
+            sccp,
         };
         root.apply_storage_budget();
         Ok(root)
@@ -6370,6 +6411,9 @@ pub struct Sumeragi {
     /// Node-local participation role.
     #[config(default = "NodeRole::Validator")]
     pub role: NodeRole,
+    /// Fixed inherited private descriptor holding this peer's 32-byte Pasta seed.
+    /// Only descriptor 199 is accepted; the launch copy is consumed before node start.
+    pub mint_finality_seed_fd: Option<u16>,
     /// Credential-free deployment handle for the global beacon share signer.
     pub global_beacon_partial_signer_provider_handle: Option<String>,
     /// Exact non-zero provider contract revision for the global beacon share signer.
@@ -6633,6 +6677,7 @@ impl Sumeragi {
     ) -> Option<actual::Sumeragi> {
         let Self {
             role,
+            mint_finality_seed_fd,
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest_hex,
@@ -6658,6 +6703,21 @@ impl Sumeragi {
             retired_keys,
         } = self;
         let mut valid = true;
+        if mint_finality_seed_fd.is_some_and(|fd| fd != 199) {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(
+                    "sumeragi.mint_finality_seed_fd must be the fixed private descriptor 199",
+                ),
+            );
+            valid = false;
+        }
+        if mint_finality_seed_fd.is_some() && role != NodeRole::Validator {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig)
+                    .attach("an observer must not configure a mint-finality seed descriptor"),
+            );
+            valid = false;
+        }
         let local = match Self::parse_local_overrides(
             view_timeout_base_ms,
             view_timeout_max_ms,
@@ -6857,6 +6917,7 @@ impl Sumeragi {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
             },
+            mint_finality_seed_fd,
             global_beacon_partial_signer_provider_handle,
             global_beacon_partial_signer_provider_revision,
             global_beacon_partial_signer_provider_policy_digest,
@@ -10058,6 +10119,9 @@ pub struct NexusStorage {
     /// WSV hot-tier deterministic encoded-key plus measured-value budget (bytes).
     #[config(default = "defaults::nexus::storage::MAX_WSV_MEMORY_BYTES")]
     pub max_wsv_memory_bytes: Bytes,
+    /// Original allocation pool shared by the four fixed KAGEMUSHA indexes.
+    #[config(default = "defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES")]
+    pub kagemusha_operation_index_bytes: Bytes,
     /// Finite shared carrier-shell and descriptor pool, excluding nested payload allocations.
     /// Zero is a closed pool, never an unlimited setting.
     #[config(default = "defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES")]
@@ -10078,6 +10142,7 @@ impl_default!(NexusStorage {
     local_budget_bytes: None,
     budget_enforce_interval_blocks: defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
     max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
+    kagemusha_operation_index_bytes: defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
     retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
     consensus_evidence_preparation_bytes:
         defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
@@ -10087,6 +10152,14 @@ impl_default!(NexusStorage {
 impl NexusStorage {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::NexusStorage> {
         let weights = self.disk_budget_weights.parse(emitter)?;
+        if self.kagemusha_operation_index_bytes.get() == 0
+            || usize::try_from(self.kagemusha_operation_index_bytes.get()).is_err()
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
+                "nexus.storage.kagemusha_operation_index_bytes must be positive and fit this platform's allocation address space",
+            ));
+            return None;
+        }
         if self
             .local_budget_bytes
             .is_some_and(|budget| budget.get() == 0)
@@ -10144,6 +10217,7 @@ impl NexusStorage {
             effective_local_budget_bytes: local_budget_bytes,
             budget_enforce_interval_blocks: self.budget_enforce_interval_blocks,
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
+            kagemusha_operation_index_bytes: self.kagemusha_operation_index_bytes,
             retained_carrier_shell_bytes: self.retained_carrier_shell_bytes,
             consensus_evidence_preparation_bytes: self.consensus_evidence_preparation_bytes,
             consensus_stake_index_bytes: self.consensus_stake_index_bytes,
@@ -24970,6 +25044,13 @@ impl SorafsProviderAttestationJournalConfig {
 /// material, and fetched payloads are never valid configuration inputs.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsProviderIngestRuntimeConfig {
+    /// Explicit admitted provider id to HTTPS origin mapping for native assignment source reads.
+    /// Plaintext is accepted only for explicitly configured numeric loopback origins.
+    #[config(default)]
+    #[norito(default)]
+    pub native_source_origins: BTreeMap<String, String>,
+    /// Owner-only canonical completion credential selecting the built-in software producer.
+    pub native_completion_credential: Option<PathBuf>,
     /// Enable finalized assignment reconciliation and provider completion.
     #[config(default = "defaults::sorafs::storage::provider_ingest_runtime::ENABLED")]
     pub enabled: bool,
@@ -25061,6 +25142,8 @@ impl Default for SorafsProviderIngestRuntimeConfig {
     fn default() -> Self {
         use defaults::sorafs::storage::provider_ingest_runtime as runtime;
         Self {
+            native_source_origins: BTreeMap::new(),
+            native_completion_credential: None,
             enabled: runtime::ENABLED,
             authenticated_source_fetch_handle: None,
             authenticated_source_fetch_revision: None,
@@ -25168,6 +25251,8 @@ impl SorafsProviderIngestRuntimeConfig {
             }
         }
         let authority_fields_present = [
+            !self.native_source_origins.is_empty(),
+            self.native_completion_credential.is_some(),
             self.authenticated_source_fetch_handle.is_some(),
             self.authenticated_source_fetch_revision.is_some(),
             self.authenticated_source_fetch_policy_digest_hex.is_some(),
@@ -25649,7 +25734,38 @@ impl SorafsProviderIngestRuntimeConfig {
                 "sorafs.storage.provider_ingest_runtime worst-case retained expected payloads, signed transactions, structural state, and terminal tombstones must fit outbox.checkpoint_max_bytes",
             );
         }
+        if self.native_source_origins.len() > 16
+            || (!self.native_source_origins.is_empty()
+                && self.native_completion_credential.is_none())
+        {
+            emit(
+                emitter,
+                "native provider-ingest origins require a native credential and at most 16 entries",
+            );
+            return None;
+        }
+        if self
+            .native_completion_credential
+            .as_ref()
+            .is_some_and(|path| {
+                !path.is_absolute()
+                    || path.components().any(|component| {
+                        matches!(
+                            component,
+                            std::path::Component::ParentDir | std::path::Component::CurDir
+                        )
+                    })
+            })
+        {
+            emit(
+                emitter,
+                "native provider-ingest credential must be an absolute normalized runtime-only path",
+            );
+            return None;
+        }
         Some(actual::SorafsProviderIngestRuntime {
+            native_source_origins: self.native_source_origins,
+            native_completion_credential: self.native_completion_credential,
             authenticated_source_fetch_handle: authenticated_source_fetch_handle?,
             authenticated_source_fetch_revision: authenticated_source_fetch_revision?,
             authenticated_source_fetch_policy_digest: authenticated_source_fetch_policy_digest?,
@@ -27545,6 +27661,8 @@ mod sorafs_reputation_runtime_config_tests;
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct SorafsNativeTransactionSignerBinding {
+    /// Absolute owner-only private-key credential; absent selects an external provider.
+    pub software_credential: Option<PathBuf>,
     /// Stable opaque production provider handle.
     pub handle: String,
     /// Canonical I105 transaction authority controlled by the signer.
@@ -27569,6 +27687,7 @@ impl SorafsNativeTransactionSignerBinding {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(message));
         };
         let Self {
+            software_credential,
             handle,
             authority,
             algorithm,
@@ -27576,6 +27695,30 @@ impl SorafsNativeTransactionSignerBinding {
             revision,
             policy_digest_hex,
         } = self;
+        if software_credential.as_ref().is_some_and(|credential| {
+            !credential.is_absolute()
+                || credential.components().any(|part| {
+                    matches!(
+                        part,
+                        std::path::Component::CurDir
+                            | std::path::Component::ParentDir
+                            | std::path::Component::Prefix(_)
+                    )
+                })
+        }) {
+            emit(
+                emitter,
+                format!("{path}.software_credential must be an absolute path without traversal"),
+            );
+            return None;
+        }
+        if software_credential.is_some() && !handle.starts_with("software://") {
+            emit(
+                emitter,
+                format!("{path}.software_credential requires a software:// handle"),
+            );
+            return None;
+        }
         let handle = if is_production_runtime_handle(&handle) {
             Some(handle)
         } else {
@@ -27694,6 +27837,7 @@ impl SorafsNativeTransactionSignerBinding {
             None
         };
         Some(actual::SorafsNativeTransactionSignerBinding {
+            software_credential,
             handle: handle?,
             authority: authority?,
             algorithm: algorithm?,
@@ -28134,7 +28278,7 @@ mod sorafs_signer_journal_inventory_tests {
         ] {
             let mut emitter = Emitter::new();
             let _ = policy.parse(&mut emitter);
-            emitter
+            let _ = emitter
                 .into_result()
                 .expect_err("unfunded signer scan policy");
         }
@@ -31059,8 +31203,10 @@ impl SorafsEvidenceViewerAuditScheduleConfig {
     }
 }
 /// User-level native repair worker and transaction-forwarder configuration.
-#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsRepair {
+    /// Account-authenticated remote repair reader.
+    pub source: Option<SorafsRepairSource>,
     /// Enable native repair processing.
     #[config(default = "defaults::sorafs::repair::ENABLED")]
     pub enabled: bool,
@@ -31080,6 +31226,7 @@ pub struct SorafsRepair {
 impl Default for SorafsRepair {
     fn default() -> Self {
         Self {
+            source: None,
             enabled: defaults::sorafs::repair::ENABLED,
             claim_ttl_secs: defaults::sorafs::repair::CLAIM_TTL_SECS,
             heartbeat_interval_secs: defaults::sorafs::repair::HEARTBEAT_INTERVAL_SECS,
@@ -31127,7 +31274,15 @@ impl SorafsRepair {
                 defaults::sorafs::repair::WORKER_CONCURRENCY_LIMIT
             )));
         }
+        let source = self.source.map(|source| {
+            if !self.enabled || !(100..=120_000).contains(&source.timeout_ms) || !source.credential.is_absolute()
+                || source.origins.is_empty() || source.origins.len() > 16 {
+                emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach("sorafs.repair.source requires enabled repair, an absolute credential path and timeout_ms within 100..=120000"));
+            }
+            actual::SorafsRepairSource { authority: source.authority, credential: source.credential, origins: source.origins, timeout_ms: source.timeout_ms }
+        });
         actual::SorafsRepair {
+            source,
             enabled: self.enabled,
             claim_ttl_secs: self.claim_ttl_secs,
             heartbeat_interval_secs: self.heartbeat_interval_secs,
@@ -31135,6 +31290,20 @@ impl SorafsRepair {
             worker_concurrency: self.worker_concurrency,
         }
     }
+}
+/// Native authenticated remote repair source settings.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsRepairSource {
+    /// Provider-id hex to origin allowlist, matched against live signed adverts.
+    /// HTTPS is required except for explicitly configured numeric loopback HTTP origins.
+    pub origins: std::collections::BTreeMap<String, String>,
+    /// Exact account owning the finalized lease; registered permissions remain authoritative.
+    pub authority: AccountId,
+    /// Absolute path to the owner-only Ed25519 or ML-DSA runtime credential.
+    pub credential: PathBuf,
+    /// Maximum duration of the complete remote repair operation.
+    #[config(default = "defaults::sorafs::repair::SOURCE_TIMEOUT_MS")]
+    pub timeout_ms: u64,
 }
 /// User-level configuration for the GC scheduler.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
@@ -31193,8 +31362,48 @@ mod sorafs_repair_gc_tests {
     use super::*;
     use iroha_data_model::sorafs::moderation_ledger::REPAIR_LEDGER_MAX_LEASE_MS_V1;
     #[test]
+    fn repair_source_requires_enabled_worker_and_bounded_private_configuration() {
+        let key =
+            iroha_crypto::KeyPair::try_from_seed(vec![0x63; 32], iroha_crypto::Algorithm::Ed25519)
+                .unwrap();
+        let config = SorafsRepair {
+            enabled: true,
+            source: Some(SorafsRepairSource {
+                origins: [(hex::encode([0x64; 32]), "https://provider.example".into())].into(),
+                authority: iroha_data_model::account::AccountId::new(key.public_key().clone()),
+                credential: PathBuf::from("/private/runtime/repair-credential"),
+                timeout_ms: 60_000,
+            }),
+            ..SorafsRepair::default()
+        };
+        let mut emitter = Emitter::new();
+        let actual = config.clone().parse(&mut emitter);
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual.source.unwrap().origins.len(), 1);
+        for mutation in 0..6 {
+            let mut invalid = config.clone();
+            let source = invalid.source.as_mut().unwrap();
+            match mutation {
+                0 => invalid.enabled = false,
+                1 => source.credential = "relative-credential".into(),
+                2 => source.timeout_ms = 99,
+                3 => source.timeout_ms = 120_001,
+                4 => source.origins.clear(),
+                _ => {
+                    source.origins = (1_u8..=17)
+                        .map(|id| (hex::encode([id; 32]), "https://provider.example".into()))
+                        .collect()
+                }
+            }
+            let mut emitter = Emitter::new();
+            invalid.parse(&mut emitter);
+            assert!(emitter.into_result().is_err(), "mutation {mutation}");
+        }
+    }
+    #[test]
     fn sorafs_repair_parse_rejects_unsafe_values_without_clamping() {
         let invalid = SorafsRepair {
+            source: None,
             enabled: true,
             claim_ttl_secs: 0,
             heartbeat_interval_secs: 0,
@@ -33855,12 +34064,10 @@ impl Default for SorafsDiscovery {
 }
 impl SorafsDiscovery {
     fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsDiscovery {
-        let admission = self.admission.into_actual(emitter);
-        if self.discovery_enabled && admission.is_none() {
-            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.discovery.discovery_enabled requires a configured admission trust policy",
-            ));
-        }
+        let admission = self
+            .admission
+            .into_actual(emitter)
+            .or_else(|| self.discovery_enabled.then_some(actual::SorafsAdmission));
         let mut capabilities_valid = true;
         if self.discovery_enabled && self.known_capabilities.is_empty() {
             emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
@@ -34093,164 +34300,52 @@ mod sorafs_publish_discovery_config_tests {
     }
 }
 /// Governance admission configuration for SoraFS discovery ingress.
-#[derive(Debug, ReadConfig, Clone, Default, norito::JsonDeserialize)]
+#[derive(Debug, ReadConfig, Clone, Copy, Default, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
 pub struct SorafsAdmissionConfig {
-    /// Directory containing governance envelopes for approved providers.
-    pub envelopes_dir: Option<PathBuf>,
-    /// Canonical Ed25519 council keys trusted to authorise provider admission changes.
+    /// Enable finalized native admission for consumers when discovery itself is disabled.
     #[config(default)]
-    pub trusted_council_keys: Vec<PublicKey>,
-    /// Minimum number of distinct trusted council signatures required.
-    #[config(default)]
-    pub signature_threshold: usize,
+    pub enabled: bool,
 }
 impl SorafsAdmissionConfig {
-    fn into_actual(self, emitter: &mut Emitter<ParseError>) -> Option<actual::SorafsAdmission> {
-        let Some(envelopes_dir) = self.envelopes_dir else {
-            if !self.trusted_council_keys.is_empty() || self.signature_threshold != 0 {
-                emitter.emit(
-                    Report::new(ParseError::InvalidSorafsConfig)
-                        .attach("sorafs.discovery.admission trust policy requires envelopes_dir"),
-                );
-            }
-            return None;
-        };
-        let mut valid = true;
-        if self.trusted_council_keys.is_empty() {
-            emitter.emit(
-                Report::new(ParseError::InvalidSorafsConfig)
-                    .attach("sorafs.discovery.admission.trusted_council_keys must not be empty"),
-            );
-            valid = false;
-        }
-        let unique_keys = self
-            .trusted_council_keys
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if unique_keys.len() != self.trusted_council_keys.len() {
-            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.discovery.admission.trusted_council_keys must not contain duplicates",
-            ));
-            valid = false;
-        }
-        for (index, key) in self.trusted_council_keys.iter().enumerate() {
-            match key.try_algorithm() {
-                Ok(Algorithm::Ed25519) => {}
-                Ok(algorithm) => {
-                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
-                        "sorafs.discovery.admission.trusted_council_keys[{index}] uses {algorithm:?}; only Ed25519 keys are accepted"
-                    )));
-                    valid = false;
-                }
-                Err(error) => {
-                    emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(format!(
-                        "sorafs.discovery.admission.trusted_council_keys[{index}] is malformed: {error}"
-                    )));
-                    valid = false;
-                }
-            }
-        }
-        let Some(signature_threshold) = NonZeroUsize::new(self.signature_threshold) else {
-            emitter.emit(
-                Report::new(ParseError::InvalidSorafsConfig)
-                    .attach("sorafs.discovery.admission.signature_threshold must be non-zero"),
-            );
-            return None;
-        };
-        if signature_threshold.get() > unique_keys.len() {
-            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
-                "sorafs.discovery.admission.signature_threshold exceeds trusted_council_keys",
-            ));
-            valid = false;
-        }
-        if !valid {
-            return None;
-        }
-        Some(actual::SorafsAdmission {
-            envelopes_dir,
-            trusted_council_keys: self.trusted_council_keys,
-            signature_threshold,
-        })
+    fn into_actual(self, _emitter: &mut Emitter<ParseError>) -> Option<actual::SorafsAdmission> {
+        self.enabled.then_some(actual::SorafsAdmission)
     }
 }
 #[cfg(test)]
 mod sorafs_admission_config_tests {
     use super::*;
-    fn council_key() -> PublicKey {
-        PublicKey::from_str(
-            "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56",
-        )
-        .expect("valid fixture council key")
-    }
     fn valid_config() -> SorafsAdmissionConfig {
-        SorafsAdmissionConfig {
-            envelopes_dir: Some(PathBuf::from("admission")),
-            trusted_council_keys: vec![council_key()],
-            signature_threshold: 1,
+        SorafsAdmissionConfig { enabled: true }
+    }
+    #[test]
+    fn enabled_admission_selects_native_authority() {
+        let mut emitter = Emitter::new();
+        assert!(valid_config().into_actual(&mut emitter).is_some());
+        assert!(
+            SorafsAdmissionConfig::default()
+                .into_actual(&mut emitter)
+                .is_none()
+        );
+        assert!(emitter.into_result().is_ok());
+    }
+    #[test]
+    fn local_admission_authority_fields_are_rejected() {
+        for json in [
+            r#"{"envelopes_dir":"admission"}"#,
+            r#"{"trusted_council_keys":[]}"#,
+            r#"{"signature_threshold":1}"#,
+        ] {
+            assert!(norito::json::from_str::<SorafsAdmissionConfig>(json).is_err());
         }
     }
     #[test]
-    fn conversion_accepts_explicit_ed25519_quorum() {
-        let mut emitter = Emitter::new();
-        let actual = valid_config()
-            .into_actual(&mut emitter)
-            .expect("admission config");
-        assert!(emitter.into_result().is_ok());
-        assert_eq!(actual.trusted_council_keys, vec![council_key()]);
-        assert_eq!(actual.signature_threshold.get(), 1);
-    }
-    #[test]
-    fn conversion_rejects_missing_trust_roots_or_threshold() {
-        let mut missing_keys = valid_config();
-        missing_keys.trusted_council_keys.clear();
-        let mut emitter = Emitter::new();
-        assert!(missing_keys.into_actual(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-        let mut zero_threshold = valid_config();
-        zero_threshold.signature_threshold = 0;
-        let mut emitter = Emitter::new();
-        assert!(zero_threshold.into_actual(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-        let mut excessive_threshold = valid_config();
-        excessive_threshold.signature_threshold = 2;
-        let mut emitter = Emitter::new();
-        assert!(excessive_threshold.into_actual(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-    #[test]
-    fn conversion_rejects_duplicates_non_ed25519_and_policy_without_directory() {
-        let mut duplicate = valid_config();
-        duplicate.trusted_council_keys.push(council_key());
-        let mut emitter = Emitter::new();
-        assert!(duplicate.into_actual(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-        let secp = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::Secp256k1)
-            .expect("derive secp256k1 test key")
-            .public_key()
-            .clone();
-        let mut wrong_algorithm = valid_config();
-        wrong_algorithm.trusted_council_keys = vec![secp];
-        let mut emitter = Emitter::new();
-        assert!(wrong_algorithm.into_actual(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-        let without_directory = SorafsAdmissionConfig {
-            envelopes_dir: None,
-            trusted_council_keys: vec![council_key()],
-            signature_threshold: 1,
-        };
-        let mut emitter = Emitter::new();
-        assert!(without_directory.into_actual(&mut emitter).is_none());
-        assert!(emitter.into_result().is_err());
-    }
-    #[test]
-    fn discovery_enabled_requires_admission_policy() {
+    fn discovery_automatically_requires_native_admission() {
         let mut discovery = SorafsDiscovery::default();
         discovery.discovery_enabled = true;
         let mut emitter = Emitter::new();
-        let parsed = discovery.parse(&mut emitter);
-        assert!(parsed.admission.is_none());
-        assert!(emitter.into_result().is_err());
+        assert!(discovery.parse(&mut emitter).admission.is_some());
+        assert!(emitter.into_result().is_ok());
     }
 
     #[test]

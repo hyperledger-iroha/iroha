@@ -5,7 +5,7 @@ use http_body_util::{BodyExt as _, Full};
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::kura::{FastpqProofSnapshot, Kura, PipelineDagSnapshot, PipelineRecoverySidecar};
 use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::{block::BlockHeader, privacy::GoldilocksDigest384V1};
+use iroha_data_model::block::BlockHeader;
 use tower::ServiceExt as _; // for Router::oneshot
 #[tokio::test]
 async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
@@ -170,16 +170,32 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         block_hash,
         entry_hash: Hash::prehashed([0x11; 32]),
         batch_index: 0,
-        parameter: "fastpq-state-transition-stark-v1".to_string(),
         transition_count: 0,
-        trace_commitment: GoldilocksDigest384V1::new([0x41; 6])
-            .expect("canonical test FASTPQ trace commitment"),
-        proof_digest: Hash::new(&proof),
-        batch: fastpq_prover::TransitionBatch::new(
-            "fastpq-state-transition-stark-v1",
-            fastpq_prover::PublicInputs::default(),
-        ),
-        proof,
+        public_inputs: iroha_data_model::fastpq::FastpqPublicInputs {
+            dsid: [0; 16],
+            slot: 0,
+            old_root: [0; 32],
+            new_root: [0; 32],
+            perm_root: [0; 32],
+            tx_set_hash: [0; 32],
+        },
+        ordering_hash: [0; 32],
+        artifact_identity: iroha_data_model::fastpq::FastpqArtifactIdentityDescriptionV1 {
+            proof_kind: iroha_data_model::fastpq::FastpqProofKindV1::OrdinaryCompact,
+            profile_id: fastpq_prover::offline_compact::quantity_profile_id(),
+            public_statement_digest: Hash::new(b"recovery statement").into(),
+            artifact_digest: Hash::new(&proof).into(),
+            inner_bundle_digest: Hash::new(b"recovery inner bundle").into(),
+            artifact_bytes: proof.len() as u64,
+            commitments: iroha_data_model::fastpq::FastpqCommitmentDescriptionV1::OrderedCompactAir(
+                iroha_data_model::fastpq::FastpqOrderedCompactAirCommitmentsV1 {
+                    segment_count: 1,
+                    segment_air_row_roots: vec![
+                        iroha_data_model::privacy::GoldilocksDigest384V1::new([0x41; 6]).unwrap(),
+                    ],
+                },
+            ),
+        },
     });
     kura.write_pipeline_metadata(&sidecar_with_proof);
     let req_fastpq_populated = http::Request::builder()
@@ -199,8 +215,8 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     let proofs = v.get("proofs").and_then(|x| x.as_array()).unwrap();
     assert_eq!(proofs.len(), 1);
     assert_eq!(
-        proofs[0].get("parameter").and_then(|x| x.as_str()),
-        Some("fastpq-state-transition-stark-v1")
+        proofs[0].get("profile_id").and_then(|x| x.as_str()),
+        Some(hex::encode(fastpq_prover::offline_compact::quantity_profile_id().0).as_str())
     );
     // Query missing height
     let req_missing = http::Request::builder()

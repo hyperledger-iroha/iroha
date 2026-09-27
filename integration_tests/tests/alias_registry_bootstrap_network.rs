@@ -51,6 +51,7 @@ use iroha_data_model::{
         AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasPlanDispositionV1,
         AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDomainV1,
     },
+    asset::AssetDefinitionId,
     block::{
         SignedBlock,
         consensus::{
@@ -68,9 +69,9 @@ use iroha_data_model::{
     },
     nexus::{
         LaneCatalog, LaneConfig as ModelLaneConfig, LaneLifecycleParameterV1, LaneLifecyclePlan,
-        LaneLifecycleStatusV1, LaneVisibility, PublicLaneMonetaryPlanV1,
-        PublicLaneMonetaryPreconditionV1, PublicLaneMonetaryRegistrationV1,
-        PublicLaneMonetaryScopeV1,
+        LaneLifecycleStatusV1, LaneVisibility, PublicLaneMonetaryPreconditionV1,
+        PublicLaneMonetaryScopeV1, PublicLanePreparationOperationV1,
+        PublicLanePreparationRequestV1, PublicLanePrepareRegistrationV1, PublicLanePreparedPlanV1,
     },
     parameter::{Parameters, system::SumeragiNposParameters},
     prelude::*,
@@ -100,6 +101,7 @@ const BPNG_MIN_QUORUM: u32 = 3;
 const FIXTURE_EPOCH_LENGTH_BLOCKS: u64 = 8;
 const NETWORK_SEED: &str =
     "integration-tests-alias-registry-bootstrap-retained-bpng-lane-fixture-only";
+const TAIRA_XOR_ASSET_DEFINITION_ID: &str = "6TEAJqbb8oEPmLncoNiMRbLEK6tw";
 const READ_TIMEOUT: Duration = Duration::from_secs(180);
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(300);
 const SUBMISSION_TASK_TIMEOUT: Duration = Duration::from_secs(360);
@@ -137,10 +139,26 @@ fn staking_custody_account() -> AccountId {
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
-    AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("nexus domain"),
-        "xor".parse().expect("stake asset name"),
-    )
+    let definition: AssetDefinitionId = defaults::nexus::staking::stake_asset_id()
+        .parse()
+        .expect("canonical network XOR asset");
+    assert_eq!(
+        definition,
+        defaults::nexus::fees::fee_asset_id()
+            .parse()
+            .expect("canonical Nexus fee XOR asset"),
+        "genesis staking and fees must use one real XOR definition"
+    );
+    assert_eq!(definition.to_string(), TAIRA_XOR_ASSET_DEFINITION_ID);
+    definition
+}
+
+#[test]
+fn retained_bpng_staking_uses_the_real_network_xor() {
+    assert_eq!(
+        stake_asset_definition_id(),
+        SumeragiNposParameters::default().xor_asset_definition_id
+    );
 }
 
 fn custom_genesis_post_topology(
@@ -165,12 +183,13 @@ fn custom_genesis_post_topology(
     let mut bootstrap: Vec<InstructionBox> = vec![
         Register::account(Account::new(staking_custody_account())).into(),
         Register::domain(Domain::new(
-            DomainId::try_new("nexus", "universal").expect("nexus domain"),
+            DomainId::try_new("universal", "universal").expect("XOR domain"),
         ))
         .into(),
-        Register::asset_definition(AssetDefinition::numeric(
+        Register::asset_definition(AssetDefinition::new(
             stake_asset_id.clone(),
-            "Retained BPNG lane fixture stake".to_owned(),
+            "XOR".to_owned(),
+            iroha_primitives::numeric::NumericSpec::fractional(9),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
         ))
@@ -2119,6 +2138,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     required_prebuilt_binaries()?;
     init_instruction_registry();
     let mut npos = SumeragiNposParameters::default();
+    npos.xor_asset_definition_id = stake_asset_definition_id();
     npos.max_validators = u32::try_from(VALIDATOR_COUNT)?;
     // Keep the genuine next-election boundary inside this bounded integration
     // history; validator promotion still waits for the signed epoch boundary.
@@ -2152,6 +2172,10 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             // Fees are fixed in the original network and retained on restart.
             // Keep one fluent borrow of the configuration writer.
             layer
+                .write(
+                    ["nexus", "fees", "fee_asset_id"],
+                    stake_asset_definition_id().to_string(),
+                )
                 .write(
                     ["nexus", "staking", "stake_asset_id"],
                     stake_asset_definition_id().to_string(),
@@ -2217,7 +2241,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .collect::<Result<BTreeMap<_, _>>>()?;
     ensure!(
         original_voters.len() == VALIDATOR_COUNT
-            && iroha_core::sumeragi::signed_genesis_validator_pops(&genesis)? == original_voters,
+            && iroha_core::sumeragi::schedule::genesis_validators(&genesis)? == original_voters,
         "signed genesis must contain exactly the original four voters"
     );
     let expected_validator_peers = original_voters.keys().cloned().collect::<Vec<_>>();
@@ -2494,9 +2518,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     let valid_until_height = epoch_end
         .checked_sub(1)
         .ok_or_else(|| eyre!("registration validity height underflowed"))?;
-    let planned_activation_height = epoch_end
-        .checked_add(1)
-        .ok_or_else(|| eyre!("registration activation height overflowed"))?;
+    let mut planned_activation_height = None;
     let mut self_registrations = Vec::with_capacity(VALIDATOR_COUNT);
     for ((validator_client, peer), keypair) in validator_clients
         .iter()
@@ -2504,6 +2526,59 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .zip(&validator_keypairs)
     {
         let validator = AccountId::new(keypair.public_key().clone());
+        let request = PublicLanePreparationRequestV1 {
+            lane_id: BPNG_FIXTURE_LANE,
+            valid_for_blocks: FIXTURE_EPOCH_LENGTH_BLOCKS,
+            operation: PublicLanePreparationOperationV1::Registration(
+                PublicLanePrepareRegistrationV1 {
+                    validator: validator.clone(),
+                    peer_id: peer.network_peer_id(),
+                    amount: stake.clone(),
+                    candidate: false,
+                },
+            ),
+        };
+        let plan_client = validator_client.clone();
+        let prepared =
+            read(move || plan_client.client().prepare_public_lane_plan(&request)).await?;
+        ensure!(
+            prepared.xor_asset_definition_id == stake_asset_definition_id(),
+            "prepared BPNG self-bond must use the signed network XOR"
+        );
+        let PublicLanePreparedPlanV1::Monetary(monetary_plan) = prepared.plan else {
+            return Err(eyre!(
+                "BPNG registration did not prepare an exact monetary plan"
+            ));
+        };
+        let PublicLaneMonetaryPreconditionV1::Registration(registration) =
+            &monetary_plan.precondition
+        else {
+            return Err(eyre!(
+                "BPNG registration preparation returned a different staking operation"
+            ));
+        };
+        ensure!(
+            registration.activation_height > epoch_end,
+            "BPNG activation must follow the frozen election epoch"
+        );
+        if let Some(previous_height) = planned_activation_height {
+            ensure!(
+                previous_height == registration.activation_height,
+                "BPNG preparation returned different activation heights for one validator batch"
+            );
+        } else {
+            planned_activation_height = Some(registration.activation_height);
+        }
+        ensure!(
+            monetary_plan.network_scope == PublicLaneMonetaryScopeV1::Network(network.network_id())
+                && monetary_plan.valid_until_height >= valid_until_height
+                && monetary_plan.source_asset
+                    == AssetId::new(stake_asset_definition_id(), validator.clone())
+                && monetary_plan.destination_asset
+                    == AssetId::new(stake_asset_definition_id(), staking_custody_account())
+                && monetary_plan.amount == stake,
+            "prepared BPNG monetary consent differs from the expected registration"
+        );
         let signed = transaction(
             validator_client,
             RegisterPublicLaneValidator::new(
@@ -2513,21 +2588,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
                 validator.clone(),
                 stake.clone(),
                 Metadata::default(),
-                PublicLaneMonetaryPlanV1 {
-                    network_scope: PublicLaneMonetaryScopeV1::Network(network.network_id()),
-                    valid_until_height,
-                    source_asset: AssetId::new(stake_asset_definition_id(), validator.clone()),
-                    destination_asset: AssetId::new(
-                        stake_asset_definition_id(),
-                        staking_custody_account(),
-                    ),
-                    amount: stake.clone(),
-                    precondition: PublicLaneMonetaryPreconditionV1::Registration(
-                        PublicLaneMonetaryRegistrationV1 {
-                            activation_height: planned_activation_height,
-                        },
-                    ),
-                },
+                monetary_plan,
             ),
         );
         ensure!(
@@ -2536,6 +2597,8 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         );
         self_registrations.push((validator_client, signed));
     }
+    let planned_activation_height = planned_activation_height
+        .ok_or_else(|| eyre!("BPNG fixture prepared no validator registrations"))?;
     ensure!(
         height(authority).await? < valid_until_height,
         "exact registration consent expired before submission"

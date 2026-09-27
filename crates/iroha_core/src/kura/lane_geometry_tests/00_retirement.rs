@@ -1624,7 +1624,7 @@ fn native_amx_archive_finality(
         .collect::<Vec<_>>();
     let height = block.header().height().get();
     assert_eq!(height, 1, "Native archive fixture uses one global block");
-    let network_id = crate::sumeragi::synthetic_network_id("native-amx-lane-archive-test");
+    let network_id = crate::unit_test_support::synthetic_network_id("native-amx-lane-archive-test");
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
         crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
             network_id, 100, &roster,

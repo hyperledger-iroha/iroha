@@ -467,12 +467,10 @@ fn verifier_owned_segment_registration_is_exact_and_full_profile_stays_closed() 
     }
 }
 #[test]
-fn full_main_proof_budget_rejects_before_witness_or_entropy() {
-    assert_eq!(
-        validate_zk_x509_main_proof_budget_v1(),
-        Err(ZkX509StarkErrorV1::ProofTooLarge)
-    );
-    assert!(136 * 2 * 5623 * 8 > super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
+fn full_main_complete_relation_proof_budget_fits_before_witness_or_entropy() {
+    assert_eq!(validate_zk_x509_main_proof_budget_v1(), Ok(()));
+    assert_eq!(136 * 5623 * 8, 6_117_824);
+    assert!(136 * 5623 * 8 < super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize);
 }
 
 /// Count the current direct-opening owners without trusting width-only sums.
@@ -573,209 +571,21 @@ fn full_main_replacement_partition_covers_every_registration_and_opening() {
     );
     assert_eq!(columns.iter().sum::<usize>(), 5_623);
 
-    // This credits only current/next base-field and DEEP openings. The new
-    // receipt, roots, claims, transcript and padding must all fit the balance.
-    let sampled_bytes_per_column =
-        usize::from(ZK_X509_FRI_QUERY_COUNT_V1) * 2 * core::mem::size_of::<u64>();
-    let deep_bytes_per_column = 2 * core::mem::size_of::<[u64; 4]>();
-    assert_eq!(sampled_bytes_per_column, 2_176);
-    assert_eq!(deep_bytes_per_column, 64);
-    let current_maximum = super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
-    let hypothetical_remainder = current_maximum
-        - (columns[0] + columns[1]) * (sampled_bytes_per_column + deep_bytes_per_column);
-    assert_eq!(hypothetical_remainder, 8_699_754);
+    let shared = layout.as_shared().unwrap();
+    assert_eq!(shared.trace_commitment_count_v1(), 1);
     assert_eq!(
-        super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize - hypothetical_remainder,
-        737_430
-    );
-}
-
-#[test]
-fn full_main_residual_layout_source_derived_maximum_is_conditional() {
-    let full = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
-    full.validate_exact_full_profile_registration_v1()
-        .expect("verifier-owned registration");
-    let (registrations, columns) =
-        full_main_opening_partition_for_test_v1(&full).expect("complete MAIN partition");
-    let retained = full
-        .registered_segments
-        .iter()
-        .filter(|registration| {
-            matches!(
-                registration.segment.adapter,
-                SegmentAdapterIdV1::ByteMemory
-                    | SegmentAdapterIdV1::StrictDer
-                    | SegmentAdapterIdV1::Rfc5280
-                    | SegmentAdapterIdV1::Projection
-                    | SegmentAdapterIdV1::P256ScalarBitBus
-            )
-        })
-        .map(|registration| registration.segment)
-        .collect::<Vec<_>>();
-    assert_eq!(retained.len(), registrations[2]);
-    let residual = AggregateProofLayoutV1::for_equal_log_buckets_v1(&retained)
-        .expect("source-derived retained registration layout");
-    let groups = residual
-        .trace_groups
-        .iter()
-        .map(|group| (group.native_trace_log2, group.base_width, group.aux_width))
-        .collect::<Vec<_>>();
-    assert_eq!(
-        groups,
-        vec![(8, 30, 160), (15, 17, 32), (18, 28, 39), (19, 189, 460)]
+        aggregate::maximum_encoded_proof_with_deep_bytes_v1(AGGREGATE_PARAMETERS_V1, &shared)
+            .unwrap(),
+        7_692_192
     );
     assert_eq!(
-        groups
-            .iter()
-            .map(|(_, base, aux)| *base + *aux)
-            .sum::<usize>(),
-        columns[2]
+        aggregate::exact_deep_opening_bytes_v1(AGGREGATE_PARAMETERS_V1, &shared).unwrap(),
+        360_064
     );
-    assert_eq!(residual.common_lde_log2, full.common_lde_log2);
-
-    // This is a wire-allocation screen only. No child proof, recursive receipt,
-    // terminal linkage, or soundness argument is constructed by this test.
-    let full_inner = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
-        AGGREGATE_PARAMETERS_V1,
-        &full.as_shared().expect("canonical MAIN aggregate layout"),
-    )
-    .expect("canonical full MAIN maximum");
-    let residual_inner = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
-        AGGREGATE_PARAMETERS_V1,
-        &residual
-            .as_shared()
-            .expect("retained MAIN aggregate layout"),
-    )
-    .expect("retained MAIN maximum under unchanged aggregate parameters");
-    let main_claim = super::super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize;
-    let ca_section = super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1;
-    let outer = super::super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1;
-    let current = super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
-    let cap = super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize;
-    assert_eq!(full_inner + main_claim + ca_section + outer, current);
-    let conditional_residual = residual_inner + main_claim + ca_section + outer;
-    assert_eq!(conditional_residual, 7_974_570);
-    assert_eq!(cap - conditional_residual, 1_462_614);
-}
-
-/// Size-only screen for one source-derived SHA child replacement. It does not
-/// prove or admit that child, or change the current full-MAIN preflight.
-#[test]
-fn full_main_one_sha_registration_exact_wire_delta_is_conditional() {
-    let full = AggregateProofLayoutV1::for_full_profile_v1().expect("canonical MAIN layout");
-    full.validate_exact_full_profile_registration_v1()
-        .expect("verifier-owned registration");
-    let (registrations, columns) =
-        full_main_opening_partition_for_test_v1(&full).expect("complete MAIN partition");
-    assert_eq!(registrations, [36, 4, 9]);
-    assert_eq!(columns, [4_000, 668, 955]);
-    let all_segments = full
-        .registered_segments
-        .iter()
-        .map(|registration| registration.segment)
-        .collect::<Vec<_>>();
-    assert_eq!(all_segments.len(), 49);
-    let full_chunks = full
-        .registered_segments
-        .iter()
-        .map(|registration| registration.column_chunks)
-        .sum::<usize>();
-    assert_eq!(full_chunks, 80);
-    let full_inner = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
-        AGGREGATE_PARAMETERS_V1,
-        &full.as_shared().expect("canonical MAIN aggregate layout"),
-    )
-    .expect("canonical full MAIN maximum");
-    let fixed = super::super::profile::ZK_X509_MAIN_CLAIM_ENVELOPE_BYTES_V1 as usize
-        + super::super::accumulator_stark::ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1
-        + super::super::credential_stark::ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1;
-    let current_maximum = super::super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize;
-    let cap = super::super::profile::ZK_X509_MAX_PROOF_BYTES_V1 as usize;
-    assert_eq!(full_inner + fixed, current_maximum);
-
-    for instance in 0_u16..4 {
-        let excluded = full
-            .registered_segment(SegmentAdapterIdV1::Sha256CallBus, instance)
-            .expect("one canonical SHA segment");
-        assert_eq!(
-            (excluded.segment.base_width, excluded.segment.aux_width),
-            (89, 78)
-        );
-        assert_eq!(excluded.column_chunks, 2);
-        let kept = all_segments
-            .iter()
-            .copied()
-            .filter(|segment| {
-                (segment.adapter, segment.instance) != (SegmentAdapterIdV1::Sha256CallBus, instance)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(kept.len(), 48, "one and only one SHA registration removed");
-        let reduced = AggregateProofLayoutV1::for_equal_log_buckets_v1(&kept)
-            .expect("48-registration MAIN diagnostic layout");
-        assert_eq!(
-            reduced
-                .registered_segments
-                .iter()
-                .map(|registration| registration.segment)
-                .collect::<Vec<_>>(),
-            kept,
-            "every other verifier-fixed registration remains in order"
-        );
-        assert!(
-            reduced
-                .registered_segment(SegmentAdapterIdV1::Sha256CallBus, instance)
-                .is_err(),
-            "excluded SHA registration must not survive"
-        );
-        for registration in &full.registered_segments {
-            if registration.segment == excluded.segment {
-                continue;
-            }
-            assert_eq!(
-                reduced
-                    .registered_segment(
-                        registration.segment.adapter,
-                        registration.segment.instance,
-                    )
-                    .expect("retained registration")
-                    .segment,
-                registration.segment,
-            );
-        }
-        assert_eq!(reduced.common_lde_log2, full.common_lde_log2);
-        assert_eq!(reduced.trace_groups.len(), full.trace_groups.len());
-        assert_eq!(
-            reduced
-                .trace_groups
-                .iter()
-                .map(|group| group.base_width + group.aux_width)
-                .sum::<usize>(),
-            columns.iter().sum::<usize>() - 167,
-        );
-        assert_eq!(
-            reduced
-                .registered_segments
-                .iter()
-                .map(|registration| registration.column_chunks)
-                .sum::<usize>(),
-            full_chunks - excluded.column_chunks,
-        );
-        let reduced_inner = aggregate::maximum_encoded_proof_with_deep_bytes_v1(
-            AGGREGATE_PARAMETERS_V1,
-            &reduced
-                .as_shared()
-                .expect("48-registration aggregate layout"),
-        )
-        .expect("48-registration MAIN maximum");
-        let reduced_x5s1 = reduced_inner + fixed;
-        let exact_delta = current_maximum - reduced_x5s1;
-        assert_eq!(exact_delta, 374_080);
-        assert_eq!(reduced_x5s1, 18_781_994);
-        assert!(
-            reduced_x5s1 > cap,
-            "one missing relation cannot qualify X5S1"
-        );
-    }
+    assert_eq!(
+        usize::from(ZK_X509_FRI_QUERY_COUNT_V1) * columns.iter().sum::<usize>() * 8,
+        6_117_824
+    );
 }
 
 #[test]

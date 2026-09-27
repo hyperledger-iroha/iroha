@@ -20,8 +20,10 @@ fn complete_test_builder_for_peers(
 fn load_default_genesis_source_template_for_test() -> Result<RawGenesisTransaction> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../defaults/genesis.template.json");
-    GenesisSourceTemplate::from_path(path)?
-        .materialize(deterministic_test_kagemusha_mint_finality_genesis_parameters())
+    GenesisSourceTemplate::from_path(path)?.materialize(
+        deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+        Some(SumeragiNposParameters::default().xor_asset_definition_id),
+    )
 }
 
 #[test]

@@ -2,11 +2,9 @@
 //!
 //! These are bounded canonical claims, not native State records or signing authority. The private
 //! signer prepares the exact token body and binding, while Core must own immutable reservation,
-//! completion, expiry, audit and replay-tombstone rows and a finalized Check consumer before any
-//! production operation can be admitted. A caller must compare these claims to independently
+//! completion, expiry, audit and replay-tombstone rows and the finalized Check consumer used by
+//! the native daemon production source. A caller must compare these claims to independently
 //! retained body, binding, original custody and audit inputs; detached observations cannot do so.
-//! TODO: Add purpose-owned State operation storage, signed Check execution/finality and the
-//! production state source before connecting the private four-signature stream-token service.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;

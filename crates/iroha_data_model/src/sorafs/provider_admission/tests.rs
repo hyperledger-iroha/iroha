@@ -57,6 +57,55 @@ fn signed_fixture_envelope(
 }
 
 #[test]
+fn signed_genesis_admission_initializer_has_one_canonical_instruction_layout() {
+    use super::governance::InitialProviderAdmissionV1;
+    use crate::{account::AccountId, isi::sorafs::InitializeSorafsProviderAdmissionV1};
+    let policy = policy();
+    let envelope = signed_fixture_envelope(&policy, &key(31));
+    let value = InitializeSorafsProviderAdmissionV1 {
+        council: governance::InitialProviderAdmissionCouncilV1 {
+            policy_id: policy.policy_id,
+            trusted_signers: policy.trusted_signers.clone(),
+            signature_threshold: policy.signature_threshold,
+        },
+        providers: vec![InitialProviderAdmissionV1 {
+            owner: AccountId::new(key(1).public_key().clone()),
+            material: norito::encode_canonical(
+                &sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1 {
+                    proposal: envelope.proposal,
+                    advert_body: envelope.advert_body,
+                    issued_at: envelope.issued_at,
+                    retention_epoch: envelope.retention_epoch,
+                },
+            )
+            .unwrap(),
+        }],
+    };
+    let frame = norito::encode_canonical(&value).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<InitializeSorafsProviderAdmissionV1>(&frame).unwrap(),
+        value
+    );
+    let json = norito::json::to_json(&value).unwrap();
+    assert_eq!(
+        norito::json::from_str::<InitializeSorafsProviderAdmissionV1>(&json).unwrap(),
+        value
+    );
+    let boxed: crate::isi::InstructionBox = value.clone().into();
+    let boxed_frame = norito::encode_canonical(&boxed).unwrap();
+    let decoded: crate::isi::InstructionBox = norito::decode_canonical(&boxed_frame).unwrap();
+    assert_eq!(
+        decoded
+            .as_any()
+            .downcast_ref::<InitializeSorafsProviderAdmissionV1>(),
+        Some(&value)
+    );
+    let mut trailing = frame;
+    trailing.push(0);
+    assert!(norito::decode_canonical::<InitializeSorafsProviderAdmissionV1>(&trailing).is_err());
+}
+
+#[test]
 fn council_policy_validates_bounded_strong_canonical_keys_and_norito() {
     let policy = policy();
     policy.validate().expect("valid policy");
@@ -91,6 +140,78 @@ fn council_policy_validates_bounded_strong_canonical_keys_and_norito() {
     assert_eq!(
         invalid.validate(),
         Err(ProviderAdmissionCouncilPolicyValidationErrorV1::Threshold)
+    );
+}
+
+#[test]
+fn parliament_admission_effect_roundtrips_and_separates_policy_provider_owner_subjects() {
+    use crate::{
+        governance::types::{ProposalKind, SorafsProviderGovernanceProposal},
+        isi::sorafs::{EstablishSorafsProviderOwnerV1, SorafsProviderGovernanceActionV1},
+        sorafs::provider_admission::governance::ProviderAdmissionGovernanceActionV1 as Action,
+    };
+    let policy = policy();
+    let envelope = signed_fixture_envelope(&policy, &key(31));
+    let provider = crate::sorafs::capacity::ProviderId::new(envelope.proposal.provider_id);
+    let configure = Action::ConfigureCouncil(norito::encode_canonical(&policy).unwrap());
+    let admit = Action::Admit(norito::encode_canonical(&envelope).unwrap());
+    assert_eq!(configure.provider_id().unwrap(), None);
+    assert_eq!(admit.provider_id().unwrap(), Some(provider));
+    for action in [configure.clone(), admit.clone()] {
+        let frame = norito::encode_canonical(&action).unwrap();
+        assert_eq!(governance::decode_frame::<Action>(&frame).unwrap(), action);
+        let json = norito::json::to_json(&action).unwrap();
+        assert_eq!(norito::json::from_str::<Action>(&json).unwrap(), action);
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(governance::decode_frame::<Action>(&trailing).is_err());
+    }
+    let proposal = |action| {
+        ProposalKind::SorafsProviderGovernance(SorafsProviderGovernanceProposal {
+            action: Box::new(action),
+        })
+    };
+    let council_subject = proposal(SorafsProviderGovernanceActionV1::Admission(configure))
+        .governed_subject_id_v1()
+        .unwrap();
+    let admission_subject = proposal(SorafsProviderGovernanceActionV1::Admission(admit))
+        .governed_subject_id_v1()
+        .unwrap();
+    let owner_subject = proposal(SorafsProviderGovernanceActionV1::Establish(
+        EstablishSorafsProviderOwnerV1 {
+            provider_id: provider,
+            owner: crate::account::AccountId::new(key(1).public_key().clone()),
+        },
+    ))
+    .governed_subject_id_v1()
+    .unwrap();
+    assert_ne!(council_subject, admission_subject);
+    assert_ne!(owner_subject, admission_subject);
+}
+
+#[test]
+fn admission_effect_rejects_noncanonical_oversized_and_substituted_provider_frames() {
+    use governance::{
+        PROVIDER_ADMISSION_MAX_FRAME_BYTES_V1, ProviderAdmissionGovernanceActionV1 as Action,
+    };
+    assert!(
+        Action::Admit(vec![0; PROVIDER_ADMISSION_MAX_FRAME_BYTES_V1 + 1])
+            .provider_id()
+            .is_err()
+    );
+    let envelope = signed_fixture_envelope(&policy(), &key(31));
+    let renewal = sorafs_manifest::ProviderAdmissionRenewalV1 {
+        version: sorafs_manifest::provider_admission::PROVIDER_ADMISSION_RENEWAL_VERSION_V1,
+        provider_id: [0xee; 32],
+        previous_envelope_digest: [1; 32],
+        envelope_digest: [2; 32],
+        envelope,
+        notes: None,
+    };
+    assert!(
+        Action::Renew(norito::encode_canonical(&renewal).unwrap())
+            .provider_id()
+            .is_err()
     );
 }
 

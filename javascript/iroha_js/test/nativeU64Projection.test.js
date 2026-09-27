@@ -49,7 +49,7 @@ function verifyingKey(name, height) {
         id: { backend: "stark/fri-v1", name: "execution-v1" },
         record: {
           version: 7,
-          circuit_id: "ivm-execution-v1",
+          circuit_id: "ivm-replay-binding-v1",
           owner_manifest_id: null,
           namespace: "core",
           backend: "stark",

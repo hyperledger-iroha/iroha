@@ -550,7 +550,7 @@ fn fixed_cut_retires_obsolete_predecessor_before_exact_blocked_target() {
     let post_cut = BlockMessage::V2(wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::CommitCertificateRequest(wire::CommitCertificateRequest {
             protocol_version: wire::PROTOCOL_VERSION,
-            network_id: crate::sumeragi::synthetic_network_id("fair-v2-ingress-test"),
+            network_id: crate::unit_test_support::synthetic_network_id("fair-v2-ingress-test"),
             context_id: predecessor_round.context_id,
             height: predecessor_round.height,
             requester: target_validator.clone(),

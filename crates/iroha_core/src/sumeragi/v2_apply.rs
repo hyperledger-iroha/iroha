@@ -1794,7 +1794,7 @@ pub(crate) fn plan_lane_reservation_ownership(
     let evidence_epochs = evidence_inputs
         .iter()
         .map(|group| {
-            crate::sumeragi::epoch_for_height_from_world(
+            crate::sumeragi::v2_npos::epoch_for_height_from_world(
                 &world,
                 group.identity.proposal_height,
                 active_context.mode,
@@ -1835,7 +1835,7 @@ pub(crate) fn plan_lane_reservation_ownership(
             });
             continue;
         }
-        let epoch = crate::sumeragi::epoch_for_height_from_world(
+        let epoch = crate::sumeragi::v2_npos::epoch_for_height_from_world(
             &world,
             input.group.identity.proposal_height,
             active_context.mode,
@@ -3565,6 +3565,15 @@ pub(crate) mod archive_reservations;
 )]
 mod native_preparation;
 
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "TODO: connect retained Apply only with complete consuming recovery"
+    )
+)]
+mod retained_lifecycle_apply;
+
 /// Production retained Native validation and its finite shell policy.
 pub(crate) mod native_validation;
 pub(crate) use native_validation::{NativeApplyService, PublishedNativeCarrier};
@@ -4123,6 +4132,9 @@ impl V2ApplyService {
         error: &BlockValidationError,
     ) -> V2ApplyError {
         let local = match error {
+            BlockValidationError::StateStorageAdmission(error) => {
+                Some(("state_storage", error.release_wait(), error.to_string()))
+            }
             BlockValidationError::EvidencePreparation(error) => Some((
                 "consensus_penalty_preparation",
                 error.release_wait(),
@@ -4156,19 +4168,16 @@ impl V2ApplyService {
         failed_block: &SignedBlock,
         error: &BlockValidationError,
     ) -> V2ApplyError {
-        if let BlockValidationError::EvidencePreparation(reason) = error {
+        let local_admission = match error {
+            BlockValidationError::EvidencePreparation(reason) => Some(reason.to_string()),
+            BlockValidationError::StateStorageAdmission(reason) => Some(reason.to_string()),
+            BlockValidationError::BlockHashAdmission(reason) => Some(reason.to_string()),
+            BlockValidationError::MembershipAdmission(reason) => Some(reason.to_string()),
+            _ => None,
+        };
+        if let Some(reason) = local_admission {
             return V2ApplyError::LocalValidation(
-                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
-            );
-        }
-        if let BlockValidationError::BlockHashAdmission(reason) = error {
-            return V2ApplyError::LocalValidation(
-                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
-            );
-        }
-        if let BlockValidationError::MembershipAdmission(reason) = error {
-            return V2ApplyError::LocalValidation(
-                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason.to_string()),
+                super::v2_body_store::LocalValidationRefusal::RecoveryRequired(reason),
             );
         }
         if let BlockValidationError::DaIndexHydration(reason) = error {
@@ -4656,48 +4665,13 @@ impl V2ApplyService {
                 "completion_material",
             ],
         );
-        context.validate()?;
-        if task.subject() != task.certificate().subject
-            || task.certificate().phase != wire::GlobalPhase::Commit
-            || task.certificate().round.context_id != context.id()
-            || task.certificate().round.height != context.height
-        {
-            return Err(V2ApplyError::TaskMismatch);
-        }
-        task.certificate().execution_commitment.validate()?;
-        if task.certificate().execution_commitment
-            != task.validated_receipt().execution_commitment()
-        {
-            return Err(V2ApplyError::ExecutionCommitmentMismatch);
-        }
-        let body = body_store.load(task.validated_receipt().durable())?;
+        let retained_lifecycle_apply::AuthenticatedApplyBody {
+            body,
+            verified_artifact,
+            canonical_proposal_wire_hash,
+        } = self.authenticate_exact_apply_body(context, body_store, task)?;
         let proposal_block_hash = body.hash();
-        let canonical_proposal_wire_hash = body
-            .canonical_proposal_wire_hash()
-            .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-        if !body.is_resultless_proposal()
-            || proposal_block_hash != task.subject().block_hash
-            || body.header().height().get() != context.height
-            || body.header().prev_block_hash() != task.subject().parent_block_hash
-            || canonical_proposal_wire_hash != task.subject().payload_hash
-        {
-            return Err(V2ApplyError::TaskMismatch);
-        }
-        // Authenticate the exact durable decision and its association with the selected body
-        // before pruning carrier sidecars or crossing either Kura/WSV commit boundary.
-        // `ApplyTask` deliberately retains the wire certificate, so this adapter must not rely
-        // only on the upstream reducer having verified it. A malformed decision remains a pure
-        // rejection, never a crash image whose canonical block/state lacks valid finality.
-        let verified_artifact =
-            VerifiedV2FinalityArtifact::verify(wire::finality::V2FinalityArtifact::new(
-                context.clone(),
-                task.subject(),
-                task.certificate().clone(),
-                self.validator_set_pops.clone(),
-            ))
-            .map_err(V2ApplyError::FinalityCryptography)?;
         let artifact = verified_artifact.artifact();
-        artifact.validate_for_header(&body.header())?;
         timings.record();
         let (ordinary_projection, live_lifecycle_projection) = match task {
             ExactApplyTaskRef::Ordinary(task) => {
@@ -5316,7 +5290,6 @@ impl V2ApplyService {
             .execution_context()
             .and_then(|bundle| bundle.merge_entry.as_ref());
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
-        let mut voting_block = None;
         #[cfg(test)]
         self.test_failures
             .candidate_executions
@@ -5330,7 +5303,6 @@ impl V2ApplyService {
                 self.block_cadence,
                 crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
                 self.state.as_ref(),
-                &mut voting_block,
             )
             .map_err(|(failed_block, error)| {
                 self.classify_validation_failure(
@@ -5501,7 +5473,6 @@ impl V2ApplyService {
             .is_some_and(|reference| reference.execution_batch_hash.is_some());
         let autonomous_apply_started = Instant::now();
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
-        let mut voting_block = None;
         let mut pipeline_events = Vec::new();
         #[cfg(test)]
         self.test_failures
@@ -5516,7 +5487,6 @@ impl V2ApplyService {
                 self.block_cadence,
                 crate::block::valid::SumeragiV2ValidationContext::from_height_context(context),
                 self.state.as_ref(),
-                &mut voting_block,
             )
             .unpack(|event| pipeline_events.push(event))
             .map_err(|(failed_block, error)| {
@@ -6260,6 +6230,35 @@ mod output_validation_diagnostic_tests {
                 &ExecutionOutputPolicyV1::bootstrap().limits(),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn local_admission_is_not_a_candidate_validation_verdict() {
+        let block = diagnostic_fixture();
+        for error in [
+            BlockValidationError::StateStorageAdmission(
+                crate::state::StateStorageAdmissionError::World(
+                    mv::storage::AdmittedStorageError::Poisoned {
+                        role: mv::storage::StorageRole::Current,
+                    },
+                ),
+            ),
+            BlockValidationError::BlockHashAdmission(
+                crate::state::BlockHashAdmissionError::ReadOnly,
+            ),
+            BlockValidationError::MembershipAdmission(
+                crate::state::MembershipAdmissionError::Poisoned,
+            ),
+        ] {
+            let classified =
+                V2ApplyService::classify_candidate_validation_error(None, &block, &error);
+            assert!(matches!(
+                classified,
+                V2ApplyError::LocalValidation(
+                    super::super::v2_body_store::LocalValidationRefusal::RecoveryRequired(_)
+                )
+            ));
+        }
     }
 
     #[test]

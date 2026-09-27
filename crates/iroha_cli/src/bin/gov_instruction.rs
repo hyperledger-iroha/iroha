@@ -97,7 +97,7 @@ enum Command {
         #[arg(long)]
         route_id: String,
     },
-    /// Ensure the canonical Halo2 IPA `ivm-execution-v1` verifying key is registered.
+    /// Ensure the canonical Halo2 IPA `ivm-replay-binding-v1` verifying key is registered.
     EnsureIvmExecutionVk {
         #[arg(long)]
         config: PathBuf,
@@ -203,7 +203,7 @@ fn existing_compatible_ivm_execution_vk(client: &Client) -> Result<Option<Verify
         if backend == iroha_core::zk::ZK_BACKEND_HALO2_IPA
             && !name.is_empty()
             && status == "Active"
-            && circuit_id == iroha_core::zk::IVM_EXECUTION_V1_CIRCUIT_ID
+            && circuit_id == iroha_core::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID
             && !gas_schedule_id.is_empty()
         {
             return Ok(Some(VerifyingKeyId::new(backend, name)));
@@ -265,8 +265,8 @@ fn ensure_ivm_execution_vk(
         eprintln!("ivm_execution_vk_existing={}", existing.name);
         return Ok(existing);
     }
-    let record = iroha_core::zk::halo2_ipa_ivm_execution_vk_record("core", 1)
-        .map_err(|err| eyre!("failed to build ivm-execution-v1 VK record: {err}"))?;
+    let record = iroha_core::zk::halo2_ipa_ivm_replay_binding_vk_record("core", 1)
+        .map_err(|err| eyre!("failed to build ivm-replay-binding-v1 VK record: {err}"))?;
     let tx = quote_and_sign_governance_transaction(
         client,
         vec![InstructionBox::from(verifying_keys::RegisterVerifyingKey {

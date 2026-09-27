@@ -171,6 +171,12 @@ fn release_manifest_actions_have_one_bounded_canonical_norito_surface() {
             decode_release_manifest_action_claim_v1(&frame).expect("canonical decode"),
             action
         );
+        let json = norito::json::to_json(&action).expect("canonical action JSON");
+        assert_eq!(
+            norito::json::from_str::<ReleaseManifestActionV1>(&json)
+                .expect("canonical action JSON decode"),
+            action
+        );
         assert_eq!(
             decode_release_manifest_action_claim_v1(&frame[..frame.len() - 1]),
             Err(ReleaseManifestClaimErrorV1::Encoding)

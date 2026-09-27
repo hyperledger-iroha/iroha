@@ -160,6 +160,20 @@ def _require_digest(value: Any, label: str) -> str:
     return value
 
 
+def _require_production_identity(value: Any) -> str:
+    """Match the exact V1 custody grammar without rewriting identity bytes."""
+
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) is None
+        or {
+            "null", "mock", "test", "dev", "demo", "fake", "dummy", "placeholder",
+        }.intersection(re.split(r"[^A-Za-z0-9]+", value.lower()))
+    ):
+        raise SignedManifestSourceError("native receipt result contains an invalid signer or deployment identity")
+    return value
+
+
 def _require_path(value: Any, label: str) -> Path:
     if (
         not isinstance(value, str) or not value or value != value.strip()
@@ -352,9 +366,7 @@ def authenticate_signed_manifest_sources(
             if result["manifest_size"] != raw.manifest_size or result["verified_at_unix_ms"] != now_unix_ms:
                 raise SignedManifestSourceError("native receipt result differs from the pinned size or independent clock")
             for field in ("service_id", "administrator_id", "deployment_id"):
-                value = result[field]
-                if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", value) is None or "test" in value.lower():
-                    raise SignedManifestSourceError("native receipt result contains an invalid signer or deployment identity")
+                _require_production_identity(result[field])
             chain = result["chain_id"]
             if not isinstance(chain, str) or re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._:-]{0,126}[A-Za-z0-9])?", chain) is None:
                 raise SignedManifestSourceError("native receipt result contains an invalid chain identity")

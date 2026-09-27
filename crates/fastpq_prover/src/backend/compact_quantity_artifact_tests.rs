@@ -229,7 +229,7 @@ fn deep_quantity_descriptor_binds_actual_protocol_and_preserves_value_relations(
     );
     assert_eq!(
         descriptor.proof_frame_schema,
-        "fastpq_prover::deep_compact::ProofV1"
+        "fastpq_prover::deep_compact::MaskedCompositionProofV1"
     );
     assert_eq!(
         descriptor.proof_frame_hash,

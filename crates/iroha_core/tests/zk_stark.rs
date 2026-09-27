@@ -467,7 +467,7 @@ fn stark_open_verify_envelope_rejects_synthetic_air_proof() {
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
     let vk_box = sample_stark_vk_box(backend, circuit_id);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
     // Two columns, one row each (matches the instance-column shape used by other backends).
@@ -585,7 +585,7 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     use iroha_primitives::json::Json;
     use std::sync::Arc;
     let backend = "stark/fri/poseidon-x7-goldilocks-6x64-v1";
-    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-execution-v1";
+    let circuit_id = "stark/fri/poseidon-x7-goldilocks-6x64-v1:ivm-replay-binding-v1";
     // Use the canonical contract artifact and dispatch boundary so this test reaches
     // native proof rejection after successful execution and registry admission.
     let compiler =
@@ -625,7 +625,7 @@ seiyaku StarkProofRejection {
         circuit_id,
         BackendTag::Stark,
         "goldilocks",
-        iroha_core::zk::ivm_execution_public_inputs_schema_hash(),
+        iroha_core::zk::ivm_replay_binding_public_inputs_schema_hash(),
         vk_hash,
     );
     vk_record.status = ConfidentialStatus::Active;
@@ -725,7 +725,7 @@ seiyaku StarkProofRejection {
         proved.overlay.is_empty(),
         "no-op contract emits no instructions"
     );
-    // Compute the ivm-execution-v1 public inputs and package them as STARK wrapper columns.
+    // Compute the ivm-replay-binding-v1 public inputs and package them as STARK wrapper columns.
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let summary = ivm_cache
         .summarize_program(proved.bytecode.as_ref())
@@ -743,7 +743,7 @@ seiyaku StarkProofRejection {
     let public_inputs = inputs.into_iter().map(|v| vec![v]).collect::<Vec<_>>();
     // Public-input schema descriptor is the same for both Halo2 and STARK wrappers.
     let env_public_inputs =
-        iroha_core::zk::ivm_execution_public_inputs_schema_descriptor().to_vec();
+        iroha_core::zk::ivm_replay_binding_public_inputs_schema_descriptor().to_vec();
     let domain_tag = stark_open_verify_domain_tag_current(
         backend,
         circuit_id,

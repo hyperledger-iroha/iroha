@@ -35,7 +35,6 @@ mod air_degree;
 mod air_expression;
 #[path = "backend/air_quotient.rs"]
 mod air_quotient;
-#[cfg(test)]
 #[path = "backend/coefficient_masking.rs"]
 mod coefficient_masking;
 #[path = "backend/masked_quotient.rs"]
@@ -49,6 +48,8 @@ mod polynomial_field;
 mod polynomial_reference;
 #[path = "backend/polynomial_transform.rs"]
 mod polynomial_transform;
+#[path = "backend/quotient_pair_masking.rs"]
+mod quotient_pair_masking;
 #[path = "backend/secret_polynomial.rs"]
 mod secret_polynomial;
 pub(crate) use air_quotient::{AirQuotientDomain, AirQuotientWeights};
@@ -101,14 +102,22 @@ mod compact_v1;
 mod compact_value_domain;
 #[path = "backend/deep_binding.rs"]
 mod deep_binding;
-#[path = "backend/deep_coefficients.rs"]
-mod deep_coefficients;
+#[path = "backend/deep_coefficient_commitment.rs"]
+mod deep_coefficient_commitment;
+#[path = "backend/deep_coefficient_replay.rs"]
+mod deep_coefficient_replay;
 #[path = "backend/deep_composition.rs"]
 mod deep_composition;
 #[path = "backend/deep_engine.rs"]
 mod deep_engine;
 #[path = "backend/deep_geometry.rs"]
 mod deep_geometry;
+#[path = "backend/deep_leaf_batch.rs"]
+mod deep_leaf_batch;
+#[path = "backend/deep_masked_quotient.rs"]
+mod deep_masked_quotient;
+#[path = "backend/deep_masked_replay.rs"]
+mod deep_masked_replay;
 #[path = "backend/deep_polynomial.rs"]
 mod deep_polynomial;
 #[path = "backend/deep_proof.rs"]
@@ -118,10 +127,10 @@ mod deep_prover;
 #[cfg(test)]
 #[path = "backend/deep_prover_plan.rs"]
 mod deep_prover_plan;
-#[path = "backend/deep_quotient.rs"]
-mod deep_quotient;
 #[path = "backend/deep_relation.rs"]
 mod deep_relation;
+#[path = "backend/deep_striped_merkle.rs"]
+mod deep_striped_merkle;
 #[cfg(test)]
 #[path = "backend/extension_trace.rs"]
 mod extension_trace;

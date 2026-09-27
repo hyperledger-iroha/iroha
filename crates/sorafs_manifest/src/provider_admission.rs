@@ -433,6 +433,77 @@ impl EndpointAttestationV1 {
         Ok(())
     }
 }
+/// Network-independent provider material authenticated only by its containing signed genesis.
+/// Constructing or decoding this template does not establish provider admission authority.
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1")]
+pub struct ProviderAdmissionGenesisMaterialV1 {
+    /// Canonical provider proposal.
+    pub proposal: ProviderAdmissionProposalV1,
+    /// Exact advertisement body admitted by genesis.
+    pub advert_body: ProviderAdvertBodyV1,
+    /// Beginning of admission validity in Unix seconds.
+    pub issued_at: u64,
+    /// Exclusive end of admission validity in Unix seconds.
+    pub retention_epoch: u64,
+}
+impl ProviderAdmissionGenesisMaterialV1 {
+    /// Validate material without claiming that signed genesis authorized it.
+    pub fn validate(&self) -> Result<(), ProviderAdmissionValidationError> {
+        self.proposal.validate()?;
+        compare_core_fields(&self.proposal, &self.advert_body)?;
+        if self.issued_at >= self.retention_epoch {
+            return Err(ProviderAdmissionValidationError::InvalidRetentionEpoch {
+                issued_at: self.issued_at,
+                retention_epoch: self.retention_epoch,
+            });
+        }
+        Ok(())
+    }
+    /// Build the unsigned, network-bound material projection retained by native admission.
+    /// Its empty council signatures deliberately prevent use as a council-approved envelope.
+    pub fn project(
+        &self,
+        network_id: [u8; 32],
+        policy_id: [u8; 32],
+        policy_digest: [u8; 32],
+    ) -> Result<ProviderAdmissionEnvelopeV1, ProviderAdmissionEnvelopeError> {
+        self.validate()
+            .map_err(ProviderAdmissionEnvelopeError::Validation)?;
+        if network_id == [0; 32] || policy_id == [0; 32] || policy_digest == [0; 32] {
+            return Err(ProviderAdmissionEnvelopeError::Validation(
+                ProviderAdmissionValidationError::InvalidPolicyBinding,
+            ));
+        }
+        Ok(ProviderAdmissionEnvelopeV1 {
+            version: PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id,
+            policy_id,
+            policy_revision: 1,
+            policy_digest,
+            admission_revision: 1,
+            expected_current_event_digest: None,
+            proposal: self.proposal.clone(),
+            proposal_digest: compute_proposal_digest(&self.proposal).map_err(|source| {
+                ProviderAdmissionEnvelopeError::Serialization {
+                    context: "genesis proposal",
+                    source,
+                }
+            })?,
+            advert_body: self.advert_body.clone(),
+            advert_body_digest: compute_advert_body_digest(&self.advert_body).map_err(
+                |source| ProviderAdmissionEnvelopeError::Serialization {
+                    context: "genesis advert",
+                    source,
+                },
+            )?,
+            issued_at: self.issued_at,
+            retention_epoch: self.retention_epoch,
+            council_signatures: Vec::new(),
+            notes: None,
+        })
+    }
+}
 /// Governance envelope binding proposals, adverts, and council signatures.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_manifest::provider_admission::ProviderAdmissionEnvelopeV1")]
@@ -681,8 +752,63 @@ pub struct AdmissionRecord {
 enum AdmissionRecordTrust {
     CouncilVerified,
     UntrustedSigners,
+    GenesisMaterial,
 }
 impl AdmissionRecord {
+    /// Construct an integrity-checked genesis material projection, without authenticating genesis.
+    /// Only a caller that verifies the exact containing signed genesis and current native
+    /// admission/owner/revocation state may use this value for production admission.
+    pub fn from_genesis_material(
+        material: &ProviderAdmissionGenesisMaterialV1,
+        network_id: [u8; 32],
+        policy_id: [u8; 32],
+        policy_digest: [u8; 32],
+    ) -> Result<Self, ProviderAdmissionEnvelopeError> {
+        let envelope = material.project(network_id, policy_id, policy_digest)?;
+        let advert_body_digest = envelope.advert_body_digest;
+        Self::from_verified_envelope(
+            envelope,
+            advert_body_digest,
+            AdmissionRecordTrust::GenesisMaterial,
+        )
+    }
+    /// Whether the record contains structurally valid signed-genesis material.
+    /// This does not prove genesis membership or provide standalone authorization.
+    #[must_use]
+    pub fn is_genesis_material(&self) -> bool {
+        self.trust == AdmissionRecordTrust::GenesisMaterial
+    }
+    /// Verify signed material selected by an authoritative retained admission head.
+    ///
+    /// Unlike initial admission, a retained head can name a renewal. This only authenticates
+    /// material: the caller must independently prove the current finalized head, its lineage,
+    /// policy and revocation status. A caller-supplied digest is not admission authority.
+    pub fn from_retained_envelope(
+        envelope: ProviderAdmissionEnvelopeV1,
+        policy: &ProviderAdmissionCouncilPolicy,
+        expected_digest: [u8; 32],
+    ) -> Result<Self, ProviderAdmissionEnvelopeError> {
+        let advert_body_digest = verify_envelope(&envelope, policy)?;
+        let envelope_digest = compute_envelope_digest(&envelope).map_err(|source| {
+            ProviderAdmissionEnvelopeError::Serialization {
+                context: "retained envelope",
+                source,
+            }
+        })?;
+        if envelope_digest != expected_digest {
+            return Err(ProviderAdmissionEnvelopeError::Validation(
+                ProviderAdmissionValidationError::FieldMismatch {
+                    field: "retained envelope digest",
+                },
+            ));
+        }
+        Ok(Self {
+            envelope,
+            advert_body_digest,
+            envelope_digest,
+            trust: AdmissionRecordTrust::CouncilVerified,
+        })
+    }
     /// Constructs a verified admission record under the configured council trust policy.
     pub fn new(
         envelope: ProviderAdmissionEnvelopeV1,
@@ -732,7 +858,7 @@ impl AdmissionRecord {
             trust,
         })
     }
-    /// Returns the immutable governance envelope backing this registry entry.
+    /// Returns the immutable admission material projection. Genesis projections have no council signatures.
     #[must_use]
     pub fn envelope(&self) -> &ProviderAdmissionEnvelopeV1 {
         &self.envelope
@@ -1812,6 +1938,65 @@ mod tests {
         };
         sign_envelope(&mut envelope, keys);
         envelope
+    }
+    #[test]
+    fn genesis_material_is_canonical_and_never_a_council_envelope() {
+        let mut proposal = sample_proposal();
+        proposal.advert_key = SigningKey::from_bytes(&[0x21; 32])
+            .verifying_key()
+            .to_bytes();
+        let material = ProviderAdmissionGenesisMaterialV1 {
+            advert_body: advert_body_from_proposal(&proposal),
+            proposal,
+            issued_at: 1000,
+            retention_epoch: 2000,
+        };
+        material.validate().unwrap();
+        let bytes = norito::encode_canonical(&material).unwrap();
+        assert_eq!(
+            norito::decode_canonical::<ProviderAdmissionGenesisMaterialV1>(&bytes).unwrap(),
+            material
+        );
+        let record =
+            AdmissionRecord::from_genesis_material(&material, [1; 32], [2; 32], [3; 32]).unwrap();
+        assert!(record.is_genesis_material());
+        assert!(!record.is_council_verified());
+        assert!(verify_envelope_untrusted_signers(record.envelope()).is_err());
+        let other =
+            AdmissionRecord::from_genesis_material(&material, [4; 32], [2; 32], [3; 32]).unwrap();
+        assert_ne!(record.envelope_digest(), other.envelope_digest());
+        let mut invalid = material;
+        invalid.advert_body.provider_id = [9; 32];
+        assert!(invalid.validate().is_err());
+    }
+    #[test]
+    fn retained_envelope_checks_the_exact_selected_digest_and_council() {
+        let key = SigningKey::from_bytes(&[0xa9; 32]);
+        let policy = council_policy(&[&key], 1);
+        let mut envelope = signed_sample_envelope(&[&key]);
+        envelope.admission_revision = 2;
+        envelope.expected_current_event_digest = Some([0xab; 32]);
+        sign_envelope(&mut envelope, &[&key]);
+        let digest = compute_envelope_digest(&envelope).unwrap();
+        assert!(AdmissionRecord::new(envelope.clone(), &policy).is_err());
+        assert_eq!(
+            AdmissionRecord::from_retained_envelope(envelope.clone(), &policy, digest)
+                .unwrap()
+                .envelope(),
+            &envelope
+        );
+        assert!(
+            AdmissionRecord::from_retained_envelope(envelope.clone(), &policy, [0; 32]).is_err()
+        );
+        let other = SigningKey::from_bytes(&[0xaa; 32]);
+        assert!(
+            AdmissionRecord::from_retained_envelope(
+                envelope,
+                &council_policy(&[&other], 1),
+                digest
+            )
+            .is_err()
+        );
     }
     fn sign_advert(key: &SigningKey, advert: &mut ProviderAdvertV1) {
         advert.signature = AdvertSignature {

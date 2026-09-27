@@ -12,7 +12,7 @@ fn clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations() {
             .try_insert_admitted(key, key + 1, |d| pool.reserve(d))
             .unwrap();
     }
-    let original = (identity(writer.inner.as_ref()), pool.used.get());
+    let original = (identity(writer.inner.as_ref()), pool.used.load());
     let mut parent = writer.checkpoint().unwrap();
     let before = identity(parent.inner.as_ref());
     let nodes = without_allocations(|| {
@@ -29,10 +29,10 @@ fn clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations() {
     assert!(matches!(result, Err(MapAdmissionError::Refused(()))));
     assert_eq!(identity(parent.inner.as_ref()), before);
     let demand = demanded.unwrap();
-    let used = pool.used.get();
-    let takes = pool.takes.get();
-    let clones = pool.clones.get();
-    pool.limit.set(used + demand.bytes() - 1);
+    let used = pool.used.load();
+    let takes = pool.takes.load();
+    let clones = pool.clones.load();
+    pool.limit.store(used + demand.bytes() - 1);
     let result = without_allocations(|| {
         parent.try_clear_admitted(|d| {
             assert_eq!(d, demand);
@@ -41,15 +41,15 @@ fn clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations() {
     });
     assert!(matches!(result, Err(MapAdmissionError::Refused(()))));
     assert_eq!(identity(parent.inner.as_ref()), before);
-    assert_eq!(pool.used.get(), used);
-    assert_eq!(pool.takes.get(), takes);
-    pool.limit.set(used + demand.bytes());
-    let callbacks = pool.callbacks.get();
+    assert_eq!(pool.used.load(), used);
+    assert_eq!(pool.takes.load(), takes);
+    pool.limit.store(used + demand.bytes());
+    let callbacks = pool.callbacks.load();
     parent.try_clear_admitted(|d| pool.reserve(d)).unwrap();
-    assert_eq!(pool.callbacks.get(), callbacks + 1);
-    assert_eq!(pool.used.get(), used + demand.bytes());
-    assert_eq!(pool.takes.get() - takes, demand.allocations());
-    assert_eq!(pool.clones.get(), clones);
+    assert_eq!(pool.callbacks.load(), callbacks + 1);
+    assert_eq!(pool.used.load(), used + demand.bytes());
+    assert_eq!(pool.takes.load() - takes, demand.allocations());
+    assert_eq!(pool.clones.load(), clones);
     let after = identity(parent.inner.as_ref());
     assert_eq!(after.cursor, before.cursor);
     assert_ne!(after.root, before.root);
@@ -70,13 +70,16 @@ fn clear_exact_limit_and_refusal_preserve_original_checkpoint_allocations() {
     );
     assert!(parent.is_empty());
     assert_eq!(parent.get_before(&128), Some(&129));
-    pool.limit.set(pool.used.get());
+    pool.limit.store(pool.used.load());
     without_allocations(|| drop(parent));
-    assert_eq!((identity(writer.inner.as_ref()), pool.used.get()), original);
+    assert_eq!(
+        (identity(writer.inner.as_ref()), pool.used.load()),
+        original
+    );
     assert_eq!(writer.get(&128), Some(&129));
     without_allocations(|| drop(writer));
     without_allocations(|| drop(map));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -94,20 +97,20 @@ fn clear_publication_retains_actual_old_reader_preimages_and_charges() {
     let old_root = old.inner.as_ref().get_root();
     let mut writer = map.try_write_admitted(|d| pool.reserve(d)).unwrap();
     let nodes = unsafe { Node::tree_node_count(writer.inner.as_ref().get_root()) }.unwrap();
-    let clones = pool.clones.get();
+    let clones = pool.clones.load();
     writer.try_clear_admitted(|d| pool.reserve(d)).unwrap();
     assert_eq!(writer.inner.as_ref().admitted_tracking()[1].0, nodes);
     assert_eq!(old.inner.as_ref().get_root(), old_root);
     assert_eq!(old.get(&128), Some(&Some(128)));
     assert_eq!(old.get(&127), Some(&None));
-    assert_eq!(pool.clones.get(), clones);
+    assert_eq!(pool.clones.load(), clones);
     writer.commit();
     assert!(map.read().is_empty());
     assert_eq!(old.len(), 129);
-    let held = pool.used.get();
+    let held = pool.used.load();
     without_allocations(|| drop(old));
     assert!(
-        pool.used.get() < held,
+        pool.used.load() < held,
         "old reader release reclaims retired charged nodes"
     );
     // The next block now observes truly empty undo, not stale None/Some entries.
@@ -121,7 +124,7 @@ fn clear_publication_retains_actual_old_reader_preimages_and_charges() {
     next.commit();
     assert_eq!(map.read().get(&128), Some(&Some(900)));
     without_allocations(|| drop(map));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -132,7 +135,7 @@ fn clear_nested_apply_and_repeated_resets_keep_full_budget_outer_abort() {
     writer
         .try_insert_admitted(7, 70, |d| pool.reserve(d))
         .unwrap();
-    let original = (identity(writer.inner.as_ref()), pool.used.get());
+    let original = (identity(writer.inner.as_ref()), pool.used.load());
     let mut outer = writer.checkpoint().unwrap();
     {
         let mut inner = outer.checkpoint().unwrap();
@@ -150,13 +153,16 @@ fn clear_nested_apply_and_repeated_resets_keep_full_budget_outer_abort() {
     }
     assert!(outer.is_empty());
     assert_eq!(outer.get_before(&7), Some(&70));
-    pool.limit.set(pool.used.get());
+    pool.limit.store(pool.used.load());
     without_allocations(|| drop(outer));
-    assert_eq!((identity(writer.inner.as_ref()), pool.used.get()), original);
+    assert_eq!(
+        (identity(writer.inner.as_ref()), pool.used.load()),
+        original
+    );
     assert_eq!(writer.get(&7), Some(&70));
     without_allocations(|| drop(writer));
     without_allocations(|| drop(map));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -170,7 +176,7 @@ fn clear_generation_refusal_precedes_callback_and_preserves_writer_and_parent() 
             Some((7, 70)),
         );
         let mut writer = map.try_write_admitted(|d| pool.reserve(d)).unwrap();
-        let used = pool.used.get();
+        let used = pool.used.load();
         if via_parent {
             let mut parent = writer.checkpoint().unwrap();
             let before = identity(parent.inner.as_ref());
@@ -194,11 +200,11 @@ fn clear_generation_refusal_precedes_callback_and_preserves_writer_and_parent() 
             ));
             assert_eq!(identity(writer.inner.as_ref()), before);
         }
-        assert_eq!(pool.used.get(), used);
+        assert_eq!(pool.used.load(), used);
         assert_eq!(writer.get(&7), Some(&70));
         without_allocations(|| drop(writer));
         without_allocations(|| drop(map));
-        assert_eq!(pool.used.get(), 0);
+        assert_eq!(pool.used.load(), 0);
     }
 }
 
@@ -218,7 +224,7 @@ fn clear_caught_callback_and_provider_panics_leave_original_parent_unusable() {
                     panic!("clear admission callback failed");
                 }
                 let provider = pool.reserve(d)?;
-                pool.panic_drop.set(true);
+                pool.panic_drop.store(true);
                 Ok(provider)
             });
         }))
@@ -235,7 +241,7 @@ fn clear_caught_callback_and_provider_panics_leave_original_parent_unusable() {
         assert!(map.read().is_empty());
         without_allocations(|| drop(writer));
         without_allocations(|| drop(map));
-        assert_eq!(pool.used.get(), 0);
+        assert_eq!(pool.used.load(), 0);
     }
 }
 
@@ -250,21 +256,21 @@ fn clear_apply_cleanup_panic_cannot_expose_a_usable_partial_writer() {
     assert!(catch_unwind(AssertUnwindSafe(|| {
         let _ = writer.try_clear_admitted(|d| {
             let provider = pool.reserve(d)?;
-            pool.arm_charge_panic_on_provider_drop.set(true);
+            pool.arm_charge_panic_on_provider_drop.store(true);
             Ok::<_, ()>(provider)
         });
     }))
     .is_err());
-    assert!(!pool.arm_charge_panic_on_provider_drop.get());
+    assert!(!pool.arm_charge_panic_on_provider_drop.load());
     assert!(
-        !pool.panic_next_charge.get(),
+        !pool.panic_next_charge.load(),
         "actual saved-buffer charge cleanup ran"
     );
     assert!(catch_unwind(AssertUnwindSafe(|| writer.len())).is_err());
     assert!(map.read().is_empty());
     without_allocations(|| drop(writer));
     without_allocations(|| drop(map));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }
 
 #[test]
@@ -274,11 +280,11 @@ fn clear_empty_root_has_exact_finite_layouts_and_never_copies_payloads() {
     let mut writer = map.try_write_admitted(|d| pool.reserve(d)).unwrap();
     let mut parent = writer.checkpoint().unwrap();
     let original = identity(parent.inner.as_ref());
-    let used = pool.used.get();
+    let used = pool.used.load();
     let expected = Layout::new::<CachePadded<Leaf<usize, usize, Charge>>>().size()
         + 2 * Layout::new::<*mut Node<usize, usize, Charge>>().size();
-    pool.limit.set(used + expected);
-    pool.panic_clone.set(1);
+    pool.limit.store(used + expected);
+    pool.panic_clone.store(1);
     parent
         .try_clear_admitted(|d| {
             assert_eq!(d.bytes(), expected);
@@ -286,14 +292,14 @@ fn clear_empty_root_has_exact_finite_layouts_and_never_copies_payloads() {
             pool.reserve(d)
         })
         .unwrap();
-    assert_eq!(pool.panic_clone.get(), 1, "no payload clone was attempted");
-    assert_eq!(pool.used.get(), used + expected);
+    assert_eq!(pool.panic_clone.load(), 1, "no payload clone was attempted");
+    assert_eq!(pool.used.load(), used + expected);
     assert_ne!(identity(parent.inner.as_ref()).root, original.root);
     assert!(parent.is_empty());
-    pool.limit.set(pool.used.get());
+    pool.limit.store(pool.used.load());
     without_allocations(|| drop(parent));
-    assert_eq!(pool.used.get(), used);
+    assert_eq!(pool.used.load(), used);
     without_allocations(|| drop(writer));
     without_allocations(|| drop(map));
-    assert_eq!(pool.used.get(), 0);
+    assert_eq!(pool.used.load(), 0);
 }

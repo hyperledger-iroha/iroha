@@ -1,7 +1,7 @@
 # SoraFS production signer authority inventory
 
 This is the implementation inventory for G02.1, initially inspected on 2026-09-13
-and rechecked on 2026-09-24 in the `optimizations` checkout. It records existing
+and rechecked on 2026-09-26 in the `optimizations` checkout. It records existing
 source boundaries and missing production code. Configuration declarations and
 test signatures do not prove an operating signer, authoritative state source or
 deployment. The outer receipt contract is
@@ -13,11 +13,16 @@ The [daemon coordinator](../../crates/irohad/src/signer_operation.rs) depends on
 `SignerKeyOperationProviderV1` and `SignerOperationStateSourceV1`. Its
 [software credential provider](../../crates/irohad/src/signer_operation/credential_provider.rs)
 implements the key-operation trait for an owner-only supervisor credential and
-rechecks enrolled custody and the exact reservation before key use. It is not
-yet assembled into configured purpose dispatch, and state-source implementations
-remain test fixtures.
-No production state source authenticates and atomically updates the required
-custody, audit predecessor, reservation and completed-operation authority.
+rechecks enrolled custody and the exact reservation before key use. Role11 stream tokens now
+have configured native software dispatch and an actual State/Kura/Queue source for custody,
+audit, reservation, completion and fresh native Checks. The daemon factory and Torii issuer
+tests exercise that composition; current execution evidence is tracked separately and this
+source inventory does not establish a live gateway deployment.
+
+The missing production state-source and configured purpose-dispatch work applies to
+release-manifest Role13 and final-promotion Role14. Their injected state-source fixtures and
+private receipt journals cannot establish native completed-operation authority. Role15's
+account-custody Check does not itself assemble the final-promotion operation service.
 
 Repository Rust/Python/shell/TOML and Cargo-manifest searches found no PKCS#11
 operation implementation, cryptoki/YubiHSM client, or cloud KMS SDK dependency.
@@ -79,7 +84,18 @@ Its default is absent; enabled issuance requires all leaves. Chain/network and
 provider identity come from the node/storage context.
 
 `sorafs.storage.native_transaction_signers` binds proof-outcome, repair, reserve
-and orderbook transaction authorities. That configuration does not establish
+and orderbook transaction authorities. Each binding can explicitly select an
+owner-only, absolute `software_credential` file; omission selects its external
+runtime provider. Native and injected providers are mutually exclusive. The stock
+daemon reads the canonical private-key multihash followed by one newline through
+its bounded, zeroizing credential reader only after State construction. Native
+keys must match their public bindings, differ across roles, and differ from the
+validator key. Native bindings are excluded from the external broker catalog.
+Every local signature checks exact current State/Kura finality and account
+existence; the native forwarders retain field-level permissions and operation
+eligibility before claiming work. These adapters have no transaction queue or
+outbox capability. No credential bytes enter configuration or diagnostics.
+That configuration does not establish
 signer custody or a role-14 completed operation. Its qualified transaction facade
 now pins the independently supplied node network and configured account, and accepts
 one direct instruction from the canonical 16-type role inventory. Cross-role,
@@ -121,8 +137,9 @@ qualification checks their routes, while Torii authenticates custody evidence.
 These are real transport implementations, not vendor key or observer backends.
 
 The [stream-token service transport](../../crates/irohad/src/signer_operation/stream_token/transport.rs)
-returns complete receipts and preserves ambiguous operations for recovery, but
-its service still depends on the two missing coordinator implementations.
+returns complete receipts and preserves ambiguous operations for recovery. Its native software
+composition uses the production role11 state source; an external broker deployment must provide
+its own configured producer and observer implementing the same verifiable protocol.
 The broker clients cannot be used as four-purpose raw signing providers or
 retagged as final-promotion authority.
 

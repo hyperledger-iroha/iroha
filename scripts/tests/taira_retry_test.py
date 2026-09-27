@@ -30,6 +30,32 @@ exec(compile(UNIT_RENDERER_PATH.read_bytes(), str(UNIT_RENDERER_PATH), "exec"), 
 OPERATOR_PUBLIC_KEY = "ed0120D75A980182B10AB7D54BFED3C964073A0EE172F3DAA62325AF021A68F707511A"
 
 
+class ContinuityGenesisAuthorityTests(unittest.TestCase):
+    def test_exact_generation_zero_authority_peers(self):
+        authority = {
+            "version": 1,
+            "generation": 0,
+            "validators": [{"validator": f"peer-{index}"} for index in range(4)],
+        }
+        manifest = {"kagemusha_mint_finality": {"authority_generation": authority}}
+        self.assertEqual(retry._continuity_mint_finality_peers(manifest),
+                         [f"peer-{index}" for index in range(4)])
+
+        for altered in (
+            {"kagemusha_mint_finality": {"epoch_roster": authority}},
+            {"kagemusha_mint_finality": {"authority_generation":
+                dict(authority, generation=1)}},
+            {"kagemusha_mint_finality": {"authority_generation":
+                dict(authority, generation=False)}},
+            {"kagemusha_mint_finality": {"authority_generation":
+                dict(authority, version=2)}},
+            {"kagemusha_mint_finality": {"authority_generation":
+                dict(authority, validators=[{"validator": "peer-0"}] * 4)}},
+        ):
+            with self.subTest(altered=altered), self.assertRaises(RuntimeError):
+                retry._continuity_mint_finality_peers(altered)
+
+
 def beacon_input_fixture(draft):
     return {
         "schema": "iroha.taira.public-reset.beacon-inputs.v1",
@@ -1150,7 +1176,7 @@ class RetryTests(unittest.TestCase):
         )
 
 
-class EpochRetirementLockTests(unittest.TestCase):
+class DeploymentRetirementLockTests(unittest.TestCase):
     """Real file descriptors/flocks; only Linux-root metadata is modeled on macOS."""
 
     def setUp(self):
@@ -1250,7 +1276,7 @@ class EpochRetirementLockTests(unittest.TestCase):
     def test_root_and_lock_custody_and_active_owner_reject(self):
         for path, field, wrong in (
             (self.state, "st_uid", 1), (self.state, "st_gid", 1),
-            (self.state, "st_mode", retry.stat.S_IFDIR | 0o755),
+            (self.state, "st_mode", retry.stat.S_IFDIR | 0o777),
             (self.lock, "st_uid", 1), (self.lock, "st_gid", 1),
             (self.lock, "st_nlink", 2), (self.lock, "st_size", 1),
             (self.lock, "st_mode", retry.stat.S_IFREG | 0o644),
@@ -1265,6 +1291,22 @@ class EpochRetirementLockTests(unittest.TestCase):
         owner.write_bytes(b"PUBLIC-OWNER-MARKER-FIXTURE")
         with self.assertRaisesRegex(retry._retire_RebindError, "active reset owner"):
             retry._retire_deployment_lock()
+        self.assert_all_closed()
+
+    def test_retired_worker_state_service_or_broken_symlink_reject_without_mutation(self):
+        state = self.base / "retired-worker"
+        unit = self.base / "retired-worker.service"
+        with mock.patch.object(retry, "RETIRE_WORKER_STATE", state), mock.patch.object(retry, "RETIRE_WORKER_UNIT", unit):
+            for path in (state, unit):
+                path.write_bytes(b"retired public fixture")
+                with self.assertRaisesRegex(retry._retire_RebindError, "retired epoch worker"):
+                    retry._retire_deployment_lock()
+                self.assertEqual(path.read_bytes(), b"retired public fixture")
+                path.unlink()
+            unit.symlink_to(self.base / "absent")
+            with self.assertRaisesRegex(retry._retire_RebindError, "retired epoch worker"):
+                retry._retire_deployment_lock()
+            self.assertTrue(unit.is_symlink())
         self.assert_all_closed()
 
     def test_named_lock_replacement_during_acquisition_rejects(self):
@@ -1974,6 +2016,12 @@ class WorkflowTests(unittest.TestCase):
         self.assertFalse(reads & private_paths)
 
 
+    def test_retired_supervisor_intent_stops_before_retirement_and_native_calls(self):
+        self.plan["epoch_supervisor"] = {"retired": True}
+        with self.assertRaises(retry.RetryError):retry.guest_locked(self.request,self.capacity,self.attempts)
+        retry._retire_retained_state.assert_not_called()
+        retry._retire_apply.assert_not_called()
+        self.assertEqual(self.calls,[])
 
     def test_fresh_native_public_bundle_failure_cannot_reuse_retained_bundle(self):
         self.fail_phase = "prepare-public-inputs"

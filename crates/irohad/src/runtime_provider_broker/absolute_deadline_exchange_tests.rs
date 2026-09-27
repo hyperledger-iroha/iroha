@@ -136,7 +136,7 @@ fn occupied_session_deadline_does_not_dispatch_retire_or_poison_a_request() {
         }),
         chain_id: "test-chain".to_owned(),
         network_id: server_test_network_id(),
-        endpoint: EndpointPolicy::production(),
+        endpoint: EndpointPolicy::production(&validated_production_endpoint()),
         requested_catalog: vec![binding.clone()],
     };
     let held = session.connection.lock().unwrap();

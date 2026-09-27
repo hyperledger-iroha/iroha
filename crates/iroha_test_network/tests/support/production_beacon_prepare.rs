@@ -1,15 +1,12 @@
 //! Fresh native localnet inputs for the production-custody beacon contract.
 
 use color_eyre::eyre::{Result, WrapErr as _, ensure, eyre};
-use iroha_core::{
-    beacon::global_threshold_beacon_roster_hash_v1, sumeragi::signed_genesis_voting_peers,
-};
+use iroha_core::sumeragi::startup::genesis_committee_peers;
 use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
     NetworkId,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, AssetId},
-    consensus::{GLOBAL_THRESHOLD_BEACON_VERSION_V1, GlobalThresholdBeaconDkgSessionV1},
     isi::{Mint, Register},
     parameter::system::{Parameters, SumeragiNposParameters},
     role::Role,
@@ -17,10 +14,9 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanDelegateAccountAliasResolution,
 };
-use iroha_genesis::{GenesisBlock, RawGenesisTransaction, validate_prepared_genesis_bundle};
+use iroha_genesis::{RawGenesisTransaction, validate_prepared_genesis_bundle};
 use iroha_model_base::peer::PeerId;
-use norito::{derive::JsonSerialize, json};
-use rand::{TryRngCore as _, rngs::OsRng};
+use norito::json;
 use std::{
     fs,
     io::Write as _,
@@ -41,7 +37,6 @@ use tokio::{
 pub(super) struct Prepared {
     pub directory: PathBuf,
     pub genesis_directory: PathBuf,
-    pub request: PathBuf,
     pub roster: Vec<PeerId>,
     pub network_id: NetworkId,
     pub genesis_public_key: PublicKey,
@@ -171,16 +166,6 @@ fn routed_account_and_snapshot_config(directory: &Path, manifest: &Path) -> Resu
         .with_consensus_meta();
     fs::write(manifest, json::to_vec(&raw)?)?;
     Ok(client_path)
-}
-
-#[derive(JsonSerialize)]
-struct Request {
-    schema: String,
-    dkg_session: GlobalThresholdBeaconDkgSessionV1,
-    target_roster: Vec<PeerId>,
-    authorization_roster: Vec<PeerId>,
-    provider_handles: Vec<String>,
-    provider_revision: u64,
 }
 
 async fn run(command: &mut Command, evidence: &Path, deadline: Instant, stage: &str) -> Result<()> {
@@ -465,7 +450,7 @@ pub(super) async fn prepare(
         &genesis_public_key,
         network_id.into_genesis_hash(),
     )?;
-    let roster = signed_genesis_voting_peers(&GenesisBlock(bundle.block().clone()))?;
+    let roster = genesis_committee_peers(bundle.block())?;
     ensure!(
         roster.len() == 4,
         "native genesis did not authenticate four voters"
@@ -534,49 +519,6 @@ pub(super) async fn prepare(
         );
         fs::write(path, toml::to_string(&client)?)?;
     }
-    let mut session_id = [0; 32];
-    OsRng
-        .try_fill_bytes(&mut session_id)
-        .map_err(|error| eyre!("fresh session entropy: {error}"))?;
-    ensure!(session_id != [0; 32], "fresh beacon session is zero");
-    let session_name: String = session_id
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    let provider_handles: Vec<_> = (1..=4)
-        .map(|seat| format!("software://beacon/{session_name}/seat-{seat}"))
-        .collect();
-    for handle in &provider_handles {
-        iroha_config::parameters::validate_production_runtime_handle(handle)
-            .map_err(|error| eyre!("invalid public provider handle: {error:?}"))?;
-    }
-    let request_value = Request {
-        schema: "iroha.global-beacon.bootstrap.request.v1".into(),
-        dkg_session: GlobalThresholdBeaconDkgSessionV1 {
-            version: GLOBAL_THRESHOLD_BEACON_VERSION_V1,
-            network_id,
-            session_id,
-            roster_hash: global_threshold_beacon_roster_hash_v1(&roster),
-            committee_size: 4,
-            threshold: 2,
-            start_height: 1,
-            sharing_end_height: 2,
-            complaints_end_height: 3,
-            responses_end_height: 4,
-        },
-        target_roster: roster.clone(),
-        authorization_roster: roster.clone(),
-        provider_handles,
-        provider_revision: 1,
-    };
-    let request = root.join("beacon-request.json");
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&request)?;
-    file.write_all(&json::to_vec(&request_value)?)?;
-    file.sync_all()?;
     ensure!(
         Instant::now() < deadline,
         "beacon fixture deadline after genesis preparation"
@@ -584,7 +526,6 @@ pub(super) async fn prepare(
     Ok(Prepared {
         directory,
         genesis_directory,
-        request,
         roster,
         network_id,
         genesis_public_key,

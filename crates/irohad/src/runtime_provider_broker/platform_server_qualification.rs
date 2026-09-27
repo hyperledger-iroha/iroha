@@ -1693,10 +1693,12 @@ pub(super) struct EndpointPolicy {
     verify_all_ancestors: bool,
 }
 impl EndpointPolicy {
-    /// Return the platform-fixed same-service-UID production policy.
-    pub(super) fn production() -> Self {
+    /// Return the same-service-UID production policy at one validated public path.
+    pub(super) fn production(
+        endpoint_path: &iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath,
+    ) -> Self {
         Self::for_service_uid(
-            PathBuf::from(STOCK_BROKER_ENDPOINT_V1),
+            endpoint_path.as_path().to_path_buf(),
             rustix::process::geteuid().as_raw(),
             true,
         )

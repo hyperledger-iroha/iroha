@@ -1,7 +1,7 @@
 // Terminal authentication and owner retirement on canonical first-release sources.
 
 fn run_terminal_ingress_test(name: &str, test: fn()) {
-    let handle = crate::sumeragi::sumeragi_thread_builder(name)
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder(name)
         .spawn(test)
         .expect("spawn terminal ingress test on the production consensus stack");
     if let Err(payload) = handle.join() {

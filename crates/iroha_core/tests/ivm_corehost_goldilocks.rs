@@ -107,11 +107,11 @@ mod goldilocks {
 
         let authority: AccountId = ALICE_ID.clone();
         let mut host = CoreHost::with_accounts(authority.clone(), Arc::new(vec![authority]));
-        let record = zk::halo2_ipa_ivm_execution_vk_record("ballot", 1)
+        let record = zk::halo2_ipa_ivm_replay_binding_vk_record("ballot", 1)
             .expect("canonical registered Pallas key");
         let id = VerifyingKeyId::new(zk::ZK_BACKEND_HALO2_IPA, "curve_policy");
-        let proof = zk::prove_halo2_ipa_ivm_execution_envelope(
-            zk::IVM_EXECUTION_V1_CANONICAL_CIRCUIT_ID,
+        let proof = zk::prove_halo2_ipa_ivm_replay_binding_envelope(
+            zk::IVM_REPLAY_BINDING_V1_CANONICAL_CIRCUIT_ID,
             record.key.as_ref().expect("inline verifier key"),
             iroha_crypto::Hash::new(b"curve-policy-code"),
             iroha_crypto::Hash::new(b"curve-policy-overlay"),

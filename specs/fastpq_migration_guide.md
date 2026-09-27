@@ -16,7 +16,7 @@ execution model).
 ## Feature Matrix
 | Path | Cargo features to enable | Result | When to use |
 | ---- | ----------------------- | ------ | ----------- |
-| Production prover (default) | _none_ | V1 backend with FFT/LDE planning and batch-derived verifier replay; the [DEEP profile](fastpq_deep_protocol_contract.md) is a separate offline path, not production admission. | Default for all production binaries. |
+| Production transfer prover (default) | _none_ | Canonical masked [DEEP profile](fastpq_deep_protocol_contract.md) with bounded ordinary/AXT verification and explicit source expectations. | Default for supported transfer statements in production binaries. |
 | Optional GPU acceleration | `fastpq_prover/fastpq-gpu` | Enables CUDA/Metal kernels. Production `gpu` mode fails closed when kernels or preflight are unavailable; `cpu` remains the default.【crates/fastpq_prover/Cargo.toml:9】【crates/iroha_core/src/fastpq/lane.rs:228】 | Hosts with supported accelerators. |
 
 ## Build Procedure
@@ -39,20 +39,18 @@ execution model).
    cargo test -p fastpq_prover
    ```
    Run this once per release build to confirm the V1 path before packaging.
-   The public V1 verifier applies `fastpq_prover::VerifyLimits`, checks the
-   canonical batch commitment and public inputs, authenticates sampled LDE query
-   chunks against Merkle paths rooted at `lde_root`, and uses the proof's
-   `lde_domain_size` when deriving query indices. It rebuilds the canonical
-   trace, LDE, and AIR commitments before accepting proof-carried
-   openings. Proof roots, FRI layer commitments, and Merkle siblings use the
-   canonical `GoldilocksDigest384V1` carrier, so malformed field representatives
-   are rejected during construction or decoding. Keep node-facing proof batches
-   within the transition-count, payload, query, and path caps. V1 proofs now carry
-   exactly 16 AIR composition challenges, sampled AIR trace rows, sampled AIR
-   composition openings, and per-round FRI
-   openings; the verifier recomputes the sampled AIR composition value from
-   opened adjacent rows and requires that value to match the FRI base-layer
-   opening.
+   The canonical verifier uses `offline_compact::VerificationLimits`, binds
+   every expected public input and complete statement digest, and authenticates
+   64 row/quotient-mask queries and five FRI folds. It checks all 923 AIR slots
+   at the out-of-domain point and the complete degree-bounded terminal; it
+   rebuilds no private witness, trace or full LDE. Roots and siblings retain all
+   six canonical words of `GoldilocksDigest384V1`. The child frame ceiling is
+   502,895 bytes, and complete wrappers still obey the one-MiB artifact cap.
+   AXT adds independently expected binding, manifest, DA, amount and expiry;
+   finalized-source verification additionally checks the authoritative anchor
+   and ordered source transactions. Metadata-only effects are unsupported by
+   the transfer AIR. Full-prover resource and cryptographic qualification remain
+   explicit evidence obligations.
 
 ### Metal toolchain preparation (macOS)
 1. Install full Xcode and select it with `xcode-select` (or `DEVELOPER_DIR`); the standalone Command Line Tools package is not sufficient for the offline Metal compiler. The macOS build probes both `metal -v` and `metallib -v` but never installs components or clears system caches. If either tool is unavailable, install it explicitly with `xcodebuild -downloadComponent MetalToolchain`; the build warns and falls back to runtime source compilation in the meantime.【crates/fastpq_prover/build.rs:107】【crates/fastpq_prover/src/backend.rs:716】【crates/fastpq_prover/src/metal.rs:2331】

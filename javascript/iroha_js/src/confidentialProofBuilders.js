@@ -4,6 +4,8 @@ import {
 } from "./nativeRuntime.js";
 import { networkIdBytes } from "./networkId.js";
 
+const CONFIDENTIAL_TREE_CAPACITY = 1 << 16;
+
 function requireRecord(value, context) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError(`${context} must be an object`);
@@ -157,6 +159,9 @@ function normalizeLeafIndex(value, context) {
   ) {
     throw new TypeError(`${context} must be an unsigned 32-bit integer`);
   }
+  if (value >= CONFIDENTIAL_TREE_CAPACITY) {
+    throw new TypeError(`${context} must be below the confidential tree capacity (65536)`);
+  }
   return value;
 }
 
@@ -208,19 +213,23 @@ function normalizeConfidentialOutput(value, index, ownerTagRequired) {
   return normalized;
 }
 
-function normalizeRequiredArray(value, context, normalizeEntry) {
+function normalizeRequiredArray(value, context, normalizeEntry, minimum = 0, maximum = Infinity) {
   if (!Array.isArray(value)) {
     throw new TypeError(`${context} must be an array`);
   }
-  return value.map(normalizeEntry);
+  if (value.length < minimum || value.length > maximum) {
+    throw new TypeError(`${context} must contain between ${minimum} and ${maximum} entries`);
+  }
+  return Array.from(value, normalizeEntry);
 }
 
 function normalizeOptionalOutputs(value) {
   if (value === undefined) {
     return [];
   }
-  return normalizeRequiredArray(value, "outputs", (entry, index) =>
-    normalizeConfidentialOutput(entry, index, false),
+  return normalizeRequiredArray(
+    value, "outputs", (entry, index) => normalizeConfidentialOutput(entry, index, false),
+    0, 1,
   );
 }
 
@@ -335,17 +344,20 @@ function buildConfidentialTransferProofV2WithRuntime(
     inputs,
     "inputs",
     normalizeConfidentialInput,
+    1, 2,
   );
   const normalizedOutputs = normalizeRequiredArray(
     outputs,
     "outputs",
     (entry, index) => normalizeConfidentialOutput(entry, index, true),
+    1, 2,
   );
   const normalizedTreeCommitments = normalizeRequiredArray(
     treeCommitments,
     "treeCommitments",
     (entry, index) =>
       normalizeFixed32BinaryLike(entry, `treeCommitments[${index}]`),
+    0, CONFIDENTIAL_TREE_CAPACITY,
   );
   const result = native.buildConfidentialTransferProofV2(
     Buffer.from(
@@ -408,12 +420,14 @@ function buildConfidentialUnshieldProofV2WithRuntime(
     inputs,
     "inputs",
     normalizeConfidentialInput,
+    1, 2,
   );
   const normalizedTreeCommitments = normalizeRequiredArray(
     treeCommitments,
     "treeCommitments",
     (entry, index) =>
       normalizeFixed32BinaryLike(entry, `treeCommitments[${index}]`),
+    0, CONFIDENTIAL_TREE_CAPACITY,
   );
   const result = native.buildConfidentialUnshieldProofV2(
     Buffer.from(
@@ -477,6 +491,7 @@ function buildConfidentialUnshieldProofV3WithRuntime(
     inputs,
     "inputs",
     normalizeConfidentialInput,
+    1, 2,
   );
   const normalizedOutputs = normalizeOptionalOutputs(outputs);
   const normalizedTreeCommitments = normalizeRequiredArray(
@@ -484,6 +499,7 @@ function buildConfidentialUnshieldProofV3WithRuntime(
     "treeCommitments",
     (entry, index) =>
       normalizeFixed32BinaryLike(entry, `treeCommitments[${index}]`),
+    0, CONFIDENTIAL_TREE_CAPACITY,
   );
   const result = native.buildConfidentialUnshieldProofV3(
     Buffer.from(
@@ -542,3 +558,162 @@ export function buildConfidentialUnshieldProofV3(input) {
     input,
   );
 }
+
+/** Failure from the local wallet API; `code` never depends on private values. */
+export class ConfidentialProverError extends Error {
+  constructor(code, message, options) {
+    super(message, options);
+    this.name = "ConfidentialProverError";
+    this.code = code;
+  }
+}
+
+const U128_MAX = (1n << 128n) - 1n;
+
+function walletAmount(value, context) {
+  if (typeof value === "number" && !Number.isSafeInteger(value)) {
+    throw new TypeError(`${context} must use bigint or a decimal string outside the safe integer range`);
+  }
+  const amount = BigInt(normalizeWholeNumberLiteral(value, context));
+  if (amount <= 0n || amount > U128_MAX) {
+    throw new TypeError(`${context} must be a positive u128 amount`);
+  }
+  return amount;
+}
+
+function walletTotal(notes, context) {
+  const total = notes.reduce((sum, note) => sum + walletAmount(note.amount, context), 0n);
+  if (total > U128_MAX) throw new TypeError(`${context} total exceeds u128`);
+  return total;
+}
+
+/** @internal Bind a wallet class to one immutable native runtime for source tests. */
+export function createConfidentialProverClass(nativeRuntime) {
+  return class ConfidentialProver {
+    #key;
+    #network;
+    #asset;
+    #native;
+
+    constructor(options) {
+      // Resolve capability before retaining the key or reading any witness.
+      let native;
+      try {
+        native = resolveNativeRuntimeBinding(nativeRuntime);
+      } catch (cause) {
+        throw new ConfidentialProverError("NATIVE_UNAVAILABLE", "The native confidential proving runtime could not be loaded", { cause });
+      }
+      if (!native || typeof native.proveConfidentialTransfer !== "function" ||
+          typeof native.proveConfidentialRedemption !== "function") {
+        throw new ConfidentialProverError("NATIVE_UNAVAILABLE", "The installed native runtime does not support canonical confidential wallet proving");
+      }
+      try {
+        const { networkId, assetDefinitionId, spendKey } = requireRecord(options, "wallet options");
+        this.#network = Buffer.from(networkIdBytes(networkId, "networkId"));
+        this.#asset = normalizeExactMetadataString(assetDefinitionId, "assetDefinitionId");
+        // Only mutable binary input is accepted; callers can erase their source.
+        if (!(spendKey instanceof Uint8Array) || spendKey.length !== 32 ||
+            spendKey.every((byte) => byte === 0)) {
+          throw new TypeError("spendKey must be a nonzero 32-byte Uint8Array");
+        }
+        this.#key = Buffer.from(spendKey);
+        this.#native = native;
+      } catch (cause) {
+        this.#key?.fill(0);
+        throw new ConfidentialProverError("INVALID_INPUT", cause.message, { cause });
+      }
+      Object.freeze(this);
+    }
+
+    /** Erase this prover's owned key copy and permanently close it. */
+    dispose() {
+      this.#key?.fill(0);
+      this.#key = undefined;
+    }
+
+    #prepare(request) {
+      if (!this.#key) throw new ConfidentialProverError("DISPOSED", "Confidential prover has been disposed");
+      requireRecord(request, "request");
+      const inputs = normalizeRequiredArray(request.inputs, "inputs", normalizeConfidentialInput, 1, 2);
+      // Check exact numeric semantics before the lower-level normalizer stringifies numbers.
+      request.inputs.forEach((input) => walletAmount(input.amount, "input amount"));
+      const leaves = normalizeRequiredArray(request.treeCommitments, "treeCommitments",
+        (entry, index) => normalizeFixed32BinaryLike(entry, `treeCommitments[${index}]`),
+        1, CONFIDENTIAL_TREE_CAPACITY);
+      const indices = new Set();
+      for (const input of inputs) {
+        if (input.leafIndex >= leaves.length) throw new TypeError("input note index lies outside the supplied tree");
+        if (indices.has(input.leafIndex)) throw new TypeError("a confidential spend cannot consume the same note twice");
+        indices.add(input.leafIndex);
+      }
+      return { inputs, leaves, root: normalizeFixed32HexLiteral(request.rootHex, "rootHex"), total: walletTotal(inputs, "inputs") };
+    }
+
+    #prove(relation, prepared, outputs, invoke) {
+      // The native owner clears its private copy; clear our FFI copy on every outcome too.
+      const key = Buffer.from(this.#key);
+      try {
+        const result = normalizeNativeProofResult(invoke(key), "confidential proof", true);
+        if (result.nullifiers.length !== prepared.inputs.length || result.outputCommitments.length !== outputs ||
+            result.root.toString("hex") !== prepared.root) {
+          throw new Error("Native confidential proof returned inconsistent public outputs");
+        }
+        return { relation, ...result };
+      } catch (cause) {
+        throw new ConfidentialProverError("PROVING_FAILED", "Confidential proof generation or verification failed", { cause });
+      } finally {
+        key.fill(0);
+      }
+    }
+
+    /** Prove and locally verify a transfer using internally selected circuit and key. */
+    proveTransfer(request) {
+      let prepared;
+      let outputs;
+      try {
+        prepared = this.#prepare(request);
+        outputs = normalizeRequiredArray(request.outputs, "outputs",
+          (entry, index) => normalizeConfidentialOutput(entry, index, true), 1, 2);
+        request.outputs.forEach((output) => walletAmount(output.amount, "output amount"));
+        if (walletTotal(outputs, "outputs") !== prepared.total) throw new TypeError("transfer input and output totals must match");
+      } catch (cause) {
+        if (cause instanceof ConfidentialProverError) throw cause;
+        throw new ConfidentialProverError("INVALID_INPUT", cause.message, { cause });
+      }
+      return this.#prove("confidential-transfer", prepared, outputs.length, (key) =>
+        this.#native.proveConfidentialTransfer(this.#network, this.#asset, key,
+          prepared.leaves, prepared.inputs, outputs, prepared.root));
+    }
+
+    /** Redeem a positive amount, selecting the full or private-change relation internally. */
+    proveRedemption(request) {
+      let prepared;
+      let amount;
+      let change;
+      try {
+        prepared = this.#prepare(request);
+        amount = walletAmount(request.publicAmount, "publicAmount");
+        if (amount > prepared.total) throw new TypeError("publicAmount exceeds the input total");
+        if (request.change !== undefined) {
+          walletAmount(request.change.amount, "change amount");
+          change = normalizeConfidentialOutput(request.change, 0, false);
+        }
+        const remainder = prepared.total - amount;
+        if ((change === undefined ? 0n : BigInt(change.amount)) !== remainder ||
+            (change !== undefined && remainder === 0n)) {
+          throw new TypeError("supply one exact change note for a nonzero remainder and none for full redemption");
+        }
+      } catch (cause) {
+        if (cause instanceof ConfidentialProverError) throw cause;
+        throw new ConfidentialProverError("INVALID_INPUT", cause.message, { cause });
+      }
+      return this.#prove(change === undefined ? "confidential-redemption" : "confidential-redemption-with-change",
+        prepared, change === undefined ? 0 : 1, (key) =>
+          this.#native.proveConfidentialRedemption(this.#network, this.#asset, key,
+            prepared.leaves, prepared.inputs, amount.toString(), prepared.root, change));
+    }
+  };
+}
+
+/** Canonical local wallet prover. Always dispose it when the wallet operation ends. */
+export const ConfidentialProver = createConfidentialProverClass(defaultNativeRuntime);

@@ -456,16 +456,59 @@ impl SignedBlock {
     }
     /// Return the canonical resultless proposal corresponding to this block.
     ///
-    /// This removes the sole execution-output owner while preserving the complete proposal
-    /// payload, signatures, and proposal-only header.
+    /// Clone the complete proposal payload, signatures, and proposal-only header without
+    /// cloning execution outputs that the returned proposal must omit.
     ///
     /// The commit certificate is removed as well: a proposal never carries finality.
     #[must_use]
     pub fn canonical_resultless_proposal(&self) -> Self {
-        let mut proposal = self.clone();
-        proposal.result = None;
-        proposal.commit_certificate = None;
-        proposal
+        Self {
+            signatures: self.signatures.clone(),
+            payload: self.payload.clone(),
+            result: None,
+            commit_certificate: None,
+        }
+    }
+    /// Compare the exact canonical resultless proposals while borrowing both source graphs.
+    ///
+    /// Both proposals undergo real canonical payload counting and the active archive-limit
+    /// check before comparison. All signatures and all seven payload fields participate;
+    /// only the execution result is ignored. This avoids whole-proposal encoding buffers,
+    /// but instruction equality can still allocate each instruction's encoded payload.
+    ///
+    /// # Errors
+    /// Returns a serialization or length error, including an exceeded active archive limit,
+    /// from either resultless proposal. Callers must not treat two errors as equality.
+    pub fn checked_resultless_proposal_eq(&self, other: &Self) -> Result<bool, NoritoFrameError> {
+        let original_len = self.checked_resultless_payload_len()?;
+        let candidate_len = other.checked_resultless_payload_len()?;
+        Ok(original_len == candidate_len
+            && self.signatures == other.signatures
+            && self.payload == other.payload)
+    }
+    fn checked_resultless_payload_len(&self) -> Result<usize, NoritoFrameError> {
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: None,
+            commit_certificate: None,
+        };
+        let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());
+        let payload_len = norito::core::encoded_payload_len(&proposal)?;
+        // Match the canonical writer's payload-length conversion and archive ceiling.
+        u64::try_from(payload_len).map_err(|_| NoritoFrameError::LengthMismatch)?;
+        enforce_payload_len_limit(payload_len)?;
+        Ok(payload_len)
+    }
+    /// Consume the original block and discard its execution result and finality certificate.
+    ///
+    /// This preserves the proposal payload and signatures without cloning any
+    /// nested transaction or consensus evidence allocation.
+    #[must_use]
+    pub fn into_resultless_proposal(mut self) -> Self {
+        self.result = None;
+        self.commit_certificate = None;
+        self
     }
     /// Borrow this block without its commit certificate: `self` when it carries none, otherwise
     /// an owned copy with the certificate cleared.
@@ -506,11 +549,13 @@ impl SignedBlock {
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        self.borrowed_resultless_wire().map(|wire| Hash::new(&wire))
+        let (prefix, payload) = self.borrowed_resultless_wire_parts()?;
+        Ok(Hash::new_from_chunks(&[&prefix, &payload]))
     }
     /// Encode the resultless proposal by borrowing the exact signed layout, including the
     /// signature set and payload. The frame still uses the canonical `SignedBlock` schema ID.
-    fn borrowed_resultless_wire(&self) -> Result<Vec<u8>, NoritoFrameError> {
+    /// Keep the version/header prefix separate so hashing does not copy the complete payload.
+    fn borrowed_resultless_wire_parts(&self) -> Result<(Vec<u8>, Vec<u8>), NoritoFrameError> {
         let proposal = SignedBlockOutputCandidate {
             signatures: OutputFieldRef(&self.signatures),
             payload: OutputFieldRef(&self.payload),
@@ -518,11 +563,10 @@ impl SignedBlock {
             commit_certificate: None,
         };
         let payload = encode_signed_block_payload(&proposal);
-        let mut frame = Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len());
-        frame.push(self.version());
-        write_signed_block_header(&payload, &mut frame)?;
-        frame.extend_from_slice(&payload);
-        Ok(frame)
+        let mut prefix = Vec::with_capacity(1 + norito::core::Header::SIZE);
+        prefix.push(self.version());
+        write_signed_block_header(&payload, &mut prefix)?;
+        Ok((prefix, payload))
     }
     /// Hash this exact canonical block wire, including deterministic execution results.
     ///
@@ -785,14 +829,11 @@ impl SignedBlock {
     pub fn canonical_wire(&self) -> Result<SignedBlockWire, NoritoFrameError> {
         let payload = encode_signed_block_payload(self);
         let version = self.version();
-        let mut versioned = Vec::with_capacity(1 + payload.len());
-        versioned.push(version);
-        versioned.extend_from_slice(&payload);
         let mut frame = Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len());
         frame.push(version);
         write_signed_block_header(&payload, &mut frame)?;
         frame.extend_from_slice(&payload);
-        Ok(SignedBlockWire { frame, versioned })
+        Ok(SignedBlockWire { frame })
     }
     fn get_genesis_block_creation_time(transactions: &[SignedTransaction]) -> u64 {
         let latest_txn_time = transactions
@@ -1180,17 +1221,12 @@ pub fn frame_versioned_signed_block_bytes(versioned: &[u8]) -> Result<Vec<u8>, N
     out.extend_from_slice(payload);
     Ok(out)
 }
-/// Canonical wire representation of a [`SignedBlock`], exposing both the framed and bare bytes.
+/// Canonical wire representation of a [`SignedBlock`], owning only its framed bytes.
 #[derive(Clone)]
 pub struct SignedBlockWire {
     frame: Vec<u8>,
-    versioned: Vec<u8>,
 }
 impl SignedBlockWire {
-    /// Serialize into an owned `(frame, versioned)` pair, transferring ownership of the buffers.
-    pub fn into_parts(self) -> (Vec<u8>, Vec<u8>) {
-        (self.frame, self.versioned)
-    }
     /// Consume the wire representation, returning the framed bytes.
     pub fn into_vec(self) -> Vec<u8> {
         self.frame
@@ -1203,13 +1239,9 @@ impl SignedBlockWire {
     pub fn to_vec(&self) -> Vec<u8> {
         self.frame.clone()
     }
-    /// Extract the bare versioned payload (version discriminator + Norito payload).
-    pub fn as_versioned(&self) -> &[u8] {
-        &self.versioned
-    }
     /// Return the version byte encoded in this frame.
     pub fn version(&self) -> u8 {
-        self.versioned
+        self.frame
             .first()
             .copied()
             .expect("canonical wire always contains a version byte")
@@ -1434,7 +1466,9 @@ fn decode_versioned_signed_block_inner(
     let canonical = block
         .canonical_wire()
         .map_err(|error| iroha_version::error::Error::NoritoCodec(error.to_string()))?;
-    if canonical.as_versioned() != bare_versioned {
+    if bare_versioned.first().copied() != Some(canonical.version())
+        || bare_versioned.get(1..) != Some(canonical.payload())
+    {
         return Err(iroha_version::error::Error::from(
             norito::core::Error::NonCanonicalEncoding,
         ));
@@ -1454,8 +1488,8 @@ fn decode_framed_versioned_signed_block_inner(
     }
     let view = norito::core::from_bytes_view(framed_payload).map_err(VersionError::from)?;
     let block = view.decode::<SignedBlock>().map_err(VersionError::from)?;
-    // Count under the canonical writer's flags before allocating its payload,
-    // versioned copy and frame. Malformed alternate-layout input must not expand
+    // Count under the canonical writer's flags before allocating its payload
+    // and frame. Malformed alternate-layout input must not expand
     // beyond the already bounded source frame during canonical authentication.
     let canonical_len = {
         let _flags = norito::core::DecodeFlagsGuard::enter(default_encode_flags());
@@ -1674,7 +1708,7 @@ mod tests {
         });
         authorization
     }
-    fn test_pin_intent(
+    pub(super) fn test_pin_intent(
         lane: LaneId,
         epoch: u64,
         sequence: u64,
@@ -1689,7 +1723,7 @@ mod tests {
             .expect("sign deterministic block pin scope");
         DaPinIntent::new(authorization, scope_authorization)
     }
-    fn sample_da_bundle() -> DaCommitmentBundle {
+    pub(super) fn sample_da_bundle() -> DaCommitmentBundle {
         let record = DaCommitmentRecord::new(
             LaneId::new(7),
             1,
@@ -2617,12 +2651,16 @@ mod tests {
         let canonical = block.canonical_wire().expect("canonical wire");
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned block");
         assert_eq!(canonical.version(), block.version());
-        assert_eq!(canonical.as_versioned(), versioned.as_slice());
+        assert_eq!(canonical.version(), versioned[0]);
         assert_eq!(canonical.as_framed(), framed.as_slice());
         assert_eq!(canonical.payload(), &versioned[1..]);
         let decoded = decode_framed_signed_block(canonical.as_framed())
             .expect("decode canonical framed block");
         assert_eq!(decoded, block);
+        let original_frame = canonical.as_framed().as_ptr();
+        let owned_frame = canonical.into_vec();
+        assert_eq!(owned_frame.as_ptr(), original_frame);
+        assert_eq!(owned_frame, framed);
     }
     #[test]
     fn signed_block_decoders_reject_nested_instruction_type_name_alias() {
@@ -2716,7 +2754,10 @@ mod tests {
         let deframed =
             deframe_versioned_signed_block_bytes(wire.as_framed()).expect("deframe framed");
         assert_eq!(deframed.bytes.as_ref(), wire.as_framed());
-        assert_eq!(deframed.bare_versioned.as_ref(), wire.as_versioned());
+        assert_eq!(
+            deframed.bare_versioned.as_ref(),
+            block.encode_versioned().as_slice()
+        );
         let decoded =
             decode_framed_signed_block(wire.as_framed()).expect("decode canonical framed genesis");
         assert_eq!(decoded, block);
@@ -2935,6 +2976,7 @@ mod tests {
         assert!(proposal.commit_certificate().is_none());
         assert!(proposal.is_resultless_proposal());
         assert_eq!(proposal, plain);
+        assert_eq!(certified.clone().into_resultless_proposal(), plain);
         assert!(
             matches!(plain.without_commit_certificate(), Cow::Borrowed(_)),
             "a block without a certificate is borrowed, not copied"
@@ -3198,6 +3240,7 @@ mod tests {
         let mut block = fixture::proposal(0);
         let proposal = block.clone();
         let proposal_hash = block.canonical_proposal_wire_hash().unwrap();
+        assert_eq!(proposal_hash, Hash::new(&proposal.encode_wire().unwrap()));
         assert!(!block.has_results());
         assert!(block.is_resultless_proposal());
         assert_eq!(block.executed_block_wire_hash().unwrap(), proposal_hash);
@@ -3205,6 +3248,7 @@ mod tests {
         assert!(block.has_results());
         assert!(!block.is_resultless_proposal());
         assert_eq!(block.canonical_resultless_proposal(), proposal);
+        assert_eq!(block.clone().into_resultless_proposal(), proposal);
         assert_eq!(block.canonical_proposal_wire_hash().unwrap(), proposal_hash);
         let executed = block.executed_block_wire_hash().unwrap();
         fixture::install(&mut block, vec![], 1).unwrap();

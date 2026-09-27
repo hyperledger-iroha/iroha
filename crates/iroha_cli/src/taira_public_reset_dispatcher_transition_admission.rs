@@ -409,6 +409,46 @@ pub(super) fn validate_sealed_records(
 }
 
 fn protected(plan: &Plan) -> Result<()> {
+    need(
+        !storage::exists(Path::new("/var/lib/taira-epoch-supervisor"))?,
+        "supervisor appeared",
+    )?;
+    need(
+        !storage::exists(Path::new(
+            "/etc/systemd/system/iroha-taira-epoch-supervisor.service",
+        ))?,
+        "supervisor unit appeared",
+    )?;
+    let absent = run_host_command(
+        SYSTEMCTL,
+        &[
+            "show",
+            "--property=LoadState,FragmentPath,DropInPaths,ActiveState,SubState,MainPID,ControlPID,Job",
+            "iroha-taira-epoch-supervisor.service",
+        ],
+        Instant::now() + Duration::from_secs(30),
+    )?;
+    let fields = std::str::from_utf8(&absent)?
+        .lines()
+        .map(|line| {
+            line.split_once('=')
+                .ok_or_else(|| eyre!("malformed supervisor unit"))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    need(
+        fields
+            == BTreeMap::from([
+                ("LoadState", "not-found"),
+                ("FragmentPath", ""),
+                ("DropInPaths", ""),
+                ("ActiveState", "inactive"),
+                ("SubState", "dead"),
+                ("MainPID", "0"),
+                ("ControlPID", "0"),
+                ("Job", ""),
+            ]),
+        "supervisor is not absent",
+    )?;
     for role in &plan.predecessor.occupied {
         let state = Path::new(&role.state.path);
         require_root_directory(state, role.slug != "taira-edge", "protected stopped state")?;
