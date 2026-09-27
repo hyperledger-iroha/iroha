@@ -2415,21 +2415,8 @@ version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
 dependencies = [
- "darling_core 0.23.0",
+ "darling_core",
  "darling_macro",
-]
-
-[[package]]
-name = "darling_core"
-version = "0.20.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d00b9596d185e565c2207a0b01f8bd1a135483d02d9b7b0a54b11da8d53412e"
-dependencies = [
- "fnv",
- "ident_case",
- "proc-macro2",
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -2451,7 +2438,7 @@ version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
 dependencies = [
- "darling_core 0.23.0",
+ "darling_core",
  "quote",
  "syn 2.0.117",
 ]
@@ -2968,13 +2955,6 @@ name = "endi"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "66b7e2430c6dff6a955451e2cfc438f09cea1965a9d6f87f7e3b90decc014099"
-
-[[package]]
-name = "enum_trait_bench"
-version = "2.0.0-rc.2.0"
-dependencies = [
- "criterion",
-]
 
 [[package]]
 name = "enumflags2"
@@ -4943,7 +4923,6 @@ dependencies = [
  "iroha_derive",
  "log",
  "norito",
- "num-traits",
  "strum",
  "thiserror 2.0.18",
  "toml 0.9.12+spec-1.1.0",
@@ -5216,7 +5195,6 @@ dependencies = [
 name = "iroha_derive"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "darling",
  "expect-test",
  "impls",
  "iroha_config_base",
@@ -5341,11 +5319,9 @@ name = "iroha_futures"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "error-stack",
- "iroha_config",
  "iroha_derive",
  "iroha_logger",
  "norito",
- "rand 0.9.4",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -6826,7 +6802,6 @@ version = "0.11.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b33efb3ca6d3b07393750d4030418d594ab1139cee518f0dc88db70fec873587"
 dependencies = [
- "darling_core 0.20.11",
  "manyhow-macros",
  "proc-macro2",
  "quote",

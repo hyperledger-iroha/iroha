@@ -55,7 +55,7 @@ const QUEUE_CAPACITY: usize = 64;
 const RETRANSMIT: Duration = Duration::from_secs(1);
 
 /// A missing pulse is availability, never an empty block or permission to omit randomness.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum BeaconError {
     /// Enough verified shares have not arrived yet.
     #[error("required threshold beacon pulse is pending")]
@@ -230,6 +230,7 @@ pub fn current_requirement(
 }
 
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::beacon::PartialFrame")]
 struct PartialFrame {
     instance: [u8; 32],
     height: u64,
@@ -743,7 +744,7 @@ mod tests {
             keys,
             signers: signers
                 .into_iter()
-                .map(|signer| Arc::new(signer) as Arc<dyn GlobalThresholdBeaconPartialSignerV1>)
+                .map(|signer| -> Arc<dyn GlobalThresholdBeaconPartialSignerV1> { Arc::new(signer) })
                 .collect(),
         }
     }

@@ -290,7 +290,11 @@ impl ReadinessNode {
                 .clone(),
         );
         let world = World::with(
-            [Domain::new("genesis".parse().unwrap()).build(&genesis_account)],
+            [Domain::new(
+                iroha_model_base::domain::DomainId::parse_fully_qualified("genesis.universal")
+                    .expect("genesis domain id"),
+            )
+            .build(&genesis_account)],
             [
                 Account::new(genesis_account.clone()).build(&genesis_account),
                 Account::new(clock_account.clone()).build(&clock_account),

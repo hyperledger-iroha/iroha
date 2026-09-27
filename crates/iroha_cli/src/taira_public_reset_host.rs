@@ -16007,7 +16007,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                     if require_successor_checkpoint(previous.as_ref(), &checkpoint).is_ok() {
                         let report = norito::json!({
                             "schema": "iroha.taira.public-reset.convergence-wave.v1", "wave": (wave as u64),
-                            "height": checkpoint.0, "block_hash": checkpoint.1, "evidence": evidence,
+                            "height": (checkpoint.0), "block_hash": (checkpoint.1), "evidence": evidence,
                         });
                         if !had_prior_receipt {
                             self.publish_local_receipt(&receipt_name, &report)?;

@@ -94,6 +94,22 @@ async fn validator_status_until(
     })?
 }
 
+/// Read a Sumeragi v2 bridge-finality proof of `height` from `client`: always an error.
+///
+/// The catalog and epoch-retention fixtures authenticate v2 finality artifacts (height contexts
+/// with v2 rosters, lane decisions and KAGEMUSHA epoch authorizations). The current node never
+/// writes them, so these reads already failed at runtime; Torii's bridge-finality route now
+/// serves the embedded-certificate `SumeragiFinalityProof`
+/// (`Client::get_next_sumeragi_finality_proof`), which carries none of that v2 context.
+/// TODO(C2): delete with native lane execution and the v2 catalog fixture.
+/// TODO(F8): verify KAGEMUSHA epoch retention against the World attestation schedule instead.
+fn v2_bridge_finality_unavailable<T>(client: &iroha::client::Client, height: u64) -> Result<T> {
+    Err(eyre!(
+        "{} no longer serves Sumeragi v2 bridge-finality proofs (height {height})",
+        client.to_builder().torii_url
+    ))
+}
+
 #[cfg(test)]
 mod status_observation_tests {
     use super::*;
@@ -179,6 +195,17 @@ mod status_observation_tests {
             responses: Mutex::new(responses.into_iter().collect()),
             request_budgets: Mutex::new(Vec::new()),
         })
+    }
+
+    #[test]
+    fn v2_bridge_finality_reads_fail_explicitly() {
+        let client = client(transport([]));
+        let error = v2_bridge_finality_unavailable::<()>(&client, 7).expect_err("never served");
+        let message = error.to_string();
+        assert!(
+            message.contains("status-observation.invalid") && message.contains("height 7"),
+            "{message}"
+        );
     }
 
     #[tokio::test]

@@ -102,7 +102,7 @@ mod current_beacon_tests {
             FinalizedGlobalThresholdBeaconKeySessionRecordV1,
             signed_pulses_fixture_for_roster_and_anchors,
         },
-        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, StateReadOnly, World, WorldReadOnly},
+        state::{GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY, World, WorldReadOnly},
         sumeragi::{
             block_store::Staging,
             certified_chain::CertifiedChain,
@@ -118,7 +118,6 @@ mod current_beacon_tests {
         parameter::system::ConsensusMode,
     };
     use iroha_sumeragi::crypto::NoAttestation;
-    use mv::storage::StorageReadOnly as _;
     use std::{collections::BTreeSet, sync::Arc};
 
     fn predecessor() -> CertifiedTestChain {
@@ -333,7 +332,7 @@ mod current_beacon_tests {
         let mut world = predecessor.state().world.block();
         world
             .parliament_required_beacon_pulse_slots
-            .remove(&(BeaconSessionId::for_network_v1(&pulse.network_id), 5));
+            .remove((BeaconSessionId::for_network_v1(&pulse.network_id), 5));
         world.commit();
         assert!(
             validate(&predecessor, proposal).is_err(),

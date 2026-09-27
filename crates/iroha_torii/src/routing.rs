@@ -2875,7 +2875,6 @@ pub struct RetailRecipientRouteResponseDto {
     pub fi_id: String,
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
-( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasResolveResponseDto {
     pub alias: String,
@@ -31998,7 +31997,6 @@ pub struct ContractViewErrorResponseDto {
     #[norito(default)]
     pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
-( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
 ( Debug, Clone, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
 /// Selects a multisig authority either by its active concrete account id or by stable alias.

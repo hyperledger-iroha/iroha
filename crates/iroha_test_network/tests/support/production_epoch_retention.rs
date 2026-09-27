@@ -5,7 +5,7 @@ use super::*;
 use iroha_core::release_identity::BuildIdentity;
 use iroha_data_model::{
     NetworkId,
-    bridge::BridgeFinalityVerifier,
+    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
     isi::kagemusha_v1::{
         BeaconEpochBindingV1, InstalledBeaconEpochBindingV1,
         KagemushaMintFinalityAuthorityGenerationV1, KagemushaMintFinalityEpochAuthorizationV1,
@@ -13,7 +13,7 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::peer::PeerId;
-use std::{collections::BTreeMap, num::NonZeroU64};
+use std::collections::BTreeMap;
 
 pub(super) const EPOCH_LENGTH: u64 = 11;
 
@@ -132,7 +132,8 @@ pub(super) async fn verify_boundary_chain(
                 builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT.min(remaining);
                 Ok(builder.build()?)
             };
-            let (first, hash) = bounded()?.get_bridge_finality_anchor(NonZeroU64::new(1).unwrap(), network)?;
+            let (first, hash): (BridgeFinalityProof, HashOf<iroha_data_model::block::BlockHeader>) =
+                super::super::v2_bridge_finality_unavailable(&bounded()?, 1)?;
             ensure!(
                 hash == genesis_hash
                     && first.block_header.hash() == genesis_hash
@@ -147,9 +148,9 @@ pub(super) async fn verify_boundary_chain(
             let mut proofs = vec![first];
             let mut expected = initial;
             for next_height in 2..=height {
-                let proof = bounded()?.get_next_bridge_finality_proof(
-                    NonZeroU64::new(next_height).unwrap(), &mut verifier,
-                )?;
+                let proof: BridgeFinalityProof =
+                    super::super::v2_bridge_finality_unavailable(&bounded()?, next_height)?;
+                verifier.verify(&proof)?;
                 let context = &proof.finality_artifact.height_context;
                 ensure!(
                     context.kagemusha_mint_finality_authority == authority

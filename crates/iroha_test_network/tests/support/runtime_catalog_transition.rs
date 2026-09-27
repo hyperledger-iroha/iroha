@@ -116,10 +116,8 @@ impl FixtureFinality {
                 cache.proofs.is_empty(),
                 "unanchored cache contains finality evidence"
             );
-            let (proof, hash) = client.get_bridge_finality_anchor(
-                NonZeroU64::new(1).expect("genesis height"),
-                self.network_id,
-            )?;
+            let (proof, hash): (BridgeFinalityProof, HashOf<BlockHeader>) =
+                super::v2_bridge_finality_unavailable(client, 1)?;
             ensure!(
                 hash == self.genesis_hash && proof.block_header.hash() == self.genesis_hash,
                 "finality anchor is not the fixture's exact signed genesis"
@@ -148,10 +146,8 @@ impl FixtureFinality {
                 .0
                 + 1;
             let mut verifier = cache.verifier.clone().expect("anchored native verifier");
-            let proof = client.get_next_bridge_finality_proof(
-                NonZeroU64::new(next).expect("successor height"),
-                &mut verifier,
-            )?;
+            let proof: BridgeFinalityProof = super::v2_bridge_finality_unavailable(client, next)?;
+            verifier.verify(&proof)?;
             self.validate_fixture_roster(&proof)?;
             cache.proofs.insert(next, proof);
             cache.verifier = Some(verifier);

@@ -11,7 +11,7 @@ use iroha::data_model::{
     prelude::*,
     sumeragi::SumeragiStatus,
 };
-use iroha_test_network::{Network, NetworkBuilder, init_instruction_registry};
+use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, init_instruction_registry};
 use iroha_test_samples::gen_account_in;
 use tokio::runtime::Runtime;
 
@@ -91,15 +91,29 @@ fn wait_for_committed(network: &Network, height: u64, limit: Duration) -> Result
     }
 }
 
-fn committed_height(network: &Network) -> Result<u64> {
-    Ok(network.client().client().get_sumeragi_status()?.committed_height)
+/// The first running peer: clients must not talk to a peer a test shut down (the crashed leader
+/// may be any peer, including the first).
+fn running_peer(network: &Network) -> Result<&NetworkPeer> {
+    network
+        .peers()
+        .iter()
+        .find(|peer| peer.is_running())
+        .ok_or_else(|| eyre::eyre!("no peer is running"))
 }
 
-/// Register a fresh account (the client waits until the transaction is applied), then wait
-/// until every running peer committed its block.
+fn committed_height(network: &Network) -> Result<u64> {
+    Ok(running_peer(network)?
+        .client()
+        .client()
+        .get_sumeragi_status()?
+        .committed_height)
+}
+
+/// Register a fresh account through a running peer (the client waits until the transaction is
+/// applied), then wait until every running peer committed its block.
 fn register_account_everywhere(network: &Network) -> Result<AccountId> {
     let (account, _) = gen_account_in("wonderland");
-    network.client().submit(
+    running_peer(network)?.client().submit(
         Register::account(Account::new(account.clone())),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
