@@ -180,7 +180,7 @@ fn validator_xor_escrow(
             {
                 definitions += 1;
                 ensure!(
-                    register.object.spec() == &iroha::data_model::asset::NumericSpec::fractional(9),
+                    register.object.spec == iroha::data_model::prelude::NumericSpec::fractional(9),
                     "signed XOR definition must have its canonical fractional quantity"
                 );
             }

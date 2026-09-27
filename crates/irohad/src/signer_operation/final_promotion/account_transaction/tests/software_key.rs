@@ -212,7 +212,7 @@ fn role15_software_key_ambiguous_provider_response_exposes_no_transaction_or_pos
         f.account_policy.binding.clone(),
     )
     .unwrap();
-    let before = f.native.finalized_floor().unwrap();
+    let before = f.native.finalized_floor();
     let mut calls = 0;
     let result = authorized.sign_with(
         Arc::clone(f.native.state()),
@@ -226,7 +226,7 @@ fn role15_software_key_ambiguous_provider_response_exposes_no_transaction_or_pos
     );
     assert!(matches!(result, Err(Error::Provider)));
     assert_eq!(calls, 1);
-    assert_eq!(f.native.finalized_floor().unwrap(), before);
+    assert_eq!(f.native.finalized_floor(), before);
 }
 
 #[test]

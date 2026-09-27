@@ -1,8 +1,9 @@
-//! Local native custody and durable finality integration, using software-signed fixtures.
+//! Local native custody and certified finality integration, using software-signed fixtures.
 //!
 //! This is not replicated consensus, state-root certification, or physical HSM qualification.
-//! The existing test-only world commit stages real typed instructions; the independent SCCP
-//! fixture binds their exact block bodies to real three-of-four BLS Commit certificates.
+//! The custody mutations are ordinary signed transactions in blocks of a certified test chain
+//! (`iroha_core::sumeragi::test_chain`): real execution, and each block's local three-of-four BLS
+//! `CommitQC` either verifies or (for the negative cases) does not.
 
 use super::{
     StreamTokenIssuerError, StreamTokenSignerPinsV1,
@@ -10,31 +11,24 @@ use super::{
     signer_test_support::{NOW_MS, PROVIDER, storage_config},
 };
 use iroha_core::{
-    kura::Kura,
-    query::{
-        store::LiveQueryStore,
-        stream_token_custody::{
-            StreamTokenCustodyControlSnapshotV1, read_stream_token_custody_control_at_v1,
-        },
+    query::stream_token_custody::{
+        StreamTokenCustodyControlSnapshotV1, read_stream_token_custody_control_at_v1,
     },
-    smartcontracts::Execute,
     state::{State, StateReadOnly, World},
+    sumeragi::{
+        certified_chain::{CertifiedChain, QcVerification},
+        test_chain::{CertifiedTestChain, Signers, TestChainConfig},
+    },
 };
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
-    block::{BlockHeader, builder::BlockBuilder},
-    isi::sorafs::MutateSorafsStreamTokenCustody,
+    isi::{InstructionBox, sorafs::MutateSorafsStreamTokenCustody},
     permission::{Permission, Permissions},
     sorafs::{capacity::ProviderId, stream_token_custody::SorafsStreamTokenCustodyActionV1},
-    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_executor_data_model::permission::sorafs::CanManageSorafsStreamTokenCustody;
-use iroha_sccp::{
-    SCCP_TAIRA_CHAIN_ID_V1, SccpFinalizedBlockTestFixtureV1,
-    sccp_finalize_taira_block_test_fixture_v1, sccp_taira_finality_network_id_v1,
-};
 use sorafs_manifest::signer::{
     custody::{
         SIGNER_CUSTODY_MAGIC_V1, SIGNER_CUSTODY_VERSION_V1, SignerCustodyAnchorV1,
@@ -48,104 +42,29 @@ use sorafs_manifest::signer::{
         SignerStreamTokenStateSubjectV1, verify_stream_token_signer_current_evidence_v1,
     },
 };
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::sync::Arc;
 
 fn fixture_key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("checked local fixture key")
 }
 
 struct NativeCustodyFixture {
+    chain: CertifiedTestChain,
     state: Arc<State>,
-    kura: Arc<Kura>,
     pins: StreamTokenSignerPinsV1,
     approval: SignerCustodyAnchorV1,
     current: StreamTokenCustodyControlSnapshotV1,
     enrollment: Vec<u8>,
-    finalized: [SccpFinalizedBlockTestFixtureV1; 2],
-}
-
-// Execute the actual permission-checked mutation, then bind the exact corresponding signed
-// instruction and successful result into the fixture block. The existing world-only helper is
-// deliberately not the production consensus commit path or a proof of the resulting WSV root.
-fn execute_fixture_block(
-    state: &mut State,
-    kura: &Kura,
-    key: &KeyPair,
-    now: u64,
-    instruction: MutateSorafsStreamTokenCustody,
-    parent: Option<&SccpFinalizedBlockTestFixtureV1>,
-) -> SccpFinalizedBlockTestFixtureV1 {
-    let height = u64::try_from(state.view().block_hashes().len()).expect("fixture height") + 1;
-    let header = BlockHeader::new(
-        height.try_into().expect("positive height"),
-        state.view().latest_block_hash(),
-        None,
-        now,
-        0,
-    );
-    let authority = AccountId::new(key.public_key().clone());
-    let mut builder = TransactionBuilder::new(
-        *state.network_id_ref(),
-        authority.clone(),
-        FeePaymentIntent::authority(Vec::new(), None),
-    );
-    builder.set_creation_time(Duration::from_millis(now));
-    let signed_transaction = builder
-        .with_instructions([instruction.clone()])
-        .try_sign(key.private_key())
-        .expect("sign exact native mutation fixture transaction");
-    let mut block = state.block(header.clone());
-    let mut tx = block.transaction();
-    instruction
-        .execute(&authority, &mut tx)
-        .expect("actual authorized native mutation");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit isolated native world fixture");
-    let mut builder = BlockBuilder::new(header);
-    builder.push_transaction(signed_transaction);
-    let mut signed = builder
-        .try_build_with_signature(0, key.private_key())
-        .expect("sign fixture proposal");
-    crate::test_utils::attach_fixture_execution_outputs(
-        &mut signed,
-        vec![
-            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(
-                iroha_data_model::block::execution_output::NetworkExecutionOutputV1 {
-                    input_index: 0,
-                    result: iroha_data_model::transaction::TransactionResult::new(Ok(vec![])),
-                    completions: vec![],
-                },
-            ),
-        ],
-    );
-    let finalized = sccp_finalize_taira_block_test_fixture_v1(&signed, parent);
-    let artifact = &finalized.proof().finality_artifact;
-    artifact
-        .verify()
-        .expect("actual four-validator BLS verification");
-    assert_eq!(
-        artifact.height_context.protocol_version,
-        iroha_data_model::block::consensus_v2::PROTOCOL_VERSION
-    );
-    assert_eq!(
-        artifact.height_context.da_layout.encoding,
-        iroha_data_model::block::consensus_v2::PayloadEncoding::ReedSolomon16
-    );
-    assert_eq!(artifact.height_context.roster.len(), 4);
-    assert_eq!(artifact.commit_qc.signers.len(), 3);
-    let hash = signed.hash();
-    let header = signed.header();
-    kura.store_block(Arc::new(signed))
-        .expect("persist exact fixture block");
-    state.push_block_hash_for_testing(hash);
-    state.update_latest_block_header_cache_for_tests(header);
-    finalized
 }
 
 impl NativeCustodyFixture {
+    /// Configuration (height 2) and enrollment (height 3), both certified.
     fn new() -> Self {
+        Self::certified_by([Signers::Quorum, Signers::Quorum])
+    }
+
+    /// Configuration and enrollment blocks whose local `CommitQC`s are signed by `signers`.
+    fn certified_by(signers: [Signers; 2]) -> Self {
         let key = fixture_key(0xA1);
         let authority = AccountId::new(key.public_key().clone());
         let provider = ProviderId::new(PROVIDER);
@@ -160,18 +79,13 @@ impl NativeCustodyFixture {
         world
             .account_permissions_mut_for_testing()
             .insert(authority, permissions);
-        let kura = Kura::blank_kura_for_testing();
-        let mut state = State::new_with_chain_and_network_id_for_testing(
-            world,
-            kura.clone(),
-            LiveQueryStore::start_test(),
-            SCCP_TAIRA_CHAIN_ID_V1.parse().expect("fixture chain"),
-            sccp_taira_finality_network_id_v1(),
-        );
+        let mut chain = CertifiedTestChain::start(TestChainConfig::new(world, NOW_MS - 1_500))
+            .expect("certified fixture chain");
+        let state = Arc::clone(chain.state());
         let pins = StreamTokenSignerPinsV1::from_config(
             &storage_config(1),
-            SCCP_TAIRA_CHAIN_ID_V1,
-            *sccp_taira_finality_network_id_v1().as_bytes(),
+            &state.view().chain_id().to_string(),
+            *state.network_id_ref().as_bytes(),
         )
         .expect("independent public fixture pins")
         .expect("enabled signer_backend profile");
@@ -190,22 +104,22 @@ impl NativeCustodyFixture {
             max_validity_ms: trust.max_validity_ms,
             max_anchor_age_ms: trust.max_anchor_age_ms,
         };
-        let first = execute_fixture_block(
-            &mut state,
-            &kura,
-            &key,
-            NOW_MS - 500,
-            MutateSorafsStreamTokenCustody {
-                provider_id: provider,
-                expected_revision: 0,
-                expected_digest: [0; 32],
-                action: SorafsStreamTokenCustodyActionV1::Configure(
-                    norito::encode_canonical(&policy).expect("canonical policy"),
-                ),
-            },
-            None,
+        let configure = MutateSorafsStreamTokenCustody {
+            provider_id: provider,
+            expected_revision: 0,
+            expected_digest: [0; 32],
+            action: SorafsStreamTokenCustodyActionV1::Configure(
+                norito::encode_canonical(&policy).expect("canonical policy"),
+            ),
+        };
+        let at = NOW_MS - 500;
+        let transaction = chain.sign(&key, [InstructionBox::from(configure)], at - 1);
+        assert_eq!(
+            chain.commit_with(Some(at), vec![transaction], signers[0]),
+            [true],
+            "actual authorized native configuration"
         );
-        let approval = read_stream_token_custody_control_at_v1(&state.view(), pins.binding(), 1)
+        let approval = read_stream_token_custody_control_at_v1(&state.view(), pins.binding(), 2)
             .expect("real native approval lookup")
             .expect("configured native control");
         assert!(approval.state.active_head.is_none());
@@ -235,20 +149,19 @@ impl NativeCustodyFixture {
             attestation: signature.payload().try_into().expect("Ed25519 signature"),
         })
         .expect("canonical full enrollment");
-        let second = execute_fixture_block(
-            &mut state,
-            &kura,
-            &key,
-            NOW_MS,
-            MutateSorafsStreamTokenCustody {
-                provider_id: provider,
-                expected_revision: 1,
-                expected_digest: approval.anchor.state_digest,
-                action: SorafsStreamTokenCustodyActionV1::Enroll(enrollment.clone()),
-            },
-            Some(&first),
+        let enroll = MutateSorafsStreamTokenCustody {
+            provider_id: provider,
+            expected_revision: 1,
+            expected_digest: approval.anchor.state_digest,
+            action: SorafsStreamTokenCustodyActionV1::Enroll(enrollment.clone()),
+        };
+        let transaction = chain.sign(&key, [InstructionBox::from(enroll)], NOW_MS - 1);
+        assert_eq!(
+            chain.commit_with(Some(NOW_MS), vec![transaction], signers[1]),
+            [true],
+            "actual authorized native enrollment"
         );
-        let current = read_stream_token_custody_control_at_v1(&state.view(), pins.binding(), 2)
+        let current = read_stream_token_custody_control_at_v1(&state.view(), pins.binding(), 3)
             .expect("real native current lookup")
             .expect("enrolled native control");
         assert_eq!(
@@ -260,38 +173,13 @@ impl NativeCustodyFixture {
             approval.anchor
         );
         Self {
-            state: Arc::new(state),
-            kura,
+            chain,
+            state,
             pins,
             approval: approval.anchor,
             current,
             enrollment,
-            finalized: [first, second],
         }
-    }
-
-    fn persist_finality(&self, index: usize) {
-        let artifact = &self.finalized[index].proof().finality_artifact;
-        let receipt = self
-            .kura
-            .store_v2_finality_artifact(artifact)
-            .expect("durably persist verified complete artifact");
-        assert_eq!(receipt.height(), artifact.height);
-        assert_eq!(receipt.block_hash(), artifact.block_hash);
-        assert_eq!(receipt.context_id(), artifact.context_id());
-        assert_eq!(receipt.certificate(), artifact.commit_qc.as_ref());
-        let reloaded = self
-            .kura
-            .v2_finality_artifact(artifact.height)
-            .expect("verified Kura artifact read")
-            .expect("durable artifact exists");
-        assert_eq!(reloaded, *artifact);
-        assert_eq!(
-            self.kura.get_durable_block_hash(
-                NonZeroUsize::new(usize::try_from(artifact.height).expect("small height")).unwrap()
-            ),
-            Some(artifact.block_hash)
-        );
     }
 
     fn guard(&self) -> CoreFinalityV1 {
@@ -376,24 +264,24 @@ impl NativeCustodyFixture {
 }
 
 #[test]
-fn actual_native_custody_requires_both_durable_artifacts_then_accepts_signed_observation() {
+fn actual_native_custody_requires_both_certified_blocks_then_accepts_signed_observation() {
+    for signers in [
+        [Signers::BelowQuorum, Signers::BelowQuorum],
+        [Signers::Quorum, Signers::BelowQuorum],
+    ] {
+        let fixture = NativeCustodyFixture::certified_by(signers);
+        assert!(matches!(
+            fixture.guard().capture(fixture.approval),
+            Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+        ));
+    }
     let fixture = NativeCustodyFixture::new();
     let guard = fixture.guard();
     let observation = fixture.verified_observation_at(fixture.current.anchor);
-    assert!(matches!(
-        guard.capture(fixture.approval),
-        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
-    ));
-    fixture.persist_finality(0);
-    assert!(matches!(
-        guard.capture(fixture.approval),
-        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
-    ));
-    fixture.persist_finality(1);
     let floor = guard
         .capture(fixture.approval)
-        .expect("real native and durable current floor");
-    assert_eq!(floor.height, 2);
+        .expect("real native and certified current floor");
+    assert_eq!(floor.height, 3);
     assert_eq!(floor.block_hash, fixture.current.anchor.block_hash);
     fixture
         .validate(&guard, floor, fixture.current.anchor, &observation)
@@ -403,8 +291,6 @@ fn actual_native_custody_requires_both_durable_artifacts_then_accepts_signed_obs
 #[test]
 fn actual_native_custody_rejects_same_height_forged_control_digests() {
     let fixture = NativeCustodyFixture::new();
-    fixture.persist_finality(0);
-    fixture.persist_finality(1);
     let guard = fixture.guard();
     let observation = fixture.verified_observation_at(fixture.current.anchor);
     let floor = guard
@@ -461,8 +347,6 @@ fn actual_native_custody_rejects_same_height_forged_control_digests() {
 #[test]
 fn actual_native_custody_retains_history_but_fences_removed_current_provider() {
     let fixture = NativeCustodyFixture::new();
-    fixture.persist_finality(0);
-    fixture.persist_finality(1);
     let guard = fixture.guard();
     let observation = fixture.verified_observation_at(fixture.current.anchor);
     let floor = guard
@@ -471,45 +355,36 @@ fn actual_native_custody_retains_history_but_fences_removed_current_provider() {
     fixture
         .validate(&guard, floor, fixture.current.anchor, &observation)
         .expect("positive validation control");
-    // Isolate the current registry predicate with the existing world-only fixture commit. This
-    // does not append or claim a consensus-certified provider-removal block; both already-durable
-    // finality artifacts and the retained native custody anchors remain exactly the same.
-    let header = BlockHeader::new(
-        3.try_into().unwrap(),
-        fixture.state.view().latest_block_hash(),
-        None,
-        NOW_MS + 1,
-        0,
-    );
-    let mut block = fixture.state.block(header);
-    let mut tx = block.transaction();
+    // Isolate the current registry predicate with a World-only fixture edit. This does not
+    // append or claim a certified provider-removal block; both certified blocks and the
+    // retained native custody anchors remain exactly the same.
+    fixture.chain.setup_world_at(NOW_MS + 1, |tx| {
+        assert_eq!(
+            tx.world_mut_for_testing()
+                .remove_provider_owner_for_testing(ProviderId::new(PROVIDER)),
+            Some(AccountId::new(fixture_key(0xA1).public_key().clone())),
+            "the exact registered provider owner is removed",
+        );
+    });
     assert_eq!(
-        tx.world_mut_for_testing()
-            .remove_provider_owner_for_testing(ProviderId::new(PROVIDER)),
-        Some(AccountId::new(fixture_key(0xA1).public_key().clone())),
-        "the exact registered provider owner is removed",
-    );
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("isolated current registry removal");
-    assert_eq!(
-        read_stream_token_custody_control_at_v1(&fixture.state.view(), fixture.pins.binding(), 2)
+        read_stream_token_custody_control_at_v1(&fixture.state.view(), fixture.pins.binding(), 3)
             .expect("historical custody remains readable")
             .expect("retained control"),
         fixture.current
     );
-    assert_eq!(fixture.state.view().block_hashes().len(), 2);
-    for finalized in &fixture.finalized {
+    assert_eq!(fixture.state.view().block_hashes().len(), 3);
+    let view = fixture.state.view();
+    let reader = CertifiedChain::new(&view).expect("certified chain reader");
+    for height in 2..=3 {
         assert_eq!(
-            fixture
-                .kura
-                .v2_finality_artifact(finalized.proof().finality_artifact.height)
-                .expect("unchanged durable artifact")
-                .as_ref(),
-            Some(&finalized.proof().finality_artifact)
+            reader
+                .certified(height)
+                .expect("unchanged certified block")
+                .verification(),
+            QcVerification::Verified
         );
     }
+    drop(view);
     assert!(matches!(
         guard.capture(fixture.approval),
         Err(StreamTokenIssuerError::SignerFinalityUnavailable)

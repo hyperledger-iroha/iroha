@@ -97,6 +97,11 @@ pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode
 }
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
 pub mod block_store;
+/// The certified-chain reader: committed blocks as their Kura frames certify them.
+pub mod certified_chain;
+/// A certified test chain: real genesis, execution and BLS-certified Kura frames.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub mod test_chain;
 /// The execution result `R` of a block (`specs/sumeragi.md` §4.1).
 pub mod commitment;
 /// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).

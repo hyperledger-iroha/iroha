@@ -83,17 +83,12 @@ pub fn capture_stream_token_authority_v1(
     let custody = read_stream_token_custody_control_at_v1(view, binding, height)
         .map_err(|_| Error::Authority)?
         .ok_or(Error::Authority)?;
-    crate::query::signer_finality::verify_signer_finality_v1(
+    let finality = crate::query::signer_finality::verify_signer_finality_v1(
         view,
         height,
         custody.anchor.block_hash,
     )
     .map_err(|_| Error::Finality)?;
-    let artifact = view
-        .kura()
-        .v2_finality_artifact(height)
-        .map_err(|_| Error::Finality)?
-        .ok_or(Error::Finality)?;
     let control = read_active(view.world(), provider)
         .map_err(|_| Error::Authority)?
         .ok_or(Error::Authority)?;
@@ -119,7 +114,7 @@ pub fn capture_stream_token_authority_v1(
         floor: StreamTokenFinalityFloorV1 {
             height,
             block_hash: custody.anchor.block_hash,
-            context_id: artifact.context_id(),
+            context_id: finality.context_id(),
         },
     })
 }

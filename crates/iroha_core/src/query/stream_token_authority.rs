@@ -49,7 +49,7 @@ pub enum StreamTokenAuthorityErrorV1 {
     Execution,
     /// Bounded historical evidence or finalized challenged Check is unavailable.
     CheckUnavailable,
-    /// Exact signed-RS16 history, Kura/QC association or floor continuity failed.
+    /// Exact certified history, Kura/QC association or floor continuity failed.
     Finality,
 }
 impl std::fmt::Display for StreamTokenAuthorityErrorV1 {

@@ -86,7 +86,7 @@ fn retained_interval_never_renews_original_age_or_deadline() {
         interval(NOW, NOW + 10)
     );
     assert_eq!(f.snapshot(), before);
-    assert_eq!(f.state.view().height(), 3);
+    assert_eq!(f.state.view().height(), 4);
     verified.round.expire_for_test();
     for time in [interval(NOW, NOW), interval(0, u64::MAX)] {
         assert_eq!(verified.recheck_use_interval(time), Err(Error::Expired));
@@ -129,7 +129,7 @@ fn retained_interval_does_not_claim_newer_native_authority() {
         Ok(())
     );
     assert_eq!(verified.snapshot(), &original);
-    assert_eq!(verified.applied_floor().height, 3);
+    assert_eq!(verified.applied_floor().height, 4);
     assert_eq!(f.snapshot(), changed);
     assert_eq!(
         pending

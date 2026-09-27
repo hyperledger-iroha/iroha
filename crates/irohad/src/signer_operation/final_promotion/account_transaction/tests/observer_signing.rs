@@ -172,7 +172,7 @@ fn observer_requires_complete_account_binding_before_key_io_with_unchanged_publi
     let original = f.begin_account_check(&account_prepared);
     assert_eq!(original.binding(), &f.account_policy.binding);
     let instruction = original.instruction().clone();
-    let (height, block_hash, context_id) = f.native.finalized_floor().unwrap();
+    let (height, block_hash, context_id) = f.native.finalized_floor();
     for mutation in 0..8 {
         let mut binding = f.account_policy.binding.clone();
         match mutation {

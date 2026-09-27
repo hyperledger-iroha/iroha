@@ -388,21 +388,25 @@ mod tests {
             .unwrap()
         );
         for error in [
-            derive_confidential_owner_tag_v2(Uint8Array::from(key.to_vec()), None).unwrap_err(),
+            derive_confidential_owner_tag_v2(Uint8Array::from(key.to_vec()), None)
+                .err()
+                .expect("invalid input is rejected"),
             derive_confidential_note_v2(
                 asset.clone(),
                 "17".into(),
                 hex::encode(rho),
                 "private-invalid-owner".into(),
             )
-            .unwrap_err(),
+            .err()
+            .expect("invalid input is rejected"),
             derive_confidential_nullifier_v2(
                 Uint8Array::from(vec![1; 32]),
                 asset,
                 Uint8Array::from(key.to_vec()),
                 "private-invalid-rho".into(),
             )
-            .unwrap_err(),
+            .err()
+            .expect("invalid input is rejected"),
         ] {
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(!error.reason.contains("private-invalid"));

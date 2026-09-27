@@ -125,12 +125,14 @@ fn every_role_signs_exact_payload_through_qualified_facade_with_real_finality() 
 fn invalid_envelopes_are_rejected_before_missing_finality_and_valid_payload_requires_qc() {
     let fixture = Fixture::new_at(1_700_000_000_000);
     let (mut state, kura) = blank_state(*fixture.state.network_id_ref());
-    // A durable complete block and matching State hash alone must never substitute for its QC.
+    // A durable complete block and matching State hash alone must never substitute for its
+    // commit certificate: the copies carry no certificate.
     for height in 1..=fixture.state.view().height() {
         let block = fixture
             .state
             .block_by_height(std::num::NonZeroUsize::new(height).unwrap())
             .unwrap();
+        let block = Arc::new(block.as_ref().clone().with_commit_certificate(None));
         kura.store_block(Arc::clone(&block)).unwrap();
         Arc::get_mut(&mut state)
             .unwrap()

@@ -6,18 +6,13 @@
 //! producing their distinct successes. Historical finality alone is not a current-authority read.
 
 use crate::{
-    kura::KuraV2CommitReceipt,
-    query::signer_finality::verify_signer_finality_v1,
     state::{State, StateReadOnly, StateView, TransactionsReadOnly},
-    sumeragi::v2::VerifiedHeightContext,
+    sumeragi::certified_chain::CertifiedChain,
 };
 use iroha_crypto::{Algorithm, HashOf, Signature};
 use iroha_data_model::{
     account::AccountId,
-    block::{
-        consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
-        proofs::TrustedBlockProofAnchor,
-    },
+    block::consensus_v2::HeightContextId,
     isi::{
         InstructionBox,
         sorafs::{
@@ -38,7 +33,6 @@ use iroha_data_model::{
     },
 };
 use std::{
-    num::NonZeroUsize,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -478,73 +472,28 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
         return Err(Error::NotApplied);
     }
     check_history_span_v1(bound.floor.height, applied_height)?;
-    let mut parent: Option<(V2FinalityArtifact, KuraV2CommitReceipt)> = None;
+    let chain = CertifiedChain::new(&view).map_err(|_| Error::Finality)?;
     let mut check_block_hash = None;
     let mut applied_floor = bound.floor;
-    for height in bound.floor.height..=applied_height {
+    // Each block is the view's, certified by its local `CommitQC`, and extends the previous one.
+    for block in chain.walk(bound.floor.height, applied_height) {
         round.ensure_live()?;
-        let index = usize::try_from(height)
-            .ok()
-            .and_then(NonZeroUsize::new)
-            .ok_or(Error::Finality)?;
-        let hash = *view
-            .block_hashes()
-            .get(index.get() - 1)
-            .ok_or(Error::Finality)?;
-        verify_signer_finality_v1(&view, height, *hash.as_ref()).map_err(|_| Error::Finality)?;
-        let (artifact, receipt) = view
-            .kura()
-            .v2_finality_artifact_with_receipt(height)
-            .map_err(|_| Error::Finality)?
-            .ok_or(Error::Finality)?;
-        let block = view
-            .canonical_block_by_height(index)
-            .map_err(|_| Error::Finality)?;
-        // Bind the exact second artifact/receipt and block used below, even if durable
-        // storage changed after the historical helper's earlier independent read.
-        if artifact.height != height
-            || artifact.block_hash != hash
-            || artifact.height_context.network_id != *view.network_id()
-            || receipt.height() != height
-            || receipt.block_hash() != hash
-            || receipt.context_id() != artifact.context_id()
-            || block.header().height().get() != height
-            || block.hash() != hash
+        let block = block.map_err(|_| Error::Finality)?;
+        let height = block.height();
+        let hash = *block.block_hash().as_ref();
+        if height == bound.floor.height
+            && (hash != bound.floor.block_hash || block.id() != bound.floor.context_id)
         {
             return Err(Error::Finality);
         }
-        if height == bound.floor.height {
-            if *hash.as_ref() != bound.floor.block_hash
-                || artifact.context_id() != bound.floor.context_id
-            {
-                return Err(Error::Finality);
-            }
-        } else {
-            let (previous, previous_receipt) = parent.as_ref().ok_or(Error::Finality)?;
-            VerifiedHeightContext::successor(
-                artifact.height_context.clone(),
-                artifact.validator_set_pops.clone(),
-                previous,
-                previous_receipt,
-                &previous.validator_set_pops,
-            )
-            .map_err(|_| Error::Finality)?;
-            if block.header().prev_block_hash() != Some(previous.block_hash) {
-                return Err(Error::Finality);
-            }
-        }
         if height == check_height {
-            // Verify execution against this same authenticated lineage body. Keeping only
-            // its hash avoids a second Kura body read or a whole-block overlap while
-            // the remaining finalized successor chain is checked below.
-            let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-                &block,
-                &artifact,
-                artifact.context_id(),
-                &entry_hash,
-            )
-            .map_err(|_| Error::Execution)?;
-            let proofs = block
+            // Verify execution against this same certified lineage body: the anchor binds the
+            // executed wire the certified result commits.
+            let anchor = block
+                .entry_anchor(&entry_hash)
+                .map_err(|_| Error::Execution)?;
+            let body = block.block();
+            let proofs = body
                 .network_execution_proof(&entry_hash)
                 .ok_or(Error::Execution)?;
             if !proofs.verify(&anchor) {
@@ -552,10 +501,10 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
             }
             let entry_index =
                 usize::try_from(anchor.entry_index()).map_err(|_| Error::Execution)?;
-            let actual = block
+            let actual = body
                 .network_entrypoint_at(entry_index)
                 .ok_or(Error::Execution)?;
-            let (_, output) = block
+            let (_, output) = body
                 .network_output_at(anchor.entry_index())
                 .ok_or(Error::Execution)?;
             if bounded_entry(actual).map_err(|_| Error::Execution)? != bound.entry_bytes
@@ -563,14 +512,13 @@ pub(crate) fn authenticate_applied_check_v1<'state>(
             {
                 return Err(Error::Execution);
             }
-            check_block_hash = Some(*block.hash().as_ref());
+            check_block_hash = Some(hash);
         }
         applied_floor = NativeCheckFloorV1 {
             height,
-            block_hash: *hash.as_ref(),
-            context_id: artifact.context_id(),
+            block_hash: hash,
+            context_id: block.id(),
         };
-        parent = Some((artifact, receipt));
     }
     round.ensure_live()?;
     let check_block_hash = check_block_hash.ok_or(Error::Execution)?;

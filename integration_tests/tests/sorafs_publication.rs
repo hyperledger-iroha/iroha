@@ -5,7 +5,7 @@
 //! use explicit software custody and bounded authenticated source transport, without State writes.
 
 use super::{
-    sorafs_network::{bounded_storage, prepare_transaction, submit_instruction},
+    sorafs_network::{bounded_storage, submit_instruction},
     sorafs_publication_authority::PublicationAuthorityFixture,
     sorafs_publication_compliance::PublicationComplianceFixture,
     sorafs_publication_config::{ProviderFixture, set},
@@ -25,7 +25,6 @@ use iroha_data_model::{
     prelude::*,
     query::sorafs::prelude::FindSorafsRepairTask,
     sorafs::{
-        capacity::ProviderId,
         moderation_ledger::RepairLedgerTerminalKindV1,
         pin_registry::{ManifestDigest, StorageClass},
         pricing::ProviderCreditRecord,
@@ -348,7 +347,7 @@ pub(super) async fn create_and_publish(
     .with_genesis_instruction(Register::domain(Domain::new(domain)))
     .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
         asset.clone(),
-        "Publication reserve".into(),
+        "Publication reserve",
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )))

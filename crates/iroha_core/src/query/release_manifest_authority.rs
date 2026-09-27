@@ -72,7 +72,7 @@ pub struct ReleaseManifestCustodySnapshotV1 {
 pub struct ReleaseManifestCustodyBlockFinalityV1 {
     /// Raw role-13 custody retained at the current State height.
     custody: ReleaseManifestCustodySnapshotV1,
-    /// Exact same-State durable block and revision-4 Kura/QC finality.
+    /// Exact same-State durable block and its certified Kura/QC finality.
     block_finality: VerifiedSignerFinalityV1,
 }
 impl ReleaseManifestCustodyBlockFinalityV1 {

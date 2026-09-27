@@ -1,10 +1,14 @@
-//! Actual native instructions and exact result-bearing blocks with real test-only BLS finality.
+//! Actual native instructions in blocks of a certified test chain (real BLS `CommitQC`s of a
+//! fixed four-validator committee; height 1 is the signed genesis).
 //!
-//! World/frontier test commits are deliberately not a consensus application-state-root proof.
-//! Custody attestations are software-signed fixtures and do not qualify a physical device.
+//! The chain is not a consensus application-state-root proof. Custody attestations are
+//! software-signed fixtures and do not qualify a physical device.
 
 use super::*;
-use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
+use crate::{
+    query::signer_check::fixture as chain_fixture, state::World,
+    sumeragi::test_chain::CertifiedTestChain,
+};
 use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::{
     IntoKeyValue, Registrable,
@@ -16,9 +20,6 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::sorafs::{
     CanCheckSorafsFinalPromotion, CanManageSorafsFinalPromotionAccountCustody,
     CanManageSorafsFinalPromotionCustody, CanOperateSorafsFinalPromotion,
-};
-use iroha_sccp::{
-    SCCP_TAIRA_CHAIN_ID_V1, SccpFinalizedBlockTestFixtureV1, sccp_taira_finality_network_id_v1,
 };
 use sorafs_manifest::{
     self as manifest,
@@ -52,7 +53,7 @@ pub(super) struct Fixture {
     pub(super) state: Arc<State>,
     pub(super) policy: SignerCustodyPolicyV1,
     pub(super) account_policy: SignerCustodyPolicyV1,
-    pub(super) finalized: Vec<SccpFinalizedBlockTestFixtureV1>,
+    pub(super) chain: CertifiedTestChain,
     pub(super) reserve_signed: Option<SignedTransaction>,
     pub(super) reserve_floor: Option<FinalPromotionCheckFloorV1>,
 }
@@ -110,17 +111,12 @@ impl Fixture {
             }
             world.account_permissions.insert(authority, permissions);
         }
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            world,
-            Kura::blank_kura_for_testing(),
-            LiveQueryStore::start_test(),
-            SCCP_TAIRA_CHAIN_ID_V1.parse().unwrap(),
-            sccp_taira_finality_network_id_v1(),
-        ));
+        let chain = chain_fixture::chain(world);
+        let state = Arc::clone(chain.state());
         let policy = SignerCustodyPolicyV1 {
             binding: SignerCustodyBindingV1 {
-                chain_id: SCCP_TAIRA_CHAIN_ID_V1.into(),
-                network_id: *sccp_taira_finality_network_id_v1().as_bytes(),
+                chain_id: state.chain_id_ref().to_string(),
+                network_id: *state.network_id_ref().as_bytes(),
                 runtime_handle: "software://sorafs/final-promotion-provenance/primary".into(),
                 key_handle: "software://sorafs/final-promotion-provenance/key-1".into(),
                 service_id: "promotion-service".into(),
@@ -165,7 +161,7 @@ impl Fixture {
             state,
             policy,
             account_policy,
-            finalized: Vec::new(),
+            chain,
             reserve_signed: None,
             reserve_floor: None,
         };
@@ -224,7 +220,7 @@ impl Fixture {
         let account = crate::query::final_promotion_account_custody::read_final_promotion_account_custody_at_v1(
             &f.state.view(),
             &f.account_policy.binding,
-            1,
+            2,
         )
         .unwrap()
         .unwrap();
@@ -326,7 +322,7 @@ impl Fixture {
             &prepared,
         )
         .unwrap();
-        let proof = &self.finalized.last().unwrap().proof().finality_artifact;
+        let tip = self.chain.committed(self.chain.height());
         FinalPromotionCheckExpectedV1 {
             binding,
             observer: AccountId::new(key(3).public_key().clone()),
@@ -336,9 +332,9 @@ impl Fixture {
             control_revision: current.control_record.revision,
             control_digest: current.custody_anchor.state_digest,
             floor: FinalPromotionCheckFloorV1 {
-                height: proof.height,
-                block_hash: *proof.block_hash.as_ref(),
-                context_id: proof.context_id(),
+                height: tip.height(),
+                block_hash: *tip.block_hash().as_ref(),
+                context_id: tip.id(),
             },
         }
     }
@@ -358,7 +354,7 @@ impl Fixture {
         seed: u8,
         now: u64,
     ) -> SignedTransaction {
-        crate::query::signer_check::fixture::sign(&self.state, instruction, seed, now)
+        chain_fixture::sign(&self.state, instruction, seed, now)
     }
 
     pub(super) fn pending(&self) -> PendingFinalPromotionCheckV1 {
@@ -367,6 +363,9 @@ impl Fixture {
         prepared.bind_signed_transaction(signed).unwrap()
     }
 
+    /// Commit `transactions` in one block at `now`. Without `membership` the State indexes them
+    /// at genesis instead of their block; without `finality` the block's local `CommitQC` does
+    /// not verify.
     pub(super) fn commit(
         &mut self,
         now: u64,
@@ -374,13 +373,14 @@ impl Fixture {
         membership: bool,
         finality: bool,
     ) -> Vec<bool> {
-        crate::query::signer_check::fixture::commit(
-            &self.state,
-            &mut self.finalized,
-            now,
-            transactions,
-            membership,
-            finality,
-        )
+        let outcomes = if finality {
+            chain_fixture::commit(&mut self.chain, now, transactions.clone())
+        } else {
+            chain_fixture::commit_uncertified(&mut self.chain, now, transactions.clone())
+        };
+        if !membership {
+            chain_fixture::misplace_membership(&self.chain, &transactions);
+        }
+        outcomes
     }
 }

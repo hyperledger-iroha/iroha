@@ -1,12 +1,14 @@
 //! No-write native role-11 Check predicate over the executing State transaction.
 //!
-//! The submitted floor is checked against State and durable Kura/QC here. An observer must still
+//! The submitted floor is checked against State and its committed Kura frame here (the certified
+//! block id of its header and result, never the node-local `CommitQC`). An observer must still
 //! independently pin that floor before signing and authenticate the eventual successful Check,
 //! original operation execution and private receipt before any token is released.
 
 use super::*;
 use crate::query::stream_token_authority::eligibility::{check_live_custody, checked_phase};
 use crate::query::stream_token_custody::NativeControl;
+use crate::sumeragi::certified_chain::committed_block;
 use iroha_data_model::sorafs::stream_token_authority::{
     STREAM_TOKEN_AUTHORITY_REQUEST_MAX_BYTES_V1, StreamTokenCheckV1, StreamTokenFinalityFloorV1,
     validate_stream_token_check_claim_v1,
@@ -40,20 +42,10 @@ fn check_floor(
     if tx.block_hashes().get(offset).map(|hash| *hash.as_ref()) != Some(floor.block_hash) {
         return Err(Error::Finality);
     }
-    verify_signer_finality_v1(tx, floor.height, floor.block_hash).map_err(|_| Error::Finality)?;
-    let (artifact, receipt) = tx
-        .kura()
-        .v2_finality_artifact_with_receipt(floor.height)
-        .map_err(|_| Error::Finality)?
-        .ok_or(Error::Finality)?;
-    if artifact.height != floor.height
-        || *artifact.block_hash.as_ref() != floor.block_hash
-        || artifact.height_context.network_id != *tx.network_id()
-        || artifact.context_id() != floor.context_id
-        || receipt.height() != floor.height
-        || *receipt.block_hash().as_ref() != floor.block_hash
-        || receipt.context_id() != floor.context_id
-    {
+    // Consensus-visible data only: the floor's committed header and result preimage, never the
+    // node-local `CommitQC` (certificates are per node).
+    let committed = committed_block(tx, floor.height).map_err(|_| Error::Finality)?;
+    if *committed.block_hash().as_ref() != floor.block_hash || committed.id() != floor.context_id {
         return Err(Error::Finality);
     }
     Ok(())

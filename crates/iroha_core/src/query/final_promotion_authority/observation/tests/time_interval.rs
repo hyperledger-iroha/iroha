@@ -53,8 +53,8 @@ fn finite_utc_interval_requires_both_custody_endpoints_at_one_applied_cut() {
             (Ok(verified), None) => {
                 assert_eq!(verified.eligibility_time_interval(), time);
                 assert_eq!(verified.snapshot(), &f.snapshot());
-                assert_eq!(verified.check_height(), 3);
-                assert_eq!(verified.applied_floor().height, 3);
+                assert_eq!(verified.check_height(), 4);
+                assert_eq!(verified.applied_floor().height, 4);
                 verified.ensure_live().unwrap();
             }
             (Err(actual), Some(expected)) => assert_eq!(actual, expected),
@@ -141,7 +141,7 @@ fn reserved_interval_checks_execution_lower_bound_and_exclusive_expiry_upper_bou
                 let verified = result.unwrap();
                 assert_eq!(verified.eligibility_time_interval(), time);
                 assert_eq!(verified.snapshot().operation.as_ref(), Some(&row));
-                assert_eq!(verified.applied_floor().height, 4);
+                assert_eq!(verified.applied_floor().height, 5);
             } else {
                 assert_eq!(result.err(), Some(Error::Authority));
             }

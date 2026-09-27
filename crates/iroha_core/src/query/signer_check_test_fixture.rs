@@ -1,46 +1,40 @@
-//! Exact native execution and fixed-roster finality for cross-crate Check tests.
+//! Exact native execution on a certified test chain for cross-crate Check tests.
 //!
-//! Available only for Core tests or the existing `iroha-core-tests` feature. The fixture
-//! owns its empty native history and fixed SCCP network, constructs aligned results through
-//! actual native execution, and retains its own three-of-four BLS / RS16 parent chain.
-//! Its software signatures and test frontier commits do not qualify deployed consensus,
-//! production custody, a production application-state root or an independent floor store.
-//! It bypasses ordinary admission and fees. Only custody, observer/operator permission and
-//! account removal, role registration and Log instructions under the initial executor with an
-//! empty trigger registry can enter its typed outputs.
+//! Available only for Core tests or the existing `iroha-core-tests` feature. The fixture owns a
+//! [`CertifiedTestChain`]: a signed genesis with a fixed four-validator committee and blocks built,
+//! executed and applied through the node's block path, each certified by a real BLS `CommitQC`, so
+//! the Check proof consumers accept its history as they accept a running node's. Its software
+//! signatures do not qualify deployed consensus, production custody, a production
+//! application-state root or an independent floor store. Account and permission setup is the
+//! initial World, never finalized history.
 use crate::{
-    kura::Kura,
-    query::{signer_check::fixture, store::LiveQueryStore},
-    state::{State, StateReadOnly, World},
+    query::signer_check::fixture,
+    state::{State, World},
+    sumeragi::test_chain::CertifiedTestChain,
 };
-use iroha_data_model::{
-    block::consensus_v2::HeightContextId,
-    transaction::{Executable, SignedTransaction},
-};
-use iroha_sccp::{
-    SCCP_TAIRA_CHAIN_ID_V1, SccpFinalizedBlockTestFixtureV1, sccp_taira_finality_network_id_v1,
-};
+use iroha_data_model::{block::consensus_v2::HeightContextId, transaction::SignedTransaction};
 use mv::storage::StorageReadOnly;
 use std::sync::Arc;
 
-/// Owns one empty-start native test State and its exact fixed-roster finalized parents.
+/// Owns one native test chain whose custody history starts empty.
 ///
 /// No constructor accepts a finality artifact, retained history, Check success or verified
 /// authority. Callers obtain real Check capabilities only through the public proof consumers.
 pub struct NativeCheckTestFixtureV1 {
+    chain: CertifiedTestChain,
     state: Arc<State>,
-    finalized: Vec<SccpFinalizedBlockTestFixtureV1>,
 }
 
 impl NativeCheckTestFixtureV1 {
-    /// Execute account registration and scoped grants for a final-promotion test deployment.
+    /// Register the three role accounts and grant their scoped final-promotion permissions in
+    /// the initial World of a new chain.
     ///
     /// This is fixture setup, not genesis or finalized history. Manager receives the two custody
     /// management permissions, operator receives Operate, and observer receives both Checks.
     /// All custody policies, enrollments and operations must still execute through `commit`.
     ///
     /// # Panics
-    /// Panics on equal role accounts, invalid setup instructions or unavailable fixture storage.
+    /// Panics on equal role accounts or when the chain cannot start.
     #[must_use]
     pub fn with_final_promotion_accounts(
         deployment: &str,
@@ -48,12 +42,10 @@ impl NativeCheckTestFixtureV1 {
         operator: iroha_data_model::account::AccountId,
         observer: iroha_data_model::account::AccountId,
     ) -> Self {
-        use crate::smartcontracts::Execute;
         use iroha_data_model::{
+            IntoKeyValue, Registrable,
             account::Account,
-            block::BlockHeader,
-            isi::{Grant, Register},
-            permission::Permission,
+            permission::{Permission, Permissions},
         };
         use iroha_executor_data_model::permission::sorafs::{
             CanCheckSorafsFinalPromotion, CanCheckSorafsFinalPromotionAccountCustody,
@@ -61,91 +53,71 @@ impl NativeCheckTestFixtureV1 {
             CanOperateSorafsFinalPromotion,
         };
         assert!(manager != operator && manager != observer && operator != observer);
-        let fixture = Self::new(World::new());
-        let mut block = fixture.state.block(BlockHeader::new(
-            std::num::NonZeroU64::MIN,
-            None,
-            None,
-            0,
-            0,
-        ));
-        let mut transaction = block.transaction();
+        let mut world = World::new();
         for id in [&manager, &operator, &observer] {
-            Register::account(Account::new(id.clone()))
-                .execute(&manager, &mut transaction)
-                .expect("register native Check fixture account");
+            let (id, account) = Account::new(id.clone()).build(&manager).into_key_value();
+            world.accounts.insert(id, account);
         }
-        let grants: [(Permission, &iroha_data_model::account::AccountId); 5] = [
+        let grants: [(&iroha_data_model::account::AccountId, Vec<Permission>); 3] = [
             (
-                CanManageSorafsFinalPromotionCustody {
-                    deployment_id: deployment.into(),
-                }
-                .into(),
                 &manager,
+                vec![
+                    CanManageSorafsFinalPromotionCustody {
+                        deployment_id: deployment.into(),
+                    }
+                    .into(),
+                    CanManageSorafsFinalPromotionAccountCustody {
+                        deployment_id: deployment.into(),
+                    }
+                    .into(),
+                ],
             ),
             (
-                CanManageSorafsFinalPromotionAccountCustody {
-                    deployment_id: deployment.into(),
-                }
-                .into(),
-                &manager,
-            ),
-            (
-                CanOperateSorafsFinalPromotion {
-                    deployment_id: deployment.into(),
-                }
-                .into(),
                 &operator,
+                vec![
+                    CanOperateSorafsFinalPromotion {
+                        deployment_id: deployment.into(),
+                    }
+                    .into(),
+                ],
             ),
             (
-                CanCheckSorafsFinalPromotion {
-                    deployment_id: deployment.into(),
-                }
-                .into(),
                 &observer,
-            ),
-            (
-                CanCheckSorafsFinalPromotionAccountCustody {
-                    deployment_id: deployment.into(),
-                }
-                .into(),
-                &observer,
+                vec![
+                    CanCheckSorafsFinalPromotion {
+                        deployment_id: deployment.into(),
+                    }
+                    .into(),
+                    CanCheckSorafsFinalPromotionAccountCustody {
+                        deployment_id: deployment.into(),
+                    }
+                    .into(),
+                ],
             ),
         ];
-        for (permission, account) in grants {
-            Grant::account_permission(permission, account.clone())
-                .execute(&manager, &mut transaction)
-                .expect("grant scoped native Check fixture permission");
+        for (account, grants) in grants {
+            let mut permissions = Permissions::new();
+            permissions.extend(grants);
+            world
+                .account_permissions
+                .insert(account.clone(), permissions);
         }
-        transaction.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit native Check fixture setup");
-        fixture
+        Self::new(world)
     }
 
-    /// Start the fixed test network from account/permission setup with no native custody rows.
+    /// Start the test chain from account/permission setup with no native custody rows.
     ///
     /// # Panics
-    /// Panics if any contract-state history is supplied or a local test store cannot initialize.
+    /// Panics if any contract-state history is supplied or the chain cannot start.
     #[must_use]
     pub fn new(world: World) -> Self {
         assert!(
             world.smart_contract_state.view().iter().next().is_none(),
             "native Check fixtures must execute their own custody history"
         );
-        Self {
-            state: Arc::new(State::new_with_chain_and_network_id_for_testing(
-                world,
-                Kura::blank_kura_for_testing(),
-                LiveQueryStore::start_test(),
-                SCCP_TAIRA_CHAIN_ID_V1
-                    .parse()
-                    .expect("fixed test chain identity"),
-                sccp_taira_finality_network_id_v1(),
-            )),
-            finalized: Vec::new(),
-        }
+        let chain = fixture::chain(world);
+        let state = Arc::clone(chain.state());
+        Self { chain, state }
     }
 
     /// Borrow the exact State used by native execution and the public Check proof consumers.
@@ -154,67 +126,32 @@ impl NativeCheckTestFixtureV1 {
         &self.state
     }
 
-    /// Execute exact signed native entries and retain their actual outcomes and real test finality.
-    ///
-    /// This always records aligned membership and durable finality. It has no bypass flags.
-    /// Failed native instructions retain their rejection result, with their transaction discarded.
-    /// The existing SCCP fixture supports only heights 1 through 9 before its epoch boundary.
+    /// Execute signed transactions in one certified block at `now` and return whether each
+    /// executed successfully (failed transactions keep their rejection result in the block).
     ///
     /// # Panics
-    /// Panics before execution for a foreign network, unsupported instruction or executor,
-    /// registered trigger, invalid signature, altered State frontier or an exhausted fixture epoch.
-    /// Panics on an internal fixture error.
+    /// Panics before any publication for a transaction the chain does not accept (for example,
+    /// another network's); panics if the block does not execute.
     pub fn commit(&mut self, now: u64, transactions: Vec<SignedTransaction>) -> Vec<bool> {
-        assert!(self.finalized.len() < 9, "fixed fixture epoch is exhausted");
-        {
-            let view = self.state.view();
-            assert_eq!(
-                view.height(),
-                self.finalized.len(),
-                "fixture frontier changed"
-            );
-            assert_eq!(
-                view.latest_block_hash(),
-                self.finalized.last().map(|parent| parent.block().hash()),
-                "fixture parent changed"
-            );
-            assert_eq!(view.network_id(), &sccp_taira_finality_network_id_v1());
-            assert_eq!(view.chain_id().to_string(), SCCP_TAIRA_CHAIN_ID_V1);
-        }
-        for transaction in &transactions {
-            assert_eq!(transaction.network_id(), Some(self.state.network_id_ref()));
-            assert!(matches!(
-                transaction.instructions(),
-                Executable::Instructions(_)
-            ));
-            transaction
-                .verify_signature()
-                .expect("exact signed fixture entry");
-        }
-        fixture::commit(
-            &self.state,
-            &mut self.finalized,
-            now,
-            transactions,
-            true,
-            true,
-        )
+        fixture::commit(&mut self.chain, now, transactions)
     }
 
-    /// Return coordinates from this fixture's own last signed parent, never from a candidate.
+    /// Return coordinates of the chain's last certified block, never from a candidate: its
+    /// height, block hash and certified block id.
     ///
-    /// `None` denotes the empty start. Callers copy these test coordinates into the distinct
-    /// purpose-owned floor DTO before beginning a Check; they are not production floor trust.
+    /// Callers copy these test coordinates into the distinct purpose-owned floor DTO before
+    /// beginning a Check; they are not production floor trust. The signed genesis is the first
+    /// floor.
     #[must_use]
-    pub fn finalized_floor(&self) -> Option<(u64, [u8; 32], HeightContextId)> {
-        self.finalized.last().map(|parent| {
-            let artifact = &parent.proof().finality_artifact;
-            (
-                artifact.height,
-                *artifact.block_hash.as_ref(),
-                artifact.context_id(),
-            )
-        })
+    pub fn finalized_floor(&self) -> (u64, [u8; 32], HeightContextId) {
+        let tip = self.chain.committed(self.chain.height());
+        (tip.height(), *tip.block_hash().as_ref(), tip.id())
+    }
+
+    /// The certified chain.
+    #[must_use]
+    pub fn chain(&self) -> &CertifiedTestChain {
+        &self.chain
     }
 }
 

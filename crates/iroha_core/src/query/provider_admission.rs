@@ -3,6 +3,7 @@
 use crate::{
     query::signer_finality::verify_signer_finality_v1,
     state::{StateReadOnly, WorldReadOnly},
+    sumeragi::certified_chain::committed_block,
 };
 use iroha_data_model::sorafs::{
     capacity::ProviderId,
@@ -237,7 +238,7 @@ fn active_record(
         .map_err(|_| ProviderAdmissionErrorV1)
 }
 
-/// Read one provider against the exact current State head and its durable revision-4 finality.
+/// Read one provider against the exact current State head and its certified Kura frame.
 /// Absence/revocation returns `None`; stale, corrupt or unavailable authority fails closed.
 /// Local time must satisfy issuance; expiry uses the later of local and finalized block time.
 pub fn read_finalized_provider_admission_v1(
@@ -336,7 +337,6 @@ fn authenticate_genesis_record(
 ) -> Result<Option<sorafs_manifest::provider_admission::ProviderAdmissionGenesisMaterialV1>, Error>
 {
     use iroha_data_model::{
-        block::proofs::TrustedBlockProofAnchor,
         isi::sorafs::InitializeSorafsProviderAdmissionV1,
         transaction::{Executable, TransactionEntrypoint},
     };
@@ -345,9 +345,10 @@ fn authenticate_genesis_record(
     if head.height != 1 || head.revision != 1 || head.predecessor.is_some() || head.revoked {
         return Err(invalid);
     }
-    let genesis = view
-        .canonical_block_by_height(std::num::NonZeroUsize::MIN)
-        .map_err(|_| invalid)?;
+    // The signed genesis is the chain's trust root: its frame's result-only certificate commits
+    // its executed wire, which anchors the initializer's entry and output.
+    let committed = committed_block(view, 1).map_err(|_| invalid)?;
+    let genesis = committed.block();
     let hash = genesis.hash();
     if hash.as_ref() != view.network_id().as_bytes()
         || head.network_id != *view.network_id().as_bytes()
@@ -356,12 +357,6 @@ fn authenticate_genesis_record(
     {
         return Err(invalid);
     }
-    verify_signer_finality_v1(view, 1, *hash.as_ref()).map_err(|_| invalid)?;
-    let proof = view
-        .kura()
-        .v2_finality_artifact(1)
-        .map_err(|_| invalid)?
-        .ok_or(invalid)?;
     let entry = genesis
         .network_entrypoint_at(origin.entrypoint_index as usize)
         .ok_or(invalid)?;
@@ -372,13 +367,7 @@ fn authenticate_genesis_record(
         return Err(invalid);
     }
     signed.verify_signature().map_err(|_| invalid)?;
-    let anchor = TrustedBlockProofAnchor::from_untrusted_finality_artifact(
-        &genesis,
-        &proof,
-        proof.context_id(),
-        &entry.hash(),
-    )
-    .map_err(|_| invalid)?;
+    let anchor = committed.entry_anchor(&entry.hash()).map_err(|_| invalid)?;
     if anchor.entry_index() != origin.entrypoint_index
         || !genesis
             .network_execution_proof(&entry.hash())

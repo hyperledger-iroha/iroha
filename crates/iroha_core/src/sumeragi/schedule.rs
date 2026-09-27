@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 
 use iroha_crypto::Algorithm;
 use iroha_data_model::{
+    block::SignedBlock,
     consensus::ConsensusKeyRole,
     isi::RegisterBox,
     parameter::system::{SumeragiParameter, SumeragiParameters},
@@ -413,7 +414,10 @@ pub fn scheduled_committee(
 /// driver's cryptography to admit (`specs/sumeragi.md` §1.6); members without a live PoP are
 /// left out (their keys stay unadmitted and certificates naming them fail).
 #[must_use]
-pub fn committee_pops(world: &impl WorldReadOnly, config: &ScheduledConfig) -> Vec<(PeerId, Vec<u8>)> {
+pub fn committee_pops(
+    world: &impl WorldReadOnly,
+    config: &ScheduledConfig,
+) -> Vec<(PeerId, Vec<u8>)> {
     config
         .committee
         .iter()
@@ -529,9 +533,7 @@ impl StateBlock<'_> {
     pub(crate) fn take_sumeragi_schedule(&mut self) -> Result<ScheduledConfig, ScheduleError> {
         match std::mem::take(&mut self.sumeragi_schedule) {
             ScheduleStep::Done(outcome) => outcome,
-            ScheduleStep::Off | ScheduleStep::Requested { .. } => {
-                Err(ScheduleError::NotAdvanced)
-            }
+            ScheduleStep::Off | ScheduleStep::Requested { .. } => Err(ScheduleError::NotAdvanced),
         }
     }
 }
@@ -602,8 +604,25 @@ pub enum GenesisCommitteeError {
 pub fn genesis_validators(
     genesis: &GenesisBlock,
 ) -> Result<BTreeMap<PeerId, Vec<u8>>, GenesisCommitteeError> {
+    let validators = genesis_registrations(&genesis.0)?;
+    for (peer, pop) in &validators {
+        iroha_crypto::bls_normal_pop_verify(peer.public_key(), pop)
+            .map_err(|_| GenesisCommitteeError::InvalidProofOfPossession(peer.to_string()))?;
+    }
+    Ok(validators)
+}
+
+/// The validators signed into genesis with their proofs of possession, **not verified**: for
+/// readers that admit the keys into a [`BlsCrypto`](super::crypto::BlsCrypto), which verifies
+/// each proof once. See [`genesis_validators`].
+///
+/// # Errors
+/// A non-instruction transaction, a non-BLS-normal key or a duplicate.
+pub fn genesis_registrations(
+    genesis: &SignedBlock,
+) -> Result<BTreeMap<PeerId, Vec<u8>>, GenesisCommitteeError> {
     let mut validators = BTreeMap::new();
-    for transaction in genesis.0.external_transactions() {
+    for transaction in genesis.external_transactions() {
         let Executable::Instructions(instructions) = transaction.instructions() else {
             return Err(GenesisCommitteeError::UnsupportedExecutable);
         };
@@ -617,8 +636,6 @@ pub fn genesis_validators(
             if register.peer.public_key().try_algorithm() != Ok(Algorithm::BlsNormal) {
                 return Err(GenesisCommitteeError::NonBlsValidator(name()));
             }
-            iroha_crypto::bls_normal_pop_verify(register.peer.public_key(), &register.pop)
-                .map_err(|_| GenesisCommitteeError::InvalidProofOfPossession(name()))?;
             if validators
                 .insert(register.peer.clone(), register.pop.clone())
                 .is_some()
@@ -1068,6 +1085,18 @@ mod tests {
         assert!(matches!(
             genesis_validators(&forged),
             Err(GenesisCommitteeError::InvalidProofOfPossession(_))
+        ));
+        // The unverified registrations still carry the forged proof; admission refuses it.
+        let registered = genesis_registrations(&forged.0).expect("registrations");
+        assert_eq!(registered.len(), 1);
+        assert!(
+            crate::sumeragi::crypto::BlsCrypto::new()
+                .admit(pair.public_key(), &registered[&peer(&pair)])
+                .is_err()
+        );
+        assert!(matches!(
+            genesis_registrations(&duplicate.0),
+            Err(GenesisCommitteeError::DuplicateValidator(_))
         ));
         let empty = genesis_with(vec![InstructionBox::from(Log::new(
             Level::INFO,
