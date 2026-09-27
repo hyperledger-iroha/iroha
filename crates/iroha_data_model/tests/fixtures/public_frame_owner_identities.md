@@ -123,8 +123,8 @@ and fixture remains; temporary capture writers are removed.
 
 | Fixture | Coverage | SHA-256 |
 | --- | --- | --- |
-| `query_manual_identity_frames.json` | Seven owners, 59 root/Option/Vec frames: erased queries, typed signatures, authorized requests, signed envelopes, batch tuples, responses and time intervals | `eea042d8a79b91aad72b4763dbc2d3897f6eb00ab3525d95bc9f902edb553e8f` |
-| `query_derived_identity_frames.json` | Eight connected owners, 122 frames: requests, parameters, all 31 item-kind tags, output, batches, singular query/output and cursors | `3381b68fa41caab3c2af0dfb1ac419606cc770b3fecdb405eedbb4e254dd1b17` |
+| `query_manual_identity_frames.json` | Seven owners, 59 root/Option/Vec frames: erased queries, typed signatures, authorized requests, signed envelopes, batch tuples, responses and time intervals | `21909a3ffabf52f33987c6498c86b5958f7c7f9203c8322015a28115b98fb29c` |
+| `query_derived_identity_frames.json` | Eight connected owners, 122 frames: requests, parameters, all 31 item-kind tags, output, batches, singular query/output and cursors | `f7f52e991d70f7ba7c7a883428d7ff9d6732d1a2b1c237dc8ca0b940c706f14e` |
 
 QuerySignature retains its own nominal identity and projects its root to
 `SignatureOf<QueryRequestWithAuthority>`; wrapper containers remain distinct.

@@ -22,7 +22,6 @@ use super::{
         LaneHistoricalRecoveryKindV1, LaneHistoricalRecoveryPayloadV1,
         LaneHistoricalRecoveryRequestV1, LaneHistoricalRecoveryResponseV1,
     },
-    network_topology::commit_quorum_from_len,
     output_guard::ConsensusOutputGuard,
     v2::VerifiedHeightContext,
     v2_apply::{
@@ -196,8 +195,8 @@ fn classify_committed_lane_block_execution_status(
     matching_preflight_has_rejections: impl FnOnce() -> Option<bool>,
     matching_execution_input_is_available: impl FnOnce() -> bool,
     payload_is_recoverable: impl FnOnce() -> bool,
-) -> Option<super::status::CommittedLaneBlockExecutionStatus> {
-    use super::status::CommittedLaneBlockExecutionStatus as Status;
+) -> Option<crate::status::CommittedLaneBlockExecutionStatus> {
+    use crate::status::CommittedLaneBlockExecutionStatus as Status;
     if receipt_conflicts() {
         return Some(Status::ApplicationReceiptConflictsWithPreflight);
     }
@@ -3157,8 +3156,8 @@ impl PendingAutonomousReservationBatch {
                 "pre-Kura direct release validator count exceeds u8".to_owned(),
             )
         })?;
-        let expected_quorum =
-            u32::try_from(commit_quorum_from_len(validator_count)).map_err(|_| {
+        let expected_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_count))
+            .map_err(|_| {
                 V2LaneWorkError::InvalidContext(
                     "pre-Kura direct release quorum exceeds u32".to_owned(),
                 )
@@ -4451,7 +4450,12 @@ impl V2LaneWorkAdapter {
         batch: &PendingAutonomousReservationBatch,
         active_view: wire::View,
     ) -> Result<AutonomousProducerBatchOutcome, V2LaneWorkError> {
+        let source_input_limit = crate::state::autonomous_source_input_capacity(
+            self.state.world_view().parameters().block(),
+        )
+        .map_err(V2LaneWorkError::InvalidContext)?;
         if batch.reservations.is_empty()
+            || batch.reservations.len() > source_input_limit
             || batch.reservations.len() > self.limits.body_buckets_per_session.get()
         {
             self.release_autonomous_reservation_batch(batch)?;
@@ -4958,9 +4962,13 @@ impl V2LaneWorkAdapter {
                     "autonomous carrier headroom exhausts the configured payload budget".to_owned(),
                 )
             })?;
-        let block_gas_limit = {
+        let (block_gas_limit, source_input_limit) = {
             let world = self.state.world_view();
-            crate::state::gas_limit_from_parameters(world.parameters())
+            (
+                crate::state::gas_limit_from_parameters(world.parameters()),
+                crate::state::autonomous_source_input_capacity(world.parameters().block())
+                    .map_err(V2LaneWorkError::InvalidContext)?,
+            )
         };
         let drain_route = self
             .state
@@ -5041,7 +5049,8 @@ impl V2LaneWorkAdapter {
                 route_count,
                 route_index,
                 route_rotation,
-            );
+            )
+            .min(source_input_limit);
             let envelope_byte_limit = Self::autonomous_route_quota(
                 usable_envelope_bytes,
                 route_count,
@@ -5276,7 +5285,7 @@ impl V2LaneWorkAdapter {
     #[cfg(test)]
     pub(crate) fn committed_lane_block_status_snapshot(
         &self,
-    ) -> Vec<super::status::CommittedLaneBlockSnapshot> {
+    ) -> Vec<crate::status::CommittedLaneBlockSnapshot> {
         let mut latest_by_lane =
             BTreeMap::<(LaneId, DataSpaceId, Hash), (CommittedLaneBlockSession, bool)>::new();
         let durable_sessions = self
@@ -5419,7 +5428,7 @@ impl V2LaneWorkAdapter {
                     },
                     || self.kura.lane_block_payload_is_recoverable(proposal),
                 )?;
-                Some(super::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
+                Some(crate::status::CommittedLaneBlockSnapshot::from_committed_session_with_execution_status(
                     &session,
                     execution_status,
                 ))
@@ -9716,6 +9725,15 @@ impl V2LaneWorkAdapter {
         {
             return Ok(AutonomousPayloadDurabilityOutcome::AlreadyTerminalApplication);
         }
+        let source_input_limit = crate::state::autonomous_source_input_capacity(
+            self.state.world_view().parameters().block(),
+        )
+        .map_err(AutonomousPayloadDurabilityError::Fatal)?;
+        if payload.entrypoints.len() > source_input_limit {
+            return Err(fatal(
+                "autonomous payload exceeds the agreed FASTPQ source capacity",
+            ));
+        }
         if !self
             .proposal_body_available(proposal)
             .map_err(|error| fatal(&error.to_string()))?
@@ -10058,6 +10076,17 @@ impl V2LaneWorkAdapter {
             Err(_) => return V2LaneIngressOutcome::Rejected,
         } {
             return V2LaneIngressOutcome::Duplicate;
+        }
+        // Source/output capacity is immutable after genesis. Apply its whole-input
+        // bound before retaining fresh payloads or installing any READY authority.
+        // An already applied exact replay returned above remains a terminal duplicate.
+        let Ok(source_input_limit) = crate::state::autonomous_source_input_capacity(
+            self.state.world_view().parameters().block(),
+        ) else {
+            return V2LaneIngressOutcome::Rejected;
+        };
+        if payload.entrypoints.len() > source_input_limit {
+            return V2LaneIngressOutcome::Rejected;
         }
         if proposal_height != self.context.height
             || self.expected_autonomous_lane_author(&payload.origin_proposal)
@@ -22815,10 +22844,8 @@ pub(super) mod tests {
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_count: u32::try_from(validator_set.len())
                     .expect("fixture committee count fits u32"),
-                min_quorum: u32::try_from(
-                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()),
-                )
-                .expect("fixture drain quorum fits u32"),
+                min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+                    .expect("fixture drain quorum fits u32"),
                 validator_set,
             },
             final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
@@ -25261,6 +25288,7 @@ pub(super) mod tests {
                 &mut queue_plan,
                 observed_round.view,
                 1,
+                |_, _| unreachable!(),
             )
             .expect("terminal exact relay prefix"),
             "the closed terminal relay prefix retires the old envelope without adapter authority"
@@ -25271,6 +25299,7 @@ pub(super) mod tests {
                 &mut queue_plan,
                 observed_round.view,
                 1,
+                |_, _| unreachable!(),
             )
             .expect("terminal exact relay prefix"),
             "the admitted relay prefix is finite after shared ingress closure"
@@ -26711,7 +26740,11 @@ pub(super) mod tests {
         context: &wire::HeightContext,
     ) {
         let topology = Topology::new(context.roster.iter().map(|entry| entry.validator.clone()));
-        let mut state_block = state.block(block.as_ref().header());
+        let mut state_block = state
+            .block_with_pristine_carrier_stage(block.as_ref(), |_| {
+                Ok::<(), core::convert::Infallible>(())
+            })
+            .expect("fund signed fixture carrier membership before State start");
         let _events = state_block.apply_without_execution(block, topology.as_ref().to_owned());
         state_block.commit().expect("commit synthetic state block");
     }
@@ -27499,7 +27532,7 @@ pub(super) mod tests {
         assert_eq!(pending_status[0].proposal, proposal);
         assert_eq!(
             pending_status[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor,
+            crate::status::CommittedLaneBlockExecutionStatus::PayloadAvailableAwaitingExecutor,
             "recoverable payload must remain visible before canonical application"
         );
         let committed = ValidBlock::committed_from_replay_signed_block(block.clone());
@@ -27523,7 +27556,7 @@ pub(super) mod tests {
         assert_eq!(committed_status[0].proposal, proposal);
         assert_eq!(
             committed_status[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
+            crate::status::CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
         );
         assert!(
             adapter
@@ -27549,7 +27582,7 @@ pub(super) mod tests {
     }
     #[test]
     fn committed_lane_status_classification_is_exhaustive_and_priority_ordered() {
-        use super::super::status::CommittedLaneBlockExecutionStatus as Status;
+        use crate::status::CommittedLaneBlockExecutionStatus as Status;
         let cases = [
             (
                 true,
@@ -27774,7 +27807,7 @@ pub(super) mod tests {
         assert_eq!(snapshot[0].commit_qc, latest.commit_qc);
         assert_eq!(
             snapshot[0].execution_status,
-            super::super::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
+            crate::status::CommittedLaneBlockExecutionStatus::AwaitingPredecessorApplication
         );
         let mut malformed = latest.clone();
         malformed.proposal.proposal_hash = Hash::new(b"malformed status proposal");
@@ -29426,10 +29459,8 @@ pub(super) mod tests {
             .collect::<Vec<_>>();
         let validator_count =
             u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
-        let min_quorum = u32::try_from(
-            crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-        )
-        .expect("fixture quorum fits u32");
+        let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+            .expect("fixture quorum fits u32");
         let previous_lane_block_height = lane_block_height.saturating_sub(1);
         let mut ownership = SumeragiLanePayloadOwnership {
             proposal_height,
@@ -29660,7 +29691,7 @@ pub(super) mod tests {
             keys,
             block,
             execution_commitment,
-            (0..crate::sumeragi::network_topology::commit_quorum_from_len(keys.len()).max(1))
+            (0..iroha_sumeragi::types::quorum(keys.len()).max(1))
                 .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
                 .collect(),
             [
@@ -30615,11 +30646,8 @@ pub(super) mod tests {
             validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_count: u32::try_from(validator_set.len()).expect("fixture validator count"),
-            min_quorum: u32::try_from(
-                crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len())
-                    .max(1),
-            )
-            .expect("fixture quorum"),
+            min_quorum: u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+                .expect("fixture quorum"),
             validator_set,
             qc_mode_tag: "permissioned:v2-lane-work".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
@@ -31445,6 +31473,7 @@ pub(super) mod tests {
         (successor, keys, request)
     }
     include!("v2_lane_work/strict_historical_read_tests.rs");
+    include!("v2_lane_work/canonical_executed_body_worker_source_tests.rs");
     include!("v2_lane_work/strict_volatile_owner_tests.rs");
     include!("v2_lane_work/strict_receipt_gate_tests.rs");
     fn canonical_executed_block_recovery_fixture() -> (
@@ -33208,6 +33237,7 @@ pub(super) mod tests {
             payload
         );
     }
+    include!("v2_lane_work/source_packing_tests.rs");
     include!("v2_lane_work/autonomous_retirement_and_merge_tests.rs");
     include!("v2_lane_work/queue_plan_admission_handoff_tests.rs");
     include!("v2_lane_work/queue_plan_owner_tests.rs");

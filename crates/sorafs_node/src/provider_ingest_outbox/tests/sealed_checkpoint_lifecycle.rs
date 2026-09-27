@@ -426,3 +426,161 @@ fn sealed_checkpoint_rollback_and_same_sequence_fork_fail_startup() {
         Err(ProviderIngestOutboxError::CheckpointFork)
     ));
 }
+
+#[test]
+fn sealed_enqueue_response_loss_restarts_with_one_source_and_completion_owner() {
+    let directory = tempdir().expect("checkpoint directory");
+    let runtime = Arc::new(TestCheckpointRuntime::new(0x76));
+    let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("sealed outbox");
+    let authorization = authorization(0x76, 7);
+    let job_id = authorization.job_id();
+
+    runtime.set_next_cas_behavior(TestCheckpointCasBehavior::CommitThenPanic);
+    assert_eq!(
+        outbox.enqueue(authorization.clone()),
+        Err(ProviderIngestOutboxError::CheckpointAuthorityAmbiguous),
+        "the caller cannot treat a lost CAS response as a failed admission"
+    );
+    let committed = runtime.latest().expect("authoritative admitted job");
+    assert_eq!(committed.checkpoint_sequence, 2);
+    drop(outbox);
+
+    let outbox = reopen_sealed_after_worker_release(&directory, Arc::clone(&runtime))
+        .expect("recover the committed successor and repair its predecessor cache");
+    assert_eq!(
+        fs::read(checkpoint_path(&directory)).expect("repaired cache"),
+        committed
+            .to_canonical_bytes(policy().checkpoint_max_bytes)
+            .expect("canonical committed record")
+    );
+    assert!(matches!(
+        outbox.status(job_id).expect("pending accepted job").state,
+        ProviderIngestDeliveryStateV1::PendingSource { attempts: 0 }
+    ));
+    assert_eq!(outbox.aggregate_counts().expect("one active job").active, 1);
+    assert_eq!(
+        outbox.enqueue(authorization.clone()),
+        Ok(ProviderIngestEnqueueResultV1::ExistingActive { job_id })
+    );
+    assert_eq!(
+        runtime.latest().expect("unchanged sealed head").revision,
+        committed.revision,
+        "replayed finalized admission must not allocate a second job"
+    );
+
+    let first_claim = outbox
+        .claim_source(job_id, owner(1), 100, cursor(7))
+        .expect("first durable source owner");
+    drop(outbox);
+    let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("restart with live lease");
+    assert_eq!(
+        outbox.claim_source(job_id, owner(2), 109, cursor(7)),
+        Err(ProviderIngestOutboxError::LeaseAlreadyHeld)
+    );
+    let second_claim = outbox
+        .claim_source(job_id, owner(2), 110, cursor(7))
+        .expect("claim only after the original lease expires");
+    assert_ne!(first_claim.generation, second_claim.generation);
+    assert_eq!(
+        outbox.mark_local_stored(&first_claim, 111, manifest_id(&authorization)),
+        Err(ProviderIngestOutboxError::InvalidSourceClaim),
+        "the pre-restart owner cannot complete the reclaimed source"
+    );
+    outbox
+        .mark_local_stored(&second_claim, 111, manifest_id(&authorization))
+        .expect("new owner persists exact local completion");
+    drop(outbox);
+
+    let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("restart after local store");
+    assert!(matches!(
+        outbox.status(job_id).expect("retained local work").state,
+        ProviderIngestDeliveryStateV1::LocalStored {
+            completion: ProviderIngestCompletionStateV1::Ready { .. },
+            ..
+        }
+    ));
+    assert!(
+        outbox
+            .claim_next_source(owner(3), 112, cursor(7))
+            .expect("no duplicate source claim")
+            .is_none()
+    );
+    let transaction = signed_completion(&authorization, 8, 8);
+    let context = completion_context(&transaction, 8, cursor(8));
+    let signing_claim = claim_for_transaction(&outbox, job_id, &transaction, 8, 120, cursor(8));
+    let transaction_hash = outbox
+        .store_completion_transaction(&signing_claim, transaction)
+        .expect("retain exact signed completion");
+    begin_submission(&outbox, job_id, transaction_hash, 121)
+        .expect("persist exposure before submitting");
+    let exposed = stored_completion(&outbox, job_id);
+    drop(outbox);
+
+    let outbox = open_sealed(&directory, Arc::clone(&runtime))
+        .expect("restart after uncertain completion exposure");
+    assert_eq!(stored_completion(&outbox, job_id), exposed);
+    assert!(matches!(
+        outbox.status(job_id).expect("retained exposure").state,
+        ProviderIngestDeliveryStateV1::LocalStored {
+            completion: ProviderIngestCompletionStateV1::Ambiguous { .. },
+            ..
+        }
+    ));
+    assert_eq!(
+        outbox.claim_completion_signing(job_id, context, 122),
+        Err(ProviderIngestOutboxError::InvalidTransition),
+        "an exposed exact transaction cannot acquire a second signer owner"
+    );
+    outbox
+        .mark_completion_submitted(job_id, transaction_hash)
+        .expect("exact transaction observed pending");
+    let submitted_head = runtime.latest().expect("submitted checkpoint").revision;
+    outbox
+        .mark_completion_submitted(job_id, transaction_hash)
+        .expect("duplicate observation is idempotent");
+    assert_eq!(
+        runtime.latest().expect("unchanged submitted head").revision,
+        submitted_head
+    );
+    observe_finalized(&outbox, cursor(9));
+    let evidence = finalized_evidence(&authorization, 8, Some(transaction_hash), 9);
+    outbox
+        .reconcile_finalized_completion(authorization.clone(), evidence.clone())
+        .expect("one finalized terminal result");
+    drop(outbox);
+
+    let outbox = open_sealed(&directory, Arc::clone(&runtime)).expect("terminal restart");
+    assert!(matches!(
+        outbox.status(job_id).expect("retained terminal").state,
+        ProviderIngestDeliveryStateV1::FinalizedCompleted {
+            completion_epoch: 8,
+            committed_transaction_hash: Some(hash),
+            ..
+        } if hash == transaction_hash
+    ));
+    assert_eq!(
+        outbox.aggregate_counts().expect("terminal counts").active,
+        0
+    );
+    assert_eq!(
+        outbox.aggregate_counts().expect("terminal counts").terminal,
+        1
+    );
+    let terminal_head = runtime.latest().expect("terminal checkpoint").revision;
+    assert_eq!(
+        outbox.enqueue(authorization.clone()),
+        Ok(ProviderIngestEnqueueResultV1::ExistingTerminal { job_id })
+    );
+    outbox
+        .reconcile_finalized_completion(authorization, evidence)
+        .expect("duplicate finalized observation is idempotent");
+    assert_eq!(
+        runtime.latest().expect("unchanged terminal head").revision,
+        terminal_head
+    );
+    assert_eq!(
+        outbox.claim_source(job_id, owner(4), 130, cursor(9)),
+        Err(ProviderIngestOutboxError::UnknownJob),
+        "terminal replay cannot create new source or completion work"
+    );
+}

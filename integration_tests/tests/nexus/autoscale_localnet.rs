@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    client::TxConfirmationStatus,
+    client::{AccountTransactionDraft, FeeQuoteRequest, TxConfirmationStatus},
     crypto::Hash,
     data_model::{
         Level, NetworkId,
@@ -21,7 +21,7 @@ use iroha::{
             EventBox,
             pipeline::{PipelineEventBox, TransactionEventFilter, TransactionStatus},
         },
-        isi::Log,
+        isi::{InstructionBox, Log},
         merge::{LaneDrainCertificateV1, MAX_MERGE_LEDGER_ENTRY_BYTES, MergeLedgerEntry},
         prelude::{HashOf, QueryBuilderExt, SignedTransaction, TransactionEntrypoint},
         query::{
@@ -31,8 +31,8 @@ use iroha::{
     },
 };
 use iroha_core::{
+    kura::LaneStorageIdentity,
     merge::{MergeLedgerCandidate, merge_qc_message_digest},
-    sumeragi::network_topology::commit_quorum_from_len,
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -44,7 +44,7 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        Barrier, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     thread,
@@ -131,6 +131,7 @@ fn autoscale_localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
+        .with_genesis_committee_keys_for_global_peers()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "autoscale", "enabled"], true)
@@ -161,6 +162,7 @@ fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
         .with_peers(TOTAL_PEERS)
         .with_block_cadence(Duration::from_millis(300))
         .with_npos_consensus()
+        .with_genesis_committee_keys_for_global_peers()
         .with_config_layer(|layer| {
             layer
                 .write(["nexus", "lane_count"], 3_i64)
@@ -185,26 +187,117 @@ fn autoscale_public_profile_localnet_builder() -> NetworkBuilder {
                 .write(["nexus", "autoscale", "per_lane_target_tps"], 32_i64);
         })
 }
-fn active_lane_segments(peer: &NetworkPeer) -> Result<Vec<String>> {
-    let blocks_root = peer.kura_store_dir().join("blocks");
-    if !blocks_root.exists() {
+#[derive(norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneIncarnationMarker")]
+struct LaneIncarnationMarkerSnapshot {
+    version: u8,
+    network_id: NetworkId,
+    dataspace_id: DataSpaceId,
+    lane_id: LaneId,
+    incarnation: Hash,
+    activation_height: u64,
+    move_target_blocks: Option<String>,
+    move_target_merge: Option<String>,
+    block_store_digest: Hash,
+    merge_log_digest: Hash,
+}
+fn active_lane_storage_instances(peer: &NetworkPeer) -> Result<Vec<(u32, String, PathBuf)>> {
+    let active_bindings = if peer.is_running() {
+        let lifecycle = peer_client_with_timeout(peer)
+            .client()
+            .get_lane_lifecycle_status()?;
+        lifecycle.validate()?;
+        let active_incarnations = lifecycle
+            .incarnations
+            .iter()
+            .map(|entry| (entry.lane_id, entry.incarnation))
+            .collect::<BTreeMap<_, _>>();
+        Some(
+            lifecycle
+                .lanes
+                .iter()
+                .filter_map(|lane| {
+                    active_incarnations
+                        .get(&lane.id)
+                        .copied()
+                        .map(|incarnation| (lane.id, (lane.dataspace_id, incarnation)))
+                })
+                .collect::<BTreeMap<_, _>>(),
+        )
+    } else {
+        // The restart test stops a peer before certification. Its physical
+        // snapshot remains frozen until that peer is started again.
+        None
+    };
+    let instances_root = peer.kura_store_dir().join("blocks").join("instances");
+    if !instances_root.exists() {
         return Ok(Vec::new());
     }
-    let mut lanes = Vec::new();
-    for entry in fs::read_dir(&blocks_root)? {
+    let mut instances = Vec::new();
+    for entry in fs::read_dir(&instances_root)? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
         }
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
+        let marker_path = entry.path().join(".lane-incarnation.norito");
+        let marker_metadata = match fs::symlink_metadata(&marker_path) {
+            Ok(metadata) => metadata,
+            // A physical directory can precede its durable publication marker.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
         };
-        if name.starts_with("lane_") {
-            lanes.push(name);
+        ensure!(
+            marker_metadata.file_type().is_file(),
+            "lane incarnation marker is not a regular file"
+        );
+        ensure!(
+            marker_metadata.len() <= 4 * 1024,
+            "lane incarnation marker exceeds its storage limit"
+        );
+        let marker_bytes = fs::read(&marker_path)?;
+        ensure!(
+            marker_bytes.len() <= 4 * 1024,
+            "lane incarnation marker exceeds its storage limit"
+        );
+        let marker: LaneIncarnationMarkerSnapshot = norito::codec::decode_adaptive(&marker_bytes)?;
+        ensure!(
+            marker.version == 4,
+            "unexpected lane incarnation marker version"
+        );
+        let identity = LaneStorageIdentity::new(
+            marker.network_id,
+            marker.lane_id,
+            marker.dataspace_id,
+            marker.incarnation,
+            marker.activation_height,
+        );
+        ensure!(
+            entry.path() == identity.blocks_dir(peer.kura_store_dir()),
+            "lane incarnation marker is not at its exact storage identity path"
+        );
+        // Kura retains retired instance directories as authenticated recovery
+        // evidence. Only the committed catalog can identify active storage.
+        if active_bindings.as_ref().is_some_and(|bindings| {
+            bindings.get(&marker.lane_id) != Some(&(marker.dataspace_id, marker.incarnation))
+        }) {
+            continue;
         }
+        let lane_id = marker.lane_id.as_u32();
+        let instance = entry.file_name().to_string_lossy().into_owned();
+        instances.push((
+            lane_id,
+            format!("lane_{lane_id:03}_instance_{instance}"),
+            entry.path(),
+        ));
     }
-    lanes.sort();
-    Ok(lanes)
+    instances.sort_by(|left, right| left.1.cmp(&right.1));
+    Ok(instances)
+}
+fn active_lane_segments(peer: &NetworkPeer) -> Result<Vec<String>> {
+    Ok(active_lane_storage_instances(peer)?
+        .into_iter()
+        .map(|(_, segment, _)| segment)
+        .collect())
 }
 fn lane_snapshot(network: &sandbox::SerializedNetwork) -> Result<Vec<(usize, Vec<String>)>> {
     network
@@ -1045,20 +1138,9 @@ fn peer_elastic_lane_storage_stats(
     peer: &NetworkPeer,
     lane_id: u32,
 ) -> Result<Option<ElasticLaneStorageStats>> {
-    let blocks_root = peer.kura_store_dir().join("blocks");
-    if !blocks_root.exists() {
-        return Ok(None);
-    }
-    for entry in fs::read_dir(&blocks_root)? {
-        let entry = entry?;
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
-            continue;
-        };
-        if is_autoscale_elastic_storage_segment(&name, lane_id) {
-            return collect_directory_tree_stats(&entry.path()).map(Some);
+    for (instance_lane_id, _, path) in active_lane_storage_instances(peer)? {
+        if instance_lane_id == lane_id {
+            return collect_directory_tree_stats(&path).map(Some);
         }
     }
     Ok(None)
@@ -2156,12 +2238,13 @@ fn storage_lane_id(segment: &str) -> Option<u32> {
     }
     digits.parse().ok()
 }
-fn autoscale_elastic_storage_segment(lane_id: u32) -> String {
-    format!("lane_{lane_id:03}_elastic_lane_{lane_id}")
-}
 fn is_autoscale_elastic_storage_segment(segment: &str, lane_id: u32) -> bool {
-    segment == autoscale_elastic_storage_segment(lane_id)
-        && storage_lane_id(segment) == Some(lane_id)
+    storage_lane_id(segment) == Some(lane_id)
+        && segment
+            .strip_prefix(&format!("lane_{lane_id:03}_instance_"))
+            .is_some_and(|instance| {
+                !instance.is_empty() && instance.chars().all(|ch| ch.is_ascii_hexdigit())
+            })
 }
 fn all_peers_have_storage_lane_profile(
     snapshot: &[(usize, Vec<String>)],
@@ -2361,7 +2444,7 @@ fn committed_lane_block_has_canonical_quorum_metadata(block: &CommittedLaneBlock
     if validator_count == 0 || validator_count > TOTAL_PEERS || min_quorum == 0 {
         return false;
     }
-    let expected_quorum = commit_quorum_from_len(validator_count).max(1);
+    let expected_quorum = iroha_sumeragi::types::quorum(validator_count).max(1);
     min_quorum == expected_quorum
         && prepare_qc_signer_count == min_quorum
         && commit_qc_signer_count == min_quorum
@@ -3086,7 +3169,7 @@ fn commit_quorum_observation(
             peer_count,
         ) {
             Ok(Some((_validator_set_len, expected_quorum))) => expected_quorum,
-            Ok(None) => commit_quorum_from_len(peer_count).max(1),
+            Ok(None) => iroha_sumeragi::types::quorum(peer_count).max(1),
             Err(observation) => return observation,
         };
         if quorum_required != expected_quorum {
@@ -3138,7 +3221,7 @@ fn expected_commit_quorum_from_validator_set_len_observation(
             peer_count,
         });
     };
-    let quorum_required = commit_quorum_from_len(validator_set_len);
+    let quorum_required = iroha_sumeragi::types::quorum(validator_set_len);
     if validator_set_len > peer_count {
         return Err(CommitQuorumObservation::InvalidValidatorSetLen {
             validator_set_len: max_len,
@@ -3191,7 +3274,7 @@ fn wait_for_commit_quorum_required(
     if let Some(error) = last_observation.timeout_error(context) {
         return Err(eyre!("{error}"));
     }
-    let fallback_quorum = commit_quorum_from_len(network.peers().len());
+    let fallback_quorum = iroha_sumeragi::types::quorum(network.peers().len());
     eprintln!(
         "[autoscale-localnet] commit quorum fallback from peer count: {} (context: {context}; last observation={last_observation:?}; last error={last_error:?})",
         fallback_quorum
@@ -3206,16 +3289,22 @@ fn wait_for_storage_lane_count(
 ) -> Result<()> {
     let started = Instant::now();
     let mut last_storage_snapshot = Vec::new();
+    let mut last_probe_error = None;
     while started.elapsed() <= timeout {
-        let storage_snapshot = lane_snapshot(network)?;
-        if all_peers_have_storage_lane_count(&storage_snapshot, expected_count) {
-            return Ok(());
+        match lane_snapshot(network) {
+            Ok(storage_snapshot) => {
+                if all_peers_have_storage_lane_count(&storage_snapshot, expected_count) {
+                    return Ok(());
+                }
+                last_storage_snapshot = storage_snapshot;
+                last_probe_error = None;
+            }
+            Err(error) => last_probe_error = Some(error.to_string()),
         }
-        last_storage_snapshot = storage_snapshot;
         thread::sleep(LANE_POLL_INTERVAL);
     }
     Err(eyre!(
-        "{context}: timed out waiting for {expected_count} provisioned lane directories on all peers; last storage snapshot: {last_storage_snapshot:?}"
+        "{context}: timed out waiting for {expected_count} active lane storage instances on all peers; last storage snapshot: {last_storage_snapshot:?}; last probe error: {last_probe_error:?}"
     ))
 }
 fn usize_to_u64(value: usize) -> u64 {
@@ -3280,6 +3369,61 @@ fn autoscale_soak_force_fail_cycle() -> Option<usize> {
         .and_then(|raw| raw.parse::<usize>().ok())
         .filter(|value| *value > 0)
 }
+fn submit_load_without_wait(
+    client: &Client,
+    load_sequence: u64,
+) -> Result<HashOf<SignedTransaction>> {
+    let fee_payment = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+    let mut payload = client
+        .account_client()
+        .prepare_transaction(AccountTransactionDraft::new(
+            vec![InstructionBox::from(Log::new(
+                Level::INFO,
+                format!("autoscale-load-{load_sequence}"),
+            ))],
+            fee_payment,
+            Metadata::default(),
+        ))?;
+    ensure!(
+        payload.admission_intent()
+            == iroha::data_model::transaction::TransactionAdmissionIntent::Ordinary,
+        "single-route load must use direct ordinary admission"
+    );
+    let quote = client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "autoscale load fee quote changed the selected payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let signed = client.account_client().sign_transaction(payload)?;
+    client.submit_transaction(&signed)
+}
+
+fn sign_queue_plan_log(client: &Client, message: String) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(
+        AccountTransactionDraft::new(
+            vec![InstructionBox::from(Log::new(Level::INFO, message))],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )
+        .with_admission_intent(
+            iroha::data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
+        ),
+    )?;
+    let quote = client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    payload.fee_payment = quote.intent;
+    Ok(account.sign_transaction(payload)?)
+}
+fn submit_queue_plan_log_and_wait(
+    client: &Client,
+    message: String,
+) -> Result<HashOf<SignedTransaction>> {
+    let signed = sign_queue_plan_log(client, message)?;
+    client.submit_transaction_and_wait(&signed)
+}
 fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<LoadSubmissionReport> {
     ensure!(
         !clients.is_empty(),
@@ -3294,15 +3438,38 @@ fn submit_load_round_robin(clients: &[Client], tx_count: usize) -> Result<LoadSu
     };
     let mut samples_per_client = vec![0_usize; clients.len()];
     let mut first_error = None::<String>;
-    for tx in 0..tx_count {
-        let load_sequence = LOAD_TX_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let client_index =
-            usize::try_from(load_sequence % usize_to_u64(clients.len())).unwrap_or(0);
-        let client = &clients[client_index];
-        match client.submit(
-            Log::new(Level::INFO, format!("autoscale-load-{load_sequence}")),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
+    // Each peer has one bounded origin collector. Submit to those collectors
+    // concurrently, but return on admission so finality does not serialize
+    // the producer and hide the asynchronous queue from the autoscaler.
+    let first_sequence = LOAD_TX_SEQUENCE.fetch_add(usize_to_u64(tx_count), Ordering::Relaxed);
+    let worker_count = tx_count.min(clients.len());
+    let mut outcomes = thread::scope(|scope| -> Result<Vec<_>> {
+        let mut workers = Vec::with_capacity(worker_count);
+        for client_index in 0..worker_count {
+            workers.push(scope.spawn(move || {
+                let mut outcomes = Vec::new();
+                for tx in (client_index..tx_count).step_by(clients.len()) {
+                    let load_sequence = first_sequence.wrapping_add(usize_to_u64(tx));
+                    let result = submit_load_without_wait(&clients[client_index], load_sequence)
+                        .map_err(|error| error.to_string());
+                    outcomes.push((tx, client_index, result));
+                }
+                outcomes
+            }));
+        }
+        let mut outcomes = Vec::with_capacity(tx_count);
+        for worker in workers {
+            outcomes.extend(
+                worker
+                    .join()
+                    .map_err(|_| eyre!("autoscale load submission worker panicked"))?,
+            );
+        }
+        Ok(outcomes)
+    })?;
+    outcomes.sort_unstable_by_key(|(tx, _, _)| *tx);
+    for (tx, client_index, outcome) in outcomes {
+        match outcome {
             Ok(hash) => {
                 report.submitted = report.submitted.saturating_add(1);
                 report.per_client_submitted[client_index] =
@@ -4319,7 +4486,7 @@ fn validate_lane_drain_certificate_evidence(
     );
     ensure!(
         usize::try_from(intent.min_quorum).ok()
-            == Some(commit_quorum_from_len(intent.validator_set.len())),
+            == Some(iroha_sumeragi::types::quorum(intent.validator_set.len())),
         "drain intent quorum does not match its exact committee"
     );
     ensure!(
@@ -4740,32 +4907,26 @@ fn build_transaction_for_legacy_default_shard(
         desired_lane < lane_count,
         "desired legacy shard must fit lane count"
     );
-    (0_u64..4_096)
-        .find_map(|nonce| {
-            let transaction = {
-                let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        Metadata::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            }
-            .expect("build integration-test transaction");
-            let hash = transaction.hash();
-            let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
-            shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
-            (u64::from_le_bytes(shard_bytes) % lane_count == desired_lane).then_some(transaction)
-        })
-        .ok_or_else(|| {
-            eyre!(
-                "failed to build a transaction for legacy default shard {desired_lane}/{lane_count}"
-            )
-        })
+    for nonce in 0_u64..4_096 {
+        let account = client.account_client();
+        let payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            [Log::new(Level::INFO, format!("{marker}-{nonce}"))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ))?;
+        let transaction = account.sign_transaction(payload)?;
+        // The default router hashes the signed payload, not the signature-bearing
+        // transaction envelope. Match that exact input when choosing a lane.
+        let hash = HashOf::new(transaction.payload());
+        let mut shard_bytes = [0_u8; core::mem::size_of::<u64>()];
+        shard_bytes.copy_from_slice(&hash.as_ref()[..core::mem::size_of::<u64>()]);
+        if u64::from_le_bytes(shard_bytes) % lane_count == desired_lane {
+            return Ok(transaction);
+        }
+    }
+    Err(eyre!(
+        "failed to build a transaction for legacy default shard {desired_lane}/{lane_count}"
+    ))
 }
 fn validate_closed_lane_has_no_post_close_work(
     peer: &NetworkPeer,
@@ -4819,46 +4980,6 @@ fn merge_log_total_bytes(peer: &NetworkPeer) -> Result<u64> {
         }
     }
     Ok(total)
-}
-fn wait_for_certified_elastic_lane(
-    clients: &[Client],
-    lane_id: LaneId,
-    quorum_required: usize,
-    timeout: Duration,
-) -> Result<()> {
-    let started = Instant::now();
-    let mut last_observed = 0_usize;
-    let mut last_errors = Vec::new();
-    while started.elapsed() <= timeout {
-        last_observed = 0;
-        last_errors.clear();
-        for (index, client) in clients.iter().enumerate() {
-            match client.get_sumeragi_diagnostics() {
-                Ok(status)
-                    if status.committed_lane_blocks.iter().any(|block| {
-                        block.lane_id == lane_id
-                            && block.executable_payload_available
-                            && block.validator_count > 0
-                            && block.min_quorum > 0
-                            && block.min_quorum <= block.validator_count
-                            && block.prepare_qc_signer_count == block.min_quorum
-                            && block.commit_qc_signer_count == block.min_quorum
-                    }) =>
-                {
-                    last_observed = last_observed.saturating_add(1);
-                }
-                Ok(_) => {}
-                Err(err) => last_errors.push((index, err.to_string())),
-            }
-        }
-        if last_observed >= quorum_required {
-            return Ok(());
-        }
-        thread::sleep(LANE_POLL_INTERVAL);
-    }
-    Err(eyre!(
-        "timed out waiting for independently certified executable lane {lane_id} evidence on quorum peers; observed={last_observed}/{quorum_required}; errors={last_errors:?}"
-    ))
 }
 fn query_committed_transaction(
     client: &Client,
@@ -4977,7 +5098,7 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
         }
     }
     ensure!(
-        signer_indices.len() == commit_quorum_from_len(qc.validator_set.len()),
+        signer_indices.len() == iroha_sumeragi::types::quorum(qc.validator_set.len()),
         "merge QC cardinality mismatch: signers={}, roster={}",
         signer_indices.len(),
         qc.validator_set.len()
@@ -5010,6 +5131,239 @@ fn validate_merge_qc_evidence(network_id: &NetworkId, entry: &MergeLedgerEntry) 
     .map_err(|err| eyre!("merge QC aggregate signature is invalid: {err:?}"))?;
     Ok(())
 }
+#[test]
+fn four_peer_async_ordinary_queues_commit_leader_snapshot() -> Result<()> {
+    mixed_async_queue_plan_and_ordinary_queues_commit(
+        TOTAL_PEERS,
+        stringify!(four_peer_async_ordinary_queues_commit_leader_snapshot),
+    )
+}
+
+#[test]
+fn seven_peer_async_ordinary_queues_commit_leader_snapshot() -> Result<()> {
+    mixed_async_queue_plan_and_ordinary_queues_commit(
+        7,
+        stringify!(seven_peer_async_ordinary_queues_commit_leader_snapshot),
+    )
+}
+
+fn mixed_async_queue_plan_and_ordinary_queues_commit(
+    peer_count: usize,
+    context: &'static str,
+) -> Result<()> {
+    run_autoscale_localnet_test_on_large_stack(context, move || {
+        let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+            .lock()
+            .expect("autoscale localnet test mutex poisoned");
+        let builder = NetworkBuilder::new()
+            .with_peers(peer_count)
+            .with_block_cadence(Duration::from_millis(300))
+            .with_npos_consensus();
+        let builder = if peer_count == 7 {
+            // The default public lane has f=1 and four validators. A
+            // seven-peer test must configure the on-chain and Nexus
+            // authority bounds together, or admission has no route at h2.
+            builder
+                .with_genesis_instruction(super::localnet_npos::npos_override_instruction(
+                    peer_count,
+                ))
+                .with_config_layer(|layer| {
+                    let mut universal = Table::new();
+                    universal.insert("id".into(), TomlValue::Integer(0));
+                    universal.insert("alias".into(), TomlValue::String("universal".to_owned()));
+                    universal.insert("fault_tolerance".into(), TomlValue::Integer(2));
+                    layer
+                        .write(
+                            ["nexus", "dataspace_catalog"],
+                            TomlValue::Array(vec![TomlValue::Table(universal)]),
+                        )
+                        .write(["nexus", "staking", "max_validators"], 7_i64);
+                })
+        } else {
+            builder
+        };
+        let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(builder, context)?
+        else {
+            return Ok(());
+        };
+        let clients = network
+            .peers()
+            .iter()
+            .map(|peer| {
+                integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                    client.torii_request_timeout = Duration::from_secs(75);
+                })
+            })
+            .collect::<Vec<_>>();
+        wait_for_submission_ready(&clients, SUBMISSION_READY_TIMEOUT, context)?;
+        // One peer sees the autonomous control before its Ordinary input;
+        // that local arrival order cannot fence a leader's later sample.
+        let queue_plan =
+            sign_queue_plan_log(&clients[0], "mixed-async-queue-plan-control".to_owned())?;
+        let queue_plan_hash = clients[0].submit_transaction(&queue_plan)?;
+        let barrier = Barrier::new(peer_count);
+        let submissions = thread::scope(|scope| {
+            let workers = clients
+                .iter()
+                .enumerate()
+                .map(|(index, client)| {
+                    let barrier = &barrier;
+                    scope.spawn(move || {
+                        barrier.wait();
+                        submit_load_without_wait(client, usize_to_u64(index))
+                            .map_err(|error| error.to_string())
+                    })
+                })
+                .collect::<Vec<_>>();
+            workers
+                .into_iter()
+                .map(|worker| worker.join().expect("ordinary submission worker panicked"))
+                .collect::<Vec<_>>()
+        });
+        let hashes = submissions
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| {
+                result.map_err(|error| eyre!("peer {index} rejected ordinary input: {error}"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let status_clients = clients
+            .iter()
+            .map(|client| {
+                integration_tests::sync::rebind_blocking_client(client, |client| {
+                    client.torii_request_timeout = Duration::from_secs(5);
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut awaiting = (0..peer_count)
+            .flat_map(|index| {
+                hashes
+                    .iter()
+                    .chain(std::iter::once(&queue_plan_hash))
+                    .map(move |hash| (index, *hash))
+            })
+            .collect::<Vec<_>>();
+        let started = Instant::now();
+        while !awaiting.is_empty() {
+            let mut terminal = None;
+            awaiting.retain(|(index, hash)| {
+                match status_clients[*index]
+                    .client()
+                    .get_transaction_status_response_local(*hash)
+                {
+                    Ok(Some(status))
+                        if status.resolved_from == "state" && status.status.kind == "Applied" =>
+                    {
+                        false
+                    }
+                    Ok(Some(status))
+                        if status.resolved_from == "state"
+                            && matches!(status.status.kind.as_str(), "Rejected" | "Expired") =>
+                    {
+                        terminal = Some(format!(
+                            "peer {index} reached {} for transaction {hash}",
+                            status.status.kind
+                        ));
+                        true
+                    }
+                    _ => true,
+                }
+            });
+            ensure!(
+                terminal.is_none(),
+                "mixed QueuePlan and independent Ordinary input failed: {}",
+                terminal.unwrap_or_default()
+            );
+            ensure!(
+                started.elapsed() < Duration::from_secs(240),
+                "mixed QueuePlan and independent Ordinary inputs did not commit on every validator; {} peer/transaction pairs remain, first={:?}",
+                awaiting.len(),
+                awaiting.first()
+            );
+            thread::sleep(LANE_POLL_INTERVAL);
+        }
+        Ok(())
+    })
+}
+
+#[test]
+fn four_peer_simultaneous_queue_plan_collectors_make_progress() -> Result<()> {
+    run_autoscale_localnet_test_on_large_stack(
+        stringify!(four_peer_simultaneous_queue_plan_collectors_make_progress),
+        || {
+            let context = stringify!(four_peer_simultaneous_queue_plan_collectors_make_progress);
+            let _test_guard = AUTOSCALE_LOCALNET_TEST_MUTEX
+                .lock()
+                .expect("autoscale localnet test mutex poisoned");
+            let builder = NetworkBuilder::new()
+                .with_peers(TOTAL_PEERS)
+                .with_block_cadence(Duration::from_millis(300))
+                .with_npos_consensus();
+            let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(builder, context)?
+            else {
+                return Ok(());
+            };
+            ensure!(network.peers().len() == TOTAL_PEERS);
+            let clients = network
+                .peers()
+                .iter()
+                .map(|peer| {
+                    integration_tests::sync::rebind_blocking_client(&peer.client(), |client| {
+                        client.torii_request_timeout = Duration::from_secs(75);
+                    })
+                })
+                .collect::<Vec<_>>();
+            wait_for_submission_ready(&clients, SUBMISSION_READY_TIMEOUT, context)?;
+            let baseline = status_snapshot(&network)?;
+            let barrier = Barrier::new(TOTAL_PEERS);
+            let submissions = thread::scope(|scope| {
+                let workers = clients
+                    .iter()
+                    .enumerate()
+                    .map(|(index, client)| {
+                        let barrier = &barrier;
+                        scope.spawn(move || {
+                            barrier.wait();
+                            submit_queue_plan_log_and_wait(
+                                client,
+                                format!("simultaneous-admission-{index}"),
+                            )
+                            .map_err(|error| error.to_string())
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().expect("submission worker panicked"))
+                    .collect::<Vec<_>>()
+            });
+            for (index, result) in submissions.into_iter().enumerate() {
+                ensure!(
+                    result.is_ok(),
+                    "peer {index} could not collect admission: {result:?}"
+                );
+            }
+            let started = Instant::now();
+            loop {
+                if let Ok(observed) = status_snapshot(&network)
+                    && observed.iter().zip(&baseline).all(|(current, before)| {
+                        current.txs_approved
+                            >= before.txs_approved.saturating_add(TOTAL_PEERS as u64)
+                    })
+                {
+                    break;
+                }
+                ensure!(
+                    started.elapsed() < Duration::from_secs(120),
+                    "four simultaneous complete admissions did not become applied on every validator"
+                );
+                thread::sleep(LANE_POLL_INTERVAL);
+            }
+            Ok(())
+        },
+    )
+}
+
 #[test]
 fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart() -> Result<()> {
     run_autoscale_localnet_test_on_large_stack(
@@ -5075,7 +5429,7 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
         "two-phase drain quorum discovery",
     )?;
     ensure!(
-        quorum_required == commit_quorum_from_len(TOTAL_PEERS)
+        quorum_required == iroha_sumeragi::types::quorum(TOTAL_PEERS)
             && quorum_required <= TOTAL_PEERS - 1,
         "four-peer drain test must retain a three-validator quorum across one restart"
     );
@@ -5102,12 +5456,8 @@ fn nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart_i
         "two-phase-drain-scale-out-heartbeat",
         EXPANSION_PROBE_INTERVAL,
     )?;
-    wait_for_certified_elastic_lane(
-        &submitters,
-        TARGET_LANE,
-        quorum_required,
-        STRICT_SCALE_OUT_WAIT_TIMEOUT,
-    )?;
+    // The expanded lane may be empty. Its committed close and retirement must
+    // still progress without requiring an unrelated certified lane block.
     let post_expansion_transitions =
         autoscale_transition_snapshot_for_lane(&network, ELASTIC_LANE_ID)?;
     let intent_log = wait_for_uncommitted_lane_drain_intent_on_all_peers(
@@ -6999,10 +7349,10 @@ mod tests {
     }
     #[test]
     fn storage_lane_id_rejects_prefix_spoofed_segments() {
-        assert_eq!(storage_lane_id("lane_003_elastic_lane_3"), Some(3));
+        assert_eq!(storage_lane_id("lane_003_instance_0"), Some(3));
         assert_eq!(storage_lane_id("lane_003_elastic3"), Some(3));
         assert!(is_autoscale_elastic_storage_segment(
-            "lane_003_elastic_lane_3",
+            "lane_003_instance_0",
             3
         ));
         assert!(!is_autoscale_elastic_storage_segment(
@@ -7022,7 +7372,7 @@ mod tests {
         assert_eq!(storage_lane_id("lane_003_elastic_"), None);
         assert_eq!(storage_lane_id("lane_03_elastic_lane_3"), None);
         assert_eq!(storage_lane_id("lane_0003_elastic_lane_3"), None);
-        assert_eq!(storage_lane_id("prefix_lane_003_elastic_lane_3"), None);
+        assert_eq!(storage_lane_id("prefix_lane_003_instance_0"), None);
     }
     #[test]
     fn autoscale_transition_stats_parse_log_markers() {
@@ -9670,13 +10020,13 @@ mod tests {
         let mut partial_four_lane_storage = three_lane_storage.clone();
         partial_four_lane_storage[0]
             .1
-            .push("lane_003_elastic_lane_3".to_owned());
+            .push("lane_003_instance_0".to_owned());
         partial_four_lane_storage[1]
             .1
-            .push("lane_003_elastic_lane_3".to_owned());
+            .push("lane_003_instance_0".to_owned());
         partial_four_lane_storage[2]
             .1
-            .push("lane_003_elastic_lane_3".to_owned());
+            .push("lane_003_instance_0".to_owned());
         assert!(!expansion_observed_on_storage_for_count(
             &partial_four_lane_storage,
             PUBLIC_PROFILE_EXPANDED_PROVISIONED_LANES
@@ -9688,7 +10038,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                 ],
             );
             4
@@ -9718,7 +10068,7 @@ mod tests {
                 vec![
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                     "lane_003_duplicate".to_owned(),
                 ],
             );
@@ -9740,7 +10090,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                     "lane_003shadow".to_owned(),
                 ],
             );
@@ -9758,7 +10108,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_003_elastic_lane_3".to_owned(),
+                    "lane_003_instance_0".to_owned(),
                     "lane_003_duplicate".to_owned(),
                 ],
             );
@@ -9779,7 +10129,7 @@ mod tests {
                     "lane_000_core".to_owned(),
                     "lane_001_governance".to_owned(),
                     "lane_002_zk".to_owned(),
-                    "lane_004_elastic_lane_4".to_owned(),
+                    "lane_004_instance_0".to_owned(),
                 ],
             );
             4
@@ -10279,28 +10629,28 @@ mod tests {
                 0,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 1,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 2,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 3,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
         ];
@@ -10310,14 +10660,14 @@ mod tests {
                 0,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (
                 1,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
             (2, vec!["lane_000_default".to_owned()]),
@@ -10325,7 +10675,7 @@ mod tests {
                 3,
                 vec![
                     "lane_000_default".to_owned(),
-                    "lane_001_elastic_lane_1".to_owned(),
+                    "lane_001_instance_0".to_owned(),
                 ],
             ),
         ];

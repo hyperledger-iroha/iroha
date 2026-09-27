@@ -147,7 +147,7 @@ def test_native_parser_covers_the_closed_release_curve_inventory(item) -> None:
 def test_canonical_i105_parser_rejects_noncanonical_sentinel_rerender() -> None:
     noncanonical = "n753" + VALID_SINGLE_I105.removeprefix("sora")
 
-    with pytest.raises(ValueError, match="unsupported account address format"):
+    with pytest.raises(ValueError, match="i105 checksum mismatch"):
         ACCOUNT_ID.decode_canonical_i105_account_id(noncanonical)
 
 

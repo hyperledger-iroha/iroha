@@ -123,7 +123,10 @@ use iroha_data_model::{
             ModerationLedgerCyclePublicationV1, ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
-    transaction::{Executable, SignedTransaction, TransactionBuilder, TransactionPayload},
+    transaction::{
+        Executable, SignedTransaction, TransactionAdmissionIntent, TransactionBuilder,
+        TransactionPayload,
+    },
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanOperateSorafsRepair, CanRecordSorafsProofOutcome,
@@ -12023,6 +12026,12 @@ fn validate_moderation_signed_transaction(
             "SoraFS moderation transaction signature or authority binding is invalid",
         )
     })?;
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS moderation transaction requires QueuePlanSynced admission",
+        ));
+    }
     if transaction.creation_time().is_zero()
         || transaction.time_to_live()
             != Some(Duration::from_millis(
@@ -13394,6 +13403,12 @@ fn validate_repair_signed_transaction(
             "SoraFS repair transaction signature or authority binding is invalid",
         )
     })?;
+    if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS repair transaction requires QueuePlanSynced admission",
+        ));
+    }
     let Executable::Instructions(instructions) = transaction.instructions() else {
         return Err(json_error(
             StatusCode::BAD_REQUEST,
@@ -31492,6 +31507,7 @@ fn admission_error_reason(err: &AdvertError) -> &'static str {
         AdvertError::UnknownCapabilities { .. } => "unknown_capabilities",
         AdvertError::AdmissionMissing { .. } => "admission_missing",
         AdvertError::AdmissionFailed { error, .. } => match error {
+            crate::sorafs::AdmissionCheckError::NetworkMismatch { .. } => "network_mismatch",
             crate::sorafs::AdmissionCheckError::Digest(_) => "digest_error",
             crate::sorafs::AdmissionCheckError::BodyMismatch => "body_mismatch",
             crate::sorafs::AdmissionCheckError::BodyDigestMismatch { .. } => "body_digest_mismatch",
@@ -34777,13 +34793,53 @@ mod advert_tests {
             *app.state.network_id_ref(),
             signer.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
+        )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
         builder
             .with_instructions([instruction])
             .sign(signer.keypair.private_key())
+    }
+    #[test]
+    fn moderation_command_rejects_ordinary_admission_intent() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let instruction: InstructionBox = AcceptSorafsModerationJurorAssignment::new(
+            "case-admission-1".to_owned(),
+            "round-1".to_owned(),
+            [0x51; 32],
+        )
+        .into();
+        let canonical = signed_moderation_transaction(&app, &auth.provider, instruction.clone());
+        validate_moderation_signed_transaction(
+            &app,
+            &canonical,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect("QueuePlanSynced moderation transaction passes route validation");
+        let mut ordinary_builder = TransactionBuilder::new(
+            *app.state.network_id_ref(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        ordinary_builder.set_ttl(Duration::from_millis(
+            sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
+        ));
+        let ordinary = ordinary_builder
+            .with_instructions([instruction])
+            .sign(auth.provider.keypair.private_key());
+        assert_eq!(
+            ordinary.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
+        let response = validate_moderation_signed_transaction(
+            &app,
+            &ordinary,
+            ModerationCommandRouteV1::AcceptAssignment,
+        )
+        .expect_err("Ordinary moderation transaction must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[test]
     fn moderation_command_contract_requires_exact_network_signature_route_and_one_instruction() {
@@ -34812,7 +34868,8 @@ mod advert_tests {
             *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
+        )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         multiple_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
@@ -34832,7 +34889,8 @@ mod advert_tests {
             )),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
+        )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         wrong_network_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
@@ -34871,7 +34929,8 @@ mod advert_tests {
             *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
+        )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         wrong_ttl_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1 + 1,
         ));
@@ -34889,7 +34948,8 @@ mod advert_tests {
             *app.state.network_id_ref(),
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
+        )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced);
         nonce_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
         ));
@@ -34914,6 +34974,7 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_metadata(metadata);
         metadata_builder.set_ttl(Duration::from_millis(
             sorafs_node::moderation_orchestrator::MODERATION_TRANSACTION_TTL_MS_V1,
@@ -35061,6 +35122,7 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_instructions([report.clone(), report])
         .sign(auth.provider.keypair.private_key());
         let response = validate_repair_signed_transaction(
@@ -35084,6 +35146,7 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_instructions([claim])
         .sign(auth.provider.keypair.private_key());
         validate_repair_signed_transaction(
@@ -35106,6 +35169,7 @@ mod advert_tests {
             auth.provider.account.clone(),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
         .with_instructions([ApplySorafsRepairTaskAction::new(
             "REP-ROUTE-1".to_owned(),
             1,
@@ -35132,6 +35196,43 @@ mod advert_tests {
         )
         .expect_err("authority substitution must invalidate the repair envelope");
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    #[test]
+    fn repair_command_rejects_ordinary_admission_intent() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let instruction = SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]);
+        let canonical = TransactionBuilder::new(
+            *app.state.network_id_ref(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+        .with_instructions([instruction.clone()])
+        .sign(auth.provider.keypair.private_key());
+        validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &canonical,
+            RepairCommandRouteV1::Report,
+        )
+        .expect("QueuePlanSynced repair transaction passes route validation");
+        let ordinary = TransactionBuilder::new(
+            *app.state.network_id_ref(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(auth.provider.keypair.private_key());
+        assert_eq!(
+            ordinary.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
+        let response = validate_repair_signed_transaction(
+            app.state.network_id_ref(),
+            &ordinary,
+            RepairCommandRouteV1::Report,
+        )
+        .expect_err("Ordinary repair transaction must fail before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     #[test]
     fn orderbook_submission_validation_preserves_http_error_classes() {
@@ -38200,6 +38301,7 @@ mod advert_tests {
         .expect("encode range capability");
         let advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at: 42,
             expires_at: 99,
             body: ProviderAdvertBodyV1 {
@@ -38393,7 +38495,7 @@ mod advert_tests {
     }
     fn torii_test_quarantine_key_wrapper() -> Arc<dyn ModerationQuarantineKeyWrapper> {
         Arc::new(ToriiTestQuarantineKeyWrapper {
-            key_id: "kms:test/torii-quarantine-v1".to_owned(),
+            key_id: "kms://moderation/quarantine/torii-fixture-v1".to_owned(),
             key: [0xA6; 32],
         })
     }
@@ -39516,7 +39618,7 @@ mod advert_tests {
                 spa_fallback: None,
             }],
         }));
-        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         inner.sorafs_gateway_config.enforce_admission = true;
         inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
         inner
@@ -39787,7 +39889,7 @@ mod advert_tests {
     fn authoritative_public_discovery_uses_rate_only_gateway_policy() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
-        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         let mut gateway_config = inner.sorafs_gateway_config.clone();
         gateway_config.enforce_admission = true;
         gateway_config.require_manifest_envelope = true;
@@ -41310,7 +41412,7 @@ mod advert_tests {
         let mut context = token_test_context();
         let mut app_inner = Arc::try_unwrap(context.app)
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
-        app_inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
+        app_inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty([0xA1; 32])));
         let mut gateway_config = app_inner.sorafs_gateway_config.clone();
         gateway_config.enforce_admission = true;
         install_api_test_gateway_security(&mut app_inner, gateway_config);
@@ -41961,7 +42063,12 @@ mod advert_tests {
             .collect::<HashSet<_>>();
         let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
             .expect("fixture admission council policy");
-        AdmissionRegistry::from_envelopes(policy, envelopes).expect("fixture envelopes validate")
+        let network_id = envelopes
+            .first()
+            .expect("fixture admission requires at least one envelope")
+            .network_id;
+        AdmissionRegistry::from_envelopes(network_id, policy, envelopes)
+            .expect("fixture envelopes validate")
     }
     fn app_state_with_cache(fixture: &ProviderFixture) -> SharedAppState {
         app_state_with_cache_inner(fixture, false)
@@ -42133,6 +42240,7 @@ mod advert_tests {
         let body_clone = body.clone();
         let mut advert = ProviderAdvertV1 {
             version: PROVIDER_ADVERT_VERSION_V1,
+            network_id: [0xA1; 32],
             issued_at,
             expires_at,
             body,
@@ -42201,6 +42309,12 @@ mod advert_tests {
         let council_key = SigningKey::from_bytes(&[0x42; 32]);
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: sorafs_manifest::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body: body_clone,

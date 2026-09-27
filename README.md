@@ -62,10 +62,6 @@ Notes:
   developer build. `cargo build --workspace` builds libraries and the shipping
   executables; generators, probes, benchmarks, and evidence programs require
   their explicit target feature, normally `--features dev-tools`.
-- Plain `cargo test` skips the oversized private Sumeragi main-loop unit-test
-  harness so local WSL runs do not need a ~10 GiB `iroha_core --test` compile.
-  Run `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests` on a
-  high-memory host when changing that private consensus harness.
 - Full workspace build can take about 20 minutes.
 - Full workspace tests can take multiple hours.
 - On WSL, make sure the Windows-side `.wslconfig` gives the VM enough memory,
@@ -315,17 +311,13 @@ artifacts, and the current [`status.md`](./status.md) and
 [`roadmap.md`](./roadmap.md). Building or testing Iroha does not require a
 sibling `iroha-docs` checkout.
 
-The canonical 54-obligation release ledger records 44 `tlaps_proved`, 3
-`cross_tool_proved`, 6 `trusted_contract`, and 1 `out_of_scope`, with no
-`specified_unproved` rows and `machine_checked_completion: true`. This closes
-the checker-mandated legacy/revision-3-rooted deductive and cross-tool status
-inventory; the checked-in flag is not proof evidence by itself and does not
-turn the compact revision-4 TLC models into deductive TLAPS proofs. Release
-still requires fresh exact-source strict TLAPS, pinned Verus, derived
-cross-tool and production-trace evidence, the mandatory revision-4
-TLC/mutation corridor, and same-source signed receipts. See
-[`formal/sumeragi_v2/README.md`](./formal/sumeragi_v2/README.md) for the exact
-mechanization boundary.
+Consensus is the sans-IO Sumeragi core in
+[`crates/iroha_sumeragi`](./crates/iroha_sumeragi), specified with its safety
+and liveness argument in [`specs/sumeragi.md`](./specs/sumeragi.md). Its
+deterministic simulator tests run with `cargo test -p iroha_sumeragi`, and
+`scripts/sumeragi_mutation_gate.py` checks that every protocol mutation listed
+in the spec is killed by a named test. The retired Sumeragi v2 TLAPS, Verus and
+release-ledger corridor was removed with the v2 consensus tooling.
 
 ## Translations
 

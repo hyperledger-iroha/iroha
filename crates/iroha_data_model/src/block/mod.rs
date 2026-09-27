@@ -27,6 +27,10 @@ use std::{
     time::Duration, vec::Vec,
 };
 pub mod proofs;
+/// Finality-verified historical retail activation; not a current-state proof.
+pub mod retail_activation_proof;
+/// Root-relative retail state inclusion; supplied root still needs current finality.
+pub mod retail_state_map_inclusion;
 fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
     let limit = norito::core::max_archive_len();
     if limit == u64::MAX {
@@ -44,6 +48,8 @@ fn enforce_payload_len_limit(len: usize) -> Result<(), NoritoFrameError> {
 #[cfg(feature = "transparent_api")]
 #[doc = "Builder utilities for constructing blocks in transparent API mode."]
 pub mod builder;
+/// Sumeragi finality proof stored with a committed block.
+pub mod commit_certificate;
 #[doc = "Consensus message types shared by Sumeragi implementations."]
 pub mod consensus;
 #[doc = "Canonical Sumeragi v2 consensus messages and height context."]
@@ -72,6 +78,7 @@ pub mod payload;
 #[cfg(feature = "transparent_api")]
 use crate::fastpq::TransferTranscript;
 use crate::transaction::signed::{SignedTransaction, TransactionEntrypoint};
+pub use commit_certificate::CommitCertificate;
 pub use execution_context::{
     AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1, AutonomousLanePayloadEnvelopeV1,
     BLOCK_EXECUTION_CONTEXT_BUNDLE_VERSION_V1, BlockExecutionContextBundle,
@@ -111,6 +118,13 @@ mod model {
         ///
         /// Blocks constructed prior to validation do not carry execution results.
         pub(super) result: Option<BlockResult>,
+        /// Sumeragi finality proof of a committed block (core header, `CommitQC` and the
+        /// preimage of the certified result).
+        ///
+        /// Absent from proposals, from executed blocks before commit and from genesis. It is
+        /// never covered by the block hash (a header hash), the proposal wire or the executed
+        /// block wire hash.
+        pub(super) commit_certificate: Option<CommitCertificate>,
     }
 }
 pub use self::model::*;
@@ -142,9 +156,7 @@ pub enum SetExecutionOutputsError {
     },
 }
 /// Private payload-only forwarding adapter; no extra codec field/frame is introduced.
-#[cfg(feature = "transparent_api")]
 struct OutputFieldRef<'a, T>(&'a T);
-#[cfg(feature = "transparent_api")]
 impl<T: norito::core::SerializePayload> norito::core::SerializePayload for OutputFieldRef<'_, T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoFrameError> {
         norito::core::SerializePayload::serialize(self.0, writer)
@@ -156,16 +168,16 @@ impl<T: norito::core::SerializePayload> norito::core::SerializePayload for Outpu
         norito::core::SerializePayload::encoded_len_exact(self.0)
     }
 }
-/// Encode-only borrow of the sole SignedBlock layout for pre-mutation sizing.
+/// Encode-only borrow of the sole `SignedBlock` layout for pre-mutation sizing and proposal hashing.
 /// No raw source constructor or alternate accepted decoder is exposed.
-#[cfg(feature = "transparent_api")]
 #[derive(Encode)]
 struct SignedBlockOutputCandidate<'a> {
     signatures: OutputFieldRef<'a, BTreeSet<BlockSignature>>,
     payload: OutputFieldRef<'a, BlockPayload>,
     result: Option<OutputFieldRef<'a, BlockResult>>,
+    /// Always `None`: the executed wire never covers a commit certificate.
+    commit_certificate: Option<OutputFieldRef<'a, CommitCertificate>>,
 }
-#[cfg(feature = "transparent_api")]
 impl norito::NoritoSchema for SignedBlockOutputCandidate<'_> {
     fn nominal_name() -> String {
         <SignedBlock as norito::NoritoSchema>::nominal_name()
@@ -202,6 +214,7 @@ impl SignedBlock {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         }
     }
     /// Create a block with a given signature and an explicit DA commitment bundle.
@@ -232,6 +245,21 @@ impl SignedBlock {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
+        }
+    }
+    /// Create a block with no block signature: a Sumeragi proposal, authenticated by the
+    /// certified consensus header that binds its bytes rather than by a block signature.
+    #[cfg(feature = "transparent_api")]
+    #[must_use]
+    pub fn unsigned_with_payload(mut payload: BlockPayload) -> SignedBlock {
+        payload.da_commitments = payload.da_commitments.filter(|bundle| !bundle.is_empty());
+        payload.da_pin_intents = payload.da_pin_intents.filter(|bundle| !bundle.is_empty());
+        SignedBlock {
+            signatures: BTreeSet::new(),
+            payload,
+            result: None,
+            commit_certificate: None,
         }
     }
     /// Create a block with a given signature and payload.
@@ -246,6 +274,7 @@ impl SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload,
             result: None,
+            commit_certificate: None,
         }
     }
     /// Atomically install actual typed outputs and their one checked Merkle cache.
@@ -296,6 +325,7 @@ impl SignedBlock {
             signatures: OutputFieldRef(&self.signatures),
             payload: OutputFieldRef(&self.payload),
             result: Some(OutputFieldRef(&result)),
+            commit_certificate: None,
         };
         let frame_len = norito::canonical_frame_len(&candidate)
             .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
@@ -331,7 +361,7 @@ impl SignedBlock {
         limits
             .validate_outputs(self.execution_outputs())
             .map_err(SetExecutionOutputsError::InvalidLimits)?;
-        let frame_len = norito::canonical_frame_len(self)
+        let frame_len = norito::canonical_frame_len(self.without_commit_certificate().as_ref())
             .map_err(|error| SetExecutionOutputsError::Encoding(error.to_string()))?;
         let actual = u64::try_from(frame_len)
             .ok()
@@ -417,27 +447,65 @@ impl SignedBlock {
     /// Whether this block is in the exact resultless shape accepted as a consensus proposal.
     ///
     /// Execution outputs are absent from a canonical proposal. The full output collection is part of
-    /// the encoded block and therefore must not be supplied by proposal ingress.
+    /// the encoded block and therefore must not be supplied by proposal ingress. A proposal never
+    /// carries a commit certificate either.
     #[inline]
     #[must_use]
     pub fn is_resultless_proposal(&self) -> bool {
-        self.result.is_none()
+        self.result.is_none() && self.commit_certificate.is_none()
     }
     /// Return the canonical resultless proposal corresponding to this block.
     ///
     /// This removes the sole execution-output owner while preserving the complete proposal
     /// payload, signatures, and proposal-only header.
+    ///
+    /// The commit certificate is removed as well: a proposal never carries finality.
     #[must_use]
     pub fn canonical_resultless_proposal(&self) -> Self {
         self.clone().into_resultless_proposal()
     }
-    /// Consume the original block and discard only its execution result.
+    /// Consume the original block and discard its execution result and finality certificate.
     ///
     /// This preserves the proposal payload and signatures without cloning any
     /// nested transaction or consensus evidence allocation.
     #[must_use]
     pub fn into_resultless_proposal(mut self) -> Self {
         self.result = None;
+        self.commit_certificate = None;
+        self
+    }
+    /// Borrow this block without its commit certificate: `self` when it carries none, otherwise
+    /// an owned copy with the certificate cleared.
+    fn without_commit_certificate(&self) -> Cow<'_, Self> {
+        if self.commit_certificate.is_none() {
+            Cow::Borrowed(self)
+        } else {
+            let mut block = self.clone();
+            block.commit_certificate = None;
+            Cow::Owned(block)
+        }
+    }
+    /// Sumeragi finality proof attached to this committed block, if any.
+    #[inline]
+    #[must_use]
+    pub fn commit_certificate(&self) -> Option<&CommitCertificate> {
+        self.commit_certificate.as_ref()
+    }
+    /// Attach (or with `None`, remove) the Sumeragi finality proof and return the previous one.
+    ///
+    /// Neither the block hash, the canonical proposal wire nor the executed block wire hash
+    /// changes. The certificate is not verified here; `iroha_core` verifies it against the
+    /// committee of the block's height before storing or serving the block.
+    pub fn set_commit_certificate(
+        &mut self,
+        certificate: Option<CommitCertificate>,
+    ) -> Option<CommitCertificate> {
+        core::mem::replace(&mut self.commit_certificate, certificate)
+    }
+    /// Builder form of [`Self::set_commit_certificate`].
+    #[must_use]
+    pub fn with_commit_certificate(mut self, certificate: Option<CommitCertificate>) -> Self {
+        self.commit_certificate = certificate;
         self
     }
     /// Hash the canonical resultless proposal wire used by [`consensus_v2::BlockSubject`].
@@ -445,20 +513,35 @@ impl SignedBlock {
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn canonical_proposal_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        if self.is_resultless_proposal() {
-            self.encode_wire().map(|wire| Hash::new(&wire))
-        } else {
-            self.canonical_resultless_proposal()
-                .encode_wire()
-                .map(|wire| Hash::new(&wire))
-        }
+        self.borrowed_resultless_wire().map(|wire| Hash::new(&wire))
+    }
+    /// Encode the resultless proposal by borrowing the exact signed layout, including the
+    /// signature set and payload. The frame still uses the canonical `SignedBlock` schema ID.
+    fn borrowed_resultless_wire(&self) -> Result<Vec<u8>, NoritoFrameError> {
+        let proposal = SignedBlockOutputCandidate {
+            signatures: OutputFieldRef(&self.signatures),
+            payload: OutputFieldRef(&self.payload),
+            result: None,
+            commit_certificate: None,
+        };
+        let payload = encode_signed_block_payload(&proposal);
+        let mut frame = Vec::with_capacity(1 + norito::core::Header::SIZE + payload.len());
+        frame.push(self.version());
+        write_signed_block_header(&payload, &mut frame)?;
+        frame.extend_from_slice(&payload);
+        Ok(frame)
     }
     /// Hash this exact canonical block wire, including deterministic execution results.
+    ///
+    /// The commit certificate is excluded (the wire is hashed with it cleared): the certified
+    /// execution result commits to this hash, so the certificate cannot be part of it.
     ///
     /// # Errors
     /// Returns [`NoritoFrameError`] if the canonical Norito header cannot be emitted.
     pub fn executed_block_wire_hash(&self) -> Result<Hash, NoritoFrameError> {
-        self.encode_wire().map(|wire| Hash::new(&wire))
+        self.without_commit_certificate()
+            .encode_wire()
+            .map(|wire| Hash::new(&wire))
     }
     #[inline]
     pub(crate) fn result_ref(&self) -> &BlockResult {
@@ -691,6 +774,7 @@ impl SignedBlock {
             signatures: [signature].into_iter().collect(),
             payload,
             result: None,
+            commit_certificate: None,
         })
     }
     /// Serialize this block into a canonical Norito wire frame (version byte + header + payload).
@@ -1344,7 +1428,7 @@ fn borrow_framed_signed_block_payload(bytes: &[u8]) -> Result<(u8, &[u8]), Norit
     validate_signed_block_header(framed_payload)?;
     Ok((version, framed_payload))
 }
-fn encode_signed_block_payload(block: &SignedBlock) -> Vec<u8> {
+fn encode_signed_block_payload<T: norito::core::SerializePayload>(block: &T) -> Vec<u8> {
     norito::core::reset_decode_state();
     norito::codec::encode_adaptive(block)
 }
@@ -1543,7 +1627,8 @@ mod tests {
         alternate_entrypoint: &[u8],
     ) -> Vec<u8> {
         assert_eq!(canonical_block.first(), Some(&1), "signed block V1 prefix");
-        let mut block = split_default_norito_fields(&canonical_block[1..], 3);
+        // signatures, payload, result, commit_certificate
+        let mut block = split_default_norito_fields(&canonical_block[1..], 4);
         let mut payload = split_default_norito_fields(&block[1], 7);
         assert_eq!(&payload[1][..8], &1_u64.to_le_bytes());
         let entrypoints = split_default_norito_fields(&payload[1][8..], 1);
@@ -1653,6 +1738,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         }
     }
     #[test]
@@ -1695,6 +1781,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         assert!(block.is_empty());
     }
@@ -1748,6 +1835,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         assert!(!block.is_empty());
     }
@@ -1826,6 +1914,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let key_pair = checked_random_keypair();
         let signatory_idx = 3;
@@ -1864,6 +1953,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         assert!(block.is_resultless_proposal());
         let mut explicit_iter = block.external_entrypoints_cloned();
@@ -2142,6 +2232,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         block.set_da_commitments(Some(sample_da_bundle()));
         assert!(!block.is_empty());
@@ -2161,6 +2252,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let intent = test_pin_intent(
             LaneId::new(7),
@@ -2185,7 +2277,7 @@ mod tests {
         let proposal = block.clone();
         let header = block.header();
         let proposal_wire_hash = block.canonical_proposal_wire_hash().unwrap();
-        fixture::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        fixture::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         assert_eq!(block.header(), header);
         assert_eq!(block.hash(), proposal.hash());
         assert_eq!(
@@ -2313,6 +2405,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let versioned = block.encode_versioned();
         assert!(!versioned.is_empty());
@@ -2368,6 +2461,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let versioned = block.encode_versioned();
         let decoded_versioned =
@@ -2406,6 +2500,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let versioned = block.encode_versioned();
         let mut framed =
@@ -2446,6 +2541,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let mut versioned = block.encode_versioned();
         versioned.push(0_u8);
@@ -2480,6 +2576,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let versioned = block.encode_versioned();
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame versioned block");
@@ -2521,6 +2618,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let versioned = block.encode_versioned();
         let canonical = block.canonical_wire().expect("canonical wire");
@@ -2567,6 +2665,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let canonical_block = block.encode_versioned();
         let alternate_block = block_with_nested_transaction_wire_alias(
@@ -2670,6 +2769,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         assert!(block.payload.header.da_commitments_hash().is_none());
         block.set_da_commitments(Some(DaCommitmentBundle::default()));
@@ -2748,6 +2848,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let versioned = block.encode_versioned();
         let framed =
@@ -2758,6 +2859,135 @@ mod tests {
         let err = decode_versioned_signed_block(&versioned)
             .expect_err("headerless payloads must be rejected");
         assert!(matches!(err, iroha_version::error::Error::NoritoCodec(_)));
+    }
+    fn plain_block_at(height: u64) -> SignedBlock {
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            7,
+            1,
+        );
+        SignedBlock {
+            signatures: BTreeSet::new(),
+            payload: BlockPayload {
+                header,
+                external_entrypoints: Vec::new(),
+                execution_context: None,
+                da_commitments: None,
+                da_proof_policies: None,
+                da_pin_intents: None,
+                npos_consensus_effects: None,
+            },
+            result: None,
+            commit_certificate: None,
+        }
+    }
+    fn sample_commit_certificate() -> CommitCertificate {
+        CommitCertificate::new(vec![0xA1; 97], vec![0xB2; 140], vec![0xC3; 480])
+    }
+    #[test]
+    fn commit_certificate_accessors() {
+        let mut block = plain_block_at(2);
+        assert!(block.commit_certificate().is_none());
+        assert_eq!(
+            block.set_commit_certificate(Some(sample_commit_certificate())),
+            None
+        );
+        assert_eq!(
+            block.commit_certificate(),
+            Some(&sample_commit_certificate())
+        );
+        assert_eq!(
+            block.set_commit_certificate(None),
+            Some(sample_commit_certificate())
+        );
+        assert!(block.commit_certificate().is_none());
+        let with = plain_block_at(2).with_commit_certificate(Some(sample_commit_certificate()));
+        assert_eq!(
+            with.commit_certificate(),
+            Some(&sample_commit_certificate())
+        );
+        assert!(
+            with.with_commit_certificate(None)
+                .commit_certificate()
+                .is_none()
+        );
+    }
+    #[test]
+    fn commit_certificate_leaves_block_and_wire_hashes_unchanged() {
+        let plain = plain_block_at(2);
+        let certified = plain
+            .clone()
+            .with_commit_certificate(Some(sample_commit_certificate()));
+        assert_eq!(certified.hash(), plain.hash());
+        assert_eq!(
+            certified
+                .canonical_proposal_wire_hash()
+                .expect("proposal hash"),
+            plain.canonical_proposal_wire_hash().expect("proposal hash")
+        );
+        assert_eq!(
+            certified.executed_block_wire_hash().expect("executed hash"),
+            plain.executed_block_wire_hash().expect("executed hash")
+        );
+        // The stored frame does carry the certificate.
+        assert_ne!(
+            certified.encode_wire().expect("wire"),
+            plain.encode_wire().expect("wire")
+        );
+        assert!(plain.is_resultless_proposal());
+        assert!(!certified.is_resultless_proposal());
+        let proposal = certified.canonical_resultless_proposal();
+        assert!(proposal.commit_certificate().is_none());
+        assert!(proposal.is_resultless_proposal());
+        assert_eq!(proposal, plain);
+        assert_eq!(certified.clone().into_resultless_proposal(), plain);
+        assert!(
+            matches!(plain.without_commit_certificate(), Cow::Borrowed(_)),
+            "a block without a certificate is borrowed, not copied"
+        );
+        assert!(matches!(
+            certified.without_commit_certificate(),
+            Cow::Owned(ref block) if block.commit_certificate().is_none()
+        ));
+    }
+    #[test]
+    fn commit_certificate_wire_json_and_versioned_round_trip() {
+        for block in [
+            plain_block_at(3),
+            plain_block_at(3).with_commit_certificate(Some(sample_commit_certificate())),
+        ] {
+            let wire = block.encode_wire().expect("wire");
+            assert_eq!(
+                decode_versioned_signed_block(&wire).expect("decode wire"),
+                block
+            );
+            assert_eq!(
+                decode_framed_signed_block(&wire).expect("decode framed"),
+                block
+            );
+            let canonical = block.canonical_wire().expect("canonical wire");
+            assert_eq!(canonical.as_framed(), wire.as_slice());
+            let versioned = block.encode_versioned();
+            assert_eq!(
+                SignedBlock::decode_all_versioned(&versioned).expect("decode versioned"),
+                block
+            );
+            let json = norito::json::to_json(&block).expect("json");
+            let parsed: SignedBlock = norito::json::from_str(&json).expect("json de");
+            assert_eq!(parsed, block);
+        }
+    }
+    #[test]
+    fn commit_certificate_bytes_are_carried_by_the_stored_frame() {
+        let plain = plain_block_at(4);
+        let certified = plain
+            .clone()
+            .with_commit_certificate(Some(sample_commit_certificate()));
+        let plain_len = plain.encode_wire().expect("wire").len();
+        let certified_len = certified.encode_wire().expect("wire").len();
+        assert!(certified_len > plain_len + sample_commit_certificate().payload_len());
     }
     #[test]
     fn framed_signed_block_uses_v1_layout_flags() {
@@ -2775,6 +3005,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let versioned = block.encode_versioned();
         let framed = frame_versioned_signed_block_bytes(&versioned).expect("frame payload");
@@ -2798,6 +3029,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         let bundle = sample_da_bundle();
         assert!(block.da_commitments().is_none());
@@ -2827,6 +3059,7 @@ mod tests {
                 npos_consensus_effects: None,
             },
             result: None,
+            commit_certificate: None,
         };
         assert!(block.payload.header.da_pin_intents_hash().is_none());
         block.set_da_pin_intents(Some(DaPinIntentBundle::default()));
@@ -3060,11 +3293,11 @@ mod tests {
         assert!(block.lane_finality_statements().is_empty());
         block
             .set_execution_outputs(
-                vec![network(0, Ok(Default::default()))],
+                vec![network(0, Ok(Vec::default()))],
                 3,
-                Default::default(),
+                BTreeMap::default(),
                 vec![],
-                Default::default(),
+                crate::nexus::AxtPolicySnapshot::default(),
                 BTreeSet::from([iroha_model_base::topology::DataSpaceId::new(9)]),
                 vec![],
                 &fixture::limits(),
@@ -3081,7 +3314,7 @@ mod tests {
     fn set_transaction_results_records_committed_fragment_count() {
         let mut block = fixture::proposal(2);
         let rows = vec![
-            network(0, Ok(Default::default())),
+            network(0, Ok(Vec::default())),
             network(
                 1,
                 Err(
@@ -3233,7 +3466,7 @@ mod tests {
         let expected_policy_snapshot = policy_snapshot.clone();
         block
             .set_execution_outputs(
-                vec![network(0, Ok(Default::default()))],
+                vec![network(0, Ok(Vec::default()))],
                 1,
                 transcripts.clone(),
                 vec![axt_envelope.clone()],
@@ -3263,7 +3496,7 @@ mod tests {
     fn set_transaction_results_updates_merkle_roots_with_time_triggers() {
         let mut block = fixture::proposal(1);
         let header = block.header();
-        let rows = vec![network(0, Ok(Default::default())), simple_time(&block, 0)];
+        let rows = vec![network(0, Ok(Vec::default())), simple_time(&block, 0)];
         let expected: MerkleTree<execution_output::ExecutionOutputV1> =
             rows.iter().map(HashOf::new).collect();
         fixture::install(&mut block, rows.clone(), 2).unwrap();
@@ -3292,7 +3525,7 @@ mod tests {
         let time = simple_time(&block, 0);
         fixture::install(
             &mut block,
-            vec![network(0, Ok(Default::default())), time.clone()],
+            vec![network(0, Ok(Vec::default())), time.clone()],
             2,
         )
         .unwrap();
@@ -3307,7 +3540,7 @@ mod tests {
     fn set_transaction_results_rejects_too_short_external_hash_prefix() {
         let mut block = fixture::proposal(2);
         let before = block.encode_wire().unwrap();
-        assert!(fixture::install(&mut block, vec![network(0, Ok(Default::default()))], 1).is_err());
+        assert!(fixture::install(&mut block, vec![network(0, Ok(Vec::default()))], 1).is_err());
         assert_eq!(block.encode_wire().unwrap(), before);
     }
     #[cfg(feature = "transparent_api")]
@@ -3316,8 +3549,8 @@ mod tests {
         for rows in [
             vec![],
             vec![
-                network(0, Ok(Default::default())),
-                network(1, Ok(Default::default())),
+                network(0, Ok(Vec::default())),
+                network(1, Ok(Vec::default())),
             ],
         ] {
             let mut block = fixture::proposal(1);
@@ -3331,7 +3564,7 @@ mod tests {
     fn set_transaction_results_rejects_external_hash_mismatch() {
         let mut block = fixture::proposal(1);
         let before = block.encode_wire().unwrap();
-        assert!(fixture::install(&mut block, vec![network(1, Ok(Default::default()))], 1).is_err());
+        assert!(fixture::install(&mut block, vec![network(1, Ok(Vec::default()))], 1).is_err());
         assert_eq!(block.encode_wire().unwrap(), before);
     }
     #[cfg(feature = "transparent_api")]
@@ -3343,7 +3576,7 @@ mod tests {
         )));
         let before = block.encode_wire().unwrap();
         assert!(matches!(
-            fixture::install_network(&mut block, vec![Ok(Default::default())]),
+            fixture::install_network(&mut block, vec![Ok(Vec::default())]),
             Err(SetExecutionOutputsError::InvalidProposal(_))
         ));
         assert_eq!(block.encode_wire().unwrap(), before);
@@ -3352,14 +3585,11 @@ mod tests {
     #[test]
     fn proofs_for_entry_hash_matches_merkle_roots() {
         let mut block = fixture::proposal(2);
-        fixture::install_network(
-            &mut block,
-            vec![Ok(Default::default()), Ok(Default::default())],
-        )
-        .unwrap();
+        fixture::install_network(&mut block, vec![Ok(Vec::default()), Ok(Vec::default())]).unwrap();
         for (index, hash) in block.network_input_hashes().enumerate() {
+            let expected_index = u32::try_from(index).expect("two-entry fixture index fits u32");
             let proof = block.network_execution_proof(&hash).unwrap();
-            assert_eq!(proof.entry_proof.proof().leaf_index(), index as u32);
+            assert_eq!(proof.entry_proof.proof().leaf_index(), expected_index);
             assert!(
                 proof
                     .entry_proof
@@ -3371,7 +3601,7 @@ mod tests {
                     .verify(&block.output_merkle_commitment().unwrap())
             );
             assert!(
-                matches!(proof.output_proof.output(), execution_output::ExecutionOutputV1::Network(row) if row.input_index == index as u32)
+                matches!(proof.output_proof.output(), execution_output::ExecutionOutputV1::Network(row) if row.input_index == expected_index)
             );
         }
     }
@@ -3379,7 +3609,7 @@ mod tests {
     #[test]
     fn proofs_for_external_entry_with_time_trigger_use_full_executed_root() {
         let mut block = fixture::proposal(1);
-        let rows = vec![network(0, Ok(Default::default())), simple_time(&block, 0)];
+        let rows = vec![network(0, Ok(Vec::default())), simple_time(&block, 0)];
         fixture::install(&mut block, rows, 2).unwrap();
         let hash = block.network_input_hashes().next().unwrap();
         let proof = block.network_execution_proof(&hash).unwrap();
@@ -3406,7 +3636,7 @@ mod tests {
     #[test]
     fn proofs_for_entry_hash_missing_returns_none() {
         let mut block = fixture::proposal(1);
-        fixture::install_network(&mut block, vec![Ok(Default::default())]).unwrap();
+        fixture::install_network(&mut block, vec![Ok(Vec::default())]).unwrap();
         assert!(
             block
                 .network_execution_proof(&HashOf::from_untyped_unchecked(Hash::new(b"missing")))
@@ -3557,8 +3787,8 @@ mod tests {
             fixture::install(
                 &mut positive,
                 vec![
-                    network(0, Ok(Default::default())),
-                    network(0, Ok(Default::default()))
+                    network(0, Ok(Vec::default())),
+                    network(0, Ok(Vec::default()))
                 ],
                 1
             )
@@ -3574,8 +3804,8 @@ mod tests {
             fixture::install(
                 &mut ambiguous,
                 vec![
-                    network(0, Ok(Default::default())),
-                    network(1, Ok(Default::default()))
+                    network(0, Ok(Vec::default())),
+                    network(1, Ok(Vec::default()))
                 ],
                 2
             )
@@ -3587,7 +3817,7 @@ mod tests {
     fn full_output_replacement_rebuilds_exact_cache() {
         let mut block = fixture::proposal(2);
         let rows = vec![
-            network(0, Ok(Default::default())),
+            network(0, Ok(Vec::default())),
             network(
                 1,
                 Err(
@@ -3600,7 +3830,7 @@ mod tests {
         fixture::install(&mut block, rows.clone(), 1).unwrap();
         let first = block.output_merkle_commitment();
         let header = block.header();
-        let replacement = vec![rows[0].clone(), network(1, Ok(Default::default()))];
+        let replacement = vec![rows[0].clone(), network(1, Ok(Vec::default()))];
         let expected: MerkleTree<execution_output::ExecutionOutputV1> =
             replacement.iter().map(HashOf::new).collect();
         fixture::install(&mut block, replacement, 2).unwrap();
@@ -3614,3 +3844,7 @@ mod tests {
 #[cfg(all(test, feature = "transparent_api"))]
 #[path = "output_attachment_tests.rs"]
 mod output_attachment_tests;
+
+#[cfg(test)]
+#[path = "proposal_wire_hash_tests.rs"]
+mod proposal_wire_hash_tests;

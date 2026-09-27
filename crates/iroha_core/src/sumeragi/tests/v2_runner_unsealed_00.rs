@@ -119,6 +119,141 @@ fn canonical_body_recovery_flushes_owned_effects_after_local_completion() {
     );
     assert!(canonical_recovery_source_work_remains(true, 0));
 }
+#[test]
+fn canonical_body_recovery_dispatch_rejects_old_lane_and_unrelated_output_effects() {
+    use super::super::message::{
+        LANE_HISTORICAL_RECOVERY_VERSION_V1, LaneHistoricalRecoveryKindV1,
+        LaneHistoricalRecoveryPayloadV1, LaneHistoricalRecoveryRequestV1,
+        LaneHistoricalRecoveryResponseV1,
+    };
+
+    let (context, _) = context();
+    let peer = PeerId::new(KeyPair::random().public_key().clone());
+    let wire_hash = Hash::new(b"canonical recovery output fixture");
+    let need = CanonicalExecutedBlockNeedV1 {
+        height: 1,
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(b"canonical block")),
+        finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(b"finality")),
+        execution_commitment: wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"parent"),
+            Hash::new(b"post"),
+            Hash::new(b"writes"),
+            1,
+            wire_hash,
+        ),
+        executed_block_wire_len: 1,
+        executed_block_wire_hash: wire_hash,
+    };
+    let block_hash = need.block_hash;
+    let execution_commitment = need.execution_commitment;
+    let finality_artifact_hash = need.finality_artifact_hash;
+    let request = LaneHistoricalRecoveryRequestV1 {
+        version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+        requester: peer.clone(),
+        certificate: None,
+        signer_pops: std::collections::BTreeMap::new(),
+        kind: LaneHistoricalRecoveryKindV1::CanonicalExecutedBlock {
+            need: Box::new(need),
+            chunk_index: 0,
+        },
+    };
+    let request_effect = V2LaneWorkEffect::PostLaneBlock {
+        peer: peer.clone(),
+        message: BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone())),
+    };
+    assert!(canonical_recovery_is_request_effect(&request_effect).unwrap());
+
+    let round = wire::ConsensusRound {
+        context_id: context.id(),
+        height: context.height,
+        view: 0,
+    };
+    let subject = wire::BlockSubject {
+        parent_block_hash: None,
+        block_hash,
+        payload_hash: Hash::new(b"canonical recovery payload"),
+    };
+    // This helper only classifies output families. The recovery owner verifies
+    // finality and chunk contents before constructing an actual response.
+    let finality_artifact = wire::finality::V2FinalityArtifact::new(
+        context.clone(),
+        subject,
+        wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: Vec::new(),
+            aggregate_signature: Vec::new(),
+        },
+        Vec::new(),
+    );
+    let response_effect = V2LaneWorkEffect::PostLaneBlock {
+        peer: peer.clone(),
+        message: BlockMessage::LaneHistoricalRecoveryResponse(Box::new(
+            LaneHistoricalRecoveryResponseV1 {
+                version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+                request_hash: HashOf::new(&request),
+                payload: LaneHistoricalRecoveryPayloadV1::CanonicalExecutedBlockChunk {
+                    finality_artifact,
+                    wire_len: 1,
+                    chunk_index: 0,
+                    chunk_count: 1,
+                    bytes: vec![0],
+                },
+            },
+        )),
+    };
+    assert!(!canonical_recovery_is_request_effect(&response_effect).unwrap());
+
+    let new_view_body = crate::lane_consensus::LaneBlockNewViewBodyV1 {
+        version: 1,
+        network_id: context.network_id.clone(),
+        epoch: context.epoch,
+        lane_id: iroha_model_base::topology::LaneId::SINGLE,
+        dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        lane_incarnation: Hash::new(b"old lane incarnation"),
+        proposal_height: 1,
+        lane_block_height: 1,
+        from_view: 0,
+        target_view: 1,
+        locked_proposal_hash: Hash::new(b"old proposal"),
+        locked_descriptor_hash: Hash::new(b"old descriptor"),
+        executable_payload_hash: Hash::new(b"old payload"),
+        validator_set_hash_version: 1,
+        validator_set_hash: HashOf::new(&vec![peer.clone()]),
+        validator_count: 1,
+        min_quorum: 1,
+        qc_mode_tag: "old lane".to_owned(),
+    };
+    let old_lane_effect = V2LaneWorkEffect::PostLaneBlock {
+        peer: peer.clone(),
+        message: BlockMessage::LaneBlockNewViewVote(
+            crate::lane_consensus::LaneBlockNewViewVoteV1 {
+                body: new_view_body,
+                signer: peer.clone(),
+                bls_signature: Vec::new(),
+            },
+        ),
+    };
+    assert!(canonical_recovery_is_request_effect(&old_lane_effect).is_err());
+    let unrelated_effect = V2LaneWorkEffect::PostQueuePlanAdmissionCertificate {
+        peer,
+        view: 0,
+        certificate: Arc::new(vec![1]),
+    };
+    assert!(canonical_recovery_is_request_effect(&unrelated_effect).is_err());
+    let mut wrong_kind = request;
+    wrong_kind.kind = LaneHistoricalRecoveryKindV1::CanonicalBlock {
+        finality_artifact_hash,
+    };
+    let wrong_kind_effect = V2LaneWorkEffect::PostLaneBlock {
+        peer: wrong_kind.requester.clone(),
+        message: BlockMessage::LaneHistoricalRecoveryRequest(Box::new(wrong_kind)),
+    };
+    assert!(canonical_recovery_is_request_effect(&wrong_kind_effect).is_err());
+}
 crate::sumeragi::v2_lifecycle_coordinator::source_contract_test!(
     canonical_body_recovery_dispatch_drains_old_output_before_new_reservations
 );
@@ -198,8 +333,8 @@ fn pending_tip_recovery_gate_precedes_lane_work_construction() {
 }
 #[test]
 fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
-    let _status_guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let started_at = Instant::now();
     let round_timeout = Duration::from_secs(10);
     let deadline = PendingTipRecoveryDeadline::new(started_at, round_timeout)
@@ -227,7 +362,7 @@ fn pending_tip_recovery_deadline_is_bounded_and_fail_closed() {
             stage: Some(PendingKuraApplyRecoveryStage::ApplicationDispatched),
         } if timeout == Duration::from_secs(30)
     ));
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 }
 #[test]
 fn bounded_sidecar_admission_turn_applies_only_its_budget() {
@@ -333,9 +468,7 @@ fn decided_recovery_certified_request(
                     1,
                     Hash::new(b"runner recovery executed block"),
                 ),
-            signers: (0..super::super::network_topology::commit_quorum_from_len(
-                context.roster.len(),
-            ))
+            signers: (0..iroha_sumeragi::types::quorum(context.roster.len()))
                 .map(|index| u32::try_from(index).expect("small runner roster index"))
                 .collect(),
             aggregate_signature: vec![0xA5; 48],
@@ -1523,7 +1656,7 @@ fn publish_applied_runner_status(context: &wire::HeightContext) {
         transition: wire::SumeragiV2ProgressTransition::Applied,
         age_ms: 0,
     });
-    super::super::status::set_v2_status(status);
+    super::super::v2_status::set_v2_status(status);
 }
 fn runner_sidecar_chunk(
     local: PeerId,

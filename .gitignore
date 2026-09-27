@@ -249,7 +249,7 @@ crates/kotodama_lang/src/ir/test_sources/*
 !crates/musubi/src/test_runner.rs
 !crates/iroha_core/src/kura/test_fault_injection_state.rs
 !crates/iroha_core/src/kura/test_fault_injection_controls.rs
-!crates/iroha_core/src/sumeragi/status/test_guards.rs
+!crates/iroha_core/src/status/test_guards.rs
 # Keep SoraFS Rust test helpers included in source captures and fresh checkouts.
 !crates/iroha_torii/src/sorafs/stream_token_cleanup/test_support.rs
 !crates/sorafs_manifest/src/signer/stream_token_evidence/test_support.rs
@@ -307,7 +307,7 @@ _apalache-out*
 /sora-single/
 /storage/
 /crates/sorafs_node/storage/
-/crates/iroha_torii/storage/torii/contract_deploy_bundles/
+/crates/iroha_torii/storage/
 /sora-one/
 /bench_trace.json
 /fastpq_*.json

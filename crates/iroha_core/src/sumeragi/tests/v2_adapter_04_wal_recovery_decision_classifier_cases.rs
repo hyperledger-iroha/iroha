@@ -343,6 +343,13 @@ fn recovered_decision_fetch_classifier_authenticates_exact_absent_manifest_and_s
 }
 #[test]
 fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store() {
+    run_lifecycle_fixture_on_large_stack(
+        "bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store",
+        bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store_body,
+    );
+}
+
+fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store_body() {
     let proposal_safety = TempDir::new().expect("temporary ProposalIntent classifier WAL");
     let timeout_safety = TempDir::new().expect("temporary TimeoutIntent classifier WAL");
     persist_proposal_intent_for_control_recovery(&proposal_safety, 0xC3);
@@ -439,13 +446,13 @@ fn bls_control_classifier_rejects_action_tag_extra_and_dual_residuals_pre_store(
 }
 #[test]
 fn bls_foreign_control_replay_row_is_never_repaired_or_published() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary foreign control replay WAL");
     let storage = TempDir::new().expect("temporary foreign control lifecycle stores");
     persist_timeout_intent_for_control_recovery(&safety);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, false));
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let wire_context = context();
     let mut context_id = [0_u8; 32];
     context_id.copy_from_slice(wire_context.id().0.as_ref());
@@ -480,17 +487,17 @@ fn bls_foreign_control_replay_row_is_never_repaired_or_published() {
         foreign_frame,
         "rejection performs no LedgerV1 fsync"
     );
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 }
 #[test]
 fn bls_same_owner_foreign_terminal_control_row_is_rejected_without_rewrite() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary same-owner control WAL");
     let storage = TempDir::new().expect("temporary same-owner lifecycle stores");
     persist_timeout_intent_for_control_recovery(&safety);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, false));
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let wire_context = context();
     let mut context_id = [0_u8; 32];
     context_id.copy_from_slice(wire_context.id().0.as_ref());
@@ -525,15 +532,15 @@ fn bls_same_owner_foreign_terminal_control_row_is_rejected_without_rewrite() {
         foreign_frame,
         "same-owner rejection performs no LedgerV1 rewrite"
     );
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 }
 #[test]
 fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary mutated control frame WAL");
     let storage = TempDir::new().expect("temporary unopened control stores");
     persist_timeout_intent_for_control_recovery(&safety);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let mut authenticated = open_recovered_startup_test(&safety)
         .expect("open exact TimeoutIntent before identity mutation")
         .authenticate_final_wal_startup_authority()
@@ -593,7 +600,7 @@ fn bls_mutated_control_frame_identity_fails_before_serve_or_ledger_open() {
     );
     assert!(!storage.path().join("ledger").exists());
     assert!(!storage.path().join("serve").exists());
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 }
 #[cfg(feature = "bls")]
 fn run_recovered_decision_validate_cold_projection_test_on_stack() {

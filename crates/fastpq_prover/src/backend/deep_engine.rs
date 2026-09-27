@@ -1,26 +1,32 @@
 //! Bounded verification of the exact DEEP compact replacement candidate.
 //!
 //! This owner joins the full statement, typed whole-message transcript, one OOD
-//! AIR identity, exact authenticated fibers and the complete constant terminal.
+//! AIR identity, exact authenticated fibers and the complete linear terminal.
 //! It constructs neither a witness nor a trace/FFT/LDE. Its inputs are the
 //! caller-prepared transfer relation and the canonical bounded proof frame.
-//! TODO: Complete the same-profile producer, source/finality authentication,
-//! privacy and cryptographic/resource qualification before production admission.
+//! The offline Quantity facade joins an unmasked producer whose constant
+//! terminal satisfies this fixed profile's degree-below-two terminal bound.
+//! Checking the complete terminal enforces polynomial geometry; it cannot
+//! establish masking, source authority or FRI soundness.
+//! TODO: Complete the masked producer and qualify generated artifacts,
+//! source/finality authentication, privacy and cryptographic/resource bounds
+//! before production admission.
 
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
 
 use super::{
-    compact_protocol::FixedAir,
-    compact_transfer_air::CompactTransferAir,
     deep_binding::{BindingError, Context, Message, Oracle, Transcript},
     deep_composition::DeepComposition,
-    deep_geometry::{CONSTRAINTS, DeepGeometry, FRI_ARITIES, FRI_LENGTHS, QUERY_COUNT},
+    deep_geometry::{
+        CONSTRAINTS, DeepGeometry, FRI_ARITIES, FRI_DEGREES, FRI_LENGTHS, QUERY_COUNT,
+    },
     deep_proof::{self, DeepProof, OpeningPlans},
+    deep_relation::DeepRelation,
     fri_fold::FriFoldPlan,
     merkle_multiproof::MultiproofPlan,
 };
-use crate::{Error, Result, field::GoldilocksFp4V1 as F};
+use crate::{Error, Result, VerifyLimits, field::GoldilocksFp4V1 as F};
 
 /// Actual bounded work of one fully accepted candidate; no admission authority.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,21 +47,124 @@ pub(super) struct VerificationWork {
     pub(super) g_blocks: usize,
     /// Checked initial-query fold edges, including repeated shared fibers.
     pub(super) fold_checks: usize,
-    /// Every terminal value checked against the degree-zero polynomial.
+    /// Every terminal value checked against one degree-below-two polynomial.
     pub(super) terminal_values: usize,
 }
 
-/// Verify a complete canonical frame against the caller's fixed transfer relation.
+/// Authenticated row commitment and measured work from one complete verification.
+/// Private fields prevent decoded or partially checked proofs from minting success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct VerifiedDeepProof {
+    row_root: WireDigest,
+    work: VerificationWork,
+}
+
+impl VerifiedDeepProof {
+    /// The row root of the same decoded proof which passed every check.
+    pub(super) const fn row_root(&self) -> WireDigest {
+        self.row_root
+    }
+
+    /// Measured verification work for that authenticated proof.
+    pub(super) const fn work(&self) -> VerificationWork {
+        self.work
+    }
+}
+
+/// Check caller ceilings against fixed geometry before decoding or private proving.
+///
+/// `proof_bytes` may be MAX_FRAME_BYTES for conservative producer preflight.
+/// Transition count belongs to the enclosing prepared public bundle and remains
+/// checked there before constructing a segment; it cannot be read from proof bytes.
+/// AIR rows have 301 retained values, quotient chunks have two Fp4 values, and
+/// FRI groups have at most 16 values. The complete 128-value terminal has its own
+/// immutable DTO/engine bound; it is not a queried FRI group.
+pub(super) fn preflight(
+    relation: &impl DeepRelation,
+    proof_bytes: usize,
+    limits: VerifyLimits,
+) -> Result<()> {
+    for (name, actual, maximum) in [
+        (
+            "max_proof_bytes",
+            proof_bytes,
+            limits.max_proof_bytes.min(deep_proof::MAX_FRAME_BYTES),
+        ),
+        (
+            "max_compact_statement_bytes",
+            relation.statement_bytes().len(),
+            limits.max_batch_bytes,
+        ),
+        ("max_fri_layers", FRI_LENGTHS.len(), limits.max_fri_layers),
+        ("max_queries", QUERY_COUNT, limits.max_queries),
+        ("max_query_chunk_values", 2, limits.max_query_chunk_values),
+        (
+            "max_query_path_len",
+            super::deep_geometry::LDE_ROWS.ilog2() as usize,
+            limits.max_query_path_len,
+        ),
+        (
+            "max_fri_round_values",
+            *FRI_ARITIES.iter().max().expect("fixed nonempty arities"),
+            limits.max_fri_round_values,
+        ),
+        (
+            "max_air_row_values",
+            super::compact_public_columns::COMMITTED_COLUMN_COUNT,
+            limits.max_air_row_values,
+        ),
+    ] {
+        if actual > maximum {
+            return Err(Error::VerifierLimitExceeded {
+                limit: name,
+                actual,
+                max: maximum,
+            });
+        }
+    }
+    Context::preflight_relation(relation).map_err(binding_error)
+}
+
+/// Verify with all segment policies and return only its authenticated commitment.
+///
+/// One canonical decode remains within the caller's allocation ceiling and any
+/// stricter enclosing Norito scope. The same object then receives exactly one
+/// full OOD AIR evaluation and all transcript, Merkle, FRI and terminal checks.
+pub(super) fn verify_committed(
+    relation: &impl DeepRelation,
+    bytes: &[u8],
+    limits: VerifyLimits,
+    max_decode_allocation_charges: usize,
+) -> Result<VerifiedDeepProof> {
+    preflight(relation, bytes.len(), limits)?;
+    let proof = deep_proof::decode_with_allocation(
+        bytes,
+        limits.max_proof_bytes,
+        max_decode_allocation_charges,
+    )?;
+    verify_decoded(relation, &proof, bytes.len())
+}
+
+/// Test diagnostic using the same decoder and complete verifier implementation.
+#[cfg(test)]
 pub(super) fn verify(
-    relation: &CompactTransferAir,
+    relation: &impl DeepRelation,
     bytes: &[u8],
     max_proof_bytes: usize,
 ) -> Result<VerificationWork> {
     // Decode enforces byte, aggregate allocation/element and shape ceilings
     // before any transcript expansion or public AIR preparation below.
     let proof = deep_proof::decode(bytes, max_proof_bytes)?;
+    Ok(verify_decoded(relation, &proof, bytes.len())?.work())
+}
+
+fn verify_decoded(
+    relation: &impl DeepRelation,
+    proof: &DeepProof,
+    proof_bytes: usize,
+) -> Result<VerifiedDeepProof> {
     let geometry = DeepGeometry::new()?;
-    let binding = Context::new(relation.statement_bytes()).map_err(binding_error)?;
+    let binding = Context::for_relation(relation).map_err(binding_error)?;
     let mut transcript = Transcript::new(binding.clone());
     if transcript.challenge().map_err(binding_error)? != Message::Dummy {
         return Err(shape(
@@ -71,7 +180,7 @@ pub(super) fn verify(
         .map_err(binding_error)?;
     let z = fields(&mut transcript, 1)?[0];
     let composition = geometry.check_ood(
-        relation,
+        relation.deep_relation(),
         &alphas,
         z,
         &proof.ood.current,
@@ -98,11 +207,11 @@ pub(super) fn verify(
         ));
     };
     let queries: Vec<_> = queries.into_iter().map(|index| index as usize).collect();
-    let plans = deep_proof::preflight(&proof, &queries)?;
-    let (leaf_hashes, parent_hashes) = authenticate(&binding, &proof, &plans)?;
-    let fold_checks = check_chains(&geometry, &composition, lambda, &betas, &queries, &proof)?;
-    Ok(VerificationWork {
-        proof_bytes: bytes.len(),
+    let plans = deep_proof::preflight(proof, &queries)?;
+    let (leaf_hashes, parent_hashes) = authenticate(&binding, proof, &plans)?;
+    let fold_checks = check_chains(&geometry, &composition, lambda, &betas, &queries, proof)?;
+    let work = VerificationWork {
+        proof_bytes,
         air_evaluations: 1,
         leaf_hashes,
         parent_hashes,
@@ -111,6 +220,10 @@ pub(super) fn verify(
         g_blocks: 637,
         fold_checks,
         terminal_values: proof.terminal.len(),
+    };
+    Ok(VerifiedDeepProof {
+        row_root: proof.row_root,
+        work,
     })
 }
 
@@ -245,14 +358,6 @@ fn check_chains(
     queries: &[usize],
     proof: &DeepProof,
 ) -> Result<usize> {
-    // The final exclusive degree is one: all 128 values, including unqueried
-    // positions, must be the same constant. Sampling this vector is insufficient.
-    let first = proof.terminal[0];
-    if proof.terminal.iter().any(|&value| value != first) {
-        return Err(shape(
-            "DEEP terminal does not represent a constant polynomial",
-        ));
-    }
     let mut domain = geometry.domain();
     let mut domains = Vec::with_capacity(FRI_ARITIES.len());
     let mut folds = Vec::with_capacity(FRI_ARITIES.len());
@@ -264,6 +369,10 @@ fn check_chains(
         )?);
         domain = domain.folded(arity);
     }
+    // Authenticate and check the entire terminal rather than only the sampled
+    // positions. The folded coset is essential: checking an index-linear vector
+    // would accept values that are not degree below two on this actual domain.
+    check_terminal_degree(domain, &proof.terminal)?;
     for (ordinal, &initial) in queries.iter().enumerate() {
         let pair = &proof.quotients[ordinal];
         let mut value = composition.base_value_at(
@@ -301,6 +410,16 @@ fn check_chains(
         }
     }
     Ok(queries.len() * FRI_ARITIES.len())
+}
+
+/// Require all authenticated values to lie on one polynomial over the folded coset.
+fn check_terminal_degree(domain: super::FriDomain, terminal: &[F]) -> Result<()> {
+    if !domain.evaluations_have_degree_below(terminal, FRI_DEGREES[5])? {
+        return Err(shape(
+            "DEEP terminal does not represent a degree-below-two polynomial",
+        ));
+    }
+    Ok(())
 }
 
 fn binding_error(error: BindingError) -> Error {

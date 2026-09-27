@@ -2,7 +2,8 @@
 //!
 //! The existing cyclotomic FFT remains the arithmetic owner. This adapter checks
 //! dimensions/coefficients and applies full Fp4 coefficient twists; it never
-//! relabels the trace parameters to obtain a larger transform or projects points.
+//! projects points. The larger DEEP domain has an explicit constructor taking
+//! its independently validated geometry, not modified replay parameters.
 
 use fastpq_isi::FASTPQ_FINAL_V1;
 
@@ -23,6 +24,42 @@ pub(super) struct PolynomialDomain {
 }
 
 impl PolynomialDomain {
+    /// Bind the exact larger DEEP coset to the same checked four-lane FFT owner.
+    ///
+    /// This entry takes a validated fixed geometry, never arbitrary root/order
+    /// metadata. The caller's cap is checked without allocating the 8M lanes.
+    pub(super) fn for_deep(
+        geometry: &super::deep_geometry::DeepGeometry,
+        max_workspace_bytes: usize,
+    ) -> Result<Self> {
+        let rows = super::deep_geometry::LDE_ROWS;
+        let workspace_bytes = rows
+            .checked_mul(2 * core::mem::size_of::<F>())
+            .ok_or_else(|| invalid("DEEP transform payload size overflow"))?;
+        limit(
+            "max_polynomial_transform_bytes",
+            workspace_bytes,
+            max_workspace_bytes,
+        )?;
+        limit(
+            "max_polynomial_transform_addressable_bytes",
+            workspace_bytes,
+            isize::MAX as usize,
+        )?;
+        let domain = geometry.domain();
+        let offset = F::embed_base(domain.offset);
+        let inverse_offset = offset
+            .inverse()
+            .ok_or_else(|| invalid("DEEP transform requires a nonzero fixed offset"))?;
+        Ok(Self {
+            rows,
+            generator: domain.generator,
+            offset,
+            inverse_offset,
+            workspace_bytes,
+        })
+    }
+
     /// Validate geometry and the maximum simultaneous lane/result payloads.
     ///
     /// Subgroup transforms use the explicit offset one. A numerator caller must
@@ -85,6 +122,7 @@ impl PolynomialDomain {
     }
 
     /// Conservative simultaneous lane/result payload for one conversion.
+    #[cfg(test)]
     pub(super) const fn workspace_bytes(self) -> usize {
         self.workspace_bytes
     }

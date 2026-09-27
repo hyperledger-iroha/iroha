@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 
-import check_native_sdk_abi23_artifact as native
+import check_native_sdk_artifact as native
 from build_sorafs_python_consumer_artifact import SCHEMA, TOOLS
 from sorafs_evidence_json import decode_evidence_json
 from sorafs_python_archive import MAX_ARCHIVE_BYTES, archive_members
@@ -145,7 +145,7 @@ def verify_python_consumer(index: PackageIndex, opened: OpenedIndexFiles, *,
     _require(bundle.manifest == runtime, "runtime bundle and selected manifest differ")
     dependency_raw = retained_original("inputs/dependencies.json", "dependency_manifest", 64 * 1024)
     dependencies = parse_dependency_manifest(dependency_raw, expected_sha256=expected_dependency_manifest_sha256)
-    native_raw = retained_original("inputs/native-abi23.json", "native_manifest", native.MAX_MANIFEST_BYTES)
+    native_raw = retained_original("inputs/native-abi24.json", "native_manifest", native.MAX_MANIFEST_BYTES)
     native_manifest = native.validate_manifest(decode_evidence_json(native_raw))
     _require(native.canonical_manifest_bytes(native_manifest) == native_raw
              and native_manifest["sdk"] == "python" and native_manifest["source_commit"] == index.source_commit

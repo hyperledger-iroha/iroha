@@ -383,8 +383,8 @@ Root {
         ),
         data_dir: "./storage/torii",
         receipt_signer: [REDACTED; 0 configured],
-        query_max_inflight: 128,
-        query_heavy_max_inflight: 32,
+        query_max_inflight: 256,
+        query_heavy_max_inflight: 64,
         require_api_token: false,
         api_tokens: [REDACTED; 0 Torii API token(s)],
         peer_telemetry_urls: [REDACTED; 0 configured],
@@ -459,10 +459,10 @@ Root {
             allow_tool_prefixes: [],
             deny_tool_prefixes: [],
             rate_per_minute: Some(
-                240,
+                1200,
             ),
             burst: Some(
-                120,
+                512,
             ),
         },
         proof_api: ProofApi {
@@ -771,6 +771,23 @@ Root {
                 BlsNormal,
             },
         },
+        local: SumeragiLocalOverrides {
+            t_base: None,
+            t_max: None,
+            start_cap: None,
+            decay_after: None,
+            rebroadcast_interval: None,
+            status_keepalive: None,
+            build_timeout: None,
+            fetch_retry: None,
+            sync_batch: None,
+            sync_retry: None,
+            sync_max_bytes: None,
+            max_observers: None,
+        },
+        records_dir: "./storage-sumeragi-records",
+        installation_log: "./storage-sumeragi-installation.log",
+        retired_keys: [],
     },
     block_sync: BlockSync {
         gossip_period: 10s,
@@ -825,6 +842,8 @@ Root {
                 67108864,
             ),
             retained_carrier_shell_bytes: 268435456,
+            consensus_evidence_preparation_bytes: 8311968,
+            consensus_stake_index_bytes: 67108864,
             disk_budget_weights: NexusStorageWeights {
                 kura_blocks_bps: 3500,
                 wsv_snapshots_bps: 2000,
@@ -1931,6 +1950,7 @@ Root {
         kagemusha: Kagemusha {
             reserve_accounts: {},
             proof_release: None,
+            allow_testnet_experimental_release: false,
         },
         router: Router {
             twap_window: 60s,

@@ -2126,7 +2126,10 @@ def assert_no_python_runtime_dependency(dependencies: str) -> None:
     """Reject explicit CPython runtime linkage in a Darwin extension."""
 
     lowered = dependencies.lower()
-    if "python.framework" in lowered or "libpython" in lowered:
+    if (
+        re.search(r"python(?:[0-9]+(?:\.[0-9]+)*[a-z]*)?\.framework", lowered)
+        or "libpython" in lowered
+    ):
         _fail("Darwin native wheel must not depend on Python.framework or libpython")
 
 
@@ -2205,6 +2208,24 @@ def verify_current_environment(
     )
     sdk_before = verify_installed_files(sdk_wheel, sdk_layout)
     installed_before = verify_installed_files(wheel, layout)
+    selected_platform = sys.platform if platform_name is None else platform_name
+    if selected_platform == "darwin":
+        if layout.native_path is None or installed_before.native is None:
+            _fail("native owner has no installed extension")
+        output = (
+            _darwin_dependency_output(layout.native_path)
+            if dependency_output is None
+            else dependency_output
+        )
+        # A linked CPython framework may crash the interpreter during module
+        # initialization. Inspect the sealed extension before executing it.
+        assert_no_python_runtime_dependency(output)
+        assert_expected_file_seal(
+            layout.native_path,
+            installed_before.native.seal,
+            label=NATIVE_MODULE_NAME,
+            max_bytes=MAX_MEMBER_BYTES,
+        )
     package_spec, native_spec = trusted_import_specs(layout)
     load_from_trusted_specs(
         wheel=wheel,
@@ -2225,21 +2246,6 @@ def verify_current_environment(
 
     if layout.native_path is None or installed_after.native is None:
         _fail("native owner has no installed extension")
-    selected_platform = sys.platform if platform_name is None else platform_name
-    if selected_platform == "darwin":
-        output = (
-            _darwin_dependency_output(layout.native_path)
-            if dependency_output is None
-            else dependency_output
-        )
-        assert_no_python_runtime_dependency(output)
-        assert_expected_file_seal(
-            layout.native_path,
-            installed_after.native.seal,
-            label=NATIVE_MODULE_NAME,
-            max_bytes=MAX_MEMBER_BYTES,
-        )
-
     # Re-authenticate the path after all archive-derived and loader operations.
     assert_expected_file_seal(
         wheel.path,

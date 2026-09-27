@@ -40,6 +40,7 @@ struct AdvertReplayHighWater {
 #[norito_schema(name = "iroha_torii::sorafs::discovery::ProviderAdvertReplayEntryV1")]
 struct ProviderAdvertReplayEntryV1 {
     version: u8,
+    network_id: [u8; 32],
     provider_id: [u8; 32],
     issued_at: u64,
     fingerprint: [u8; FINGERPRINT_LEN],
@@ -47,6 +48,7 @@ struct ProviderAdvertReplayEntryV1 {
 #[derive(Debug)]
 struct ReplayCheckpointStore {
     path: PathBuf,
+    network_id: [u8; 32],
     max_entries: usize,
     // Retained for the full cache lifetime; dropping the cache releases the
     // operating-system advisory lock.
@@ -267,6 +269,16 @@ pub enum ReplayCheckpointError {
     /// The checkpoint does not use the canonical Norito encoding.
     #[error("provider advert replay checkpoint is not canonically encoded")]
     NonCanonicalEncoding,
+    /// A persisted high-water mark belongs to a different genesis network.
+    #[error(
+        "provider advert replay checkpoint network {provided:02x?} differs from local network {expected:02x?}"
+    )]
+    NetworkMismatch {
+        /// Exact genesis network configured for this cache.
+        expected: [u8; 32],
+        /// Genesis network recorded in the checkpoint.
+        provided: [u8; 32],
+    },
     /// Checkpoint provider identifiers are not strictly increasing.
     #[error("provider advert replay checkpoint entries are not strictly sorted and unique")]
     NonCanonicalOrder,
@@ -341,10 +353,15 @@ pub enum AdvertError {
     },
 }
 impl ReplayCheckpointStore {
-    fn new(path: PathBuf, max_entries: NonZeroUsize) -> Result<Self, ReplayCheckpointError> {
+    fn new(
+        path: PathBuf,
+        network_id: [u8; 32],
+        max_entries: NonZeroUsize,
+    ) -> Result<Self, ReplayCheckpointError> {
         let lock_file = acquire_checkpoint_lock(&path)?;
         Ok(Self {
             path,
+            network_id,
             max_entries: max_entries.get(),
             _lock_file: lock_file,
         })
@@ -401,6 +418,12 @@ impl ReplayCheckpointStore {
         }
         let mut high_water = HashMap::with_capacity(entries.len());
         for entry in entries {
+            if entry.network_id != self.network_id {
+                return Err(ReplayCheckpointError::NetworkMismatch {
+                    expected: self.network_id,
+                    provided: entry.network_id,
+                });
+            }
             if admission.entry(&entry.provider_id).is_none() {
                 return Err(ReplayCheckpointError::ProviderNotAdmitted {
                     provider_id: entry.provider_id,
@@ -429,6 +452,7 @@ impl ReplayCheckpointStore {
             .iter()
             .map(|(provider_id, high_water)| ProviderAdvertReplayEntryV1 {
                 version: REPLAY_CHECKPOINT_VERSION_V1,
+                network_id: self.network_id,
                 provider_id: *provider_id,
                 issued_at: high_water.issued_at,
                 fingerprint: high_water.fingerprint,
@@ -1014,7 +1038,8 @@ impl ProviderAdvertCache {
                 max_entries: max_entries.get(),
             });
         }
-        let replay_checkpoint = ReplayCheckpointStore::new(checkpoint_path, max_entries)?;
+        let replay_checkpoint =
+            ReplayCheckpointStore::new(checkpoint_path, *admission.network_id(), max_entries)?;
         let replay_high_water = replay_checkpoint.load(&admission)?;
         Ok(Self {
             known_capabilities: known_capabilities.into_iter().collect(),
@@ -1317,12 +1342,13 @@ mod replay_checkpoint_tests {
         NonZeroUsize::new(value).expect("test checkpoint capacity is non-zero")
     }
     fn checkpoint_store(path: PathBuf, capacity: usize) -> ReplayCheckpointStore {
-        ReplayCheckpointStore::new(path, max_entries(capacity))
+        ReplayCheckpointStore::new(path, [0xA1; 32], max_entries(capacity))
             .expect("acquire test replay checkpoint lock")
     }
     fn entry(provider_byte: u8, issued_at: u64) -> ProviderAdvertReplayEntryV1 {
         ProviderAdvertReplayEntryV1 {
             version: REPLAY_CHECKPOINT_VERSION_V1,
+            network_id: [0xA1; 32],
             provider_id: [provider_byte; 32],
             issued_at,
             fingerprint: [provider_byte.wrapping_add(1); FINGERPRINT_LEN],
@@ -1348,7 +1374,7 @@ mod replay_checkpoint_tests {
         );
         let store = checkpoint_store(path, 4);
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::Empty)
         ));
     }
@@ -1357,7 +1383,7 @@ mod replay_checkpoint_tests {
         let temp = private_tempdir();
         let err = ProviderAdvertCache::new_persistent(
             [],
-            Arc::new(AdmissionRegistry::empty()),
+            Arc::new(AdmissionRegistry::empty([0xA1; 32])),
             temp.path().join("replay.to"),
             max_entries(REPLAY_CHECKPOINT_HARD_MAX_ENTRIES + 1),
         )
@@ -1377,12 +1403,12 @@ mod replay_checkpoint_tests {
         let path = temp.path().join("replay.to");
         let first = checkpoint_store(path.clone(), 4);
         assert!(matches!(
-            ReplayCheckpointStore::new(path.clone(), max_entries(4)),
+            ReplayCheckpointStore::new(path.clone(), [0xA1; 32], max_entries(4)),
             Err(ReplayCheckpointError::LockHeld { path: lock_path })
                 if lock_path == path.with_added_extension("lock")
         ));
         drop(first);
-        ReplayCheckpointStore::new(path, max_entries(4))
+        ReplayCheckpointStore::new(path, [0xA1; 32], max_entries(4))
             .expect("dropping first cache releases replay checkpoint lock");
     }
     #[cfg(any(unix, windows))]
@@ -1396,7 +1422,7 @@ mod replay_checkpoint_tests {
         fs::hard_link(&lock_path, &alias).expect("hardlink checkpoint lock fixture");
 
         assert!(matches!(
-            ReplayCheckpointStore::new(path, max_entries(4)),
+            ReplayCheckpointStore::new(path, [0xA1; 32], max_entries(4)),
             Err(ReplayCheckpointError::Io { .. })
         ));
     }
@@ -1407,7 +1433,7 @@ mod replay_checkpoint_tests {
         write_private(&path, &to_bytes(&vec![entry(1, 10), entry(2, 20)]).unwrap());
         let store = checkpoint_store(path, 1);
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::TooManyEntries {
                 actual: 2,
                 maximum: 1
@@ -1422,7 +1448,7 @@ mod replay_checkpoint_tests {
         let oversized = vec![0u8; usize::try_from(store.maximum_bytes()).unwrap() + 1];
         write_private(&path, &oversized);
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::TooLarge { actual, maximum })
                 if actual == maximum + 1 && maximum == store.maximum_bytes()
         ));
@@ -1438,7 +1464,7 @@ mod replay_checkpoint_tests {
         fs::hard_link(&path, &alias).expect("hardlink checkpoint fixture");
 
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::Io { .. })
         ));
         assert!(matches!(
@@ -1461,7 +1487,7 @@ mod replay_checkpoint_tests {
         write_private(&path, &to_bytes(&vec![unsupported]).unwrap());
         let store = checkpoint_store(path, 4);
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::UnsupportedVersion { version: 2 })
         ));
     }
@@ -1475,7 +1501,7 @@ mod replay_checkpoint_tests {
         ] {
             write_private(&store.path, &to_bytes(&entries).unwrap());
             assert!(matches!(
-                store.load(&AdmissionRegistry::empty()),
+                store.load(&AdmissionRegistry::empty([0xA1; 32])),
                 Err(ReplayCheckpointError::NonCanonicalOrder)
             ));
         }
@@ -1498,7 +1524,7 @@ mod replay_checkpoint_tests {
         write_private(&path, &alternate);
         let store = checkpoint_store(path, 4);
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::NonCanonicalEncoding)
         ));
     }
@@ -1509,7 +1535,7 @@ mod replay_checkpoint_tests {
         write_private(&path, &to_bytes(&vec![entry(3, 10)]).unwrap());
         let store = checkpoint_store(path, 4);
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::ProviderNotAdmitted {
                 provider_id
             }) if provider_id == [3; 32]
@@ -1527,7 +1553,7 @@ mod replay_checkpoint_tests {
         let store = checkpoint_store(checkpoint.clone(), 4);
         symlink(&external, &checkpoint).expect("create checkpoint symlink after locking");
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::Io { .. })
         ));
         assert!(matches!(
@@ -1552,7 +1578,7 @@ mod replay_checkpoint_tests {
         fs::create_dir(&real_parent).expect("create real checkpoint parent");
         symlink(&real_parent, &linked_parent).expect("create parent symlink");
         assert!(matches!(
-            ReplayCheckpointStore::new(linked_parent.join("replay.to"), max_entries(4)),
+            ReplayCheckpointStore::new(linked_parent.join("replay.to"), [0xA1; 32], max_entries(4)),
             Err(ReplayCheckpointError::Io { .. })
         ));
         assert!(
@@ -1569,7 +1595,7 @@ mod replay_checkpoint_tests {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         let store = checkpoint_store(path, 4);
         assert!(matches!(
-            store.load(&AdmissionRegistry::empty()),
+            store.load(&AdmissionRegistry::empty([0xA1; 32])),
             Err(ReplayCheckpointError::Io { .. })
         ));
     }

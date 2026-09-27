@@ -1,7 +1,7 @@
-//! Exact ownership, success-only staging and legacy source-error behavior.
+//! Exact source ownership, intrinsic admission and whole-overlay rollback.
 
 use super::*;
-use crate::{fastpq::FastpqSourceCaptureError, query::store::LiveQueryStore};
+use crate::query::store::LiveQueryStore;
 use iroha_data_model::{block::BlockHeader, fastpq::TransferSmtWitness};
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use nonzero_ext::nonzero;
@@ -38,11 +38,12 @@ fn delta() -> TransferDeltaTranscript {
 
 #[test]
 fn preparation_finalizes_exact_transcript_without_staging_and_moves_its_storage() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"prepared execution call");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
     tx.current_lane_id = Some(LaneId::SINGLE);
     tx.current_dataspace_id = Some(DataSpaceId::new(7));
@@ -88,12 +89,13 @@ fn preparation_finalizes_exact_transcript_without_staging_and_moves_its_storage(
 
 #[test]
 fn successful_callback_stages_one_exact_occurrence_after_the_movement() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"successful movement");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
     let applied = tx
         .apply_with_prepared_transfer_transcripts(&ALICE_ID, hash, vec![delta()], |tx| {
@@ -112,7 +114,7 @@ fn successful_callback_stages_one_exact_occurrence_after_the_movement() {
     tx.apply();
     assert_eq!(block.fastpq_transcripts[&hash], vec![expected.clone()]);
     assert_eq!(block.captured_fastpq_transcript_sources().unwrap().len(), 1);
-    let witness = crate::sumeragi::witness::drain_exec_witness();
+    let witness = crate::exec_witness::drain_exec_witness();
     assert_eq!(witness.fastpq_transcripts.len(), 1);
     assert_eq!(witness.fastpq_transcripts[0].entry_hash, hash);
     assert_eq!(witness.fastpq_transcripts[0].transcripts, vec![expected]);
@@ -120,14 +122,14 @@ fn successful_callback_stages_one_exact_occurrence_after_the_movement() {
 
 #[test]
 fn failed_callback_drops_prepared_transcript_and_does_not_latch_capture_error() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"failed movement");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
-    tx.current_lane_id = Some(LaneId::new(999));
     let result: Result<(), Error> =
         tx.apply_with_prepared_transfer_transcripts(&ALICE_ID, hash, vec![delta()], |_| {
             Err(Error::InvariantViolation("movement failed".into()))
@@ -149,40 +151,47 @@ fn failed_callback_drops_prepared_transcript_and_does_not_latch_capture_error() 
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );
 }
 
 #[test]
-fn successful_callback_preserves_sticky_capture_error_and_transcript_recording() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+fn unresolved_source_rejects_before_callback_and_refuses_ignored_error_apply() {
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"unresolved source lane");
-    let missing = LaneId::new(999);
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let usage = block.fastpq_source_usage_for_testing();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
-    tx.current_lane_id = Some(missing);
-    tx.apply_with_prepared_transfer_transcripts(&ALICE_ID, hash, vec![delta()], |_| Ok(()))
-        .unwrap();
-    assert_eq!(tx.pending_transfer_transcripts.len(), 1);
-    assert_eq!(
-        tx.pending_fastpq_source_captures.sources(),
-        Err(&FastpqSourceCaptureError::MissingLaneIncarnation {
-            lane_id: missing,
-            entry_hash: hash,
-        })
-    );
+    tx.current_lane_id = Some(LaneId::new(999));
+    let mut called = false;
+    let result =
+        tx.apply_with_prepared_transfer_transcripts(&ALICE_ID, hash, vec![delta()], |_| {
+            called = true;
+            Ok(())
+        });
+    assert!(result.is_err());
+    assert!(!called);
+    assert!(tx.fastpq_source_quota.intrinsic_rejected().is_err());
+    assert!(tx.pending_transfer_transcripts.is_empty());
     tx.apply();
-    assert_eq!(block.fastpq_transcripts[&hash].len(), 1);
-    assert!(block.captured_fastpq_transcript_sources().is_err());
+    assert!(block.fastpq_transcripts.is_empty());
+    assert!(
+        block
+            .captured_fastpq_transcript_sources()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(block.fastpq_source_usage_for_testing(), usage);
 }
 
 #[test]
 fn empty_occurrence_keeps_legacy_no_identity_no_op_and_runs_callback() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     let mut tx = block.transaction();
@@ -210,11 +219,12 @@ fn empty_occurrence_keeps_legacy_no_identity_no_op_and_runs_callback() {
 
 #[test]
 fn immediate_multi_delta_recording_preserves_one_occurrence_and_absent_digest() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"multi delta occurrence");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
     let deltas = vec![delta(), delta()];
     let allocation = deltas.as_ptr();
@@ -240,12 +250,13 @@ fn immediate_multi_delta_recording_preserves_one_occurrence_and_absent_digest() 
 
 #[test]
 fn discarded_successful_movement_keeps_block_capture_and_transcripts_empty() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
     {
-        let mut tx = block.transaction();
         let hash = Hash::new(b"rolled back movement");
+        block.retain_fastpq_source_invocation(hash).unwrap();
+        let mut tx = block.transaction();
         tx.tx_call_hash = Some(hash);
         tx.apply_with_prepared_transfer_transcripts(&ALICE_ID, hash, vec![delta()], |_| Ok(()))
             .unwrap();
@@ -262,11 +273,12 @@ fn discarded_successful_movement_keeps_block_capture_and_transcripts_empty() {
 
 #[test]
 fn incremental_singleton_matches_the_fixed_prepared_occurrence() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"incremental singleton");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
     tx.current_lane_id = Some(LaneId::SINGLE);
     tx.current_dataspace_id = Some(DataSpaceId::new(7));
@@ -274,7 +286,7 @@ fn incremental_singleton_matches_the_fixed_prepared_occurrence() {
         .prepare_transfer_occurrence(&ALICE_ID, hash, vec![delta()])
         .unwrap();
     tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 3, |tx, append| {
-        append(delta())?;
+        append(tx, delta())?;
         assert!(tx.pending_transfer_transcripts.is_empty());
         assert!(
             tx.pending_fastpq_source_captures
@@ -294,11 +306,12 @@ fn incremental_singleton_matches_the_fixed_prepared_occurrence() {
 
 #[test]
 fn incremental_empty_discards_initial_capture_error_and_multi_preserves_one_group() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"incremental group");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
     tx.current_lane_id = Some(LaneId::new(999));
     tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 3, |_, _| Ok(()))
@@ -315,8 +328,8 @@ fn incremental_empty_discards_initial_capture_error_and_multi_preserves_one_grou
         .prepare_transfer_occurrence(&ALICE_ID, hash, vec![delta(), delta()])
         .unwrap();
     tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 3, |tx, append| {
-        append(delta())?;
-        append(delta())?;
+        append(tx, delta())?;
+        append(tx, delta())?;
         assert!(tx.pending_transfer_transcripts.is_empty());
         Ok(())
     })
@@ -334,18 +347,18 @@ fn incremental_empty_discards_initial_capture_error_and_multi_preserves_one_grou
 
 #[test]
 fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"incremental failed body");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
-    tx.current_lane_id = Some(LaneId::new(999));
     let result: Result<(), Error> =
         tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 3, |tx, append| {
-            append(delta())?;
-            append(delta())?;
+            append(tx, delta())?;
+            append(tx, delta())?;
             assert!(tx.pending_transfer_transcripts.is_empty());
             Err(Error::InvariantViolation(
                 "later movement or outcome failed".into(),
@@ -373,7 +386,7 @@ fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );
@@ -381,20 +394,22 @@ fn incremental_whole_callback_error_discards_all_accepted_occurrences() {
 
 #[test]
 fn incremental_preparation_limit_rejects_before_the_next_movement() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"incremental preparation bound");
+    block.retain_fastpq_source_invocation(hash).unwrap();
+    let mut tx = block.transaction();
     tx.tx_call_hash = Some(hash);
     let mut movements = 0;
-    let result = tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 1, |_, append| {
-        append(delta())?;
-        movements += 1;
-        append(delta())?;
-        movements += 1;
-        Ok(())
-    });
+    let result =
+        tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 1, |tx, append| {
+            append(tx, delta())?;
+            movements += 1;
+            append(tx, delta())?;
+            movements += 1;
+            Ok(())
+        });
     assert!(
         result
             .unwrap_err()
@@ -413,17 +428,18 @@ fn incremental_preparation_limit_rejects_before_the_next_movement() {
 
 #[test]
 fn incremental_ignored_preparation_error_cannot_publish_a_partial_occurrence() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let state = state();
     let mut block = state.block(header());
-    let mut tx = block.transaction();
     let hash = Hash::new(b"ignored incremental preparation error");
-    tx.tx_call_hash = Some(hash);
+    block.retain_fastpq_source_invocation(hash).unwrap();
     for limit in [0, 1] {
+        let mut tx = block.transaction();
+        tx.tx_call_hash = Some(hash);
         let result =
-            tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, limit, |_, append| {
-                let _ = append(delta());
-                assert!(append(delta()).is_err());
+            tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, limit, |tx, append| {
+                let _ = append(tx, delta());
+                assert!(append(tx, delta()).is_err());
                 Ok(())
             });
         assert!(
@@ -447,7 +463,7 @@ fn incremental_preparation_failure_rolls_back_real_transfers_with_the_entry() {
     use crate::smartcontracts::Execute as _;
     use iroha_data_model::isi::Transfer;
 
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
     let definition_id = delta().asset_definition;
     let source = AssetId::new(definition_id.clone(), ALICE_ID.clone());
@@ -478,6 +494,7 @@ fn incremental_preparation_failure_rolls_back_real_transfers_with_the_entry() {
     );
     let mut block = state.block(header());
     let prior_hash = Hash::new(b"prior accepted transfer");
+    block.retain_fastpq_source_invocation(prior_hash).unwrap();
     {
         let mut tx = block.transaction();
         tx.tx_call_hash = Some(prior_hash);
@@ -490,9 +507,11 @@ fn incremental_preparation_failure_rolls_back_real_transfers_with_the_entry() {
     let prior_transcripts = block.fastpq_transcripts.clone();
     let prior_captures = block.captured_fastpq_transcript_sources().unwrap().clone();
     let prior_fragments = block.committed_fragment_count();
+    let prior_usage = block.fastpq_source_usage_for_testing();
     {
-        let mut tx = block.transaction();
         let hash = Hash::new(b"entry rejected during preparation");
+        block.retain_fastpq_source_invocation(hash).unwrap();
+        let mut tx = block.transaction();
         tx.tx_call_hash = Some(hash);
         let result =
             tx.apply_with_incremental_transfer_transcripts(&ALICE_ID, hash, 1, |tx, append| {
@@ -501,14 +520,14 @@ fn incremental_preparation_failure_rolls_back_real_transfers_with_the_entry() {
                 accepted.from_balance_after = Quantity::from(6_u32);
                 accepted.to_balance_before = Quantity::from(1_u32);
                 accepted.to_balance_after = Quantity::from(4_u32);
-                append(accepted.clone())?;
+                append(tx, accepted.clone())?;
                 Transfer::asset_quantity(source.clone(), 3_u32, BOB_ID.clone())
                     .execute(&ALICE_ID, tx)?;
                 assert_eq!(
                     tx.world.assets().get(&source).unwrap().0,
                     Quantity::from(6_u32)
                 );
-                append(accepted)?;
+                append(tx, accepted)?;
                 Ok(())
             });
         assert!(
@@ -536,4 +555,9 @@ fn incremental_preparation_failure_rolls_back_real_transfers_with_the_entry() {
         &prior_captures
     );
     assert_eq!(block.committed_fragment_count(), prior_fragments);
+    let (ordinary, mandatory) = block.fastpq_source_usage_for_testing();
+    let mut expected = prior_usage.0;
+    expected.executed_entries += 1;
+    assert_eq!(ordinary, expected);
+    assert_eq!(mandatory, prior_usage.1);
 }

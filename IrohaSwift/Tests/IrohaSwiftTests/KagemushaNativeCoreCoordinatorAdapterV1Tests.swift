@@ -5,6 +5,31 @@ import XCTest
 
 /// Scripted endpoints verify orchestration only; they provide no proof or hardware qualification.
 final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
+  func testOutgoingStateProofExportReturnsOneBoundedPairForOriginalOperation() throws {
+    let endpoint = Endpoint()
+    let core = try adapter(endpoint)
+    let operationID = Data(repeating: 0x66, count: 32)
+    let publicInputs = Data([0x81])
+    let pairedProof = Data([0x82])
+    endpoint.expect(.exportOutgoingStateProof, [operationID],
+      [operationID, publicInputs, pairedProof])
+    let pair = try core.exportOutgoingStateProof(operationID: operationID)
+    XCTAssertEqual(pair.operationID, operationID)
+    XCTAssertEqual(pair.publicInputsArchive, publicInputs)
+    XCTAssertEqual(pair.pairedProofArchive, pairedProof)
+    XCTAssertThrowsError(try KagemushaOutgoingStateProofArchivesV1(
+      operationID: Data(repeating: 0, count: 32),
+      publicInputsArchive: publicInputs, pairedProofArchive: pairedProof))
+    XCTAssertThrowsError(try KagemushaOutgoingStateProofArchivesV1(
+      operationID: operationID, publicInputsArchive: Data(), pairedProofArchive: pairedProof))
+    XCTAssertThrowsError(try KagemushaOutgoingStateProofArchivesV1(
+      operationID: operationID, publicInputsArchive: publicInputs,
+      pairedProofArchive: Data(repeating: 1, count: 6_529)))
+    endpoint.expect(.exportOutgoingStateProof, [operationID],
+      [Data(repeating: 0x67, count: 32), publicInputs, pairedProof])
+    XCTAssertThrowsError(try core.exportOutgoingStateProof(operationID: operationID))
+  }
+
   func testCloseRevokesTypedAdapterBeforeMonetaryDispatch() throws {
     let endpoint = Endpoint()
     let core = try adapter(endpoint)
@@ -16,7 +41,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     XCTAssertEqual(endpoint.calls, 0)
   }
 
-  func testAllElevenMethodsMapExactNativeFields() throws {
+  func testWalletTransitionMethodsMapExactNativeFields() throws {
     let f = try Fixture()
     let endpoint = Endpoint()
     let core = try adapter(endpoint)
@@ -166,6 +191,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       case .acceptAuthenticatedReply:
         admitted.append((fields[0][0], fields[4]))
         return []
+      case .exportOutgoingStateProof: return [fields[0], Data([0x81]), Data([0x82])]
       default: throw TestError.unexpectedCall
       }
     }
@@ -180,6 +206,13 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
       amount: request.amount, validityWindowMS: request.expiresAtMS - request.issuedAtMS), f.archive.paymentRequest)
     XCTAssertEqual(admitted.map { $0.0 }, [1, 22])
     for (operation, bytes) in admitted { XCTAssertEqual(bytes, responseSignature(operation)) }
+    let exported = try provider.exportOutgoingStateProof(operationID: request.requestID)
+    XCTAssertEqual(exported.operationID, request.requestID)
+    XCTAssertEqual(exported.publicInputsArchive, Data([0x81]))
+    XCTAssertEqual(exported.pairedProofArchive, Data([0x82]))
+    let callCount = endpoint.calls
+    XCTAssertThrowsError(try provider.exportOutgoingStateProof(operationID: Data(repeating: 0, count: 32)))
+    XCTAssertEqual(endpoint.calls, callCount)
   }
 
   func testAcknowledgementAfterRotationReachesHardwareWithOriginalCreationContext() throws {
@@ -552,7 +585,7 @@ final class KagemushaNativeCoreCoordinatorAdapterV1Tests: XCTestCase {
     func expect(_ method: KagemushaCoreCoordinatorMethodV1, _ request: [Data]?, _ response: [Data]) {
       self.method = method; expected = request; self.response = response
     }
-    func contract() -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13] }
+    func contract() -> [UInt32] { [2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 14] }
     func open(storagePath: Data) -> UInt64 { 1 }
     func close(handle: UInt64) { XCTAssertEqual(handle, 1); closeCalls += 1 }
     func invoke(handle: UInt64, method: UInt8, request: Data) throws -> Data {

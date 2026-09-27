@@ -27,6 +27,7 @@ state_test! { sync native_recorded_execution_retains_sources_results_aliases_and
             group.body().canonical_bytes().as_ptr(), group.body().source().canonical_control_bytes().as_ptr(),
             group.decisions().as_ptr(), group.contexts().as_ptr(),
         )).collect::<Vec<_>>();
+        drop(carrier);
         let recorded = source.record_execution(applying).unwrap().expect("same original State");
         let prepared = recorded.prepared_for_test();
         let overlay = prepared.overlay();
@@ -59,8 +60,8 @@ state_test! { sync native_recorded_execution_retains_sources_results_aliases_and
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
         // The same thread can immediately begin a new capture; completion held
         // the original guard until checked drain and then released it.
-        let guard = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
-        let empty = crate::sumeragi::witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
+        let guard = crate::exec_witness::begin_exec_witness_capture().unwrap();
+        let empty = crate::exec_witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
         assert!(empty.reads.is_empty() && empty.writes.is_empty() && empty.fastpq_transcripts.is_empty());
         drop(guard);
       }
@@ -95,13 +96,14 @@ state_test! { sync native_recorded_execution_nested_recorder_refuses_without_mut
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("original source"); };
-    let guard = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
-    crate::sumeragi::witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
-    let witness_before = norito::encode_canonical(&crate::sumeragi::witness::snapshot_exec_witness()).unwrap();
+    let guard = crate::exec_witness::begin_exec_witness_capture().unwrap();
+    crate::exec_witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
+    let witness_before = norito::encode_canonical(&crate::exec_witness::snapshot_exec_witness()).unwrap();
+    drop(carrier);
     let error = source.record_execution(applying).err().expect("nested capture must refuse rather than deadlock");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionRecorderConflict(_)), "{error}");
     assert!(error.to_string().contains("already belongs"), "{error}");
-    assert_eq!(norito::encode_canonical(&crate::sumeragi::witness::snapshot_exec_witness()).unwrap(), witness_before);
+    assert_eq!(norito::encode_canonical(&crate::exec_witness::snapshot_exec_witness()).unwrap(), witness_before);
     drop(guard);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
 }
@@ -196,8 +198,8 @@ state_test! { sync native_recorded_execution_late_failure_discards_hook_effects_
     assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);
-    let guard = crate::sumeragi::witness::exec_witness_guard();
-    let empty = crate::sumeragi::witness::drain_exec_witness();
+    let guard = crate::exec_witness::exec_witness_guard();
+    let empty = crate::exec_witness::drain_exec_witness();
     assert!(empty.reads.is_empty() && empty.writes.is_empty() && empty.fastpq_transcripts.is_empty());
     drop(guard);
 }
@@ -211,7 +213,7 @@ state_test! { sync native_recorded_execution_nested_owner_refuses_before_waiting
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state.prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("original source"); };
     let header = carrier.header();
-    let guard = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+    let guard = crate::exec_witness::begin_exec_witness_capture().unwrap();
     let released = AtomicBool::new(false);
     let (held_tx, held_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -227,6 +229,7 @@ state_test! { sync native_recorded_execution_nested_owner_refuses_before_waiting
             drop(overlay);
         });
         held_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        drop(carrier);
         let result = source.record_execution(applying);
         let refused_while_held = !released.load(Ordering::Acquire);
         let _ = release_tx.send(());
@@ -249,7 +252,7 @@ state_test! { sync native_recorded_cursor_postcheck_without_bundle_does_not_reen
     // Reproduce the interval between a rewind clearing the cached result and
     // waiting for the State writer retained by this original execution owner.
     *state.da_indexes_hydrated.write() = None;
-    let recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+    let recorder = crate::exec_witness::begin_exec_witness_capture().unwrap();
     prepared.overlay().validate_da_shard_cursors(&carrier).unwrap();
     assert!(state.da_indexes_hydrated.read().is_none());
     drop(recorder);
@@ -266,7 +269,7 @@ state_test! { sync native_recorded_controls_reject_foreign_pristine_state_and_st
     let applying = native_control_verified_context(state, fixture.native.block.header().height().get());
     let controls = crate::block::ValidBlock::prepare_native_execution_controls(&carrier, state, applying.clone()).unwrap();
     let error = other.native.state.block_with_pristine_stage(carrier.header(), |overlay| {
-        let _recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+        let _recorder = crate::exec_witness::begin_exec_witness_capture().unwrap();
         controls.apply(overlay).map(|_| ())
     }).err().expect("the same header cannot transfer original State ownership");
     assert!(error.to_string().contains("original pristine State owner"), "{error}");
@@ -278,7 +281,7 @@ state_test! { sync native_recorded_controls_reject_foreign_pristine_state_and_st
         drop(publication_notice.begin());
     }
     let error = state.block_with_pristine_stage(carrier.header(), |overlay| {
-        let _recorder = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
+        let _recorder = crate::exec_witness::begin_exec_witness_capture().unwrap();
         controls.apply(overlay).map(|_| ())
     }).err().expect("stale control observation cannot execute");
     assert!(error.to_string().contains("original pristine State owner"), "{error}");

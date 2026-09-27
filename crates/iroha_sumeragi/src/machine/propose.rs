@@ -1,0 +1,344 @@
+//! Proposing and the heartbeat (§6.10): a leader can always propose; empty blocks are valid.
+
+use super::{Build, Core, Me};
+use crate::{
+    api::Action,
+    message::{Block, BlockHeader, Proposal, TimeoutCert, WireMessage},
+    preimage,
+    safety::RecordedProposal,
+};
+
+impl Core {
+    /// The signing member if it may propose in `(h, view)`: it is `L(h, view)`, has not timed
+    /// out of the view and has no proposal recorded at the view (S1).
+    fn leader_eligible(&self) -> Option<Me> {
+        let me = self.signer()?;
+        let view = self.view;
+        let recorded = self
+            .safety
+            .as_ref()
+            .and_then(|r| r.proposal.as_ref())
+            .is_some_and(|p| p.view >= view);
+        (self.rnd.leader() == me.index
+            && self.timeout_view.is_none_or(|t| t < view)
+            && (!recorded || cfg!(sumeragi_mutation = "MS1")))
+        .then_some(me)
+    }
+
+    /// `propose` (§6.10) on round entry: nothing if a proposal is recorded at `(h, view)` (rule
+    /// 0: after a restart only the recorded one is re-sent); at view 0 schedule the build at
+    /// `t_propose` (rule 1); after `TC(view − 1)` propose at once (rule 2): `Q`'s block unchanged
+    /// if the TC carries `Q`, else a fresh block (`EMPTY` from `empty_after_views` on).
+    pub(super) fn propose(&mut self) {
+        if self.leader_eligible().is_none() {
+            return;
+        }
+        if self.view == 0 {
+            let at = self
+                .pm
+                .propose_time(self.t_enter, self.cfg.params.block_time);
+            self.build = Build::Scheduled(at);
+            return;
+        }
+        let Some(tc) = self
+            .high_tc
+            .clone()
+            .filter(|tc| tc.view.checked_add(1) == Some(self.view))
+        else {
+            return;
+        };
+        match tc
+            .high_pqc
+            .as_ref()
+            .filter(|_| !cfg!(sumeragi_mutation = "MS10a"))
+        {
+            // TC rule: re-propose Q's block unchanged, fetching the body if needed.
+            Some(q) => {
+                if let Some(block) = self.blocks.get(&q.block_hash).cloned() {
+                    self.propose_block(block, Some(tc));
+                } else {
+                    self.repropose = true;
+                    let sources = self.signer_keys(q);
+                    self.want(q.block_hash, self.height, sources);
+                }
+            }
+            None if self.view >= self.cfg.params.empty_after_views
+                && !cfg!(sumeragi_mutation = "ML13") =>
+            {
+                self.propose_fresh(Vec::new(), false);
+            }
+            None => self.request_build(true),
+        }
+    }
+
+    /// Push `BuildPayload{req}` with a fresh request id; `second`: no idle wait follows
+    /// (heartbeat retry or view > 0).
+    fn request_build(&mut self, second: bool) {
+        let budget = self.pm.exec_budget(self.cfg.params.e_max);
+        let req = self.next_req;
+        self.next_req = self.next_req.saturating_add(1);
+        self.out.push(Action::BuildPayload {
+            req,
+            height: self.height,
+            view: self.view,
+            max_bytes: self.cfg.params.max_block_bytes,
+            exec_budget_ms: u32::try_from(budget).unwrap_or(u32::MAX),
+        });
+        self.build = Build::Requested {
+            req,
+            deadline: self.now.saturating_add(self.local.build_timeout),
+            second,
+            ready: false,
+        };
+    }
+
+    /// Fire a due build deadline (`Tick`, §6.11 first).
+    pub(super) fn build_tick(&mut self) {
+        match self.build {
+            Build::Scheduled(at) if self.now >= at => self.request_build(false),
+            Build::Requested {
+                req,
+                deadline,
+                second,
+                ready,
+            } if self.now >= deadline => {
+                // No answer by `t_propose + build_timeout`: use `EMPTY` (unflagged).
+                self.payload_ready(req, (Vec::new(), false), second, ready);
+            }
+            Build::IdleWait { until, .. } if self.now >= until => self.request_build(true),
+            _ => {}
+        }
+    }
+
+    /// The build deadline, if any.
+    pub(super) fn build_deadline(&self) -> Option<u64> {
+        match self.build {
+            Build::Idle => None,
+            Build::Scheduled(at) | Build::IdleWait { until: at, .. } => Some(at),
+            Build::Requested { deadline, .. } => Some(deadline),
+        }
+    }
+
+    /// On `PayloadBuilt{req}`: an answer to another request than the outstanding one is ignored.
+    /// `attest` is the application flag of a block with this payload (§3.7 A1).
+    pub(super) fn on_payload_built(&mut self, req: u64, payload: Vec<u8>, attest: bool) {
+        if let Build::Requested {
+            req: outstanding,
+            second,
+            ready,
+            ..
+        } = self.build
+            && req == outstanding
+            && !self.awaiting
+        {
+            self.payload_ready(req, (payload, attest), second, ready);
+        }
+    }
+
+    fn payload_ready(
+        &mut self,
+        req: u64,
+        (payload, attest): (Vec<u8>, bool),
+        second: bool,
+        ready: bool,
+    ) {
+        // SPEC: a payload above `max_block_bytes` would be a signed defect; it is replaced by
+        // `EMPTY` (unflagged) rather than proposed (Appendix E, E20).
+        let too_large =
+            u32::try_from(payload.len()).map_or(true, |len| len > self.cfg.params.max_block_bytes);
+        let (payload, attest) = if too_large {
+            (Vec::new(), false)
+        } else {
+            (payload, attest)
+        };
+        let idle_until = self
+            .t_enter
+            .saturating_add(self.cfg.params.idle_block_interval);
+        if self.view == 0 && !second && payload.is_empty() && self.now < idle_until {
+            if ready {
+                // `PayloadReady{req}` already arrived: a transaction came in after the builder
+                // answered `EMPTY`.
+                self.request_build(true);
+            } else {
+                self.build = Build::IdleWait {
+                    req,
+                    until: idle_until,
+                };
+            }
+            return;
+        }
+        self.build = Build::Idle;
+        self.propose_fresh(payload, attest);
+    }
+
+    /// On `PayloadReady{req}` (§6.10): it only ends the view-0 leader's heartbeat wait for the
+    /// request `req` that was answered `EMPTY`. No timer depends on it (§9.1).
+    pub(super) fn on_payload_ready(&mut self, req: u64) {
+        if self.awaiting {
+            return;
+        }
+        // ML21: the revision-3 `t_tx` term (any `PayloadReady` pulls the view-0 anchor in).
+        #[cfg(sumeragi_mutation = "ML21")]
+        if self.view == 0 {
+            let t = (self.now.saturating_add(self.cfg.params.block_time))
+                .saturating_add(self.local.build_timeout);
+            self.t_prop = Some(self.t_prop.map_or(t, |x| x.min(t)));
+        }
+        match &mut self.build {
+            Build::IdleWait { req: waiting, .. } if *waiting == req => self.request_build(true),
+            // SPEC: the driver sends `PayloadReady{req}` after answering `BuildPayload{req}`
+            // with `EMPTY`; that answer may still be queued behind it. The readiness is kept,
+            // and the `EMPTY` answer then requests again at once instead of idling until
+            // `idle_block_interval` (found by the simulator: F2 seed 115, an honest leader
+            // demoted for idling; Appendix E, E4).
+            #[cfg(not(sumeragi_mutation = "ME4"))]
+            Build::Requested {
+                req: outstanding,
+                ready,
+                ..
+            } if *outstanding == req => *ready = true,
+            _ => {}
+        }
+    }
+
+    /// Build and send a fresh block (§6.10 rule 3) with the builder's application flag `attest`
+    /// (§3.7 A1).
+    fn propose_fresh(&mut self, payload: Vec<u8>, attest: bool) {
+        let Some(me) = self.leader_eligible() else {
+            self.build = Build::Idle;
+            return;
+        };
+        // SPEC: the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh
+        // payload, also a built one at view 0: with `empty_after_views = 0` (a chain parameter
+        // the application must reject, §9.4) it would otherwise propose a payload that every
+        // voter reports as a signed defect (Appendix E, E38).
+        let (payload, attest) = if self.view >= self.cfg.params.empty_after_views
+            && !cfg!(sumeragi_mutation = "ML13")
+        {
+            (Vec::new(), false)
+        } else {
+            (payload, attest)
+        };
+        // MA7: the builder's flag is dropped.
+        let attest = attest && !cfg!(sumeragi_mutation = "MA7");
+        let justify = if self.view == 0 {
+            None
+        } else {
+            match self.high_tc.clone() {
+                Some(tc) if tc.view.checked_add(1) == Some(self.view) => Some(tc),
+                _ => return,
+            }
+        };
+        let header = BlockHeader {
+            instance: self.instance,
+            height: self.height,
+            origin_view: self.view,
+            parent_hash: self.tip.block_hash,
+            parent_result: self.tip.result,
+            payload_hash: preimage::payload_hash(&*self.crypto, &payload),
+            payload_len: u32::try_from(payload.len()).unwrap_or(u32::MAX),
+            proposer: me.index,
+            skipped_leaders: self
+                .topo
+                .skipped_leader_keys(&self.cfg.committee, self.view),
+            attest,
+        };
+        self.propose_block(Block { header, payload }, justify);
+    }
+
+    /// Record, sign and broadcast a proposal of `block`, then accept it (§6.10 rule 3, SR1).
+    fn propose_block(&mut self, block: Block, justify: Option<TimeoutCert>) {
+        let Some(me) = self.leader_eligible() else {
+            return;
+        };
+        self.build = Build::Idle;
+        self.repropose = false;
+        let bh = block.hash(&*self.crypto);
+        self.put_body(bh, block.clone(), false);
+        #[cfg(not(sumeragi_mutation = "MS29"))]
+        if let Some(record) = self.safety.as_mut() {
+            record.proposal = Some(RecordedProposal {
+                view: self.view,
+                block_hash: bh,
+                justify: justify.clone(),
+            });
+        }
+        self.persist();
+        self.send_proposal(me, block, justify);
+    }
+
+    /// Sign and broadcast the proposal of `block` in `(h, view)` (after its record), then
+    /// handle it as an accepted proposal.
+    fn send_proposal(&mut self, me: Me, block: Block, justify: Option<TimeoutCert>) {
+        let parent_qc = self
+            .safety
+            .as_ref()
+            .and_then(|record| record.parent_commit_qc.clone());
+        let bh = block.hash(&*self.crypto);
+        let ad = preimage::att_digest(&*self.crypto, justify.as_ref(), parent_qc.as_ref());
+        let msg = preimage::prop_preimage(&self.instance, self.height, self.view, &bh, &ad);
+        let Some(sig) = self.sign(me, &msg) else {
+            return;
+        };
+        let proposal = Proposal {
+            instance: self.instance,
+            height: self.height,
+            view: self.view,
+            header: block.header,
+            justify,
+            parent_qc,
+            payload: Some(block.payload),
+            sig,
+        };
+        let to = self.recipients(true);
+        self.broadcast(to, WireMessage::Proposal(Box::new(proposal.clone())));
+        let mut stripped = proposal;
+        stripped.payload = None;
+        self.mine.proposal = Some(stripped.clone());
+        self.proposal_sent_at = Some(self.now);
+        if self.proposal.is_none() {
+            self.accept_own(stripped, bh, ad);
+        }
+    }
+
+    /// §6.10 rule 0: after a restart the leader re-sends exactly the recorded proposal of the
+    /// view once its body is loaded from the local store, and never builds another (SR1).
+    pub(super) fn resend_recorded_proposal(&mut self) {
+        let Some(bh) = self.resend_recorded.take() else {
+            return;
+        };
+        let Some(me) = self.signer() else {
+            return;
+        };
+        let Some(recorded) = self
+            .safety
+            .as_ref()
+            .and_then(|r| r.proposal.clone())
+            .filter(|p| p.view == self.view && p.block_hash == bh)
+        else {
+            return;
+        };
+        let Some(block) = self.blocks.get(&bh).cloned() else {
+            return;
+        };
+        self.send_proposal(me, block, recorded.justify);
+    }
+
+    /// The re-proposal's body arrived (§6.10 rule 2).
+    pub(super) fn try_repropose(&mut self) {
+        let Some(tc) = self.high_tc.clone() else {
+            return;
+        };
+        let Some(block) = tc
+            .high_pqc
+            .as_ref()
+            .and_then(|q| self.blocks.get(&q.block_hash))
+            .cloned()
+        else {
+            return;
+        };
+        if tc.view.checked_add(1) == Some(self.view) {
+            self.propose_block(block, Some(tc));
+        }
+    }
+}

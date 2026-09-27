@@ -119,7 +119,7 @@ python3 -m pytest -q \
   scripts/tests/sorafs_python_child_runner_test.py \
   scripts/tests/sorafs_python_consumer_artifact_test.py \
   scripts/tests/build_sorafs_python_consumer_artifact_test.py \
-  scripts/tests/check_native_sdk_abi23_artifact_test.py \
+  scripts/tests/check_native_sdk_artifact_test.py \
   scripts/tests/check_native_sdk_bounded_probe_test.py \
   scripts/tests/sorafs_python_environment_test.py \
   scripts/tests/sorafs_python_process_test.py \

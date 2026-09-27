@@ -275,6 +275,18 @@ fn kagemusha_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
         MAX_KAGEMUSHA_FINALITY_DECODE_DEPTH,
     )
 }
+/// Decode one capped bare Kura sidecar under the canonical Norito resource budget.
+///
+/// Sidecar readers check their exact hard byte cap before calling this helper.
+/// Keeping the budget tied to the admitted byte length also rejects a short
+/// corrupt record that advertises a large nested collection before allocation.
+/// The direct slice decoder preserves `DecodeAll`'s fixed bare layout and
+/// complete-consumption check without copying the entire sidecar first.
+fn decode_bounded_kura_sidecar<T: Decode>(bytes: &[u8]) -> std::result::Result<T, norito::Error> {
+    norito::with_decode_limits(norito::canonical_decode_limits(bytes.len()), || {
+        norito::codec::decode_adaptive(bytes)
+    })
+}
 include!("kura/startup_finality_support.rs");
 include!("kura/read_only_evidence.rs");
 /// Finality artifact returned by Kura's authenticated, cryptographically verified reader.
@@ -669,9 +681,9 @@ pub struct Kura {
     resource_inventory: Arc<resource_inventory::Inventory>,
     /// Process-local identity shared with sealed lifecycle storage authority.
     instance_identity: Arc<KuraInstanceIdentityMarker>,
-    /// Per-owner read-only observation of the authenticated pre-reconcile boundary.
-    #[cfg(test)]
-    snapshot_finalization_resource_probe: Mutex<SnapshotFinalizationResourceProbe>,
+    /// One anti-equivocation signer journal owner for every State using this storage instance.
+    lane_drain_signing_guard:
+        once_cell::sync::OnceCell<Arc<crate::lane_drain::LaneDrainSigningGuard>>,
     /// Opened canonical store-root owner used to mint descriptor-relative WAL storage.
     #[cfg(all(unix, not(target_os = "espidf")))]
     store_root_directory: BoundProgressDirectory,
@@ -3088,10 +3100,6 @@ impl Kura {
             membership_storage,
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
-            #[cfg(test)]
-            snapshot_finalization_resource_probe: Mutex::new(
-                SnapshotFinalizationResourceProbe::default(),
-            ),
             #[cfg(all(unix, not(target_os = "espidf")))]
             store_root_directory,
             _store_root_lock_file: Some(store_root_lock_file),
@@ -3116,6 +3124,7 @@ impl Kura {
             sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
+            lane_drain_signing_guard: once_cell::sync::OnceCell::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: ResidentMutex::new(
                 VecDeque::new(),
@@ -3325,9 +3334,7 @@ impl Kura {
         }
         if config.init_mode == InitMode::Strict {
             if !provisional_open {
-                kura.recover_journal_owned_lane_instances_on_startup(
-                    StartupRecoveryMutationAuthority::Authenticated,
-                )?;
+                kura.recover_journal_owned_lane_instances_on_startup()?;
             }
             // Bootstrap recovery needs the exact retained instance journal; a
             // configured LaneId cannot identify an original publication target.
@@ -3353,11 +3360,7 @@ impl Kura {
                 )?;
                 kura.validate_retained_block_inventory_on_startup()?;
                 kura.recover_canonical_association_stage_before_state_geometry()?;
-                kura.reconcile_merge_carriers_from_durable_blocks_with_authority(
-                    None,
-                    prune_intent.is_some(),
-                    true,
-                )?;
+                kura.reconcile_merge_carriers_from_durable_blocks(prune_intent.is_some(), true)?;
                 if let Some(intent) = prune_intent.as_ref() {
                     kura.complete_recovered_prune_intent(intent)?;
                 }
@@ -3513,10 +3516,6 @@ impl Kura {
             ),
             resource_inventory: Arc::clone(&resource_inventory),
             instance_identity: Arc::new(KuraInstanceIdentityMarker),
-            #[cfg(test)]
-            snapshot_finalization_resource_probe: Mutex::new(
-                SnapshotFinalizationResourceProbe::default(),
-            ),
             #[cfg(all(unix, not(target_os = "espidf")))]
             store_root_directory,
             _store_root_lock_file: Some(store_root_lock_file),
@@ -3541,6 +3540,7 @@ impl Kura {
             sidecar_read_permit,
             autonomous_lifecycle_process_generation_lock: Mutex::new(()),
             autonomous_lifecycle_process_generation_claim: OnceLock::new(),
+            lane_drain_signing_guard: once_cell::sync::OnceCell::new(),
             historical_autonomous_recovery_mutation_lock: Mutex::new(()),
             v2_finality_verification_cache: ResidentMutex::new(
                 VecDeque::new(),
@@ -3827,6 +3827,24 @@ impl Kura {
     #[must_use]
     pub fn store_root(&self) -> PathBuf {
         self.store_root.clone()
+    }
+    /// Share the durable signing decision across every State backed by this exact Kura.
+    pub(crate) fn lane_drain_signing_guard(
+        &self,
+        active_incarnations: &BTreeSet<(LaneId, Hash)>,
+    ) -> std::result::Result<
+        Arc<crate::lane_drain::LaneDrainSigningGuard>,
+        crate::lane_drain::LaneDrainSigningGuardError,
+    > {
+        self.lane_drain_signing_guard
+            .get_or_try_init(|| {
+                crate::lane_drain::LaneDrainSigningGuard::open(
+                    &self.store_root,
+                    active_incarnations,
+                )
+                .map(Arc::new)
+            })
+            .map(Arc::clone)
     }
     /// Return cached total on-disk bytes used by Kura (active + retired segments).
     ///
@@ -4565,37 +4583,21 @@ impl Kura {
         Self::read_durable_hash_at_height(&mut self.block_store.lock(), height)
     }
     fn recover_canonical_association_stage(&self) -> Result<()> {
-        self.recover_canonical_association_stage_with_authority(
-            None,
+        self.recover_canonical_association_stage_with_artifacts(
             CanonicalAssociationArtifactRecovery::ActiveGeometry,
         )
     }
     /// Recover only the physical associations of the exact committed stage;
     /// State has not authenticated its active secondary catalog yet.
     fn recover_canonical_association_stage_before_state_geometry(&self) -> Result<()> {
-        self.recover_canonical_association_stage_with_authority(
-            None,
+        self.recover_canonical_association_stage_with_artifacts(
             CanonicalAssociationArtifactRecovery::JournalPhysicalGeometry,
         )
     }
-    fn recover_canonical_association_stage_during_snapshot_finalization(
+    fn recover_canonical_association_stage_with_artifacts(
         &self,
-        authority: &SnapshotFinalizationMutationAuthority<'_>,
-    ) -> Result<()> {
-        authority.validate_for(self)?;
-        self.recover_canonical_association_stage_with_authority(
-            Some(authority),
-            CanonicalAssociationArtifactRecovery::ActiveGeometry,
-        )
-    }
-    fn recover_canonical_association_stage_with_authority(
-        &self,
-        finalization_authority: Option<&SnapshotFinalizationMutationAuthority<'_>>,
         artifact_recovery: CanonicalAssociationArtifactRecovery,
     ) -> Result<()> {
-        if let Some(authority) = finalization_authority {
-            authority.validate_for(self)?;
-        }
         let Some(stage) = self.read_canonical_association_stage()? else {
             return Ok(());
         };
@@ -4620,13 +4622,7 @@ impl Kura {
         }
         if let Some(entry) = stage.merge_entry.as_ref() {
             let _ = self.append_committed_merge_entry_for_block_if_missing(&block, entry)?;
-            if finalization_authority.is_some() {
-                self.remove_pending_certified_merge_entry_after_authorization(
-                    entry.canonical_hash(),
-                )?;
-            } else {
-                self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
-            }
+            self.remove_committed_pending_merge_entry_best_effort(entry.canonical_hash());
         }
         self.remove_canonical_association_stage()
     }
@@ -9276,7 +9272,6 @@ impl Kura {
     fn merge_carrier_records_for_startup_prepublication_reconciliation(
         &self,
         durable_tip: u64,
-        allow_pending_tip: bool,
     ) -> Result<(Vec<MergeLedgerCarrierRecord>, BTreeMap<u64, BlockHeader>)> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -9310,10 +9305,7 @@ impl Kura {
                             .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
                                 record.block_height,
                             )?;
-                        if !allow_pending_tip
-                            || record.block_height != durable_tip
-                            || finality.is_some()
-                        {
+                        if record.block_height != durable_tip || finality.is_some() {
                             return Err(strict_error);
                         }
                         let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
@@ -9357,26 +9349,11 @@ impl Kura {
             "sparse merge carriers changed during startup reconciliation".to_owned(),
         ))
     }
-    fn reconcile_merge_carriers_during_snapshot_finalization(
+    fn reconcile_merge_carriers_from_durable_blocks(
         &self,
-        authority: &SnapshotFinalizationMutationAuthority<'_>,
-    ) -> Result<()> {
-        authority.validate_for(self)?;
-        self.reconcile_merge_carriers_from_durable_blocks_with_authority(
-            Some(authority),
-            false,
-            true,
-        )
-    }
-    fn reconcile_merge_carriers_from_durable_blocks_with_authority(
-        &self,
-        finalization_authority: Option<&SnapshotFinalizationMutationAuthority<'_>>,
         reject_missing_retained_carrier: bool,
         scan_canonical_bodies: bool,
     ) -> Result<()> {
-        if let Some(authority) = finalization_authority {
-            authority.validate_for(self)?;
-        }
         self.validate_pending_merge_entries_on_startup()?;
         let block_count = self.exact_durable_blocks_count()?;
         let block_count_u64 = u64::try_from(block_count)?;
@@ -9508,13 +9485,9 @@ impl Kura {
         }
         // Existing carrier files must never silently migrate to another
         // block. A normal process restart may retain only the sole durable tip
-        // as an unpublished pre-finality recovery candidate; snapshot
-        // finalization requires every carrier to be fully authenticated.
-        let (records, finalized_carrier_headers) = self
-            .merge_carrier_records_for_startup_prepublication_reconciliation(
-                block_count_u64,
-                finalization_authority.is_none(),
-            )?;
+        // as an unpublished pre-finality recovery candidate.
+        let (records, finalized_carrier_headers) =
+            self.merge_carrier_records_for_startup_prepublication_reconciliation(block_count_u64)?;
         for record in records {
             let Some(_finalized_header) = finalized_carrier_headers.get(&record.block_height)
             else {
@@ -9537,11 +9510,7 @@ impl Kura {
             } else {
                 self.mark_transaction_entrypoint_index_incomplete(height.get(), block_count);
             }
-            if finalization_authority.is_some() {
-                self.remove_pending_certified_merge_entry_after_authorization(record.entry_hash)?;
-            } else {
-                self.remove_pending_certified_merge_entry(record.entry_hash)?;
-            }
+            self.remove_pending_certified_merge_entry(record.entry_hash)?;
         }
         Ok(())
     }
@@ -13362,13 +13331,16 @@ impl Kura {
         // before its consumer admits the signed wire length. The existing replica
         // authority verifies the exact CommitQC/retained-record/header bindings
         // without reading the body; the bounded reader validates body bytes later.
-        let Some((wire_len, _)) = self.verified_v2_finality_wire_hash_for_eviction(
+        let wire_len = match self.verified_v2_finality_wire_hash_for_eviction(
             &store.path_to_blockchain,
             height_u64,
             hash,
-        )?
-        else {
-            return Ok(None);
+        )? {
+            Some((wire_len, _)) => wire_len,
+            // A Sumeragi block has no v2 finality sidecar: its frame carries the commit
+            // certificate the Sumeragi block store verified before writing it.
+            // TODO(WP8c): Kura keeps no v2 finality.
+            None => index.length,
         };
         if wire_len != index.length {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
@@ -13859,231 +13831,6 @@ impl Kura {
         }
         self.ensure_snapshot_bootstrap_authenticated()?;
         self.ensure_canonical_storage_not_poisoned()
-    }
-    /// Finalize a provisional imported prefix against an authenticated typed lineage.
-    ///
-    /// The authorization proves that the outer snapshot signature (or exact
-    /// one-time audited policy), Merkle metadata, complete hash vector, and
-    /// first executable v2 artifact were verified. This method consumes that
-    /// authorization and independently rechecks every durable marker binding
-    /// before enabling Kura mutation.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if Kura is not awaiting authentication, the token
-    /// differs from the durable provisional prefix, or deferred recovery
-    /// fails. A deferred-recovery failure poisons canonical storage and leaves
-    /// finalization fail-closed.
-    pub fn finalize_authenticated_snapshot_bootstrap(
-        &self,
-        authorization: crate::sumeragi::AuthenticatedV2SnapshotStartup,
-    ) -> Result<()> {
-        let (record, snapshot_hashes, first_height_context) = authorization.into_parts();
-        let pending = {
-            let state = self.provisional_snapshot_bootstrap.lock();
-            state
-                .pending_metadata()
-                .cloned()
-                .ok_or(Error::SnapshotBootstrapAuthenticationPending)?
-        };
-        record
-            .validate()
-            .map_err(|error| Error::InvalidSnapshotBootstrapMarker {
-                path: self
-                    .active_blocks_dir
-                    .lock()
-                    .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
-                reason: format!("typed bootstrap lineage is invalid: {error}"),
-            })?;
-        let anchor = record
-            .context
-            .snapshot_bootstrap
-            .as_ref()
-            .expect("validated bootstrap lineage contains an anchor");
-        if usize::try_from(anchor.snapshot_height)? != pending.hash_only_prefix_height
-            || snapshot_hashes.len() < pending.hash_only_prefix_height
-            || snapshot_hashes
-                .get(pending.hash_only_prefix_height.saturating_sub(1))
-                .copied()
-                != Some(anchor.snapshot_block_hash)
-        {
-            return Err(Error::InvalidSnapshotBootstrapMarker {
-                path: self
-                    .active_blocks_dir
-                    .lock()
-                    .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
-                reason: "typed lineage anchor differs from the provisional Kura prefix".to_owned(),
-            });
-        }
-        let lineage_hash = snapshot_bootstrap_lineage_digest(&record);
-        if first_height_context.context() != &record.context
-            || first_height_context.proofs_of_possession() != record.validator_set_pops
-        {
-            return Err(Error::InvalidSnapshotBootstrapMarker {
-                path: self.sumeragi_v2_storage_root().join("contexts"),
-                reason: "authenticated first-height context differs from typed snapshot lineage"
-                    .to_owned(),
-            });
-        }
-        if pending
-            .bootstrap_lineage_hash
-            .is_some_and(|expected| expected != lineage_hash)
-        {
-            return Err(Error::InvalidSnapshotBootstrapMarker {
-                path: self
-                    .active_blocks_dir
-                    .lock()
-                    .join(VERIFIED_SNAPSHOT_TAIL_FILE_NAME),
-                reason: "signed snapshot lineage differs from the durable marker binding"
-                    .to_owned(),
-            });
-        }
-        {
-            let mut store = self.block_store.lock();
-            let logical_count = store.read_index_count()?;
-            let hashes_count = store.read_hashes_count()?;
-            let durable_hashes = store.read_block_hashes(0, usize::try_from(hashes_count)?)?;
-            if logical_count != hashes_count
-                || snapshot_hashes.len() > durable_hashes.len()
-                || durable_hashes[..snapshot_hashes.len()] != snapshot_hashes[..]
-            {
-                return Err(Error::InvalidSnapshotBootstrapMarker {
-                    path: store.path_to_blockchain.join(HASHES_FILE_NAME),
-                    reason: "signed snapshot hash vector is not an exact prefix of durable Kura"
-                        .to_owned(),
-                });
-            }
-            let marker = store
-                .validated_verified_snapshot_tail_read_only(logical_count, hashes_count)?
-                .ok_or_else(|| Error::InvalidSnapshotBootstrapMarker {
-                    path: store.verified_snapshot_tail_marker_path(),
-                    reason: "authenticated snapshot did not publish a durable lineage marker"
-                        .to_owned(),
-                })?;
-            if marker.body_prefix_count != marker.snapshot_height
-                || usize::try_from(marker.snapshot_height)? != pending.hash_only_prefix_height
-                || marker.bootstrap_lineage_hash != Some(lineage_hash)
-                || pending
-                    .hash_journal_digest
-                    .is_some_and(|expected| expected != marker.hash_journal_digest)
-            {
-                return Err(Error::InvalidSnapshotBootstrapMarker {
-                    path: store.verified_snapshot_tail_marker_path(),
-                    reason: "durable marker differs from authenticated prefix lineage".to_owned(),
-                });
-            }
-        }
-        // The read-only authentication preflight is complete. Claim the one
-        // finalization transition immediately before deferred recovery. Any
-        // competing or repeated finalizer observes `Finalizing` (or the later
-        // `Authenticated`) and cannot run recovery a second time.
-        if !self
-            .provisional_snapshot_bootstrap
-            .lock()
-            .begin_finalization(&pending)
-        {
-            return Err(Error::SnapshotBootstrapAuthenticationPending);
-        }
-        // Deferred recovery is now authorized. Any failure poisons canonical
-        // storage and deliberately leaves the runtime in `Finalizing`, so no
-        // canonical operation can observe partially recovered state.
-        let finalize_result = (|| -> Result<()> {
-            let finalization_authority = SnapshotFinalizationMutationAuthority::new(self)?;
-            self.recover_journal_owned_lane_instances_on_startup(
-                StartupRecoveryMutationAuthority::SnapshotFinalization(&finalization_authority),
-            )?;
-            let merge_path = self.active_merge_path.lock().clone();
-            let merge_capacity = self.merge_log.lock().cache_capacity;
-            let merge_resources = self
-                .begin_total_disk_usage_mutation()
-                .with_resource_paths(vec![merge_path.clone()]);
-            let mut merge_log = MergeLedgerLog::open_at(&merge_path, merge_capacity)?;
-            let block_count = self.exact_durable_blocks_count()?;
-            if merge_log.total_entries > block_count {
-                merge_log.truncate_to_len(block_count)?;
-            }
-            *self.merge_log.lock() = merge_log;
-            merge_resources.finish_resources_before_disk_rescan();
-            let blocks_root = self.active_blocks_dir.lock().clone();
-            let block_data = self.block_data.lock();
-            let mut durable_hashes = block_data
-                .dense_entries()
-                .ok_or(Error::EmergencyFastAuxiliaryUnavailable {
-                    subsystem: "complete canonical history",
-                })?
-                .iter()
-                .take(block_count)
-                .map(|(hash, _)| *hash)
-                .collect::<Vec<_>>();
-            drop(block_data);
-            {
-                let mut store = self.block_store.lock();
-                let checkpoint_resources = self
-                    .begin_total_disk_usage_mutation()
-                    .with_startup_resource_tree(&Self::wsv_checkpoint_dir_for(&blocks_root));
-                let manifest_resources = self
-                    .begin_total_disk_usage_mutation()
-                    .with_startup_resource_tree(&Self::commit_manifest_dir_for(&blocks_root));
-                Self::reconcile_commit_manifests(&mut store, &blocks_root, &mut durable_hashes)?;
-                checkpoint_resources.finish_resources_before_disk_rescan();
-                manifest_resources.finish_resources_before_disk_rescan();
-            }
-            self.recover_retained_block_rewrite_stage_during_snapshot_finalization(
-                &blocks_root,
-                &finalization_authority,
-            )?;
-            let verified_finality = self.validate_v2_finality_inventory_on_startup(true)?;
-            self.install_v2_startup_finality_verification_inventory(verified_finality);
-            self.prune_retained_block_records_from_during_snapshot_finalization(
-                &blocks_root,
-                u64::try_from(block_count)?.saturating_add(1),
-                &finalization_authority,
-            )?;
-            self.validate_retained_block_inventory_on_startup()?;
-            self.recover_canonical_association_stage_during_snapshot_finalization(
-                &finalization_authority,
-            )?;
-            self.reconcile_merge_carriers_during_snapshot_finalization(&finalization_authority)?;
-            self.refresh_v2_startup_replay_auxiliary_binding()?;
-            self.refresh_disk_usage_bytes()?;
-            // Publish the immutable first-height context last. After this
-            // point the same state-machine lock performs the infallible
-            // Finalizing -> Authenticated assignment, so no fallible operation
-            // can leave a successfully published context in a live pending
-            // process.
-            let mut runtime_state = self.provisional_snapshot_bootstrap.lock();
-            if !matches!(*runtime_state, SnapshotBootstrapRuntimeState::Finalizing) {
-                return Err(Error::SnapshotBootstrapAuthenticationPending);
-            }
-            let context_store = crate::sumeragi::v2_context_store::V2ContextStore::open(
-                self.sumeragi_v2_storage_root(),
-            )
-            .map_err(|error| Error::SnapshotBootstrapFinalization {
-                reason: error.to_string(),
-            })?;
-            context_store
-                .persist(&first_height_context)
-                .map_err(|error| Error::SnapshotBootstrapFinalization {
-                    reason: error.to_string(),
-                })?;
-            *runtime_state = SnapshotBootstrapRuntimeState::Authenticated;
-            Ok(())
-        })();
-        if let Err(error) = finalize_result {
-            self.poison_canonical_storage(
-                "authenticated snapshot deferred startup recovery",
-                &error,
-            );
-            return Err(error);
-        }
-        // Accounting cannot introduce a fallible consensus transition after the
-        // immutable first-height context and Authenticated state are published.
-        // All finalization authority/mutation guards have dropped at this point.
-        #[cfg(test)]
-        self.observe_snapshot_finalization_resources_before_reconcile_for_test();
-        let _ = self.reconcile_physical_resource_inventory();
-        let _ = self.reconcile_resident_resource_inventory();
-        Ok(())
     }
     /// Returns `true` when the canonical block is represented only by its
     /// hash from a hard-fork snapshot bootstrap and the local body is
@@ -15881,8 +15628,8 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let mut cursor = snapshot.bytes.as_slice();
-        let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        let record = decode_bounded_kura_sidecar::<KuraV2FinalityRecord>(&snapshot.bytes)
+            .map_err(Error::NoritoFrame)?;
         let canonical_len = {
             let _flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
@@ -16181,6 +15928,111 @@ impl Kura {
         };
         let receipt = v2_commit_receipt(&artifact);
         Ok(Some((artifact, receipt)))
+    }
+    /// Read one State-selected finality record without materializing its executed body.
+    ///
+    /// The caller supplies the block hash, parent hash, and network from one
+    /// immutable State view. Kura joins them to its exact durable hash/index and
+    /// retained header, validates the canonical finality and retention records,
+    /// binds the signed proposal and complete-wire identities, and verifies the
+    /// CommitQC and roster proofs of possession. The receipt is reconstructed
+    /// only from that same verified artifact. This does not authorize a source
+    /// transaction: callers still need an exact executed-body proof at each
+    /// source height and independently pinned successor continuity.
+    ///
+    /// TODO: Before wiring this into a multi-height production caller, reserve
+    /// the full history's bounded sidecar I/O, cumulative Norito decoder graph,
+    /// re-encoding scratch, BLS work, and separately read target bodies. One
+    /// height can read up to `MAX_KURA_V2_FINALITY_RECORD_BYTES +
+    /// MAX_RETAINED_BLOCK_RECORD_BYTES` bytes even when the body is absent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a non-durable height, mismatched State hash,
+    /// parent, or network, corrupt index or sidecar, or invalid finality proof.
+    #[cfg_attr(
+        not(test),
+        allow(
+            dead_code,
+            reason = "TODO: wire bounded signer replay after resource admission"
+        )
+    )]
+    pub(crate) fn v2_finality_metadata_for_state(
+        &self,
+        height: u64,
+        expected_state_hash: HashOf<BlockHeader>,
+        expected_state_parent_hash: Option<HashOf<BlockHeader>>,
+        expected_network_id: NetworkId,
+    ) -> Result<Option<(BlockHeader, V2FinalityArtifact, KuraV2CommitReceipt)>> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        self.ensure_canonical_storage_not_poisoned()?;
+        if NonZeroUsize::new(usize::try_from(height)?).is_none() {
+            return Err(Error::CanonicalBlockWireMismatch { height });
+        }
+        let (durable_hash, indexed_wire_len) = {
+            let mut store = self.block_store.lock();
+            let durable_count = store.read_exact_durable_index_count()?;
+            if height > durable_count {
+                return Err(Error::BlockHeightGap {
+                    expected_next_height: durable_count.saturating_add(1),
+                    actual_height: height,
+                });
+            }
+            let hash = store
+                .read_block_hashes(height - 1, 1)?
+                .into_iter()
+                .next()
+                .ok_or(Error::HashesFileHeightMismatch)?;
+            let index = store.read_block_index(height - 1)?;
+            (hash, index.length)
+        };
+        if durable_hash != expected_state_hash {
+            return Err(Error::BlockHeightConflict {
+                height,
+                expected: durable_hash,
+                actual: expected_state_hash,
+            });
+        }
+        if indexed_wire_len == 0 || indexed_wire_len > STRICT_INIT_MAX_BLOCK_BYTES {
+            return Err(Error::CorruptedBlockLength {
+                length: indexed_wire_len,
+                limit: STRICT_INIT_MAX_BLOCK_BYTES,
+            });
+        }
+        let blocks_dir = self.active_blocks_dir.lock().clone();
+        let directory = Self::v2_finality_artifact_dir_for(&blocks_dir);
+        let path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
+        let Some((record, read_identity)) = self.decode_v2_finality_record_at(&path, &directory)?
+        else {
+            return Ok(None);
+        };
+        Self::validate_v2_finality_record_at(&path, height, durable_hash, &record)?;
+        if record.block_header.prev_block_hash() != expected_state_parent_hash
+            || record.artifact.height_context.network_id != expected_network_id
+        {
+            return Err(Error::CanonicalBlockWireMismatch { height });
+        }
+        let (retained_header, proposal_hash, wire_len, wire_hash, _, _) = self
+            .retained_block_record_at_without_live_body(&blocks_dir, height, durable_hash)?
+            .ok_or(Error::MissingRetainedBlockRecord { height })?;
+        if retained_header != record.block_header {
+            return Err(Error::ConflictingRetainedBlockRecord { height });
+        }
+        if wire_len != indexed_wire_len {
+            return Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height });
+        }
+        Self::validate_v2_finality_wire_bindings(
+            height,
+            &record.artifact,
+            proposal_hash,
+            wire_len,
+            wire_hash,
+        )?;
+        self.verify_v2_finality_artifact_at(&path, &directory, &record.artifact, &read_identity)?;
+        let receipt = v2_commit_receipt(&record.artifact);
+        Ok(Some((record.block_header, record.artifact, receipt)))
     }
     fn validate_staged_kagemusha_finality(
         staged: &StagedKagemushaFinalitySidecarV1,
@@ -22247,7 +22099,7 @@ impl Kura {
     /// intent is durable, any storage failure is fail-stop and startup completes the prune forward.
     /// A suffix containing durable v2 finality cannot be pruned.
     pub fn prune_to_height(&self, height: u64) -> Result<()> {
-        let _transition_guard = crate::sumeragi::status::consensus_transition_guard();
+        let _transition_guard = crate::sumeragi::v2_status::consensus_transition_guard();
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.ensure_no_retired_rollback_intents()?;
@@ -43616,8 +43468,8 @@ impl BlockStore {
         else {
             return Err(Error::MissingV2FinalityArtifact { height });
         };
-        let mut cursor = bytes.as_slice();
-        let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        let record = decode_bounded_kura_sidecar::<KuraV2FinalityRecord>(&bytes)
+            .map_err(Error::NoritoFrame)?;
         if record.encode() != bytes {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -43663,8 +43515,8 @@ impl BlockStore {
                 reason: "evicted block is missing its complete v2 finality record".to_owned(),
             });
         };
-        let mut cursor = bytes.as_slice();
-        let record = KuraV2FinalityRecord::decode_all(&mut cursor).map_err(Error::NoritoFrame)?;
+        let record = decode_bounded_kura_sidecar::<KuraV2FinalityRecord>(&bytes)
+            .map_err(Error::NoritoFrame)?;
         if record.encode() != bytes {
             return Err(Error::InvalidProvisionalSnapshotSuffix {
                 height,
@@ -47258,8 +47110,6 @@ impl BlockStore {
 }
 include!("kura/prune_block_store_tail.rs");
 #[cfg(test)]
-include!("kura/snapshot_finalization_resource_test_observation.rs");
-#[cfg(test)]
 include!("kura/test_fault_injection_state.rs");
 #[cfg(test)]
 include!("kura/test_fault_injection_controls.rs");
@@ -47707,7 +47557,6 @@ pub(crate) mod tests {
     include!("kura/tests/13_manifests_and_fsync.rs");
     include!("kura/tests/14_pipeline_and_lane_frame_owners.rs");
     include!("kura/tests/14b_sidecar_physical_resource_tests.rs");
-    include!("kura/tests/14c_authenticated_snapshot_resource_tests.rs");
     include!("kura/tests/14_resource_evidence.rs");
     include!("kura/tests/14a_physical_resource_guard_tests.rs");
     include!("kura/tests/14b_metadata_physical_resource_tests.rs");

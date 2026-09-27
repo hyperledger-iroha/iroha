@@ -786,6 +786,7 @@ pub(super) mod test_fixture {
                 release_id: selected.release_id,
                 hardware_profile_id: selected.hardware_profile_id,
                 device_key_reference: selected.device_key_reference,
+                attested_key_id: selected.attested_key_id,
                 lane_id: selected.lane_id,
                 issued_at_ms: 900,
                 expires_at_ms: 1_900,

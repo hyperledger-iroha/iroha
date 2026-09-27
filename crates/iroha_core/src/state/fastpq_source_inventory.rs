@@ -138,7 +138,8 @@ impl StateBlock<'_> {
             pending,
             |state| state.validate_owned_fastpq_sources(sources),
             |state, tx_set_hash| state.build_owned_fastpq_source_inventory(sources, tx_set_hash),
-        )
+        )?;
+        self.bind_merge_prefix_inventory(sources)
     }
 
     fn validate_owned_fastpq_sources(&self, sources: &OwnedExecutionSources) -> Result<(), String> {
@@ -166,6 +167,7 @@ impl StateBlock<'_> {
         {
             return Err("ordinary FASTPQ inventory cannot replace a native stage".into());
         }
+        self.verify_merge_owned_sources(sources)?;
         let routes = sources.network_routes();
         if routes.len() > sources.entries().len() {
             return Err("FASTPQ owned Network routes exceed the actual source count".into());
@@ -228,6 +230,12 @@ impl StateBlock<'_> {
             return Err("FASTPQ source inventory has already been finalized".into());
         }
         let inventory = validate(self).and_then(|()| {
+            if matches!(
+                self.execution_output_plan,
+                Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)
+            ) {
+                return Err("FASTPQ source inventory cannot finalize a poisoned carrier".into());
+            }
             let tx_set_hash = self
                 .fastpq_tx_set_hash
                 .filter(|hash| *hash != [0; 32])
@@ -244,6 +252,12 @@ impl StateBlock<'_> {
                 pending,
             );
             let inventory = build(self, tx_set_hash)?;
+            self.fastpq_source_quota
+                .as_ref()
+                .ok_or("source capacity was not frozen")?
+                .as_ref()
+                .map_err(|error| error.clone())?
+                .reconcile(inventory.entries(), &self.fastpq_transcripts)?;
             self.fastpq_source_captures
                 .seal()
                 .map_err(|error| error.to_string())?;
@@ -260,6 +274,8 @@ impl StateBlock<'_> {
                 Ok(())
             }
             Err(error) => {
+                self.execution_output_plan =
+                    Some(super::output_capacity::ExecutionOutputPlanState::Poisoned);
                 self.fastpq_source_inventory = Some(Err(error.clone()));
                 Err(error)
             }
@@ -509,6 +525,12 @@ impl StateBlock<'_> {
     pub(crate) fn verified_fastpq_source_inventory_for_capture(
         &self,
     ) -> Result<Arc<FastpqSourceInventoryV1>, String> {
+        if matches!(
+            self.execution_output_plan,
+            Some(super::output_capacity::ExecutionOutputPlanState::Poisoned)
+        ) {
+            return Err("FASTPQ witness capture refuses a poisoned carrier".into());
+        }
         let inventory = match &self.fastpq_source_inventory {
             None => return Err("FASTPQ witness capture has no finalized owned inventory".into()),
             Some(Err(error)) => return Err(error.clone()),

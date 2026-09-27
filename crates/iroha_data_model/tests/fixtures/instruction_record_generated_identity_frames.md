@@ -5,7 +5,7 @@ captures for 321 instruction-record type rows. Its 357 populated values preserve
 1,428 complete root, vector, option and map frames.
 
 The fixture SHA-256 is
-`7c05d9493fbfac8cbf249f26fe5fe7a5a70f114cc8a163d1c7e3467e6fdb6b9b`.
+`9a643a65ce7c613d3a72ffadae36bca3458087359cb04f46b50cfb34d2b97d34`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -51,3 +51,24 @@ inventory count and complete four-frame roundtrips remain mandatory; no old
 decoder or identity fallback was introduced.
 The opt-in `capture_current_privacy_activation_instruction_identity_frames` test
 prints the actual capture to stdout and never writes the fixture itself.
+
+`RegisterZkAsset` was recaptured on 2026-09-25 after removal of its retired
+`vk_shield` field. A temporary Rust test constructed both the no-unshield and
+unshield cases and printed the actual root, vector, option and map frames. The
+fixture proposal changed only those two cases; the temporary test was removed.
+The type's directional identity hashes and the other 320 rows are unchanged.
+
+`RedeemKagemushaV1` and `TopUpKagemushaV1` were recaptured on 2026-09-25
+after the terminal-body commitment and hardware credential binding changed.
+The temporary typed maintenance test identified exactly these two changed
+populated rows among the 51 missing-record producers. It supplied all four
+current frame forms for each row; the row identities, other 319 rows, and
+inventory counts are unchanged. The temporary test was removed after capture.
+
+`RegisterIdentifierPolicy`, both `ClaimIdentifier` cases, and
+`FinalizeElection` were recaptured on 2026-09-25 after first-release policy,
+receipt and exact `u128` tally changes. The two Claim cases were matched by
+their unchanged encoded account field, preserving original case order. Only
+these three rows' four frame forms changed; all declared type identities and
+the 321-row, 357-case inventory remain unchanged. The temporary typed capture
+tests were removed afterwards.

@@ -4732,6 +4732,7 @@ dependencies = [
  "iroha_p2p",
  "iroha_primitives",
  "iroha_service_model",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_network",
  "iroha_test_samples",
@@ -4906,6 +4907,7 @@ dependencies = [
  "iroha_service_model",
  "iroha_torii_shared",
  "log",
+ "mv",
  "nonzero_ext",
  "norito",
  "rust_decimal",
@@ -5005,6 +5007,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_sccp",
  "iroha_schema",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii_shared",
@@ -5141,6 +5144,7 @@ dependencies = [
  "iroha_model_base",
  "iroha_primitives",
  "iroha_schema",
+ "iroha_sumeragi",
  "iroha_version",
  "iroha_zkp_halo2",
  "ivm_abi",
@@ -5151,6 +5155,7 @@ dependencies = [
  "p256",
  "regex",
  "rustc-hash 2.1.2",
+ "rustix 1.1.4",
  "sha2",
  "sorafs_manifest",
  "tempfile",
@@ -5221,6 +5226,7 @@ dependencies = [
  "iroha_smart_contract_codec",
  "iroha_smart_contract_utils",
  "norito",
+ "sorafs_manifest",
 ]
 
 [[package]]
@@ -5757,6 +5763,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_sumeragi"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "norito",
+]
+
+[[package]]
 name = "iroha_swarm"
 version = "2.0.0-rc.2.0"
 dependencies = [
@@ -5902,6 +5915,7 @@ dependencies = [
  "iroha_schema",
  "iroha_schema_gen",
  "iroha_service_model",
+ "iroha_sumeragi",
  "iroha_telemetry",
  "iroha_test_samples",
  "iroha_torii",
@@ -7354,8 +7368,6 @@ dependencies = [
 [[package]]
 name = "num-bigint"
 version = "0.4.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
 dependencies = [
  "num-integer",
  "num-traits",

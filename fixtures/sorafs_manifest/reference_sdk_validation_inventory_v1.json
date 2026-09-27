@@ -639,8 +639,8 @@
       "kind": "provider_advert",
       "encoding": "json",
       "expectation": "valid",
-      "byte_length": 602,
-      "sha256": "2c8bf5eea1cb4bad689531768452e36d17498e7f23aa93a75372e1969080ad01"
+      "byte_length": 690,
+      "sha256": "1ab3ac7773af4b6d59660db7345dc5b076a44d5f6ac9adb138f1d9c39abc3932"
     },
     {
       "path": "provider_admission/advert_v1.to",
@@ -648,8 +648,8 @@
       "kind": "provider_advert",
       "encoding": "norito",
       "expectation": "valid",
-      "byte_length": 591,
-      "sha256": "51a36d9ce7b55b884cd33b767a502ab14e606cb9daea6ef4a67e0e872d51bbfa"
+      "byte_length": 624,
+      "sha256": "3ed7963e58dd933c49b41da736dce914933ad1e9a011a20da383ce403d3dd5a7"
     },
     {
       "path": "provider_admission/envelope_v1.json",
@@ -657,8 +657,8 @@
       "kind": "provider_admission_envelope",
       "encoding": "json",
       "expectation": "valid",
-      "byte_length": 551,
-      "sha256": "04402bf9cdc7be126be09ec339c5a39c5804584bd9d08a3eb96ba369eccd7c2e"
+      "byte_length": 639,
+      "sha256": "6f324c66716c3e791199e783fb14ae1a17c61b909709c87cc514c59244fa6ed2"
     },
     {
       "path": "provider_admission/envelope_v1.to",
@@ -666,8 +666,8 @@
       "kind": "provider_admission_envelope",
       "encoding": "norito",
       "expectation": "valid",
-      "byte_length": 1278,
-      "sha256": "1d5ec1a5ce450a7df7833849e1b26536517d5b568d64e67069e00899d92171de"
+      "byte_length": 1311,
+      "sha256": "19db550b4822f611ee48fdcf175ab92f4654fb4f8d460c0625f90950d738153e"
     },
     {
       "path": "reference_sdk/pop_membership_current_v1.to",
@@ -1091,6 +1091,6 @@
     "key_usage": "test_only_reference_sdk_fixture",
     "public_key_hex": "d5af25e204ad03d0a26e236996404f1be51a60948bcc026cd084a83690b756d3",
     "public_key_fingerprint_sha256": "1a09a6a1b85cec77787ba6ce26f18500a2434865cee04d79c69a481888f52fff",
-    "signature_hex": "ec319ca9afc72011b35fac31bd57615dfe4ba3634d0aac9799a7eb9ced789e92bdd908f1d929d05efad5f37a6d50abb16b02dc6983d7e18e954a248c324ad504"
+    "signature_hex": "1b8ab4f546e93441a91a67d42405cfae917d9d73964e8770e4f8e8eb2d81dd962d00593a03c5e6342975d7de55925e87e43dc27d75bf8868e5c0c41acb85600d"
   }
 }

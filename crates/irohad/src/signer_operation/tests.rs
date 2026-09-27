@@ -195,6 +195,14 @@ impl SignerOperationStateSourceV1 for Source {
         }
         Ok(reservation)
     }
+    fn reserve_stream_token(
+        &self,
+        _request: &SignerOperationReservationRequestV1<'_>,
+        _review: &SignerStreamTokenReservationReviewV1<'_>,
+    ) -> Result<SignerOperationReservationV1, SignerOperationErrorV1> {
+        // This generic fixture has no body-bearing native role-11 source.
+        Err(SignerOperationErrorV1::InvalidOperation)
+    }
     fn observe_reserved(
         &self,
         check: &SignerOperationReservationCheckV1<'_>,

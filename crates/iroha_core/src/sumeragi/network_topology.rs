@@ -79,7 +79,7 @@ impl Topology {
     }
     /// The required amount of votes to commit a block with this topology.
     pub fn min_votes_for_commit(&self) -> usize {
-        commit_quorum_from_len(self.0.len())
+        iroha_sumeragi::types::quorum(self.0.len())
     }
     /// The required amount of votes to trigger a view change (f + 1).
     pub fn min_votes_for_view_change(&self) -> usize {
@@ -261,17 +261,6 @@ impl Topology {
         self.0.sort();
         self.0.dedup();
     }
-}
-/// Compute the commit quorum size for a topology of the given length.
-///
-/// The result is `floor(2 * len / 3) + 1` for a non-empty topology, expressed
-/// as `len - floor((len - 1) / 3)` so the arithmetic cannot overflow.
-#[must_use]
-pub fn commit_quorum_from_len(len: usize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    len - (len - 1) / 3
 }
 #[cfg(test)]
 mod prf_collectors_tests {
@@ -1135,44 +1124,48 @@ mod tests {
         );
     }
     #[test]
-    fn commit_quorum_helper_matches_topology_rule() {
+    fn commit_quorum_matches_the_core_quorum() {
         let cases = [1_usize, 2, 3, 4, 5, 6, 7, 9, 10, 16];
         for len in cases {
             let topology = test_topology(len);
             assert_eq!(
                 topology.min_votes_for_commit(),
-                commit_quorum_from_len(len),
+                iroha_sumeragi::types::quorum(len),
                 "quorum mismatch for len={len}"
             );
         }
     }
+    /// The core quorum reproduces every value of the retired `commit_quorum_from_len`
+    /// (`0` for an empty topology, `len - (len - 1) / 3` otherwise), so swapping the helper
+    /// changed no quorum anywhere.
     #[test]
-    fn commit_quorum_helper_covers_boundaries_and_all_residue_classes() {
+    fn core_quorum_equals_the_retired_topology_helper_everywhere() {
+        fn retired_commit_quorum_from_len(len: usize) -> usize {
+            if len == 0 {
+                return 0;
+            }
+            len - (len - 1) / 3
+        }
         let expected = [0_usize, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7, 8, 9];
         for (len, expected) in expected.into_iter().enumerate() {
             assert_eq!(
-                commit_quorum_from_len(len),
+                iroha_sumeragi::types::quorum(len),
                 expected,
                 "quorum mismatch for len={len}"
             );
         }
-        for len in 0_usize..=4_096 {
-            let quorum = commit_quorum_from_len(len);
-            let max_faults = len.saturating_sub(1) / 3;
-            assert_eq!(quorum, len - max_faults, "quorum mismatch for len={len}");
+        for len in (0_usize..=4_096).chain([usize::MAX - 1, usize::MAX]) {
+            let quorum = iroha_sumeragi::types::quorum(len);
+            assert_eq!(quorum, retired_commit_quorum_from_len(len), "len={len}");
+            assert_eq!(quorum, len - len.saturating_sub(1) / 3, "len={len}");
             assert!(quorum <= len);
-            if len != 0 {
+            if (1..=4_096).contains(&len) {
                 assert!(
                     3 * quorum > 2 * len,
                     "quorum must strictly exceed two thirds for len={len}"
                 );
             }
         }
-        assert_eq!(
-            commit_quorum_from_len(usize::MAX),
-            usize::MAX - (usize::MAX - 1) / 3,
-            "the helper must remain exact without saturating at usize::MAX"
-        );
     }
     #[test]
     fn view_change_quorum_is_f_plus_one() {

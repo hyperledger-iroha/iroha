@@ -23,6 +23,7 @@ fn repeated_hex(byte: &str, count: usize) -> String {
 }
 fn body_args() -> Vec<String> {
     vec![
+        format!("--network-id={}", repeated_hex("a1", 32)),
         "--chunker-profile=sorafs.sf1@1.0.0".to_string(),
         format!("--provider-id={}", repeated_hex("11", 32)),
         format!("--stake-pool-id={}", repeated_hex("22", 32)),
@@ -172,6 +173,7 @@ fn provider_advert_external_signing_round_trip_is_deterministic() {
     );
     let verify_output = cargo_bin_cmd!("sorafs_provider_advert")
         .arg("--verify")
+        .arg(format!("--network-id={}", repeated_hex("a1", 32)))
         .arg(format!("--advert={}", first_advert.display()))
         .args(reviewed_key_args(&first_signer))
         .arg("--now=1700000000")
@@ -181,6 +183,40 @@ fn provider_advert_external_signing_round_trip_is_deterministic() {
         verify_output.status.success(),
         "verify failed: {}",
         String::from_utf8_lossy(&verify_output.stderr)
+    );
+    let foreign_verify = cargo_bin_cmd!("sorafs_provider_advert")
+        .arg("--verify")
+        .arg(format!("--network-id={}", repeated_hex("b2", 32)))
+        .arg(format!("--advert={}", first_advert.display()))
+        .args(reviewed_key_args(&first_signer))
+        .output()
+        .expect("verify advert against foreign network");
+    assert!(!foreign_verify.status.success());
+    assert!(
+        String::from_utf8_lossy(&foreign_verify.stderr).contains("network id differs"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&foreign_verify.stderr)
+    );
+}
+#[test]
+fn provider_advert_prepare_requires_explicit_network_before_output() {
+    let temp = tempdir().expect("tempdir");
+    let fixture = signing_fixture(&temp, 0x33, "provider");
+    let (mut args, payload_path, _) = prepare_args(&temp, &fixture, "networkless.payload");
+    args.retain(|arg| !arg.starts_with("--network-id="));
+    let output = cargo_bin_cmd!("sorafs_provider_advert")
+        .args(args)
+        .output()
+        .expect("prepare networkless provider advert");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("--network-id"),
+        "unexpected stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !payload_path.exists(),
+        "networkless signing payload must not be written"
     );
 }
 #[test]

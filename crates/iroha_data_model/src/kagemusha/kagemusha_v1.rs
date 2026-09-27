@@ -336,7 +336,7 @@ pub const KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1: u32 = 1 << 17;
 /// Apple App Attest signs an increasing assertion counter. This does not claim a
 /// rollback-resistant monetary journal or one-use hardware key.
 pub const KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1: u32 = 1 << 18;
-/// Android KeyMint attests rollback resistance and a hardware-enforced one-use
+/// Android `KeyMint` attests rollback resistance and a hardware-enforced one-use
 /// key limit for each transition key.
 pub const KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1: u32 = 1 << 19;
 /// Exact ordinary iPhone App Attest guarantee set.
@@ -344,7 +344,7 @@ pub const KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1: u32 =
     KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_IDENTITY_V1
         | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1
         | KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1;
-/// Exact ordinary Android KeyMint guarantee set.
+/// Exact ordinary Android `KeyMint` guarantee set.
 pub const KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1: u32 =
     KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_IDENTITY_V1
         | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1
@@ -666,7 +666,7 @@ impl KagemushaDeviceSignatureV1 {
     /// Parse a canonical DER ECDSA signature and normalize its S scalar for the direct
     /// hardware-selection wire profile.
     ///
-    /// Android KeyMint commonly returns DER from `SHA256withECDSA`; ECDSA's `(r, n - s)`
+    /// Android `KeyMint` commonly returns DER from `SHA256withECDSA`; ECDSA's `(r, n - s)`
     /// equivalent is normalized before the fixed-width low-S signature enters Norito.
     /// This conversion is cryptographic framing only, not evidence of hardware enforcement.
     ///
@@ -986,7 +986,7 @@ pub enum KagemushaHardwarePlatformClassV1 {
     OtherQualified,
     /// Ordinary iPhone app using governed App Attest enrollment and assertions.
     AppleAppAttest,
-    /// Ordinary Android app using governed KeyMint enrollment and one-use keys.
+    /// Ordinary Android app using governed `KeyMint` enrollment and one-use keys.
     AndroidKeyMint,
 }
 

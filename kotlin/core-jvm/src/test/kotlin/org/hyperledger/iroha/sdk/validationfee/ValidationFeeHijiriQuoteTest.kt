@@ -112,7 +112,7 @@ class ValidationFeeHijiriQuoteTest {
             }
             assertEquals(
                 "native Hijiri validation-fee quote bridge is unavailable: " +
-                    "required ABI-23 method $method is missing",
+                    "required ABI-24 method $method is missing",
                 failure.message,
             )
             assertTrue(failure.cause is UnsatisfiedLinkError)

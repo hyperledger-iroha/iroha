@@ -72,6 +72,31 @@ export * from "./dist/toriiBrowserExplorerTypes.js";
 export type * from "./dist/subscriptionTypes.js";
 export * from "./dist/sorafsOrderbookSubmission.js";
 
+/** One raw contract-state value under a separately trusted accumulated root. */
+export interface ContractStateValueInclusionProofV1 {
+  readonly version: 1;
+  readonly path: string;
+  readonly value: ReadonlyArray<number> | Uint8Array;
+  readonly leaf_count: number | string;
+  readonly steps: ReadonlyArray<{
+    readonly bit: number;
+    readonly prefix: ReadonlyArray<number> | Uint8Array;
+    readonly sibling: string | Uint8Array;
+  }>;
+}
+/** Verify exact key/value membership; the caller authenticates trustedRoot through v2 finality. */
+export function verifyContractStateValueInclusionV1(
+  proof: ContractStateValueInclusionProofV1,
+  expectedPath: string,
+  trustedRoot: string | Uint8Array,
+): boolean;
+/** Decode duplicate-key-free Torii JSON and verify against an authenticated root. */
+export function verifyContractStateValueInclusionJsonV1(
+  payload: string | Uint8Array,
+  expectedPath: string,
+  trustedRoot: string | Uint8Array,
+): boolean;
+
 export type JsonValue =
   | null
   | boolean
@@ -193,7 +218,7 @@ export const SM2_PRIVATE_KEY_LENGTH: number;
 export const SM2_PUBLIC_KEY_LENGTH: number;
 export const SM2_SIGNATURE_LENGTH: number;
 export const SM2_DEFAULT_DISTINGUISHED_ID: string;
-export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 23;
+export const PRIVACY_REQUIRED_BRIDGE_ABI_VERSION: 24;
 
 export interface SignedTransactionResult {
   /** Exact canonical VersionedSignedTransaction V1 bytes. */
@@ -2109,6 +2134,7 @@ export interface IdentifierPolicySummary {
   normalization: string;
   resolver_public_key: string;
   output_opening_public_key: string;
+  phone_retail_attestor_public_key?: string;
   backend: string;
   input_encryption?: string;
   input_encryption_public_parameters?: string;
@@ -5349,6 +5375,14 @@ export interface ToriiGovernanceTallyResult {
   tally: ToriiGovernanceTally | null;
 }
 
+/** Exact standalone-election weights at one committed block. */
+export interface ToriiElectionTally {
+  evaluated_block_height: number | bigint;
+  evaluated_block_hash: string;
+  finalized: boolean;
+  tally: Array<number | bigint>;
+}
+
 export interface ToriiGovernanceLockCustody {
   escrowed: boolean;
   asset_definition_id: string;
@@ -6504,6 +6538,8 @@ export interface ToriiSumeragiV2LaneFinalityManifestCommitment { root: string; l
 
 export interface ToriiSumeragiV2MergeCarrierCommitment { version: 1; entry_hash: string; }
 
+export interface ToriiSumeragiV2TransactionTreeCommitment { root: string; leaf_count: ToriiU64; }
+
 export interface ToriiSumeragiV2ExecutionCommitment {
   parent_state_root: string;
   post_state_root: string;
@@ -6517,6 +6553,8 @@ export interface ToriiSumeragiV2ExecutionCommitment {
   merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;
   executed_block_wire_len: ToriiU64;
   executed_block_wire_hash: string;
+  transaction_input_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;
+  transaction_output_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;
 }
 
 export interface ToriiSumeragiV2QuorumCertificateRef {
@@ -8302,13 +8340,20 @@ export interface CastPlainBallotInstructionInput {
   owner: string;
   amount: QuantityInput;
   durationBlocks: NumericLike;
-  direction?: number | string;
+  direction: number | string;
+}
+
+/** Choice-free extension of an existing public ballot's bond or lock. */
+export interface UpdatePlainConvictionInstructionInput {
+  referendumId: string;
+  owner: string;
+  amount: QuantityInput;
+  durationBlocks: NumericLike;
 }
 
 export interface RegisterZkAssetInstructionInput {
   assetDefinitionId: string;
   unshieldVerifyingKey?: VerifyingKeyIdLike | null;
-  shieldVerifyingKey?: VerifyingKeyIdLike | null;
 }
 
 export interface ScheduleConfidentialPolicyTransitionInstructionInput {
@@ -8344,6 +8389,7 @@ export interface SubmitBallotInstructionInput {
 
 export interface FinalizeElectionInstructionInput {
   electionId: string;
+  /** Exact unsigned 128-bit weights; use bigint or canonical decimal text above JS safe integers. */
   tally: ReadonlyArray<NumericLike>;
   tallyProof: ProofAttachmentInput;
 }
@@ -10461,6 +10507,18 @@ export interface CastPlainBallotTransactionInput {
   privateKeyAlgorithm?: CryptoAlgorithm;
 }
 
+export interface UpdatePlainConvictionTransactionInput {
+  networkId: NetworkId;
+  authority: string;
+  update: UpdatePlainConvictionInstructionInput;
+  metadata?: MetadataLike;
+  creationTimeMs?: number | null;
+  ttlMs?: number | null;
+  nonce?: number | null;
+  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
+  privateKeyAlgorithm?: CryptoAlgorithm;
+}
+
 export interface RegisterZkAssetTransactionInput {
   networkId: NetworkId;
   authority: string;
@@ -11943,6 +12001,10 @@ export declare class ToriiClient {
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
   ): Promise<ToriiGovernanceReferendumResult>;
+  getElectionTally(
+    electionId: string,
+    options: RequiredCanonicalRequestOptions,
+  ): Promise<ToriiElectionTally | null>;
   getGovernanceTally(
     referendumId: string,
     options: RequiredCanonicalRequestOptions,
@@ -13180,7 +13242,7 @@ export function signQuotedIvmProvedTransactionPayload(
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
-export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 23;
+export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 24;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
 
 export function normalizeValidationFeeCheckpointV1(
@@ -13205,7 +13267,7 @@ export const VALIDATION_FEE_HIJIRI_QUOTE_ASSURANCE: "EVALUATED_PROJECTION_NOT_IN
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_REQUEST_BYTES: 4096;
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_RESPONSE_BYTES: 65536;
 export const VALIDATION_FEE_HIJIRI_QUOTE_MAX_TRANSFERS: 100000;
-export const VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION: 23;
+export const VALIDATION_FEE_HIJIRI_QUOTE_REQUIRED_BRIDGE_ABI_VERSION: 24;
 export function encodeValidationFeeHijiriQuoteRequestV1(
   accountId: string,
   qualifyingTransferCount: number,
@@ -13434,6 +13496,9 @@ export function buildCastZkBallotTransaction(
 ): SignedTransactionResult;
 export function buildCastPlainBallotTransaction(
   input: CastPlainBallotTransactionInput & FeePaymentRequired,
+): SignedTransactionResult;
+export function buildUpdatePlainConvictionTransaction(
+  input: UpdatePlainConvictionTransactionInput & FeePaymentRequired,
 ): SignedTransactionResult;
 export function buildRegisterZkAssetTransaction(
   input: RegisterZkAssetTransactionInput & FeePaymentRequired,
@@ -13824,6 +13889,58 @@ export function buildRegisterAssetDefinitionInstruction(options: {
   owningDomain: string | null;
 }): object;
 
+/** Exact JSON text preserves 64-bit dataspace IDs across the native signing boundary. */
+export function buildActivateRetailDailyLimitV1InstructionJson(options: {
+  definition: {
+    id: string;
+    name: string;
+    description: string | null;
+    alias: string | null;
+    spec: { scale: 2 };
+    mintable: "Infinitely";
+    logo: string | null;
+    metadata: Record<string, never>;
+    balance_scope_policy: "DataspaceRestricted";
+    owning_domain: string;
+  };
+  policy: {
+    asset_definition_id: string;
+    physical_dataspace: number | string | bigint;
+    revision: number | string | bigint;
+    daily_cap: string;
+    identity_issuer: string;
+    identity_issuer_public_key: string;
+    monetary_issuer_account: string;
+    reserve_account: string;
+    institutional_exceptions: [];
+  };
+}): string;
+
+/** Wrap an issuer-signed identity attestation without creating signing material. */
+export function buildBindRetailIdentityV1InstructionJson(options: {
+  attestation: {
+    body: {
+      domain: "iroha.bpng.retail-identity.v1";
+      asset_definition_id: string;
+      physical_dataspace: number | string | bigint;
+      policy_revision: number | string | bigint;
+      account_id: string;
+      identity: { digest: ReadonlyArray<number> };
+      uniqueness_evidence_digest: ReadonlyArray<number>;
+    };
+    signature: string;
+  };
+}): string;
+
+/** Build a typed monetary effect; bank receipt authentication remains external. */
+export function buildRetailMonetaryMovementV1InstructionJson(options: {
+  assetDefinitionId: string;
+  purpose: "mint_to_reserve" | "credit_retail" | "defund_retail" | "burn_reserve";
+  retailAccount: string | null;
+  amount: string;
+  operationDigest: ReadonlyArray<number>;
+}): string;
+
 export function buildGrantAccountPermissionInstruction(options: {
   accountId?: string;
   destinationAccountId?: string;
@@ -14143,6 +14260,9 @@ export function buildCastZkBallotInstruction(
 
 export function buildCastPlainBallotInstruction(
   input: CastPlainBallotInstructionInput,
+): object;
+export function buildUpdatePlainConvictionInstruction(
+  input: UpdatePlainConvictionInstructionInput,
 ): object;
 
 export function buildSubmitAgendaProposalInstruction(input: {

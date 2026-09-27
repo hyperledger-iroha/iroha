@@ -3274,6 +3274,8 @@ pub struct IdentifierPolicySummaryDto {
     pub normalization: String,
     pub resolver_public_key: String,
     pub output_opening_public_key: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_attestor_public_key: Option<String>,
     pub backend: String,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub input_encryption: Option<String>,
@@ -3303,6 +3305,9 @@ pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
     pub encrypted_input: String,
     pub output_opening: iroha_data_model::ram_lfe::RamLfeOutputOpening,
+    #[norito(default)]
+    pub phone_retail_canonicality:
+        Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>,
 }
 }
 impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
@@ -3313,6 +3318,8 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
         let mut policy_id = None;
         let mut encrypted_input = None;
         let mut output_opening = None;
+        let mut phone_retail_canonicality = None;
+        let mut seen_phone_retail_canonicality = false;
         while let Some(key) = object.next_key()? {
             match key.as_str() {
                 "policy_id" => {
@@ -3335,6 +3342,13 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                         object.parse_value::<iroha_data_model::ram_lfe::RamLfeOutputOpening>()?,
                     );
                 }
+                "phone_retail_canonicality" => {
+                    if seen_phone_retail_canonicality {
+                        return Err(norito::json::MapVisitor::duplicate_field(key.as_str()));
+                    }
+                    seen_phone_retail_canonicality = true;
+                    phone_retail_canonicality = object.parse_value::<Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>>()?;
+                }
                 other => return Err(norito::json::MapVisitor::unknown_field(other)),
             }
         }
@@ -3346,6 +3360,7 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                 .ok_or_else(|| norito::json::MapVisitor::missing_field("encrypted_input"))?,
             output_opening: output_opening
                 .ok_or_else(|| norito::json::MapVisitor::missing_field("output_opening"))?,
+            phone_retail_canonicality,
         })
     }
     fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
@@ -3355,6 +3370,8 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
         let mut policy_id = None;
         let mut encrypted_input = None;
         let mut output_opening = None;
+        let mut phone_retail_canonicality = None;
+        let mut seen_phone_retail_canonicality = false;
         for (key, value) in object {
             match key.as_str() {
                 "policy_id" => {
@@ -3381,6 +3398,13 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                         <iroha_data_model::ram_lfe::RamLfeOutputOpening as norito::json::JsonDeserialize>::json_from_value(value)?,
                     );
                 }
+                "phone_retail_canonicality" => {
+                    if seen_phone_retail_canonicality {
+                        return Err(norito::json::Error::duplicate_field(key));
+                    }
+                    seen_phone_retail_canonicality = true;
+                    phone_retail_canonicality = <Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1> as norito::json::JsonDeserialize>::json_from_value(value)?;
+                }
                 other => return Err(norito::json::Error::unknown_field(other)),
             }
         }
@@ -3390,6 +3414,7 @@ impl norito::json::JsonDeserialize for IdentifierResolveRequestDto {
                 .ok_or_else(|| norito::json::Error::missing_field("encrypted_input"))?,
             output_opening: output_opening
                 .ok_or_else(|| norito::json::Error::missing_field("output_opening"))?,
+            phone_retail_canonicality,
         })
     }
 }
@@ -3399,6 +3424,9 @@ derived_items! {
 pub struct IdentifierResolveResponseDto {
     pub payload: IdentifierResolutionReceiptPayloadDto,
     pub attestation: RamLfeReceiptAttestationDto,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_canonicality:
+        Option<iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1>,
 }
 }
 #[cfg(all(test, feature = "app_api"))]
@@ -3475,6 +3503,8 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         assert!(error.to_string().contains("policy_id"));
     }
     routing_test! { sync identifier_resolve_request_rejects_malformed_encrypted_fields
+        use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":123,"encrypted_input":"ciphertext","output_opening":{}}"#,
         )
@@ -3501,16 +3531,59 @@ mod ram_lfe_encrypted_only_request_dto_tests {
         )
         .expect_err("duplicate encrypted inputs must be rejected");
         assert!(error.to_string().contains("encrypted_input"));
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{},"output_opening":{}}"#,
-        )
+        let signer = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519)
+            .expect("derive output-opening fixture key");
+        let payload = iroha_data_model::ram_lfe::RamLfeOutputOpeningPayload {
+            program_id: "email_retail".parse().expect("fixture program id"),
+            input_ciphertext_hash: Hash::new(b"input-ciphertext"),
+            output_ciphertext_hash: Hash::new(b"output-ciphertext"),
+            parameter_digest: Hash::new(b"parameters"),
+            evaluation_key_digest: Hash::new(b"evaluation-keys"),
+            opened_output_hash: Hash::new(b"opened-output"),
+            opened_at_ms: 1,
+            expires_at_ms: Some(2),
+        };
+        let opening = iroha_data_model::ram_lfe::RamLfeOutputOpening {
+            signature: SignatureOf::try_new(signer.private_key(), &payload)
+                .expect("sign output-opening fixture")
+                .into(),
+            payload,
+        };
+        let opening_json = norito::json::to_string(&opening).expect("encode output-opening fixture");
+        let duplicate_opening = [
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            opening_json.as_str(),
+            r#","output_opening": "#,
+            opening_json.as_str(),
+            "}",
+        ]
+        .concat();
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(&duplicate_opening)
         .expect_err("duplicate output openings must be rejected");
         assert!(error.to_string().contains("output_opening"));
-        let error = norito::json::from_str::<IdentifierResolveRequestDto>(
-            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":{"payload":{"program_id":"p","program_id":"q"},"signature":"00"}}"#,
-        )
+        let valid_request = [
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            opening_json.as_str(),
+            "}",
+        ]
+        .concat();
+        norito::json::from_str::<IdentifierResolveRequestDto>(&valid_request)
+            .expect("serialized output-opening fixture must parse");
+        let program_id_json = norito::json::to_string(&opening.payload.program_id)
+            .expect("encode output-opening program id fixture");
+        let duplicate_program_id_key = format!("\"program_id\":{program_id_json},\"program_id\":");
+        let duplicate_opening_json =
+            opening_json.replacen("\"program_id\":", &duplicate_program_id_key, 1);
+        assert_ne!(duplicate_opening_json, opening_json, "fixture has program_id");
+        let nested_duplicate = [
+            r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening": "#,
+            duplicate_opening_json.as_str(),
+            "}",
+        ]
+        .concat();
+        let error = norito::json::from_str::<IdentifierResolveRequestDto>(&nested_duplicate)
         .expect_err("nested duplicate output-opening fields must be rejected");
-        assert!(error.to_string().contains("program_id"));
+        assert!(error.to_string().contains("program_id"), "{error}");
         let error = norito::json::from_str::<IdentifierResolveRequestDto>(
             r#"{"policy_id":"policy","encrypted_input":"ciphertext","output_opening":"not-an-opening"}"#,
         )
@@ -3539,6 +3612,8 @@ pub struct IdentifierClaimLookupResponseDto {
     pub policy_id: String,
     pub opaque_id: String,
     pub receipt_hash: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub phone_retail_nullifier: Option<String>,
     pub uaid: String,
     pub account_id: String,
     pub verified_at_ms: u64,
@@ -4563,8 +4638,8 @@ pub struct AppQueryLimits {
     pub max_page_limit: u64,
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub max_fetch_size: u64,
-    /// Rate-limiter cost applied per requested row when backpressure is enforced.
-    pub rate_limit_cost_per_row: u64,
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub rate_limit_cost_per_page: u64,
 }
 impl AppQueryLimits {
     /// Construct limits with sane floors and ordering.
@@ -4572,17 +4647,17 @@ impl AppQueryLimits {
         default_page_limit: u64,
         max_page_limit: u64,
         max_fetch_size: u64,
-        rate_limit_cost_per_row: u64,
+        rate_limit_cost_per_page: u64,
     ) -> Self {
         let default_page_limit = default_page_limit.max(1);
         let max_page_limit = max_page_limit.max(default_page_limit);
         let max_fetch_size = max_fetch_size.max(default_page_limit).max(1);
-        let rate_limit_cost_per_row = rate_limit_cost_per_row.max(1);
+        let rate_limit_cost_per_page = rate_limit_cost_per_page.max(1);
         Self {
             default_page_limit,
             max_page_limit,
             max_fetch_size,
-            rate_limit_cost_per_row,
+            rate_limit_cost_per_page,
         }
     }
     /// Clamp the requested page limit to the configured bounds.
@@ -4619,10 +4694,10 @@ impl AppQueryLimits {
             Some(size) => Ok(Some(size)),
         }
     }
-    /// Compute rate-limiter cost for a given page size.
+    /// Compute cost in default-sized pages, charging at least one page.
     pub fn rate_limit_cost(&self, page_size: u64) -> u64 {
-        self.rate_limit_cost_per_row
-            .saturating_mul(page_size.max(1))
+        self.rate_limit_cost_per_page
+            .saturating_mul(page_size.max(1).div_ceil(self.default_page_limit))
     }
 }
 impl Default for AppQueryLimits {
@@ -4631,7 +4706,7 @@ impl Default for AppQueryLimits {
             defaults::torii::APP_API_DEFAULT_LIST_LIMIT as u64,
             defaults::torii::APP_API_MAX_LIST_LIMIT as u64,
             defaults::torii::APP_API_MAX_FETCH_SIZE as u64,
-            defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW as u64,
+            defaults::torii::APP_API_RATE_LIMIT_COST_PER_PAGE as u64,
         )
     }
 }
@@ -4665,6 +4740,28 @@ mod app_query_limits_tests {
     use super::{AppQueryLimits, read_app_query_limits};
     use std::panic::{self, AssertUnwindSafe};
     use std::sync::RwLock;
+    routing_test! { sync app_query_cost_counts_default_sized_pages
+        let limits = AppQueryLimits::default();
+        for (page_size, expected) in [(0, 1), (1, 1), (99, 1), (100, 1), (101, 2), (499, 5), (500, 5)] {
+            assert_eq!(limits.rate_limit_cost(page_size), expected, "page size {page_size}");
+        }
+        assert_eq!(limits.clamp_page_limit(None).unwrap(), 100);
+        assert!(limits.clamp_page_limit(Some(501)).is_err());
+        assert!(limits.clamp_fetch_size(Some(501)).is_err());
+    }
+    routing_test! { sync app_query_cost_respects_custom_page_size_and_multiplier
+        let limits = AppQueryLimits::new(25, 500, 500, 3);
+        for (page_size, expected) in [(0, 3), (1, 3), (25, 3), (26, 6), (500, 60)] {
+            assert_eq!(limits.rate_limit_cost(page_size), expected, "page size {page_size}");
+        }
+    }
+    routing_test! { sync app_query_cost_saturates_and_preserves_constructor_floors
+        let limits = AppQueryLimits::new(1, u64::MAX, u64::MAX, u64::MAX);
+        assert_eq!(limits.rate_limit_cost(2), u64::MAX);
+        let limits = AppQueryLimits::new(u64::MAX, u64::MAX, u64::MAX, 1);
+        assert_eq!(limits.rate_limit_cost(u64::MAX), 1);
+        assert_eq!(AppQueryLimits::new(0, 0, 0, 0).rate_limit_cost(0), 1);
+    }
     routing_test! { sync read_app_query_limits_recovers_from_poison
         let lock = RwLock::new(AppQueryLimits::default());
         let _ = panic::catch_unwind(AssertUnwindSafe(|| {
@@ -5913,8 +6010,8 @@ pub struct ZkVoteGetTallyResponseDto {
     pub evaluated_block_hash: String,
     /// True when the election has been finalized on-chain.
     pub finalized: bool,
-    /// Public tally counts per option (length equals number of options).
-    pub tally: Vec<u64>,
+    /// Exact public conviction weights per option (length equals number of options).
+    pub tally: Vec<u128>,
 }
 }
 #[cfg(test)]
@@ -6164,7 +6261,7 @@ pub async fn handle_v1_sumeragi_qc(accept: Option<axum::http::HeaderValue>) -> R
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    let Some(status) = sumeragi::status::v2_status() else {
+    let Some(status) = sumeragi::v2_status::v2_status() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let payload = SumeragiV2QcResponse {
@@ -9701,7 +9798,7 @@ mod bls_key_response_bounds_tests {
 pub async fn handle_v1_sumeragi_leader(
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
-    let Some(status) = sumeragi::status::v2_status() else {
+    let Some(status) = sumeragi::v2_status::v2_status() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     let payload = SumeragiLeaderResponse {
@@ -10577,6 +10674,25 @@ fn validated_zk_vote_tally_response(
             "invalid V1 election state for `{election_id}`: {error}"
         ))
     })?;
+    election
+        .tally
+        .iter()
+        .try_fold(0_u128, |total, weight| total.checked_add(*weight))
+        .ok_or_else(|| {
+            zk_query_conversion_error(format!(
+                "invalid V1 election state for `{election_id}`: tally total exceeds u128"
+            ))
+        })?;
+    if election.end_ts < election.start_ts {
+        return Err(zk_query_conversion_error(format!(
+            "invalid V1 election state for `{election_id}`: end_ts precedes start_ts"
+        )));
+    }
+    if !election.finalized && election.tally.iter().any(|weight| *weight != 0) {
+        return Err(zk_query_conversion_error(format!(
+            "invalid V1 election state for `{election_id}`: unfinalized tally is nonzero"
+        )));
+    }
     Ok(ZkVoteGetTallyResponseDto {
         evaluated_block_height,
         evaluated_block_hash,
@@ -10623,7 +10739,7 @@ pub async fn handle_v1_zk_vote_tally(
 #[cfg(test)]
 mod zk_vote_tally_response_tests {
     use super::*;
-    fn election(options: u32, tally: Vec<u64>) -> iroha_core::state::ElectionState {
+    fn election(options: u32, tally: Vec<u128>) -> iroha_core::state::ElectionState {
         iroha_core::state::ElectionState {
             options,
             tally,
@@ -10633,9 +10749,11 @@ mod zk_vote_tally_response_tests {
     routing_test! { sync tally_response_rejects_corrupt_or_oversized_election_state
         for (options, tally) in [
             (0, Vec::new()),
+            (1, vec![0]),
             (64, Vec::new()),
             (64, vec![0; 65]),
             (65, vec![0; 65]),
+            (2, vec![u128::MAX, 1]),
         ] {
             let state = election(options, tally);
             assert!(
@@ -10646,9 +10764,24 @@ mod zk_vote_tally_response_tests {
             );
         }
     }
+    routing_test! { sync tally_response_rejects_invalid_window_or_partial_public_result
+        let mut state = election(2, vec![0, 0]);
+        state.start_ts = 10;
+        state.end_ts = 9;
+        assert!(validated_zk_vote_tally_response(
+            "invalid-window", &state, 7, hex::encode([9_u8; 32]),
+        ).is_err());
+
+        state.end_ts = 10;
+        state.tally = vec![1, 0];
+        assert!(validated_zk_vote_tally_response(
+            "partial-result", &state, 7, hex::encode([9_u8; 32]),
+        ).is_err());
+    }
     routing_test! { sync tally_response_accepts_v1_boundaries_with_snapshot_identity
-        for (options, tally_len) in [(1, 1), (64, 64)] {
-            let state = election(options, vec![7; tally_len]);
+        for (options, tally_len) in [(2, 2), (64, 64)] {
+            let mut state = election(options, vec![7; tally_len]);
+            state.finalized = true;
             let expected_hash = hex::encode([9_u8; 32]);
             let response =
                 validated_zk_vote_tally_response("bounded", &state, 7, expected_hash.clone())
@@ -10657,6 +10790,24 @@ mod zk_vote_tally_response_tests {
             assert_eq!(response.evaluated_block_height, 7);
             assert_eq!(response.evaluated_block_hash, expected_hash);
         }
+    }
+    routing_test! { sync tally_response_preserves_weight_above_u64_max
+        let weight = u128::from(u64::MAX) + 1;
+        let mut state = election(2, vec![weight, 0]);
+        state.finalized = true;
+        let response = validated_zk_vote_tally_response(
+            "exact-weight",
+            &state,
+            7,
+            hex::encode([9_u8; 32]),
+        )
+        .expect("exact u128 election response");
+        assert_eq!(response.tally, vec![weight, 0]);
+        let json = norito::json::to_string(&response).expect("encode exact tally JSON");
+        assert!(json.contains(&weight.to_string()), "JSON must retain all weight digits");
+        let decoded: ZkVoteGetTallyResponseDto =
+            norito::json::from_str(&json).expect("decode exact tally JSON");
+        assert_eq!(decoded.tally, response.tally);
     }
 }
 fn sumeragi_evidence_response_encode_error() -> Error {
@@ -22323,6 +22474,12 @@ fn required_canonical_name_string(object: &Map, key: &str) -> Option<String> {
     let name = literal.parse::<Name>().ok()?;
     (name.as_ref() == literal).then_some(literal)
 }
+fn required_canonical_int_string(object: &Map, key: &str) -> Option<String> {
+    let literal = required_nonempty_json_string(object, key)?;
+    let value = literal.parse::<iroha_primitives::bigint::BigInt>().ok()?;
+    let bounded = iroha_primitives::numeric_abi::IntValueV1::try_new(value).ok()?;
+    (bounded.as_int().to_string() == literal).then_some(literal)
+}
 fn canonical_quantity_string(value: &Value, allow_zero: bool) -> Option<String> {
     let literal = value.as_str()?;
     if literal.is_empty() || literal.trim() != literal {
@@ -22548,6 +22705,12 @@ fn strict_multisig_contract_call_intent(
             "apps_mint_request::cbsi",
             "finalize_mint_request" | "cancel_mint_request",
         ) => ("MINT_REQUEST", &["proposal_id"][..]),
+        ("apps_mint_request::bpng", "finalize_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id", "finalized_at_ms"][..])
+        }
+        ("apps_mint_request::bpng", "cancel_mint_request") => {
+            ("MINT_REQUEST", &["proposal_id", "canceled_at_ms"][..])
+        }
         ("pkdeploy_issuance_swap_sbp::sbp", "swap") => (
             "ISSUANCE_SWAP",
             &["swap_id", "pkr_amount", "treasury_amount"][..],
@@ -22653,6 +22816,17 @@ fn strict_multisig_contract_call_intent(
                     return None;
                 }
                 intent.insert("ttl_ms".into(), Value::from(ttl_ms));
+            }
+            if contract_alias_literal == "apps_mint_request::bpng" {
+                let timestamp_key = match contract_entrypoint.as_str() {
+                    "finalize_mint_request" => "finalized_at_ms",
+                    "cancel_mint_request" => "canceled_at_ms",
+                    _ => return None,
+                };
+                intent.insert(
+                    timestamp_key.into(),
+                    Value::from(required_canonical_int_string(object, timestamp_key)?),
+                );
             }
         }
         "ISSUANCE_SWAP" => {
@@ -23475,6 +23649,129 @@ mod multisig_contract_call_tests {
         assert_eq!(mint_intent["proposal_id"].as_str(), Some("mint_1"));
         assert_eq!(mint_intent["amount"].as_str(), Some("125"));
         assert_eq!(mint_intent.as_object().expect("flat mint intent").len(), 4);
+        let bpng_mint_alias: iroha_data_model::smart_contract::ContractAlias =
+            "apps_mint_request::bpng".parse().expect("BPNG mint alias");
+        let bpng_finalize_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "bpng_mint_1",
+            "finalized_at_ms": "9223372036854775808",
+        }));
+        let bpng_finalize = strict_multisig_contract_call_intent(
+            &multisig,
+            &proposal(build(
+                &bpng_mint_alias,
+                "finalize_mint_request",
+                &bpng_finalize_payload,
+            )),
+        )
+        .expect("typed BPNG finalize intent");
+        assert_eq!(bpng_finalize.operation_type, "MINT_REQUEST");
+        let bpng_finalize_intent = bpng_finalize
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("BPNG finalize intent value");
+        assert_eq!(
+            bpng_finalize_intent["contract_alias"].as_str(),
+            Some("apps_mint_request::bpng")
+        );
+        assert_eq!(
+            bpng_finalize_intent["contract_entrypoint"].as_str(),
+            Some("finalize_mint_request")
+        );
+        assert_eq!(
+            bpng_finalize_intent["proposal_id"].as_str(),
+            Some("bpng_mint_1")
+        );
+        assert_eq!(
+            bpng_finalize_intent["finalized_at_ms"].as_str(),
+            Some("9223372036854775808")
+        );
+        assert_eq!(bpng_finalize_intent.as_object().expect("flat intent").len(), 4);
+        let bpng_cancel_payload = IrohaJson::new(norito::json!({
+            "proposal_id": "bpng_mint_1",
+            "canceled_at_ms": "-9223372036854775809",
+        }));
+        let bpng_cancel = strict_multisig_contract_call_intent(
+            &multisig,
+            &proposal(build(
+                &bpng_mint_alias,
+                "cancel_mint_request",
+                &bpng_cancel_payload,
+            )),
+        )
+        .expect("typed BPNG cancel intent");
+        assert_eq!(bpng_cancel.operation_type, "MINT_REQUEST");
+        let bpng_cancel_intent = bpng_cancel
+            .intent
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("BPNG cancel intent value");
+        assert_eq!(
+            bpng_cancel_intent["contract_entrypoint"].as_str(),
+            Some("cancel_mint_request")
+        );
+        assert_eq!(
+            bpng_cancel_intent["canceled_at_ms"].as_str(),
+            Some("-9223372036854775809")
+        );
+        assert_eq!(bpng_cancel_intent.as_object().expect("flat intent").len(), 4);
+        for invalid_timestamp in [
+            norito::json!(1),
+            norito::json!("+1"),
+            norito::json!("01"),
+            norito::json!("-0"),
+            norito::json!(" 1"),
+            Value::from("9".repeat(200)),
+        ] {
+            let invalid_payload = IrohaJson::new(norito::json!({
+                "proposal_id": "bpng_mint_1",
+                "finalized_at_ms": invalid_timestamp,
+            }));
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(
+                        &bpng_mint_alias,
+                        "finalize_mint_request",
+                        &invalid_payload,
+                    )),
+                )
+                .is_none(),
+                "BPNG timestamp must be an exact signed 512-bit Int JSON string",
+            );
+        }
+        for (entrypoint, invalid_payload) in [
+            (
+                "finalize_mint_request",
+                norito::json!({ "proposal_id": "bpng_mint_1" }),
+            ),
+            (
+                "finalize_mint_request",
+                norito::json!({
+                    "proposal_id": "bpng_mint_1",
+                    "finalized_at_ms": "1",
+                    "canceled_at_ms": "1",
+                }),
+            ),
+            (
+                "cancel_mint_request",
+                norito::json!({
+                    "proposal_id": "bpng_mint_1",
+                    "finalized_at_ms": "1",
+                }),
+            ),
+        ] {
+            assert!(
+                strict_multisig_contract_call_intent(
+                    &multisig,
+                    &proposal(build(
+                        &bpng_mint_alias,
+                        entrypoint,
+                        &IrohaJson::new(invalid_payload),
+                    )),
+                )
+                .is_none(),
+                "BPNG entrypoint payload must have only its exact typed fields",
+            );
+        }
         let issuance_alias: iroha_data_model::smart_contract::ContractAlias =
             "pkdeploy_issuance_swap_sbp::sbp"
                 .parse()
@@ -47577,7 +47874,7 @@ fn settlement_counts_to_value(
     norito::json::Value::Object(obj)
 }
 fn dvp_last_event_json(
-    event: &sumeragi::status::DvpSettlementEventSnapshot,
+    event: &iroha_core::status::DvpSettlementEventSnapshot,
 ) -> norito::json::Value {
     let settlement_id = event
         .settlement_id
@@ -47611,7 +47908,7 @@ fn dvp_last_event_json(
     ])
 }
 fn pvp_last_event_json(
-    event: &sumeragi::status::PvpSettlementEventSnapshot,
+    event: &iroha_core::status::PvpSettlementEventSnapshot,
 ) -> norito::json::Value {
     let settlement_id = event
         .settlement_id
@@ -47647,7 +47944,7 @@ fn pvp_last_event_json(
     ])
 }
 fn settlement_snapshot_value(
-    settlement: &sumeragi::status::SettlementStatusSnapshot,
+    settlement: &iroha_core::status::SettlementStatusSnapshot,
 ) -> norito::json::Value {
     let dvp_last = settlement
         .dvp
@@ -47720,7 +48017,7 @@ fn lane_block_qc_summary_json(qc: &iroha_data_model::block::consensus::LaneBlock
     ])
 }
 fn committed_lane_block_wire(
-    entry: &sumeragi::status::CommittedLaneBlockSnapshot,
+    entry: &iroha_core::status::CommittedLaneBlockSnapshot,
 ) -> SumeragiCommittedLaneBlock {
     SumeragiCommittedLaneBlock {
         lane_id: entry.lane_id,
@@ -47742,7 +48039,7 @@ fn committed_lane_block_wire(
         commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
     }
 }
-fn committed_lane_block_json(entry: &sumeragi::status::CommittedLaneBlockSnapshot) -> Value {
+fn committed_lane_block_json(entry: &iroha_core::status::CommittedLaneBlockSnapshot) -> Value {
     json_object(vec![
         json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
         json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
@@ -47786,21 +48083,20 @@ fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
 /// though it described the live consensus protocol.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_status(
-    State(_state): State<std::sync::Arc<CoreState>>,
     accept: Option<axum::http::HeaderValue>,
-    restart_required: bool,
+    status: Option<iroha_data_model::sumeragi::SumeragiStatus>,
 ) -> Result<Response> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let Some(status) = sumeragi::status::v2_status_with_restart_required(restart_required) else {
+    let Some(status) = status else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
     Ok(crate::utils::respond_with_format(status, format))
 }
 fn sumeragi_pipeline_execution_status(
-    snapshot: sumeragi::status::PipelineExecutionSnapshot,
+    snapshot: iroha_core::status::PipelineExecutionSnapshot,
 ) -> SumeragiPipelineExecutionStatus {
     SumeragiPipelineExecutionStatus {
         tx_vertices_total: snapshot.tx_vertices_total,
@@ -47852,12 +48148,12 @@ pub async fn handle_v1_sumeragi_diagnostics(
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    let snapshot = sumeragi::status_snapshot();
-    let queue = sumeragi::status::tx_queue_backpressure();
+    let snapshot = iroha_core::status::snapshot();
+    let queue = iroha_core::status::tx_queue_backpressure();
     let world = state.world_view();
     let npos = match world.sumeragi_npos_parameters() {
         Some(params) => {
-            let Some(reducer) = sumeragi::status::v2_status() else {
+            let Some(reducer) = sumeragi::v2_status::v2_status() else {
                 return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
             };
             Some(sumeragi_npos_diagnostics(&params, &reducer)?)
@@ -47978,14 +48274,12 @@ pub async fn handle_v1_sumeragi_diagnostics(
         })?;
     Ok(crate::utils::respond_with_format(diagnostics, format))
 }
-/// SSE stream for `/v1/sumeragi/status/sse` using only authoritative v2 snapshots.
-///
-/// Before reducer replay completes the stream remains silent instead of
-/// emitting the archival v1/RBC status shape.
+/// SSE stream for `/v1/sumeragi/status/sse`: the instance's status every `poll_ms` (silent
+/// until the instance started).
 pub fn handle_v1_sumeragi_status_sse(
     _state: std::sync::Arc<CoreState>,
     poll_ms: u64,
-    sumeragi_handle: Option<iroha_core::sumeragi::SumeragiHandle>,
+    sumeragi_handle: Option<iroha_core::sumeragi::node::NodeHandle>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
     let interval = Duration::from_millis(poll_ms.max(100));
     let ticker = tokio::time::interval(interval);
@@ -47994,11 +48288,9 @@ pub fn handle_v1_sumeragi_status_sse(
         |(mut ticker, sumeragi_handle)| async move {
             loop {
                 ticker.tick().await;
-                let restart_required = sumeragi_handle
+                if let Some(status) = sumeragi_handle
                     .as_ref()
-                    .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-                if let Some(status) =
-                    sumeragi::status::v2_status_with_restart_required(restart_required)
+                    .and_then(iroha_core::sumeragi::node::NodeHandle::status_dto)
                 {
                     match norito::json::to_json(&status) {
                         Ok(body) => {
@@ -48008,7 +48300,7 @@ pub fn handle_v1_sumeragi_status_sse(
                         Err(error) => {
                             iroha_logger::error!(
                                 ?error,
-                                "failed to serialize authoritative Sumeragi v2 status"
+                                "failed to serialize the Sumeragi status"
                             );
                         }
                     }
@@ -62318,7 +62610,7 @@ struct DataspaceSummaryAccumulator {
     portfolio_accounts: u64,
     portfolio_positions: u64,
     asset_definitions: BTreeSet<String>,
-    commitments: Vec<sumeragi::status::DataspaceCommitmentSnapshot>,
+    commitments: Vec<iroha_core::status::DataspaceCommitmentSnapshot>,
 }
 fn upsert_dataspace_summary<'a>(
     summaries: &'a mut BTreeMap<DataSpaceId, DataspaceSummaryAccumulator>,
@@ -62407,7 +62699,7 @@ fn manifest_summary_json(manifest: Option<&SpaceDirectoryManifestRecord>) -> Val
     Value::Object(map)
 }
 fn commitments_summary_json(
-    commitments: &[sumeragi::status::DataspaceCommitmentSnapshot],
+    commitments: &[iroha_core::status::DataspaceCommitmentSnapshot],
 ) -> Value {
     let mut map = Map::new();
     let mut lane_ids = BTreeSet::new();
@@ -62546,7 +62838,7 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
         let bindings = world.uaid_dataspaces().get(&uaid);
         let manifests = world.space_directory_manifests().get(&uaid);
         let portfolio = portfolio::collect_portfolio_from_world_and_nexus(&world, &nexus, uaid);
-        let status_snapshot = sumeragi::status_snapshot();
+        let status_snapshot = iroha_core::status::snapshot();
         let mut summaries: BTreeMap<DataSpaceId, DataspaceSummaryAccumulator> = BTreeMap::new();
         if let Some(binding_set) = bindings.as_ref() {
             for (dataspace_id, accounts) in binding_set.iter() {

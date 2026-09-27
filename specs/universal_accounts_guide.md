@@ -63,6 +63,13 @@ UAIDs are now the anchor for a second identity layer:
 - A claim binds one derived `opaque:` identifier to exactly one UAID and one
   canonical `AccountId` under that policy, but the chain only accepts the
   claim when it is accompanied by a signed `IdentifierResolutionReceipt`.
+- The first-release phone namespace is exactly `phone#retail` with
+  `PhoneE164` normalization and the signed programmed BFV `phone_retail`
+  program. Its policy pins a canonicality-attestor public key. Each claim and
+  resolution carries that attestor's signature over the network, encrypted
+  input/output commitments, opened output, beneficiary, and a secret-keyed
+  canonical E.164 nullifier. The nullifier determines the global `opaque:`
+  handle, so a second ciphertext for the same phone cannot bind another UAID.
 - Resolution remains a `resolve -> transfer` flow. Torii resolves the opaque
   handle and returns the canonical `AccountId`; transfers still target the
   canonical account, not `uaid:` or `opaque:` literals directly.
@@ -132,8 +139,8 @@ Current Torii routes:
 | `POST /v1/ram-lfe/programs/{program_id}/execute` | Accepts `{ encrypted_input }` only and returns the stateless `RamLfeExecutionReceipt`, `{ output_ciphertext, output_hash, receipt_hash }`, and a signed `output_opening` that can be reused with the same encrypted input for identifier resolve/claim requests. It does not return plaintext output. The current Torii runtime issues receipts for the programmed BFV backend. |
 | `POST /v1/ram-lfe/receipts/verify` | Statelessly validates a `RamLfeExecutionReceipt` against the published on-chain program policy and optionally checks that a caller-supplied encrypted `output_hex` matches the receipt `output_hash`. Proof-mode validation obeys the node's live ZK backend enablement and configured envelope/proof byte caps. |
 | `GET /v1/identifier-policies` | Lists active and inactive hidden-function policy namespaces plus their public metadata, including optional BFV `input_encryption` parameters, the required `normalization` mode for encrypted client-side input, and `ram_fhe_profile` for programmed BFV policies. |
-| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts `{ policy_id, encrypted_input, output_opening }`. The BFV `encrypted_input` must already be normalized according to the published policy mode. The endpoint derives the `opaque:` handle from the verified external `RamLfeOutputOpening` and returns a signed receipt that `ClaimIdentifier` can submit on-chain. |
-| `POST /v1/identifiers/resolve` | Accepts `{ policy_id, encrypted_input, output_opening }`. The endpoint re-evaluates the encrypted input, verifies the external output opening, derives the `opaque:` handle from the opened output hash, and returns a nested `{ payload, attestation }` receipt when an active claim exists. |
+| `POST /v1/accounts/{account_id}/identifiers/claim-receipt` | Accepts `{ policy_id, encrypted_input, output_opening }` and requires `phone_retail_canonicality` for `phone#retail`. The BFV input must already be normalized according to the published policy mode. Non-phone handles derive from the verified opening; `phone#retail` derives from the signed canonical nullifier. The endpoint returns a receipt that `ClaimIdentifier` can submit on-chain. |
+| `POST /v1/identifiers/resolve` | Accepts the same fields and requires `phone_retail_canonicality` for `phone#retail`. It re-evaluates the encrypted input and verifies the output opening and, for phone, the signed canonical nullifier against the active claim. It returns a nested receipt when the binding exists. |
 | `GET /v1/identifiers/receipts/{receipt_hash}` | Looks up the persisted `IdentifierClaimRecord` bound to a deterministic receipt hash so operators and SDKs can audit claim ownership or diagnose replay / mismatch failures without scanning the full identifier index. |
 
 Every RAM-LFE or identifier `POST` in this table requires exact-NetworkId
@@ -156,7 +163,23 @@ relinearization-only for the first release; Soracloud rotation/bootstrap
 refresh keys are governed by FHE execution policies instead of
 identifier-program metadata.
 
+The separate trusted `phone#retail` attestor holds the BFV decryption key and
+a high-entropy phone-nullifier secret. It decrypts and checks exact canonical
+E.164 input locally, then signs the canonicality statement; neither the raw
+phone nor an unkeyed phone digest enters Torii or consensus state. The
+attestor's pinned signing key and nullifier secret must remain stable for the
+policy's lifetime. Without a trusted attestation, phone claim and resolve
+requests fail closed. Clients must independently pin their intended network,
+policy owner, program commitment, resolver and output-opening keys, and
+canonicality-attestor key before trusting discovered policy metadata.
+
 Current SDK support:
+
+The JavaScript and Kotlin request helpers currently reject `phone#retail`
+until they can carry and verify the signed canonicality statement. Kotlin's
+claim-wire encoder also rejects it. Clients using the Torii API directly must
+supply the statement and independently verify their pinned trust material; an
+output opening by itself is insufficient.
 
 - `normalizeIdentifierInput(value, normalization)` matches the Rust
   canonicalizers for `exact`, `lowercase_trimmed`, `phone_e164`,
@@ -244,8 +267,10 @@ release, RAM-LFE and hidden-identifier routes are encrypted-only: Torii does
 not accept plaintext inputs, does not hold BFV secret keys, and does not
 decrypt input or output ciphertexts. Identifier claim and resolve requests must
 include an externally signed `RamLfeOutputOpening`; the `opaque:` identifier is
-derived from the verified opened-output hash, not from Torii-side plaintext or
-from the ciphertext hash alone.
+derived from the verified opened-output hash for non-phone policies. For
+`phone#retail`, it derives from the trusted attestor's network-scoped,
+secret-keyed canonical E.164 nullifier. The output opening alone cannot prove
+phone normalization or uniqueness across randomized encryptions.
 
 ## 2. Deriving and verifying UAIDs
 

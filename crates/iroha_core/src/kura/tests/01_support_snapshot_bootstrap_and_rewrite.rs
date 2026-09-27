@@ -21,7 +21,6 @@ use crate::{
     prelude::{AcceptedTransaction, World},
     query::store::LiveQueryStore,
     state::State,
-    sumeragi::network_topology::Topology,
 };
 use iroha_config::{
     base::WithOrigin,
@@ -80,7 +79,7 @@ fn provisional_snapshot_metadata(tag: u8) -> ProvisionalSnapshotBootstrap {
     }
 }
 #[test]
-fn snapshot_bootstrap_state_blocks_until_successful_finalization() {
+fn snapshot_bootstrap_state_blocks_until_authenticated() {
     let kura = Kura::blank_kura_for_testing();
     let pending = provisional_snapshot_metadata(7);
     *kura.provisional_snapshot_bootstrap.lock() =
@@ -97,98 +96,10 @@ fn snapshot_bootstrap_state_blocks_until_successful_finalization() {
         kura.ensure_snapshot_bootstrap_authenticated(),
         Err(Error::SnapshotBootstrapAuthenticationPending)
     ));
-    assert!(
-        kura.provisional_snapshot_bootstrap
-            .lock()
-            .begin_finalization(&pending)
-    );
+    *kura.provisional_snapshot_bootstrap.lock() = SnapshotBootstrapRuntimeState::Authenticated;
     assert_eq!(kura.provisional_snapshot_bootstrap_metadata(), None);
-    assert!(
-        kura.provisional_snapshot_bootstrap_pending(),
-        "finalizing remains unauthenticated and must keep every mutation fail-closed"
-    );
-    assert!(matches!(
-        kura.ensure_snapshot_bootstrap_authenticated(),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(
-        kura.provisional_snapshot_bootstrap
-            .lock()
-            .finish_finalization()
-    );
+    assert!(!kura.provisional_snapshot_bootstrap_pending());
     assert!(kura.ensure_snapshot_bootstrap_authenticated().is_ok());
-    assert!(
-        !kura
-            .provisional_snapshot_bootstrap
-            .lock()
-            .finish_finalization(),
-        "authenticated state cannot be finalized twice"
-    );
-}
-#[test]
-fn snapshot_bootstrap_pending_state_has_one_finalization_claim() {
-    let pending = provisional_snapshot_metadata(11);
-    let state = Arc::new(Mutex::new(SnapshotBootstrapRuntimeState::Pending(
-        pending.clone(),
-    )));
-    let start = Arc::new(std::sync::Barrier::new(3));
-    let mut finalizers = Vec::new();
-    for _ in 0..2 {
-        let state = Arc::clone(&state);
-        let start = Arc::clone(&start);
-        let pending = pending.clone();
-        finalizers.push(thread::spawn(move || {
-            start.wait();
-            state.lock().begin_finalization(&pending)
-        }));
-    }
-    start.wait();
-    let claims = finalizers
-        .into_iter()
-        .map(|finalizer| finalizer.join().expect("finalizer thread must not panic"))
-        .filter(|claimed| *claimed)
-        .count();
-    assert_eq!(claims, 1, "exactly one finalizer may claim recovery");
-    assert!(matches!(
-        *state.lock(),
-        SnapshotBootstrapRuntimeState::Finalizing
-    ));
-    assert!(
-        !state.lock().begin_finalization(&pending),
-        "Finalizing remains fail-closed until recovery succeeds"
-    );
-}
-#[test]
-fn snapshot_finalization_authority_is_instance_bound_and_expires() {
-    let first = Kura::blank_kura_for_testing();
-    let second = Kura::blank_kura_for_testing();
-    let pending = provisional_snapshot_metadata(13);
-    *first.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending.clone());
-    *second.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending.clone());
-    assert!(
-        first
-            .provisional_snapshot_bootstrap
-            .lock()
-            .begin_finalization(&pending)
-    );
-    let authority =
-        SnapshotFinalizationMutationAuthority::new(&first).expect("mint finalization token");
-    assert!(matches!(
-        authority.validate_for(&second),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(
-        first
-            .provisional_snapshot_bootstrap
-            .lock()
-            .finish_finalization()
-    );
-    assert!(matches!(
-        authority.validate_for(&first),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
 }
 #[cfg(unix)]
 #[test]
@@ -202,7 +113,7 @@ fn provisional_snapshot_gate_preserves_tree_across_mutation_families() {
     let before = snapshot_regular_test_tree(&store_root);
     let pending = provisional_snapshot_metadata(5);
     *kura.provisional_snapshot_bootstrap.lock() =
-        SnapshotBootstrapRuntimeState::Pending(pending.clone());
+        SnapshotBootstrapRuntimeState::Pending(pending);
     let entry_hash =
         HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]));
     assert!(matches!(
@@ -230,15 +141,6 @@ fn provisional_snapshot_gate_preserves_tree_across_mutation_families() {
         },
         Vec::new(),
     ));
-    assert!(matches!(
-        kura.purge_retired_segments(),
-        Err(Error::SnapshotBootstrapAuthenticationPending)
-    ));
-    assert!(
-        kura.provisional_snapshot_bootstrap
-            .lock()
-            .begin_finalization(&pending)
-    );
     assert!(matches!(
         kura.purge_retired_segments(),
         Err(Error::SnapshotBootstrapAuthenticationPending)
@@ -829,7 +731,12 @@ fn v2_finality_artifact_for_block_with_keys_and_context_policy(
         "fixture finality artifacts must form a contiguous chain"
     );
     let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(network_id, epoch, epoch_end_height, &roster);
+        crate::kagemusha_v1_test_fixtures::mint_finality_retained_authorization(
+            network_id,
+            epoch,
+            epoch_end_height,
+            &roster,
+        );
     let context = HeightContext {
         network_id,
         protocol_version: PROTOCOL_VERSION,
@@ -2016,6 +1923,227 @@ fn v2_finality_artifact_roundtrips_with_unforgeable_receipt() {
     );
 }
 #[test]
+fn v2_finality_metadata_for_state_matches_full_read_without_body_io() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let stored_receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    let (full_header, full_artifact) = kura
+        .v2_finality_artifact_with_header(1)
+        .expect("read full finality")
+        .expect("finality exists");
+    kura.reset_canonical_query_reads_for_test();
+    let (header, metadata_artifact, receipt) = kura
+        .v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        )
+        .expect("read State-bound metadata")
+        .expect("finality exists");
+    assert_eq!(header, full_header);
+    assert_eq!(metadata_artifact, full_artifact);
+    assert_eq!(receipt.height(), stored_receipt.height());
+    assert_eq!(receipt.block_hash(), stored_receipt.block_hash());
+    assert_eq!(receipt.context_id(), stored_receipt.context_id());
+    assert_eq!(receipt.subject(), stored_receipt.subject());
+    assert_eq!(receipt.certificate(), stored_receipt.certificate());
+    assert_eq!(receipt.artifact_hash(), stored_receipt.artifact_hash());
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
+fn v2_finality_metadata_for_state_rejects_wrong_fork_network_and_receipt() {
+    let kura = Kura::blank_kura_for_testing();
+    let mut generator = DummyBlocks::new();
+    let blocks = vec![generator.next(), generator.next()];
+    for block in &blocks {
+        kura.store_block(Arc::clone(block)).expect("store block");
+    }
+    let artifacts = v2_finality_artifacts_for_chain(&blocks);
+    for artifact in &artifacts {
+        let receipt = kura
+            .store_v2_finality_artifact(artifact)
+            .expect("store finality");
+        assert_eq!(receipt.height(), artifact.height);
+    }
+    assert!(matches!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            blocks[1].hash(),
+            blocks[0].header().prev_block_hash(),
+            artifacts[0].height_context.network_id,
+        ),
+        Err(Error::BlockHeightConflict { .. })
+    ));
+    assert!(
+        kura.v2_finality_metadata_for_state(
+            2,
+            blocks[1].hash(),
+            None,
+            artifacts[1].height_context.network_id,
+        )
+        .is_err()
+    );
+    assert!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            blocks[0].hash(),
+            blocks[0].header().prev_block_hash(),
+            test_network_id(b"wrong finality network"),
+        )
+        .is_err()
+    );
+    let (_, first, first_receipt) = kura
+        .v2_finality_metadata_for_state(
+            1,
+            blocks[0].hash(),
+            blocks[0].header().prev_block_hash(),
+            artifacts[0].height_context.network_id,
+        )
+        .unwrap()
+        .unwrap();
+    let (_, second, second_receipt) = kura
+        .v2_finality_metadata_for_state(
+            2,
+            blocks[1].hash(),
+            blocks[1].header().prev_block_hash(),
+            artifacts[1].height_context.network_id,
+        )
+        .unwrap()
+        .unwrap();
+    let verify_successor = |receipt: &KuraV2CommitReceipt| {
+        crate::sumeragi::v2::VerifiedHeightContext::successor(
+            second.height_context.clone(),
+            second.validator_set_pops.clone(),
+            &first,
+            receipt,
+            &first.validator_set_pops,
+        )
+    };
+    assert!(verify_successor(&first_receipt).is_ok());
+    assert!(verify_successor(&second_receipt).is_err());
+}
+#[test]
+fn v2_finality_metadata_for_state_accepts_evicted_body_without_reading_it() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    assert_eq!(receipt.block_hash(), block.hash());
+    kura.evict_first_admission_body_for_testing(nonzero!(1_usize), block.hash())
+        .expect("evict body without removing signed metadata");
+    assert!(
+        kura.block_store
+            .lock()
+            .read_block_index(0)
+            .unwrap()
+            .is_evicted()
+    );
+    kura.reset_canonical_query_reads_for_test();
+    let result = kura
+        .v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        )
+        .expect("read evicted-body metadata")
+        .expect("finality exists");
+    assert_eq!(result.1, artifact);
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
+fn v2_finality_metadata_for_state_does_not_materialize_corrupt_inline_body() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    assert_eq!(receipt.block_hash(), block.hash());
+    let blocks_dir = kura.active_blocks_dir.lock().clone();
+    let index = kura.block_store.lock().read_block_index(0).unwrap();
+    let mut data = fs::OpenOptions::new()
+        .write(true)
+        .open(blocks_dir.join(DATA_FILE_NAME))
+        .expect("open inline body data");
+    data.seek(SeekFrom::Start(index.start))
+        .expect("seek to body");
+    data.write_all(&[0xff]).expect("corrupt inline body");
+    data.sync_all().expect("persist corrupted test body");
+    drop(data);
+    kura.block_data.lock()[0].1 = None;
+    kura.reset_canonical_query_reads_for_test();
+    // Metadata continuity may be authenticated despite a corrupt local body.
+    // A target execution proof must still read and authenticate that body.
+    assert!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        )
+        .expect("read signed metadata only")
+        .is_some()
+    );
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
+fn v2_finality_metadata_for_state_rejects_index_and_retained_wire_substitution() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block)).expect("store block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    let receipt = kura
+        .store_v2_finality_artifact(&artifact)
+        .expect("store finality");
+    assert_eq!(receipt.block_hash(), block.hash());
+    let index = kura.block_store.lock().read_block_index(0).unwrap();
+    kura.block_store
+        .lock()
+        .write_block_index(0, index.start, index.length + 1)
+        .expect("substitute index length");
+    assert!(matches!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        ),
+        Err(Error::V2FinalityExecutedBlockWireLengthMismatch { height: 1 })
+    ));
+    kura.block_store
+        .lock()
+        .write_block_index(0, index.start, index.length)
+        .expect("restore index length");
+    let retained_path = kura.retained_block_record_path(1);
+    let retained_bytes = fs::read(&retained_path).expect("read retained record");
+    let mut retained =
+        Kura::decode_canonical_retained_block_record(&retained_path, &retained_bytes)
+            .expect("decode retained record");
+    retained.proposal_wire_hash = Hash::new(b"wrong proposal wire");
+    fs::write(&retained_path, retained.encode()).expect("substitute retained wire hash");
+    kura.reset_canonical_query_reads_for_test();
+    assert!(matches!(
+        kura.v2_finality_metadata_for_state(
+            1,
+            block.hash(),
+            block.header().prev_block_hash(),
+            artifact.height_context.network_id,
+        ),
+        Err(Error::V2FinalityPayloadHashMismatch { height: 1 })
+    ));
+    assert_eq!(kura.canonical_query_reads_for_test(), (0, 0));
+}
+#[test]
 fn block_store_read_only_finality_verifies_without_mutation() {
     let kura = Kura::blank_kura_for_testing();
     let block = DummyBlocks::new().next();
@@ -2038,6 +2166,107 @@ fn block_store_read_only_finality_verifies_without_mutation() {
     assert!(BlockStore::new(&path).read_verified_v2_finality(1).is_err());
     drop(reader);
     assert_eq!(snapshot_regular_files_recursively(&path), before);
+}
+#[test]
+fn bounded_kura_sidecar_decode_preserves_valid_finality_and_retained_records() {
+    let kura = Kura::blank_kura_for_testing();
+    let block = DummyBlocks::new().next();
+    kura.store_block(Arc::clone(&block))
+        .expect("store canonical block");
+    let artifact = v2_finality_artifact_for_block(&block);
+    kura.store_v2_finality_artifact(&artifact)
+        .expect("store finality sidecars");
+
+    let finality_path = kura.v2_finality_artifact_path(1);
+    let finality_bytes = fs::read(&finality_path).expect("read finality sidecar");
+    let decoded_finality: KuraV2FinalityRecord =
+        decode_bounded_kura_sidecar(&finality_bytes).expect("decode bounded finality sidecar");
+    assert_eq!(decoded_finality.artifact, artifact);
+    assert_eq!(decoded_finality.encode(), finality_bytes);
+
+    let retained_path = kura.retained_block_record_path(1);
+    let retained_bytes = fs::read(&retained_path).expect("read retained sidecar");
+    let decoded_retained: KuraRetainedBlockRecord =
+        decode_bounded_kura_sidecar(&retained_bytes).expect("decode bounded retained sidecar");
+    assert_eq!(decoded_retained.block_hash, block.hash());
+    assert_eq!(decoded_retained.encode(), retained_bytes);
+    assert_eq!(
+        Kura::decode_canonical_retained_block_record(&retained_path, &retained_bytes)
+            .expect("canonical retained reader"),
+        decoded_retained
+    );
+}
+#[test]
+fn bounded_kura_sidecar_decode_rejects_nested_sequence_and_allocation_bombs() {
+    let advertised_nested_elements = u64::MAX.to_le_bytes();
+    let error = decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&advertised_nested_elements)
+        .expect_err("short malformed record cannot advertise an unbounded nested sequence");
+    assert!(matches!(
+        error,
+        norito::Error::SequenceLengthExceeded { .. }
+    ));
+
+    let nested = vec![vec![7_u8; 32], vec![9_u8; 32]];
+    let encoded = nested.encode();
+    let zero_allocation = norito::DecodeLimits::new(
+        encoded.len().saturating_mul(8),
+        encoded.len(),
+        encoded.len().saturating_mul(8),
+        0,
+        norito::core::MAX_VALUE_NESTING_DEPTH,
+    );
+    let error = norito::with_decode_limits(zero_allocation, || {
+        decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&encoded)
+    })
+    .expect_err("nested allocation must obey an enclosing resource budget");
+    assert!(matches!(
+        error,
+        norito::Error::TotalAllocationExceeded { .. }
+    ));
+}
+#[test]
+fn bounded_kura_sidecar_decode_shares_cumulative_budget_across_records() {
+    let record = vec![vec![7_u8; 32], vec![9_u8; 32]];
+    let bytes = record.encode();
+    let limits = norito::canonical_decode_limits(bytes.len());
+    let (decoded, single_usage) = norito::core::with_decode_limits_measured(limits, || {
+        decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&bytes)
+    });
+    assert_eq!(decoded.expect("measure one complete record"), record);
+    let per_record = single_usage.total_allocated_bytes();
+    assert!(per_record > 0);
+    let pair_allocation = per_record.checked_mul(2).expect("fixture budget fits");
+    let pair_limits = |allocated| {
+        norito::DecodeLimits::new(
+            limits.max_sequence_elements(),
+            limits.max_field_bytes(),
+            single_usage.total_elements().checked_mul(2).unwrap(),
+            allocated,
+            limits.max_nesting_depth(),
+        )
+    };
+    let decode_pair = || -> std::result::Result<_, norito::Error> {
+        let first = decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&bytes)?;
+        let second = decode_bounded_kura_sidecar::<Vec<Vec<u8>>>(&bytes)?;
+        Ok((first, second))
+    };
+    let (decoded, pair_usage) =
+        norito::core::with_decode_limits_measured(pair_limits(pair_allocation), decode_pair);
+    assert_eq!(
+        decoded.expect("exact cumulative allowance"),
+        (record.clone(), record)
+    );
+    assert_eq!(pair_usage.total_allocated_bytes(), pair_allocation);
+    assert_eq!(
+        pair_usage.total_elements(),
+        single_usage.total_elements() * 2
+    );
+    let error = norito::with_decode_limits(pair_limits(pair_allocation - 1), decode_pair)
+        .expect_err("second sidecar must retain the first sidecar's cumulative allocation charges");
+    assert!(matches!(
+        error,
+        norito::Error::TotalAllocationExceeded { .. }
+    ));
 }
 #[test]
 fn block_store_read_only_finality_rejects_invalid_signature_and_binding() {

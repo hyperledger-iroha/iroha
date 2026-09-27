@@ -41,6 +41,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         for relative, contents in {
             "Cargo.toml": "[workspace]\n",
             "Cargo.lock": "# locked\n",
+            "ci/check_connect_norito_bridge_header.sh": "#!/bin/sh\n",
             "rust-toolchain.toml": "[toolchain]\nchannel = 'stable'\n",
             "crates/connect_norito_bridge/NoritoBridge.podspec.template": "# podspec\n",
             "crates/connect_norito_bridge/RELEASE_NOTES.md": "# release\n",
@@ -131,6 +132,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
         self.assertIn("scripts/update_norito_bridge_swift_pins.py", apple)
         self.assertIn("scripts/validate_norito_bridge_xcframework.py", apple)
         self.assertIn("scripts/check_mobile_sdk_artifact_pin_commit.py", apple)
+        self.assertIn("ci/check_connect_norito_bridge_header.sh", apple)
 
         android = self.inputs("android")
         self.assertNotIn("IrohaSwift/Package.resolved", android)
@@ -194,6 +196,20 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
                 source_owner.write_text(original_contents + "# changed admission logic\n", encoding="utf-8")
                 self.assertNotEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
                 source_owner.write_text(original_contents, encoding="utf-8")
+
+    def test_apple_fingerprint_authenticates_header_parity_gate(self) -> None:
+        inputs = self.inputs("apple")
+        original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
+        gate = self.root / "ci/check_connect_norito_bridge_header.sh"
+        gate.write_text(gate.read_text(encoding="utf-8") + "# changed gate\n", encoding="utf-8")
+        self.assertNotEqual(
+            original,
+            seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"),
+        )
+        self.assertIn(
+            "ci/check_connect_norito_bridge_header.sh",
+            seal.status(self.root, inputs, lockfile_path=self.root / "Cargo.lock"),
+        )
 
     def test_selected_lock_is_root_lock_in_metadata_and_fingerprint(self) -> None:
         root_lock = self.root / "Cargo.lock"

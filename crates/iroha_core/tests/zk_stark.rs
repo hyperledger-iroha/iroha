@@ -1389,9 +1389,18 @@ fn governance_rejects_development_halo2_and_generic_stark_ballot_roles() {
             domain_tag: "gov:ballot:v1".to_owned(),
             ..ElectionState::default()
         };
-        retained.ballot_nullifiers.insert([0x55; 32]);
-        retained.ciphertexts.push(vec![0x66; 32]);
-        assert!(!retained.ballot_nullifiers.contains(&nullifier));
+        retained
+            .accepted_ballots
+            .push(iroha_core::state::StandaloneBallotCorpusEntryV1 {
+                nullifier: [0x55; 32],
+                commitment: [0x66; 32],
+            });
+        assert!(
+            !retained
+                .accepted_ballots
+                .iter()
+                .any(|entry| entry.nullifier == nullifier)
+        );
         let election_before =
             norito::to_bytes(&retained).expect("encode retained election before rejection");
         stx.world
@@ -1449,9 +1458,14 @@ fn governance_rejects_development_halo2_and_generic_stark_ballot_roles() {
             .elections()
             .get(&election_id)
             .expect("retained election remains");
-        assert!(!election.ballot_nullifiers.contains(&nullifier));
-        assert_eq!(election.ballot_nullifiers.len(), 1);
-        assert_eq!(election.ciphertexts, vec![vec![0x66; 32]]);
+        assert!(
+            !election
+                .accepted_ballots
+                .iter()
+                .any(|entry| entry.nullifier == nullifier)
+        );
+        assert_eq!(election.accepted_ballots.len(), 1);
+        assert_eq!(election.accepted_ballots[0].commitment, [0x66; 32]);
         assert_eq!(
             norito::to_bytes(election).expect("encode retained election after rejection"),
             election_before,

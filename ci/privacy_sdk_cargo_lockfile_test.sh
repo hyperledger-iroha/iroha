@@ -2111,7 +2111,7 @@ printf '%s\n' \
   'if [[ "${1:-}" == "-I" && "${2:-}" == "-c" ]]; then' \
   '  case "${3:-}" in *"version(\"maturin\")"*) python_invocation_kind=probe:maturin-version ;; *) python_invocation_kind=probe:python-version ;; esac' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "--version" ]]; then python_invocation_kind=probe:python-version-output' \
-  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_abi23_artifact.py ]]; then python_invocation_kind=abi23-checker' \
+  'elif [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_artifact.py ]]; then python_invocation_kind=abi24-checker' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == */verify_privacy_python_wheel.py ]]; then python_invocation_kind=verifier' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-B" && "${3:-}" == "-m" ]]; then python_invocation_kind="module:${4:-}"' \
   'elif [[ "${1:-}" == "-I" && "${2:-}" == "-m" ]]; then python_invocation_kind="module:${3:-}"' \
@@ -2148,16 +2148,16 @@ printf '%s\n' \
   '  printf "%s\n" "${native}"' \
   '  exit 0' \
   'fi' \
-  'if [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_abi23_artifact.py ]]; then' \
+  'if [[ "${1:-}" == "-I" && "${2:-}" == "-S" && "${3:-}" == */check_native_sdk_artifact.py ]]; then' \
   '  action="${4:-}"' \
   '  manifest=""' \
   '  previous=""' \
   '  for argument in "$@"; do if [[ "${previous}" == "--manifest" ]]; then manifest="${argument}"; fi; previous="${argument}"; done' \
-  '  [[ -n "${manifest}" ]] || { echo "ABI23 checker did not receive a manifest" >&2; exit 121; }' \
+  '  [[ -n "${manifest}" ]] || { echo "ABI24 checker did not receive a manifest" >&2; exit 121; }' \
   '  case "${action}" in' \
   '    record) printf "%s\n" "{\"fake\":true}" >"${manifest}" ;;' \
-  '    verify) [[ -f "${manifest}" ]] || { echo "ABI23 manifest is unavailable" >&2; exit 122; } ;;' \
-  '    *) echo "unexpected ABI23 checker action" >&2; exit 123 ;;' \
+  '    verify) [[ -f "${manifest}" ]] || { echo "ABI24 manifest is unavailable" >&2; exit 122; } ;;' \
+  '    *) echo "unexpected ABI24 checker action" >&2; exit 123 ;;' \
   '  esac' \
   '  exit 0' \
   'fi' \
@@ -2697,6 +2697,41 @@ if type(native_spec.loader) is not importlib.machinery.ExtensionFileLoader:
     raise AssertionError("native spec did not use ExtensionFileLoader")
 if native_spec.origin != str(native_path) or native_spec.loader_state is not None:
     raise AssertionError("native spec did not retain its trusted origin/state")
+
+# A CPython framework dependency must be refused before the installed
+# extension can execute. A linked interpreter can crash before any post-import
+# verifier gets to inspect otool output.
+original_prefix = sys.prefix
+original_load = verifier.load_from_trusted_specs
+
+def forbidden_runtime_link_load(**_kwargs):
+    raise AssertionError("native extension loaded before Darwin dependency refusal")
+
+try:
+    sys.prefix = str(environment_root)
+    verifier.load_from_trusted_specs = forbidden_runtime_link_load
+    expect_failure(
+        "Python.framework or libpython",
+        lambda: verifier.verify_current_environment(
+            environment_root,
+            wheel_path,
+            wheel.seal,
+            norito_root,
+            torii_root,
+            sdk_path,
+            sdk_wheel.seal,
+            site_roots={site_root},
+            platform_name="darwin",
+            dependency_output=(
+                f"{native_path}:\n"
+                "\t@rpath/Python3.framework/Versions/3.9/Python3\n"
+            ),
+            extension_suffixes=(".abi3.so",),
+        ),
+    )
+finally:
+    verifier.load_from_trusted_specs = original_load
+    sys.prefix = original_prefix
 
 
 class InertExtensionLoader(importlib.machinery.ExtensionFileLoader):
@@ -3363,6 +3398,22 @@ expect_failure(
         "/Library/Frameworks/Python.framework/Versions/3.12/Python"
     ),
 )
+expect_failure(
+    "Python.framework or libpython",
+    lambda: verifier.assert_no_python_runtime_dependency(
+        "@rpath/Python3.framework/Versions/3.9/Python3"
+    ),
+)
+for versioned_framework in (
+    "@rpath/Python3.13.framework/Versions/A/Python3.13",
+    "@rpath/Python3.13t.framework/Versions/A/Python3.13t",
+):
+    expect_failure(
+        "Python.framework or libpython",
+        lambda versioned_framework=versioned_framework: verifier.assert_no_python_runtime_dependency(
+            versioned_framework
+        ),
+    )
 verifier.assert_no_python_runtime_dependency(
     f"{native_path}:\n\t/usr/lib/libSystem.B.dylib\n"
 )
@@ -3841,10 +3892,10 @@ expected_kinds = [
     "verifier",
     "module:pip",
     "verifier",
-    "abi23-checker",
-    "abi23-checker",
+    "abi24-checker",
+    "abi24-checker",
     "module:pytest",
-    "abi23-checker",
+    "abi24-checker",
 ]
 if [group["kind"] for group in groups] != expected_kinds:
     raise SystemExit(
@@ -4025,14 +4076,14 @@ if arguments(9) != [
 ]:
     raise SystemExit("installed wheel verification transcript drifted")
 
-checker = root / "scripts/check_native_sdk_abi23_artifact.py"
+checker = root / "scripts/check_native_sdk_artifact.py"
 record = arguments(10)
 first_verify = arguments(11)
 final_verify = arguments(13)
 if record[:4] != ["-I", "-S", str(checker), "record"]:
-    raise SystemExit(f"ABI23 record transcript drifted: {record!r}")
+    raise SystemExit(f"ABI24 record transcript drifted: {record!r}")
 if "--manifest" not in record or "--artifact" not in record:
-    raise SystemExit("ABI23 record omitted its manifest or artifact binding")
+    raise SystemExit("ABI24 record omitted its manifest or artifact binding")
 manifest = record[record.index("--manifest") + 1]
 artifact = record[record.index("--artifact") + 1]
 expected_verify = [
@@ -4050,7 +4101,7 @@ expected_verify = [
     str(venv / "bin/python"),
 ]
 if first_verify != expected_verify or final_verify != expected_verify:
-    raise SystemExit("ABI23 verification transcript drifted")
+    raise SystemExit("ABI24 verification transcript drifted")
 
 if arguments(12) != [
     "-I",
@@ -4805,7 +4856,7 @@ for workflow_path in \
   'crates/sorafs_car/**' \
   'crates/sorafs_chunker/**' \
   'crates/sorafs_orchestrator/**' \
-  ci/verify_privacy_python_wheel.py scripts/check_native_sdk_abi23_artifact.py scripts/tests/check_privacy_csharp_native_contract_test.py \
+  ci/verify_privacy_python_wheel.py scripts/check_native_sdk_artifact.py scripts/tests/check_privacy_csharp_native_contract_test.py \
   python/iroha_python/pyproject.toml \
   python/iroha_native/pyproject.toml \
   'python/iroha_native/src/**' \

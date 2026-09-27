@@ -315,19 +315,6 @@ See [the profiling guide](../docs/profile_build.md#measured-memory-acceptance).
 ### Featured checks
 - `check_rust_1_92_lints.sh` – runs `cargo check` with the Rust 1.92 lint set (including the new never-type fallback and macro-export checks) so stricter diagnostics surface before CI.
 - `check_nexus_cross_dataspace_localnet.sh` – runs the Nexus 12-peer cross-dataspace proof on ten fresh deterministic seeds (`nexus-cross-dataspace-v1-seed-00` through `-09`). Each seed is a separate network/test process with no retry, and the launcher rejects missing or zero-test transcripts before publishing exact 10/10 completion accounting. Production release also invokes the launcher's ignored `--cross-dataspace-fault-soak` path, whose validated duration is exactly 7,200 seconds.
-- `check_sumeragi_v2_multilane_release_inventory.sh` – statically pins the exact autoscale A/B/A and rotating-validator Native AMX four-peer test names, requires ordinary test attributes without `#[ignore]`, and verifies that the production release runner invokes their mandatory zero-skip launcher.
-- `check_sumeragi_formal.sh` – runs the fail-closed serialized Sumeragi v2
-  release gate. It validates the proof ledger, runs every deductive module
-  with the pinned TLAPM backends and fingerprints disabled, and then validates
-  fresh source- and log-bound proof evidence before any bounded checks.
-  The remaining stages run pinned TLA2Tools counterexample searches, normalize
-  and replay the checked-in TLC witness against the production reducer, run
-  the exact seven-test fast network-simulation inventory, and verify the
-  source-linked production core with pinned Verus and `--no-cheating`. The
-  nightly workflow additionally runs the sole ignored test, the 100,000-height
-  chaos simulation, through
-  `scripts/formal/run_sumeragi_v2_harness.sh`. The retired Sumeragi v1
-  Apalache and expected-failure corridors are not release evidence.
 - `check_swift_spm_validation.sh` – exercises `IrohaSwift/Package.swift` with the bridge present and with the bridge intentionally missing. The complete artifact must build and the missing-artifact case must fail with the mandatory-bridge diagnostic. Writes a summary + logs under `artifacts/swift_spm_validation`.
 - `check_swift_pod_bridge.sh` – requires CocoaPods, authenticates the final
   packaged ZIP, generated binary podspec, checksum inventory, and package

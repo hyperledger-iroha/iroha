@@ -499,12 +499,9 @@ def test_identity_codec_preserves_every_rust_controller_fixture() -> None:
 
 
 def test_identity_codec_rejects_degenerate_ed25519() -> None:
-    identity_point = AccountAddress.from_account(
-        public_key=b"\x01" + bytes(31), algorithm="ed25519"
-    )
-    with pytest.raises(ValueError):
-        encode_create_kaigi_instruction_v1(
-            call_id=KaigiIdV1(**_FIXTURE["call_id"]), host=identity_point.to_i105()
+    with pytest.raises(ValueError, match="invalid public key payload"):
+        AccountAddress.from_account(
+            public_key=b"\x01" + bytes(31), algorithm="ed25519"
         )
 
 

@@ -19,7 +19,18 @@ pub const TOPOLOGY_APPROVAL_DOMAIN_V1: &[u8] = b"iroha:sorafs:topology-configura
 /// This approves configuration only. It cannot assert a live deployment, resilience, throughput,
 /// custody, native execution, or promotion. Digests are SHA-256 over the named exact inputs;
 /// the ordered-validator digest retains the qualification summary's canonical calculation.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "sorafs_manifest::signer::topology::subject::TopologyApprovalSubjectV1")]
 pub struct TopologyApprovalSubjectV1 {
     /// Canonical deployment identity; must equal the independently governed signer purpose.

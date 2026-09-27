@@ -57,6 +57,14 @@ impl SignerOperationStateSourceV1 for CountedSource {
         self.entering(None);
         self.inner.reserve(request)
     }
+    fn reserve_stream_token(
+        &self,
+        request: &SignerOperationReservationRequestV1<'_>,
+        review: &SignerStreamTokenReservationReviewV1<'_>,
+    ) -> Result<SignerOperationReservationV1, SignerOperationErrorV1> {
+        self.entering(None);
+        self.inner.reserve_stream_token(request, review)
+    }
     fn observe_reserved(
         &self,
         check: &SignerOperationReservationCheckV1<'_>,
@@ -102,7 +110,7 @@ fn counted_ceremony(
         fixture.coordinator,
         reviewed(&statement),
         Arc::from(statement),
-        SignerReceiptJournalV1::open(path, SignerReceiptPurposeV1::FinalPromotionProvenance)
+        SignerReceiptJournalV1::open_test(path, SignerReceiptPurposeV1::FinalPromotionProvenance)
             .unwrap(),
     )
     .unwrap();
@@ -214,7 +222,10 @@ fn late_errors_release_the_gate_but_preserve_the_uncompleted_tombstone() {
     let calls = source.calls.load(Ordering::SeqCst);
     assert_eq!(service.recover().unwrap_err(), conflict);
     assert!(source.calls.load(Ordering::SeqCst) > calls);
-    assert_eq!(service.sign().unwrap_err(), conflict);
+    assert_eq!(
+        service.sign().unwrap_err(),
+        SignerFinalPromotionErrorV1::Journal
+    );
     assert_eq!(journal_entries(&path), retained);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
     assert_eq!(source.inner.state.lock().unwrap().commits, 0);
@@ -258,7 +269,7 @@ fn recovery_only_view_outlives_every_protected_provider_and_retains_the_exact_jo
     drop(provider);
     assert!(provider_lifetime.upgrade().is_none());
     assert!(
-        SignerReceiptJournalV1::open(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
+        SignerReceiptJournalV1::open_test(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
             .is_err()
     );
     let reads = source.calls.load(Ordering::SeqCst);
@@ -271,7 +282,7 @@ fn recovery_only_view_outlives_every_protected_provider_and_retains_the_exact_jo
     assert!(provider_lifetime.upgrade().is_none());
     drop(recovery);
     let _new_lease =
-        SignerReceiptJournalV1::open(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
+        SignerReceiptJournalV1::open_test(&path, SignerReceiptPurposeV1::FinalPromotionProvenance)
             .unwrap();
 }
 

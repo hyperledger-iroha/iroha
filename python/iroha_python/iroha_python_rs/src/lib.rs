@@ -72,6 +72,7 @@ use iroha_data_model::{
             AttestEscrowCondition, CancelAssetLock, DrawdownAssetLock, ExpireAssetLock,
             ExpireConditionalEscrow, OpenAssetLock, OpenConditionalEscrow,
         },
+        governance::UpdatePlainConviction,
         repo::{RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
@@ -5808,7 +5809,7 @@ mod tests {
     include!("tests/python_crypto_boundary_tests.rs");
     #[test]
     fn native_sdk_bridge_abi_version_is_exactly_twenty_two() {
-        assert_eq!(connect_norito_bridge_abi_version_py(), 23);
+        assert_eq!(connect_norito_bridge_abi_version_py(), 24);
     }
     #[test]
     fn hijiri_quote_pyo3_codec_encodes_and_rejects_malformed_response() {
@@ -6459,6 +6460,73 @@ mod tests {
                 transfer.quantity,
                 Quantity::from_str("1.25").expect("quantity parses")
             );
+        });
+    }
+    #[test]
+    fn update_plain_conviction_instruction_has_exact_choice_free_native_wire() {
+        ensure_python();
+        Python::attach(|py| {
+            let instruction_type = py.get_type::<Instruction>();
+            let owner = canonical_i105_from_seed(0x47);
+            let instruction = Instruction::update_plain_conviction(
+                &instruction_type,
+                "referendum-1",
+                &owner,
+                "2.5",
+                42,
+            )
+            .expect("canonical conviction update");
+            assert_eq!(
+                instruction.wire_id().expect("wire id"),
+                "iroha.instruction.v1::governance::UpdatePlainConviction"
+            );
+            let expected = InstructionBox::from(UpdatePlainConviction {
+                referendum_id: "referendum-1".to_owned(),
+                owner: parse_account_id(&owner).expect("owner parses"),
+                amount: Quantity::from_str("2.5").expect("quantity parses"),
+                duration_blocks: 42,
+            });
+            assert_eq!(
+                norito::to_bytes(&instruction.inner).expect("native frame"),
+                norito::to_bytes(&expected).expect("model frame")
+            );
+            for referendum_id in ["", ".hidden", "space value", &"x".repeat(129)] {
+                assert!(
+                    Instruction::update_plain_conviction(
+                        &instruction_type,
+                        referendum_id,
+                        &owner,
+                        "2.5",
+                        42,
+                    )
+                    .is_err(),
+                    "invalid selector: {referendum_id:?}"
+                );
+            }
+            assert!(
+                Instruction::update_plain_conviction(
+                    &instruction_type,
+                    "referendum-1",
+                    "alice@example",
+                    "2.5",
+                    42,
+                )
+                .is_err(),
+                "owner alias must be rejected"
+            );
+            for amount in ["01", " 2.5", "1e0"] {
+                assert!(
+                    Instruction::update_plain_conviction(
+                        &instruction_type,
+                        "referendum-1",
+                        &owner,
+                        amount,
+                        42,
+                    )
+                    .is_err(),
+                    "noncanonical quantity: {amount:?}"
+                );
+            }
         });
     }
     #[test]
@@ -9125,6 +9193,28 @@ impl Instruction {
             .map_err(|err| PyValueError::new_err(format!("invalid instruction JSON: {err}")))?;
         Ok(Instruction::new(instruction))
     }
+    /// Build the choice-free update of one existing public standalone ballot.
+    #[classmethod]
+    fn update_plain_conviction(
+        _cls: &Bound<'_, PyType>,
+        referendum_id: &str,
+        owner: &str,
+        amount: &str,
+        duration_blocks: u64,
+    ) -> PyResult<Self> {
+        if !iroha_data_model::governance::is_valid_governance_selector_v1(referendum_id) {
+            return Err(PyValueError::new_err(
+                "referendum_id must be a canonical governance selector V1",
+            ));
+        }
+        let instruction = UpdatePlainConviction {
+            referendum_id: referendum_id.to_owned(),
+            owner: parse_exact_i105_account_id(owner, "owner")?,
+            amount: parse_asset_quantity(amount, "amount")?,
+            duration_blocks,
+        };
+        Ok(Self::new(instruction.into()))
+    }
     /// Construct one canonical native SoraFS replication-order issue.
     #[classmethod]
     #[pyo3(signature = (order_id, order_payload_base64, issued_epoch, deadline_epoch, musubi_archive=None))]
@@ -9636,12 +9726,11 @@ impl Instruction {
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]
-    #[pyo3(signature = (asset_definition_id, *, vk_unshield=None, vk_shield=None))]
+    #[pyo3(signature = (asset_definition_id, *, vk_unshield=None))]
     fn register_zk_asset<'py>(
         _cls: &Bound<'py, PyType>,
         asset_definition_id: &str,
         vk_unshield: Option<&Bound<'py, PyAny>>,
-        vk_shield: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
         let asset: AssetDefinitionId = asset_definition_id.parse().map_err(|err| {
             PyValueError::new_err(format!(
@@ -9649,11 +9738,7 @@ impl Instruction {
             ))
         })?;
         let vk_unshield = parse_verifying_key_id_py(vk_unshield, "vk_unshield")?;
-        let vk_shield = parse_verifying_key_id_py(vk_shield, "vk_shield")?;
-        let instruction = RegisterZkAsset::new(asset, vk_unshield, vk_shield);
-        instruction
-            .validate_verifier_roles()
-            .map_err(PyValueError::new_err)?;
+        let instruction = RegisterZkAsset::new(asset, vk_unshield);
         Ok(Instruction::new(instruction.into()))
     }
     #[classmethod]

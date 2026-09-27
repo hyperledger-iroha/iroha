@@ -18,7 +18,10 @@ use halo2_proofs::{
     halo2curves::pasta::{EpAffine, EqAffine, Fp, Fq},
     poly::ipa::commitment::ParamsIPA,
 };
-use iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1;
+use iroha_data_model::{
+    NetworkId,
+    kagemusha::{KagemushaHardwarePlatformClassV1, KagemushaReleasePurposeV1},
+};
 use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
@@ -95,6 +98,23 @@ fn require_hardware_assertion_fold_v1(
         | KagemushaHardwarePlatformClassV1::DedicatedSecureElement
         | KagemushaHardwarePlatformClassV1::OtherQualified => Ok(()),
     }
+}
+
+fn require_production_guard_release_v1(purpose: KagemushaReleasePurposeV1) -> Result<()> {
+    if purpose != KagemushaReleasePurposeV1::Production {
+        return Err(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable);
+    }
+    Ok(())
+}
+
+fn require_signed_guard_network_v1(
+    release_network: NetworkId,
+    statement_network: DigestV1,
+) -> Result<()> {
+    if release_network.as_bytes() != &statement_network {
+        return Err(KagemushaGuardVerificationErrorV1::Binding);
+    }
+    Ok(())
 }
 
 #[derive(norito::NoritoSchema)]
@@ -181,6 +201,7 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
         let release = verifier
             .monetary_release()
             .map_err(|_| KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
+        require_production_guard_release_v1(release.purpose())?;
         Ok(Self {
             authority: Some((
                 KagemushaGuardProofDiagnosticVerifierV1::new(verifier)?,
@@ -230,6 +251,7 @@ impl KagemushaAuthenticatedGuardBundleVerifierV1 {
             .authority
             .as_ref()
             .ok_or(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)?;
+        require_signed_guard_network_v1(release.network_id(), normalized.network_id)?;
         let profile = release
             .enabled_profile(normalized.hardware_profile_id)
             .ok_or(KagemushaGuardVerificationErrorV1::Binding)?;
@@ -765,6 +787,26 @@ pub(super) mod frame_identity_tests;
 mod tests {
     use super::*;
     use crate::zk::kagemusha_v1_state::KagemushaTransitionKindV1;
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::block::BlockHeader;
+
+    #[test]
+    fn monetary_guard_requires_the_signed_release_network() {
+        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"monetary-guard-release-network"),
+        ));
+        let foreign = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"monetary-guard-foreign-network"),
+        ));
+        assert_eq!(
+            require_signed_guard_network_v1(network, *network.as_bytes()),
+            Ok(())
+        );
+        assert_eq!(
+            require_signed_guard_network_v1(network, *foreign.as_bytes()),
+            Err(KagemushaGuardVerificationErrorV1::Binding)
+        );
+    }
 
     const EMPTY: DigestV1 = [0x75; 32];
 
@@ -786,6 +828,27 @@ mod tests {
         ] {
             assert_eq!(require_hardware_assertion_fold_v1(class), Ok(()));
         }
+    }
+
+    #[test]
+    fn production_guard_rejects_experimental_release_purpose() {
+        use iroha_data_model::kagemusha::KagemushaTestnetExperimentScopeV1;
+
+        assert_eq!(
+            require_production_guard_release_v1(KagemushaReleasePurposeV1::Production),
+            Ok(())
+        );
+        assert_eq!(
+            require_production_guard_release_v1(KagemushaReleasePurposeV1::TestnetExperiment(
+                KagemushaTestnetExperimentScopeV1 {
+                    asset_identity_digest: [1; 32],
+                    asset_incarnation: [2; 32],
+                    asset_scale: 2,
+                    liability_pool_id: [3; 32],
+                },
+            )),
+            Err(KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable)
+        );
     }
 
     // These synthetic transcripts test shape and exact statement bindings only. Actual proof

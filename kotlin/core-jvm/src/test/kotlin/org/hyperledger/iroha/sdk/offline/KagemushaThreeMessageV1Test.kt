@@ -7,8 +7,8 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
-import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import kotlin.test.assertFalse
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
 class KagemushaThreeMessageV1Test {
     @Test

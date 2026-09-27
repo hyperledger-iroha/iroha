@@ -4369,43 +4369,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         let terminal = self.resolved_validate_outcome(key)?.cloned();
         if let Some(terminal) = terminal {
-            let receipt = self.durable_bodies.get(&key).cloned().ok_or_else(|| {
-                EffectExecutorError::Contract("terminal Validate lost its durable body".to_owned())
-            })?;
-            let certificate = self
-                .exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?
-                .ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "terminal Validate lost its current protected QC".to_owned(),
-                    )
-                })?;
-            let (manifest, recovered) =
-                self.recovered_bodies.get(&key).cloned().ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "terminal Validate lost its exact recovered body frame".to_owned(),
-                    )
-                })?;
-            if recovered != receipt {
-                return Err(EffectExecutorError::Contract(
-                    "terminal Validate changed its recovered body receipt".to_owned(),
-                ));
-            }
-            if let Some(previous) = self.pending_resolved_validate_replay.as_ref()
-                && previous.terminal().as_ref() != terminal.as_ref()
-            {
-                return Err(EffectExecutorError::Contract(
-                    "terminal Validate replay changed its physical outcome".to_owned(),
-                ));
-            }
-            if !replacing_resolved {
-                self.ensure_pending_slot()?;
-            }
-            let pending = super::v2_lifecycle_coordinator::PendingResolvedValidateReplayV1::seal_exact_protected_body(
-                effect, ownership, manifest, receipt, certificate, terminal,
-            ).map_err(|reason| EffectExecutorError::Contract(reason.to_owned()))?;
-            let previous = self.pending_resolved_validate_replay.replace(pending);
-            assert_eq!(previous.is_some(), replacing_resolved);
-            return Ok(None);
+            return self.replay_terminal_validate_body(
+                key,
+                effect,
+                ownership,
+                terminal,
+                replacing_resolved,
+            );
         }
         if let Some(marker) = self
             .published_lifecycle_validate_retry_markers
@@ -4428,46 +4398,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "ValidateBody has no matching durable body receipt".to_owned(),
             )
         })?;
-        if let Some(recovery) = self.pending_tip_recovery.as_ref() {
-            if recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation
-                || recovery.replay_tag() != tag
-                || recovery.durable_round() != round
-                || recovery.durable_subject() != subject
-                || recovery.durable_receipt() != &receipt
-                || self.validated_bodies.get(&key) != Some(recovery.validated_receipt())
-            {
-                return Err(EffectExecutorError::Contract(
-                    "PendingKura ValidateBody changed its exact recovered validation owner"
-                        .to_owned(),
-                ));
-            }
-            self.ensure_pending_slot()?;
-            let _next_apply_work = self.plan_work_id()?;
-            let marker = self
-                .pending_tip_recovery
-                .as_mut()
-                .expect("pending-Kura validation was checked above")
-                .take_deferred_validated_marker()?;
-            let successor = match self
-                .runtime
-                .commit_pending_kura_validated_apply(marker, &effect, &ownership)
-            {
-                Ok(successor) => successor,
-                Err((marker, error)) => {
-                    self.pending_tip_recovery
-                        .as_mut()
-                        .expect("pending-Kura validation still owns its recovery evidence")
-                        .restore_deferred_validated_marker(marker);
-                    return Err(EffectExecutorError::PendingApplyRecoveryMismatch(error));
-                }
-            };
-            // The independently fsynced marker now enters the reducer through
-            // its real direct successful-validation transition. The returned
-            // Apply is the sole predecessor-projected child and is consumed by
-            // the outer recovery step only after it records the Apply stage.
-            return Ok(Some(DirectValidatedApplySuccessorV1::PendingKura(
-                successor,
-            )));
+        if self.pending_tip_recovery.is_some() {
+            return self.validate_pending_kura_body(tag, key, &effect, &ownership, &receipt);
         }
         if self.authenticated_genesis_replay.contains_key(&key)
             && self.remote_proposal_replay.contains_key(&key)
@@ -4476,87 +4408,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 "ValidateBody retained two incompatible replay authorities".to_owned(),
             ));
         }
-        match self.authenticated_genesis_replay.get(&key) {
-            Some(AuthenticatedGenesisReplayStageV1::BodyAvailable(_))
-            | Some(AuthenticatedGenesisReplayStageV1::StoreAdmission(_))
-            | Some(AuthenticatedGenesisReplayStageV1::Store { .. }) => {
-                return Err(EffectExecutorError::Contract(
-                    "authenticated-genesis ValidateBody preceded its durable Store replay"
-                        .to_owned(),
-                ));
-            }
-            Some(AuthenticatedGenesisReplayStageV1::Stored {
-                replay,
-                ownership: store_ownership,
-            }) => {
-                if !replay.exactly_retains_owned_store(&receipt, store_ownership) {
-                    return Err(EffectExecutorError::Contract(
-                        "authenticated-genesis ValidateBody changed its Store lineage".to_owned(),
-                    ));
-                }
-            }
-            None => {}
-        }
         if self.authenticated_genesis_replay.contains_key(&key) {
-            let Some(AuthenticatedGenesisReplayStageV1::Stored {
-                replay: stored,
-                ownership: store_ownership,
-            }) = self.authenticated_genesis_replay.remove(&key)
-            else {
-                unreachable!("preflighted authenticated-genesis Store replay remains installed")
-            };
-            let store_terminal = stored
-                .seal_store_terminal_retry(&receipt, &store_ownership)
-                .ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "authenticated-genesis Validate could not seal its durable Store terminal"
-                            .to_owned(),
-                    )
-                })?;
-            let validate_ownership = ownership;
-            let validate = match self.protected_decision {
-                Some((decision_round, proposal_round, decision_subject, execution_commitment))
-                    if proposal_round == round && decision_subject == subject =>
-                {
-                    stored.project_validate_after_durable_decision(
-                        effect.clone(),
-                        validate_ownership.clone(),
-                        decision_round,
-                        proposal_round,
-                        decision_subject,
-                        execution_commitment,
-                    )
-                }
-                Some(_) => {
-                    unreachable!("a retained Decision Validate has the protected genesis body key")
-                }
-                None => stored.project_validate(effect.clone(), validate_ownership.clone()),
-            };
-            let validate = match validate {
-                Ok(validate) => validate,
-                Err(error) => {
-                    let previous = self.authenticated_genesis_replay.insert(
-                        key,
-                        AuthenticatedGenesisReplayStageV1::Stored {
-                            replay: error.into_stored(),
-                            ownership: store_ownership,
-                        },
-                    );
-                    debug_assert!(previous.is_none());
-                    return Err(EffectExecutorError::Contract(
-                        "authenticated-genesis Store could not project its Validate successor"
-                            .to_owned(),
-                    ));
-                }
-            };
-            self.install_pending_durable_validate_admission(
-                key,
-                &effect,
-                &validate_ownership,
-                validate.into_pending_durable_validate_admission(),
-                Some(store_terminal),
-            )?;
-            return Ok(None);
+            return self.validate_authenticated_genesis_body(key, effect, ownership, receipt);
         }
         match self.remote_proposal_replay.get(&key) {
             Some(RemoteProposalReplayStageV1::Fetch { .. })
@@ -4579,67 +4432,289 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
             }
             None => {
-                // A TC may promote an older PrepareQC after ordinary Proposal
-                // replay retired; a later CommitQC may decide the same durable
-                // body directly. Rejoin only the currently protected full QC
-                // to the exact recovered manifest, receipt and runtime
-                // statement. Both phases enter normal LocalBody lifecycle
-                // admission with an inert Store predecessor. Validation and
-                // Apply still require their separate durable registry turns.
-                let authority_certificate =
-                    self.exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
-                let Some(certificate) = authority_certificate else {
-                    return Err(EffectExecutorError::Contract(
-                        "ValidateBody omitted its mandatory lifecycle replay owner".to_owned(),
-                    ));
-                };
-                let (manifest, recovered_receipt) =
-                    self.recovered_bodies.get(&key).cloned().ok_or_else(|| {
-                        EffectExecutorError::Contract(
-                            "protected-body ValidateBody omitted its exact recovered body frame"
-                                .to_owned(),
-                        )
-                    })?;
-                if recovered_receipt != receipt {
-                    return Err(EffectExecutorError::Contract(
-                        "protected-body ValidateBody changed its durable body receipt".to_owned(),
-                    ));
-                }
-                let validate_ownership = ownership;
-                let store_terminal = DurableStoreTerminalRetrySealV1::seal_validate_predecessor(
-                    &effect,
-                    &validate_ownership,
-                    &receipt,
-                )
-                .ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "protected-body ValidateBody could not seal its exact Store predecessor"
-                            .to_owned(),
-                    )
-                })?;
-                let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
-                    effect.clone(),
-                    validate_ownership.clone(),
-                    manifest,
-                    receipt,
-                    certificate,
-                )
-                .map_err(|_| {
-                    EffectExecutorError::Contract(
-                        "protected-body ValidateBody could not reseal exact lifecycle replay"
-                            .to_owned(),
-                    )
-                })?;
-                self.install_pending_durable_validate_admission(
-                    key,
-                    &effect,
-                    &validate_ownership,
-                    prepared.into_pending_durable_validate_admission(),
-                    Some(store_terminal),
-                )?;
-                return Ok(None);
+                return self.validate_recovered_protected_body(key, effect, ownership, receipt);
             }
         }
+        self.validate_remote_proposal_body(key, effect, ownership, receipt)
+    }
+
+    // Keep mutually exclusive replay owners in separate stack frames. Their
+    // move-only pre-admission and rollback carriers are large; accumulating
+    // them in validate_body can exhaust a normal worker stack during replay.
+    /// Prepare one exact terminal outcome for its current protected occurrence.
+    #[inline(never)]
+    fn replay_terminal_validate_body(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+        terminal: Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+        replacing_resolved: bool,
+    ) -> Result<Option<DirectValidatedApplySuccessorV1>, EffectExecutorError> {
+        let receipt = self.durable_bodies.get(&key).cloned().ok_or_else(|| {
+            EffectExecutorError::Contract("terminal Validate lost its durable body".to_owned())
+        })?;
+        let certificate = self
+            .exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "terminal Validate lost its current protected QC".to_owned(),
+                )
+            })?;
+        let (manifest, recovered) = self.recovered_bodies.get(&key).cloned().ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "terminal Validate lost its exact recovered body frame".to_owned(),
+            )
+        })?;
+        if recovered != receipt {
+            return Err(EffectExecutorError::Contract(
+                "terminal Validate changed its recovered body receipt".to_owned(),
+            ));
+        }
+        if let Some(previous) = self.pending_resolved_validate_replay.as_ref()
+            && previous.terminal().as_ref() != terminal.as_ref()
+        {
+            return Err(EffectExecutorError::Contract(
+                "terminal Validate replay changed its physical outcome".to_owned(),
+            ));
+        }
+        if !replacing_resolved {
+            self.ensure_pending_slot()?;
+        }
+        let pending = super::v2_lifecycle_coordinator::PendingResolvedValidateReplayV1::seal_exact_protected_body(
+            effect, ownership, manifest, receipt, certificate, terminal,
+        ).map_err(|reason| EffectExecutorError::Contract(reason.to_owned()))?;
+        let previous = self.pending_resolved_validate_replay.replace(pending);
+        assert_eq!(previous.is_some(), replacing_resolved);
+        Ok(None)
+    }
+
+    /// Advance only the retained interrupted-tip validation into its exact Apply.
+    #[inline(never)]
+    fn validate_pending_kura_body(
+        &mut self,
+        tag: EventTag,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: &AdapterEffect,
+        ownership: &RuntimeEffectOwnership,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<Option<DirectValidatedApplySuccessorV1>, EffectExecutorError> {
+        let (round, subject) = key;
+        let recovery = self
+            .pending_tip_recovery
+            .as_ref()
+            .expect("pending-Kura validation retains its recovery evidence");
+        if recovery.stage() != PendingKuraApplyRecoveryStage::DeterministicValidation
+            || recovery.replay_tag() != tag
+            || recovery.durable_round() != round
+            || recovery.durable_subject() != subject
+            || recovery.durable_receipt() != receipt
+            || self.validated_bodies.get(&key) != Some(recovery.validated_receipt())
+        {
+            return Err(EffectExecutorError::Contract(
+                "PendingKura ValidateBody changed its exact recovered validation owner".to_owned(),
+            ));
+        }
+        self.ensure_pending_slot()?;
+        let _next_apply_work = self.plan_work_id()?;
+        let marker = self
+            .pending_tip_recovery
+            .as_mut()
+            .expect("pending-Kura validation was checked above")
+            .take_deferred_validated_marker()?;
+        let successor = match self
+            .runtime
+            .commit_pending_kura_validated_apply(marker, effect, ownership)
+        {
+            Ok(successor) => successor,
+            Err((marker, error)) => {
+                self.pending_tip_recovery
+                    .as_mut()
+                    .expect("pending-Kura validation still owns its recovery evidence")
+                    .restore_deferred_validated_marker(marker);
+                return Err(EffectExecutorError::PendingApplyRecoveryMismatch(error));
+            }
+        };
+        // The independently fsynced marker now enters the reducer through
+        // its real direct successful-validation transition. The returned
+        // Apply is the sole predecessor-projected child and is consumed by
+        // the outer recovery step only after it records the Apply stage.
+        Ok(Some(DirectValidatedApplySuccessorV1::PendingKura(
+            successor,
+        )))
+    }
+
+    /// Project the authenticated genesis Store owner into its Validate admission.
+    #[inline(never)]
+    fn validate_authenticated_genesis_body(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+        receipt: DurableBodyReceipt,
+    ) -> Result<Option<DirectValidatedApplySuccessorV1>, EffectExecutorError> {
+        let (round, subject) = key;
+        match self.authenticated_genesis_replay.get(&key) {
+            Some(AuthenticatedGenesisReplayStageV1::BodyAvailable(_))
+            | Some(AuthenticatedGenesisReplayStageV1::StoreAdmission(_))
+            | Some(AuthenticatedGenesisReplayStageV1::Store { .. }) => {
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis ValidateBody preceded its durable Store replay"
+                        .to_owned(),
+                ));
+            }
+            Some(AuthenticatedGenesisReplayStageV1::Stored {
+                replay,
+                ownership: store_ownership,
+            }) => {
+                if !replay.exactly_retains_owned_store(&receipt, store_ownership) {
+                    return Err(EffectExecutorError::Contract(
+                        "authenticated-genesis ValidateBody changed its Store lineage".to_owned(),
+                    ));
+                }
+            }
+            None => {}
+        }
+        let Some(AuthenticatedGenesisReplayStageV1::Stored {
+            replay: stored,
+            ownership: store_ownership,
+        }) = self.authenticated_genesis_replay.remove(&key)
+        else {
+            unreachable!("preflighted authenticated-genesis Store replay remains installed")
+        };
+        let store_terminal = stored
+            .seal_store_terminal_retry(&receipt, &store_ownership)
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "authenticated-genesis Validate could not seal its durable Store terminal"
+                        .to_owned(),
+                )
+            })?;
+        let validate_ownership = ownership;
+        let validate = match self.protected_decision {
+            Some((decision_round, proposal_round, decision_subject, execution_commitment))
+                if proposal_round == round && decision_subject == subject =>
+            {
+                stored.project_validate_after_durable_decision(
+                    effect.clone(),
+                    validate_ownership.clone(),
+                    decision_round,
+                    proposal_round,
+                    decision_subject,
+                    execution_commitment,
+                )
+            }
+            Some(_) => {
+                unreachable!("a retained Decision Validate has the protected genesis body key")
+            }
+            None => stored.project_validate(effect.clone(), validate_ownership.clone()),
+        };
+        let validate = match validate {
+            Ok(validate) => validate,
+            Err(error) => {
+                let previous = self.authenticated_genesis_replay.insert(
+                    key,
+                    AuthenticatedGenesisReplayStageV1::Stored {
+                        replay: error.into_stored(),
+                        ownership: store_ownership,
+                    },
+                );
+                debug_assert!(previous.is_none());
+                return Err(EffectExecutorError::Contract(
+                    "authenticated-genesis Store could not project its Validate successor"
+                        .to_owned(),
+                ));
+            }
+        };
+        self.install_pending_durable_validate_admission(
+            key,
+            &effect,
+            &validate_ownership,
+            validate.into_pending_durable_validate_admission(),
+            Some(store_terminal),
+        )?;
+        Ok(None)
+    }
+
+    /// Rejoin the protected durable QC with its exact recovered body for Validate.
+    #[inline(never)]
+    fn validate_recovered_protected_body(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+        receipt: DurableBodyReceipt,
+    ) -> Result<Option<DirectValidatedApplySuccessorV1>, EffectExecutorError> {
+        // A TC may promote an older PrepareQC after ordinary Proposal
+        // replay retired; a later CommitQC may decide the same durable
+        // body directly. Rejoin only the currently protected full QC
+        // to the exact recovered manifest, receipt and runtime
+        // statement. Both phases enter normal LocalBody lifecycle
+        // admission with an inert Store predecessor. Validation and
+        // Apply still require their separate durable registry turns.
+        let authority_certificate =
+            self.exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
+        let Some(certificate) = authority_certificate else {
+            return Err(EffectExecutorError::Contract(
+                "ValidateBody omitted its mandatory lifecycle replay owner".to_owned(),
+            ));
+        };
+        let (manifest, recovered_receipt) =
+            self.recovered_bodies.get(&key).cloned().ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "protected-body ValidateBody omitted its exact recovered body frame".to_owned(),
+                )
+            })?;
+        if recovered_receipt != receipt {
+            return Err(EffectExecutorError::Contract(
+                "protected-body ValidateBody changed its durable body receipt".to_owned(),
+            ));
+        }
+        let validate_ownership = ownership;
+        let store_terminal = DurableStoreTerminalRetrySealV1::seal_validate_predecessor(
+            &effect,
+            &validate_ownership,
+            &receipt,
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "protected-body ValidateBody could not seal its exact Store predecessor".to_owned(),
+            )
+        })?;
+        let prepared =
+            PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
+                effect.clone(),
+                validate_ownership.clone(),
+                manifest,
+                receipt,
+                certificate,
+            )
+            .map_err(|_| {
+                EffectExecutorError::Contract(
+                    "protected-body ValidateBody could not reseal exact lifecycle replay"
+                        .to_owned(),
+                )
+            })?;
+        self.install_pending_durable_validate_admission(
+            key,
+            &effect,
+            &validate_ownership,
+            prepared.into_pending_durable_validate_admission(),
+            Some(store_terminal),
+        )?;
+        Ok(None)
+    }
+
+    /// Project the signed Proposal Store owner, restoring it if projection fails.
+    #[inline(never)]
+    fn validate_remote_proposal_body(
+        &mut self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        effect: AdapterEffect,
+        ownership: RuntimeEffectOwnership,
+        receipt: DurableBodyReceipt,
+    ) -> Result<Option<DirectValidatedApplySuccessorV1>, EffectExecutorError> {
+        let (round, subject) = key;
         let authority_certificate =
             self.exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
         let Some(RemoteProposalReplayStageV1::Stored {

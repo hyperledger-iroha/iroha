@@ -111,6 +111,32 @@ impl RnsNativeTreeWorkV1 {
             digest_storage_bytes,
         })
     }
+
+    /// Exact work floor for the current index-bound leaves and binary nodes.
+    ///
+    /// This deliberately excludes every payload hash. It screens proposals
+    /// that only shorten or avoid payload hashing while retaining the same
+    /// six-lane index and node frames; it is not a replacement admission cost.
+    pub(super) fn index_node_floor_field_operations(self) -> Result<u64, RnsNativeTreeErrorV1> {
+        let index = self
+            .index_frame
+            .field_multiplications
+            .checked_add(self.index_frame.field_additions)
+            .ok_or(RnsNativeTreeErrorV1::ArithmeticOverflow)?;
+        let node = self
+            .node_frame
+            .field_multiplications
+            .checked_add(self.node_frame.field_additions)
+            .ok_or(RnsNativeTreeErrorV1::ArithmeticOverflow)?;
+        self.leaves
+            .checked_mul(index)
+            .and_then(|work| {
+                self.internal_nodes
+                    .checked_mul(node)
+                    .and_then(|nodes| work.checked_add(nodes))
+            })
+            .ok_or(RnsNativeTreeErrorV1::ArithmeticOverflow)
+    }
 }
 
 /// All nodes of one exact governed tree, leaves first and root last.
@@ -260,6 +286,28 @@ mod tests {
         assert_eq!(work.one_payload_permutations, 298_846_728);
         assert_eq!(work.all_payload_field_operations, 3_032_072_370_498);
         assert_eq!(work.one_payload_field_operations, 505_349_817_048);
+        let structural_floor = work.index_node_floor_field_operations().unwrap();
+        assert_eq!(structural_floor, 505_344_997_698);
+        let index_only = work.leaves
+            * (work.index_frame.field_multiplications + work.index_frame.field_additions);
+        assert_eq!(index_only, 255_332_450_304);
+        assert!(index_only > ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1);
+        assert_eq!(
+            work.all_payload_field_operations - structural_floor,
+            work.leaves
+                * (work.payload_frame.field_multiplications + work.payload_frame.field_additions)
+        );
+        assert_eq!(
+            work.one_payload_field_operations - structural_floor,
+            work.payload_frame.field_multiplications + work.payload_frame.field_additions
+        );
+        assert!(structural_floor > ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1);
+        let mut overflowing = work;
+        overflowing.leaves = u64::MAX;
+        assert_eq!(
+            overflowing.index_node_floor_field_operations(),
+            Err(RnsNativeTreeErrorV1::ArithmeticOverflow)
+        );
         assert_eq!(work.digest_storage_bytes, 50_331_600);
         assert!(work.one_payload_field_operations > ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1);
         for oracle in [
@@ -273,6 +321,13 @@ mod tests {
             assert_eq!(other.node_frame.words_per_lane, 94);
             assert_eq!(other.internal_nodes + 1, other.leaves);
         }
+        let terminal =
+            RnsNativeTreeWorkV1::for_oracle(parameter(), RnsNativeOracleV1::Fri { layer: 17 })
+                .unwrap();
+        assert!(
+            terminal.index_node_floor_field_operations().unwrap()
+                < ZK_AMS_MKHE_RNS_NATIVE_WORK_MAX_V1
+        );
         assert_eq!(
             RnsNativeTreeWorkV1::for_oracle(parameter(), RnsNativeOracleV1::Fri { layer: 18 }),
             Err(RnsNativeTreeErrorV1::InvalidOracle)

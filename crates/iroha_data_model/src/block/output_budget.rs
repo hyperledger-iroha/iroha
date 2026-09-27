@@ -27,7 +27,7 @@ pub struct ExecutionOutputLimits {
     pub max_output_bytes: u64,
     /// Maximum sum of canonical output-row frame lengths.
     pub max_total_output_bytes: u64,
-    /// Maximum complete canonical executed SignedBlockWire length.
+    /// Maximum complete canonical executed `SignedBlockWire` length.
     pub max_executed_wire_bytes: u64,
 }
 
@@ -85,7 +85,7 @@ impl ExecutionOutputLimits {
 pub enum ExecutionOutputPhase {
     /// Exact immutable network-input prefix.
     Network,
-    /// Isolated callbacks for actual prefix events and BlockApproved.
+    /// Isolated callbacks for actual prefix events and `BlockApproved`.
     Pipeline,
     /// Actual scheduled Time occurrences.
     Time,
@@ -125,7 +125,7 @@ pub struct ExecutionOutputPhaseReservation {
 /// Conservative carrier envelope derived before network-input selection.
 ///
 /// Every selected network input may produce a pipeline event, followed by one
-/// BlockApproved event. Each event may select every eligible existing pipeline
+/// `BlockApproved` event. Each event may select every eligible existing pipeline
 /// registration. Time has a separate finite invocation ceiling. Nested callbacks
 /// stay in their enclosing row and do not create additional top-level outputs.
 /// Core must derive the registry and terminal-byte bounds from authenticated

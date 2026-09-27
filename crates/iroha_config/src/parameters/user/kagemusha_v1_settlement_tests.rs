@@ -10,6 +10,7 @@ fn kagemusha_v1_parse_initializes_empty_runtime_custody() {
     assert!(emitter.into_result().is_ok());
     assert!(actual.reserve_accounts.is_empty());
     assert!(actual.proof_release.is_none());
+    assert!(!actual.allow_testnet_experimental_release);
 }
 
 #[test]
@@ -34,4 +35,15 @@ fn kagemusha_v1_release_paths_are_all_or_none() {
     let release = parsed.proof_release.expect("complete release is retained");
     assert_eq!(release.manifest, PathBuf::from("release.nrt"));
     assert_eq!(release.artifact_directory, PathBuf::from("artifacts"));
+}
+
+#[test]
+fn kagemusha_v1_experimental_release_requires_explicit_node_setting() {
+    let mut emitter = Emitter::new();
+    let mut configured = Kagemusha::default();
+    configured.allow_testnet_experimental_release = true;
+    let parsed = configured.parse(&mut emitter);
+    assert!(emitter.into_result().is_ok());
+    assert!(parsed.allow_testnet_experimental_release);
+    assert!(parsed.proof_release.is_none());
 }

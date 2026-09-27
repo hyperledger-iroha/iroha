@@ -60,6 +60,11 @@ impl State {
     ) -> Result<(), LaneLifecycleError> {
         self.ensure_config_catalog_mutation_is_pre_genesis(&nexus.lane_catalog, false)?;
         let installed = self.nexus_snapshot();
+        // Evidence preparation is process-local configured custody. Runtime
+        // catalog updates cannot replace its finite pool or reset live credits.
+        nexus.storage.consensus_evidence_preparation_bytes =
+            installed.storage.consensus_evidence_preparation_bytes;
+        nexus.storage.consensus_stake_index_bytes = installed.storage.consensus_stake_index_bytes;
         nexus.configured_dataspace_catalog = installed.configured_dataspace_catalog.clone();
         let runtime = runtime_catalog_from_world(&self.world.view())?;
         if let Some(runtime) = runtime.as_ref() {

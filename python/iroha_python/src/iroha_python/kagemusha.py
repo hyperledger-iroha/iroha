@@ -1899,11 +1899,11 @@ def encrypted_credit_aad_for_peer(
 
 
 def encode_payment_request(value: KagemushaPaymentRequestV1) -> bytes:
-    return _encode_top_level(value, KagemushaPaymentRequestV1, 928, _validate_request)
+    return _encode_top_level(value, KagemushaPaymentRequestV1, 1024, _validate_request)
 
 
 def decode_payment_request(raw: object) -> KagemushaPaymentRequestV1:
-    return _decode_top_level(raw, KagemushaPaymentRequestV1, 928, _validate_request)
+    return _decode_top_level(raw, KagemushaPaymentRequestV1, 1024, _validate_request)
 
 
 def encode_payment_proof(value: KagemushaPaymentProofV1) -> bytes:
@@ -2359,7 +2359,7 @@ def decode_top_up_instruction(raw: object) -> KagemushaTopUpInstructionV1:
 
 
 _KIND_LIMITS: Final[Mapping[str, tuple[int, int]]] = {
-    "request": (928, 1243),
+    "request": (1024, 1371),
     "payment": (7552, 10075),
     "acknowledgement": (256, 347),
     "mint_authorization": (7936, 10587),
@@ -2500,8 +2500,8 @@ class Kagemusha:
     device_lifecycle_version: ClassVar[int] = 1
     handoff_capability: ClassVar[str] = "kagemusha_handoff_v1"
     text_prefix: ClassVar[str] = "kgm1:"
-    maximum_request_raw_bytes: ClassVar[int] = 928
-    maximum_request_text_bytes: ClassVar[int] = 1243
+    maximum_request_raw_bytes: ClassVar[int] = 1024
+    maximum_request_text_bytes: ClassVar[int] = 1371
     target_complete_exchange_raw_bytes: ClassVar[int] = 8_960
     maximum_complete_exchange_raw_bytes: ClassVar[int] = _MAXIMUM_COMPLETE_EXCHANGE_RAW_BYTES
     maximum_complete_exchange_text_bytes: ClassVar[int] = _MAXIMUM_COMPLETE_EXCHANGE_TEXT_BYTES

@@ -4,10 +4,8 @@ mod quantity_statement;
 #[cfg(test)]
 pub(crate) use quantity_statement::quantity_materializer_invocations_for_testing;
 mod source_capture;
-#[cfg(test)]
-mod source_prefix_lengths;
-#[cfg(test)]
-mod source_reservation;
+pub(crate) mod source_prefix_lengths;
+pub(crate) mod source_reservation;
 pub(crate) use source_capture::{
     FastpqSourceTranscriptUsage, measure_fastpq_source_statement_usage,
     preflight_fastpq_source_transcripts,
@@ -776,8 +774,8 @@ pub fn public_inputs_template_from_block(
 ) -> FastpqPublicInputsTemplate {
     let creation_ms = u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX);
     let slot = creation_ms.saturating_mul(1_000_000);
-    let old_root = crate::sumeragi::exec::parent_state_from_witness(witness);
-    let new_root = crate::sumeragi::exec::post_state_from_witness(witness);
+    let old_root = crate::exec_witness::roots::parent_state_from_witness(witness);
+    let new_root = crate::exec_witness::roots::post_state_from_witness(witness);
     FastpqPublicInputsTemplate {
         dsid: dataspace_id_bytes(DataSpaceId::UNIVERSAL),
         slot,
@@ -1759,11 +1757,15 @@ mod tests {
         assert_eq!(template.perm_root, perm_root);
         assert_eq!(
             template.old_root,
-            <[u8; 32]>::from(crate::sumeragi::exec::parent_state_from_witness(&witness))
+            <[u8; 32]>::from(crate::exec_witness::roots::parent_state_from_witness(
+                &witness
+            ))
         );
         assert_eq!(
             template.new_root,
-            <[u8; 32]>::from(crate::sumeragi::exec::post_state_from_witness(&witness))
+            <[u8; 32]>::from(crate::exec_witness::roots::post_state_from_witness(
+                &witness
+            ))
         );
     }
     #[test]

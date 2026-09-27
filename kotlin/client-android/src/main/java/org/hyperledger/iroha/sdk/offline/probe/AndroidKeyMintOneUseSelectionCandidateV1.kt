@@ -18,6 +18,7 @@ import java.io.FileDescriptor
 import java.security.MessageDigest
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.KagemushaKeyMintRawSelectionEvidenceV1
 import org.hyperledger.iroha.sdk.crypto.keystore.attestation.preparedChallengeV1
+import org.hyperledger.iroha.sdk.crypto.keystore.attestation.requireKagemushaCoreSelectionFrameV1
 
 /**
  * Collects raw Android KeyMint evidence for one Core-selected transition in an ordinary app.
@@ -726,9 +727,9 @@ internal class SelectionCandidateRunnerV1(
         val before = secureIndexBeforeLittleEndian.copyOf()
         val after = secureIndexAfterLittleEndian.copyOf()
         val expectedKey = expectedCommittedPublicKey.copyOf()
-        requireCanonicalFrame(frame)
         require(lane.size == 32 && lane.any { it != 0.toByte() })
         require(exactNext(before, after)) { "secure index must be exact-next" }
+        requireKagemushaCoreSelectionFrameV1(frame, lane, before, after)
         require(expectedKey.size == 65 && expectedKey[0] == 0x04.toByte()) {
             "committed key must be uncompressed P-256 SEC1"
         }
@@ -857,20 +858,6 @@ internal class SelectionCandidateRunnerV1(
         hex(MessageDigest.getInstance("SHA-256").digest(lane + before))
 
     private fun alias(slot: String): String = "iroha_kagemusha_v1_$slot"
-
-    private fun requireCanonicalFrame(frame: ByteArray) {
-        val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000"
-            .toByteArray(Charsets.US_ASCII)
-        require(frame.size in (domain.size + 9)..1024)
-        require(frame.copyOfRange(0, domain.size).contentEquals(domain))
-        var bodyLength = 0L
-        for (index in 0 until 8) {
-            bodyLength = bodyLength or ((frame[domain.size + index].toLong() and 0xffL) shl (8 * index))
-        }
-        require(bodyLength > 0 && bodyLength == (frame.size - domain.size - 8).toLong()) {
-            "Core selection frame length mismatch"
-        }
-    }
 
     private fun exactNext(before: ByteArray, after: ByteArray): Boolean {
         if (before.size != 16 || after.size != 16) return false

@@ -8,22 +8,31 @@
 
 use std::sync::{Arc, OnceLock};
 
+use super::secret_polynomial::SecretPolynomial;
+use crate::digest384_batch::Digest384LastFieldJob;
 use fastpq_isi::{
     FASTPQ_CATALOG_V1, FASTPQ_FINAL_V1, GoldilocksDigest384OwnedDomainPrefixV1,
     GoldilocksDigest384OwnedDomainV1, GoldilocksDigest384V1 as Digest,
 };
 use norito::NoritoSerialize;
 
+#[cfg(test)]
 use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1};
 
+#[cfg(test)]
 pub(super) const IDENTITY: &[u8] =
     b"fastpq:compact:goldilocks-six-lane:h6:g-field-blocks:q375:c401:342cols:923slots:65536rows:8blowup:17folds:v1";
 const MAX_CONTEXT_BYTES: usize = 256 * 1024;
+#[cfg(test)]
 const LDE_ROWS: u32 = 524_288;
+#[cfg(test)]
 const QUERY_COUNT: usize = 375;
+#[cfg(test)]
 const QUERY_CANDIDATES: usize = 401;
 
+#[cfg(test)]
 const QUERY_TAPE_BYTES: usize = QUERY_CANDIDATES.div_ceil(6) * 48;
+#[cfg(test)]
 const H_OUTPUT_BYTES: usize = 48;
 // H includes 18 FRI rounds and all 21 transcript chain commitments. Row,
 // mixed and quotient nodes use round zero and retain their oracle in the body.
@@ -44,6 +53,7 @@ pub(super) enum CandidateError {
     Context,
     /// Round must be one of the fixed 22 verifier messages.
     #[error("candidate verifier round is outside 1..=22")]
+    #[cfg(test)]
     Round,
     /// Oracle, leaf or parent geometry is not the fixed candidate geometry.
     #[error("candidate tree geometry or canonical leaf payload is invalid")]
@@ -53,12 +63,15 @@ pub(super) enum CandidateError {
     TapeLength,
     /// A field-native tape contains a noncanonical base-field word.
     #[error("candidate tape contains a noncanonical field word")]
+    #[cfg(test)]
     TapeEncoding,
     /// A bounded tape did not contain enough accepted values.
     #[error("candidate fixed tape exhausted")]
+    #[cfg(test)]
     TapeExhausted,
     /// The operation does not follow the challenge/commit schedule.
     #[error("candidate transcript operation is out of sequence")]
+    #[cfg(test)]
     Phase,
     /// Canonical Norito framing failed.
     #[error("candidate Norito framing failed: {0}")]
@@ -69,8 +82,10 @@ type Result<T> = std::result::Result<T, CandidateError>;
 
 /// Validated ordinal of one complete verifier message.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct Round(u8);
 
+#[cfg(test)]
 impl Round {
     /// Validate the exact initial-dummy through final-query round range.
     pub(super) fn new(ordinal: u8) -> Result<Self> {
@@ -107,6 +122,7 @@ impl Round {
 
 /// Complete decoded verifier message; it never exposes mutable pending tape.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum Message {
     /// Initial empty IOP message from an ignored positive-length random tape.
     Dummy,
@@ -118,6 +134,7 @@ pub(super) enum Message {
 
 /// Oracle identity within this candidate's fixed commitment schedule.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) enum Oracle {
     /// Complete row of 342 canonical base-field coordinates.
     Row,
@@ -129,6 +146,7 @@ pub(super) enum Oracle {
     Fri(u8),
 }
 
+#[cfg(test)]
 impl Oracle {
     fn shape(self) -> Result<(u8, u8, u32, usize)> {
         match self {
@@ -155,8 +173,8 @@ pub(super) struct Context {
 // A closed internal profile selector preserves the single canonical framing owner.
 #[derive(Clone, Copy, Debug)]
 enum FramingProfile {
-    Current,
     #[cfg(test)]
+    Current,
     Deep,
 }
 
@@ -265,14 +283,56 @@ impl norito::NoritoSchema for Frame<'_> {
     }
 }
 
+/// Fixed maximum canonical body for the closed DEEP tree preparation path.
+pub(super) const MAX_PREPARED_HASH_FRAME_BYTES: usize = 8 * 1024;
+
+/// Exact canonical body held in one fixed allocation and erased on every exit.
+/// Prefix state contains only public domain metadata and the body length.
+pub(super) struct PreparedHashFrame {
+    cached: GoldilocksDigest384OwnedDomainPrefixV1,
+    index: u64,
+    encoded: SecretPolynomial<u8>,
+}
+
+impl PreparedHashFrame {
+    /// Preserve the optimized canonical cached CPU implementation.
+    pub(super) fn hash_cpu(&self) -> crate::Result<Digest> {
+        self.cached
+            .hash_at(self.index, &[&self.encoded])
+            .ok_or_else(|| crate::Error::InvalidTraceShape {
+                details: "prepared canonical hash failed".to_owned(),
+            })
+    }
+
+    /// Exact final field extent, shared by CPU and device admission.
+    pub(super) fn payload_len(&self) -> usize {
+        self.encoded.len()
+    }
+
+    /// Construct a device-only fresh typed handoff without copying its private body.
+    pub(super) fn job(&self) -> crate::Result<Digest384LastFieldJob<'_>> {
+        let prefix = self
+            .cached
+            .last_field_stream_at(self.index, &[], self.encoded.len())
+            .map_err(|error| crate::Error::InvalidTraceShape {
+                details: error.to_string(),
+            })?;
+        Digest384LastFieldJob::new(prefix, &self.encoded).map_err(|details| {
+            crate::Error::InvalidTraceShape {
+                details: details.to_owned(),
+            }
+        })
+    }
+}
+
 impl Context {
     /// Canonically frame and absorb one bounded immutable complete context.
+    #[cfg(test)]
     pub(super) fn new(bytes: &[u8]) -> Result<Self> {
         Self::with_profile(bytes, IDENTITY, FramingProfile::Current)
     }
 
     /// Construct only the fixed private DEEP profile, using the same frame owner.
-    #[cfg(test)]
     pub(super) fn new_deep(bytes: &[u8]) -> Result<Self> {
         Self::with_profile(bytes, super::deep_binding::IDENTITY, FramingProfile::Deep)
     }
@@ -297,6 +357,7 @@ impl Context {
 
     // Each logical hash still includes the complete profile-context frame.
     // Only the existing canonical prefix owner's immutable lane state is cached.
+    #[cfg(test)]
     fn cache_slot(role: &[u8], phase: &[u8], round: u8, level: u32) -> Result<usize> {
         if role == H_ROLE
             && phase == H_PHASE
@@ -323,8 +384,8 @@ impl Context {
         level: u32,
     ) -> Result<&GoldilocksDigest384OwnedDomainPrefixV1> {
         let slot = match self.profile {
-            FramingProfile::Current => Self::cache_slot(role, phase, round, level)?,
             #[cfg(test)]
+            FramingProfile::Current => Self::cache_slot(role, phase, round, level)?,
             FramingProfile::Deep => {
                 const LEVELS: usize = super::deep_geometry::LDE_ROWS.ilog2() as usize + 1;
                 const ROUNDS: usize = 10;
@@ -379,6 +440,7 @@ impl Context {
         Ok(digest)
     }
 
+    #[cfg(test)]
     fn expand(&self, round: Round, body: &[u8], output: &mut [u8]) -> Result<()> {
         if output.len() != round.tape_bytes() || output.len() % 48 != 0 {
             return Err(CandidateError::TapeLength);
@@ -387,7 +449,6 @@ impl Context {
     }
 
     /// Expand the complete tape of one fixed private DEEP message.
-    #[cfg(test)]
     pub(super) fn expand_deep(
         &self,
         round: super::deep_binding::Round,
@@ -430,6 +491,38 @@ impl Context {
         )
     }
 
+    /// Prepare the same canonical body and typed cached domain for bounded hashing.
+    pub(super) fn prepare_hash_frame(&self, frame: &Frame<'_>) -> crate::Result<PreparedHashFrame> {
+        let length = norito::canonical_frame_len(frame)?;
+        if length > MAX_PREPARED_HASH_FRAME_BYTES {
+            return Err(crate::Error::VerifierLimitExceeded {
+                limit: "max_deep_hash_frame_bytes",
+                actual: length,
+                max: MAX_PREPARED_HASH_FRAME_BYTES,
+            });
+        }
+        // A fixed slice writer cannot grow or leave private bytes in a retired
+        // allocation. Every partial write is owned by the erasure guard.
+        let mut encoded = SecretPolynomial::zeroed(length)?;
+        let mut destination = &mut encoded[..];
+        norito::core::write_canonical_to_writer(frame, &mut destination)?;
+        if !destination.is_empty() {
+            return Err(norito::core::Error::LengthMismatch.into());
+        }
+        let cached = self
+            .cached_prefix(H_ROLE, H_PHASE, frame.round, frame.level)
+            .map_err(|error| crate::Error::InvalidTraceShape {
+                details: error.to_string(),
+            })?
+            .clone();
+        let index = u64::from(frame.position);
+        Ok(PreparedHashFrame {
+            cached,
+            index,
+            encoded,
+        })
+    }
+
     /// Construct a body for a closed internal protocol owner.
     pub(super) fn frame<'a>(
         &self,
@@ -455,6 +548,7 @@ impl Context {
     }
 
     /// Hash a canonical complete leaf under its full context and exact position.
+    #[cfg(test)]
     pub(super) fn hash_leaf(&self, oracle: Oracle, index: u32, payload: &[u8]) -> Result<Digest> {
         let (role, round, leaves, bytes) = oracle.shape()?;
         if index >= leaves
@@ -477,6 +571,7 @@ impl Context {
     }
 
     /// Hash one valid parent; the sole terminal parent duplicates its child.
+    #[cfg(test)]
     pub(super) fn hash_parent(
         &self,
         oracle: Oracle,
@@ -505,6 +600,7 @@ impl Context {
         ))
     }
 
+    #[cfg(test)]
     fn challenge_frame<'a>(&self, round: Round, predecessor: &'a [u8; 48]) -> Frame<'a> {
         self.frame(
             4,
@@ -517,6 +613,7 @@ impl Context {
         )
     }
 
+    #[cfg(test)]
     fn chain_frame<'a>(
         &self,
         round: Round,
@@ -541,6 +638,7 @@ impl Context {
     }
 }
 
+#[cfg(test)]
 fn decode_message(round: Round, raw: &[u8]) -> Result<Message> {
     if raw.len() != round.tape_bytes() {
         return Err(CandidateError::TapeLength);
@@ -592,6 +690,7 @@ fn decode_message(round: Round, raw: &[u8]) -> Result<Message> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(test)]
 enum Phase {
     Ready(Round),
     Pending { round: Round, raw: Vec<u8> },
@@ -601,12 +700,14 @@ enum Phase {
 
 /// Fixed-anchor whole-message transcript; completion is not proof acceptance.
 #[derive(Clone, Debug)]
+#[cfg(test)]
 pub(super) struct Transcript {
     context: Context,
     predecessor: Digest,
     phase: Phase,
 }
 
+#[cfg(test)]
 impl Transcript {
     /// Start with the fixed zero anchor and the positive-tape dummy message.
     pub(super) fn new(context: Context) -> Self {
@@ -1411,6 +1512,43 @@ mod tests {
         assert!(matches!(
             context.chain_frame(Round(22), &vec![0; Round(22).tape_bytes()], &root),
             Err(CandidateError::Phase)
+        ));
+    }
+}
+
+#[cfg(test)]
+mod prepared_frame_tests {
+    use super::*;
+
+    #[test]
+    fn fixed_slice_body_encoding_matches_canonical_writer_and_rejects_oversized_frames() {
+        let context = Context::new_deep(b"prepared-frame canonical owner").unwrap();
+        for length in [0, 1, 7, 8, 96, 2_408, 4_096] {
+            let payload = vec![37; length];
+            let frame = context.frame(1, 1, 0, 0, 17, 48, BodyFields::One(&payload));
+            let expected = norito::encode_canonical(&frame).unwrap();
+            let prepared = context.prepare_hash_frame(&frame).unwrap();
+            assert_eq!(&*prepared.encoded, expected);
+            assert_eq!(prepared.payload_len(), expected.len());
+            assert_eq!(
+                prepared.hash_cpu().unwrap(),
+                context.hash_frame(&frame).unwrap()
+            );
+            let mut stream = *prepared.job().unwrap().prefix();
+            stream.update(&prepared.encoded).unwrap();
+            assert_eq!(
+                stream.finalize().unwrap(),
+                context.hash_frame(&frame).unwrap()
+            );
+        }
+        let oversized = vec![0; MAX_PREPARED_HASH_FRAME_BYTES];
+        let frame = context.frame(1, 1, 0, 0, 17, 48, BodyFields::One(&oversized));
+        assert!(matches!(
+            context.prepare_hash_frame(&frame),
+            Err(crate::Error::VerifierLimitExceeded {
+                limit: "max_deep_hash_frame_bytes",
+                ..
+            })
         ));
     }
 }

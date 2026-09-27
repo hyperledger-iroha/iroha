@@ -733,11 +733,11 @@ fn incoming_proxy_submit_fixture_with_validator_signers(
         }
         topology.commit();
         install_lane_manifest_registry_for_test(state, &[(LaneId::SINGLE, validator_bindings)]);
-        app.sumeragi = Some(queue_plan_capacity_handle_for_test(
+        app.sumeragi = queue_plan_capacity_handle_for_test(
             *app.state.network_id_ref(),
             iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
             validator_signers,
-        ));
+        );
     }
     let admission_intent = if admission == ToriiProxyTransactionAdmissionV1::QueuePlanSynced {
         iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
@@ -793,71 +793,12 @@ fn incoming_proxy_submit_fixture_with_validator_signers(
 }
 #[cfg(feature = "connect")]
 fn queue_plan_capacity_handle_for_test(
-    network_id: NetworkId,
-    layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
-    signers: &[KeyPair],
-) -> iroha_core::sumeragi::SumeragiHandle {
-    queue_plan_capacity_harness_for_test(network_id, layout, signers).handle()
-}
-#[cfg(feature = "connect")]
-fn queue_plan_capacity_harness_for_test(
-    network_id: NetworkId,
-    layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
-    signers: &[KeyPair],
-) -> iroha_core::sumeragi::SumeragiIngressTestHarness {
-    use iroha_data_model::{
-        block::consensus_v2 as wire,
-        isi::kagemusha_v1::{KAGEMUSHA_CHAIN_VERSION_V1, KagemushaMintFinalityAuthorityGenerationV1},
-    };
-    let mut signers = signers.iter().collect::<Vec<_>>();
-    signers.sort_by(|a, b| a.public_key().cmp(b.public_key()));
-    let roster = signers
-        .iter()
-        .map(|key| wire::ValidatorPower {
-            validator: PeerId::new(key.public_key().clone()),
-            power: 1,
-        })
-        .collect::<Vec<_>>();
-    let mint_roster = KagemushaMintFinalityAuthorityGenerationV1 {
-        version: KAGEMUSHA_CHAIN_VERSION_V1, network_id, generation: 0,
-        validators: roster.iter().enumerate().map(|(index, validator)| {
-            iroha_core::zk::kagemusha_v1_recursion::derive_kagemusha_mint_finality_validator_keys_v1(
-                &[index as u8 + 1; 32], 0, validator.validator.clone(),
-            ).unwrap()
-        }).collect(),
-    };
-    let context = wire::HeightContext {
-        network_id,
-        protocol_version: wire::PROTOCOL_VERSION,
-        height: 1,
-        epoch: 0,
-        epoch_end_height: 100,
-        next_epoch_snapshot: None,
-        mode: wire::ConsensusMode::Permissioned,
-        parent_commit_qc: None,
-        snapshot_bootstrap: None,
-        quorum: wire::DualQuorum::from_roster(&roster).unwrap(),
-        roster,
-        kagemusha_mint_finality_authorization: iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochAuthorizationV1::genesis(&mint_roster, 100).unwrap(),
-        kagemusha_mint_finality_authority: mint_roster,
-        nexus_amx_context_hash: Hash::new(b"Torii capacity fixture nexus"),
-        execution_policy_hash: Hash::new(b"Torii capacity fixture policy"),
-        da_layout: layout,
-        leader_seed: [9; 32],
-    };
-    let proofs = signers
-        .iter()
-        .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap())
-        .collect();
-    let ingress = iroha_core::sumeragi::SumeragiIngressTestHarness::new(4);
-    ingress
-        .authenticate_admission_capacity(
-            context,
-            proofs,
-            &iroha_config::parameters::actual::Sumeragi::default(),
-        )
-        .unwrap();
-    ingress
+    _network_id: NetworkId,
+    _layout: iroha_data_model::block::consensus_v2::DataAvailabilityLayout,
+    _signers: &[KeyPair],
+) -> Option<iroha_core::sumeragi::node::NodeHandle> {
+    // TODO(WP8a): QueuePlan capacity is no longer reserved by consensus.
+    None
 }
 #[cfg(feature = "connect")]
 fn single_route_queue_plan_authorities(
@@ -1191,6 +1132,7 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
     assert!(
         super::ingest_queue_plan_admission_publication(&app, &certificate_only)
             .expect_err("certificate-only bytes cannot publish recoverable input")
+            .to_string()
             .contains("complete lane admitted input cannot be decoded")
     );
     assert!(
@@ -1264,6 +1206,7 @@ fn queue_plan_admission_publication_validates_and_persists_idempotently() {
     assert!(
         super::ingest_queue_plan_admission_publication(&app, &unsupported)
             .expect_err("unsupported publication schema must fail")
+            .to_string()
             .contains("schema_version")
     );
 }
@@ -1383,7 +1326,7 @@ fn queue_plan_publication_ingest_requires_configured_certified_receiver() {
             .local_peer_id = receiver.clone();
         let error = super::ingest_queue_plan_admission_publication(&app, &publication)
             .expect_err("missing or uncertified publication receiver");
-        assert!(error.contains(if receiver.is_none() {
+        assert!(error.to_string().contains(if receiver.is_none() {
             "no configured peer identity"
         } else {
             "not in the certified coordinator roster"
@@ -1449,6 +1392,7 @@ fn queue_plan_admission_publication_retains_future_until_catch_up() {
     assert!(
         super::ingest_queue_plan_admission_publication(&app, &incomplete)
             .expect_err("one attestation must not authorize a four-validator publication")
+            .to_string()
             .contains("exact durability quorum")
     );
     assert_eq!(
@@ -3087,90 +3031,6 @@ async fn incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn incoming_queue_plan_capacity_unavailable_never_creates_a_journal_claim() {
-    for owner in 0..3 {
-        let (mut app, request) =
-            incoming_proxy_submit_fixture(0xb1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
-        let directory = tempfile::tempdir().unwrap();
-        let journal = directory.path().join("admission.norito");
-        app.queue
-            .install_plan_journal(&journal, 1024 * 1024, true)
-            .unwrap();
-        let before = std::fs::read(&journal).unwrap();
-        Arc::get_mut(&mut app).unwrap().sumeragi = match owner {
-            0 => None,
-            1 => Some(iroha_core::sumeragi::SumeragiIngressTestHarness::new(4).handle()),
-            _ => Some(iroha_core::sumeragi::SumeragiHandle::emergency_fast_disabled()),
-        };
-        let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
-        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
-        let body = axum::body::to_bytes(response.into_body(), 4096)
-            .await
-            .unwrap();
-        let envelope: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
-        assert_eq!(envelope.code(), "queue_plan_admission_capacity_unavailable");
-        assert_eq!(app.queue.active_len(), 0);
-        assert_eq!(std::fs::read(&journal).unwrap(), before);
-    }
-}
-#[cfg(feature = "connect")]
-#[tokio::test]
-async fn queue_plan_native_capacity_refuses_direct_and_ingress_promises_before_journal() {
-    use iroha_data_model::block::consensus_v2 as wire;
-    let seed = 0xb2_u8;
-    let signers = (0_u8..4)
-        .map(|offset| {
-            checked_torii_test_keypair_from_seed_byte(
-                seed.wrapping_add(offset),
-                Algorithm::BlsNormal,
-                "capacity refusal authority",
-            )
-        })
-        .collect::<Vec<_>>();
-    let (mut app, request) = incoming_proxy_submit_fixture_with_validator_signers(
-        seed,
-        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
-        &signers,
-    );
-    let ToriiProxyRequestKindV1::SubmitTransaction {
-        transaction,
-        admission_binding: Some(binding),
-        ..
-    } = &request.request
-    else {
-        panic!("complete fixture");
-    };
-    let sizes = iroha_core::torii_proxy::maximum_lane_admitted_input_envelope_sizes_v1(
-        transaction,
-        binding,
-    )
-    .unwrap();
-    assert!(sizes.complete_input_bytes < sizes.native_payload_bytes);
-    let mut layout = wire::recommended_data_availability_layout();
-    layout.max_payload_size_bytes = sizes.complete_input_bytes as u64;
-    let handle = queue_plan_capacity_handle_for_test(*app.state.network_id_ref(), layout, &signers);
-    Arc::get_mut(&mut app).unwrap().sumeragi = Some(handle);
-    let directory = tempfile::tempdir().unwrap();
-    let journal = directory.path().join("admission.norito");
-    app.queue
-        .install_plan_journal(&journal, 1024 * 1024, true)
-        .unwrap();
-    let before = std::fs::read(&journal).unwrap();
-    let direct = super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
-    assert_eq!(direct.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let routed = super::execute_torii_proxy_request_with_fallback_admitted(
-        &app,
-        RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
-        request.request.clone(),
-        None,
-    )
-    .await;
-    assert_eq!(routed.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(app.queue.active_len(), 0);
-    assert_eq!(std::fs::read(&journal).unwrap(), before);
-}
-#[cfg(feature = "connect")]
-#[tokio::test]
 async fn queue_plan_capacity_loss_after_quorum_remains_indeterminate() {
     let signers = (0_u8..4)
         .map(|offset| {
@@ -4305,6 +4165,78 @@ async fn queue_plan_synced_attempt_window_is_parallel_bounded_and_released_at_qu
 
 #[cfg(feature = "connect")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn peer_queue_plan_publication_waits_for_state_after_durable_block_write() {
+    let signers = (0_u8..4)
+        .map(|offset| {
+            checked_torii_test_keypair_from_seed_byte(
+                0xd4_u8.wrapping_add(offset),
+                Algorithm::BlsNormal,
+                "derive delayed peer publication validator key",
+            )
+        })
+        .collect::<Vec<_>>();
+    let (app, request) = incoming_proxy_submit_fixture_with_validator_signers(
+        0xd4,
+        ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        &signers,
+    );
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .unwrap()
+        .unwrap();
+    let receipts = signers
+        .iter()
+        .take(expected.durability_threshold)
+        .map(|signer| exact_queue_plan_synced_test_receipt(&request, signer, 40_006))
+        .collect();
+    let snapshot = queue_plan_synced_test_certificate_snapshot(&request, receipts);
+    let publication = QueuePlanAdmissionPublicationV1 {
+        schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+        certificate: queue_plan_synced_test_complete_input(&request, &snapshot.body),
+    };
+    let hash = Hash::new(&publication.certificate);
+    let expected_bytes = publication.certificate.clone();
+    let successor = make_empty_signed_block(1, None, 1_700_000_000_000);
+    let successor_header = successor.header().clone();
+    app.kura.store_block(Arc::new(successor)).unwrap();
+    let error = super::ingest_queue_plan_admission_publication(&app, &publication)
+        .expect_err("Kura's one-block lead must remain a typed publication overlap");
+    assert!(matches!(
+        error,
+        QueuePlanAdmissionPublicationIngestError::Persistence(ref source)
+            if super::queue_plan_publication_wait::publication_overlap_height(source) == Some(1)
+    ));
+    let sender = PeerId::from(signers[1].public_key().clone());
+    let work_app = app.clone();
+    let work = tokio::spawn(async move {
+        super::process_incoming_queue_plan_admission_publication(
+            &work_app,
+            &sender,
+            &publication,
+        )
+        .await;
+    });
+    // State publication is asynchronous and may legitimately take longer than
+    // the synchronous 250 ms reconciliation probe.
+    tokio::time::sleep(Duration::from_millis(750)).await;
+    assert!(!work.is_finished(), "peer publication must await State catch-up");
+    assert_eq!(
+        app.kura.pending_queue_plan_admission_certificate(hash).unwrap(),
+        None,
+    );
+    app.state
+        .append_committed_block_header_for_tests(successor_header);
+    tokio::time::timeout(Duration::from_secs(10), work)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        app.kura.pending_queue_plan_admission_certificate(hash).unwrap(),
+        Some(expected_bytes),
+    );
+}
+
+#[cfg(feature = "connect")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn strict_proxy_admission_retains_w_across_delayed_state_publication() {
     let signers = (0_u8..4)
         .map(|offset| {
@@ -4843,95 +4775,6 @@ async fn queue_plan_synced_other_rejections_do_not_rearm_partial_admission() {
     }
 }
 
-#[cfg(feature = "connect")]
-#[tokio::test]
-async fn oversized_complete_admission_is_rejected_before_dispatch_or_journal() {
-    let seed = 0x83;
-    let (app, mut request) =
-        incoming_proxy_submit_fixture(seed, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
-    let key = checked_torii_test_ed25519_keypair(seed, "derive oversized complete-input signer");
-    let ToriiProxyRequestKindV1::SubmitTransaction {
-        transaction,
-        expected_plan,
-        admission_binding: Some(binding),
-        ..
-    } = &mut request.request
-    else {
-        panic!("strict request")
-    };
-    let plan = expected_plan.clone().try_into_routing_plan().unwrap();
-    *transaction = TransactionEntrypoint::External(
-        TransactionBuilder::new(
-            *app.state.network_id_ref(),
-            AccountId::new(key.public_key().clone()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([Log::new(
-            Level::INFO,
-            "x".repeat(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES),
-        )])
-        .with_admission_intent(
-            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced,
-        )
-        .sign(key.private_key()),
-    );
-    *binding = iroha_core::torii_proxy::new_queue_plan_admission_binding(
-        app.state.network_id_ref(),
-        transaction,
-        &plan,
-        binding.admission_context.clone(),
-        binding.enqueue_timestamp_ms,
-    )
-    .unwrap();
-    request.request_id = binding.request_id;
-    let peer = binding.admission_context.route_incarnations[0].validator_set[0].clone();
-    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let observed = attempts.clone();
-    let response = super::execute_torii_proxy_request_across_candidates(
-        tokio::time::Instant::now(),
-        vec![ToriiProxyCandidate::P2p(peer)],
-        plan.coordinator_route(),
-        request.clone(),
-        usize::MAX,
-        Duration::ZERO,
-        move |_, _| {
-            observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            async {
-                Err::<ToriiProxyHttpResponseV1, _>(ToriiProxyAttemptError::before_dispatch(
-                    "unexpected dispatch".to_owned(),
-                ))
-            }
-        },
-        |_| async {},
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 0);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let error: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
-    assert_eq!(error.code(), "queue_plan_admission_input_too_large");
-
-    // The direct receiver cannot bypass preflight by avoiding the aggregator.
-    // A real journal is installed; neither a queued transaction nor a durable
-    // journal record is allowed to appear for this unpublishable input.
-    let journal_dir = tempfile::tempdir().unwrap();
-    let journal_path = journal_dir.path().join("queue_plan_journal.norito");
-    app.queue
-        .install_plan_journal(&journal_path, 8 * 1024 * 1024, true)
-        .unwrap();
-    let before = std::fs::read(&journal_path).unwrap();
-    let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
-    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let error: ErrorEnvelope = norito::decode_from_bytes(&body).unwrap();
-    assert_eq!(error.code(), "queue_plan_admission_input_too_large");
-    assert_eq!(app.queue.active_len(), 0);
-    assert_eq!(std::fs::read(&journal_path).unwrap(), before);
-}
 
 // Component fixture with real complete-input staging and exact-wire 3-of-4
 // finality. It does not execute a live network or qualify lane retirement.

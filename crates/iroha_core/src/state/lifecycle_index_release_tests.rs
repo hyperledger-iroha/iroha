@@ -115,7 +115,7 @@ fn ready(watches: &mut [(ReleaseFuture, DeferredRelease)], probe: &Arc<Probe>) {
 
 #[test]
 fn authenticated_relay_install_releases_cursor_and_relay_after_lifecycle() {
-    let _status = crate::sumeragi::status::lane_relay_test_guard();
+    let _status = crate::status::lane_relay_test_guard();
     let (state, _, validators) = lane_relay_manifest_test_state();
     configure_commit_topology_preserving_world_peers(&state, 1);
     let envelope = sample_lane_relay_envelope_for_state(&state, 1, LaneId::SINGLE, &validators);
@@ -238,7 +238,7 @@ fn compatible_manifest_refresh_defers_real_read_refusal_and_write_success() {
 
 #[test]
 fn lifecycle_transition_and_partial_manifest_unwind_defer_original_indexes() {
-    let _status = crate::sumeragi::status::lane_relay_test_guard();
+    let _status = crate::status::lane_relay_test_guard();
     for unwind in [false, true] {
         let state = Arc::new(blank_test_state());
         let probe = Probe::new(Arc::clone(&state));

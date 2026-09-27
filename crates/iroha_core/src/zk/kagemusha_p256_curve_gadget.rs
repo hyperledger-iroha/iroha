@@ -3,9 +3,9 @@
 //! The pinned `halo2-ecc` generic point checker and scalar multipliers assume
 //! `y² = x³ + b`. P-256 instead has `y² = x³ - 3x + b`; using those generic
 //! routines for App Attest or Android P-256 signatures is incorrect. These
-//! primitives, constrained ECDSA equation and exact-width App Attest hash/
-//! counter slice do not yet bind Core's subject body, enrolled credential,
-//! CBOR/DER extraction or recursive monetary authorization.
+//! primitives and the App Attest hash/counter slice are composed with staged
+//! subject, credential and original-CBOR/DER relations. The composed stage is
+//! not yet invoked by recursive monetary authorization.
 // TODO: Qualify the full 256-bit signature relation, supported Apple assertion
 // profiles, and governed credential fold before hardware proofs authorize money.
 
@@ -22,7 +22,7 @@ use halo2_ecc::{
     fields::{FieldChip as _, Selectable as _, fp::FpChip},
 };
 use halo2_proofs::halo2curves::{
-    CurveAffine as _, CurveAffineExt as _,
+    CurveAffine as _,
     ff::Field as _,
     ff::PrimeField,
     secp256r1::{Fp as P256Base, Fq as P256Scalar, Secp256r1Affine},
@@ -32,6 +32,11 @@ use super::pasta_sha256::{PastaSha256BitV1, PastaSha256ByteV1, PastaSha256JobsV1
 
 #[path = "app_attest_der_gadget.rs"]
 pub(crate) mod app_attest_der_gadget;
+
+/// Three 87-bit limbs cover P-256 products within halo2-ecc's Pasta carry
+/// bound. Three 86-bit limbs leave only a 510-bit bound for 512-bit products.
+pub(crate) const P256_LIMB_BITS: usize = 87;
+pub(crate) const P256_NUM_LIMBS: usize = 3;
 
 /// Constrain one reduced affine point to P-256, excluding the point at infinity.
 ///
@@ -43,16 +48,24 @@ pub(crate) fn assert_p256_affine_point<F: BigPrimeField>(
     ctx: &mut Context<F>,
     point: &EcPoint<F, ProperCrtUint<F>>,
 ) {
+    assert!(
+        chip.limb_bits * chip.num_limbs - 1 + F::NUM_BITS as usize - 2 >= 512,
+        "P-256 coordinate products exceed the nonnative carry bound"
+    );
     let _ = chip.enforce_less_than(ctx, point.x.clone());
     let _ = chip.enforce_less_than(ctx, point.y.clone());
-    let y2 = chip.mul_no_carry(ctx, &point.y, &point.y);
+    // Reduce each product before checking the curve equation. An unreduced
+    // square can exceed halo2-ecc's carry-check bound if the limbs are too narrow.
+    let y2 = chip.mul(ctx, &point.y, &point.y);
     let x2 = chip.mul(ctx, &point.x, &point.x);
-    let x3 = chip.mul_no_carry(ctx, x2, &point.x);
+    let x3 = chip.mul(ctx, x2, &point.x);
     let minus_three_x = chip.scalar_mul_no_carry(ctx, &point.x, -3);
     let x3_minus_three_x = chip.add_no_carry(ctx, x3, minus_three_x);
     let rhs = chip.add_constant_no_carry(ctx, x3_minus_three_x, Secp256r1Affine::b());
-    let difference = chip.sub_no_carry(ctx, y2, rhs);
-    chip.check_carry_mod_to_zero(ctx, difference);
+    let rhs = chip.carry_mod(ctx, rhs);
+    // Equality yields an unsatisfied proof for an off-curve witness. The
+    // library's zero carry checker debug-asserts on that expected input.
+    chip.assert_equal(ctx, y2, rhs);
     let y_is_zero = chip.is_zero(ctx, &point.y);
     chip.gate().assert_is_const(ctx, &y_is_zero, &F::ZERO);
 }
@@ -256,17 +269,25 @@ pub(crate) fn joint_multiply_p256_affine_bits<F: BigPrimeField, const N: usize>(
 
 /// Constrain a proper three-limb integer to its unique 256-bit representation.
 ///
-/// The last two bits of the 86-by-three limb layout must be zero. This works
+/// The top five bits of the 87-by-three limb layout must be zero. This works
 /// for canonical P-256 base coordinates and scalar residues alike.
 fn p256_uint_bits_le<F: BigPrimeField>(
     base_chip: &FpChip<'_, F, P256Base>,
     ctx: &mut Context<F>,
     value: &ProperCrtUint<F>,
 ) -> [AssignedValue<F>; 256] {
-    assert_eq!(value.limbs().len(), 3, "P-256 uses three 86-bit limbs");
-    let mut bits = Vec::with_capacity(258);
+    assert_eq!(
+        value.limbs().len(),
+        P256_NUM_LIMBS,
+        "P-256 uses three limbs"
+    );
+    let mut bits = Vec::with_capacity(base_chip.limb_bits * P256_NUM_LIMBS);
     for limb in value.limbs() {
-        bits.extend(base_chip.gate().num_to_bits(ctx, *limb, 86));
+        bits.extend(
+            base_chip
+                .gate()
+                .num_to_bits(ctx, *limb, base_chip.limb_bits),
+        );
     }
     for bit in &bits[256..] {
         base_chip.gate().assert_is_const(ctx, bit, &F::ZERO);
@@ -364,13 +385,15 @@ fn assert_p256_low_s<F: BigPrimeField>(
     s: &ProperCrtUint<F>,
 ) {
     let cutoff = (modulus::<P256Scalar>() >> 1usize) + 1u32;
-    let cutoff = FixedOverflowInteger::from_native(&cutoff, 3, 86).assign(ctx);
+    let cutoff =
+        FixedOverflowInteger::from_native(&cutoff, scalar_chip.num_limbs, scalar_chip.limb_bits)
+            .assign(ctx);
     let low_s = big_less_than::assign(
         scalar_chip.range(),
         ctx,
         s.clone(),
         cutoff,
-        86,
+        scalar_chip.limb_bits,
         scalar_chip.limb_bases[1],
     );
     scalar_chip.gate().assert_is_const(ctx, &low_s, &F::ONE);
@@ -422,7 +445,8 @@ pub(crate) fn assert_p256_ecdsa_digest<
         enrolled_public_key.y.clone(),
     );
 
-    let scalar_chip = FpChip::<F, P256Scalar>::new(base_chip.range(), 86, 3);
+    let scalar_chip =
+        FpChip::<F, P256Scalar>::new(base_chip.range(), base_chip.limb_bits, base_chip.num_limbs);
     let _ = scalar_chip.enforce_less_than(ctx, r.clone());
     let _ = scalar_chip.enforce_less_than(ctx, s.clone());
     let r_valid = scalar_chip.is_soft_nonzero(ctx, r.clone());
@@ -623,10 +647,6 @@ where
 /// hash/key to the enrolled Apple credential, and the two indices to the
 /// recursive transition. The SHA jobs must be realized with
 /// [`PastaSha256JobsV1::synthesize`] after Base synthesis.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "staged monetary assertion fold remains closed")
-)]
 pub(crate) fn assert_apple_assertion_ecdsa<
     F,
     const S_LEN: usize,
@@ -684,7 +704,6 @@ where
 mod tests {
     use super::*;
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
-    use halo2_base::utils::CurveAffineExt as _;
     use halo2_ecc::bigint::FixedCRTInteger;
     use halo2_proofs::{
         dev::MockProver,
@@ -702,7 +721,7 @@ mod tests {
             .use_lookup_bits(9)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let order = modulus::<P256Scalar>();
         let value = if above_order {
             &order + 1_u32
@@ -710,7 +729,11 @@ mod tests {
             &order - 1_u32
         };
         let ctx = builder.main(0);
-        let assigned = FixedCRTInteger::from_native(value, 3, 86).assign(ctx, 86, &modulus::<F>());
+        let assigned = FixedCRTInteger::from_native(value, P256_NUM_LIMBS, P256_LIMB_BITS).assign(
+            ctx,
+            P256_LIMB_BITS,
+            &modulus::<F>(),
+        );
         let _ = chip.enforce_less_than(ctx, assigned);
         builder.assigned_instances = vec![Vec::new()];
         builder.calculate_params(Some(9));
@@ -734,7 +757,7 @@ mod tests {
             .use_lookup_bits((TEST_K - 1) as usize)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let generator = Secp256r1Affine::generator();
         let (x, y) = generator.into_coordinates();
         let y = if alter_y {
@@ -767,6 +790,23 @@ mod tests {
     fn generator_and_double_match_p256_in_both_pasta_fields() {
         assert!(check_point_and_double::<Fp>(false, true));
         assert!(check_point_and_double::<Fq>(false, true));
+    }
+
+    #[test]
+    #[should_panic(expected = "P-256 coordinate products exceed the nonnative carry bound")]
+    fn p256_point_checker_rejects_insufficient_carry_geometry() {
+        let mut builder = BaseCircuitBuilder::<Fp>::new(false)
+            .use_k(TEST_K as usize)
+            .use_lookup_bits((TEST_K - 1) as usize);
+        let range = builder.range_chip();
+        let undersized_chip = FpChip::<Fp, P256Base>::new(&range, 86, P256_NUM_LIMBS);
+        let (x, y) = Secp256r1Affine::generator().into_coordinates();
+        let ctx = builder.main(0);
+        let point = EcPoint::new(
+            undersized_chip.load_private(ctx, x),
+            undersized_chip.load_private(ctx, y),
+        );
+        assert_p256_affine_point(&undersized_chip, ctx, &point);
     }
 
     #[test]
@@ -807,7 +847,7 @@ mod tests {
             .use_lookup_bits((TEST_K - 1) as usize)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let generator = Secp256r1Affine::generator();
         let mut sec1 = uncompressed_sec1(generator);
         if mutation != 0 {
@@ -851,7 +891,7 @@ mod tests {
             .use_lookup_bits((TEST_K - 1) as usize)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let ctx = builder.main(0);
         let left = load_affine(&chip, ctx, left);
         let right = if corrupt_right {
@@ -907,7 +947,7 @@ mod tests {
             .use_lookup_bits(17)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let generator = Secp256r1Affine::generator();
         let right_host = if inverse_right {
             (-generator.to_curve()).to_affine()
@@ -984,8 +1024,8 @@ mod tests {
             .use_lookup_bits(17)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
-        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let base_chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let ctx = builder.main(0);
         let generator = Secp256r1Affine::generator();
         let two = (generator.to_curve() + generator.to_curve()).to_affine();
@@ -1043,8 +1083,8 @@ mod tests {
                 .use_lookup_bits((TEST_K - 1) as usize)
                 .use_instance_columns(1);
             let range = builder.range_chip();
-            let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
-            let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+            let base_chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+            let scalar_chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
             let ctx = builder.main(0);
             let generator = Secp256r1Affine::generator();
             let two = (generator.to_curve() + generator.to_curve()).to_affine();
@@ -1113,7 +1153,7 @@ mod tests {
             .use_lookup_bits((TEST_K - 1) as usize)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let ctx = builder.main(0);
         let s = scalar_chip.load_private(ctx, s_value);
         assert_p256_low_s(&scalar_chip, ctx, &s);
@@ -1143,8 +1183,8 @@ mod tests {
             .use_lookup_bits((TEST_K - 1) as usize)
             .use_instance_columns(1);
         let range = builder.range_chip();
-        let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
-        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let base_chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let ctx = builder.main(0);
         // (2^256 - 1) - n, encoded as a canonical little-endian scalar.
         let remainder_be = [
@@ -1190,7 +1230,6 @@ mod apple_assertion_tests {
         circuit::{Layouter, V1},
         dev::MockProver,
         halo2curves::{
-            ff::{Field as _, PrimeField as _},
             group::{Curve as _, prime::PrimeCurveAffine as _},
             pasta::{Fp, Fq},
         },
@@ -1335,7 +1374,7 @@ mod apple_assertion_tests {
             .use_k(TEST_K as usize)
             .use_lookup_bits((TEST_K - 1) as usize);
         let range = builder.range_chip();
-        let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
+        let base_chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let mut jobs = PastaSha256JobsV1::default();
         let ctx = builder.main(0);
         let canonical_s: [AssignedValue<F>; S_LEN] =
@@ -1473,8 +1512,8 @@ mod apple_assertion_tests {
             .use_k(TEST_K as usize)
             .use_lookup_bits((TEST_K - 1) as usize);
         let range = builder.range_chip();
-        let base_chip = FpChip::<F, P256Base>::new(&range, 86, 3);
-        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, 86, 3);
+        let base_chip = FpChip::<F, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
+        let scalar_chip = FpChip::<F, P256Scalar>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let mut jobs = PastaSha256JobsV1::default();
         let ctx = builder.main(0);
         let signed_s: [AssignedValue<F>; S_LEN] =
@@ -1557,7 +1596,7 @@ mod apple_assertion_tests {
             .use_k(TEST_K as usize)
             .use_lookup_bits((TEST_K - 1) as usize);
         let range = builder.range_chip();
-        let base_chip = FpChip::<Fp, P256Base>::new(&range, 86, 3);
+        let base_chip = FpChip::<Fp, P256Base>::new(&range, P256_LIMB_BITS, P256_NUM_LIMBS);
         let ctx = builder.main(0);
         let mut s = DOMAIN.to_vec();
         s.extend_from_slice(&0_u64.to_le_bytes());

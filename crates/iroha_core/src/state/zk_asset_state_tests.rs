@@ -339,6 +339,8 @@ fn persisted_tree_profile_roundtrips_and_is_required() {
         ("mode", norito::json::Value::String("Hybrid".to_owned())),
         ("allow_shield", norito::json::Value::Bool(true)),
         ("allow_unshield", norito::json::Value::Bool(true)),
+        ("vk_shield", norito::json::Value::Null),
+        ("vk_shield_commitment", norito::json::Value::Null),
     ] {
         assert!(
             !current_json

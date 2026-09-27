@@ -74,7 +74,7 @@ enum CurrentCarrierSourceClass {
 struct AwaitingNativeSource {
     class: CurrentCarrierSourceClass,
     context: VerifiedHeightContext,
-    proposal: SignedBlock,
+    proposal_hash: iroha_crypto::Hash,
     recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>,
     pending: Option<PendingNativeSource>,
     source_admission: Option<NativeExecutionResourceAdmission>,
@@ -119,7 +119,9 @@ impl RetainedValidationOwner for NativeValidationCandidate {
             .expect("original Native validation phase")
         {
             NativeValidationPhase::AwaitingSource(source) => {
-                source.context.context() == context && source.proposal == *body
+                // The retaining service compares the complete signed body before
+                // retrying this phase, so no second deep hash/encode is needed.
+                source.context.context() == context
             }
             NativeValidationPhase::Stopped {
                 context_id,
@@ -140,6 +142,16 @@ impl RetainedValidationOwner for NativeValidationCandidate {
                         == body.canonical_proposal_wire_hash().ok()
             }
         }
+    }
+
+    fn needs_decoded_body(&self) -> bool {
+        matches!(
+            self.phase
+                .as_ref()
+                .as_ref()
+                .expect("original Native validation phase"),
+            NativeValidationPhase::AwaitingSource(_)
+        )
     }
 
     fn ready_commitment(&self) -> Option<wire::ExecutionCommitment> {
@@ -426,9 +438,8 @@ impl V2ApplyService {
 }
 
 impl OwnedNativeCarrierValidator {
-    /// A lifecycle certificate is the sole external control allowed to execute
-    /// directly at its quorum-certified next global height. Reauthenticate it
-    /// here: a Torii admission decision is never voting authority for peers.
+    /// A lifecycle certificate is a special exact-height direct input.
+    /// Reauthenticate it here: a Torii decision is never voting authority.
     fn authenticate_lifecycle_control(&self, body: &SignedBlock) -> Result<(), V2ApplyError> {
         let invalid = |reason: &str| V2ApplyError::Validation(reason.to_owned());
         let [entrypoint] = body.external_entrypoints_slice() else {
@@ -535,6 +546,56 @@ impl OwnedNativeCarrierValidator {
         Ok(())
     }
 
+    /// A peer validates the leader's signed ordinary input and route from the
+    /// proposal itself; its local queue may contain a different async snapshot.
+    fn authenticate_direct_external(&self, body: &SignedBlock) -> Result<(), V2ApplyError> {
+        let bundle = body.execution_context().ok_or_else(|| {
+            V2ApplyError::Validation("direct external carrier lacks execution context".into())
+        })?;
+        if bundle.external.len() != body.external_entrypoint_count() {
+            return Err(V2ApplyError::Validation(
+                "direct external route count differs from its inputs".into(),
+            ));
+        }
+        let mut lifecycle = false;
+        for (entrypoint, context) in body
+            .external_entrypoints_slice()
+            .iter()
+            .zip(&bundle.external)
+        {
+            let TransactionEntrypoint::External(signed) = entrypoint else {
+                return Err(V2ApplyError::Validation(
+                    "direct external input must be a signed transaction".into(),
+                ));
+            };
+            if signed.admission_intent() != TransactionAdmissionIntent::Ordinary
+                || context.entrypoint_hash != entrypoint.hash()
+                || context.native_amx_receipt.is_some()
+                || !matches!(
+                    crate::queue::routing_plan_from_execution_context(context),
+                    Ok(crate::queue::RoutingPlan::Single(_))
+                )
+            {
+                return Err(V2ApplyError::Validation(
+                    "direct external input must bind one ordinary route".into(),
+                ));
+            }
+            lifecycle |= signed
+                .instructions()
+                .explicit_instructions()
+                .any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+                        .is_some()
+                });
+        }
+        if lifecycle {
+            self.authenticate_lifecycle_control(body)?;
+        }
+        Ok(())
+    }
+
     // These are disjoint first-release producers. Failed Native authentication
     // never enters the genesis/control producer or a second execution attempt.
     fn classify_source(
@@ -574,7 +635,7 @@ impl OwnedNativeCarrierValidator {
                         .into(),
                 ));
             }
-            self.authenticate_lifecycle_control(body)?;
+            self.authenticate_direct_external(body)?;
             return Ok(CurrentCarrierSourceClass::Control);
         }
         Ok(if native {
@@ -587,6 +648,7 @@ impl OwnedNativeCarrierValidator {
     fn execute_source(
         &self,
         mut waiting: AwaitingNativeSource,
+        proposal: &SignedBlock,
     ) -> Result<NativeValidationPhase, V2ApplyError> {
         if matches!(
             waiting.class,
@@ -604,7 +666,7 @@ impl OwnedNativeCarrierValidator {
                 .into());
             }
             let prepared = self.service.prepare_current_control_source_admitted(
-                &waiting.proposal,
+                proposal,
                 &waiting.context,
                 waiting
                     .shell_admission
@@ -617,8 +679,7 @@ impl OwnedNativeCarrierValidator {
         // executes its scratch candidate. That consumed source releases its charge;
         // retry the same retained proposal with a fresh finite admission.
         if waiting.source_pending.is_none() && waiting.source_admission.is_none() {
-            let group_count = waiting
-                .proposal
+            let group_count = proposal
                 .execution_context()
                 .and_then(|context| context.native_lane_decisions.as_deref())
                 .expect("Native source retains its decision batch")
@@ -650,7 +711,7 @@ impl OwnedNativeCarrierValidator {
             self.service
                 .state
                 .prepare_proposed_native_lane_batch_source(
-                    waiting.proposal.clone(),
+                    proposal.clone(),
                     &waiting.recovered,
                     waiting
                         .source_admission
@@ -700,7 +761,7 @@ impl OwnedNativeCarrierValidator {
             }
         };
         let prepared = self.service.prepare_native_source_admitted(
-            &waiting.proposal,
+            proposal,
             source,
             waiting.context.clone(),
             &mut waiting.shell_admission,
@@ -849,17 +910,20 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
         let proposal_hash = body
             .canonical_proposal_wire_hash()
             .map_err(|error| V2ApplyError::CanonicalBlock(error.to_string()))?;
-        let result = self.execute_source(AwaitingNativeSource {
-            class,
-            context: self.context.clone(),
-            proposal: body.clone(),
-            recovered: Vec::new(),
-            pending: None,
-            source_admission,
-            source_pending: None,
-            retry_refusal: None,
-            shell_admission: Some(shell_admission),
-        });
+        let result = self.execute_source(
+            AwaitingNativeSource {
+                class,
+                context: self.context.clone(),
+                proposal_hash,
+                recovered: Vec::new(),
+                pending: None,
+                source_admission,
+                source_pending: None,
+                retry_refusal: None,
+                shell_admission: Some(shell_admission),
+            },
+            body,
+        );
         let phase = match result {
             Ok(phase) => phase,
             // Before execution, original archive or shell occupancy can retry normally.
@@ -900,6 +964,7 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
     fn resume(
         &mut self,
         mut owner: Self::Owner,
+        proposal: &SignedBlock,
     ) -> Result<Self::Owner, (Self::Owner, LocalValidationRefusal)> {
         let phase = owner
             .phase
@@ -918,15 +983,8 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 }
                 // All completed original responses stay attached before the one execution.
                 let context_id = waiting.context.context().id();
-                let proposal_hash = match waiting.proposal.canonical_proposal_wire_hash() {
-                    Ok(hash) => hash,
-                    Err(error) => {
-                        let refusal = LocalValidationRefusal::RecoveryRequired(error.to_string());
-                        *owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));
-                        return Err((owner, refusal));
-                    }
-                };
-                match self.execute_source(waiting) {
+                let proposal_hash = waiting.proposal_hash;
+                match self.execute_source(waiting, proposal) {
                     Ok(NativeValidationPhase::AwaitingSource(waiting))
                         if waiting.pending.is_none() =>
                     {

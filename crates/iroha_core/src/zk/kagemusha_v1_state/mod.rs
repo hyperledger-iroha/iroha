@@ -48,6 +48,10 @@ mod one_use_key_ratchet;
 mod outgoing_operation_index;
 #[cfg(unix)]
 mod private_journal;
+#[cfg(all(test, unix))]
+pub(crate) use private_journal::TestPersistenceFailure;
+#[cfg(unix)]
+pub(crate) use private_journal::{PrivateJournal, PrivateJournalError, PrivateJournalFormat};
 mod receive_fold;
 mod receive_fold_operation;
 mod recovery_metadata;
@@ -60,6 +64,11 @@ pub use recovery_metadata::{
     KagemushaRecoveryJournalPrefixV1, KagemushaRecoveryJournalsV1, KagemushaRecoveryMetadataV1,
 };
 mod sparse_merkle;
+mod state_proof_archive_export;
+pub use state_proof_archive_export::{
+    KAGEMUSHA_OUTGOING_STATE_PUBLIC_INPUT_ARCHIVE_MAX_BYTES_V1,
+    KagemushaOutgoingStateProofArchivePairV1,
+};
 
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use candidate_lifecycle::terminal_journal_canonical_layout_v1;
@@ -87,6 +96,9 @@ pub(crate) use mint_fold_private_inputs::{
     KagemushaMintFoldOpeningWitnessV1, KagemushaMintFoldPrivateInputsV1,
 };
 pub use mint_inbox::*;
+pub(crate) use mint_inbox::{
+    KagemushaTestnetVerifiedMintProofsV1, verify_applied_top_up_mint_stage_experimental_v1,
+};
 pub use mint_inbox_operations::{
     KagemushaPendingCreditWatermarkV1, MintCreditStageOutcomeV1, PendingCreditFoldV1,
 };
@@ -135,7 +147,7 @@ use iroha_data_model::{
         KagemushaEncryptedCreditEnvelopeV1, KagemushaLifecycleBindingV1, KagemushaMintCreditV1,
         KagemushaOperationKindV1, KagemushaPairedProofV1, KagemushaPastaStateCommitmentV1,
         KagemushaPaymentOutputV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
-        KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1,
+        KagemushaRedemptionProofV1, KagemushaRedemptionStatementV1, KagemushaReleasePurposeV1,
         kagemusha_asset_identity_digest_v1, kagemusha_ciphertext_digest_v1,
         kagemusha_device_key_reference_v1, kagemusha_liability_pool_id_v1,
         kagemusha_pasta_state_commitment_v1, kagemusha_peer_credit_opening_commitment_v1,
@@ -390,6 +402,7 @@ pub type DigestV1 = [u8; 32];
 pub struct KagemushaStateProofReleaseV1 {
     artifacts: KagemushaRecursionArtifactsV1,
     enabled_profiles: Arc<[KagemushaEnabledProfileV1]>,
+    purpose: KagemushaReleasePurposeV1,
 }
 
 impl KagemushaStateProofReleaseV1 {
@@ -410,6 +423,7 @@ impl KagemushaStateProofReleaseV1 {
                 canonical_empty_effect_digest,
             ),
             Arc::from(release.enabled_profiles()),
+            release.purpose(),
         )
     }
 
@@ -417,6 +431,12 @@ impl KagemushaStateProofReleaseV1 {
     #[must_use]
     pub const fn release_id(&self) -> DigestV1 {
         self.artifacts.release_id
+    }
+
+    /// Return the purpose authenticated by the signed release manifest.
+    #[must_use]
+    pub const fn purpose(&self) -> KagemushaReleasePurposeV1 {
+        self.purpose
     }
 
     /// Return the release-fixed digest representing an empty durable transition effect.
@@ -430,12 +450,17 @@ impl KagemushaStateProofReleaseV1 {
         artifacts: KagemushaRecursionArtifactsV1,
         enabled_profiles: Vec<KagemushaEnabledProfileV1>,
     ) -> Result<Self, KagemushaStateErrorV1> {
-        Self::from_release_parts(artifacts, enabled_profiles.into())
+        Self::from_release_parts(
+            artifacts,
+            enabled_profiles.into(),
+            KagemushaReleasePurposeV1::Production,
+        )
     }
 
     fn from_release_parts(
         artifacts: KagemushaRecursionArtifactsV1,
         enabled_profiles: Arc<[KagemushaEnabledProfileV1]>,
+        purpose: KagemushaReleasePurposeV1,
     ) -> Result<Self, KagemushaStateErrorV1> {
         // A state-proof release installs one paired recursive artifact package. Allowing an
         // enabled profile to name another suite or verifier would create apparently valid
@@ -454,6 +479,7 @@ impl KagemushaStateProofReleaseV1 {
         Ok(Self {
             artifacts,
             enabled_profiles,
+            purpose,
         })
     }
 
@@ -468,7 +494,9 @@ impl KagemushaStateProofReleaseV1 {
         &self,
         context: KagemushaStateContextV1,
     ) -> Result<(), KagemushaStateErrorV1> {
-        if context.release_id != self.release_id() {
+        if self.purpose != KagemushaReleasePurposeV1::Production
+            || context.release_id != self.release_id()
+        {
             return Err(KagemushaStateErrorV1::InvalidReleaseOrLiabilityPool);
         }
         let enabled = self
@@ -2644,6 +2672,77 @@ where
         Ok(preview)
     }
 
+    /// Reconstruct the exact Core redemption preview for the genuine-proof diagnostic corridor.
+    ///
+    /// This test-only projection checks the complete prepared candidate before exposing the
+    /// normalized Guard statement needed by the proof builder. It cannot refresh commit time.
+    #[cfg(all(test, feature = "zk-halo2-ipa"))]
+    pub(crate) fn diagnostic_redeem_split_preview(
+        &self,
+        candidate: &PreparedOutgoingCandidateV1,
+        trusted_commit_time_ms: u64,
+    ) -> Result<TransitionPreviewV1, KagemushaStateErrorV1> {
+        let PreparedOutgoingRecoveryViewV1::Redemption { statement, .. } =
+            candidate.recovery_view()
+        else {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        };
+        if candidate.predecessor_state != self.state || trusted_commit_time_ms == 0 {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let rebuilt = self.prepare_redeem_split(RedeemSplitPreparationV1 {
+            amount: statement.amount,
+            beneficiary: statement.beneficiary.clone(),
+            terminal_nullifier: statement.terminal_nullifier,
+            redemption_commitment: statement.redemption_commitment,
+            successor_state_nonce_commitment: candidate.successor_state.state_nonce_commitment,
+            commit_evidence: statement.commit_evidence,
+            commit_authorization_reference_ms: trusted_commit_time_ms,
+            outbox_reservation: candidate.outbox_reservation,
+            prepared_one_use_authorization_digest: candidate.prepared_one_use_authorization_digest,
+            sealed_transition_inputs: candidate.sealed_transition_inputs.clone(),
+            sealed_recovery_seeds: candidate.sealed_recovery_seeds.clone(),
+        })?;
+        if rebuilt != *candidate {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        let statement = &rebuilt.proof_statement;
+        let preview = self.transition_preview(
+            KagemushaTransitionKindV1::RedeemSplit,
+            rebuilt.successor_state.clone(),
+            statement.effect_digest,
+            [0; 32],
+            [0; 32],
+            [0; 32],
+            [0; 32],
+            TransitionAuxiliaryBindingsV1 {
+                lifecycle_binding_digest: statement.lifecycle_binding_digest,
+                prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
+                ..TransitionAuxiliaryBindingsV1::default()
+            },
+            trusted_commit_time_ms,
+            |normalized_digest| {
+                local_transition_transport_digest(
+                    KagemushaTransitionKindV1::RedeemSplit,
+                    self.state.release_id,
+                    self.state.liability_pool_id,
+                    statement.prepared_transition_binding_digest,
+                    self.state.state_commitment,
+                    rebuilt.successor_state.state_commitment,
+                    normalized_digest,
+                )
+            },
+        )?;
+        if preview.proof_statement != *statement
+            || preview.hardware_statement.state_transition_digest != rebuilt.state_transition_digest
+            || preview.hardware_statement.normalized_guard_statement_digest
+                != rebuilt.normalized_guard_statement_digest
+        {
+            return Err(KagemushaStateErrorV1::InvalidCandidateStage);
+        }
+        Ok(preview)
+    }
+
     /// Derive one complete, recoverable full or partial `RedeemSplit` intent.
     ///
     /// Core derives the private aggregate successor, terminal lifecycle, redemption ID, proof
@@ -2890,16 +2989,19 @@ where
         &mut self,
         candidate: PersistedOutgoingCandidateV1,
     ) -> Result<PersistedOutgoingCandidateV1, KagemushaStateErrorV1> {
+        let mut next_outbox = self.sender_outbox_capacity.clone();
         let mut next_journal = self.outgoing_candidate_journal.clone();
         next_journal.persist_candidate(candidate.clone())?;
+        next_outbox.reconcile_capacity_meters(&next_journal)?;
         next_journal.validate_recovered(
             &self.state,
             self.journal_revision,
-            &self.sender_outbox_capacity,
+            &next_outbox,
             &self.proof_release,
             self.proof_release.artifacts,
             &self.recursive_verifier,
         )?;
+        self.sender_outbox_capacity = next_outbox;
         self.outgoing_candidate_journal = next_journal;
         Ok(candidate)
     }
@@ -2933,10 +3035,23 @@ where
         {
             return Err(KagemushaStateErrorV1::InvalidCandidateStage);
         }
+        let mut next_outbox = self.sender_outbox_capacity.clone();
         let mut next_journal = self.outgoing_candidate_journal.clone();
         next_journal.commit(committed.clone())?;
-        self.state = prepared.private_state_link().1.clone();
-        self.journal_revision = prepared.proof_statement.journal_revision_after;
+        next_outbox.reconcile_capacity_meters(&next_journal)?;
+        let next_state = prepared.private_state_link().1.clone();
+        let next_revision = prepared.proof_statement.journal_revision_after;
+        next_journal.validate_recovered(
+            &next_state,
+            next_revision,
+            &next_outbox,
+            &self.proof_release,
+            self.proof_release.artifacts,
+            &self.recursive_verifier,
+        )?;
+        self.state = next_state;
+        self.journal_revision = next_revision;
+        self.sender_outbox_capacity = next_outbox;
         self.outgoing_candidate_journal = next_journal;
         Ok(committed)
     }

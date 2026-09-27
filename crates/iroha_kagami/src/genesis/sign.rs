@@ -1172,7 +1172,10 @@ fn staged_genesis_with_projection_on_bounded_stack<T>(
             })
             .collect::<Vec<_>>();
         if transaction_errors.is_empty() {
-            eyre!("staged genesis execution failed: {error}")
+            eyre!(
+                "staged genesis execution failed: {error} ({} network inputs)",
+                block.network_entrypoint_count()
+            )
         } else {
             eyre!(
                 "staged genesis execution failed: {error}; {}",
@@ -2755,7 +2758,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             )
             .collect::<BTreeSet<_>>();
         let mut builder = manifest.into_builder().next_transaction();
-        let domain = DomainId::parse_fully_qualified(crate::genesis::PUBLIC_XOR_DOMAIN).unwrap();
+        let domain =
+            DomainId::parse_fully_qualified(crate::genesis::profile::PUBLIC_XOR_DOMAIN).unwrap();
         if registrations.domains.insert(domain.clone()) {
             builder = builder.append_instruction(Register::domain(Domain::new(domain)));
         }
@@ -3919,6 +3923,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let _chain_discriminant = staged_genesis_chain_discriminant(&manifest);
         let expected_escrow = configured_npos_bootstrap_escrow_account_id(&manifest, None)
             .expect("resolve default staking escrow");
+        let expected_stake_asset = configured_npos_bootstrap_stake_asset_id(&manifest, None)
+            .expect("resolve genesis-pinned staking asset");
         let genesis_key_pair = test_genesis_key_pair();
         let private_key_file = test_private_key_file_for(&genesis_key_pair);
         let public_key_derived_orphan = AccountId::new(
@@ -3971,13 +3977,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                             register.monetary_plan,
                             PublicLaneMonetaryPlanV1::genesis_registration(
                                 AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
+                                    expected_stake_asset.clone(),
                                     register.validator.clone(),
                                 ),
-                                AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
-                                    expected_escrow.clone(),
-                                ),
+                                AssetId::new(expected_stake_asset.clone(), expected_escrow.clone(),),
                                 register.initial_stake.clone(),
                             ),
                             "signed bootstrap must bind its configured stake custody",
@@ -3987,13 +3990,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                             register.monetary_plan,
                             PublicLaneMonetaryPlanV1::genesis_registration(
                                 AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
+                                    expected_stake_asset.clone(),
                                     register.stake_account.clone(),
                                 ),
-                                AssetId::new(
-                                    default_npos_bootstrap_stake_asset_id(),
-                                    expected_escrow.clone(),
-                                ),
+                                AssetId::new(expected_stake_asset.clone(), expected_escrow.clone(),),
                                 register.initial_stake.clone(),
                             ),
                             "bootstrap consent must bind the configured custody transfer",

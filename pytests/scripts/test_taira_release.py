@@ -81,7 +81,7 @@ class TairaPrepareTests(unittest.TestCase):
             path.chmod(0o755)
 
     def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88,
-                isolate=None, native_paths=None):
+                isolate=None, native_paths=None, package_names=None):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -97,7 +97,7 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "isolated_cargo_environment", side_effect=isolate or (lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), []))), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release, "captured_gate", return_value=development_gate), \
-             patch.object(release, "local_package_names", return_value=set()), \
+             patch.object(release, "local_package_names", side_effect=package_names or (lambda *_: set())), \
              patch.object(release, "admit_source_fingerprints", side_effect=cache_admission or (lambda *_a, **_k: [])), \
              patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
              patch.object(development_gate, "run_checks", side_effect=check) as gate, \
@@ -108,14 +108,27 @@ class TairaPrepareTests(unittest.TestCase):
             result = release.prepare(self.args)
         return result, gate, compile
 
+    def test_offline_package_failure_precedes_attempt_native_gate_and_build(self):
+        def must_not_run(*_args, **_kwargs):
+            self.fail("missing offline package reached the native gate or build")
+        with self.assertRaisesRegex(ValueError, "missing-crate"):
+            self.prepare(check=must_not_run, build=must_not_run,
+                         package_names=ValueError("offline Cargo package preflight failed: missing-crate"))
+        self.assertEqual(list((self.out / "attempts").iterdir()), [])
+        self.assertFalse((self.out / "checks.json").exists())
+
     def test_prepare_orders_gate_build_capture_and_publishes_read_only_files(self):
         events = []
         def check(_root, *, environment, source_commit, lock_fds,
-                  completed_independent_checks, update_independent_checks, qualification_scope):
+                  completed_independent_checks, update_independent_checks,
+                  completed_pre_network_checks, update_pre_network_checks,
+                  qualification_scope):
             events.append("gate")
             self.assertEqual(qualification_scope, "basic")
             self.assertIsNone(completed_independent_checks)
             self.assertTrue(callable(update_independent_checks))
+            self.assertIsNone(completed_pre_network_checks)
+            self.assertTrue(callable(update_pre_network_checks))
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
             self.assertEqual(len(lock_fds), 3)
             self.assertEqual(lock_fds[1], 88)  # Existing source-custody fixture descriptor.
@@ -585,7 +598,9 @@ class TairaPrepareTests(unittest.TestCase):
                 self.out = self.root / ("prepared-incremental-" + preference)
                 self.args.output_dir = self.out
                 def check(_root, *, environment, source_commit, lock_fds,
-                          completed_independent_checks, update_independent_checks, qualification_scope):
+                          completed_independent_checks, update_independent_checks,
+                          completed_pre_network_checks, update_pre_network_checks,
+                          qualification_scope):
                     self.assertEqual(environment["CARGO_INCREMENTAL"], preference)
                     self.assertEqual(qualification_scope, "basic")
                     self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))

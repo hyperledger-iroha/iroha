@@ -379,6 +379,7 @@ fn make_signed_advert(
         .expect("test vectors must build valid advert bodies");
     let mut advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
+        network_id: [0xA1; 32],
         issued_at: ISSUED_AT,
         expires_at: ISSUED_AT
             .checked_add(TTL_SECS)

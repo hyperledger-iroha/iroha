@@ -27,15 +27,14 @@ fn statuses(tx: &StateTransaction<'_, '_>) -> Vec<bool> {
 
 #[test]
 fn independent_later_funded_legs_use_prior_applied_balances_and_one_occurrence() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, alice_asset) = build_asset_transfer_control_test_state(10);
     let bob_asset = AssetId::new(definition.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash;
     {
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0x81);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x81; Hash::LENGTH]));
         hash = tx.tx_call_hash.unwrap();
         tx.world.add_account_permission(
             &ALICE_ID,
@@ -100,15 +99,14 @@ fn independent_later_funded_legs_use_prior_applied_balances_and_one_occurrence()
 
 #[test]
 fn independent_rejected_preparations_keep_singleton_digest_and_outcome_order() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash;
     {
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0x82);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x82; Hash::LENGTH]));
         hash = tx.tx_call_hash.unwrap();
         TransferAssetBatch::independent(vec![
             entry(
@@ -163,13 +161,12 @@ fn independent_rejected_preparations_keep_singleton_digest_and_outcome_order() {
 
 #[test]
 fn independent_zero_accepted_legs_publish_no_occurrence() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     {
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0x83);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x83; Hash::LENGTH]));
         tx.current_lane_id = Some(iroha_model_base::topology::LaneId::new(999));
         TransferAssetBatch::independent(vec![
             entry(
@@ -205,14 +202,13 @@ fn independent_zero_accepted_legs_publish_no_occurrence() {
 
 #[test]
 fn independent_control_usage_counts_only_interleaved_successful_legs() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0);
     let mut block = state.block(header);
     let hash;
     {
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0x84);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x84; Hash::LENGTH]));
         hash = tx.tx_call_hash.unwrap();
         SetAssetTransferControl::new(
             ALICE_ID.clone(),
@@ -273,7 +269,7 @@ fn independent_control_usage_counts_only_interleaved_successful_legs() {
 
 #[test]
 fn independent_full_quantity_and_self_transfer_keep_exact_repeated_key_values() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let initial: Quantity = "18446744073709551618.125".parse().unwrap();
     let transferred: Quantity = "18446744073709551617.125".parse().unwrap();
@@ -281,8 +277,7 @@ fn independent_full_quantity_and_self_transfer_keep_exact_repeated_key_values() 
     let mut block = state.block(header);
     let hash;
     {
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0x85);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x85; Hash::LENGTH]));
         hash = tx.tx_call_hash.unwrap();
         **tx.world.assets.get_mut(&source).unwrap() = initial.clone();
         TransferAssetBatch::independent(vec![

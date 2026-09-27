@@ -4095,7 +4095,7 @@ impl V2ApplyService {
         // updated only here, after `validate_and_apply` has durably accepted the
         // block (or recovery has confirmed that the WSV already contains it).
         if !finalized_envelopes.is_empty() {
-            crate::sumeragi::status::set_lane_settlement_commitments(
+            crate::status::set_lane_settlement_commitments(
                 finalized_envelopes
                     .iter()
                     .map(|envelope| envelope.settlement_commitment.clone())
@@ -4135,6 +4135,11 @@ impl V2ApplyService {
             BlockValidationError::StateStorageAdmission(error) => {
                 Some(("state_storage", error.release_wait(), error.to_string()))
             }
+            BlockValidationError::EvidencePreparation(error) => Some((
+                "consensus_penalty_preparation",
+                error.release_wait(),
+                error.to_string(),
+            )),
             BlockValidationError::BlockHashAdmission(error) => Some((
                 "block_hash_history",
                 error.release_wait(),
@@ -4164,6 +4169,7 @@ impl V2ApplyService {
         error: &BlockValidationError,
     ) -> V2ApplyError {
         let local_admission = match error {
+            BlockValidationError::EvidencePreparation(reason) => Some(reason.to_string()),
             BlockValidationError::StateStorageAdmission(reason) => Some(reason.to_string()),
             BlockValidationError::BlockHashAdmission(reason) => Some(reason.to_string()),
             BlockValidationError::MembershipAdmission(reason) => Some(reason.to_string()),

@@ -2639,10 +2639,8 @@ fn geometry_lane_proposal_and_ownership(
     validator_set: Vec<PeerId>,
 ) -> (LaneBlockProposalV1, SumeragiLanePayloadOwnership) {
     let validator_count = u32::try_from(validator_set.len()).expect("geometry committee count");
-    let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-        validator_set.len(),
-    ))
-    .expect("geometry committee quorum");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+        .expect("geometry committee quorum");
     let mut ownership = SumeragiLanePayloadOwnership {
         proposal_height,
         proposal_view,
@@ -3208,11 +3206,15 @@ fn journal_instance_recovery_refuses_occupied_and_unauthorized_targets_without_w
     let before = fs::read(kura.lane_geometry_journal_path()).unwrap();
     let previous = std::mem::replace(
         &mut *kura.provisional_snapshot_bootstrap.lock(),
-        crate::kura::SnapshotBootstrapRuntimeState::Finalizing,
+        crate::kura::SnapshotBootstrapRuntimeState::Pending(
+            crate::kura::ProvisionalSnapshotBootstrap {
+                hash_only_prefix_height: 1,
+                bootstrap_lineage_hash: None,
+                hash_journal_digest: None,
+            },
+        ),
     );
-    let refused = kura.recover_journal_owned_lane_instances_on_startup(
-        crate::kura::StartupRecoveryMutationAuthority::Authenticated,
-    );
+    let refused = kura.recover_journal_owned_lane_instances_on_startup();
     *kura.provisional_snapshot_bootstrap.lock() = previous;
     assert!(matches!(
         refused,
@@ -3225,10 +3227,8 @@ fn journal_instance_recovery_refuses_occupied_and_unauthorized_targets_without_w
     fs::create_dir_all(&blocks).unwrap();
     let foreign = blocks.join("foreign-unowned-data");
     fs::write(&foreign, b"must remain unchanged").unwrap();
-    kura.recover_journal_owned_lane_instances_on_startup(
-        crate::kura::StartupRecoveryMutationAuthority::Authenticated,
-    )
-    .expect_err("intent cannot adopt occupied target");
+    kura.recover_journal_owned_lane_instances_on_startup()
+        .expect_err("intent cannot adopt occupied target");
     assert_eq!(fs::read(&foreign).unwrap(), b"must remain unchanged");
     assert!(!merge.exists());
     assert_eq!(fs::read(kura.lane_geometry_journal_path()).unwrap(), before);

@@ -139,17 +139,10 @@ class ZkAssetInstructionsJavaConsumerTest {
         RegisterZkAssetInstruction.builder()
             .setAsset("rose#wonderland")
             .setUnshieldVerifyingKey("halo2/ipa:unshield-v3")
-            .setShieldVerifyingKey("halo2/ipa:shield-v3")
             .build();
     assertTrue(instruction.getKind() == InstructionKind.REGISTER);
     assertTrue("halo2/ipa:unshield-v3".equals(instruction.getArguments().get("vk_unshield")));
-    assertTrue("halo2/ipa:shield-v3".equals(instruction.getArguments().get("vk_shield")));
-    expectThrows(
-        () ->
-            RegisterZkAssetInstruction.builder()
-                .setAsset("rose#wonderland")
-                .setShieldVerifyingKey("halo2/ipa:shield-v3")
-                .build());
+    assertTrue(!instruction.getArguments().containsKey("vk_shield"));
 
     final LinkedHashMap<String, String> retiredArguments =
         new LinkedHashMap<>(instruction.getArguments());
@@ -160,6 +153,9 @@ class ZkAssetInstructionsJavaConsumerTest {
     expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
     retiredArguments.remove("vk_transfer");
     retiredArguments.put("allow_shield", "true");
+    expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
+    retiredArguments.remove("allow_shield");
+    retiredArguments.put("vk_shield", "halo2/ipa:shield-v3");
     expectThrows(() -> RegisterZkAssetInstruction.fromArguments(retiredArguments));
   }
 

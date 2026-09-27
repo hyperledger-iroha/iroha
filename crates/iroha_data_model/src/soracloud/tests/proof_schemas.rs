@@ -1,7 +1,7 @@
 const PROOF_SCHEMA_CONTRACT_ASSET_VERSION: &str = "IROHA_STATIC_CONTRACT_ROWS_V1";
 const PROOF_SCHEMA_CONTRACT_ASSET_LEN: usize = 87_147;
 const PROOF_SCHEMA_CONTRACT_ASSET_SHA256: &str =
-    "eba2fdf2452fb720fc531069734d68deb14a1d8d234c9d33b3bdb34b1dff3adf";
+    "302a939cfa0b17e636975658d96a96966424bc2771568d09b8c400ef4ae53a81";
 const PROOF_SCHEMA_CONTRACT_ASSET: &[u8] = include_bytes!("proof_schema_contracts_v1.txt");
 
 fn proof_schema_contracts() -> &'static std::collections::BTreeMap<String, Vec<String>> {
@@ -108,7 +108,7 @@ fn soracloud_fhe_public_input_schema_hashes_are_stable() {
     );
     assert_eq!(
         hex::encode(soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1()),
-        "006b15847f07dd14fa730c22a12c95c1d7c02465c4e76b9ec9a86a3b23f37909",
+        "f93865308bb9b7a158d6dc397a1ac1f5574cbcd2d2be1982003188082d11b537",
         "full-bootstrap execution proof public-input schema hash drifted"
     );
 }

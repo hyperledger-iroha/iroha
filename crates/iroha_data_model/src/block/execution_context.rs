@@ -440,7 +440,7 @@ impl BlockExecutionContextBundle {
     }
     /// Reject parallel old/new economic authority in one native carrier.
     ///
-    /// QueuePlan admissions are independent controls; full block framing and
+    /// `QueuePlan` admissions are independent controls; full block framing and
     /// execution validation remain the enclosing carrier's responsibility.
     /// # Errors
     /// Rejects mixed economic forms, unsupported version or malformed native batch.

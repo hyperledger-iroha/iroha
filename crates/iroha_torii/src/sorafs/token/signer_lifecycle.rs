@@ -111,6 +111,9 @@ impl SignerDriverV1 {
         history.trusted_at = now;
         Ok(now)
     }
+    pub(super) fn require_completed_proof_source(&self) -> Result<(), StreamTokenIssuerError> {
+        self.finality.require_completed_proof_source()
+    }
     fn check_handles(&self) -> Result<(), StreamTokenIssuerError> {
         if self.client.handle() != self.pins.binding().runtime_handle
             || self.observer.handle() != self.pins.observer_handle()
@@ -279,6 +282,9 @@ impl SignerDriverV1 {
     ) -> Result<StreamTokenV1, StreamTokenIssuerError> {
         let prepared = SignerStreamTokenExpectedV1::new(&body, self.pins.binding())
             .map_err(|_| evidence_error())?;
+        // Production cannot make a signer reservation while the completed-operation proof
+        // required for release has no authoritative source. This is before provider I/O.
+        self.require_completed_proof_source()?;
         let (original, _) = self.current(Phase::BeforeProvider, None)?;
         self.check_handles()?;
         // The exact body and prepared operation survive an ambiguous result. Recovery is one

@@ -10,7 +10,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
-    sumeragi::status,
+    sumeragi::v2_status,
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::consensus_v2::{
@@ -33,13 +33,13 @@ impl PublishedStatus {
         let guard = STATUS_TEST_LOCK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        status::set_v2_status(value);
+        v2_status::set_v2_status(value);
         Self { _guard: guard }
     }
 }
 impl Drop for PublishedStatus {
     fn drop(&mut self) {
-        status::clear_v2_status();
+        v2_status::clear_v2_status();
     }
 }
 fn status_fixture() -> SumeragiV2Status {

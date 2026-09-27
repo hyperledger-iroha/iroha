@@ -160,7 +160,7 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// DA pin-intent hash.
         pub Option<[u8; 32]>,
-        /// NPoS effects hash.
+        /// `NPoS` effects hash.
         pub Option<[u8; 32]>,
         /// Execution-context hash.
         pub Option<[u8; 32]>,
@@ -168,6 +168,23 @@ pub mod wire {
         pub Option<[u8; 32]>,
         /// Confidential feature digest.
         pub Option<ConfidentialFeatureDigestWire>,
+    );
+    // This alias is the existing nested V1 payload tuple, not a new wire frame.
+    type BlockHeaderPayloadTuple = (
+        NonZeroU64,
+        Option<[u8; 32]>,
+        Option<[u8; 32]>,
+        Option<[u8; 32]>,
+        u64,
+        u64,
+        Option<[u8; 32]>,
+        Option<[u8; 32]>,
+        (
+            Option<[u8; 32]>,
+            Option<[u8; 32]>,
+            Option<[u8; 32]>,
+            Option<ConfidentialFeatureDigestWire>,
+        ),
     );
     impl ncore::SerializePayload for BlockHeaderWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
@@ -182,22 +199,7 @@ pub mod wire {
                 self.7,
                 (self.8, self.9, self.10, self.11),
             );
-            <(
-                NonZeroU64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                u64,
-                u64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                (
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<ConfidentialFeatureDigestWire>,
-                ),
-            ) as ncore::SerializePayload>::serialize(&tuple, writer)
+            <BlockHeaderPayloadTuple as ncore::SerializePayload>::serialize(&tuple, writer)
         }
         fn encoded_len_hint(&self) -> Option<usize> {
             let tuple = (
@@ -211,22 +213,7 @@ pub mod wire {
                 self.7,
                 (self.8, self.9, self.10, self.11),
             );
-            <(
-                NonZeroU64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                u64,
-                u64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                (
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<ConfidentialFeatureDigestWire>,
-                ),
-            ) as ncore::SerializePayload>::encoded_len_hint(&tuple)
+            <BlockHeaderPayloadTuple as ncore::SerializePayload>::encoded_len_hint(&tuple)
         }
         fn encoded_len_exact(&self) -> Option<usize> {
             let tuple = (
@@ -240,57 +227,15 @@ pub mod wire {
                 self.7,
                 (self.8, self.9, self.10, self.11),
             );
-            <(
-                NonZeroU64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                u64,
-                u64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                (
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<ConfidentialFeatureDigestWire>,
-                ),
-            ) as ncore::SerializePayload>::encoded_len_exact(&tuple)
+            <BlockHeaderPayloadTuple as ncore::SerializePayload>::encoded_len_exact(&tuple)
         }
     }
     impl<'de> ncore::DeserializePayload<'de> for BlockHeaderWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-            let tuple: (
-                NonZeroU64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                u64,
-                u64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                (
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<ConfidentialFeatureDigestWire>,
-                ),
-            ) = <(
-                NonZeroU64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                u64,
-                u64,
-                Option<[u8; 32]>,
-                Option<[u8; 32]>,
-                (
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<[u8; 32]>,
-                    Option<ConfidentialFeatureDigestWire>,
-                ),
-            ) as ncore::DeserializePayload>::deserialize(archived.cast());
+            let tuple: BlockHeaderPayloadTuple =
+                <BlockHeaderPayloadTuple as ncore::DeserializePayload>::deserialize(
+                    archived.cast(),
+                );
             Self(
                 tuple.0, tuple.1, tuple.2, tuple.3, tuple.4, tuple.5, tuple.6, tuple.7, tuple.8.0,
                 tuple.8.1, tuple.8.2, tuple.8.3,

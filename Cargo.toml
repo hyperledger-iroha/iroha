@@ -52,6 +52,8 @@ iroha_macro = { path = "crates/iroha_macro", default-features = false }
 iroha_futures = { path = "crates/iroha_futures" }
 iroha_genesis = { path = "crates/iroha_genesis" }
 iroha_sccp = { path = "crates/iroha_sccp" }
+# The sans-IO Sumeragi consensus core; `iroha_core` hosts its node driver.
+iroha_sumeragi = { path = "crates/iroha_sumeragi" }
 norito = { path = "crates/norito", default-features = false }
 norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }
@@ -187,6 +189,8 @@ concread = { version = "=0.5.10", default-features = false }
 [patch.crates-io]
 # Allocation custody must follow actual epoch reclamation in the locked EBR owner.
 concread = { path = "vendor/concread" }
+# Quantity admission requires exact fallible native-digit handoff without repacking.
+num-bigint = { path = "vendor/num-bigint-0.4.6" }
 halo2-axiom = { path = "vendor/halo2-axiom" }
 halo2curves-axiom = { path = "vendor/halo2curves-axiom" }
 find_cuda_helper = { path = "vendor/find_cuda_helper" }
@@ -346,7 +350,6 @@ members = [
 ]
 exclude = [
     "mochi/fixtures",
-    "crates/iroha_sumeragi_core",
     "crates/gpuzstd_metal.ignore"
 ]
 

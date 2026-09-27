@@ -125,7 +125,7 @@ impl EventFilter for ExecuteTriggerEventFilter {
 }
 /// Exports common structs and enums from this module.
 pub mod prelude {
-    pub use super::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
+    pub use super::model::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
 }
 
 #[cfg(test)]

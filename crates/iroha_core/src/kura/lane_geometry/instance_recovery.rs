@@ -1,22 +1,17 @@
 //! Physical recovery of exact immutable instances already owned by a durable journal.
-use super::super::StartupRecoveryMutationAuthority;
 use super::*;
 
 impl Kura {
     /// Finish only journal-admitted empty creations before any auxiliary inventory reads.
     /// This does not publish an active catalog or derive an identity from configuration.
-    /// The ordinary startup token rejects provisional imports; their authenticated
-    /// finalizer must supply its existing instance-bound mutation authority instead.
-    pub(in crate::kura) fn recover_journal_owned_lane_instances_on_startup(
-        &self,
-        authority: StartupRecoveryMutationAuthority<'_>,
-    ) -> Result<()> {
-        authority.validate_for(self)?;
+    /// Provisional snapshot imports are rejected until their bootstrap is authenticated.
+    pub(in crate::kura) fn recover_journal_owned_lane_instances_on_startup(&self) -> Result<()> {
+        self.durable_mutation_authorized()?;
         let _prune_guard = self.prune_lock.lock();
         let _canonical_guard = self.canonical_chain_lock.lock();
         let _geometry_guard = self.lane_geometry_lock.lock();
         let _sidecar_guard = self.sidecar_lock.lock();
-        authority.validate_for(self)?;
+        self.durable_mutation_authorized()?;
         let journal = self.read_lane_geometry_journal()?;
         if journal.configured_primary_binding.is_none()
             && journal.records.is_empty()

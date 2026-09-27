@@ -126,7 +126,7 @@ const K_DOMAIN_REDEMPTION_STATEMENT_DIGEST = /* @__PURE__ */ ascii((TEXT_IROHA_K
 const K_DOMAIN_REDEMPTION_ID = /* @__PURE__ */ ascii((TEXT_IROHA_KAGEMUSHA_V1 + "redemption-id"));
 
 const LIMITS = Object.freeze({
-  paymentRequest: [928, 1243],
+  paymentRequest: [1024, 1371],
   payment: [7552, 10075],
   acknowledgement: [256, 347],
   mintAuthorization: [7936, 10587],

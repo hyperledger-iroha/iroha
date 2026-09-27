@@ -1130,6 +1130,21 @@ fn try_acquire_torii_proxy_memory(
             )
         })
 }
+fn try_acquire_torii_proxy_receiver_memory(
+    app: &SharedAppState,
+) -> Result<ToriiProxyMemoryReservation, Response> {
+    app.torii_proxy_receiver_memory_inflight
+        .clone()
+        .try_acquire_owned()
+        .map(ToriiProxyMemoryReservation::new)
+        .map_err(|_| {
+            torii_proxy_error_response(
+                StatusCode::TOO_MANY_REQUESTS,
+                "proxy_capacity_exceeded",
+                "Torii proxy receiver memory capacity is exhausted",
+            )
+        })
+}
 fn hold_torii_proxy_memory_in_response_body(
     response: Response,
     reservation: ToriiProxyMemoryReservation,

@@ -184,13 +184,14 @@ def test_copy_with_new_inodes_and_times_replays_without_old_processes_or_clock(c
     assert archive.inspect_archive(copied,plan,budget,expected).inventory.sha256==expected.inventory_sha256
 
 
-@pytest.mark.parametrize('case',['extra','missing','symlink','hardlink','directory_symlink','wrong_mode','fifo','oversize','changed_bytes'])
+@pytest.mark.parametrize('case',['extra','missing','symlink','hardlink','directory_symlink','wrong_mode','fifo','oversize','changed_bytes','missing_report','changed_report'])
 def test_inventory_rejects_namespace_and_physical_changes(complete,tmp_path,case):
     root,plan,budget,expected,_=complete
     copied=tmp_path/'evidence';shutil.copytree(root,copied)
-    path=copied/'runs/pair-01/one_lane/native/proof.nrt'
+    path=(copied/'report.json' if case in ('missing_report','changed_report')
+          else copied/'runs/pair-01/one_lane/native/proof.nrt')
     if case=='extra':put(copied/'extra',b'x')
-    elif case=='missing':path.unlink()
+    elif case in ('missing','missing_report'):path.unlink()
     elif case=='symlink':path.unlink();path.symlink_to(root/'runs/pair-01/one_lane/native/proof.nrt')
     elif case=='hardlink':path.unlink();os.link(root/'runs/pair-01/one_lane/native/proof.nrt',path)
     elif case=='directory_symlink':
@@ -200,6 +201,10 @@ def test_inventory_rejects_namespace_and_physical_changes(complete,tmp_path,case
     elif case=='oversize':
         with path.open('wb') as output:output.truncate(65537)
     elif case=='changed_bytes':path.write_bytes(b'X'*path.stat().st_size)
+    elif case=='changed_report':
+        value=json.loads(path.read_bytes())
+        value['throughput_criterion_met']=not value['throughput_criterion_met']
+        path.write_bytes(json.dumps(value,sort_keys=True,separators=(',',':')).encode('ascii'))
     try:
         with pytest.raises(archive.ArchiveDataError):archive.inspect_archive(copied,plan,budget,expected)
     finally:

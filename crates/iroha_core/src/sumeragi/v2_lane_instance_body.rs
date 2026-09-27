@@ -1144,11 +1144,15 @@ impl LaneInstance {
             }));
         }
         let auth = LaneAuthenticator::new(&self.verified);
-        let preimage = self
+        let (preimage, retained) = self
             .native_records
             .iter()
             .rev()
-            .find_map(|record| auth.native_signing_preimage(message, record).ok())
+            .find_map(|record| {
+                auth.native_signing_preimage(message, record)
+                    .ok()
+                    .map(|preimage| (preimage, record))
+            })
             .ok_or_else(|| bad("body signing lost its exact fsynced native intent"))?;
         let _lease = state.consensus_publication_lease();
         let gate = self.current_gate(state, observed);
@@ -1159,6 +1163,11 @@ impl LaneInstance {
         let operation = guard
             .begin_fail_stop_operation()
             .ok_or_else(|| bad("consensus output is closed"))?;
+        if let LaneWalRecordV1::LockAndCommit { statement, .. } = &retained.record {
+            self.lane_drain_signing_guard
+                .authorize_native_commit_vote(&self.verified, statement)
+                .map_err(bad)?;
+        }
         let signature = Signature::try_new(self.key.private_key(), &preimage).map_err(bad)?;
         self.completion = Some(reducer::Event::Signed {
             tag,

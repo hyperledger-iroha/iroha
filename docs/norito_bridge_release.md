@@ -67,7 +67,7 @@ that workflow for local release verification.
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.xcframework/NoritoBridge.artifacts.json`; the companion
    `$NORITO_BRIDGE_OUT_DIR/NoritoBridge.artifacts.json` path is a stable relative symlink to that file, so
    one atomic XCFramework exchange publishes the binaries and manifest together. The
-   manifest binds exact native bridge ABI 23, the privacy-production feature state,
+   manifest binds exact native bridge ABI 24, the privacy-production feature state,
    source commit and fingerprint, embedded source commit, header digest,
    required-symbol inventory, and per-slice SHA-256 hashes. Ordinary builds embed
    their own commit. An exact mechanical fallback-pin child embeds its parent commit,
@@ -75,7 +75,11 @@ that workflow for local release verification.
    hashes they authenticate; the checker rejects every broader child as ordinary
    source. The hermetic Apple build binds that identity consistently through
    `CONNECT_NORITO_SOURCE_REVISION`, `IROHA_GIT_COMMIT_HASH`, and
-   `VERGEN_GIT_SHA`. Before publication the helper invokes
+   `VERGEN_GIT_SHA`. It replaces user Cargo compiler wrappers with the
+   source-sealed `scripts/apple_proc_macro_rustc_wrapper.sh`, which disables
+   debug-info stripping only for host proc-macro dylibs so they load under the
+   supported Xcode/Rust pair; target libraries retain their release settings.
+   Before publication the helper invokes
    `scripts/check_mobile_sdk_artifacts.sh --apple-only` against the staged generation; a
    checker or `xcodebuild` failure leaves the live generation unchanged. The
    first-release builder has no skip-build, preserved-target, alternate-lock, or
@@ -117,7 +121,7 @@ that workflow for local release verification.
 
    Before releasing its authenticated artifact-publication lock, the builder invokes
    the sole archive owner on the generation it just published. The owner retains a
-   unique source snapshot and re-authenticates the exact ABI-23 inventory,
+   unique source snapshot and re-authenticates the exact ABI-24 inventory,
    recomputes source and tool provenance, verifies each Mach-O architecture and the
    required/forbidden export policy with the sealed Xcode toolchain, sorts entries,
    stores them without host-zlib variance, normalizes modes and ZIP timestamps from
@@ -251,12 +255,15 @@ ignored `target/norito-bridge-local/` directory. Create owned canonical mode-070
 `cargo`, `build`, `artifacts`, and `projections` directories there, and use the first
 three as the explicit Cargo, build, and output roots. Reuse this fixed Cargo lane.
 The builder still performs all five real Apple builds, source/lock/tool seals,
-consumer links, ABI-23 checks and atomic artifact exchange. It does not clean Cargo.
+consumer links, ABI-24 checks and atomic artifact exchange. It does not clean Cargo.
 Select the current root graph explicitly with `--lockfile-path "$PWD/Cargo.lock"`
 for the builder, pin owner and artifact checker. This local-only route retains
 `--locked --offline` and the source/lock identity checks; it never changes the
-root lock or substitutes the release graph. Default privacy release builds still
-require their read-only external canonical graph snapshot. If source inputs are
+root lock or substitutes the release graph. External privacy-enabled builds
+require a read-only graph snapshot matching the signed root lock and the sole
+digest in `ci/privacy_sdk_cargo_lockfile.sh`; an older snapshot cannot authorize
+the current source. Apps requiring an external artifact cannot consume this
+checkout-local lane. If source inputs are
 dirty, also pass the existing `--allow-dirty-source`; scope and dirty admission
 are independent. Clean local builds retain their local-only scope.
 

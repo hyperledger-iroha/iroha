@@ -151,8 +151,8 @@ use iroha_schema::{Declaration, IntoSchema, MetaMap, Metadata, NamedFieldsMeta, 
 pub use merkle::{CompactMerkleProof, MerkleError, MerkleProof, MerkleTree, MerkleTreeCommitment};
 pub use merkle_map::{
     MerkleMap, MerkleMapEdit, MerkleMapError, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore,
-    MerkleMapReadError, MerkleMapRoot, MerkleMapUpdateError, MerkleMapUpdateWorkspace,
-    MerkleMapValueRef,
+    MerkleMapProof, MerkleMapProofStep, MerkleMapReadError, MerkleMapRoot, MerkleMapUpdateError,
+    MerkleMapUpdateWorkspace, MerkleMapValueRef,
 };
 pub use privacy::{
     CommitmentScheme, LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment, MerkleWitness,
@@ -1647,6 +1647,109 @@ pub fn bls_normal_verify_preaggregated_same_message(
         aggregated_signature,
         &pk_bytes,
     )
+}
+/// A BLS-normal public key whose Proof-of-Possession (`PoP`) verified, parsed once.
+///
+/// Only [`BlsNormalPopVerifiedKey::new`] creates one, and it verifies the `PoP` first, so the
+/// type witnesses the rogue-key precondition of aggregate verification: consensus verifies a
+/// committee member's `PoP` once, when the member is admitted, and then aggregates its key in
+/// every certificate without re-checking or re-parsing it.
+#[cfg(feature = "bls")]
+#[derive(Clone)]
+pub struct BlsNormalPopVerifiedKey {
+    public_key: PublicKey,
+    point: signature::bls::BlsNormalPublicKey,
+}
+#[cfg(feature = "bls")]
+impl BlsNormalPopVerifiedKey {
+    /// Verify `pop` for the BLS-normal key `public_key` and keep the parsed key.
+    ///
+    /// # Errors
+    /// Returns [`Error::BadSignature`] if the key is not BLS-normal or the proof does not
+    /// verify, and a parse error for a malformed key.
+    pub fn new(public_key: &PublicKey, pop: &[u8]) -> Result<Self, Error> {
+        bls_normal_pop_verify(public_key, pop)?;
+        let payload = bls_public_key_payload(public_key, Algorithm::BlsNormal)?;
+        let point = signature::bls::BlsNormal::parse_public_key(payload)?;
+        Ok(Self {
+            public_key: public_key.clone(),
+            point,
+        })
+    }
+    /// The verified public key.
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+    /// The raw BLS-normal key bytes (the 48-byte compressed G1 point).
+    pub fn payload(&self) -> &[u8] {
+        // The constructor extracted this payload successfully from the same key.
+        self.public_key
+            .try_to_bytes()
+            .map_or(&[][..], |(_, payload)| payload)
+    }
+}
+#[cfg(feature = "bls")]
+impl fmt::Debug for BlsNormalPopVerifiedKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("BlsNormalPopVerifiedKey")
+            .field(&self.public_key)
+            .finish()
+    }
+}
+#[cfg(feature = "bls")]
+impl PartialEq for BlsNormalPopVerifiedKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.public_key == other.public_key
+    }
+}
+#[cfg(feature = "bls")]
+impl Eq for BlsNormalPopVerifiedKey {}
+/// Verify ONE pre-aggregated BLS-normal signature over MULTIPLE distinct messages, where the
+/// message of each group was signed by every key of that group (e.g. a Sumeragi timeout
+/// certificate: its signers grouped by the view of the certificate they carried).
+///
+/// The keys of each group are aggregated and one multi-pairing checks
+/// `e(σ, g) = Π_i e(Σ_{pk ∈ group_i} pk, H(m_i))` (cost: one Miller loop per group plus one).
+/// Every key carries a verified `PoP` ([`BlsNormalPopVerifiedKey`]), which makes the
+/// per-group (same-message) aggregation rogue-key safe; distinct messages across groups need
+/// no further precondition.
+///
+/// # Errors
+/// Returns [`Error::BadSignature`] for no group, an empty group, a key repeated inside a group,
+/// a message shared by two groups, a group whose keys sum to the identity, a malformed,
+/// non-canonical or identity signature, or a failed pairing check.
+#[cfg(feature = "bls")]
+pub fn bls_normal_verify_preaggregated_multi_message(
+    groups: &[(&[&BlsNormalPopVerifiedKey], &[u8])],
+    aggregated_signature: &[u8],
+) -> Result<(), Error> {
+    use std::collections::BTreeSet;
+    if groups.is_empty() {
+        return Err(Error::BadSignature);
+    }
+    let mut messages = BTreeSet::new();
+    let mut points: Vec<Vec<&signature::bls::BlsNormalPublicKey>> =
+        Vec::with_capacity(groups.len());
+    for (keys, message) in groups {
+        if keys.is_empty() || !messages.insert(*message) {
+            return Err(Error::BadSignature);
+        }
+        let mut seen = BTreeSet::new();
+        let mut group = Vec::with_capacity(keys.len());
+        for key in *keys {
+            if !seen.insert(key.payload()) {
+                return Err(Error::BadSignature);
+            }
+            group.push(&key.point);
+        }
+        points.push(group);
+    }
+    let parsed: Vec<(&[&signature::bls::BlsNormalPublicKey], &[u8])> = points
+        .iter()
+        .zip(groups)
+        .map(|(group, (_, message))| (group.as_slice(), *message))
+        .collect();
+    signature::bls::verify_preaggregated_multi_message_normal(&parsed, aggregated_signature)
 }
 // Note: small-variant pre-aggregated helpers are not exposed; consensus uses BLS-normal only.
 /// Verify BLS-Normal Proof-of-Possession (`PoP`) for a given public key.

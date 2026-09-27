@@ -13,7 +13,7 @@ use iroha_core::{
     query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
-    sumeragi::{self, status},
+    status,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha_data_model::{
@@ -60,7 +60,7 @@ fn nexus_dataspaces_summary_ed25519_fixture_uses_checked_key_generation() {
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -155,7 +155,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     block
         .commit_world_overlay_for_testing()
         .expect("commit seeded state");
-    sumeragi::status::set_lane_commitments(
+    status::set_lane_commitments(
         Vec::new(),
         vec![status::DataspaceCommitmentSnapshot {
             block_height: 123,
@@ -215,13 +215,13 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     assert_eq!(row["consensus"]["entries"], Value::from(1));
     assert_eq!(row["consensus"]["lane_ids"][0], Value::from(7));
     assert_eq!(row["consensus"]["last_block_height"], Value::from(123));
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_without_uaid() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -272,7 +272,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_dataspace() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
@@ -363,7 +363,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_manifests() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -450,7 +450,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     block
         .commit_world_overlay_for_testing()
         .expect("commit account");
-    sumeragi::status::set_lane_commitments(
+    status::set_lane_commitments(
         Vec::new(),
         vec![status::DataspaceCommitmentSnapshot {
             block_height: 77,
@@ -547,13 +547,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
     );
     assert_eq!(revoked["portfolio"]["accounts"], Value::from(0));
     assert_eq!(revoked["consensus"]["entries"], Value::from(0));
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_dataspace() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -670,7 +670,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_null_alias_for_uncataloged_da
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_totals() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -773,7 +773,7 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         .world
         .uaid_dataspaces_mut_for_testing()
         .insert(uaid, bindings);
-    sumeragi::status::set_lane_commitments(
+    status::set_lane_commitments(
         Vec::new(),
         vec![
             status::DataspaceCommitmentSnapshot {
@@ -859,13 +859,13 @@ async fn nexus_dataspaces_summary_endpoint_merges_bound_accounts_and_consensus_t
         row["consensus"]["details"].as_array().expect("details")[0]["lane_id"],
         Value::from(3_u64)
     );
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     router.shutdown().await;
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) = request_summary(
@@ -883,7 +883,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let (status, body) =
@@ -898,7 +898,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account() {
     let _guard = consensus_guard();
-    sumeragi::status::set_lane_commitments(Vec::new(), Vec::new());
+    status::set_lane_commitments(Vec::new(), Vec::new());
     let (state, kura, local_peer_id) = minimal_state();
     let router = build_test_router(state, &kura, local_peer_id);
     let account_literal = valid_missing_account_literal();

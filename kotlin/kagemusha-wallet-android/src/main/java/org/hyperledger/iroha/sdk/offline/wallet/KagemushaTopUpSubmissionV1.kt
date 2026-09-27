@@ -48,7 +48,7 @@ private object KagemushaTopUpSubmissionNativeV1 {
     private val available: Boolean by lazy {
         try {
             System.loadLibrary("connect_norito_bridge")
-            KagemushaTopUpSubmissionJniV1.nativeBridgeAbiVersion() == 23 &&
+            KagemushaTopUpSubmissionJniV1.nativeBridgeAbiVersion() == 24 &&
                 KagemushaTopUpSubmissionJniV1.nativeValidate(byteArrayOf(), byteArrayOf()) != 0
         } catch (_: LinkageError) { false } catch (_: RuntimeException) { false }
     }

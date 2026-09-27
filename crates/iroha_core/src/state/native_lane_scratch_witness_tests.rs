@@ -129,16 +129,13 @@ fn native_scratch_owned_start(state: &State, header: BlockHeader) -> Box<StateBl
 fn native_scratch_recorded_start(
     state: &State,
     header: BlockHeader,
-) -> (
-    Box<StateBlock<'_>>,
-    crate::sumeragi::witness::ExecWitnessGuard,
-) {
+) -> (Box<StateBlock<'_>>, crate::exec_witness::ExecWitnessGuard) {
     // The actual constructor retains the State writers before opening capture,
     // so the hook and following transfers share the proper lock order too.
     state
         .block_with_owned_start_stages(
             header,
-            |_| crate::sumeragi::witness::begin_exec_witness_capture(),
+            |_| crate::exec_witness::begin_exec_witness_capture(),
             |_, guard| Ok(guard),
         )
         .unwrap()
@@ -146,7 +143,7 @@ fn native_scratch_recorded_start(
 
 #[inline(never)]
 fn native_scratch_prove_due_hook_records(fixture: &NativeEconomicFixture) {
-    use crate::sumeragi::witness;
+    use crate::exec_witness;
     let header = empty_global_block_after(Some(&fixture.native.block)).header();
     let (overlay, _owner) = native_scratch_recorded_start(&fixture.native.state, header);
     assert_eq!(header.height().get(), 7);
@@ -163,7 +160,7 @@ fn native_scratch_prove_due_hook_records(fixture: &NativeEconomicFixture) {
     );
     assert!(overlay.world.assets.get(&fixture.destination).is_none());
     assert!(!overlay.fastpq_transcripts.is_empty());
-    let captured = witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
+    let captured = exec_witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
     assert!(
         !captured.fastpq_transcripts.is_empty(),
         "the real due hook records before native economics starts"
@@ -196,30 +193,30 @@ fn native_scratch_capture_around(
     owner: &NativeEconomicFixture,
     mut scratch: impl FnMut(),
 ) -> Vec<u8> {
-    use crate::sumeragi::witness;
+    use crate::exec_witness;
     let header = empty_global_block_after(Some(&owner.native.block)).header();
     let (mut overlay, _owner) = native_scratch_recorded_start(&owner.native.state, header);
     native_scratch_owner_transfer(&mut overlay, owner);
-    let before = witness::snapshot_exec_witness();
+    let before = exec_witness::snapshot_exec_witness();
     assert!(!before.fastpq_transcripts.is_empty());
     let before_bytes = norito::encode_canonical(&before).unwrap();
     scratch();
     assert_eq!(
-        norito::encode_canonical(&witness::snapshot_exec_witness()).unwrap(),
+        norito::encode_canonical(&exec_witness::snapshot_exec_witness()).unwrap(),
         before_bytes
     );
 
     // The second real transfer is held in an existing generation-bound recorder
     // overlay. Reset/drain/rebind inside scratch would discard it on commit.
-    let held = witness::begin_exec_witness_overlay();
+    let held = exec_witness::begin_exec_witness_overlay();
     native_scratch_owner_transfer(&mut overlay, owner);
     scratch();
     assert_eq!(
-        norito::encode_canonical(&witness::snapshot_exec_witness()).unwrap(),
+        norito::encode_canonical(&exec_witness::snapshot_exec_witness()).unwrap(),
         before_bytes
     );
     held.commit();
-    let captured = witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
+    let captured = exec_witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
     let bytes = norito::encode_canonical(&captured).unwrap();
     assert_ne!(
         bytes, before_bytes,
@@ -331,7 +328,7 @@ state_test! { sync native_scratch_late_marker_failure_rolls_back_hook_and_preser
 state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_for_state
     use super::NativeLaneBatchSourcePreparationV1;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use crate::sumeragi::witness;
+    use crate::exec_witness;
     let (fixture, finalized_carrier, included) = retained_native_batch_fixture();
     let carrier = finalized_carrier.canonical_resultless_proposal();
     let state = &fixture.native.state;
@@ -342,9 +339,9 @@ state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_f
     let header = carrier.header();
     let before = crate::snapshot::canonical_state_snapshot_hash(state).unwrap();
     let files = exact_test_tree_fingerprint(&state.kura.store_root());
-    let guard = witness::begin_exec_witness_capture().unwrap();
-    witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
-    let witness_before = norito::encode_canonical(&witness::snapshot_exec_witness()).unwrap();
+    let guard = exec_witness::begin_exec_witness_capture().unwrap();
+    exec_witness::record_read_asset(&fixture.source, Some(&Quantity::from(100u32)));
+    let witness_before = norito::encode_canonical(&exec_witness::snapshot_exec_witness()).unwrap();
     let released = AtomicBool::new(false);
     let (held_tx, held_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
@@ -362,7 +359,7 @@ state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_f
         held_rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
         // Suppression does not waive recorder ownership. Each wrapper must
         // refuse before its own observation, snapshot, context or State writer.
-        let suppression = witness::suppress_recording_for_current_thread();
+        let suppression = exec_witness::suppress_recording_for_current_thread();
         let errors = [
             state.preexecute_lane_decision_groups(header, &groups).err(),
             state.prepare_native_batch_on_carrier(header, groups.clone()).err(),
@@ -388,8 +385,8 @@ state_test! { sync native_scratch_entries_refuse_recorder_owner_before_waiting_f
         }
         assert!(refused_while_held, "all Native entries must refuse before waiting for State");
     });
-    assert_eq!(norito::encode_canonical(&witness::snapshot_exec_witness()).unwrap(), witness_before);
-    witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
+    assert_eq!(norito::encode_canonical(&exec_witness::snapshot_exec_witness()).unwrap(), witness_before);
+    exec_witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
     drop(guard);
     assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
     assert_eq!(exact_test_tree_fingerprint(&state.kura.store_root()), files);

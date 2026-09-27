@@ -87,6 +87,13 @@ const SURFACE_PUBLIC_OVERLAY: &str = "public_overlay";
 const GOSSIP_SEED_PUBLIC_DOMAIN: u64 = 0x5055_424C_4943_5F00;
 const GOSSIP_SEED_RESTRICTED_DOMAIN: u64 = 0x5245_5354_5249_4354;
 const GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS: usize = 8;
+// A large complete admission input occupies the relay for longer than an ordinary
+// default-sized gossip frame. Pace retries by the bytes actually posted to peers.
+const GOSSIP_RESEND_PACING_QUANTUM_BYTES: usize = 256 * 1024;
+fn tx_gossip_relay_drop_count() -> u64 {
+    iroha_p2p::network::subscriber_queue_full_count()
+        .saturating_add(iroha_p2p::network::post_overflow_tx_gossip_count())
+}
 fn active_gossip_lane_ids(state: &State, nexus: &Nexus) -> BTreeSet<LaneId> {
     nexus
         .lane_catalog
@@ -217,8 +224,21 @@ fn persist_queue_plan_gossip_certificate(
 #[derive(Debug, Clone)]
 struct PeerRecentSuppressionEntry {
     peer_id: PeerId,
-    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    key: PeerRecentSendKey,
     expires_tick: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct PeerRecentSendKey {
+    entrypoint_hash: EntrypointHash,
+    certified: bool,
+}
+impl PeerRecentSendKey {
+    fn from_gossip(tx: &GossipTransaction) -> Self {
+        Self {
+            entrypoint_hash: tx.hash(),
+            certified: tx.queue_plan_admitted_input().is_some(),
+        }
+    }
 }
 /// Count canonical NetworkMessage framing before asking the P2P owner to count
 /// its authenticated relay and Data envelopes. No transaction bytes or signatures
@@ -444,13 +464,13 @@ pub struct TransactionGossiper {
     gossip_tick: u64,
     /// Deferred gossip hashes bucketed by resend tick.
     gossip_deferred: Vec<Vec<HashOf<TransactionEntrypoint>>>,
-    /// Recently-sent entrypoint hashes tracked per peer to suppress duplicate fanout.
-    peer_recently_sent: BTreeMap<PeerId, HashMap<HashOf<TransactionEntrypoint>, u64>>,
+    /// Recently-sent wire identities tracked per peer to suppress duplicate fanout.
+    peer_recently_sent: BTreeMap<PeerId, HashMap<PeerRecentSendKey, u64>>,
     /// Expiry ring for per-peer suppression entries (tick-based TTL).
     peer_recent_ring: Vec<Vec<PeerRecentSuppressionEntry>>,
-    /// Subscriber-queue drop counter at the last backpressure observation.
+    /// Subscriber and outbound TxGossip drop counter at the last backpressure observation.
     last_drop_count: u64,
-    /// Timestamp of the last observed subscriber-queue drop.
+    /// Timestamp of the last observed relay drop.
     last_drop_at: Option<Instant>,
     network: IrohaNetwork,
     queue: Arc<Queue>,
@@ -571,7 +591,7 @@ impl TransactionGossiper {
             gossip_deferred,
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring,
-            last_drop_count: 0,
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network,
             queue,
@@ -599,7 +619,7 @@ impl TransactionGossiper {
             .unwrap_or(self.gossip_period)
     }
     fn gossip_backpressure_active(&mut self, now: Instant) -> bool {
-        let current = iroha_p2p::network::subscriber_queue_full_count();
+        let current = tx_gossip_relay_drop_count();
         if current > self.last_drop_count {
             self.last_drop_count = current;
             self.last_drop_at = Some(now);
@@ -660,9 +680,9 @@ impl TransactionGossiper {
         for entry in expiring {
             let peer_id = entry.peer_id.clone();
             if let Some(peer_map) = self.peer_recently_sent.get_mut(&peer_id) {
-                match peer_map.get(&entry.entrypoint_hash).copied() {
+                match peer_map.get(&entry.key).copied() {
                     Some(expiry) if expiry == entry.expires_tick && expiry <= self.gossip_tick => {
-                        peer_map.remove(&entry.entrypoint_hash);
+                        peer_map.remove(&entry.key);
                     }
                     Some(expiry) if expiry == entry.expires_tick => {
                         deferred.push(entry);
@@ -685,27 +705,87 @@ impl TransactionGossiper {
             self.peer_recent_ring[deferred_slot].push(entry);
         }
     }
-    fn peer_recently_seen_all_hashes(
-        &self,
-        peer_id: &PeerId,
-        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
-    ) -> bool {
+    fn peer_recently_seen_all_keys(&self, peer_id: &PeerId, keys: &[PeerRecentSendKey]) -> bool {
         self.peer_recently_sent
             .get(peer_id)
-            .is_some_and(|seen| entrypoint_hashes.iter().all(|hash| seen.contains_key(hash)))
+            .is_some_and(|seen| keys.iter().all(|key| seen.contains_key(key)))
+    }
+    /// A peer's recent-send set applies to individual inputs, not an entire batch. A newly
+    /// arrived small input must not carry a previously posted large input back into its relay.
+    fn unsent_gossip_for_peer(
+        &self,
+        peer_id: &PeerId,
+        message: &Arc<TransactionGossip>,
+        keys: &[PeerRecentSendKey],
+        encoded_len: usize,
+    ) -> Option<(Arc<TransactionGossip>, Vec<PeerRecentSendKey>, usize)> {
+        debug_assert_eq!(message.txs.len(), keys.len());
+        debug_assert_eq!(message.routes.len(), keys.len());
+        debug_assert_eq!(message.plans.len(), keys.len());
+        let Some(seen) = self.peer_recently_sent.get(peer_id) else {
+            return Some((Arc::clone(message), keys.to_vec(), encoded_len));
+        };
+        let unsent = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(index, key)| (!seen.contains_key(key)).then_some(index))
+            .collect::<Vec<_>>();
+        if unsent.is_empty() {
+            return None;
+        }
+        if unsent.len() == keys.len() {
+            return Some((Arc::clone(message), keys.to_vec(), encoded_len));
+        }
+        let filtered = TransactionGossip {
+            txs: unsent.iter().map(|&i| message.txs[i].clone()).collect(),
+            routes: unsent.iter().map(|&i| message.routes[i]).collect(),
+            plans: unsent.iter().map(|&i| message.plans[i].clone()).collect(),
+            plane: message.plane,
+        };
+        let filtered_len = filtered.encoded_len_exact()?;
+        Some((
+            Arc::new(filtered),
+            unsent.iter().map(|&i| keys[i]).collect(),
+            filtered_len,
+        ))
+    }
+    fn post_unsent_gossip_to_peer(
+        &mut self,
+        peer_id: &PeerId,
+        message: &Arc<TransactionGossip>,
+        keys: &[PeerRecentSendKey],
+        encoded_len: usize,
+        priority: Priority,
+    ) -> Option<(usize, usize)> {
+        let (message, sent_keys, frame_bytes) =
+            self.unsent_gossip_for_peer(peer_id, message, keys, encoded_len)?;
+        let sent_count = sent_keys.len();
+        let overflow_before = iroha_p2p::network::post_overflow_tx_gossip_count();
+        self.network.post(Post {
+            data: NetworkMessage::TransactionGossiper(message),
+            peer_id: peer_id.clone(),
+            priority,
+        });
+        // Best-effort P2P post has no return value. Its synchronous overflow counter is the
+        // only acknowledgement available here; a rejected post must stay eligible for retry.
+        if iroha_p2p::network::post_overflow_tx_gossip_count() != overflow_before {
+            return None;
+        }
+        self.remember_peer_recent_sends(std::slice::from_ref(peer_id), &sent_keys, frame_bytes);
+        Some((sent_count, frame_bytes))
     }
     fn filter_targets_by_peer_recent_suppression(
         &self,
         targets: Vec<PeerId>,
-        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
+        keys: &[PeerRecentSendKey],
     ) -> (Vec<PeerId>, usize) {
-        if entrypoint_hashes.is_empty() || targets.is_empty() {
+        if keys.is_empty() || targets.is_empty() {
             return (targets, 0);
         }
         let mut filtered = Vec::with_capacity(targets.len());
         let mut suppressed = 0usize;
         for peer in &targets {
-            if self.peer_recently_seen_all_hashes(peer, entrypoint_hashes) {
+            if self.peer_recently_seen_all_keys(peer, keys) {
                 suppressed = suppressed.saturating_add(1);
             } else {
                 filtered.push(peer.clone());
@@ -716,47 +796,41 @@ impl TransactionGossiper {
     fn filter_targets_or_replay_recent_suppressed(
         &self,
         targets: Vec<PeerId>,
-        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
+        keys: &[PeerRecentSendKey],
     ) -> (Vec<PeerId>, usize, bool) {
-        if entrypoint_hashes.is_empty() || targets.is_empty() {
+        if keys.is_empty() || targets.is_empty() {
             return (targets, 0, false);
         }
-        let (targets, suppressed) =
-            self.filter_targets_by_peer_recent_suppression(targets, entrypoint_hashes);
+        let (targets, suppressed) = self.filter_targets_by_peer_recent_suppression(targets, keys);
         (targets, suppressed, false)
     }
-    fn filter_targets_for_priority(
-        &self,
-        targets: Vec<PeerId>,
-        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
-        priority: Priority,
-    ) -> (Vec<PeerId>, usize, bool) {
-        if matches!(priority, Priority::High) {
-            (targets, 0, false)
-        } else {
-            self.filter_targets_or_replay_recent_suppressed(targets, entrypoint_hashes)
-        }
+    fn peer_recent_ttl_ticks(&self, frame_bytes: usize) -> u64 {
+        let base = u64::try_from(self.peer_recent_ring.len()).expect("ring length fits u64");
+        let frames = frame_bytes
+            .max(1)
+            .div_ceil(GOSSIP_RESEND_PACING_QUANTUM_BYTES);
+        base.max(u64::try_from(frames).unwrap_or(u64::MAX))
     }
     fn remember_peer_recent_sends(
         &mut self,
         targets: &[PeerId],
-        entrypoint_hashes: &[HashOf<TransactionEntrypoint>],
+        keys: &[PeerRecentSendKey],
+        frame_bytes: usize,
     ) {
-        if targets.is_empty() || entrypoint_hashes.is_empty() || self.peer_recent_ring.is_empty() {
+        if targets.is_empty() || keys.is_empty() || self.peer_recent_ring.is_empty() {
             return;
         }
-        let ttl_ticks =
-            u64::try_from(self.peer_recent_ring.len()).expect("peer_recent_ring length fits u64");
+        let ttl_ticks = self.peer_recent_ttl_ticks(frame_bytes);
         let expires_tick = self.gossip_tick.saturating_add(ttl_ticks);
         let slot_idx = self.peer_recent_slot_for_tick(expires_tick);
         let slot = &mut self.peer_recent_ring[slot_idx];
         for peer_id in targets {
             let peer_map = self.peer_recently_sent.entry(peer_id.clone()).or_default();
-            for entrypoint_hash in entrypoint_hashes {
-                if peer_map.insert(*entrypoint_hash, expires_tick) != Some(expires_tick) {
+            for key in keys {
+                if peer_map.insert(*key, expires_tick) != Some(expires_tick) {
                     slot.push(PeerRecentSuppressionEntry {
                         peer_id: peer_id.clone(),
-                        entrypoint_hash: *entrypoint_hash,
+                        key: *key,
                         expires_tick,
                     });
                 }
@@ -766,25 +840,13 @@ impl TransactionGossiper {
     #[allow(clippy::too_many_lines)]
     fn gossip_transactions(&mut self) {
         let now = Instant::now();
-        let queue_active_len = self.queue.active_len();
-        let targeted_backlog_active =
-            Self::targeted_backlog_requires_gossip(self.gossip_size, queue_active_len);
-        if self.gossip_backpressure_active(now) && !targeted_backlog_active {
+        if self.gossip_backpressure_active(now) {
             iroha_logger::trace!(
                 drops = self.last_drop_count,
                 cooldown_ms = self.backpressure_cooldown().as_millis(),
                 "transaction gossiper skipping gossip due to relay backpressure"
             );
             return;
-        }
-        if targeted_backlog_active && self.last_drop_at.is_some() {
-            iroha_logger::debug!(
-                queue_active_len,
-                gossip_size = self.gossip_size.get(),
-                drops = self.last_drop_count,
-                cooldown_ms = self.backpressure_cooldown().as_millis(),
-                "transaction gossiper continuing under targeted backlog despite relay backpressure"
-            );
         }
         self.expire_peer_recent_suppression();
         self.release_deferred_gossip();
@@ -957,8 +1019,10 @@ impl TransactionGossiper {
             return;
         }
         let mut sent_hashes = Vec::with_capacity(message.txs.len());
+        let mut sent_keys = Vec::with_capacity(message.txs.len());
         for tx in &message.txs {
             sent_hashes.push(tx.hash());
+            sent_keys.push(PeerRecentSendKey::from_gossip(tx));
         }
         let carries_queue_plan_certificate = message
             .txs
@@ -989,7 +1053,7 @@ impl TransactionGossiper {
             )
         };
         let (targets, suppressed_targets, replaying_suppressed_targets) =
-            self.filter_targets_for_priority(targets, &sent_hashes, priority);
+            self.filter_targets_or_replay_recent_suppressed(targets, &sent_keys);
         let (targets, _) = Self::select_targets_with_seed(targets, public_target_cap, seed);
         if targets.is_empty() {
             iroha_logger::debug!(
@@ -1026,32 +1090,39 @@ impl TransactionGossiper {
                 dataspace = %dataspace_id,
                 "gossiping public transaction batch to capped target set"
             );
-            let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
             for peer_id in &targets {
-                self.network.post(Post {
-                    data: payload.clone(),
-                    peer_id: peer_id.clone(),
+                if let Some((sent_count, sent_bytes)) = self.post_unsent_gossip_to_peer(
+                    peer_id,
+                    &message,
+                    &sent_keys,
+                    frame_bytes,
                     priority,
-                });
+                ) {
+                    self.record_sent_metric(
+                        GossipPlane::Public,
+                        dataspace_id,
+                        lane_ids,
+                        std::slice::from_ref(peer_id),
+                        public_target_cap,
+                        sent_count,
+                        sent_bytes,
+                        false,
+                        None,
+                        replaying_suppressed_targets
+                            .then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
+                    );
+                }
             }
-            self.record_sent_metric(
-                GossipPlane::Public,
-                dataspace_id,
-                lane_ids,
-                &targets,
-                public_target_cap,
-                batch_txs,
-                frame_bytes,
-                false,
-                None,
-                replaying_suppressed_targets.then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
-            );
-            self.remember_peer_recent_sends(&targets, &sent_hashes);
             // Re-enqueue sent hashes when we gossip to a capped target set so the batch can
             // continue spreading to other peers in subsequent rounds.
             self.defer_gossip_hashes(sent_hashes);
         } else {
-            if suppressed_targets == 0 {
+            let every_target_needs_full_batch = targets.iter().all(|peer_id| {
+                self.peer_recently_sent
+                    .get(peer_id)
+                    .is_none_or(|seen| sent_keys.iter().all(|key| !seen.contains_key(key)))
+            });
+            if suppressed_targets == 0 && every_target_needs_full_batch {
                 iroha_logger::debug!(
                     tx_count = batch_txs,
                     size_bytes = encoded_len,
@@ -1060,10 +1131,26 @@ impl TransactionGossiper {
                     dataspace = %dataspace_id,
                     "broadcasting transaction gossip batch"
                 );
+                let overflow_before = iroha_p2p::network::post_overflow_tx_gossip_count();
                 self.network.broadcast(Broadcast {
                     data: NetworkMessage::TransactionGossiper(Arc::clone(&message)),
                     priority,
                 });
+                if iroha_p2p::network::post_overflow_tx_gossip_count() == overflow_before {
+                    self.record_sent_metric(
+                        GossipPlane::Public,
+                        dataspace_id,
+                        lane_ids,
+                        &targets,
+                        public_target_cap,
+                        batch_txs,
+                        frame_bytes,
+                        false,
+                        None,
+                        None,
+                    );
+                    self.remember_peer_recent_sends(&targets, &sent_keys, frame_bytes);
+                }
             } else {
                 iroha_logger::debug!(
                     tx_count = batch_txs,
@@ -1076,28 +1163,30 @@ impl TransactionGossiper {
                     dataspace = %dataspace_id,
                     "gossiping public transaction batch to unsuppressed peer subset"
                 );
-                let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
                 for peer_id in &targets {
-                    self.network.post(Post {
-                        data: payload.clone(),
-                        peer_id: peer_id.clone(),
+                    if let Some((sent_count, sent_bytes)) = self.post_unsent_gossip_to_peer(
+                        peer_id,
+                        &message,
+                        &sent_keys,
+                        frame_bytes,
                         priority,
-                    });
+                    ) {
+                        self.record_sent_metric(
+                            GossipPlane::Public,
+                            dataspace_id,
+                            lane_ids,
+                            std::slice::from_ref(peer_id),
+                            public_target_cap,
+                            sent_count,
+                            sent_bytes,
+                            false,
+                            None,
+                            replaying_suppressed_targets
+                                .then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
+                        );
+                    }
                 }
             }
-            self.record_sent_metric(
-                GossipPlane::Public,
-                dataspace_id,
-                lane_ids,
-                &targets,
-                public_target_cap,
-                batch_txs,
-                frame_bytes,
-                false,
-                None,
-                replaying_suppressed_targets.then_some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY),
-            );
-            self.remember_peer_recent_sends(&targets, &sent_hashes);
             // Broadcast is best-effort during startup and under targeted ingress load. Keep
             // pending transactions on the resend ring until consensus removes them from the queue.
             self.retry_public_broadcast_hashes(sent_hashes);
@@ -1151,8 +1240,10 @@ impl TransactionGossiper {
         let batch_txs = message.txs.len();
         let frame_bytes = encoded_len;
         let mut sent_hashes = Vec::with_capacity(message.txs.len());
+        let mut sent_keys = Vec::with_capacity(message.txs.len());
         for tx in &message.txs {
             sent_hashes.push(tx.hash());
+            sent_keys.push(PeerRecentSendKey::from_gossip(tx));
         }
         let carries_queue_plan_certificate = message
             .txs
@@ -1200,7 +1291,7 @@ impl TransactionGossiper {
             }
         };
         let (targets, suppressed_targets, replaying_suppressed_targets) =
-            self.filter_targets_for_priority(targets, &sent_hashes, priority);
+            self.filter_targets_or_replay_recent_suppressed(targets, &sent_keys);
         if targets.is_empty() {
             self.defer_gossip_hashes(sent_hashes);
             self.record_drop_metric(
@@ -1218,13 +1309,31 @@ impl TransactionGossiper {
             return;
         }
         let message = Arc::new(message);
-        let payload = NetworkMessage::TransactionGossiper(Arc::clone(&message));
         for peer_id in &targets {
-            self.network.post(Post {
-                data: payload.clone(),
-                peer_id: peer_id.clone(),
+            if let Some((sent_count, sent_bytes)) = self.post_unsent_gossip_to_peer(
+                peer_id,
+                &message,
+                &sent_keys,
+                frame_bytes,
                 priority,
-            });
+            ) {
+                self.record_sent_metric(
+                    GossipPlane::Restricted,
+                    dataspace_id,
+                    lane_ids,
+                    std::slice::from_ref(peer_id),
+                    self.dataspace_cfg.restricted_target_cap,
+                    sent_count,
+                    sent_bytes,
+                    fallback_used,
+                    fallback_surface,
+                    if replaying_suppressed_targets {
+                        Some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY)
+                    } else {
+                        reason
+                    },
+                );
+            }
         }
         iroha_logger::debug!(
             tx_count = message.txs.len(),
@@ -1236,23 +1345,6 @@ impl TransactionGossiper {
             %dataspace_id,
             "gossiping restricted transactions to online commit topology"
         );
-        self.record_sent_metric(
-            GossipPlane::Restricted,
-            dataspace_id,
-            lane_ids,
-            &targets,
-            self.dataspace_cfg.restricted_target_cap,
-            batch_txs,
-            frame_bytes,
-            fallback_used,
-            fallback_surface,
-            if replaying_suppressed_targets {
-                Some(OUTCOME_PEER_RECENT_SUPPRESSION_REPLAY)
-            } else {
-                reason
-            },
-        );
-        self.remember_peer_recent_sends(&targets, &sent_hashes);
         self.defer_gossip_hashes(sent_hashes);
     }
     #[cfg_attr(not(feature = "telemetry"), allow(unused_variables))]
@@ -1390,10 +1482,6 @@ impl TransactionGossiper {
         } else {
             Some(configured_cap)
         }
-    }
-    fn targeted_backlog_requires_gossip(gossip_size: NonZeroU32, queue_active_len: usize) -> bool {
-        let backlog_threshold = (gossip_size.get() as usize).saturating_mul(2);
-        queue_active_len >= backlog_threshold
     }
     fn seed_for_plane(seed: u64, dataspace_id: DataSpaceId, domain: u64) -> u64 {
         splitmix64(seed ^ dataspace_id.as_u64() ^ domain)
@@ -1940,18 +2028,18 @@ impl TransactionGossiper {
             let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_admitted_input().is_some();
             if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             if !batch_seen_hashes.insert(entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             if !has_queue_plan_certificate
                 && self
                     .is_transaction_known_locally_cached(entrypoint_hash, &committed_transactions)
             {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             let (entrypoint, payload, queue_plan_certificate) =
@@ -2722,11 +2810,11 @@ impl TransactionGossiper {
             let entrypoint_hash = tx.hash();
             let has_queue_plan_certificate = tx.queue_plan_admitted_input().is_some();
             if !has_queue_plan_certificate && certified_hashes.contains(&entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             if !batch_seen_hashes.insert(entrypoint_hash) {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             // A certificate-bearing duplicate may be the first message that can promote an
@@ -2736,7 +2824,7 @@ impl TransactionGossiper {
                 && self
                     .is_transaction_known_locally_cached(entrypoint_hash, &committed_transactions)
             {
-                crate::sumeragi::status::inc_gossip_duplicate_known_skipped();
+                crate::status::inc_gossip_duplicate_known_skipped();
                 continue;
             }
             let entrypoint = match tx.materialize_entrypoint() {
@@ -4533,7 +4621,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
-            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue,
@@ -4774,7 +4862,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
-            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue,
@@ -5003,7 +5091,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             gossip_deferred: vec![Vec::new(); resend_ticks.get() as usize],
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
-            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
@@ -5133,20 +5221,27 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         gossiper.last_drop_at = Some(past);
         assert!(!gossiper.gossip_backpressure_active(now));
     }
+    fn ordinary_send_key(entrypoint_hash: EntrypointHash) -> PeerRecentSendKey {
+        PeerRecentSendKey {
+            entrypoint_hash,
+            certified: false,
+        }
+    }
     #[test]
     fn peer_recent_suppression_expires_after_ttl_ticks() {
         let resend_ticks = NonZeroU32::new(2).expect("nonzero resend ticks");
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("suppression-expiry");
-        let entrypoint_hash = signed.hash_as_entrypoint();
+        let key = ordinary_send_key(signed.hash_as_entrypoint());
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&entrypoint_hash),
+            std::slice::from_ref(&key),
+            1,
         );
         let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
             vec![peer.clone()],
-            std::slice::from_ref(&entrypoint_hash),
+            std::slice::from_ref(&key),
         );
         assert!(
             targets.is_empty(),
@@ -5160,7 +5255,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         gossiper.expire_peer_recent_suppression();
         let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
             vec![peer.clone()],
-            std::slice::from_ref(&entrypoint_hash),
+            std::slice::from_ref(&key),
         );
         assert_eq!(targets, vec![peer]);
         assert_eq!(suppressed, 0);
@@ -5171,7 +5266,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("suppression-same-tick-dedup");
-        let entrypoint_hash = signed.hash_as_entrypoint();
+        let key = ordinary_send_key(signed.hash_as_entrypoint());
         let slot = gossiper.peer_recent_slot_for_tick(
             gossiper
                 .gossip_tick
@@ -5179,11 +5274,13 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&entrypoint_hash),
+            std::slice::from_ref(&key),
+            1,
         );
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&entrypoint_hash),
+            std::slice::from_ref(&key),
+            1,
         );
         assert_eq!(
             gossiper.peer_recent_ring[slot].len(),
@@ -5197,20 +5294,22 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let mut gossiper = closed_test_gossiper(resend_ticks);
         let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("suppression-stale-ring-entry");
-        let entrypoint_hash = signed.hash_as_entrypoint();
+        let key = ordinary_send_key(signed.hash_as_entrypoint());
         let ttl = GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64;
         let first_expiry = gossiper.gossip_tick.saturating_add(ttl);
         let first_slot = gossiper.peer_recent_slot_for_tick(first_expiry);
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&entrypoint_hash),
+            std::slice::from_ref(&key),
+            1,
         );
         gossiper.advance_gossip_tick();
         let second_expiry = gossiper.gossip_tick.saturating_add(ttl);
         let second_slot = gossiper.peer_recent_slot_for_tick(second_expiry);
         gossiper.remember_peer_recent_sends(
             std::slice::from_ref(&peer),
-            std::slice::from_ref(&entrypoint_hash),
+            std::slice::from_ref(&key),
+            1,
         );
         assert_eq!(gossiper.peer_recent_ring[first_slot].len(), 1);
         assert_eq!(gossiper.peer_recent_ring[second_slot].len(), 1);
@@ -5224,7 +5323,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             gossiper
                 .peer_recently_sent
                 .get(&peer)
-                .is_some_and(|seen| seen.get(&entrypoint_hash) == Some(&second_expiry)),
+                .is_some_and(|seen| seen.get(&key) == Some(&second_expiry)),
             "newer suppression expiry should remain active"
         );
         gossiper.gossip_tick = second_expiry;
@@ -5242,14 +5341,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
         let (signed_a, _) = build_transaction("peer-a");
         let (signed_b, _) = build_transaction("peer-b");
-        let entrypoint_hash_a = signed_a.hash_as_entrypoint();
-        let entrypoint_hash_b = signed_b.hash_as_entrypoint();
-        let all_hashes = vec![entrypoint_hash_a.clone(), entrypoint_hash_b.clone()];
-        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_a), &[entrypoint_hash_a]);
-        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_b), &all_hashes);
+        let key_a = ordinary_send_key(signed_a.hash_as_entrypoint());
+        let key_b = ordinary_send_key(signed_b.hash_as_entrypoint());
+        let all_keys = vec![key_a, key_b];
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_a), &[key_a], 1);
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_b), &all_keys, 1);
         let (targets, suppressed) = gossiper.filter_targets_by_peer_recent_suppression(
             vec![peer_a.clone(), peer_b.clone()],
-            &all_hashes,
+            &all_keys,
         );
         assert_eq!(targets, vec![peer_a]);
         assert_eq!(suppressed, 1);
@@ -5261,16 +5360,114 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
         let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
         let (signed, _) = build_transaction("peer-recent-defer");
-        let entrypoint_hash = signed.hash_as_entrypoint();
+        let key = ordinary_send_key(signed.hash_as_entrypoint());
         let targets = vec![peer_a.clone(), peer_b.clone()];
-        gossiper.remember_peer_recent_sends(&targets, std::slice::from_ref(&entrypoint_hash));
-        let (targets, suppressed, replayed) = gossiper.filter_targets_or_replay_recent_suppressed(
-            targets,
-            std::slice::from_ref(&entrypoint_hash),
-        );
+        gossiper.remember_peer_recent_sends(&targets, std::slice::from_ref(&key), 1);
+        let (targets, suppressed, replayed) = gossiper
+            .filter_targets_or_replay_recent_suppressed(targets, std::slice::from_ref(&key));
         assert!(targets.is_empty());
         assert_eq!(suppressed, 2);
         assert!(!replayed);
+    }
+    #[test]
+    fn certified_promotion_is_sent_once_after_ordinary_gossip() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(2).unwrap());
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (_, accepted) = build_transaction("certified-promotion");
+        let mut gossip_tx = GossipTransaction::new(accepted);
+        let ordinary = PeerRecentSendKey::from_gossip(&gossip_tx);
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer), &[ordinary], 1);
+        gossip_tx.kind = GossipTransactionKind::CertifiedInput;
+        let certified = PeerRecentSendKey::from_gossip(&gossip_tx);
+        assert_eq!(ordinary.entrypoint_hash, certified.entrypoint_hash);
+        assert_ne!(ordinary, certified);
+        let (targets, _) =
+            gossiper.filter_targets_by_peer_recent_suppression(vec![peer.clone()], &[certified]);
+        assert_eq!(targets, vec![peer.clone()]);
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer), &[certified], 1);
+        let (targets, suppressed) =
+            gossiper.filter_targets_by_peer_recent_suppression(vec![peer], &[certified]);
+        assert!(targets.is_empty());
+        assert_eq!(suppressed, 1);
+    }
+    #[test]
+    fn large_gossip_frame_extends_suppression_until_relay_can_drain() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(2).unwrap());
+        let peer: PeerId = (*PEER_KEYPAIR).public_key().clone().into();
+        let (signed, _) = build_transaction("large-frame-pacing");
+        let key = ordinary_send_key(signed.hash_as_entrypoint());
+        let frame_bytes = 10 * 1024 * 1024;
+        let ttl = gossiper.peer_recent_ttl_ticks(frame_bytes);
+        assert_eq!(ttl, 40);
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer), &[key], frame_bytes);
+        gossiper.gossip_tick = GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS as u64;
+        gossiper.expire_peer_recent_suppression();
+        let (targets, suppressed) =
+            gossiper.filter_targets_by_peer_recent_suppression(vec![peer.clone()], &[key]);
+        assert!(targets.is_empty());
+        assert_eq!(suppressed, 1);
+        gossiper.gossip_tick = ttl;
+        gossiper.expire_peer_recent_suppression();
+        let (targets, suppressed) =
+            gossiper.filter_targets_by_peer_recent_suppression(vec![peer.clone()], &[key]);
+        assert_eq!(targets, vec![peer]);
+        assert_eq!(suppressed, 0);
+    }
+    #[test]
+    fn new_small_input_does_not_resend_recent_large_input_to_same_peer() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(2).unwrap());
+        let peer_a: PeerId = (*ALICE_KEYPAIR).public_key().clone().into();
+        let peer_b: PeerId = (*BOB_KEYPAIR).public_key().clone().into();
+        let (large, _) = build_transaction(&"L".repeat(128 * 1024));
+        let (small, _) = build_transaction("new-small-input");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        let message = Arc::new(TransactionGossip {
+            txs: vec![large.clone().into(), small.clone().into()],
+            routes: vec![route, route],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        });
+        let keys = message
+            .txs
+            .iter()
+            .map(PeerRecentSendKey::from_gossip)
+            .collect::<Vec<_>>();
+        let full_len = message
+            .as_ref()
+            .encoded_len_exact()
+            .expect("complete batch length");
+        gossiper.remember_peer_recent_sends(std::slice::from_ref(&peer_a), &keys[..1], full_len);
+
+        let (filtered, filtered_keys, filtered_len) = gossiper
+            .unsent_gossip_for_peer(&peer_a, &message, &keys, full_len)
+            .expect("new input needs delivery");
+        assert_eq!(filtered.txs.len(), 1);
+        assert_eq!(filtered.txs[0].hash(), small.hash_as_entrypoint());
+        assert_eq!(filtered_keys, keys[1..]);
+        assert_eq!(filtered.routes.len(), 1);
+        assert_eq!(filtered.plans.len(), 1);
+        assert_eq!(filtered_len, filtered.as_ref().encode().len());
+        assert!(filtered_len < full_len / 2);
+        let network_bytes = NetworkMessage::TransactionGossiper(Arc::clone(&filtered)).encode();
+        let decoded: NetworkMessage = Decode::decode(&mut network_bytes.as_slice())
+            .expect("filtered batch is a valid network message");
+        match decoded {
+            NetworkMessage::TransactionGossiper(decoded) => {
+                assert_eq!(decoded.txs.len(), 1);
+                assert_eq!(decoded.txs[0].hash(), small.hash_as_entrypoint());
+            }
+            _ => panic!("filtered network message changed its variant"),
+        }
+
+        let (complete, complete_keys, complete_len) = gossiper
+            .unsent_gossip_for_peer(&peer_b, &message, &keys, full_len)
+            .expect("other peer needs complete batch");
+        assert!(Arc::ptr_eq(&complete, &message));
+        assert_eq!(complete_keys, keys);
+        assert_eq!(complete_len, full_len);
     }
     include!("gossiper/gossip_partition_and_nexus_activity_tests.rs");
     #[test]
@@ -5529,18 +5726,6 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert_eq!(effective, None);
     }
     #[test]
-    fn targeted_backlog_keeps_gossip_active_at_threshold() {
-        let gossip_size = NonZeroU32::new(8).expect("non-zero gossip size");
-        assert!(!TransactionGossiper::targeted_backlog_requires_gossip(
-            gossip_size,
-            15
-        ));
-        assert!(TransactionGossiper::targeted_backlog_requires_gossip(
-            gossip_size,
-            16
-        ));
-    }
-    #[test]
     fn seed_for_plane_changes_with_dataspace() {
         let base = 0xCAFE_BABE;
         let first = TransactionGossiper::seed_for_plane(
@@ -5742,7 +5927,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             ],
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
-            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
@@ -6379,12 +6564,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         assert!(gossiper.state.pipeline.stateless_cache_cap > 0);
         let (valid, _) = build_transaction("signature-cache-identity");
         let (max_clock_drift, limits) = gossiper.state.transaction_admission_limits();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock, time_source) = TimeSource::new_mock(valid.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             valid.clone(),
             gossiper.state.network_id_ref(),
             max_clock_drift,
             limits,
             &gossiper.state.crypto(),
+            &time_source,
         )
         .expect("validate the complete original signed envelope");
         gossiper
@@ -6486,7 +6673,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             ],
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
-            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network,
             queue: Arc::clone(&queue),
@@ -6586,7 +6773,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             ],
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
-            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),
@@ -6735,7 +6922,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             ],
             peer_recently_sent: BTreeMap::new(),
             peer_recent_ring: vec![Vec::new(); GOSSIP_PEER_RECENT_SUPPRESSION_TTL_TICKS],
-            last_drop_count: iroha_p2p::network::subscriber_queue_full_count(),
+            last_drop_count: tx_gossip_relay_drop_count(),
             last_drop_at: None,
             network: IrohaNetwork::closed_for_tests(),
             queue: Arc::clone(&queue),

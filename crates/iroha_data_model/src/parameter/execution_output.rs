@@ -38,7 +38,7 @@ pub struct ExecutionOutputPolicyV1 {
     pub max_output_bytes: u64,
     /// Maximum sum of complete canonical output-row frame bytes.
     pub max_total_output_bytes: u64,
-    /// Maximum complete executed SignedBlockWire bytes, including non-output data.
+    /// Maximum complete executed `SignedBlockWire` bytes, including non-output data.
     pub max_executed_wire_bytes: u64,
     /// Maximum total Pipeline registrations, including disabled/depleted actions.
     /// Zero disables new Pipeline registrations; it never means unlimited.

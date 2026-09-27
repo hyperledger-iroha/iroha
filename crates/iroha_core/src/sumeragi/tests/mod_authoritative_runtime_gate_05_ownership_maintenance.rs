@@ -35,6 +35,8 @@ fn fair_v2_ingress_ownership_projection_ignores_route_liveness_until_maintenance
             .clone()
     };
     assert!(admitted.validate_exact());
+    assert!(admitted.matches_message(&request));
+    assert!(!admitted.matches_message(&v2_auxiliary_prepare(1)));
     let admitted_projection = admitted.process_local_projection_hash();
     assert!(routes.retire(&initial_route));
     assert!(!initial_route.is_active());

@@ -1,0 +1,226 @@
+//! Block payloads of the Sumeragi driver (`specs/sumeragi.md` §3.2, §6.10).
+//!
+//! A payload is the exact wire of an *unsigned, resultless* iroha block proposal: the certified
+//! core header binds its bytes, so it needs no block signature. `EMPTY = []` stands for the
+//! block every node synthesizes deterministically from the committed parent with the same
+//! builder and no transactions, so it is byte-identical everywhere (`R` commits to the
+//! executed block's wire).
+//!
+//! The leader's builder peeks at the queue (it never removes transactions), keeps the queue's
+//! FIFO order, and fills the block up to the payload byte cap and the on-chain transaction cap.
+
+use std::{num::NonZeroUsize, time::Duration};
+
+use iroha_data_model::{block::SignedBlock, transaction::TransactionAdmissionIntent};
+use iroha_primitives::time::TimeSource;
+
+use crate::{
+    block::{BlockBuilder, ValidBlock},
+    queue::{Queue, execution_context_for_routing_plan},
+    state::{State, StateReadOnly, WorldReadOnly, compute_confidential_feature_digest},
+    tx::AcceptedTransaction,
+};
+use iroha_data_model::block::BlockExecutionContextBundle;
+
+/// How many queued transactions one build inspects at most.
+pub const MAX_QUEUE_SCAN: NonZeroUsize = NonZeroUsize::new(4096).expect("non-zero");
+
+/// Why a payload could not be built or decoded.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PayloadError {
+    /// The canonical block time overflows.
+    #[error("canonical block time overflows")]
+    TimeOverflow,
+    /// The block could not be encoded.
+    #[error("block encoding failed: {0}")]
+    Encode(String),
+    /// The payload bytes are not a canonical block proposal.
+    #[error("payload is not a canonical block proposal: {0}")]
+    NotCanonical(String),
+}
+
+/// Inputs of one block assembly shared by the builder and `EMPTY` synthesis.
+#[derive(Clone, Copy, Debug)]
+pub struct Assembly<'a> {
+    /// The committed parent block.
+    pub parent: &'a SignedBlock,
+    /// The view the block is (first) proposed in (`origin_view`).
+    pub view: u64,
+    /// The chain's block cadence (`ChainParams.block_time`).
+    pub cadence: Duration,
+}
+
+/// Build the unsigned proposal carrying `transactions` (in order) over `assembly.parent`,
+/// reading the DA policy and confidential-feature digest from the committed `state`.
+///
+/// Deterministic in its inputs: the block time is canonical (parent time plus the cadence,
+/// strictly after every timed input), not the local clock.
+///
+/// # Errors
+/// The canonical block time overflows.
+pub fn assemble(
+    state: &State,
+    assembly: Assembly<'_>,
+    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+) -> Result<SignedBlock, PayloadError> {
+    let parent_time = assembly.parent.header().creation_time();
+    let minimum = parent_time
+        .checked_add(assembly.cadence)
+        .ok_or(PayloadError::TimeOverflow)?;
+    let build = |time: Duration| -> Result<SignedBlock, PayloadError> {
+        build_at(state, assembly, transactions, time)
+    };
+    let first = build(minimum)?;
+    let canonical = ValidBlock::sumeragi_block_time(&first, parent_time, assembly.cadence)
+        .map_err(|_| PayloadError::TimeOverflow)?;
+    if canonical == first.header().creation_time() {
+        Ok(first)
+    } else {
+        build(canonical)
+    }
+}
+
+fn build_at(
+    state: &State,
+    assembly: Assembly<'_>,
+    transactions: &[(AcceptedTransaction<'static>, crate::queue::RoutingPlan)],
+    time: Duration,
+) -> Result<SignedBlock, PayloadError> {
+    let height = assembly.parent.header().height().get().saturating_add(1);
+    let (_, time_source) = TimeSource::new_mock(time);
+    let accepted = transactions
+        .iter()
+        .map(|(tx, _)| tx.clone())
+        .collect::<Vec<_>>();
+    let nexus = state.nexus_snapshot();
+    let view = state.view();
+    let confidential = compute_confidential_feature_digest(
+        view.world(),
+        view.zk(),
+        view.sccp_registry(),
+        height,
+    );
+    drop(view);
+    let contexts = transactions
+        .iter()
+        .map(|(tx, plan)| execution_context_for_routing_plan(tx.hash_as_entrypoint(), plan))
+        .collect::<Vec<_>>();
+    let execution_context = BlockExecutionContextBundle::new(contexts);
+    let builder = BlockBuilder::new_with_time_source(accepted, time_source)
+        .chain(assembly.view, Some(assembly.parent))
+        .with_da_proof_policies(Some(crate::da::active_proof_policy_bundle_at_height(
+            &nexus, height,
+        )))
+        .with_confidential_features((!confidential.is_empty()).then_some(confidential))
+        .with_execution_context((!execution_context.is_empty()).then_some(execution_context))
+        .with_network_input_time_floor(time)
+        .ok_or(PayloadError::TimeOverflow)?;
+    Ok(builder.into_unsigned_proposal())
+}
+
+/// The block `EMPTY` stands for at `(parent height + 1, view)`.
+///
+/// # Errors
+/// The canonical block time overflows.
+pub fn empty_block(state: &State, assembly: Assembly<'_>) -> Result<SignedBlock, PayloadError> {
+    assemble(state, assembly, &[])
+}
+
+/// The payload bytes of `block`: its canonical resultless proposal wire.
+///
+/// # Errors
+/// The block cannot be encoded.
+pub fn encode(block: &SignedBlock) -> Result<Vec<u8>, PayloadError> {
+    block
+        .canonical_resultless_proposal()
+        .encode_wire()
+        .map_err(|error| PayloadError::Encode(error.to_string()))
+}
+
+/// Decode a non-empty payload: the canonical wire of an unsigned, resultless proposal without
+/// a certificate (re-encoding must reproduce the bytes exactly).
+///
+/// # Errors
+/// The bytes do not decode, are not canonical, carry a result, a certificate or a signature.
+pub fn decode(payload: &[u8]) -> Result<SignedBlock, PayloadError> {
+    let block = iroha_data_model::block::decode_versioned_signed_block(payload)
+        .map_err(|error| PayloadError::NotCanonical(error.to_string()))?;
+    if !block.is_resultless_proposal() {
+        return Err(PayloadError::NotCanonical(
+            "carries a result or a commit certificate".into(),
+        ));
+    }
+    if block.signatures().next().is_some() {
+        return Err(PayloadError::NotCanonical("carries a block signature".into()));
+    }
+    let reencoded = block
+        .encode_wire()
+        .map_err(|error| PayloadError::NotCanonical(error.to_string()))?;
+    if reencoded != payload {
+        return Err(PayloadError::NotCanonical("non-canonical encoding".into()));
+    }
+    Ok(block)
+}
+
+/// Select queued transactions for the block after `parent` (FIFO, peeked, never removed),
+/// within `max_bytes` of transaction bytes, the on-chain transaction cap and the FASTPQ source
+/// policy's Network input cap. Transactions the router cannot place and `QueuePlanSynced`
+/// inputs are skipped.
+pub fn select(
+    state: &State,
+    queue: &std::sync::Arc<Queue>,
+    max_bytes: usize,
+) -> Vec<(AcceptedTransaction<'static>, crate::queue::RoutingPlan)> {
+    let view = state.view();
+    let block_parameters = view.world().parameters().block();
+    // The next block executes under the FASTPQ source policy frozen at its start (the
+    // committed one): proposal packing honours its Network input cap, as validation does.
+    let fastpq_inputs = block_parameters
+        .fastpq_source()
+        .maximum_network_inputs(block_parameters.execution_output())
+        .map_or(0, |inputs| usize::try_from(inputs).unwrap_or(usize::MAX));
+    let max_transactions = usize::try_from(block_parameters.max_transactions().get())
+        .unwrap_or(usize::MAX)
+        .min(fastpq_inputs);
+    let Some((pending, lease)) = queue.bounded_pending_snapshot(&view, MAX_QUEUE_SCAN) else {
+        return Vec::new();
+    };
+    drop(view);
+    drop(lease);
+    let mut selected = Vec::new();
+    let mut bytes = 0usize;
+    for transaction in pending {
+        if selected.len() >= max_transactions {
+            break;
+        }
+        // TODO(WP8a): QueuePlanSynced is deleted with the lane machinery.
+        if transaction.entrypoint().admission_intent() == TransactionAdmissionIntent::QueuePlanSynced
+        {
+            continue;
+        }
+        let Ok(plan) = queue.route_plan_with_state(&transaction, state) else {
+            continue;
+        };
+        let next = bytes.saturating_add(transaction.encoded_len());
+        if next > max_bytes {
+            continue;
+        }
+        bytes = next;
+        selected.push((transaction, plan));
+    }
+    selected
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_rejects_garbage_and_empty() {
+        assert!(matches!(decode(&[]), Err(PayloadError::NotCanonical(_))));
+        assert!(matches!(
+            decode(&[1, 2, 3, 4]),
+            Err(PayloadError::NotCanonical(_))
+        ));
+    }
+}

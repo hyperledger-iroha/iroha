@@ -7,7 +7,7 @@ impl StorageBackend {
             .expect("storage state poisoned")
             .manifests
             .get(manifest_id)
-            .cloned()
+            .map(|manifest| manifest.as_ref().clone())
     }
     /// Returns a clone of the stored manifest metadata, looked up by digest.
     #[must_use]
@@ -19,7 +19,7 @@ impl StorageBackend {
             .manifests
             .get(&manifest_id)
             .filter(|manifest| manifest.manifest_digest == *digest)
-            .cloned()
+            .map(|manifest| manifest.as_ref().clone())
     }
     /// Return the deterministic preferred manifest for a content CID without cloning the store.
     ///
@@ -48,6 +48,6 @@ impl StorageBackend {
                     .then_with(|| left.manifest_digest().cmp(right.manifest_digest()))
                     .then_with(|| left.manifest_id().cmp(right.manifest_id()))
             })
-            .cloned()
+            .map(|manifest| manifest.as_ref().clone())
     }
 }

@@ -12,6 +12,9 @@
 //! terminal claim is valid only after the exact typed-plan stage and job totals have been reached
 //! and the ordered terminal-digest root equals the plan commitment.
 
+#[path = "mint_hash_claim_global_inventory.rs"]
+mod global_inventory;
+
 use ff::{Field as _, PrimeField};
 #[cfg(test)]
 use halo2_base::QuantumCell::Witness;

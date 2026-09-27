@@ -3,11 +3,11 @@
 use super::super::tests::{cache_canonical_test_transaction_set, delta, header, state};
 use super::*;
 use crate::{
+    exec_witness,
     fastpq::{
         FastpqPublicInputsTemplate, quantity_materializer_invocations_for_testing,
         quantity_statement_from_finalized_transcripts,
     },
-    sumeragi::witness,
 };
 use fastpq_prover::gadgets::public_transfer_statement::{
     PublicTransferLimits, TransferSmtBuildLimits,
@@ -31,9 +31,11 @@ fn limits() -> FastpqSourceStatementBuildLimits {
 
 fn seal(block: &mut StateBlock<'_>, sources: &[Hash], empty_entries: &[Hash]) -> Archive {
     cache_canonical_test_transaction_set(block, &[]);
+    for hash in empty_entries {
+        block.admit_fastpq_source_for_testing(*hash);
+    }
     for hash in sources {
-        let mut transaction = block.transaction();
-        transaction.tx_call_hash = Some(*hash);
+        let mut transaction = block.transaction_for_fastpq_testing(*hash);
         for before in [10_u32, 9] {
             let mut transfer = delta();
             transfer.from_balance_before = Quantity::from(before);
@@ -93,8 +95,8 @@ fn encoded_bundle(bundle: &[TransferTranscript]) -> usize {
 
 #[test]
 fn complete_same_entry_measurement_matches_actual_frames_and_retry_replaces_usage() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let hash = Hash::new(b"reservation ordered entry");
@@ -159,8 +161,8 @@ fn complete_same_entry_measurement_matches_actual_frames_and_retry_replaces_usag
 
 #[test]
 fn all_six_inclusive_caps_precede_private_work_and_preserve_state() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let archive = seal(
@@ -228,10 +230,10 @@ fn all_six_inclusive_caps_precede_private_work_and_preserve_state() {
 
 #[test]
 fn empty_archives_count_owned_nontransfer_entries_with_zero_transcript_caps() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let state = state();
     for entries in [0_u32, 1] {
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(header());
         let times = if entries == 0 {
             Vec::new()
@@ -280,8 +282,8 @@ fn empty_archives_count_owned_nontransfer_entries_with_zero_transcript_caps() {
 
 #[test]
 fn aborted_failed_and_retried_attempts_preserve_the_previous_complete_reservation() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let hash = Hash::new(b"atomic reservation");
@@ -318,8 +320,8 @@ fn aborted_failed_and_retried_attempts_preserve_the_previous_complete_reservatio
 
 #[test]
 fn changed_private_paths_are_remeasured_and_failed_growth_keeps_prior_usage() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let hash = Hash::new(b"private input accounting");
@@ -359,14 +361,13 @@ fn changed_private_paths_are_remeasured_and_failed_growth_keeps_prior_usage() {
 
 #[test]
 fn same_entry_discontinuity_is_rejected_without_splitting_or_private_work() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     cache_canonical_test_transaction_set(&mut block, &[]);
     let hash = Hash::new(b"intervening nontransfer relation remains unavailable");
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(hash);
+    let mut tx = block.transaction_for_fastpq_testing(hash);
     // Both single occurrences are arithmetically valid. Together they require an
     // intervening balance change that the current transfer-only relation cannot prove.
     for _ in 0..2 {
@@ -392,8 +393,8 @@ fn same_entry_discontinuity_is_rejected_without_splitting_or_private_work() {
 
 #[test]
 fn foreign_equal_inventory_and_late_owner_replacement_fail_before_materialization() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let archive = seal(&mut block, &[Hash::new(b"allocation ownership")], &[]);
@@ -423,8 +424,8 @@ fn foreign_equal_inventory_and_late_owner_replacement_fail_before_materializatio
 
 #[test]
 fn missing_failed_stale_and_replay_state_owners_are_not_reservation_authority() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     assert!(block.fastpq_source_statement_budget(limits()).is_err());
@@ -465,8 +466,8 @@ fn counts_and_derived_construction_ceilings_reject_overflow_atomically() {
     if let Some(over) = (u32::MAX as usize).checked_add(1) {
         assert!(checked_entry_count(over).is_err());
     }
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let archive = seal(&mut block, &[], &[]);
@@ -498,8 +499,8 @@ fn counts_and_derived_construction_ceilings_reject_overflow_atomically() {
 
 #[test]
 fn strict_producer_failure_after_successful_preparation_does_not_commit_usage() {
-    let _guard = witness::exec_witness_guard();
-    witness::start_block();
+    let _guard = exec_witness::exec_witness_guard();
+    exec_witness::start_block();
     let state = state();
     let mut block = state.block(header());
     let archive = seal(&mut block, &[], &[]);

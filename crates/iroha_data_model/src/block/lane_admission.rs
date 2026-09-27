@@ -20,11 +20,11 @@ use iroha_model_base::{
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeSet;
 
-/// Current first-release QueuePlan authority-attestation layout.
+/// Current first-release `QueuePlan` authority-attestation layout.
 pub const QUEUE_PLAN_ADMISSION_ATTESTATION_VERSION_V1: u16 = 1;
-/// Current first-release QueuePlan admission-certificate layout.
+/// Current first-release `QueuePlan` admission-certificate layout.
 pub const QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1: u16 = 1;
-/// Current first-release QueuePlan global-admission binding layout.
+/// Current first-release `QueuePlan` global-admission binding layout.
 pub const QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1: u16 = 1;
 /// Journal claim layout expected by the signed first-release binding.
 /// Core statically checks equality with its actual journal-record version.
@@ -253,7 +253,7 @@ pub struct QueuePlanGlobalAdmissionIdentityV1 {
     pub version: u16,
     /// Domain-separated digest of the exact network identifier.
     pub network_id_digest: Hash,
-    /// Deterministic QueuePlanSynced proxy request identity.
+    /// Deterministic `QueuePlanSynced` proxy request identity.
     pub request_id: Hash,
 }
 /// One routing leg paired with the exact active lane incarnation that admitted it.
@@ -408,66 +408,68 @@ impl QueuePlanAdmissionContextV1 {
             );
         }
         for (bound, expected_leg) in self.route_incarnations.iter().zip(legs) {
-            if bound.leg != expected_leg {
-                return Err(
-                    "queue-plan admission context legs are missing, reordered, or role-mismatched"
-                        .to_owned(),
-                );
-            }
-            if hash_is_zero(bound.lane_incarnation) {
-                return Err(
-                    "queue-plan admission context contains a zero lane incarnation".to_owned(),
-                );
-            }
-            if bound.validator_set_hash_version != crate::consensus::VALIDATOR_SET_HASH_VERSION_V1 {
-                return Err(format!(
-                    "queue-plan admission validator-set hash version {} is unsupported",
-                    bound.validator_set_hash_version
-                ));
-            }
-            if hash_is_zero(Hash::from(bound.validator_set_hash)) {
-                return Err(
-                    "queue-plan admission context contains a zero validator-set hash".to_owned(),
-                );
-            }
-            let validator_count = bound.validator_set.len();
-            if validator_count == 0 || validator_count > MAX_LANE_CONSENSUS_VALIDATORS {
-                return Err(format!(
-                    "queue-plan admission validator count {} is outside 1..={MAX_LANE_CONSENSUS_VALIDATORS}",
-                    validator_count
-                ));
-            }
-            if usize::from(bound.validator_count) != validator_count {
-                return Err(format!(
-                    "queue-plan admission validator count {} does not equal exact roster length {validator_count}",
-                    bound.validator_count
-                ));
-            }
-            if bound.validator_set.iter().collect::<BTreeSet<_>>().len() != validator_count {
-                return Err(
-                    "queue-plan admission validator roster contains duplicate identities"
-                        .to_owned(),
-                );
-            }
-            if bound.validator_set_hash != HashOf::new(&bound.validator_set) {
-                return Err(
-                    "queue-plan admission validator-set hash does not match the exact ordered roster"
-                        .to_owned(),
-                );
-            }
-            let expected_threshold = validator_count.div_ceil(3);
-            if usize::from(bound.durability_threshold) != expected_threshold {
-                return Err(format!(
-                    "queue-plan admission durability threshold {} does not equal ceil({validator_count}/3)",
-                    bound.durability_threshold
-                ));
-            }
+            validate_route_incarnation(bound, expected_leg)?;
         }
         Ok(())
     }
 }
 
-/// Return the exact network identity carried by every QueuePlan admission binding.
+fn validate_route_incarnation(
+    bound: &QueuePlanRouteIncarnationV1,
+    expected_leg: RouteLeg,
+) -> Result<(), String> {
+    if bound.leg != expected_leg {
+        return Err(
+            "queue-plan admission context legs are missing, reordered, or role-mismatched"
+                .to_owned(),
+        );
+    }
+    if hash_is_zero(bound.lane_incarnation) {
+        return Err("queue-plan admission context contains a zero lane incarnation".to_owned());
+    }
+    if bound.validator_set_hash_version != crate::consensus::VALIDATOR_SET_HASH_VERSION_V1 {
+        return Err(format!(
+            "queue-plan admission validator-set hash version {} is unsupported",
+            bound.validator_set_hash_version
+        ));
+    }
+    if hash_is_zero(Hash::from(bound.validator_set_hash)) {
+        return Err("queue-plan admission context contains a zero validator-set hash".to_owned());
+    }
+    let validator_count = bound.validator_set.len();
+    if validator_count == 0 || validator_count > MAX_LANE_CONSENSUS_VALIDATORS {
+        return Err(format!(
+            "queue-plan admission validator count {validator_count} is outside 1..={MAX_LANE_CONSENSUS_VALIDATORS}"
+        ));
+    }
+    if usize::from(bound.validator_count) != validator_count {
+        return Err(format!(
+            "queue-plan admission validator count {} does not equal exact roster length {validator_count}",
+            bound.validator_count
+        ));
+    }
+    if bound.validator_set.iter().collect::<BTreeSet<_>>().len() != validator_count {
+        return Err(
+            "queue-plan admission validator roster contains duplicate identities".to_owned(),
+        );
+    }
+    if bound.validator_set_hash != HashOf::new(&bound.validator_set) {
+        return Err(
+            "queue-plan admission validator-set hash does not match the exact ordered roster"
+                .to_owned(),
+        );
+    }
+    let expected_threshold = validator_count.div_ceil(3);
+    if usize::from(bound.durability_threshold) != expected_threshold {
+        return Err(format!(
+            "queue-plan admission durability threshold {} does not equal ceil({validator_count}/3)",
+            bound.durability_threshold
+        ));
+    }
+    Ok(())
+}
+
+/// Return the exact network identity carried by every `QueuePlan` admission binding.
 #[must_use]
 pub fn queue_plan_admission_network_id_digest(network_id: &NetworkId) -> Hash {
     Hash::new_from_chunks(&[
@@ -475,7 +477,7 @@ pub fn queue_plan_admission_network_id_digest(network_id: &NetworkId) -> Hash {
         network_id.as_bytes(),
     ])
 }
-/// Derive the deterministic QueuePlanSynced request identity shared by every ingress.
+/// Derive the deterministic `QueuePlanSynced` request identity shared by every ingress.
 ///
 /// This pure kernel deliberately excludes connection/session identity. Every responsive ingress
 /// therefore presents the same semantic request identity for one network and entrypoint while
@@ -490,7 +492,7 @@ pub fn queue_plan_synced_request_id(
         entrypoint_hash,
     )
 }
-/// Derive the deterministic QueuePlanSynced request identity from its durable projection.
+/// Derive the deterministic `QueuePlanSynced` request identity from its durable projection.
 ///
 /// Binding the request to the persisted network digest lets journal replay and certificate
 /// validation recompute the same semantic identity without trusting a human-readable chain
@@ -527,7 +529,7 @@ pub struct QueuePlanAdmissionRegistryKeyV1 {
     /// Typed canonical transaction-entrypoint identity.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
-/// Immutable value claimed by a QueuePlan global-admission registry key.
+/// Immutable value claimed by a `QueuePlan` global-admission registry key.
 #[derive(
     Clone,
     Copy,
@@ -576,7 +578,7 @@ pub struct QueuePlanAdmissionBindingV1 {
     pub version: u16,
     /// Domain-separated exact network identity.
     pub network_id_digest: Hash,
-    /// Deterministic QueuePlanSynced proxy request identity.
+    /// Deterministic `QueuePlanSynced` proxy request identity.
     pub request_id: Hash,
     /// Typed canonical transaction-entrypoint identity.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,
@@ -637,7 +639,7 @@ impl QueuePlanAdmissionBindingV1 {
         if self.request_id
             != queue_plan_synced_request_id_from_network_digest(
                 self.network_id_digest,
-                self.entrypoint_hash.clone(),
+                self.entrypoint_hash,
             )
         {
             return Err(
@@ -670,7 +672,7 @@ impl QueuePlanAdmissionBindingV1 {
         QueuePlanAdmissionRegistryKeyV1 {
             version: QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest: self.network_id_digest,
-            entrypoint_hash: self.entrypoint_hash.clone(),
+            entrypoint_hash: self.entrypoint_hash,
         }
     }
     /// Return the immutable WSV registry value for this exact binding.
@@ -687,7 +689,7 @@ fn hash_is_zero(hash: Hash) -> bool {
     hash == Hash::prehashed([0; Hash::LENGTH])
 }
 
-/// One compact signature over a shared QueuePlan admission binding.
+/// One compact signature over a shared `QueuePlan` admission binding.
 #[derive(
     norito::NoritoSchema,
     iroha_schema::IntoSchema,
@@ -705,7 +707,7 @@ pub struct QueuePlanAdmissionAttestationV1 {
     /// Signature over the binding hash and validator index.
     pub signature: Signature,
 }
-/// Coordinator-authority evidence that one exact QueuePlan journal claim is durably replicated.
+/// Coordinator-authority evidence that one exact `QueuePlan` journal claim is durably replicated.
 #[derive(
     Clone,
     Debug,

@@ -6,6 +6,7 @@ package org.hyperledger.iroha.sdk.offline.probe
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.UserManager
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import java.io.ByteArrayInputStream
@@ -115,6 +116,7 @@ sealed interface Pixel6TestnetObservationResultV1 {
 internal interface Pixel6TestnetObservationDeviceV1 {
     val apiLevel: Int
     fun isPixel6(): Boolean
+    fun isUserUnlocked(): Boolean
     fun hasStrongBox(): Boolean
     fun newNonce(): ByteArray
     fun hasAlias(alias: String): Boolean
@@ -156,6 +158,11 @@ internal class Pixel6TestnetObservationRunnerV1(
         val before = secureIndexBeforeLittleEndian.copyOf()
         val after = secureIndexAfterLittleEndian.copyOf()
         requirePixel6CanonicalFrameV1(frame, network, release, lane, before, after)
+        if (try { !device.isUserUnlocked() } catch (_: Exception) { true }) {
+            return Pixel6TestnetObservationResultV1.Unavailable(
+                "unlock the Pixel 6 with its PIN after reboot before collecting evidence",
+            )
+        }
         // A slot is scoped to the predecessor, across all network/release requests. Changing
         // either scope cannot create a second local selection for the same lane predecessor.
         val slot = pixel6HexV1(pixel6Sha256V1(lane + before))
@@ -264,6 +271,8 @@ private class AndroidPixel6StrongBoxDeviceV1(private val context: Context) :
     Pixel6TestnetObservationDeviceV1 {
     override val apiLevel: Int get() = Build.VERSION.SDK_INT
     override fun isPixel6(): Boolean = isPixel6HardwareV1(Build.MANUFACTURER, Build.DEVICE)
+    override fun isUserUnlocked(): Boolean =
+        (context.getSystemService(Context.USER_SERVICE) as UserManager).isUserUnlocked
     override fun hasStrongBox(): Boolean =
         context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
     override fun newNonce(): ByteArray = ByteArray(32).also(SecureRandom()::nextBytes)

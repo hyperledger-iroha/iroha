@@ -1251,7 +1251,17 @@ impl Root {
         let telemetry = self.telemetry.map(actual::Telemetry::from);
         let telemetry_profile = actual::TelemetryProfile::from(self.telemetry_profile);
         let telemetry_integrity = self.telemetry_integrity.parse(&mut emitter);
-        let sumeragi = self.sumeragi.parse(&mut emitter);
+        let sumeragi = self.sumeragi.parse(&mut emitter, &kura.store_dir);
+        if let Some(sumeragi) = sumeragi.as_ref()
+            && sumeragi.retired_keys.contains(peer.id().public_key())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                    "sumeragi.retired_keys must not contain the node's configured key {}",
+                    peer.id().public_key()
+                )),
+            );
+        }
         if let Some(sumeragi) = sumeragi.as_ref() {
             let lane_profile = network.lane_profile;
             let reply_source_capacity = network
@@ -6413,6 +6423,47 @@ pub struct Sumeragi {
     /// Consensus key-rotation and algorithm policy.
     #[config(nested)]
     pub keys: SumeragiKeys,
+    /// Override of the base view timeout `T_base` in milliseconds (`specs/sumeragi.md` §9.3).
+    ///
+    /// Every local-parameter override below is optional: an unset value takes the §9.3 default
+    /// for the committee size, resolved by the node once the committee is known. The complete
+    /// set is validated against the chain parameters at startup (§9.4).
+    pub view_timeout_base_ms: Option<DurationMs>,
+    /// Override of the view timeout cap `T_max` in milliseconds.
+    pub view_timeout_max_ms: Option<DurationMs>,
+    /// Override of the largest pacemaker start level.
+    pub start_level_cap: Option<u32>,
+    /// Override of the number of fast commits that lowers the start level by one.
+    pub start_level_decay_after: Option<u32>,
+    /// Override of the state rebroadcast interval while unsettled, in milliseconds.
+    pub rebroadcast_interval_ms: Option<DurationMs>,
+    /// Override of the status keepalive interval while settled, in milliseconds.
+    pub status_keepalive_ms: Option<DurationMs>,
+    /// Override of the payload build timeout in milliseconds.
+    pub build_timeout_ms: Option<DurationMs>,
+    /// Override of the block-body fetch retry interval in milliseconds.
+    pub fetch_retry_ms: Option<DurationMs>,
+    /// Override of the number of entries per sync request.
+    pub sync_batch: Option<u16>,
+    /// Override of the sync request retry interval in milliseconds.
+    pub sync_retry_ms: Option<DurationMs>,
+    /// Override of the byte limit of one sync response (at least `max_block_bytes + 64 KiB`).
+    pub sync_max_bytes: Option<u32>,
+    /// Override of the number of observers kept in the peer table besides the committee.
+    pub max_observers: Option<u32>,
+    /// Directory holding the Sumeragi safety records (one file per instance and key) and the
+    /// record-store id (§7.4). It must not be inside the Kura store directory and must be
+    /// excluded from backups. Default: a sibling of `kura.store_dir` named
+    /// `<store dir name>-sumeragi-records`.
+    pub records_dir: Option<WithOrigin<PathBuf>>,
+    /// File holding the Sumeragi key installation log (§7.4); it must be outside
+    /// `records_dir`. Default: a sibling of `kura.store_dir` named
+    /// `<store dir name>-sumeragi-installation.log`.
+    pub installation_log: Option<WithOrigin<PathBuf>>,
+    /// Consensus keys that no longer sign but keep their safety records (§7.4 Keys, §10.3):
+    /// after a key rotation the old key is listed here and never removed.
+    #[config(default)]
+    pub retired_keys: Vec<PublicKey>,
 }
 /// Node role in consensus participation (user view).
 /// User-level enumeration translating `NodeRole` settings.
@@ -6502,7 +6553,116 @@ mod trusted_peers_pop_env_tests {
     }
 }
 impl Sumeragi {
-    fn parse(self, emitter: &mut Emitter<ParseError>) -> Option<actual::Sumeragi> {
+    /// Validate the optional local-parameter overrides: every interval and `sync_batch` must be
+    /// non-zero (the remaining §9.4 rules need the committee and chain parameters and are
+    /// checked by the node at startup).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one argument per optional flat `[sumeragi]` local-parameter key"
+    )]
+    fn parse_local_overrides(
+        view_timeout_base_ms: Option<DurationMs>,
+        view_timeout_max_ms: Option<DurationMs>,
+        start_level_cap: Option<u32>,
+        start_level_decay_after: Option<u32>,
+        rebroadcast_interval_ms: Option<DurationMs>,
+        status_keepalive_ms: Option<DurationMs>,
+        build_timeout_ms: Option<DurationMs>,
+        fetch_retry_ms: Option<DurationMs>,
+        sync_batch: Option<u16>,
+        sync_retry_ms: Option<DurationMs>,
+        sync_max_bytes: Option<u32>,
+        max_observers: Option<u32>,
+    ) -> core::result::Result<actual::SumeragiLocalOverrides, String> {
+        let intervals = [
+            ("view_timeout_base_ms", view_timeout_base_ms),
+            ("view_timeout_max_ms", view_timeout_max_ms),
+            ("rebroadcast_interval_ms", rebroadcast_interval_ms),
+            ("status_keepalive_ms", status_keepalive_ms),
+            ("build_timeout_ms", build_timeout_ms),
+            ("fetch_retry_ms", fetch_retry_ms),
+            ("sync_retry_ms", sync_retry_ms),
+        ];
+        let mut zero: Vec<&str> = intervals
+            .iter()
+            .filter(|(_, value)| value.is_some_and(|value| value.get().is_zero()))
+            .map(|(name, _)| *name)
+            .collect();
+        if sync_batch == Some(0) {
+            zero.push("sync_batch");
+        }
+        if !zero.is_empty() {
+            return Err(format!(
+                "sumeragi local-parameter overrides must be non-zero: {}",
+                zero.join(", ")
+            ));
+        }
+        Ok(actual::SumeragiLocalOverrides {
+            t_base: view_timeout_base_ms.map(DurationMs::get),
+            t_max: view_timeout_max_ms.map(DurationMs::get),
+            start_cap: start_level_cap,
+            decay_after: start_level_decay_after,
+            rebroadcast_interval: rebroadcast_interval_ms.map(DurationMs::get),
+            status_keepalive: status_keepalive_ms.map(DurationMs::get),
+            build_timeout: build_timeout_ms.map(DurationMs::get),
+            fetch_retry: fetch_retry_ms.map(DurationMs::get),
+            sync_batch,
+            sync_retry: sync_retry_ms.map(DurationMs::get),
+            sync_max_bytes,
+            max_observers,
+        })
+    }
+
+    /// Resolve the safety-record directory and installation log (§7.4): explicit values are
+    /// resolved relative to their configuration file, defaults are siblings of the Kura store
+    /// directory. The records must live outside the Kura store (which is backed up, restored
+    /// and, in test networks, recreated) and the installation log outside the records.
+    fn parse_record_paths(
+        records_dir: Option<WithOrigin<PathBuf>>,
+        installation_log: Option<WithOrigin<PathBuf>>,
+        kura_store_dir: &WithOrigin<PathBuf>,
+    ) -> core::result::Result<(PathBuf, PathBuf), String> {
+        let store_dir = kura_store_dir.resolve_relative_path();
+        let records_dir = match records_dir {
+            Some(path) => path.resolve_relative_path(),
+            None => actual::Sumeragi::default_records_dir(&store_dir).ok_or_else(|| {
+                format!(
+                    "sumeragi.records_dir has no default for kura.store_dir `{}` (no final path component); set it explicitly",
+                    store_dir.display()
+                )
+            })?,
+        };
+        let installation_log = match installation_log {
+            Some(path) => path.resolve_relative_path(),
+            None => actual::Sumeragi::default_installation_log(&store_dir).ok_or_else(|| {
+                format!(
+                    "sumeragi.installation_log has no default for kura.store_dir `{}` (no final path component); set it explicitly",
+                    store_dir.display()
+                )
+            })?,
+        };
+        if actual::path_is_within(&records_dir, &store_dir) {
+            return Err(format!(
+                "sumeragi.records_dir `{}` must not be inside kura.store_dir `{}`: safety records are never backed up or restored with the block store",
+                records_dir.display(),
+                store_dir.display()
+            ));
+        }
+        if actual::path_is_within(&installation_log, &records_dir) {
+            return Err(format!(
+                "sumeragi.installation_log `{}` must be outside sumeragi.records_dir `{}`",
+                installation_log.display(),
+                records_dir.display()
+            ));
+        }
+        Ok((records_dir, installation_log))
+    }
+
+    fn parse(
+        self,
+        emitter: &mut Emitter<ParseError>,
+        kura_store_dir: &WithOrigin<PathBuf>,
+    ) -> Option<actual::Sumeragi> {
         let Self {
             role,
             mint_finality_seed_fd,
@@ -6514,6 +6674,21 @@ impl Sumeragi {
             limits,
             storage,
             keys,
+            view_timeout_base_ms,
+            view_timeout_max_ms,
+            start_level_cap,
+            start_level_decay_after,
+            rebroadcast_interval_ms,
+            status_keepalive_ms,
+            build_timeout_ms,
+            fetch_retry_ms,
+            sync_batch,
+            sync_retry_ms,
+            sync_max_bytes,
+            max_observers,
+            records_dir,
+            installation_log,
+            retired_keys,
         } = self;
         let mut valid = true;
         if mint_finality_seed_fd.is_some_and(|fd| fd != 199) {
@@ -6530,6 +6705,46 @@ impl Sumeragi {
                     .attach("an observer must not configure a mint-finality seed descriptor"),
             );
             valid = false;
+        }
+        let local = match Self::parse_local_overrides(
+            view_timeout_base_ms,
+            view_timeout_max_ms,
+            start_level_cap,
+            start_level_decay_after,
+            rebroadcast_interval_ms,
+            status_keepalive_ms,
+            build_timeout_ms,
+            fetch_retry_ms,
+            sync_batch,
+            sync_retry_ms,
+            sync_max_bytes,
+            max_observers,
+        ) {
+            Ok(local) => local,
+            Err(message) => {
+                emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(message));
+                valid = false;
+                actual::SumeragiLocalOverrides::default()
+            }
+        };
+        let record_paths =
+            match Self::parse_record_paths(records_dir, installation_log, kura_store_dir) {
+                Ok(paths) => Some(paths),
+                Err(message) => {
+                    emitter.emit(Report::new(ParseError::InvalidSumeragiConfig).attach(message));
+                    valid = false;
+                    None
+                }
+            };
+        let mut unique_retired = BTreeSet::new();
+        for key in &retired_keys {
+            if !unique_retired.insert(key) {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig)
+                        .attach(format!("sumeragi.retired_keys lists {key} more than once")),
+                );
+                valid = false;
+            }
         }
         let global_beacon_partial_signer_provider_policy_digest =
             match validate_consensus_signer_provider_binding_v1(
@@ -6680,7 +6895,12 @@ impl Sumeragi {
         if !valid {
             return None;
         }
+        let (records_dir, installation_log) = record_paths?;
         Some(actual::Sumeragi {
+            local,
+            records_dir,
+            installation_log,
+            retired_keys,
             role: match role {
                 NodeRole::Validator => actual::NodeRole::Validator,
                 NodeRole::Observer => actual::NodeRole::Observer,
@@ -6752,6 +6972,123 @@ impl Sumeragi {
                 allowed_algorithms: key_algorithms,
             },
         })
+    }
+}
+#[cfg(test)]
+mod sumeragi_core_parse_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn ms(value: u64) -> Option<DurationMs> {
+        Some(DurationMs(Duration::from_millis(value)))
+    }
+
+    #[test]
+    fn local_overrides_map_every_field() {
+        let local = Sumeragi::parse_local_overrides(
+            ms(1),
+            ms(2),
+            Some(3),
+            Some(4),
+            ms(5),
+            ms(6),
+            ms(7),
+            ms(8),
+            Some(9),
+            ms(10),
+            Some(11),
+            Some(12),
+        )
+        .expect("non-zero overrides");
+        assert_eq!(local.t_base, Some(Duration::from_millis(1)));
+        assert_eq!(local.t_max, Some(Duration::from_millis(2)));
+        assert_eq!(local.start_cap, Some(3));
+        assert_eq!(local.decay_after, Some(4));
+        assert_eq!(local.rebroadcast_interval, Some(Duration::from_millis(5)));
+        assert_eq!(local.status_keepalive, Some(Duration::from_millis(6)));
+        assert_eq!(local.build_timeout, Some(Duration::from_millis(7)));
+        assert_eq!(local.fetch_retry, Some(Duration::from_millis(8)));
+        assert_eq!(local.sync_batch, Some(9));
+        assert_eq!(local.sync_retry, Some(Duration::from_millis(10)));
+        assert_eq!(local.sync_max_bytes, Some(11));
+        assert_eq!(local.max_observers, Some(12));
+        let none = Sumeragi::parse_local_overrides(
+            None, None, None, None, None, None, None, None, None, None, None, None,
+        )
+        .expect("no overrides");
+        assert!(none.is_empty());
+    }
+
+    #[test]
+    fn local_overrides_name_every_zero_interval() {
+        let error = Sumeragi::parse_local_overrides(
+            ms(0),
+            None,
+            Some(0),
+            Some(0),
+            None,
+            None,
+            ms(0),
+            None,
+            Some(0),
+            None,
+            Some(0),
+            Some(0),
+        )
+        .expect_err("zero intervals");
+        assert_eq!(
+            error,
+            "sumeragi local-parameter overrides must be non-zero: view_timeout_base_ms, build_timeout_ms, sync_batch"
+        );
+    }
+
+    #[test]
+    fn record_paths_default_to_store_siblings_and_reject_nesting() {
+        let store = WithOrigin::inline(PathBuf::from("/data/kura"));
+        let (records, log) =
+            Sumeragi::parse_record_paths(None, None, &store).expect("default record paths");
+        assert_eq!(records, PathBuf::from("/data/kura-sumeragi-records"));
+        assert_eq!(log, PathBuf::from("/data/kura-sumeragi-installation.log"));
+
+        let inside = Sumeragi::parse_record_paths(
+            Some(WithOrigin::inline(PathBuf::from("/data/kura/records"))),
+            None,
+            &store,
+        )
+        .expect_err("records inside the store");
+        assert!(
+            inside.contains("must not be inside kura.store_dir"),
+            "{inside}"
+        );
+
+        let nested_log = Sumeragi::parse_record_paths(
+            Some(WithOrigin::inline(PathBuf::from("/srv/records"))),
+            Some(WithOrigin::inline(PathBuf::from("/srv/records/log"))),
+            &store,
+        )
+        .expect_err("log inside the records");
+        assert!(
+            nested_log.contains("must be outside sumeragi.records_dir"),
+            "{nested_log}"
+        );
+
+        let rootless = WithOrigin::inline(PathBuf::from("/"));
+        let no_default = Sumeragi::parse_record_paths(None, None, &rootless)
+            .expect_err("no default for a store without a final component");
+        assert!(
+            no_default.contains("sumeragi.records_dir has no default"),
+            "{no_default}"
+        );
+        let explicit = Sumeragi::parse_record_paths(
+            Some(WithOrigin::inline(PathBuf::from("/records"))),
+            None,
+            &rootless,
+        )
+        .expect_err("records inside `/` and no log default");
+        assert!(
+            explicit.contains("installation_log has no default"),
+            "{explicit}"
+        );
     }
 }
 /// SoraNet handshake configuration (user view).
@@ -8703,6 +9040,10 @@ pub struct Settlement {
 /// content address and compiled protocol identity.
 #[derive(Debug, ReadConfig, Clone, Default)]
 pub struct Kagemusha {
+    /// Permit a signed TestnetExperiment proof release on this explicitly configured node.
+    /// Production releases do not need this permission.
+    #[config(default = "false")]
+    pub allow_testnet_experimental_release: bool,
     /// Canonical Norito release manifest.
     pub release_manifest_path: Option<PathBuf>,
     /// Canonical Norito internal qualification receipt.
@@ -8920,6 +9261,7 @@ impl Kagemusha {
         actual::Kagemusha {
             reserve_accounts: BTreeMap::new(),
             proof_release,
+            allow_testnet_experimental_release: self.allow_testnet_experimental_release,
         }
     }
 }
@@ -9772,6 +10114,14 @@ pub struct NexusStorage {
     /// Zero is a closed pool, never an unlimited setting.
     #[config(default = "defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES")]
     pub retained_carrier_shell_bytes: usize,
+    /// Finite process-local pool for committed-evidence preparation. At least one
+    /// maximum prune-key and pending-penalty backing plan must fit.
+    #[config(default = "defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES")]
+    pub consensus_evidence_preparation_bytes: usize,
+    /// Finite process-local pool for flat consensus stake-index share keys.
+    /// A capacity refusal remains a local retry, not an invalid block.
+    #[config(default = "defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES")]
+    pub consensus_stake_index_bytes: usize,
     /// Budget weights for dividing the disk cap across subsystems.
     #[config(nested)]
     pub disk_budget_weights: NexusStorageWeights,
@@ -9782,6 +10132,9 @@ impl_default!(NexusStorage {
     max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
     kagemusha_operation_index_bytes: defaults::nexus::storage::KAGEMUSHA_OPERATION_INDEX_BYTES,
     retained_carrier_shell_bytes: defaults::nexus::storage::RETAINED_CARRIER_SHELL_BYTES,
+    consensus_evidence_preparation_bytes:
+        defaults::nexus::storage::CONSENSUS_EVIDENCE_PREPARATION_BYTES,
+    consensus_stake_index_bytes: defaults::nexus::storage::CONSENSUS_STAKE_INDEX_BYTES,
     disk_budget_weights: NexusStorageWeights::default(),
 });
 impl NexusStorage {
@@ -9802,6 +10155,24 @@ impl NexusStorage {
             emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(
                 "nexus.storage.local_budget_bytes must be greater than zero when configured",
             ));
+            return None;
+        }
+        if self.consensus_evidence_preparation_bytes
+            < defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.consensus_evidence_preparation_bytes must be at least {} bytes",
+                defaults::nexus::storage::CONSENSUS_EVIDENCE_ONE_PLAN_BYTES
+            )));
+            return None;
+        }
+        if self.consensus_stake_index_bytes
+            < defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES
+        {
+            emitter.emit(Report::new(ParseError::InvalidNexusConfig).attach(format!(
+                "nexus.storage.consensus_stake_index_bytes must be at least {} bytes",
+                defaults::nexus::storage::CONSENSUS_STAKE_INDEX_MIN_BYTES
+            )));
             return None;
         }
         if let Some(local_budget_bytes) = self.local_budget_bytes {
@@ -9836,6 +10207,8 @@ impl NexusStorage {
             max_wsv_memory_bytes: self.max_wsv_memory_bytes,
             kagemusha_operation_index_bytes: self.kagemusha_operation_index_bytes,
             retained_carrier_shell_bytes: self.retained_carrier_shell_bytes,
+            consensus_evidence_preparation_bytes: self.consensus_evidence_preparation_bytes,
+            consensus_stake_index_bytes: self.consensus_stake_index_bytes,
             disk_budget_weights: weights,
             configured_component_caps: None,
         })
@@ -14636,9 +15009,10 @@ pub struct Torii {
     /// Maximum fetch size accepted by app-facing iterable queries.
     #[config(default = "defaults::torii::APP_API_MAX_FETCH_SIZE")]
     pub app_api_max_fetch_size: u32,
-    /// Rate-limiter cost applied per requested row on app-facing endpoints.
-    #[config(default = "defaults::torii::APP_API_RATE_LIMIT_COST_PER_ROW")]
-    pub app_api_rate_limit_cost_per_row: u32,
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    /// Empty pages cost one page; the default charges one unit per 100 rows.
+    #[config(default = "defaults::torii::APP_API_RATE_LIMIT_COST_PER_PAGE")]
+    pub app_api_rate_limit_cost_per_page: u32,
     /// Maximum allowed clock skew for signed app-facing canonical requests (seconds).
     #[config(default = "defaults::torii::app_auth::MAX_CLOCK_SKEW_SECS")]
     pub app_auth_max_clock_skew_secs: u64,
@@ -14768,11 +15142,12 @@ pub struct Torii {
     pub preauth_max_connections: Option<NonZeroUsize>,
     /// Maximum concurrent pre-auth connections per IP.
     pub preauth_max_connections_per_ip: Option<NonZeroUsize>,
-    /// Pre-auth handshake rate per IP (tokens/sec). None disables.
+    /// Pre-auth request rate per IP (tokens/sec); omission selects the default.
     pub preauth_rate_per_ip_per_sec: Option<u32>,
-    /// Pre-auth handshake burst per IP (tokens). None disables.
+    /// Pre-auth request burst per IP (tokens); omission selects the default.
     pub preauth_burst_per_ip: Option<u32>,
-    /// Temporary ban duration applied after rate/limit violations (milliseconds).
+    /// Extra cooldown after pre-auth rate exhaustion (milliseconds; zero disables).
+    /// Connection-capacity rejection never applies a ban.
     pub preauth_ban_duration_ms: Option<DurationMs>,
     /// Maximum number of temporary pre-auth bans retained in memory.
     #[config(default = "defaults::torii::PREAUTH_BAN_CAPACITY")]
@@ -16070,8 +16445,8 @@ impl Torii {
             std::num::NonZeroU32::new(self.app_api_max_list_limit).unwrap_or(nonzero!(1_u32));
         let max_fetch_size =
             std::num::NonZeroU32::new(self.app_api_max_fetch_size).unwrap_or(nonzero!(1_u32));
-        let rate_limit_cost_per_row =
-            std::num::NonZeroU32::new(self.app_api_rate_limit_cost_per_row)
+        let rate_limit_cost_per_page =
+            std::num::NonZeroU32::new(self.app_api_rate_limit_cost_per_page)
                 .unwrap_or(nonzero!(1_u32));
         let webhook = self.webhook.parse();
         let webhook_security = self.webhook_security.parse();
@@ -16305,7 +16680,7 @@ impl Torii {
                 default_list_limit,
                 max_list_limit,
                 max_fetch_size,
-                rate_limit_cost_per_row,
+                rate_limit_cost_per_page,
                 request_signature_max_clock_skew: Duration::from_secs(
                     self.app_auth_max_clock_skew_secs,
                 ),
@@ -17909,8 +18284,8 @@ fn validate_app_api_limits(config: &Torii, emitter: &mut Emitter<ParseError>) {
             config.app_api_max_fetch_size,
         ),
         (
-            "torii.app_api_rate_limit_cost_per_row",
-            config.app_api_rate_limit_cost_per_row,
+            "torii.app_api_rate_limit_cost_per_page",
+            config.app_api_rate_limit_cost_per_page,
         ),
     ] {
         if value == 0 {
@@ -27730,6 +28105,103 @@ impl SorafsPorReplayArchiveConfig {
         })
     }
 }
+/// Shared signer-journal inventory resource admission for every purpose.
+#[derive(Debug, ReadConfig, Clone, Copy, norito::JsonDeserialize)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsSignerJournalInventory {
+    /// Aggregate resident requested allocation ceiling in bytes.
+    #[config(default = "defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES")]
+    pub resident_bytes: Bytes,
+    /// Aggregate logical directory/metadata probe ceiling, not physical disk bytes.
+    #[config(default = "defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_METADATA_PROBES")]
+    pub metadata_probes: u64,
+    /// Aggregate retained path, scan and receipt descriptor ceiling.
+    #[config(default = "defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES")]
+    pub open_handles: u32,
+}
+impl Default for SorafsSignerJournalInventory {
+    fn default() -> Self {
+        Self {
+            resident_bytes: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES,
+            metadata_probes: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_METADATA_PROBES,
+            open_handles: defaults::sorafs::storage::SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES,
+        }
+    }
+}
+impl SorafsSignerJournalInventory {
+    fn parse(self, emitter: &mut Emitter<ParseError>) -> actual::SorafsSignerJournalInventory {
+        // A complete maximum receipt scan must fit a single operation. Lower settings would
+        // permanently refuse a valid full journal, regardless of concurrency.
+        const MIN_RESIDENT_BYTES: u64 = 1024 * 1024;
+        const MIN_METADATA_PROBES: u64 = 65_537 + 4 * 65 + 4 + 4 * 65 + 1;
+        const MIN_OPEN_HANDLES: u32 = 67;
+        if self.resident_bytes.0 < MIN_RESIDENT_BYTES
+            || self.metadata_probes < MIN_METADATA_PROBES
+            || self.open_handles < MIN_OPEN_HANDLES
+        {
+            emitter.emit(Report::new(ParseError::InvalidSorafsConfig).attach(
+                "sorafs.storage.signer_journal_inventory cannot fund one maximum inventory scan and pinned path",
+            ));
+        }
+        actual::SorafsSignerJournalInventory {
+            resident_bytes: self.resident_bytes,
+            metadata_probes: self.metadata_probes,
+            open_handles: self.open_handles,
+        }
+    }
+}
+#[cfg(test)]
+mod sorafs_signer_journal_inventory_tests {
+    use super::*;
+
+    #[test]
+    fn default_and_exact_minimum_are_configurable() {
+        let mut emitter = Emitter::new();
+        let default = SorafsSignerJournalInventory::default().parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("default signer inventory policy");
+        let expected = actual::SorafsSignerJournalInventory::default();
+        assert_eq!(default.resident_bytes.0, expected.resident_bytes.0);
+        assert_eq!(default.metadata_probes, expected.metadata_probes);
+        assert_eq!(default.open_handles, expected.open_handles);
+        let mut emitter = Emitter::new();
+        let exact = SorafsSignerJournalInventory {
+            resident_bytes: Bytes(1024 * 1024),
+            metadata_probes: 65_537 + 4 * 65 + 4 + 4 * 65 + 1,
+            open_handles: 67,
+        }
+        .parse(&mut emitter);
+        emitter
+            .into_result()
+            .expect("inclusive signer inventory minimum");
+        assert_eq!(exact.open_handles, 67);
+    }
+
+    #[test]
+    fn one_below_any_resource_is_rejected() {
+        for policy in [
+            SorafsSignerJournalInventory {
+                resident_bytes: Bytes(1024 * 1024 - 1),
+                ..SorafsSignerJournalInventory::default()
+            },
+            SorafsSignerJournalInventory {
+                metadata_probes: 65_537 + 4 * 65 + 4 + 4 * 65,
+                ..SorafsSignerJournalInventory::default()
+            },
+            SorafsSignerJournalInventory {
+                open_handles: 66,
+                ..SorafsSignerJournalInventory::default()
+            },
+        ] {
+            let mut emitter = Emitter::new();
+            let _ = policy.parse(&mut emitter);
+            emitter
+                .into_result()
+                .expect_err("unfunded signer scan policy");
+        }
+    }
+}
 /// User-level configuration container for the embedded SoraFS storage worker.
 #[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
 pub struct SorafsStorage {
@@ -27750,6 +28222,9 @@ pub struct SorafsStorage {
     /// Maximum number of manifests pinned before back-pressure engages.
     #[config(default = "defaults::sorafs::storage::MAX_PINS")]
     pub max_pins: usize,
+    /// Shared finite signer-journal inventory admission policy.
+    #[config(nested)]
+    pub signer_journal_inventory: SorafsSignerJournalInventory,
     /// Interval between Proof-of-Retrievability sampling rounds (seconds).
     #[config(default = "defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS")]
     pub por_sample_interval_secs: u64,
@@ -27862,6 +28337,7 @@ impl Default for SorafsStorage {
             max_capacity_bytes: defaults::sorafs::storage::MAX_CAPACITY_BYTES,
             max_parallel_fetches: defaults::sorafs::storage::MAX_PARALLEL_FETCHES,
             max_pins: defaults::sorafs::storage::MAX_PINS,
+            signer_journal_inventory: SorafsSignerJournalInventory::default(),
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
             pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
             pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
@@ -28372,6 +28848,7 @@ impl SorafsStorage {
             max_capacity_bytes: self.max_capacity_bytes,
             max_parallel_fetches: self.max_parallel_fetches,
             max_pins: self.max_pins,
+            signer_journal_inventory: self.signer_journal_inventory.parse(emitter),
             por_sample_interval_secs: self.por_sample_interval_secs,
             pdp_sample_window: self.pdp_sample_window,
             pdp_tree_memory_limit_bytes: self.pdp_tree_memory_limit_bytes,

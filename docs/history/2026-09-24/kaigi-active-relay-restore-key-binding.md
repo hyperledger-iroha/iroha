@@ -1,0 +1,9 @@
+# Kaigi active relay manifest binding during restore
+
+Status on 2026-09-24: Kaigi-owned restore validation is linked in the combined Core test binary `target/debug/deps/iroha_core-4c145bf78d09a1ce`. Its `relay_restore_key_tests` selector passed 3/3 with no failures; the separate `relay_lifecycle_guard_v1::tests::` selector passed again, 2/2 with no failures. This is focused local evidence, not release qualification.
+
+The Kaigi restore path rebuilds account dependencies from authoritative domain metadata. It already validates each retained call's shape and separately rebuilds the relay registry, but it did not compare the HPKE key in an **active** call's retained manifest to the relay descriptor after restart. An active call could therefore be restored with a missing or changed relay descriptor even though Create and Set had required exact key equality at admission.
+
+The dependency rebuild now captures the exact registered relay keys while it performs its existing registry scan. For each active retained call manifest, it requires every hop ID to have a registered descriptor with the same HPKE key. It checks the current domain layer and the latest undo layer through the existing rebuild procedure. Ended calls keep their historical manifest and may outlive relay retirement. Restore does not reapply current governance allowlists or manifest expiry to historical admissions.
+
+The new controls exercise a valid active route through rebuild and validation, reject missing and key-mismatched descriptors without rewriting authoritative domain layers, and accept an ended call retaining its historical manifest after one relay retires. This source cut does not qualify off-chain relay transport, HPKE key possession, authenticated recovery across four validators, or the Kaigi privacy release gate.

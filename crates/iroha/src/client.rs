@@ -81,7 +81,8 @@ use iroha_data_model::{
         AliasSetupReportV1, AliasTransactionPlanBodyV1, AliasTransactionPlanV1,
     },
     block::consensus::SumeragiDiagnosticsStatus,
-    block::consensus_v2::{SumeragiV2QcResponse, SumeragiV2Status},
+    sumeragi::SumeragiStatus,
+    block::consensus_v2::SumeragiV2QcResponse,
     da::{
         ingest::{DaIngestReceipt, DaIngestRequest, DaPinScopeV1},
         types::{BlobDigest, ExtraMetadata},
@@ -423,8 +424,9 @@ macro_rules! sorafs_transaction_methods {
     ($submitter:ident; $($name:ident => $route:expr),+ $(,)?) => {
         $(
             #[doc = concat!("Submit the exact `", stringify!($route), "` `SoraFS` transaction.")]
+            /// The caller must sign a transaction with `QueuePlanSynced` admission.
             /// # Errors
-            /// Returns errors from route validation, compatibility admission, or transport.
+            /// Returns errors from route validation, admission intent, compatibility admission, or transport.
             pub fn $name(
                 &self,
                 transaction: &SignedTransaction,
@@ -438,8 +440,9 @@ macro_rules! sorafs_transaction_methods {
 macro_rules! sorafs_transaction_submitter {
     ($name:ident($route:ident: $route_type:ty), $validate:path, $path:expr, $error:literal) => {
         #[doc = concat!("Submit a caller-signed transaction to one exact `", stringify!($route_type), "` route.")]
+        /// The caller must select `QueuePlanSynced` before signing.
         /// # Errors
-        /// Returns an error if route validation, compatibility admission, construction, or
+        /// Returns an error if route validation, admission intent, compatibility admission, construction, or
         /// transport fails.
         pub fn $name(
             &self,
@@ -447,6 +450,9 @@ macro_rules! sorafs_transaction_submitter {
             transaction: &SignedTransaction,
         ) -> Result<HashOf<SignedTransaction>> {
             $validate($route, transaction)?;
+            if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+                return Err(eyre!("SoraFS native transaction route requires QueuePlanSynced admission"));
+            }
             self.ensure_transaction_submit_compatibility()?;
             let payload = PreparedTransactionPayload::from_transaction(transaction);
             let hash = payload.hash();
@@ -9646,7 +9652,7 @@ impl Client {
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_sumeragi_status(&self) -> Result<SumeragiV2Status> {
+    pub fn get_sumeragi_status(&self) -> Result<SumeragiStatus> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/status");
         let resp = self.send_builder(
             self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
@@ -9659,19 +9665,16 @@ impl Client {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
         let status = if Self::is_norito_content_type(content_type) {
-            decode_from_bytes::<SumeragiV2Status>(resp.body())
+            decode_from_bytes::<SumeragiStatus>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status Norito payload: {err}"))?
         } else if Self::is_exact_json_content_type(content_type) {
-            norito::json::from_slice::<SumeragiV2Status>(resp.body())
+            norito::json::from_slice::<SumeragiStatus>(resp.body())
                 .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?
         } else {
             return Err(eyre!(
                 "Failed to decode sumeragi status: invalid content-type `{content_type}` (expected {APPLICATION_NORITO} or {APPLICATION_JSON})"
             ));
         };
-        status
-            .validate()
-            .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
         Ok(status)
     }
     /// GET `/v1/sumeragi/status` — consensus status snapshot.
@@ -9695,13 +9698,10 @@ impl Client {
                 "Failed to decode sumeragi status JSON: invalid content-type `{content_type}` (expected {APPLICATION_JSON})"
             ));
         }
-        let status = norito::json::from_slice::<SumeragiV2Status>(resp.body())
+        let status = norito::json::from_slice::<SumeragiStatus>(resp.body())
             .map_err(|err| eyre!("Failed to decode sumeragi status JSON payload: {err}"))?;
-        status
-            .validate()
-            .map_err(|err| eyre!("Invalid Sumeragi v2 status payload: {err}"))?;
         norito::json::to_value(&status)
-            .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"))
+            .map_err(|err| eyre!("Failed to render Sumeragi status JSON: {err}"))
     }
     /// GET `/v1/sumeragi/diagnostics` with typed decoding and evidence validation.
     ///
@@ -16210,7 +16210,10 @@ pub struct AccountTransactionDraft {
 }
 
 impl AccountTransactionDraft {
-    /// Create a queue-plan-synchronized transaction draft.
+    /// Create an ordinary transaction draft for direct leader selection.
+    ///
+    /// Multi-route transactions must select `QueuePlanSynced` explicitly before
+    /// signing, because their participant custody needs a certified admission.
     pub fn new(
         executable: impl Into<Executable>,
         fee_payment: FeePaymentIntent,
@@ -16220,7 +16223,7 @@ impl AccountTransactionDraft {
             executable: executable.into(),
             fee_payment,
             metadata,
-            admission_intent: TransactionAdmissionIntent::QueuePlanSynced,
+            admission_intent: TransactionAdmissionIntent::Ordinary,
             attachments: None,
             time_to_live: None,
         }
@@ -25847,6 +25850,10 @@ mod tests {
 
         assert_eq!(first.authority(), &first_client.account);
         assert_eq!(first.network_id(), Some(&first_client.network_id));
+        assert_eq!(
+            first.admission_intent(),
+            TransactionAdmissionIntent::Ordinary
+        );
         assert_eq!(second.authority(), &second_client.account);
         assert_eq!(second.network_id(), Some(&second_client.network_id));
         assert_ne!(first.authority(), second.authority());
@@ -33362,6 +33369,21 @@ mod tests {
         )
     }
 
+    fn empty_queue_plan_transaction(client: &Client) -> SignedTransaction {
+        let account = account_context(client);
+        account
+            .prepare_transaction(
+                AccountTransactionDraft::new(
+                    Vec::<InstructionBox>::new(),
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                )
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+            )
+            .and_then(|payload| account.sign_transaction(payload))
+            .expect("build QueuePlanSynced client test transaction")
+    }
+
     #[derive(Debug)]
     struct DelayedCapabilityTransport {
         capability_requests: Arc<AtomicUsize>,
@@ -34119,7 +34141,7 @@ mod tests {
     fn nonblocking_queue_plan_exact_outcome_unknown_is_structured_and_never_retried() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let response = exact_queue_plan_outcome_unknown_response(&identity);
@@ -34146,7 +34168,7 @@ mod tests {
     fn nonblocking_prepared_queue_plan_exact_outcome_unknown_uses_local_identity() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let payload = PreparedTransactionPayload::from_transaction(&transaction);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
@@ -34174,7 +34196,7 @@ mod tests {
     fn nonblocking_queue_plan_claimed_invalid_evidence_remains_ambiguous() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let mut response = exact_queue_plan_outcome_unknown_response(&identity);
@@ -34209,7 +34231,7 @@ mod tests {
     fn nonblocking_queue_plan_post_dispatch_transport_error_remains_ambiguous() {
         let client = client_with_base_url(base_url());
 
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -34247,7 +34269,7 @@ mod tests {
     async fn async_nonblocking_queue_plan_ambiguities_are_structured_and_never_retried() {
         for scenario in ["exact", "claimed-invalid", "truncated"] {
             let mut client = client_with_base_url(base_url());
-            let transaction = empty_transaction(&client);
+            let transaction = empty_queue_plan_transaction(&client);
             let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
                 .expect("client transaction must use QueuePlanSynced admission");
             let response = match scenario {
@@ -34332,7 +34354,7 @@ mod tests {
         for asynchronous in [false, true] {
             for (scenario, header_name, mut header_value, expected_diagnostic) in cases.clone() {
                 let mut client = client_with_base_url(base_url());
-                let transaction = empty_transaction(&client);
+                let transaction = empty_queue_plan_transaction(&client);
                 let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
                     .expect("client transaction must use QueuePlanSynced admission");
                 if header_value.is_empty() {
@@ -34390,7 +34412,7 @@ mod tests {
         );
 
         client.transaction_status_timeout = Duration::from_secs(1);
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let hash = transaction.hash();
         let status = PipelineTransactionStatusResponse::new(
             hash.to_string(),
@@ -34871,7 +34893,7 @@ mod tests {
     #[test]
     fn confirmation_handler_preserves_exact_queue_plan_outcome_unknown() {
         let client = client_with_base_url(base_url());
-        let transaction = empty_transaction(&client);
+        let transaction = empty_queue_plan_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transactions use QueuePlanSynced admission");
         let envelope = ErrorEnvelope::new(
@@ -35058,8 +35080,45 @@ mod tests {
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.blocks, status.blocks);
     }
-    fn sample_sumeragi_status() -> SumeragiV2Status {
-        sample_sumeragi_v2_status(12, 5, 2)
+    fn sample_sumeragi_status() -> SumeragiStatus {
+        let key = KeyPair::from_seed(vec![7; 32], iroha_crypto::Algorithm::BlsNormal)
+            .public_key()
+            .clone();
+        SumeragiStatus {
+            instance: [3; 32],
+            height: 12,
+            view: 5,
+            stage: 1,
+            leader: Some(key.clone()),
+            proxy_tail: Some(key.clone()),
+            high_qc_view: Some(4),
+            level: 2,
+            start_level: 0,
+            t_retx_ms: 250,
+            committed_height: 11,
+            applied_height: 11,
+            awaiting: false,
+            signer: Some(key),
+            unanchored: false,
+            abstaining: false,
+            halted: None,
+            footprint: iroha_data_model::sumeragi::SumeragiFootprint {
+                votes: 1,
+                timeouts: 0,
+                blocks: 2,
+                exec_entries: 1,
+                wants: 0,
+                pending_apply: 0,
+                sync_entries: 0,
+                sync_bytes: 0,
+                peers: 4,
+                recent_headers: 8,
+                configs: 3,
+                cert_cache: 1,
+                evidence_keys: 0,
+                probe: 0,
+            },
+        }
     }
     #[test]
     fn get_sumeragi_status_prefers_norito_and_handles_json() {
@@ -35136,72 +35195,13 @@ mod tests {
     include!("client/sumeragi_api_separation_tests.rs");
 
     #[test]
-    fn get_sumeragi_status_rejects_structurally_impossible_norito_and_json() {
-        let client = client_with_base_url(base_url());
-        let mut wrong_protocol = sample_sumeragi_status();
-        wrong_protocol.protocol_version += 1;
-        let response = mk_response(
-            StatusCode::OK,
-            norito::to_bytes(&wrong_protocol).expect("serialize invalid status"),
-            Some(APPLICATION_NORITO),
-        );
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_status()
-            },
-        )
-        .expect_err("wrong protocol must be rejected after Norito decode");
-        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-        let mut impossible_phase = sample_sumeragi_status();
-        impossible_phase.phase = SumeragiV2StatusPhase::PendingApply;
-        impossible_phase.body_state = SumeragiV2BodyState::Applied;
-        let response = mk_response(
-            StatusCode::OK,
-            norito::json::to_vec(&impossible_phase).expect("serialize invalid status"),
-            Some(APPLICATION_JSON),
-        );
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_status()
-            },
-        )
-        .expect_err("inconsistent commit frontier must be rejected after JSON decode");
-        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-        let response = mk_response(
-            StatusCode::OK,
-            norito::json::to_vec(&wrong_protocol).expect("serialize invalid status"),
-            Some(APPLICATION_JSON),
-        );
-        let error = with_mock_http(
-            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
-            |mock_transport| {
-                let client = client
-                    .clone()
-                    .with_test_http_transport(mock_transport.clone());
-                client.get_sumeragi_status_json()
-            },
-        )
-        .expect_err("JSON projection helper must validate the typed snapshot");
-        assert!(error.to_string().contains("Invalid Sumeragi v2 status"));
-    }
-    #[test]
     fn get_sumeragi_status_json_requires_exact_json_media_type() {
         let mut status = sample_sumeragi_status();
         status.height = 43;
         status.view = 7;
-        status.phase = SumeragiV2StatusPhase::Prepare;
-        status.body_state = SumeragiV2BodyState::Validated;
-        status.last_committed_height = 42;
+        status.committed_height = 42;
         let expected_json =
-            norito::json::to_value(&status).expect("serialize exact Sumeragi v2 status");
+            norito::json::to_value(&status).expect("serialize exact Sumeragi status");
         let json_snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let json_body =
             norito::json::to_vec(&status).expect("serialize sumeragi status endpoint JSON payload");
@@ -36341,6 +36341,84 @@ mod tests {
             "strict native SoraFS routes must carry an unambiguous signature-bound QueuePlanSynced intent"
         );
     }
+    fn build_sorafs_transaction<Exec: Into<Executable>>(
+        client: &Client,
+        executable: Exec,
+    ) -> SignedTransaction {
+        let account = account_context(client);
+        let payload = account
+            .prepare_transaction(
+                AccountTransactionDraft::new(
+                    executable,
+                    FeePaymentIntent::authority(Vec::new(), None),
+                    Metadata::default(),
+                )
+                .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+            )
+            .expect("prepare SoraFS transaction");
+        account
+            .sign_transaction(payload)
+            .expect("sign SoraFS transaction")
+    }
+    #[test]
+    fn sorafs_native_transaction_routes_reject_ordinary_intent_before_http() {
+        use iroha_data_model::isi::sorafs::{
+            RequestSorafsReserveMovement, SubmitSorafsModerationCommit, SubmitSorafsRepairTask,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = capability_gated_responder(&store, StatusCode::ACCEPTED);
+        with_mock_http(responder, |mock_transport| {
+            let client = client_with_base_url(base_url()).with_test_http_transport(mock_transport);
+            let repair = build_transaction(
+                &client,
+                [SubmitSorafsRepairTask::new([0x51; 32], vec![0x01])],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
+            let moderation = build_transaction(
+                &client,
+                [SubmitSorafsModerationCommit::new(vec![0x01])],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
+            let reserve = build_transaction(
+                &client,
+                [RequestSorafsReserveMovement::new(
+                    [0x62; 32],
+                    iroha_data_model::sorafs::capacity::ProviderId::new([0x64; 32]),
+                    iroha_data_model::sorafs::reserve::ReserveMovementKindV1::TopUp,
+                    "1".parse().expect("reserve quantity"),
+                    1,
+                    [0x65; 32],
+                )],
+                FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
+            for transaction in [&repair, &moderation, &reserve] {
+                assert_eq!(
+                    transaction.admission_intent(),
+                    TransactionAdmissionIntent::Ordinary
+                );
+            }
+            for result in [
+                client.post_sorafs_repair_report(&repair),
+                client.post_sorafs_moderation_ballot_commit(&moderation),
+                client.post_sorafs_reserve_top_up(&reserve),
+            ] {
+                let error = result.expect_err("ordinary SoraFS intent must fail locally");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("requires QueuePlanSynced admission")
+                );
+            }
+        });
+        assert!(
+            store.lock().expect("snapshot store").is_empty(),
+            "invalid signed intent must not trigger capability lookup or command HTTP"
+        );
+    }
     macro_rules! assert_sorafs_routes {
         ($($route:expr => $path:expr),+ $(,)?) => {
             $(assert_eq!(format!("/{}", $route.path()), $path);)+
@@ -36354,7 +36432,6 @@ mod tests {
         let expected_hash = with_mock_http(responder, |mock_transport| {
             let mut client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
-            client.add_transaction_nonce = true;
             client.transaction_ttl = Some(Duration::from_secs(1));
             let commit = moderation_ballot_commit_fixture();
             let commit_payload = to_bytes(&commit).expect("encode canonical commit");
@@ -36366,6 +36443,7 @@ mod tests {
                         FeePaymentIntent::authority(Vec::new(), None),
                         Metadata::default(),
                     )
+                    .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
                     .with_time_to_live(SORAFS_MODERATION_TRANSACTION_TTL),
                 )
                 .expect("prepare exact moderation transaction");
@@ -36383,7 +36461,7 @@ mod tests {
                 transaction.admission_intent(),
                 TransactionAdmissionIntent::QueuePlanSynced
             );
-            assert!(transaction.nonce().is_some());
+            assert!(transaction.nonce().is_none());
             assert!(transaction.metadata().is_empty());
             let Executable::Instructions(instructions) = transaction.instructions() else {
                 panic!("moderation transaction must contain instructions");
@@ -36644,14 +36722,12 @@ mod tests {
         let expected_hash = with_mock_http(responder, |mock_transport| {
             let client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
-            let transaction = build_transaction(
+            let transaction = build_sorafs_transaction(
                 &client,
                 [iroha_data_model::isi::sorafs::SubmitSorafsRepairTask::new(
                     [0x51; 32],
                     vec![0x01],
                 )],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
             );
             assert_sorafs_routes! {
                 SorafsRepairCommandRoute::Report => "/v1/sorafs/audit/repair/report",
@@ -36684,7 +36760,7 @@ mod tests {
             let mut client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             client.transaction_ttl = Some(Duration::from_secs(300));
-            let transaction = build_transaction(
+            let transaction = build_sorafs_transaction(
                 &client,
                 [
                     iroha_data_model::isi::sorafs::RequestSorafsReserveMovement::new(
@@ -36696,8 +36772,6 @@ mod tests {
                         [0x65; 32],
                     ),
                 ],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
             );
             assert_sorafs_routes! {
                 SorafsReserveCommandRoute::TopUp => "/v1/sorafs/reserve/top-up",

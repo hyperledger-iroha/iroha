@@ -5,6 +5,7 @@ use super::super::super::signed_app_preparation::{
     SignedAppPreparationPinsV1, verify_signed_app_preparation_v1,
 };
 use super::*;
+use std::time::Duration;
 
 fn preparation_fixture() -> Fixture {
     let mut f = Fixture::new();
@@ -237,6 +238,59 @@ fn accept(
             f.verified_app(challenge),
         )
         .unwrap()
+}
+
+#[test]
+fn signed_app_certificate_phase_two_accepts_only_the_selected_challenge_and_authority() {
+    let f = Fixture::new();
+    let pending = f.begin();
+    let challenge = f.proof(pending.client_nonce).challenge;
+    let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
+    let canonical_challenge = challenge.canonical_bytes().unwrap();
+    let certificate = norito::encode_canonical(&f.app_certificate(&challenge)).unwrap();
+    let accepted = pending
+        .accept_challenge_with_certificate(
+            &canonical_challenge,
+            projection(&challenge, &command),
+            &certificate,
+            1_500,
+        )
+        .unwrap();
+    assert_eq!(
+        accepted.device_request_id().unwrap(),
+        challenge.device_request_id().unwrap()
+    );
+
+    let pending = f.begin();
+    let other_challenge = f.proof(pending.client_nonce).challenge;
+    let mut other_certificate = f.app_certificate(&other_challenge);
+    other_certificate.assertion.server_nonce[0] ^= 1;
+    let other_certificate = norito::encode_canonical(&other_certificate).unwrap();
+    assert_eq!(
+        pending
+            .accept_challenge_with_certificate(
+                &other_challenge.canonical_bytes().unwrap(),
+                projection(&other_challenge, &command),
+                &other_certificate,
+                1_500,
+            )
+            .err(),
+        Some(InitialEnrollmentErrorV1::Authority),
+    );
+
+    let pending = f.begin();
+    let other_challenge = f.proof(pending.client_nonce).challenge;
+    assert_eq!(
+        pending
+            .accept_challenge_with_certificate(
+                &other_challenge.canonical_bytes().unwrap(),
+                projection(&other_challenge, &command),
+                &norito::encode_canonical(&f.app_certificate(&other_challenge)).unwrap(),
+                2_000,
+            )
+            .err(),
+        Some(InitialEnrollmentErrorV1::Authority),
+    );
 }
 
 fn account_signature(proof: &KagemushaRetailEnrollmentPossessionProofV1) -> Vec<u8> {
@@ -792,7 +846,7 @@ fn expiry_precedes_parsing_and_signing_in_every_retained_phase() {
     let mut pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
     let command = KagemushaDeviceReadCredentialCommandV1::canonical_bytes().unwrap();
-    pending.deadline = NativeDeadlineV1::expired_for_test();
+    pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         pending.canonical_qualification().err(),
         Some(InitialEnrollmentErrorV1::Expired)
@@ -811,7 +865,7 @@ fn expiry_precedes_parsing_and_signing_in_every_retained_phase() {
     let pending = f.begin();
     let proof = f.proof(pending.client_nonce().unwrap());
     let mut accepted = accept(&f, pending, &proof.challenge);
-    accepted.pending.deadline = NativeDeadlineV1::expired_for_test();
+    accepted.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         accepted.account_signing_message().err(),
         Some(InitialEnrollmentErrorV1::Expired)
@@ -830,7 +884,7 @@ fn expiry_precedes_parsing_and_signing_in_every_retained_phase() {
     );
 
     let (mut prepared, _) = prepare(&f);
-    prepared.pending.deadline = NativeDeadlineV1::expired_for_test();
+    prepared.pending.deadline = Some(NativeDeadlineV1::expired_for_test());
     assert_eq!(
         prepared.challenge_id().err(),
         Some(InitialEnrollmentErrorV1::Expired)
@@ -852,7 +906,7 @@ fn all_challenge_transitions_share_the_original_continuous_deadline() {
     let proof = f.proof(pending.client_nonce().unwrap());
     let certificate = f.certificate(&proof).canonical_bytes().unwrap();
     let original = NativeDeadlineV1::start(Duration::from_secs(2)).unwrap();
-    pending.deadline = original.clone();
+    pending.deadline = Some(original.clone());
     let prepared = accept(&f, pending, &proof.challenge)
         .prepare_proof(&account_signature(&proof), &proof.device_response)
         .unwrap();

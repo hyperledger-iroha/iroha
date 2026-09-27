@@ -4,9 +4,9 @@ use super::*;
 use iroha_config::base::read::ConfigReader;
 use iroha_core::{
     beacon,
-    kura::{BlockIndex, BlockStore},
+    kura::{BlockIndex, BlockStore, Kura},
 };
-use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair, MerkleTree};
+use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair};
 use iroha_data_model::{
     block::{SignedBlock, decode_framed_signed_block},
     bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier},
@@ -126,9 +126,12 @@ fn runtime_workspace() -> Result<tempfile::TempDir> {
         .or_else(|| std::env::var_os("IROHA_RELEASE_ARTIFACT_ROOT"))
         .ok_or_else(|| eyre!("an explicit owner-only external beacon fixture root is required"))?;
     let root = validate_runtime_root(Path::new(&root))?;
-    Ok(tempfile::Builder::new()
+    let workspace = tempfile::Builder::new()
         .prefix("beacon-production-")
-        .tempdir_in(root)?)
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(root)?;
+    validate_runtime_root(workspace.path())?;
+    Ok(workspace)
 }
 fn binary(variable: &str, kind: ReleasePrebuiltBinary) -> Result<PathBuf> {
     let path = std::env::var_os(variable)
@@ -359,17 +362,16 @@ async fn status_height(clients: &[iroha::client::Client], deadline: Instant) -> 
                     .map(|client| validator_status_until(client, deadline)),
             )
             .await?;
-            if statuses
-                .iter()
-                .all(|s| s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0)
-            {
+            if statuses.iter().all(|s| {
+                s.blocks > 0 && s.blocks == statuses[0].blocks && s.queue_size == 0 && s.peers == 3
+            }) {
                 return Ok(statuses[0].blocks);
             }
             sleep(Duration::from_millis(200)).await;
         }
     })
     .await
-    .wrap_err("four validators did not reach the same drained committed height")?
+    .wrap_err("four validators did not reach the same drained committed height and full mesh")?
 }
 fn exact_height_reached(
     statuses: &[iroha_torii_shared::status::Status],
@@ -532,6 +534,49 @@ impl Peers {
         Ok(())
     }
 }
+// Only the fixture's first launch owns the assertion that its freshly generated keys never
+// signed. A later launch must preserve that distinction even if safety files were lost.
+fn configure_consensus_boot(
+    command: &mut Command,
+    records_dir: &Path,
+    installation_log: &Path,
+    first_launch: bool,
+) -> Result<()> {
+    if first_launch {
+        for path in [records_dir, installation_log] {
+            ensure!(
+                matches!(fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound),
+                "initial fixture launch requires absent consensus history: {}",
+                path.display(),
+            );
+        }
+        command.arg("--sumeragi-assert-fresh-key");
+    }
+    Ok(())
+}
+
+#[test]
+fn production_beacon_fresh_key_assertion_is_only_for_the_original_launch() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let records = directory.path().join("sumeragi-records");
+    let log = directory.path().join("sumeragi-installation.log");
+    let mut first = Command::new("iroha3d");
+    configure_consensus_boot(&mut first, &records, &log, true)?;
+    assert_eq!(
+        first.as_std().get_args().collect::<Vec<_>>(),
+        ["--sumeragi-assert-fresh-key"]
+    );
+    let mut restart = Command::new("iroha3d");
+    configure_consensus_boot(&mut restart, &records, &log, false)?;
+    assert_eq!(restart.as_std().get_args().count(), 0);
+    fs::create_dir(&records)?;
+    assert!(configure_consensus_boot(&mut Command::new("iroha3d"), &records, &log, true).is_err());
+    fs::remove_dir(&records)?;
+    fs::write(&log, b"retained installation")?;
+    assert!(configure_consensus_boot(&mut Command::new("iroha3d"), &records, &log, true).is_err());
+    Ok(())
+}
+
 fn spawn_peers(
     directory: &Path,
     daemon: &Path,
@@ -550,13 +595,6 @@ fn spawn_peers(
             .position(|peer| peer == &native.common.peer.id)
             .ok_or_else(|| eyre!("peer is outside signed genesis roster"))?
             + 1;
-        let signer = consumed_copy(
-            &directory.join(format!(
-                "runtime/taira-runtime-signers/peer{index}.private_key"
-            )),
-            &directory.join(format!("runtime/peer{index}-run{run_number}.fd198")),
-            71,
-        )?;
         let mint = consumed_copy(
             &directory.join(format!("runtime/mint-finality-signers/peer{index}.seed")),
             &directory.join(format!("runtime/peer{index}-run{run_number}.fd199")),
@@ -575,10 +613,15 @@ fn spawn_peers(
                 &directory.join(format!("peer{index}-run{run_number}-stderr.log")),
                 &[],
             )?);
-        let descriptors = vec![(signer.file.as_raw_fd(), 198), (mint.file.as_raw_fd(), 199)];
+        configure_consensus_boot(
+            &mut child,
+            &native.sumeragi.records_dir,
+            &native.sumeragi.installation_log,
+            run_number == 1,
+        )?;
+        let descriptors = vec![(mint.file.as_raw_fd(), 199)];
         inherit(&mut child, &descriptors)?;
         peers.children.push(child.spawn()?);
-        peers.private_copies.push(signer);
         peers.private_copies.push(mint);
     }
     Ok(peers)
@@ -852,6 +895,7 @@ impl Canary<'_> {
 
 struct ProviderBroker {
     child: Child,
+    endpoint: PathBuf,
     _owner_root: Arc<tempfile::TempDir>,
 }
 
@@ -868,6 +912,130 @@ impl ProviderBroker {
             .wrap_err("fixture-owned stock broker did not stop")??;
         Ok(())
     }
+}
+
+fn configure_stock_broker(table: &mut toml::Table, endpoint: &Path) -> Result<()> {
+    let sumeragi = table
+        .get_mut("sumeragi")
+        .and_then(toml::Value::as_table_mut)
+        .ok_or_else(|| eyre!("native Sumeragi config absent"))?;
+    sumeragi.insert("mint_finality_seed_fd".into(), toml::Value::Integer(199));
+    let broker = table
+        .entry("runtime_provider_broker")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()))
+        .as_table_mut()
+        .ok_or_else(|| eyre!("runtime_provider_broker is not a table"))?;
+    broker.insert(
+        "endpoint_path".into(),
+        toml::Value::String(endpoint.to_string_lossy().into_owned()),
+    );
+    Ok(())
+}
+
+#[test]
+fn production_beacon_stock_config_preserves_providers_and_configures_seed_custody() -> Result<()> {
+    let mut table: toml::Table = "[sumeragi]\nrole = 'validator'\n[soracloud_runtime.mutation_signer]\nhandle = 'original-signer'\n".parse()?;
+    let original = table["soracloud_runtime"].clone();
+    configure_stock_broker(&mut table, Path::new("/owner/initial/broker.sock"))?;
+    assert_eq!(
+        table["sumeragi"]["mint_finality_seed_fd"].as_integer(),
+        Some(199)
+    );
+    assert_eq!(table["soracloud_runtime"], original);
+    table["sumeragi"].as_table_mut().unwrap().insert(
+        "global_beacon_partial_signer_provider_handle".into(),
+        toml::Value::String("beacon-seat".into()),
+    );
+    configure_stock_broker(&mut table, Path::new("/owner/activated/broker.sock"))?;
+    assert_eq!(
+        table["sumeragi"]["global_beacon_partial_signer_provider_handle"].as_str(),
+        Some("beacon-seat")
+    );
+    assert_eq!(table["soracloud_runtime"], original);
+    assert_eq!(
+        table["runtime_provider_broker"]["endpoint_path"].as_str(),
+        Some("/owner/activated/broker.sock")
+    );
+    Ok(())
+}
+
+async fn spawn_provider_broker(
+    directory: &Path,
+    peer: usize,
+    binary: &Path,
+    catalog: &[u8],
+    credentials: &[u8],
+) -> Result<ProviderBroker> {
+    let root = iroha_test_network::new_disposable_owner_private_root()?;
+    let catalog_path = root.path().join("catalog.norito");
+    let catalog_file = private_file(&catalog_path, catalog)?;
+    catalog_file.set_permissions(fs::Permissions::from_mode(0o400))?;
+    catalog_file.sync_all()?;
+    let signer = consumed_copy(
+        &directory.join(format!(
+            "runtime/taira-runtime-signers/peer{peer}.private_key"
+        )),
+        &root.path().join("runtime-signer.fd198"),
+        71,
+    )?;
+    let endpoint = root.path().join("runtime-provider-broker-v1.sock");
+    iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(endpoint.clone())?;
+    let mut child = command(binary, root.path());
+    child
+        .arg("--catalog")
+        .arg(&catalog_path)
+        .arg("--broker-endpoint")
+        .arg(&endpoint)
+        .stdin(Stdio::piped())
+        .stderr(Stdio::from(private_file(
+            &root.path().join("broker-stderr.log"),
+            &[],
+        )?));
+    inherit(&mut child, &[(signer.file.as_raw_fd(), 198)])?;
+    let mut child = child.spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| eyre!("stock broker stdin handoff absent"))?;
+    stdin.write_all(credentials).await?;
+    stdin.shutdown().await?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| eyre!("stock broker readiness pipe absent"))?;
+    let mut ready = [0_u8; 6];
+    timeout_at(Instant::now() + PHASE_BUDGET, stdout.read_exact(&mut ready)).await??;
+    ensure!(
+        ready == *b"READY\n" && child.try_wait()?.is_none(),
+        "stock broker did not qualify the exact runtime providers"
+    );
+    drop(signer);
+    Ok(ProviderBroker {
+        child,
+        endpoint,
+        _owner_root: root,
+    })
+}
+
+async fn stage_initial_provider_brokers(
+    directory: &Path,
+    binary: &Path,
+) -> Result<Vec<ProviderBroker>> {
+    let credentials = Zeroizing::new(encode_consensus_threshold_credential_bundle_v1(None, None)?);
+    let mut brokers = Vec::new();
+    for peer in 0..4 {
+        let path = directory.join(format!("peer{peer}.toml"));
+        let native = config(&path)?;
+        let catalog =
+            IrohaRuntimeProviderBindingsV1::try_from_config(&native)?.export_canonical_v1()?;
+        let broker = spawn_provider_broker(directory, peer, binary, &catalog, &credentials).await?;
+        let mut table: toml::Table = fs::read_to_string(&path)?.parse()?;
+        configure_stock_broker(&mut table, &broker.endpoint)?;
+        fs::write(&path, toml::to_string(&table)?)?;
+        config(&path)?;
+        brokers.push(broker);
+    }
+    Ok(brokers)
 }
 
 async fn stage_provider_brokers(
@@ -916,8 +1084,9 @@ async fn stage_provider_brokers(
                 && digest == expected_digest,
             "native provider inventory changed this exact signed DKG seat"
         );
+        let retained = IrohaRuntimeProviderBindingsV1::try_from_config(&native)?;
         let catalog = IrohaRuntimeProviderBindingsV1::with_prepared_beacon_inventory_v1(
-            None,
+            Some(&retained),
             CHAIN,
             dkg.public_session.network_id,
             handle,
@@ -925,14 +1094,12 @@ async fn stage_provider_brokers(
             digest,
         )?
         .export_canonical_v1()?;
-        let root = iroha_test_network::new_disposable_owner_private_root()?;
-        let catalog_path = root.path().join("catalog.norito");
-        let catalog_file = private_file(&catalog_path, &catalog)?;
-        catalog_file.set_permissions(fs::Permissions::from_mode(0o400))?;
-        catalog_file.sync_all()?;
-        let credential_path = root.path().join("credential.norito");
-        let mut credential_file =
-            consumed_copy(&output.credential_path, &credential_path, 16 * 1024 * 1024)?;
+        let credential_path = iroha_test_network::new_disposable_owner_private_root()?;
+        let mut credential_file = consumed_copy(
+            &output.credential_path,
+            &credential_path.path().join("beacon-credential.norito"),
+            16 * 1024 * 1024,
+        )?;
         let mut credential = Zeroizing::new(Vec::new());
         credential_file.file.read_to_end(&mut credential)?;
         let credential_bundle = Zeroizing::new(encode_consensus_threshold_credential_bundle_v1(
@@ -940,38 +1107,14 @@ async fn stage_provider_brokers(
             None,
         )?);
         drop(credential_file);
-        let endpoint = root.path().join("runtime-provider-broker-v1.sock");
-        iroha_config::parameters::actual::RuntimeProviderBrokerEndpointPath::try_new(
-            endpoint.clone(),
-        )?;
-        let mut child = command(broker_binary, root.path());
-        child
-            .arg("--catalog")
-            .arg(&catalog_path)
-            .arg("--broker-endpoint")
-            .arg(&endpoint)
-            .stdin(Stdio::piped())
-            .stderr(Stdio::from(private_file(
-                &root.path().join("broker-stderr.log"),
-                &[],
-            )?));
-        let mut child = child.spawn()?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| eyre!("stock broker stdin handoff absent"))?;
-        stdin.write_all(&credential_bundle).await?;
-        stdin.shutdown().await?;
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| eyre!("stock broker readiness pipe absent"))?;
-        let mut ready = [0_u8; 6];
-        timeout_at(Instant::now() + PHASE_BUDGET, stdout.read_exact(&mut ready)).await??;
-        ensure!(
-            ready == *b"READY\n" && child.try_wait()?.is_none(),
-            "stock broker did not qualify the exact one-seat credential"
-        );
+        let broker = spawn_provider_broker(
+            directory,
+            index,
+            broker_binary,
+            &catalog,
+            &credential_bundle,
+        )
+        .await?;
         let mut table: toml::Table = toml::from_str(&fs::read_to_string(&path)?)?;
         let sumeragi = table
             .entry("sumeragi")
@@ -990,21 +1133,10 @@ async fn stage_provider_brokers(
             "global_beacon_partial_signer_provider_policy_digest_hex".into(),
             toml::Value::String(hex(&digest)),
         );
-        let broker = table
-            .entry("runtime_provider_broker")
-            .or_insert_with(|| toml::Value::Table(toml::Table::new()))
-            .as_table_mut()
-            .ok_or_else(|| eyre!("runtime_provider_broker is not a table"))?;
-        broker.insert(
-            "endpoint_path".into(),
-            toml::Value::String(endpoint.to_string_lossy().into_owned()),
-        );
+        configure_stock_broker(&mut table, &broker.endpoint)?;
         fs::write(&path, toml::to_string(&table)?)?;
         config(&path)?;
-        brokers.push(ProviderBroker {
-            child,
-            _owner_root: root,
-        });
+        brokers.push(broker);
         paths.push(path);
     }
     Ok((brokers, paths))
@@ -1163,10 +1295,8 @@ fn verify_pulse(
     let epoch_length = npos.epoch_length_blocks().get();
     ensure!(
         epoch_length == epoch_retention::EPOCH_LENGTH,
-        "fixture must exercise the real catalog merge at mandatory height 10"
+        "fixture must exercise the native catalog decision at mandatory height 10"
     );
-    let catalog_tree: MerkleTree<TransactionEntrypoint> =
-        [catalog_entrypoint_hash].into_iter().collect();
     let pulse_height = epoch_length
         .checked_sub(1)
         .filter(|height| *height > 1)
@@ -1186,31 +1316,39 @@ fn verify_pulse(
         // All fixture children have stopped. This is a strict read-only native
         // journal reader, so validation cannot repair or rewrite the evidence.
         let native = config(config_path)?;
-        let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
+        let mut store = BlockStore::open_read_only(
+            Kura::canonical_storage_paths(native.kura.store_dir.value()).0,
+        )?;
         ensure!(
             store.read_index_count()? > epoch_length,
             "paid deployment did not cross the mandatory epoch boundary"
         );
         let anchor = read_block(&mut store, anchor_height)?;
         let block = read_block(&mut store, pulse_height)?;
-        // Native completion has already authenticated this exact native catalog
-        // transaction as Applied on all four peers. Bind it to the sole leaf of
-        // the execution-bearing merge at the mandatory pulse height, excluding
-        // unrelated transactions, QueuePlan admissions and anchor padding.
+        // Native completion has already authenticated this exact catalog
+        // transaction as Applied on all four peers. The first-release carrier
+        // executes it through a native lane decision, not a merge entry. Bind
+        // the sole native decision to this pulse and exclude unrelated work.
         let context = block
             .execution_context()
             .ok_or_else(|| eyre!("mandatory pulse has no certified execution context"))?;
-        let reference = context.merge_entry.as_ref().ok_or_else(|| {
-            eyre!("catalog transaction did not execute on the mandatory pulse carrier")
+        let decisions = context.native_lane_decisions.as_deref().ok_or_else(|| {
+            eyre!("catalog transaction has no native decision on the mandatory pulse carrier")
         })?;
+        decisions
+            .validate_structure()
+            .map_err(|error| eyre!("invalid mandatory pulse native decisions: {error}"))?;
         ensure!(
-            reference.execution_batch_hash.is_some()
-                && reference.entrypoint_count == Some(1)
-                && reference.entrypoint_merkle_root == catalog_tree.root()
+            decisions.base_state_height == anchor_height
+                && decisions.groups.len() == 1
+                && decisions.groups[0].payload.input.entrypoint.hash() == catalog_entrypoint_hash
+                && decisions.groups[0].payload.descriptor.slots.len() == 1
+                && context.merge_entry.is_none()
                 && block.external_entrypoint_count() == 0
                 && context.queue_plan_admissions.is_empty()
-                && context.autonomous_lane_payloads.is_empty(),
-            "mandatory pulse carrier is not the exact one-transaction native catalog merge"
+                && context.autonomous_lane_payloads.is_empty()
+                && context.lane_payload_ownerships.is_empty(),
+            "mandatory pulse carrier is not the exact one-transaction native catalog decision"
         );
         let (header, initial) = store.read_verified_v2_finality(1)?;
         let initial_authority = initial
@@ -1355,6 +1493,7 @@ impl Runtime<'_> {
         for index in 0..4 {
             ready(self.api + index, 200, deadline).await?;
         }
+        status_height(self.clients, deadline).await?;
         Ok(())
     }
     async fn signed_snapshot_restart(&mut self, applied_height: u64) -> Result<()> {
@@ -1387,8 +1526,8 @@ impl Runtime<'_> {
             heights.iter().all(|height| *height >= applied_height),
             "shutdown snapshot regressed"
         );
-        // Restart uses newly consumed FD198/199 copies of retained signing
-        // custody and reconnects to each peer's still-running stock broker.
+        // Restart consumes a new FD199 seed copy and reconnects to each peer's
+        // still-running stock broker, which retains its original runtime signer.
         self.restart(restart).await?;
         timeout_at(restart, async {
             loop {
@@ -1711,10 +1850,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     )?;
     init_instruction_registry();
     let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
-    let daemon = binary(
-        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL",
-        ReleasePrebuiltBinary::IrohadMessageControl,
-    )?;
+    let daemon = binary("TEST_NETWORK_BIN_IROHAD", ReleasePrebuiltBinary::Irohad)?;
     let launcher = binary(
         "TEST_NETWORK_BIN_IROHAD_TAIRA",
         ReleasePrebuiltBinary::IrohadTaira,
@@ -1754,6 +1890,46 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         preparation_started.elapsed().as_secs_f64()
     );
     let directory = &prepared.directory;
+    // The running fixture uses the stock daemon and authenticated provider broker.
+    // Qualify the shipping launcher separately against every exact generated
+    // core-testnet config before any peer starts: its deployment profile guard
+    // must accept the same four-node inputs the reset will materialize.
+    let launcher_check_deadline = Instant::now() + PHASE_BUDGET;
+    let launcher_check = async {
+        for peer in 0..4 {
+            let mut check = command(&launcher, directory);
+            check
+                .args(["--sora", "--config"])
+                .arg(directory.join(format!("peer{peer}.toml")))
+                .args(["--genesis-manifest-json"])
+                .arg(prepared.genesis_directory.join("genesis.json"))
+                .arg("--check-config");
+            let output = run(check, launcher_check_deadline)
+                .await
+                .wrap_err_with(|| {
+                    format!("shipping Taira launcher rejected generated peer{peer} config")
+                })?;
+            if output != b"Ready: configuration and available genesis are valid\n" {
+                let diagnostic = workspace
+                    .path()
+                    .join(format!("launcher-check-peer{peer}.stdout"));
+                private_file(&diagnostic, &output)?;
+                return Err(eyre!(
+                    "shipping Taira launcher did not complete offline genesis validation for peer{peer}; private stdout: {}",
+                    diagnostic.display()
+                ));
+            }
+        }
+        Ok::<(), color_eyre::Report>(())
+    }
+    .await;
+    if let Err(error) = launcher_check {
+        eprintln!(
+            "beacon fixture launcher precheck retained at {}",
+            workspace.keep().display()
+        );
+        return Err(error);
+    }
     let fresh = fresh_client(directory, &prepared.network_id)?;
     let clients = (0..4)
         .map(|index| client(&directory.join("client.toml"), api + index))
@@ -1790,8 +1966,8 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         "beacon fixture starting four validators: budget={:.3}s",
         PHASE_BUDGET.as_secs_f64()
     );
+    let mut brokers = stage_initial_provider_brokers(directory, &broker_binary).await?;
     let mut peers = spawn_peers(directory, &daemon, &prepared.roster, 1)?;
-    let mut brokers = Vec::new();
     let mut outcome: Result<()> = async {
         listeners_started(&mut peers, api, startup).await?;
         wait_for_exact_height(&clients, 1, startup).await?;
@@ -1900,6 +2076,10 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 503, restart).await?; }
         peers.stop(restart).await?;
+        for broker in &mut brokers {
+            broker.stop(restart).await?;
+        }
+        brokers.clear();
         let (active_brokers, peer_configs) = stage_provider_brokers(
             directory,
             &broker_binary,

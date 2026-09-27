@@ -129,8 +129,6 @@ pub(crate) fn preflight_fastpq_source_transcripts(
 }
 
 mod budget;
-#[cfg(test)]
-pub(crate) use budget::measure_fastpq_source_entry_bundle_usage;
 pub(crate) use budget::{FastpqSourceTranscriptUsage, measure_fastpq_source_statement_usage};
 
 fn source_statement_public_limits(

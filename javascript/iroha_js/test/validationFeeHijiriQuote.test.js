@@ -78,7 +78,7 @@ async function withNativeBinding(native, body) {
 function quoteNative(overrides = {}) {
   return {
     connectNoritoBridgeAbiVersion() {
-      return 23;
+      return 24;
     },
     validationFeeHijiriQuoteRequestV1(accountId, count) {
       assert.equal(accountId, ACCOUNT_ID);
@@ -96,13 +96,13 @@ function quoteNative(overrides = {}) {
 
 test("Hijiri quote factories isolate immutable native runtimes", async () => {
   const bindingA = {
-    connectNoritoBridgeAbiVersion: () => 23,
+    connectNoritoBridgeAbiVersion: () => 24,
     validationFeeHijiriQuoteRequestV1: () => Buffer.from([0xa1]),
     validationFeeVerifyHijiriQuoteResponseV1() {},
   };
   const apiA = createValidationFeeHijiriQuoteApi(createNativeRuntime(bindingA));
   const apiB = createValidationFeeHijiriQuoteApi(createNativeRuntime({
-    connectNoritoBridgeAbiVersion: () => 23,
+    connectNoritoBridgeAbiVersion: () => 24,
     validationFeeHijiriQuoteRequestV1: () => Buffer.from([0xb2]),
     validationFeeVerifyHijiriQuoteResponseV1() {},
   }));
@@ -119,7 +119,7 @@ test("Hijiri quote factories isolate immutable native runtimes", async () => {
   assert.deepEqual(requestB, Buffer.from([0xb2]));
 });
 
-test("Hijiri quote codec delegates exclusively to the ABI-23 native bridge", async () => {
+test("Hijiri quote codec delegates exclusively to the ABI-24 native bridge", async () => {
   await withNativeBinding(quoteNative(), (api) => {
     assert.deepEqual(
       api.encodeValidationFeeHijiriQuoteRequestV1(ACCOUNT_ID, 2),
@@ -137,7 +137,7 @@ test("Hijiri quote codec delegates exclusively to the ABI-23 native bridge", asy
   await withNativeBinding(
     {
       connectNoritoBridgeAbiVersion() {
-        return 23;
+        return 24;
       },
     },
     (api) => {

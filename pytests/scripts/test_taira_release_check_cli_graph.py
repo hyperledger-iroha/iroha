@@ -190,7 +190,7 @@ class CliCopyLifetimeTests(unittest.TestCase):
             existing.isolate_stage_fixture(stack, keep=("NETWORK_STAGES",))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", gate.NETWORK_STAGES if network else ()))
             stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", ("cli_fixture",)),)))
-            for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
+            for function in ("run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
                 stack.enter_context(patch.object(gate, function))
             batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", side_effect=build))
             later_compile = stack.enter_context(patch.object(gate, "compile_harness", side_effect=AssertionError("no separate CLI compilation")))

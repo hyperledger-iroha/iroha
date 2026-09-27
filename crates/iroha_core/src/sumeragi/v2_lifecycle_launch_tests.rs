@@ -1594,7 +1594,7 @@ fn launch_source_keeps_status_sealed_and_orders_store_transfer() {
     assert_source_tokens_in_order(
         finalization_behavior,
         &[
-            "let _status_guard = crate::sumeragi::status::rbc_status_test_guard()",
+            "let _status_guard = crate::status::rbc_status_test_guard()",
             "Algorithm::Ed25519",
             "TransactionBuilder::new_genesis(",
             "block_builder.set_da_proof_policies(Some(proof_policy_bundle))",
@@ -1984,7 +1984,7 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let phase_carrier = source_region(
         registry_source,
         "impl DurableRecoveredWalSignWork {",
-        "/// Whether one concrete registry row is still an executable adapter effect",
+        "/// Whether one concrete registry row is still an executable adapter effect or",
     );
     assert_source_token_count(
         phase_carrier,

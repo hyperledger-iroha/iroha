@@ -16474,11 +16474,14 @@ fn prepare_built_sorafs_manifest_registration(
         iroha::data_model::isi::sorafs::RegisterPinManifest::new(built.bytes.clone(), None, None);
     let payload = client
         .account_client()
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            [InstructionBox::from(instruction)],
-            requested_fee_payment.clone(),
-            binding.metadata(operation)?,
-        ))
+        .prepare_transaction(
+            iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(instruction)],
+                requested_fee_payment.clone(),
+                binding.metadata(operation)?,
+            )
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+        )
         .wrap_err("failed to build exact SoraFS pin-registration payload")?;
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
@@ -19233,11 +19236,14 @@ pub(crate) fn prepare_soracloud_draft_transaction(
     let executable = Executable::Instructions(instructions.into());
     let mut payload = client
         .account_client()
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            executable,
-            requested_fee_payment.clone(),
-            binding.metadata(operation)?,
-        ))
+        .prepare_transaction(
+            iroha::client::AccountTransactionDraft::new(
+                executable,
+                requested_fee_payment.clone(),
+                binding.metadata(operation)?,
+            )
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
+        )
         .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
@@ -29340,6 +29346,58 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
             &binding.idempotency_key,
         )
         .expect_err("a substituted public-discovery registry must fail closed");
+    }
+
+    #[test]
+    fn prepared_soracloud_draft_quotes_signed_queue_plan_admission() {
+        let server = MockHttpServer::start(BTreeMap::new());
+        let key_pair = soracloud_fixture_key_pair(0x59);
+        let mut config = crate::fallback_config();
+        config.account = AccountId::new(key_pair.public_key().clone());
+        config.key_pair = key_pair;
+        config.torii_api_url = server.base_url.parse().expect("mock Torii URL");
+        let binding = TairaMutationBindingV1 {
+            authorization_sha256: "ab".repeat(32),
+            authorization_nonce: "0123456789abcdef_123456789abcde-".to_owned(),
+            kind: "service_mutation".to_owned(),
+            phase: "pre_edge".to_owned(),
+            idempotency_key: "cd".repeat(32),
+            execution_expires_at_unix_ms: u64::MAX,
+        };
+        let requested = FeePaymentIntent::authority(Vec::new(), None);
+        let prepared = prepare_soracloud_draft_transaction(
+            &config,
+            requested.clone(),
+            binding,
+            &server.base_url,
+            1,
+            vec![InstructionBox::from(iroha::data_model::isi::Log::new(
+                iroha::data_model::Level::INFO,
+                "prepared mutation".to_owned(),
+            ))],
+            "service_mutation",
+        )
+        .expect("prepare exact Soracloud mutation");
+        let transaction = prepared
+            .decode_and_validate()
+            .expect("validate prepared Soracloud mutation");
+        assert_eq!(transaction.fee_payment_intent(), &requested);
+        assert_eq!(
+            transaction.admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced
+        );
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.path == iroha_torii_shared::uri::FEES_QUOTE)
+            .expect("exact mutation fee quote request");
+        let quoted: FeeQuoteWireRequest =
+            json::from_slice(&request.body).expect("decode mutation fee quote request");
+        assert_eq!(quoted.payload, *transaction.payload());
+        assert_eq!(
+            quoted.payload.admission_intent,
+            TransactionAdmissionIntent::QueuePlanSynced
+        );
     }
 
     #[test]

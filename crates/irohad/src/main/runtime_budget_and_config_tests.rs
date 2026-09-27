@@ -30,14 +30,13 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             require_genesis_inrou_deployment_authority: None,
             trace_config: false,
             config_blake3: None,
+            sumeragi_assert_fresh_key: false,
         },
         terminal_colors: false,
         language: None,
         sora: true,
         #[cfg(feature = "test-network-parliament-signers")]
         test_network_parliament_beacon_signer_mode: TestNetworkParliamentBeaconSignerMode::Valid,
-        #[cfg(all(unix, feature = "test-network-message-control"))]
-        test_network_production_beacon_custody: false,
         fastpq_execution_mode: None,
         fastpq_poseidon_mode: None,
         fastpq_device_class: None,

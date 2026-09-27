@@ -123,7 +123,15 @@ fn queue_reuses_gossip_payload_without_side_cache() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world_with_test_domains(), kura, query_handle);
-    let time_source = TimeSource::new_system();
+    // Gossip admission uses network time. Anchor the signed fixture to that
+    // clock, with room for another test to update its offset concurrently.
+    let network_now = crate::time::admission_snapshot()
+        .status
+        .now
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("network admission time follows the Unix epoch");
+    let (_clock, time_source) =
+        TimeSource::new_mock(network_now.saturating_sub(Duration::from_secs(10)));
     let queue = Queue::test(config_factory(), &time_source);
     let tx = accepted_tx_by_someone(&time_source);
     let entrypoint = tx.entrypoint().clone();

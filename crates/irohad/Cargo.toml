@@ -42,10 +42,11 @@ external-software-signer-bin = ["daemon"]
 dev-tools = ["daemon", "zk-stark"]
 accel-metal = ["fastpq-gpu", "ivm/metal", "norito/codec-gpu-metal"]
 accel-cuda = ["fastpq-gpu", "iroha_core/cuda", "ivm/cuda", "norito/codec-gpu-cuda"]
-# Test-network-only inbound consensus message control. This feature is never
-# enabled by a production/default build; `iroha_test_network` builds a separate
-# daemon binary in an isolated target directory when an adversarial network
-# test explicitly requests it.
+# Test-network-only fault injection. This feature is never enabled by a
+# production/default build; `iroha_test_network` builds a separate daemon binary
+# in an isolated target directory when an adversarial network test requests it.
+# TODO(WP6): Sumeragi frame control (hold/drop/partition) replaces the deleted
+# v2 consensus message controller.
 test-network-message-control = [
     "iroha_core/test-network-native-amx-fault-injection",
     "iroha_torii/test-network-private-settlement-route-control",
@@ -189,7 +190,7 @@ x25519-dalek = { version = "2.0.1", default-features = false, features = ["stati
 blake3 = { workspace = true }
 
 [dev-dependencies]
-iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests", "sumeragi-main-loop-tests"] }
+iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 serial_test = "3.5.0"
 tempfile = { workspace = true }

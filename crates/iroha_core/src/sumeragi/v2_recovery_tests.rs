@@ -353,10 +353,8 @@ fn lane_owned_block_for_recovery(
         .collect::<Vec<_>>();
     let validator_count =
         u32::try_from(validators.len()).expect("fixture validator count fits u32");
-    let min_quorum = u32::try_from(
-        crate::sumeragi::network_topology::commit_quorum_from_len(validators.len()).max(1),
-    )
-    .expect("fixture quorum fits u32");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validators.len()).max(1))
+        .expect("fixture quorum fits u32");
     let base_mode_tag = match context.mode {
         wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
         wire::ConsensusMode::Npos => wire::NPOS_TAG,

@@ -13,6 +13,12 @@ struct PreparedTransferOccurrence {
 }
 
 impl StateTransaction<'_, '_> {
+    fn refuse_fastpq_source_preparation(&mut self, error: String) {
+        self.fastpq_source_quota.fail_preparation(error);
+        *self.block_execution_output_plan =
+            Some(output_capacity::ExecutionOutputPlanState::Poisoned);
+    }
+
     fn prepare_transfer_occurrence(
         &self,
         authority: &AccountId,
@@ -44,6 +50,44 @@ impl StateTransaction<'_, '_> {
         })
     }
 
+    fn reserve_transfer_occurrence(
+        &mut self,
+        occurrence: &PreparedTransferOccurrence,
+    ) -> Result<(), Error> {
+        let captured = match occurrence.capture.as_ref() {
+            Ok(captured) => captured,
+            Err(error) => {
+                self.refuse_fastpq_source_preparation(error.to_string());
+                return Err(Error::InvariantViolation(error.to_string().into()));
+            }
+        };
+        if self.pending_transfer_transcripts.try_reserve(1).is_err() {
+            let error = "host cannot retain FASTPQ pending transcript";
+            self.refuse_fastpq_source_preparation(error.into());
+            return Err(Error::InvariantViolation(error.into()));
+        }
+        let hash = occurrence.transcript.batch_hash;
+        let bundle = self
+            .fastpq_transcripts
+            .get(&hash)
+            .into_iter()
+            .flatten()
+            .chain(
+                self.pending_transfer_transcripts
+                    .iter()
+                    .filter(|entry| entry.batch_hash == hash),
+            )
+            .chain(std::iter::once(&occurrence.transcript));
+        let result =
+            self.fastpq_source_quota
+                .replace_entry(hash, captured.is_protocol_purpose(), bundle);
+        if self.fastpq_source_quota.intrinsic_rejected().is_err() {
+            *self.block_execution_output_plan =
+                Some(output_capacity::ExecutionOutputPlanState::Poisoned);
+        }
+        result.map_err(|error| Error::InvariantViolation(error.into()))
+    }
+
     fn stage_transfer_occurrence(&mut self, occurrence: Option<PreparedTransferOccurrence>) {
         let Some(PreparedTransferOccurrence {
             transcript,
@@ -53,7 +97,7 @@ impl StateTransaction<'_, '_> {
             return;
         };
         self.pending_fastpq_source_captures.record(capture);
-        crate::sumeragi::witness::record_fastpq_transcript(&transcript);
+        crate::exec_witness::record_fastpq_transcript(&transcript);
         self.pending_transfer_transcripts.push(transcript);
     }
 
@@ -63,9 +107,13 @@ impl StateTransaction<'_, '_> {
         authority: &AccountId,
         batch_hash: Hash,
         deltas: Vec<TransferDeltaTranscript>,
-    ) {
+    ) -> Result<(), Error> {
         let occurrence = self.prepare_transfer_occurrence(authority, batch_hash, deltas);
+        if let Some(occurrence) = &occurrence {
+            self.reserve_transfer_occurrence(occurrence)?;
+        }
         self.stage_transfer_occurrence(occurrence);
+        Ok(())
     }
 
     /// Prepare an exact occurrence, run its movement, then stage it only on success.
@@ -76,9 +124,9 @@ impl StateTransaction<'_, '_> {
     /// the prepared balance/control plan; receiver admission occurs before this boundary.
     /// No prepared occurrence escapes the exclusive transaction borrow.
     ///
-    /// Captured source errors keep their existing sticky-on-success semantics. This does
-    /// not validate source completeness, reserve a budget, or roll back callback writes.
-    /// The callback's existing transaction rollback contract remains authoritative.
+    /// Reserve the exact complete-entry frame before the movement. Capture or quota
+    /// failure poisons the physical attempt. Callback writes remain in the original
+    /// State overlay and cannot apply after any returned preparation/movement error.
     ///
     /// # Errors
     ///
@@ -93,7 +141,16 @@ impl StateTransaction<'_, '_> {
         apply: impl FnOnce(&mut Self) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let occurrence = self.prepare_transfer_occurrence(authority, batch_hash, deltas);
-        let applied = apply(self)?;
+        if let Some(occurrence) = &occurrence {
+            self.reserve_transfer_occurrence(occurrence)?;
+        }
+        let applied = match apply(self) {
+            Ok(applied) => applied,
+            Err(error) => {
+                self.fastpq_source_quota.poison();
+                return Err(error);
+            }
+        };
         self.stage_transfer_occurrence(occurrence);
         Ok(applied)
     }
@@ -116,9 +173,9 @@ impl StateTransaction<'_, '_> {
     /// do not preallocate a full transcript. Exceeding the bound rejects the whole body,
     /// even if a callback incorrectly ignores its preparation error.
     ///
-    /// TODO: reserve the exact complete-entry source budget at this fallible preparation
-    /// boundary. Callback mutations still require the caller's transaction rollback;
-    /// final accumulator/witness/pending-vector publication can still allocate.
+    /// The source guard remeasures committed, pending and candidate occurrences before
+    /// each movement. Callback mutations still require the original State rollback;
+    /// capture/witness publication can allocate and a carrier unwind remains fatal.
     ///
     /// # Errors
     ///
@@ -131,7 +188,7 @@ impl StateTransaction<'_, '_> {
         capacity: usize,
         apply: impl FnOnce(
             &mut Self,
-            &mut dyn FnMut(TransferDeltaTranscript) -> Result<(), Error>,
+            &mut dyn FnMut(&mut Self, TransferDeltaTranscript) -> Result<(), Error>,
         ) -> Result<T, Error>,
     ) -> Result<T, Error> {
         let capture = self.fastpq_source_context.capture_transcript(
@@ -148,21 +205,38 @@ impl StateTransaction<'_, '_> {
             Error::InvariantViolation("transfer transcript exceeds its declared entry bound".into())
         };
         let applied = {
-            let mut append = |delta: TransferDeltaTranscript| {
+            let mut append = |state: &mut Self, delta: TransferDeltaTranscript| {
                 let count = occurrence
                     .as_ref()
                     .map_or(0, |entry| entry.transcript.deltas.len());
                 if preparation_failed || count >= capacity {
                     preparation_failed = true;
+                    state.refuse_fastpq_source_preparation(
+                        "transfer transcript exceeds its declared entry bound".into(),
+                    );
                     return Err(bound_error());
                 }
                 if let Some(occurrence) = &mut occurrence {
                     occurrence.transcript.poseidon_preimage_digest = None;
+                    occurrence.transcript.deltas.try_reserve(1).map_err(|_| {
+                        preparation_failed = true;
+                        state.refuse_fastpq_source_preparation(
+                            "host cannot retain FASTPQ delta".into(),
+                        );
+                        Error::InvariantViolation("host cannot retain FASTPQ delta".into())
+                    })?;
                     occurrence.transcript.deltas.push(delta);
                 } else {
                     let authority_digest = crate::fastpq::authority_digest(authority);
                     let poseidon_preimage_digest =
                         Some(crate::fastpq::poseidon_preimage_digest(&delta, &batch_hash));
+                    empty_deltas.try_reserve(1).map_err(|_| {
+                        preparation_failed = true;
+                        state.refuse_fastpq_source_preparation(
+                            "host cannot retain FASTPQ delta".into(),
+                        );
+                        Error::InvariantViolation("host cannot retain FASTPQ delta".into())
+                    })?;
                     empty_deltas.push(delta);
                     occurrence = Some(PreparedTransferOccurrence {
                         transcript: TransferTranscript {
@@ -174,9 +248,21 @@ impl StateTransaction<'_, '_> {
                         capture,
                     });
                 }
-                Ok(())
+                let prepared = state.reserve_transfer_occurrence(
+                    occurrence
+                        .as_ref()
+                        .expect("accepted delta creates occurrence"),
+                );
+                preparation_failed |= prepared.is_err();
+                prepared
             };
-            apply(self, &mut append)?
+            match apply(self, &mut append) {
+                Ok(applied) => applied,
+                Err(error) => {
+                    self.fastpq_source_quota.poison();
+                    return Err(error);
+                }
+            }
         };
         if preparation_failed {
             return Err(bound_error());

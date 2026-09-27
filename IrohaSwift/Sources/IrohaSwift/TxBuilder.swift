@@ -131,7 +131,7 @@ public struct TransactionInstructionFrame: Equatable, Sendable {
             guard let privacyProtocolId, let privacyAdmission, let expectedNetworkId else {
                 throw ExecutableBatchInputError.privacyExact12CapabilityAdmissionRequired
             }
-            // Re-run the ABI23 catalog getter+validator and the exact manifest/
+            // Re-run the ABI24 catalog getter+validator and the exact manifest/
             // envelope tuple comparison at final encoding. A previously issued
             // token cannot turn a missing or stale native artifact into authority.
             try PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
@@ -527,23 +527,11 @@ public struct VerifyingKeyIdReference: Equatable, Sendable {
     }
 }
 
-public enum RegisterZkAssetRequestError: Error, LocalizedError, Equatable, Sendable {
-    case shieldVerifierRequiresUnshieldVerifier
-
-    public var errorDescription: String? {
-        switch self {
-        case .shieldVerifierRequiresUnshieldVerifier:
-            return "A shield verifier requires an unshield verifier so shielded funds remain redeemable."
-        }
-    }
-}
-
 public struct RegisterZkAssetRequest {
     public let networkId: NetworkId
     public let authority: String
     public let assetDefinitionId: String
     public let unshieldVerifyingKey: VerifyingKeyIdReference?
-    public let shieldVerifyingKey: VerifyingKeyIdReference?
     public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
 
@@ -551,17 +539,12 @@ public struct RegisterZkAssetRequest {
                 authority: String,
                 assetDefinitionId: String,
                 unshieldVerifyingKey: VerifyingKeyIdReference? = nil,
-                shieldVerifyingKey: VerifyingKeyIdReference? = nil,
                 feePayment: FeePaymentIntent,
-                ttlMs: UInt64? = 100_000) throws {
-        guard shieldVerifyingKey == nil || unshieldVerifyingKey != nil else {
-            throw RegisterZkAssetRequestError.shieldVerifierRequiresUnshieldVerifier
-        }
+                ttlMs: UInt64? = 100_000) {
         self.networkId = networkId
         self.authority = authority
         self.assetDefinitionId = assetDefinitionId
         self.unshieldVerifyingKey = unshieldVerifyingKey
-        self.shieldVerifyingKey = shieldVerifyingKey
         self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
@@ -658,6 +641,36 @@ public struct CastPlainBallotRequest {
         self.amount = amount
         self.durationBlocks = durationBlocks
         self.direction = direction
+        self.feePayment = feePayment
+        self.ttlMs = ttlMs
+    }
+}
+
+/// Increase an existing public ballot's bond or lock without changing its choice.
+public struct UpdatePlainConvictionRequest {
+    public let networkId: NetworkId
+    public let authority: String
+    public let referendumId: String
+    public let owner: String
+    public let amount: String
+    public let durationBlocks: UInt64
+    public let feePayment: FeePaymentIntent
+    public let ttlMs: UInt64?
+
+    public init(networkId: NetworkId,
+                authority: String,
+                referendumId: String,
+                owner: String,
+                amount: String,
+                durationBlocks: UInt64,
+                feePayment: FeePaymentIntent,
+                ttlMs: UInt64? = 100_000) {
+        self.networkId = networkId
+        self.authority = authority
+        self.referendumId = referendumId
+        self.owner = owner
+        self.amount = amount
+        self.durationBlocks = durationBlocks
         self.feePayment = feePayment
         self.ttlMs = ttlMs
     }
@@ -1463,6 +1476,20 @@ public final class IrohaSDK: @unchecked Sendable {
         return try SwiftTransactionEncoder.encodeCastPlainBallot(request: request,
                                                                  signingKey: signingKey,
                                                                  creationTimeMs: creationTimeMs)
+    }
+
+    public func buildUpdatePlainConviction(request: UpdatePlainConvictionRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeUpdatePlainConviction(request: request,
+                                                                       keypair: keypair,
+                                                                       creationTimeMs: creationTimeMs)
+    }
+
+    public func buildUpdatePlainConviction(request: UpdatePlainConvictionRequest, signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        let creationTimeMs = makeCreationTimeMs()
+        return try SwiftTransactionEncoder.encodeUpdatePlainConviction(request: request,
+                                                                       signingKey: signingKey,
+                                                                       creationTimeMs: creationTimeMs)
     }
 
     public func buildCastZkBallot(request: CastZkBallotRequest, keypair: Keypair) throws -> SignedTransactionEnvelope {

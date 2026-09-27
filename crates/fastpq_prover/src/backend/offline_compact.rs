@@ -1,7 +1,7 @@
 //! Fixed quantity-artifact production and verification for offline callers.
 //!
-//! The two routes verify complete ordered bundles under the fixed six-lane compact V1
-//! implementation. The caller supplies independent expected public inputs and AXT
+//! The two routes verify complete ordered bundles under the fixed six-lane DEEP
+//! implementation with 64 bounded queries and one OOD AIR evaluation per segment. The caller supplies independent expected public inputs and AXT
 //! context; artifact bytes cannot select another value domain or protocol.
 //! Success establishes mathematical consistency with those expectations, not
 //! their authority, ledger finality, replay admission or production qualification.
@@ -182,6 +182,9 @@ impl VerificationLimits {
 /// and dropped one segment at a time. Verification limits also constrain output.
 #[derive(Debug, Clone, Copy)]
 pub struct ProvingLimits {
+    /// Explicit local commitment hashing. CPU is deterministic; selected devices
+    /// must pass primitive readiness and errors do not silently choose CPU.
+    pub digest_execution: crate::DigestExecutionV1,
     /// Limits on private touched-tree construction and retained path material.
     pub private_smt: TransferSmtBuildLimits,
     /// Maximum total base trace cells across the ordered segments.
@@ -189,11 +192,15 @@ pub struct ProvingLimits {
     /// Maximum conservative structural working-payload charge for one segment.
     ///
     /// This is an accounting charge, not reserved memory or an RSS ceiling. It
-    /// sums trace, fixed-column, commitment, FRI and bounded evaluator buffers;
+    /// sums source conversion, LDE, commitment, FRI and exact quotient buffers;
     /// allocator metadata, runtime thread stacks, cold hash-DAG compilation and
     /// unrelated process memory are excluded. Public inputs, retained child
     /// frames, private SMT work and decoder charges have separate limits.
     pub max_segment_charge_bytes: usize,
+    /// Maximum structural arithmetic and inspection work in each coefficient
+    /// conversion or exact quotient phase. Checked before that phase allocates
+    /// transform buffers; this is local work policy, not consensus gas.
+    pub max_segment_work_units: usize,
 }
 
 /// A producer failure; no partial artifact is returned.
@@ -289,13 +296,13 @@ pub struct VerificationWork {
     pub transcripts: usize,
     /// Distinct complete row leaf hashes across all children.
     pub row_leaves: usize,
-    /// Distinct mixed and quotient leaf hashes across all children.
+    /// Distinct paired-quotient leaf hashes across all children.
     pub oracle_leaves: usize,
-    /// Distinct binary FRI group leaves, including terminal leaves.
+    /// Distinct complete FRI fiber leaves, including complete terminal leaves.
     pub fri_leaves: usize,
     /// Shared internal Merkle hashes after successful reconstruction.
     pub parent_hashes: usize,
-    /// Relation evaluations at transcript query indices.
+    /// Complete AIR evaluations at the transcript out-of-domain point, one per child.
     pub air_evaluations: usize,
     /// Whole-terminal polynomial degree checks.
     pub terminal_degree_checks: usize,
@@ -369,7 +376,7 @@ impl VerifiedArtifact {
     }
 }
 
-/// Return the exact existing fixed quantity candidate profile identifier.
+/// Return the exact fixed DEEP quantity candidate profile identifier.
 ///
 /// This equality filter does not register or qualify a production profile. A
 /// count-one quantity bundle retains its bundle schema and relation identity.

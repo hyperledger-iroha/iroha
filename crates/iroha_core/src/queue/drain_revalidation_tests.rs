@@ -272,7 +272,7 @@ fn retained_queue_plan_drain_replays_original_journal_after_close() {
 }
 
 #[test]
-fn retained_queue_plan_drain_handoff_requires_canonical_rank_and_keeps_fresh_ingress_closed() {
+fn retained_queue_plan_drain_handoff_requires_canonical_rank_and_terminalizes_unranked_claim() {
     let fixture = retained_queue_plan_drain_fixture(true);
     let handoff =
         queue_with_state_free_future_created_router(&fixture.state, &fixture.queue.time_source);
@@ -321,11 +321,9 @@ fn retained_queue_plan_drain_handoff_requires_canonical_rank_and_keeps_fresh_ing
             .is_err(),
         "an off-chain receipt cannot acquire canonical drain authority"
     );
-    unranked.assert_live_journal_claim();
+    unranked.assert_terminally_removed();
     assert!(
-        unranked
-            .queue
-            .txs
-            .contains_key(&unranked.transaction.hash_as_entrypoint())
+        !unranked.queue.transaction_selection_durability_faulted(),
+        "a committed close must not turn unranked local custody into a queue-wide fault"
     );
 }

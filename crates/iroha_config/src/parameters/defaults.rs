@@ -1240,6 +1240,12 @@ pub mod sorafs {
         pub const MAX_CAPACITY_BYTES: Bytes = Bytes(100 * 1024 * 1024 * 1024);
         /// Maximum concurrent fetch operations served by the gateway.
         pub const MAX_PARALLEL_FETCHES: usize = 32;
+        /// Shared private signer-journal inventory resident-credit ceiling (bytes).
+        pub const SIGNER_JOURNAL_INVENTORY_RESIDENT_BYTES: Bytes = Bytes(16 * 1024 * 1024);
+        /// Concurrent logical directory/metadata probe credits across every signer purpose.
+        pub const SIGNER_JOURNAL_INVENTORY_METADATA_PROBES: u64 = 300_000;
+        /// Concurrent pinned path, receipt and scan descriptors across every signer purpose.
+        pub const SIGNER_JOURNAL_INVENTORY_OPEN_HANDLES: u32 = 1_024;
         /// Maximum number of manifests pinned before the node applies back-pressure.
         pub const MAX_PINS: usize = 10_000;
         /// Background Proof-of-Retrievability sampling cadence (seconds).
@@ -2253,9 +2259,9 @@ pub mod torii {
     /// Per-authority allocation within the query result cache.
     pub const QUERY_STORE_CAPACITY_PER_USER: NonZeroUsize = nonzero!(128usize);
     /// Maximum concurrent query executions admitted by Torii.
-    pub const QUERY_MAX_INFLIGHT: NonZeroUsize = nonzero!(128usize);
+    pub const QUERY_MAX_INFLIGHT: NonZeroUsize = nonzero!(256usize);
     /// Maximum concurrent heavy query executions admitted by Torii.
-    pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(32usize);
+    pub const QUERY_HEAVY_MAX_INFLIGHT: NonZeroUsize = nonzero!(64usize);
     /// Aggregate bytes split between bounded signed-query ingress and fanout working sets.
     pub const QUERY_FANOUT_MAX_RETAINED_BYTES: Bytes = Bytes(64_000_000);
     /// Minimum aggregate V1 query-memory pool for four ingress slots plus one fanout.
@@ -2273,7 +2279,9 @@ pub mod torii {
     /// Variable-size representations in the internal proxy HTTP memory envelope.
     pub const TORII_PROXY_HTTP_MEMORY_PHASE_UNITS_V1: u64 = 4;
     /// Maximum time a query waits for execution capacity before Torii rejects it.
-    pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 25;
+    /// A solo proof burst can occupy all heavy-query permits for more than one
+    /// second; keep a finite queue deadline below the outer HTTP route timeout.
+    pub const QUERY_QUEUE_TIMEOUT_MS: u64 = 30_000;
     /// Absolute deadline for one admitted App routed-read body.
     pub const APP_API_ROUTED_READ_BODY_READ_TIMEOUT_MS: u64 = 10_000;
     /// Derive the V1 routed-read route-body phase during configuration parsing.
@@ -2293,22 +2301,25 @@ pub mod torii {
             .map(|remaining| remaining / QUERY_FANOUT_PREBODY_UNITS_V1)
             .filter(|phase| *phase > 1)
     }
-    // Default per-authority query rate (tokens/sec). Set low but permissive.
-    // None disables limiting; Some enables it.
-    // Chosen to be friendly under normal usage while protecting from bursty abuse.
+    // A solo walk can use 128 direct bridge-finality GETs plus 416 MCP
+    // finality-proof tools (4,352 tokens at eight each). Leave headroom for
+    // direct readbacks and funding/contract reads while keeping a finite
+    // 20-proof/s refill and independent heavy-query and egress limits.
     /// Default steady-state query rate tokens issued per authority every second.
-    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(25);
-    // Default burst capacity in tokens per authority.
+    pub const QUERY_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(160);
     /// Maximum burst tokens accumulated per authority.
-    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(50);
+    pub const QUERY_BURST_PER_AUTHORITY: Option<u32> = Some(8_192);
     /// Default steady-state transaction submission rate tokens per authority every second.
     pub const TX_RATE_PER_AUTHORITY_PER_SEC: Option<u32> = Some(10_000);
     /// Default transaction submission burst tokens per authority.
     pub const TX_BURST_PER_AUTHORITY: Option<u32> = Some(20_000);
+    // A single deployment can make 48 contract mutations and eight weighted
+    // bridge-proof submissions (eight tokens each) before refill. Keep both
+    // the per-origin refill and burst finite; admission and queue caps remain.
     /// Default steady-state deploy rate tokens issued per origin every second.
-    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(4);
+    pub const DEPLOY_RATE_PER_ORIGIN_PER_SEC: Option<u32> = Some(16);
     /// Maximum burst tokens accumulated per origin for deploy endpoints.
-    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(8);
+    pub const DEPLOY_BURST_PER_ORIGIN: Option<u32> = Some(128);
     /// Default public Soracloud local-read rate per remote IP every second.
     pub const SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC: Option<u32> = Some(5);
     /// Default public Soracloud local-read burst capacity per remote IP.
@@ -2358,8 +2369,9 @@ pub mod torii {
     pub const PROOF_RETRY_AFTER_SECS: u64 = 1;
     /// Default global pre-auth connection cap (pre-RLIMIT clamp).
     pub const PREAUTH_MAX_CONNECTIONS: Option<NonZeroUsize> = Some(nonzero!(1024usize));
-    /// Default per-IP pre-auth connection cap.
-    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(64usize));
+    /// Default per-IP pre-auth connection cap, including bounded query waiters.
+    /// A solo client's next heavy-query wave must reach the execution queue.
+    pub const PREAUTH_MAX_CONNECTIONS_PER_IP: Option<NonZeroUsize> = Some(nonzero!(256usize));
     /// SoraNet privacy ingestion defaults (disabled until explicitly configured).
     pub mod soranet_privacy_ingest {
         use super::*;
@@ -2575,8 +2587,8 @@ pub mod torii {
     pub const APP_API_MAX_LIST_LIMIT: u32 = 500;
     /// Maximum fetch size accepted by app-facing iterable queries.
     pub const APP_API_MAX_FETCH_SIZE: u32 = 500;
-    /// Rate-limiter cost applied per requested row on app-facing endpoints.
-    pub const APP_API_RATE_LIMIT_COST_PER_ROW: u32 = 1;
+    /// Rate-limiter cost per default-sized page, rounding partial pages up.
+    pub const APP_API_RATE_LIMIT_COST_PER_PAGE: u32 = 1;
     /// Canonical request freshness defaults for app-facing signed HTTP requests.
     pub mod app_auth {
         /// Maximum allowed clock skew for signed app requests (seconds).
@@ -2682,12 +2694,17 @@ pub mod torii {
         pub const OPERATION_REGISTRY_MAX_BYTES: usize =
             OPERATION_REGISTRY_ACCOUNTED_BYTES_PER_ENTRY * OPERATION_REGISTRY_MAX_ENTRIES;
     }
+    // The pre-auth gate charges every external HTTP request, including routine
+    // deployment reads and writes. A solo walk with 128 proof reads, 58
+    // mutations, 32 direct readbacks, four funding requests and seven outer MCP
+    // requests fits before refill. Ordinary bursts recover with token refill;
+    // operators can explicitly configure a longer rate-violation cooldown.
     /// Steady-state rate for pre-authorization attempts per IP.
-    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(20);
+    pub const PREAUTH_RATE_PER_IP_PER_SEC: Option<u32> = Some(100);
     /// Burst tokens allowed for pre-authorization attempts per IP.
-    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
-    /// Time to ban IPs that exceed pre-auth rate limits.
-    pub const PREAUTH_BAN_DURATION: Duration = Duration::from_secs(60);
+    pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(256);
+    /// Optional extra cooldown after pre-auth rate exhaustion; disabled by default.
+    pub const PREAUTH_BAN_DURATION: Duration = Duration::ZERO;
     /// Maximum number of temporary pre-auth bans retained in memory.
     pub const PREAUTH_BAN_CAPACITY: NonZeroUsize = nonzero!(4096usize);
     /// Exact transport source hosts trusted for internal Torii reads and privileged routing.
@@ -2984,10 +3001,13 @@ pub mod torii {
         pub fn deny_tool_prefixes() -> Vec<String> {
             Vec::new()
         }
+        // Six bounded 64-tool batches plus 32 follow-up reads fit without
+        // throttling one operator. The finite refill is 20 tool calls/second;
+        // independent dispatch concurrency and payload limits still apply.
         /// Optional steady-state MCP request budget (requests/minute). None disables.
-        pub const RATE_PER_MINUTE: Option<u32> = Some(240);
+        pub const RATE_PER_MINUTE: Option<u32> = Some(1_200);
         /// Optional MCP request burst budget.
-        pub const BURST: Option<u32> = Some(120);
+        pub const BURST: Option<u32> = Some(512);
     }
     /// Account-onboarding defaults surfaced via `torii.account_onboarding`.
     pub mod account_onboarding {
@@ -3339,6 +3359,60 @@ pub mod nexus {
         pub const KAGEMUSHA_OPERATION_INDEX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Shared retained carrier shell/effects/descriptor allowance, not total RAM.
         pub const RETAINED_CARRIER_SHELL_BYTES: usize = 256 * 1024 * 1024;
+        /// Exact backing for one maximum-size committed-evidence prune-key plan.
+        pub const CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * core::mem::size_of::<iroha_crypto::Hash>();
+        /// Exact in-memory shape of one pending penalty metadata entry.
+        /// Each optional peer's compact bytes hold a separate original charge.
+        pub type ConsensusPenaltyPendingEntry = (
+            iroha_crypto::Hash,
+            u64,
+            Option<(
+                iroha_data_model::block::consensus::ValidatorIndex,
+                iroha_model_base::peer::PeerId,
+                mv::allocation::AllocationCharge,
+            )>,
+        );
+        /// Exact fixed backing for the maximum retained pending penalty plan.
+        pub const CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * core::mem::size_of::<ConsensusPenaltyPendingEntry>();
+        /// Maximum compact peer-key bytes in one pending plan. Actual plans
+        /// reserve each present key's exact tag-plus-payload length instead.
+        pub const CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES: usize = 4
+            * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            * (1 + iroha_crypto::MAX_PUBLIC_KEY_PAYLOAD_BYTES);
+        /// Minimum pool able to retain one maximum prune plan and one pending plan.
+        pub const CONSENSUS_EVIDENCE_ONE_PLAN_BYTES: usize = CONSENSUS_EVIDENCE_PRUNE_PLAN_BYTES
+            + CONSENSUS_EVIDENCE_PENDING_PLAN_BYTES
+            + CONSENSUS_EVIDENCE_PENDING_PEER_KEYS_MAX_BYTES;
+        /// Simultaneously retained proposal, validation, application and replay plans.
+        pub const CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS: usize = 8;
+        /// Finite pool for eight maximum prune/pending plans and cloned peer keys.
+        /// Stake indexes, proof snapshots and penalty scratch remain unfunded.
+        pub const CONSENSUS_EVIDENCE_PREPARATION_BYTES: usize =
+            CONSENSUS_EVIDENCE_ONE_PLAN_BYTES * CONSENSUS_EVIDENCE_PREPARATION_CONCURRENT_PLANS;
+        /// Minimum original-owner backing for one public-lane stake-share key,
+        /// one validator group, and three cloned Ed25519 account identifiers.
+        /// The Core group is a transparent wrapper around this exact tuple
+        /// layout. Larger keys/multisig controllers are measured against the
+        /// configured finite pool; Quantity owners remain separate obligations.
+        pub const CONSENSUS_STAKE_INDEX_MIN_BYTES: usize = core::mem::size_of::<(
+            iroha_model_base::topology::LaneId,
+            iroha_data_model::account::AccountId,
+            iroha_data_model::account::AccountId,
+        )>() + core::mem::size_of::<(
+            iroha_model_base::topology::LaneId,
+            iroha_data_model::account::AccountId,
+            core::ops::Range<usize>,
+            iroha_primitives::numeric::Quantity,
+            iroha_primitives::numeric::Quantity,
+            iroha_primitives::numeric::Quantity,
+        )>() + 3
+            * (1 + 32 + core::mem::size_of::<mv::allocation::AllocationCharge>());
+        /// Finite process-local pool for stake-index backings and nested account keys.
+        pub const CONSENSUS_STAKE_INDEX_BYTES: usize = 64 * 1024 * 1024;
         /// Budget share for Kura block storage (basis points).
         pub const KURA_BLOCKS_BPS: u16 = 3_500;
         /// Budget share for tiered-state cold snapshots (basis points).
@@ -4252,6 +4326,12 @@ pub mod sumeragi {
     pub fn key_allowed_algorithms() -> Vec<Algorithm> {
         KEY_ALLOWED_ALGOS.to_vec()
     }
+    /// Suffix of the default safety-record directory, a sibling of the Kura store directory
+    /// (`specs/sumeragi.md` §7.4: records are never backed up or restored with the store).
+    pub const RECORDS_DIR_SUFFIX: &str = "-sumeragi-records";
+    /// Suffix of the default key installation log, a sibling of the Kura store directory and
+    /// outside the record directory (§7.4).
+    pub const INSTALLATION_LOG_SUFFIX: &str = "-sumeragi-installation.log";
     /// NPoS epoch, randomness, election, and reconfiguration defaults.
     pub mod npos {
         /// Epoch length in blocks.

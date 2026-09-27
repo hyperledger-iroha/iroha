@@ -870,6 +870,8 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     merge_carrier: null,
     executed_block_wire_len: 123,
     executed_block_wire_hash: fakeSumeragiHash(0x37),
+    transaction_input_commitment: null,
+    transaction_output_commitment: null,
   };
   const commitContextId = [fakeSumeragiHash(0x41)];
   return {
@@ -12105,6 +12107,48 @@ test("getSumeragiStatusTyped requires exact lane-finality and merge projections"
   }
 });
 
+test("getSumeragiStatusTyped requires exact transaction input and output trees", async () => {
+  const commitmentOf = (value) => value.last_commit_qc.certificate.execution_commitment;
+  const inputTree = { root: fakeSumeragiHash(0x3a), leaf_count: 2 };
+  const outputTree = { root: fakeSumeragiHash(0x3b), leaf_count: 3 };
+  const payload = createSumeragiV2StatusPayload();
+  Object.assign(commitmentOf(payload), {
+    transaction_input_commitment: inputTree,
+    transaction_output_commitment: outputTree,
+  });
+  const parsed = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+  assert.deepEqual(commitmentOf(parsed).transaction_input_commitment, inputTree);
+  assert.deepEqual(commitmentOf(parsed).transaction_output_commitment, outputTree);
+
+  const outputOnly = createSumeragiV2StatusPayload();
+  commitmentOf(outputOnly).transaction_output_commitment = outputTree;
+  const parsedOutputOnly = await sumeragiClientForPayload(outputOnly).getSumeragiStatusTyped();
+  assert.equal(commitmentOf(parsedOutputOnly).transaction_input_commitment, null);
+  assert.deepEqual(commitmentOf(parsedOutputOnly).transaction_output_commitment, outputTree);
+
+  const invalidCases = [
+    (commitment) => { delete commitment.transaction_input_commitment; },
+    (commitment) => { delete commitment.transaction_output_commitment; },
+    (commitment) => { commitment.transaction_input_commitment = { leaf_count: 2 }; },
+    (commitment) => { commitment.transaction_output_commitment = { ...outputTree, extra: true }; },
+    (commitment) => { commitment.transaction_input_commitment = { ...inputTree, root: "invalid" }; },
+    (commitment) => { commitment.transaction_input_commitment = { ...inputTree, leaf_count: 0 }; },
+    (commitment) => { commitment.transaction_input_commitment = { ...inputTree, leaf_count: -1 }; },
+    (commitment) => { commitment.transaction_input_commitment = { ...inputTree, leaf_count: Number.MAX_SAFE_INTEGER + 1 }; },
+    (commitment) => { commitment.transaction_output_commitment = null; },
+    (commitment) => { commitment.transaction_output_commitment = { ...outputTree, leaf_count: 1 }; },
+  ];
+  for (const mutate of invalidCases) {
+    const invalid = createSumeragiV2StatusPayload();
+    Object.assign(commitmentOf(invalid), {
+      transaction_input_commitment: inputTree,
+      transaction_output_commitment: outputTree,
+    });
+    mutate(commitmentOf(invalid));
+    await assert.rejects(() => sumeragiClientForPayload(invalid).getSumeragiStatusTyped());
+  }
+});
+
 test("getSumeragiStatusTyped accepts aggregate top-up commitments beyond the retired cap", async () => {
   const payload = createSumeragiV2StatusPayload();
   const commitment = payload.last_commit_qc.certificate.execution_commitment;
@@ -12246,6 +12290,8 @@ test("Sumeragi execution commitment declarations expose current mandatory fields
     "lane_finality_manifest: ToriiSumeragiV2LaneFinalityManifestCommitment | null;",
     "merge_carrier: ToriiSumeragiV2MergeCarrierCommitment | null;",
     "executed_block_wire_len: ToriiU64;",
+    "transaction_input_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;",
+    "transaction_output_commitment: ToriiSumeragiV2TransactionTreeCommitment | null;",
   ]) {
     assert.ok(match[1].includes(field), `missing declaration: ${field}`);
   }
@@ -12254,6 +12300,10 @@ test("Sumeragi execution commitment declarations expose current mandatory fields
   );
   assert.ok(carrierMatch, "missing ToriiSumeragiV2MergeCarrierCommitment declaration");
   assert.match(carrierMatch[1], /version: 1;/u);
+  assert.match(
+    declarations,
+    /export interface ToriiSumeragiV2TransactionTreeCommitment \{ root: string; leaf_count: ToriiU64; \}/u,
+  );
   assert.match(carrierMatch[1], /entry_hash: string;/u);
   assert.match(declarations, /ToriiSumeragiV2LaneFinalityManifestCommitment \{[^}]*root: string;[^}]*leaf_count: number;/u);
 });

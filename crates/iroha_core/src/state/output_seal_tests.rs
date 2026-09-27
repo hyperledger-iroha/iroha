@@ -14,14 +14,15 @@ struct AlteredProposal {
     signatures: std::collections::BTreeSet<iroha_data_model::block::BlockSignature>,
     payload: iroha_data_model::block::BlockPayload,
     result: Option<iroha_data_model::block::BlockResult>,
+    commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
 }
 
 #[test]
 fn altered_auxiliary_body_cannot_enter_finalizer_with_the_original_header() {
     use norito::codec::{DecodeAll, Encode};
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     run(&mut block, &source);
     let before = source.header();
@@ -45,10 +46,10 @@ fn altered_auxiliary_body_cannot_enter_finalizer_with_the_original_header() {
 
 #[test]
 fn unowned_receipt_accumulator_refuses_before_and_after_finalizer() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for after in [false, true] {
         let (state, mut source) = seal_fixture();
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         run(&mut block, &source);
         let foreign = HashOf::from_untyped_unchecked(Hash::new(b"unowned receipt accumulator"));
@@ -152,9 +153,9 @@ fn metadata(
 
 #[test]
 fn actual_three_phase_seal_keeps_proposal_and_exact_wire_and_blocks_publication() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let header = source.header();
     let signatures = source.signatures().cloned().collect::<Vec<_>>();
     let mut block = state.block(header);
@@ -196,9 +197,9 @@ fn actual_three_phase_seal_keeps_proposal_and_exact_wire_and_blocks_publication(
 
 #[test]
 fn repeated_execution_or_seal_cannot_reapply_actual_effects() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     run(&mut block, &source);
     let fragments = block.committed_fragment_count();
@@ -215,10 +216,10 @@ fn repeated_execution_or_seal_cannot_reapply_actual_effects() {
 
 #[test]
 fn foreign_proposal_and_partial_mock_sources_cannot_enter_the_finalizer() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for partial in [false, true] {
         let (state, mut source) = seal_fixture();
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         block.reserve_ordinary_execution_outputs(&source).unwrap();
         if partial {
@@ -252,9 +253,9 @@ fn foreign_proposal_and_partial_mock_sources_cannot_enter_the_finalizer() {
 
 #[test]
 fn combined_driver_owns_actual_phases_and_finalizer_once() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     let mut calls = 0;
     block
@@ -283,10 +284,10 @@ fn combined_driver_owns_actual_phases_and_finalizer_once() {
 
 #[test]
 fn finalizer_error_and_unwind_poison_the_consumed_owner() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for unwind in [false, true] {
         let (state, mut source) = seal_fixture();
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         run(&mut block, &source);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -319,9 +320,9 @@ fn finalizer_error_and_unwind_poison_the_consumed_owner() {
 
 #[test]
 fn finalizer_must_account_for_every_applied_fragment() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     run(&mut block, &source);
     let result = block.seal_execution_outputs(&mut source, |state, source, routes| {
@@ -349,9 +350,9 @@ fn finalizer_must_account_for_every_applied_fragment() {
 
 #[test]
 fn changed_signature_invalidates_exact_attachment_without_changing_proposal() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     run(&mut block, &source);
     block.seal_execution_outputs(&mut source, metadata).unwrap();
@@ -368,10 +369,10 @@ fn changed_signature_invalidates_exact_attachment_without_changing_proposal() {
 
 #[test]
 fn state_transaction_cannot_apply_after_output_seal() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for consensus_only in [false, true] {
         let (state, mut source) = seal_fixture();
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         run(&mut block, &source);
         block.seal_execution_outputs(&mut source, metadata).unwrap();
@@ -409,9 +410,9 @@ fn state_transaction_cannot_apply_after_output_seal() {
 
 #[test]
 fn actual_seal_binds_finalizer_world_values_and_refuses_late_durable_changes() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     run(&mut block, &source);
     let key: iroha_model_base::state_path::StatePath = "seal/finalizer".parse().unwrap();
@@ -446,9 +447,9 @@ fn actual_seal_binds_finalizer_world_values_and_refuses_late_durable_changes() {
 
 #[test]
 fn seal_verification_uses_values_instead_of_noop_or_rolled_back_touch_history() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, mut source) = seal_fixture();
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     run(&mut block, &source);
     block.seal_execution_outputs(&mut source, metadata).unwrap();

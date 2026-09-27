@@ -10,7 +10,6 @@ use iroha::data_model::{
     prelude::QueryBuilderExt,
     query::peer::prelude::FindPeers,
 };
-use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_test_network::*;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
@@ -536,7 +535,7 @@ fn is_register_duplicate_error(err: &eyre::Report) -> bool {
     })
 }
 fn expected_connected_peers(roster_len: usize) -> u64 {
-    commit_quorum_from_len(roster_len)
+    iroha_sumeragi::types::quorum(roster_len)
         .saturating_sub(1)
         .try_into()
         .unwrap_or(0)

@@ -9,6 +9,7 @@ public enum KagemushaCoreCoordinatorMethodV1: UInt8, CaseIterable, Sendable {
   case beginObservation
   case initialEnrollment
   case acknowledgeCommittedAppAttest
+  case exportOutgoingStateProof
 }
 
 /// Framing errors grant no native coordinator or monetary authority.
@@ -142,7 +143,7 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try qualification(fields, end + 2)
     case .initialEnrollment:
       switch try number(fields, 0) {
-      case 1:
+      case 1, 7:
         try count(fields, 2); try bounded(fields, 1, 512)
       case 2:
         try count(fields, 11); try ticket(fields, 1)
@@ -170,6 +171,8 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try bounded(fields, 3, 8 * 1024)
       try require(number(fields, 4) != UInt32.max, "App Attest counter exhausted")
       try digest(fields, 5); try digest(fields, 6)
+    case .exportOutgoingStateProof:
+      try count(fields, 1); try digest(fields, 0)
     }
   }
 
@@ -197,9 +200,11 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try equal(response, 3, request, senderInputs(request, 1))
     case .initialEnrollment:
       switch try number(request, 0) {
-      case 1:
-        try count(response, 5); try ticket(response, 0)
-        for index in 1...4 { try digest(response, index) }
+      case 1, 7:
+        try count(response, 7); try ticket(response, 0)
+        for index in 1...5 { try digest(response, index) }
+        // Fixed suspend-inclusive native expiry, never a Unix timestamp.
+        try nativeContinuousDeadline(response, 6)
       case 2:
         try count(response, 4); try equal(response, 0, request, 1)
         try equal(response, 1, request, 7); try equal(response, 2, request, 8)
@@ -224,6 +229,9 @@ public enum KagemushaCoreCoordinatorFrameV1 {
       try require(number(response, 4) == number(request, 4) + 1,
         "App Attest acknowledgment skipped the committed counter")
       try equal(response, 5, request, 5); try equal(response, 6, request, 6)
+    case .exportOutgoingStateProof:
+      try count(response, 3); try equal(response, 0, request, 0)
+      try bounded(response, 1, 4096); try bounded(response, 2, 6528)
     }
   }
 
@@ -246,12 +254,17 @@ public enum KagemushaCoreCoordinatorFrameV1 {
 
   private static func bounded(_ fields: [Data], _ index: Int, _ maximum: Int) throws {
     let value = try field(fields, index)
-    try require(!value.isEmpty && value.count <= maximum, "invalid enrollment field size")
+    try require(!value.isEmpty && value.count <= maximum, "invalid coordinator field size")
   }
 
   private static func ticket(_ fields: [Data], _ index: Int) throws {
     let value = try field(fields, index)
     try require(value.count == 8 && value.contains { $0 != 0 }, "invalid enrollment ticket")
+  }
+
+  private static func nativeContinuousDeadline(_ fields: [Data], _ index: Int) throws {
+    let value = try field(fields, index)
+    try require(value.count == 8 && value.contains { $0 != 0 }, "invalid native continuous deadline")
   }
 
   private static func digest(_ fields: [Data], _ index: Int) throws {

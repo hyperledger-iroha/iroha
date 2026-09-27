@@ -2682,8 +2682,8 @@ fn recovered_apply_validate_retry_census_for_test(
 
 #[cfg(feature = "bls")]
 fn recovered_decision_apply_validate_retry_retirement_fixture() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let (mut owner, _safety, storage) =
         crate::sumeragi::v2::recovered_decision_apply_owner_for_lineage_test(0xEA);
     let active_context = owner.coordinator.active_context;

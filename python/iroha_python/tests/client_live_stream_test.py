@@ -444,6 +444,62 @@ def test_sumeragi_status_stream_uses_fresh_one_shot_operator_auth() -> None:
     assert nonces[0] != nonces[1]
 
 
+def test_sumeragi_status_stream_drops_ambient_resume_header_and_signs_once() -> None:
+    class RecordingOperatorKeyPair:
+        public_key_multihash = StubOperatorKeyPair.public_key_multihash
+
+        def __init__(self) -> None:
+            self.messages: list[bytes] = []
+
+        def sign(self, message: bytes) -> bytes:
+            self.messages.append(message)
+            return b"\x5a" * 64
+
+    from iroha_torii_client.client import operator_network_request_signature_message
+
+    key_pair = RecordingOperatorKeyPair()
+    network_id = NetworkId.from_bytes(bytes([0xA5]) * 32)
+    session = SequencedSession([SseStubResponse(['data: {"view": 2}', ""])])
+    session.trust_env = False
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        default_headers={"lAsT-EvEnT-Id": "stale-cursor", "X-Trace": "kept"},
+        operator_signing_context=OperatorSigningContext(
+            network_id, key_pair
+        ),
+    )
+
+    assert next(client.stream_sumeragi_status()) == {"view": 2}
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    headers = {name.lower(): value for name, value in call["headers"].items()}
+    assert "last-event-id" not in headers
+    assert headers["x-trace"] == "kept"
+    assert headers["x-iroha-operator-public-key"] == key_pair.public_key_multihash
+    assert key_pair.messages == [
+        operator_network_request_signature_message(
+            network_id.literal,
+            "GET",
+            "/v1/sumeragi/status/sse",
+            b"",
+            timestamp_ms=int(headers["x-iroha-operator-timestamp-ms"]),
+            nonce=headers["x-iroha-operator-nonce"],
+        )
+    ]
+    assert call["allow_redirects"] is False
+
+
+def test_nonreplayable_stream_rejects_session_resume_header_before_dispatch() -> None:
+    session = SequencedSession([])
+    session.headers["Last-Event-ID"] = "ambient-cursor"
+    client = ToriiClient("https://torii.example", session=session, max_retries=0)
+
+    with pytest.raises(ValueError, match="Session.headers Last-Event-ID"):
+        next(client.stream_events(max_retries=0))
+    assert session.calls == []
+
+
 def test_sumeragi_status_stream_rejects_missing_signer_and_retries_before_dispatch() -> None:
     session = SequencedSession([])
     client = ToriiClient("https://torii.example", session=session, max_retries=3)

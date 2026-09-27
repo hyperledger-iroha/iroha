@@ -4023,7 +4023,7 @@ fn complete_tip_terminal_apply_store_join_is_not_an_all_row_retirement() {
 fn complete_tip_decision_factory_publishes_one_authenticated_owner_open_chain() {
     let result = crate::sumeragi::sumeragi_thread_builder("complete-tip-decision-owner-open")
         .spawn(|| {
-            let _guard = crate::sumeragi::status::rbc_status_test_guard();
+            let _guard = crate::status::rbc_status_test_guard();
             for validated_body in [false, true] {
                 let fixture = RecoveryFixture::new("complete-tip-decision-factory", 0x71);
                 let (_, mut parent) = terminal_decision_chain_fixture(&fixture);

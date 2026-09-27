@@ -25,11 +25,13 @@ state_test! { sync native_transport_backpressure_keeps_exact_ticket_and_serves_o
     let guard = ConsensusOutputGuard::isolated();
     let mut transport = NativeLaneTransport::new(Arc::clone(&fixture.state),Arc::clone(&guard),local,nonzero!(1_usize));
     assert!(matches!(transport.retain(&observed,native_transport_packet_for_test(&fixture,lane)),NativeTransportAdmission::Retained));
+    let repeated = native_transport_packet_for_test(&fixture,lane);
+    assert!(matches!(transport.retain(&observed,repeated),NativeTransportAdmission::Retained),"an exact retransmission shares the original fanout even at capacity");
     let mut different = native_transport_packet_for_test(&fixture,lane);
     different.envelope = native_driver_control_for_test(&fixture,lane,1);
     different.canonical_bytes = norito::encode_canonical(&different.envelope).unwrap();
     let original = different.canonical_bytes.clone();
-    let NativeTransportAdmission::Retry(returned) = transport.retain(&observed,different) else {panic!("full transport must retain distinct source custody")};
+    let NativeTransportAdmission::Retry(returned) = transport.retain(&observed,different) else {panic!("a distinct control must retain source custody while full")};
     assert_eq!(returned.canonical_bytes,original);
     let mut ticket_owner = None;
     let mut original_frame = None;
@@ -42,10 +44,14 @@ state_test! { sync native_transport_backpressure_keeps_exact_ticket_and_serves_o
         Err(NetworkActorAdmissionError::Backpressured {message:post,ticket:Some(ticket),rank:1})
     }).unwrap();
     assert_eq!(first,NativeTransportProgress::Backpressured {instance:lane.instance_id(),peer:peers[0].clone(),rank:1});
+    assert!(matches!(transport.retain(&observed,native_transport_packet_for_test(&fixture,lane)),NativeTransportAdmission::Retained),"a retry cannot replace the original returned post or ticket");
     for peer in &peers[1..] {
         assert_eq!(transport.poll_for_test(&observed,|post,ticket| {
             assert_eq!(&post.peer_id,peer);assert!(ticket.is_none());Ok(())
         }).unwrap(),NativeTransportProgress::Admitted {instance:lane.instance_id(),peer:peer.clone()});
+    }
+    for _ in 0..16 {
+        assert!(matches!(transport.retain(&observed,native_transport_packet_for_test(&fixture,lane)),NativeTransportAdmission::Retained),"retransmission rearms admitted peers once without multiplying the blocked ticket");
     }
     assert_eq!(ticket_owner.as_ref().unwrap().waiter_count(),1);
     assert_eq!(ticket_owner.as_ref().unwrap().ticket_drop_cancellations(),0);
@@ -60,6 +66,11 @@ state_test! { sync native_transport_backpressure_keeps_exact_ticket_and_serves_o
         assert_eq!(ticket.as_ref().unwrap().rank(),Some(1));
         accepted_ticket = ticket;Ok(())
     }).unwrap(),NativeTransportProgress::Admitted {instance:lane.instance_id(),peer:peers[0].clone()});
+    for peer in &peers[1..] {
+        assert_eq!(transport.poll_for_test(&current,|post,ticket| {
+            assert_eq!(&post.peer_id,peer);assert!(ticket.is_none());Ok(())
+        }).unwrap(),NativeTransportProgress::Admitted {instance:lane.instance_id(),peer:peer.clone()});
+    }
     assert_eq!(transport.poll_for_test(&current,|_,_|panic!("drained")).unwrap(),NativeTransportProgress::Idle);
     assert_eq!(ticket_owner.as_ref().unwrap().ticket_drop_cancellations(),0,"the test actor owns the returned exact ticket now");
     drop(transport);assert!(!guard.restart_required());drop(accepted_ticket);
@@ -100,13 +111,15 @@ state_test! { sync native_transport_rejects_changed_source_and_fails_stop_on_act
     let lane = &observed.contexts()[0];let local = lane.frozen().committee[0].clone();
     let guard = ConsensusOutputGuard::isolated();
     let mut transport = NativeLaneTransport::new(Arc::clone(&fixture.state),Arc::clone(&guard),local.clone(),nonzero!(1_usize));
-    for change in 0..4 {
+    for change in 0..6 {
         let mut packet = native_transport_packet_for_test(&fixture,lane);
         match change {
             0 => packet.canonical_bytes[0] ^= 1,
             1 => packet.destinations.swap(0,1),
             2 => {if let iroha_data_model::block::lane_consensus::LaneMessageV1::TimeoutVote(vote) = &mut packet.envelope.message {vote.share.signature[0] ^= 1;}packet.canonical_bytes = norito::encode_canonical(&packet.envelope).unwrap();},
             3 => {packet.envelope.version += 1;packet.canonical_bytes = norito::encode_canonical(&packet.envelope).unwrap();},
+            4 => {packet.canonical_bytes.pop().unwrap();},
+            5 => {packet.canonical_bytes.push(0);},
             _ => unreachable!(),
         }
         let bytes = packet.canonical_bytes.clone();
@@ -320,7 +333,6 @@ state_test! { sync native_transport_production_decision_reaches_global_nonmember
     drop(transport);
     assert!(!guard.restart_required());
 }
-
 
 state_test! { sync native_transport_exact_retransmissions_cannot_exhaust_slots_behind_silent_peer
     use crate::sumeragi::{

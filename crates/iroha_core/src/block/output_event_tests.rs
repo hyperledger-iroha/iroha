@@ -63,6 +63,9 @@ fn local_storage_recovery_emits_no_block_rejection() {
         BlockValidationError::from_certified_merge_stage_error(
             MergeLedgerCommitError::BlockHashAdmission(BlockHashAdmissionError::ReadOnly),
         ),
+        BlockValidationError::EvidencePreparation(
+            crate::state::EvidencePreparationError::Admission(AllocationRefusal::DemandOverflow),
+        ),
     ];
     let mut events = Vec::new();
     for error in local_errors {
@@ -393,6 +396,7 @@ struct MutableEventBlockWire {
     signatures: BTreeSet<BlockSignature>,
     payload: BlockPayload,
     result: Option<BlockResult>,
+    commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
 }
 
 fn mutate_event_body(

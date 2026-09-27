@@ -301,6 +301,211 @@ public sealed class ToriiRuntimeGovernanceAuthenticationTests
         Assert.False(request.Headers.ContainsKey("X-Iroha-Signature"));
     }
 
+    [Fact]
+    public async Task ElectionTallySignsExactPostAndPreservesUInt128Weight()
+    {
+        using var handler = new RecordingHandler(request =>
+        {
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            Assert.Equal("application/json", request.Content?.Headers.ContentType?.MediaType);
+            return ElectionTallyResponse(
+                $"{{\"evaluated_block_height\":18446744073709551615,\"evaluated_block_hash\":\"{new string('a', 64)}\",\"finalized\":true,\"tally\":[340282366920938463463374607431768211455,0]}}");
+        });
+        using var client = CreateAuthenticatedClient(handler);
+
+        var tally = await client.GetElectionTallyAsync(
+            "election-1",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(tally);
+        Assert.Equal(ulong.MaxValue, tally.EvaluatedBlockHeight);
+        Assert.Equal(new string('a', 64), tally.EvaluatedBlockHash);
+        Assert.True(tally.Finalized);
+        Assert.Equal([UInt128.MaxValue, UInt128.Zero], tally.Tally);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal("POST", request.Method);
+        Assert.Equal("/v1/zk/vote/tally", request.Path);
+        Assert.Equal(string.Empty, request.Query);
+        Assert.Equal("{\"election_id\":\"election-1\"}", Encoding.UTF8.GetString(request.Body!));
+        var timestamp = long.Parse(
+            Header(request, "X-Iroha-Timestamp-Ms"),
+            NumberStyles.None,
+            CultureInfo.InvariantCulture);
+        var nonce = Header(request, "X-Iroha-Nonce");
+        var signature = Convert.FromBase64String(Header(request, "X-Iroha-Signature"));
+        var publicKey = Ed25519Signer.GetPublicKey(PrivateKeySeed);
+        byte[] SignedMessage(NetworkId networkId, byte[] body) =>
+            CanonicalRequest.BuildSignatureMessage(
+                networkId,
+                request.Method,
+                request.Path,
+                request.Query,
+                body,
+                timestamp,
+                nonce);
+        Assert.True(Ed25519Signer.Verify(
+            SignedMessage(NetworkId.Parse(ExactNetworkIdLiteral), request.Body!),
+            signature,
+            publicKey));
+        Assert.False(Ed25519Signer.Verify(
+            SignedMessage(NetworkId.Parse(ForeignNetworkIdLiteral), request.Body!),
+            signature,
+            publicKey));
+        Assert.False(Ed25519Signer.Verify(
+            SignedMessage(NetworkId.Parse(ExactNetworkIdLiteral), "{\"election_id\":\"other\"}"u8.ToArray()),
+            signature,
+            publicKey));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(".alias")]
+    [InlineData("bad/selector")]
+    [InlineData("nonascii-é")]
+    [InlineData("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxy")]
+    public async Task ElectionTallyRejectsInvalidSelectorBeforeDispatch(string electionId)
+    {
+        using var handler = new RecordingHandler(_ => ElectionTallyResponse("{}"));
+        using var client = CreateAuthenticatedClient(handler);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            client.GetElectionTallyAsync(electionId, TestContext.Current.CancellationToken));
+
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ElectionTallyRejectsMissingAuthenticationAndNetworkBeforeDispatch()
+    {
+        using var handler = new RecordingHandler(_ => ElectionTallyResponse("{}"));
+        using var withoutCredentials = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions { NetworkId = NetworkId.Parse(ExactNetworkIdLiteral) });
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            withoutCredentials.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Empty(handler.Requests);
+
+        using var withoutNetwork = new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(AccountId, PrivateKeySeed),
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            withoutNetwork.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"HASH\",\"finalized\":true,\"tally\":[0,0]}")]
+    [InlineData("{\"evaluated_block_height\":0,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[0,0]}")]
+    [InlineData("{\"evaluated_block_height\":1.0,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[0,0]}")]
+    [InlineData("{\"evaluated_block_height\":\"1\",\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[0,0]}")]
+    [InlineData("{\"evaluated_block_height\":18446744073709551616,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[0,0]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":1,\"tally\":[0,0]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[340282366920938463463374607431768211456,0]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[\"1\",0]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[1e0,0]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[340282366920938463463374607431768211455,1]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[0]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[0,0],\"extra\":0}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"tally\":[0,0]}")]
+    [InlineData("{\"evaluated_block_height\":1,\"evaluated_block_height\":1,\"evaluated_block_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"finalized\":true,\"tally\":[0,0]}")]
+    public async Task ElectionTallyRejectsMalformedResponse(string body)
+    {
+        using var handler = new RecordingHandler(_ => ElectionTallyResponse(body));
+        using var client = CreateAuthenticatedClient(handler);
+
+        await Assert.ThrowsAsync<JsonException>(() =>
+            client.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task ElectionTallyBoundsResponseAndRequiresIdentityEncoding()
+    {
+        using var oversizedHandler = new RecordingHandler(_ => ElectionTallyResponse(new string(' ', 8193)));
+        using var oversizedClient = CreateAuthenticatedClient(oversizedHandler);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            oversizedClient.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Single(oversizedHandler.Requests);
+
+        using var compressedHandler = new RecordingHandler(_ =>
+        {
+            var response = ElectionTallyResponse("{}");
+            response.Content.Headers.ContentEncoding.Add("gzip");
+            return response;
+        });
+        using var compressedClient = CreateAuthenticatedClient(compressedHandler);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            compressedClient.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Single(compressedHandler.Requests);
+
+        using var nonJsonHandler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new ByteArrayContent("{}"u8.ToArray()),
+        });
+        using var nonJsonClient = CreateAuthenticatedClient(nonJsonHandler);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            nonJsonClient.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Single(nonJsonHandler.Requests);
+    }
+
+    [Fact]
+    public async Task ElectionTallyAbsentResponseHasNoBody()
+    {
+        using var emptyHandler = new RecordingHandler(_ => ElectionTallyResponse("", HttpStatusCode.NotFound));
+        using var emptyClient = CreateAuthenticatedClient(emptyHandler);
+        Assert.Null(await emptyClient.GetElectionTallyAsync(
+            "election-1", TestContext.Current.CancellationToken));
+        Assert.Single(emptyHandler.Requests);
+
+        using var bodyHandler = new RecordingHandler(_ => ElectionTallyResponse("{}", HttpStatusCode.NotFound));
+        using var bodyClient = CreateAuthenticatedClient(bodyHandler);
+        await Assert.ThrowsAsync<InvalidDataException>(() =>
+            bodyClient.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Single(bodyHandler.Requests);
+    }
+
+    [Fact]
+    public async Task ElectionTallyRedirectAndChangedTargetAreNotAccepted()
+    {
+        using var redirectHandler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+        {
+            Headers = { Location = new Uri("https://redirect.example/replayed") },
+            Content = new ByteArrayContent([]),
+        });
+        using var redirectClient = CreateAuthenticatedClient(redirectHandler);
+        await Assert.ThrowsAsync<ToriiApiException>(() =>
+            redirectClient.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Single(redirectHandler.Requests);
+
+        using var changedTargetHandler = new RecordingHandler(_ =>
+        {
+            var response = ElectionTallyResponse("{}");
+            response.RequestMessage = new HttpRequestMessage(
+                HttpMethod.Post,
+                new Uri("https://torii.example/replayed"));
+            return response;
+        });
+        using var changedTargetClient = CreateAuthenticatedClient(changedTargetHandler);
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            changedTargetClient.GetElectionTallyAsync("election-1", TestContext.Current.CancellationToken));
+        Assert.Single(changedTargetHandler.Requests);
+    }
+
+    private static HttpResponseMessage ElectionTallyResponse(
+        string body,
+        HttpStatusCode statusCode = HttpStatusCode.OK) =>
+        new(statusCode)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+
     private static ToriiClient CreateAuthenticatedClient(HttpMessageHandler handler) =>
         new(
             new Uri("https://torii.example"),

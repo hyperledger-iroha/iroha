@@ -115,6 +115,23 @@ object TransferWirePayloadEncoder {
     fun encodeQuantityPayload(quantity: KotodamaQuantity): ByteArray =
         encodeQuantityPayload(quantity.toString())
 
+    /** Decode one bare canonical `Quantity` field without accepting alternate spellings. */
+    internal fun decodeQuantityPayload(
+        payload: ByteArray,
+        flags: Int = NoritoCodec.DEFAULT_FLAGS,
+    ): String {
+        val decoder = NoritoDecoder(payload, flags)
+        val quantity = QuantityAdapter().decode(decoder)
+        require(decoder.remaining() == 0) { "Trailing bytes after Quantity payload" }
+        val canonical = quantity.render()
+        val encoder = NoritoEncoder(flags)
+        QuantityAdapter().encode(encoder, quantity)
+        require(payload.contentEquals(encoder.toByteArray())) {
+            "Quantity payload is not canonical"
+        }
+        return canonical
+    }
+
     /** Decodes a bare `AccountId` payload produced by [encodeAccountIdPayload]. */
     @JvmStatic
     internal fun decodeAccountIdPayload(

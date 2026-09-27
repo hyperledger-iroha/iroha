@@ -20,7 +20,7 @@ const SUITES = Object.freeze([
   ["sorafsOrchestrator.parity", "registerSorafsOrchestratorParityTests"],
   ["sorafsPdpValidation", "registerSorafsPdpValidationTests"],
 ]);
-// The first nine entries are the existing ABI23 checker's exact Node inventory.
+// The first nine entries are the existing ABI24 checker's exact Node inventory.
 // A source contract control must keep this projection bound to that sole owner.
 const ABI_SYMBOLS = Object.freeze([
   "connectNoritoBridgeAbiVersion", "inspectSorafsOrderbookSubmissionForDiscriminantV1",
@@ -103,7 +103,7 @@ function symbols(binding) {
   for (const name of [...ABI_SYMBOLS, ...SORAFS_SYMBOLS])
     demand(typeof Object.getOwnPropertyDescriptor(binding, name)?.value === "function", `missing native capability ${name}`);
   const version = binding.connectNoritoBridgeAbiVersion();
-  demand(version === 23 && Number.isSafeInteger(version), "same-binding ABI is not23");
+  demand(version === 24 && Number.isSafeInteger(version), "same-binding ABI is not24");
   return Object.freeze({ bridgeAbiVersion: version, requiredSymbols: ABI_SYMBOLS, sorafsSymbols: SORAFS_SYMBOLS });
 }
 

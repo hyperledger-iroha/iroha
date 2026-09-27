@@ -10,6 +10,14 @@ fn pending_for_subject(
     subject: FinalPromotionCheckSubjectV1,
 ) -> PendingFinalPromotionCheckV1 {
     let mut expected = f.expected();
+    if matches!(
+        &subject,
+        FinalPromotionCheckSubjectV1::BeforeProvider(_)
+            | FinalPromotionCheckSubjectV1::AfterProvider(_)
+            | FinalPromotionCheckSubjectV1::BeforeCommit(_)
+    ) {
+        expected.floor = f.reserve_floor.expect("pre-Reserve independent floor");
+    }
     expected.subject = subject;
     let prepared =
         begin_final_promotion_check_v1(Arc::clone(&f.state), expected, Duration::from_secs(60))
@@ -32,7 +40,7 @@ fn finite_utc_interval_requires_both_custody_endpoints_at_one_applied_cut() {
             [true]
         );
         let samples = std::cell::Cell::new(0);
-        let result = pending.verify_finalized(|| {
+        let result = pending.verify_finalized(FinalPromotionCheckSourceV1::Current, || {
             samples.set(samples.get() + 1);
             Ok(time)
         });
@@ -88,7 +96,9 @@ fn malformed_interval_is_rejected_before_native_eligibility() {
         // The exact Check succeeded, but same-cut custody is revoked. A malformed interval
         // must return Clock before the native eligibility owner would return Authority.
         assert_eq!(
-            pending.verify_finalized(|| Ok(time)).err(),
+            pending
+                .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(time))
+                .err(),
             Some(Error::Clock)
         );
     }
@@ -121,7 +131,12 @@ fn reserved_interval_checks_execution_lower_bound_and_exclusive_expiry_upper_bou
                 ),
                 [true]
             );
-            let result = pending.verify_finalized(|| Ok(time));
+            let result = pending.verify_finalized(
+                FinalPromotionCheckSourceV1::Reserved(
+                    f.reserve_signed.as_ref().expect("original signed Reserve"),
+                ),
+                || Ok(time),
+            );
             if boundary == 0 {
                 let verified = result.unwrap();
                 assert_eq!(verified.eligibility_time_interval(), time);
@@ -135,7 +150,7 @@ fn reserved_interval_checks_execution_lower_bound_and_exclusive_expiry_upper_bou
 }
 
 #[test]
-fn completed_interval_checks_execution_time_without_renewing_reservation_expiry() {
+fn completed_interval_cannot_authorize_without_exact_complete_source_proof() {
     for before_release in [false, true] {
         for lower_before_execution in [false, true] {
             let mut f = Fixture::new();
@@ -185,15 +200,13 @@ fn completed_interval_checks_execution_time_without_renewing_reservation_expiry(
                 ),
                 [true]
             );
-            let result = pending.verify_finalized(|| Ok(time));
-            if lower_before_execution {
-                assert_eq!(result.err(), Some(Error::Authority));
-            } else {
-                let verified = result.unwrap();
-                assert_eq!(verified.eligibility_time_interval(), time);
-                assert_eq!(verified.snapshot().operation.as_ref(), Some(&row));
-                assert_eq!(verified.applied_floor().height, 5);
-            }
+            assert_eq!(
+                pending
+                    .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(time))
+                    .err(),
+                Some(Error::Execution),
+                "a successful native completed Check alone cannot admit this phase"
+            );
         }
     }
 }

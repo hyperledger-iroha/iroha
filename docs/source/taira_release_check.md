@@ -99,6 +99,19 @@ portable-only requests. Each phase reports its own feature graph; these results
 provide no release qualification or independent-checkpoint credit. Immutable
 qualification continues to compile and test its complete graph.
 
+The source census includes charged Concread notification custody and the current
+native State source, recorded-execution and allocation owners. Archive refusal,
+retained dispatch and publication controls remain selected under their owning
+modules. Exact selector checks also bind staking's atomic failed-payout control
+and Kagami's permissioned-genesis prohibition on additional XOR minting.
+Before peers start, both scopes verify that only the original fixture launch may
+assert fresh consensus signing keys; restart cannot repeat that assertion.
+The generic test-network harness also rejects this assertion after history loss.
+They also check that stock beacon configuration retains existing providers and
+sets the inherited descriptor for mint finality seed custody.
+The daemon selection checks exact broker catalog composition and rejects changed
+credentials, substituted catalogs and unsupported provider slots.
+
 Focused development checks validate an explicitly forwarded `TMPDIR` in the
 execution environment before invoking the compiler. Set it to an existing,
 writable absolute directory visible to the build guest; a host-only path fails

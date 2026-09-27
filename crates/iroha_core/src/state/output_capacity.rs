@@ -43,6 +43,9 @@ pub(super) struct ReservedExecutionOutputPlan {
     native: bool,
     maximum_rows: u32,
     budget: ExecutionOutputBudget,
+    prefix_count: u32,
+    prefix_bytes: u64,
+    unused_time: u32,
 }
 
 /// Immutable actual invocation source, constructed only by the execution producer.
@@ -76,6 +79,7 @@ pub(super) struct OwnedExecutionSources {
     // retained prefix, including validation and publication refusal.
     _entries_charge: Option<mv::allocation::AllocationCharge>,
     _network_routes_charge: Option<mv::allocation::AllocationCharge>,
+    merge_prefix: Option<std::sync::Arc<super::merge_execution_prefix::MergeExecutionPrefixSeal>>,
 }
 
 impl OwnedExecutionSources {
@@ -95,6 +99,19 @@ impl OwnedExecutionSources {
     }
     pub(super) fn network_routes(&self) -> &[crate::queue::RoutingDecision] {
         &self.network_routes
+    }
+    pub(super) fn merge_prefix(
+        &self,
+    ) -> Option<&std::sync::Arc<super::merge_execution_prefix::MergeExecutionPrefixSeal>> {
+        self.merge_prefix.as_ref()
+    }
+    pub(super) fn prefix_count(&self) -> usize {
+        self.merge_prefix
+            .as_ref()
+            .map_or(0, |prefix| prefix.inputs().len())
+    }
+    pub(super) fn carrier_network_routes(&self) -> &[crate::queue::RoutingDecision] {
+        &self.network_routes[self.prefix_count()..]
     }
 }
 
@@ -118,6 +135,7 @@ pub(super) enum ExecutionOutputPlanState {
 #[path = "output_producer.rs"]
 mod producer;
 pub(super) use producer::SealedExecutionOutputs;
+pub(super) use producer::execute_network_attempt;
 pub(crate) use producer::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 
 impl StateBlock<'_> {
@@ -130,7 +148,7 @@ impl StateBlock<'_> {
         }
         self.frozen_execution_output_capacity = Some((|| {
             let parameters = self.world.parameters.get().block();
-            let policy = parameters.execution_output();
+            let (_, policy) = self.fastpq_source_policy_at_block_start();
             policy.validate()?;
             let time_invocations = parameters.max_time_trigger_invocations().get();
             policy.validate_time_invocations(time_invocations)?;
@@ -162,7 +180,8 @@ impl StateBlock<'_> {
 
     /// Frozen row ceiling for transaction-owned callback capture.
     pub(super) fn callback_output_byte_limit(&self) -> Result<u64, String> {
-        Ok(self.frozen_output_capacity()?.policy.max_output_bytes)
+        let (_, output) = self.fastpq_source_policy_at_block_start();
+        Ok(output.max_output_bytes)
     }
 
     /// Frozen Pipeline candidate count per source event, captured before execution.
@@ -191,13 +210,15 @@ impl StateBlock<'_> {
             return Err("ordinary output plan differs from its applying source".into());
         }
         block.validate_proposal_commitments()?;
+        self.verify_merge_prefix_carrier(block)?;
+        self.require_merge_prefix_recording()?;
         let count = u32::try_from(block.network_entrypoint_count())
             .map_err(|_| "Network input count exceeds u32")?;
         let root = MerkleTree::root_from_typed_leaves(
             block.network_entrypoints().map(TransactionEntrypoint::hash),
         )
         .map(Hash::from);
-        self.reserve_execution_outputs(count, root, false)
+        self.reserve_execution_outputs(count, root, false, Some(block))
     }
 
     /// Native route groups contribute one output each, regardless of route count.
@@ -215,7 +236,7 @@ impl StateBlock<'_> {
                 .map(|group| group.body().payload().input.entrypoint.hash()),
         )
         .map(Hash::from);
-        self.reserve_execution_outputs(count, root, true)
+        self.reserve_execution_outputs(count, root, true, None)
     }
 
     #[cfg(test)]
@@ -231,22 +252,51 @@ impl StateBlock<'_> {
         count: u32,
         input_root: Option<Hash>,
         native: bool,
+        ordinary: Option<&SignedBlock>,
     ) -> Result<(), String> {
         if self.execution_output_plan.is_some() {
             return Err("carrier output reservations already have an owner".into());
         }
+        let (source_profile, source_output) = self.fastpq_source_policy_at_block_start();
+        if count > source_profile.maximum_network_inputs(source_output)? {
+            return Err("selected carrier exceeds frozen FASTPQ source capacity".into());
+        }
         let frozen = self.frozen_output_capacity()?;
+        if frozen.policy != source_output {
+            return Err(
+                "execution output and FASTPQ source policies have different frozen owners".into(),
+            );
+        }
         let limits = frozen.policy.limits();
         let phases = frozen
             .terminals
             .envelope(frozen.pipeline_candidates, frozen.time_invocations)
             .reservations(count, &limits)?;
-        let budget = ExecutionOutputBudget::new(limits, phases)?;
         let maximum_rows = phases.iter().try_fold(0_u32, |total, phase| {
             total
                 .checked_add(phase.count)
                 .ok_or("reserved row count overflows u32")
         })?;
+        let pipeline_candidates = frozen.pipeline_candidates;
+        let time_invocations = frozen.time_invocations;
+        let prefix_count = self.merge_prefix_seal().map_or(Ok(0), |prefix| {
+            u32::try_from(prefix.inputs().len()).map_err(|_| "merge prefix count exceeds u32")
+        })?;
+        let prefix_bytes = self
+            .merge_prefix_seal()
+            .map_or(0, |prefix| prefix.row_bytes());
+        let prefix_budget = if let Some(source) = ordinary {
+            self.take_merge_prefix_budget(source, pipeline_candidates, time_invocations)?
+        } else {
+            if prefix_count != 0 {
+                return Err("native source cannot replace a merge prefix".into());
+            }
+            None
+        };
+        let (budget, unused_time) = match prefix_budget {
+            Some((budget, unused)) => (budget, unused),
+            None => (ExecutionOutputBudget::new(limits, phases)?, 0),
+        };
         self.execution_output_plan = Some(ExecutionOutputPlanState::Reserved(
             ReservedExecutionOutputPlan {
                 proposal: self._curr_block.hash(),
@@ -255,6 +305,9 @@ impl StateBlock<'_> {
                 native,
                 maximum_rows,
                 budget,
+                prefix_count,
+                prefix_bytes,
+                unused_time,
             },
         ));
         Ok(())
@@ -277,6 +330,19 @@ impl StateTransaction<'_, '_> {
     ) -> Result<(), InstructionExecutionError> {
         let current = self.world.parameters.get().block();
         match parameter {
+            Parameter::Block(BlockParameter::FastpqSource(next)) => {
+                if self.block_height() != 1 {
+                    return Err(invalid("FASTPQ source capacity is immutable after genesis"));
+                }
+                next.validate(current.execution_output()).map_err(invalid)?;
+                super::fastpq_governance_source::validate_retained(
+                    *next,
+                    self.world.governance_locks.iter(),
+                    None,
+                    None,
+                )
+                .map_err(invalid)?;
+            }
             Parameter::Block(BlockParameter::ExecutionOutput(next)) => {
                 if self.block_height() != 1 {
                     return Err(invalid(
@@ -284,6 +350,7 @@ impl StateTransaction<'_, '_> {
                     ));
                 }
                 next.validate().map_err(invalid)?;
+                current.fastpq_source().validate(*next).map_err(invalid)?;
                 next.validate_time_invocations(current.max_time_trigger_invocations().get())
                     .map_err(invalid)?;
                 if u32::try_from(self.world.triggers.pipeline_triggers().len())

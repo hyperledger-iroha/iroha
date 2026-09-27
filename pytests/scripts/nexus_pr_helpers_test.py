@@ -49,10 +49,6 @@ def _fixture(
     shutil.copy2(helper, copied_helper)
     shutil.copy2(PROCESS_POLICY, scripts / PROCESS_POLICY.name)
     shutil.copy2(PREBUILT_SHELL, scripts / PREBUILT_SHELL.name)
-    _write_executable(
-        ci / "check_sumeragi_v2_multilane_release_inventory.sh",
-        "#!/bin/sh\nexit 0\n",
-    )
 
     external_root = Path(
         tempfile.mkdtemp(prefix="iroha-nexus-pr-helper-test-", dir="/private/tmp")

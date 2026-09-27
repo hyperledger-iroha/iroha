@@ -75,7 +75,7 @@ fn execute_all(block: &mut StateBlock<'_>, source: &SignedBlock) {
 
 #[test]
 fn actual_pipeline_uses_network_then_approved_block_and_distinct_calls() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![
@@ -95,7 +95,7 @@ fn actual_pipeline_uses_network_then_approved_block_and_distinct_calls() {
             ),
         ],
     );
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     execute_all(&mut block, &source);
     let rows = &retained(&block).rows;
@@ -129,7 +129,7 @@ fn actual_pipeline_uses_network_then_approved_block_and_distinct_calls() {
 
 #[test]
 fn real_pipeline_rejection_quarantines_only_failed_callback_and_preserves_siblings() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![
@@ -146,7 +146,7 @@ fn real_pipeline_rejection_quarantines_only_failed_callback_and_preserves_siblin
             callback("c_good", vec![write("later")], block_filter(), 1),
         ],
     );
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     execute_all(&mut block, &source);
     let rows = &retained(&block).rows;
@@ -182,7 +182,7 @@ fn real_pipeline_rejection_quarantines_only_failed_callback_and_preserves_siblin
 
 #[test]
 fn pipeline_full_row_exact_fit_and_one_byte_below_keep_failure_policy_separate() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let build = |bytes| {
         pipeline_fixture(
             bytes,
@@ -198,7 +198,7 @@ fn pipeline_full_row_exact_fit_and_one_byte_below_keep_failure_policy_separate()
         )
     };
     let (state, source) = build(65_536);
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     execute_all(&mut block, &source);
     let exact =
@@ -206,7 +206,7 @@ fn pipeline_full_row_exact_fit_and_one_byte_below_keep_failure_policy_separate()
     drop(block);
     for (bytes, applied) in [(exact, true), (exact - 1, false)] {
         let (state, source) = build(bytes);
-        witness::start_block();
+        exec_witness::start_block();
         let mut block = state.block(source.header());
         execute_all(&mut block, &source);
         let row = &retained(&block).rows[1];
@@ -241,7 +241,7 @@ fn pipeline_full_row_exact_fit_and_one_byte_below_keep_failure_policy_separate()
 
 #[test]
 fn pipeline_stale_match_keeps_original_candidate_gap_and_cannot_repeat_phase() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![
@@ -255,7 +255,7 @@ fn pipeline_stale_match_keeps_original_candidate_gap_and_cannot_repeat_phase() {
             callback("c_last", vec![write("last")], block_filter(), 1),
         ],
     );
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     execute_all(&mut block, &source);
     let rows = &retained(&block).rows;
@@ -290,7 +290,7 @@ fn pipeline_stale_match_keeps_original_candidate_gap_and_cannot_repeat_phase() {
 
 #[test]
 fn exhausted_pipeline_gas_skips_callbacks_without_failure_or_repeat_debit() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (state, source) = pipeline_fixture(
         65_536,
         vec![callback(
@@ -300,7 +300,7 @@ fn exhausted_pipeline_gas_skips_callbacks_without_failure_or_repeat_debit() {
             1,
         )],
     );
-    witness::start_block();
+    exec_witness::start_block();
     let mut block = state.block(source.header());
     block.reserve_ordinary_execution_outputs(&source).unwrap();
     block

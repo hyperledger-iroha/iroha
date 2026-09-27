@@ -44,6 +44,11 @@ object IdentifierJsonParser {
                         item["output_opening_public_key"],
                         "identifier policy list.items[$i].output_opening_public_key",
                     ),
+                    phoneRetailAttestorPublicKey = if (item["phone_retail_attestor_public_key"] == null) null
+                    else requiredPublicKeyLiteral(
+                        item["phone_retail_attestor_public_key"],
+                        "identifier policy list.items[$i].phone_retail_attestor_public_key",
+                    ),
                 )
             )
         }

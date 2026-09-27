@@ -1665,6 +1665,20 @@ impl IrohaRuntimeProviderBindingsV1 {
     pub fn iter(&self) -> impl ExactSizeIterator<Item = &IrohaRuntimeProviderBindingV1> {
         self.bindings.iter()
     }
+    /// Preserve catalog identity and ordering while selecting backend-owned slots.
+    #[cfg(any(test, feature = "test-network-disposable-broker"))]
+    pub(crate) fn select_slots(&self, slots: &[IrohaRuntimeProviderSlotV1]) -> Self {
+        Self {
+            chain_id: self.chain_id.clone(),
+            network_id: self.network_id,
+            bindings: self
+                .bindings
+                .iter()
+                .filter(|binding| slots.contains(&binding.slot()))
+                .cloned()
+                .collect(),
+        }
+    }
     /// Return whether the validated configuration requests no external
     /// runtime provider.
     #[must_use]

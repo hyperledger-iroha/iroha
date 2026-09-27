@@ -456,21 +456,19 @@ async fn wait_for_common_v2_subject(
                 .await
             {
                 Ok(status) => {
-                    if let Err(error) = status.validate() {
-                        last_observed.push(format!("peer {index}: invalid v2 status: {error}"));
-                    } else if status.last_committed_height < minimum_height {
+                    if let Some(halted) = status.halted {
+                        last_observed.push(format!("peer {index}: halted: {halted:?}"));
+                    } else if status.committed_height < minimum_height {
                         last_observed.push(format!(
-                            "peer {index}: v2 height {} below {minimum_height}",
-                            status.last_committed_height
-                        ));
-                    } else if let Some(subject) = status.last_committed_subject {
-                        subjects.push(subject);
-                        last_observed.push(format!(
-                            "peer {index}: subject at height {}",
-                            status.last_committed_height
+                            "peer {index}: committed height {} below {minimum_height}",
+                            status.committed_height
                         ));
                     } else {
-                        last_observed.push(format!("peer {index}: missing committed subject"));
+                        subjects.push(status.committed_height);
+                        last_observed.push(format!(
+                            "peer {index}: committed height {}",
+                            status.committed_height
+                        ));
                     }
                 }
                 Err(error) => last_observed.push(format!("peer {index}: status failed: {error}")),

@@ -79,7 +79,7 @@ impl HeightReads for NativeReads {
     fn tip(&self, peer: usize) -> Result<u64> {
         Ok(self.clients[peer]
             .get_sumeragi_status()?
-            .last_committed_height)
+            .committed_height)
     }
 
     fn attest(

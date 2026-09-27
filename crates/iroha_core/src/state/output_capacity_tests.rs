@@ -247,7 +247,10 @@ fn foreign_source_or_invalid_restored_capacity_cannot_mint_a_plan() {
     assert!(block.reserve_ordinary_execution_outputs(&source).is_err());
     assert!(block.prepare_owned_time_phase(&source.header()).is_err());
     assert_eq!(block.world.external_event_buf.len(), events);
-    assert!(block.execution_output_plan.is_none());
+    assert!(matches!(
+        block.execution_output_plan,
+        Some(super::ExecutionOutputPlanState::Poisoned)
+    ));
     let mut tx = block.transaction();
     SetParameter::new(Parameter::Block(BlockParameter::ExecutionOutput(
         ExecutionOutputPolicyV1::bootstrap(),
@@ -491,4 +494,52 @@ fn try_block_rejects_invalid_acquired_abi_and_releases_the_overlay() {
     assert!(block.start_of_block_effects_applied);
     assert!(block.world.runtime_upgrades.is_empty());
     assert!(block.execution_output_plan.is_none());
+}
+
+#[test]
+fn same_genesis_parameter_writes_cannot_replace_either_frozen_profile() {
+    use nonzero_ext::nonzero;
+    let state = state(512);
+    let initial = state.world.parameters.view().get().block();
+    let ((source, output), block) = {
+        let block = state
+            .block_with_pristine_stage(header(), |block| {
+                let mut changed_output = initial.execution_output();
+                changed_output.max_pipeline_triggers = 0;
+                changed_output.max_time_invocations = 1;
+                let mut transaction = block.transaction();
+                transaction
+                    .world
+                    .parameters
+                    .get_mut()
+                    .set_parameter(Parameter::Block(BlockParameter::ExecutionOutput(
+                        changed_output,
+                    )));
+                transaction
+                    .world
+                    .parameters
+                    .get_mut()
+                    .set_parameter(Parameter::Block(BlockParameter::MaxTimeTriggerInvocations(
+                        nonzero!(1_u32),
+                    )));
+                transaction.apply();
+                Ok::<(), String>(())
+            })
+            .unwrap();
+        (block.fastpq_source_policy_at_block_start(), block)
+    };
+    assert_eq!(source, initial.fastpq_source());
+    assert_eq!(output, initial.execution_output());
+    let frozen = block
+        .frozen_execution_output_capacity
+        .as_ref()
+        .unwrap()
+        .as_ref()
+        .unwrap();
+    assert_eq!(frozen.policy, output);
+    assert_eq!(frozen.time_invocations, 1);
+    assert_ne!(
+        block.world.parameters.get().block().execution_output(),
+        output
+    );
 }

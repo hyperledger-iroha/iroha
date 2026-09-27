@@ -597,7 +597,7 @@ jobs:
           # We want to have a report, but it is not a hard error
           fail: false
 
-  sumeragi_formal:
+  formal_models:
     runs-on: ubuntu-latest
     env:
       CARGO_NET_OFFLINE: "true"
@@ -613,7 +613,7 @@ jobs:
         run: |
           set -euo pipefail
           invocation_base="$(cd -- /tmp && pwd -P)"
-          invocation_root="$(mktemp -d "$invocation_base/iroha-sumeragi-v2-formal.XXXXXX")"
+          invocation_root="$(mktemp -d "$invocation_base/iroha-formal.XXXXXX")"
           chmod 700 "$invocation_root"
           mkdir -m 700 \
             "$invocation_root/target" \
@@ -621,17 +621,12 @@ jobs:
             "$invocation_root/artifacts/formal" \
             "$invocation_root/artifacts/formal/sora_parliament" \
             "$invocation_root/artifacts/formal/sora_parliament/inputs" \
-            "$invocation_root/artifacts/formal/sumeragi_v2" \
             "$invocation_root/tmp" \
             "$invocation_root/tools" \
-            "$invocation_root/tools/tlapm" \
-            "$invocation_root/tools/tla2tools" \
-            "$invocation_root/tools/apalache" \
-            "$invocation_root/tools/verus"
+            "$invocation_root/tools/tla2tools"
           {
             printf 'invocation_root=%s\n' "$invocation_root"
             printf 'artifact_root=%s\n' "$invocation_root/artifacts"
-            printf 'tlapm_root=%s\n' "$invocation_root/tools/tlapm"
           } >> "$GITHUB_OUTPUT"
           {
             printf 'CARGO_TARGET_DIR=%s\n' "$invocation_root/target"
@@ -639,41 +634,14 @@ jobs:
             printf 'IROHA_RELEASE_CANCEL_REQUEST_PATH=%s\n' "$invocation_root/cancel-request.json"
             printf 'ATOMIC_PRIVATE_SETTLEMENT_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/atomic_private_settlement"
             printf 'SORA_PARLIAMENT_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sora_parliament"
-            printf 'SUMERAGI_V2_FORMAL_EVIDENCE_DIR=%s\n' "$invocation_root/artifacts/formal/sumeragi_v2"
             printf 'TMPDIR=%s\n' "$invocation_root/tmp"
-            printf 'TLAPM_INSTALL_ROOT=%s\n' "$invocation_root/tools/tlapm"
             printf 'TLA2TOOLS_INSTALL_ROOT=%s\n' "$invocation_root/tools/tla2tools"
-            printf 'APALACHE_INSTALL_ROOT=%s\n' "$invocation_root/tools/apalache"
-            printf 'VERUS_INSTALL_ROOT=%s\n' "$invocation_root/tools/verus"
           } >> "$GITHUB_ENV"
-      - name: Cache pinned TLAPM
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ${{ steps.formal_layout.outputs.tlapm_root }}/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu
-          key: sumeragi-v2-tlapm-linux-x86-64-3ab43c7ff31db4ced850619d4746fa4c841a7681-closure-v2-${{ hashFiles('scripts/formal/sumeragi_v2_tlapm_source_build_lock.json', 'scripts/formal/sumeragi_v2_tlapm_source_lock.py', 'scripts/formal/sumeragi_v2_tlapm_locked_wget.sh', 'scripts/formal/build_sumeragi_v2_tlapm_from_source.sh', 'scripts/formal/install_sumeragi_v2_tlapm.sh') }}
-      - name: Install pinned formal tools
+      - name: Install pinned TLA2Tools
         run: |
           set -euo pipefail
-          bash scripts/formal/install_sumeragi_v2_tlapm.sh
-          bash scripts/formal/install_sumeragi_v2_tla2tools.sh
-          bash scripts/formal/install_apalache.sh 0.52.2
-          bash scripts/formal/install_sumeragi_v2_verus.sh
-          tlapm_tree="$TLAPM_INSTALL_ROOT/3ab43c7ff31db4ced850619d4746fa4c841a7681/x86_64-linux-gnu/tlapm"
-          mapfile -t tlapm_functions < <(find "$tlapm_tree" -type f -name Functions.tla -print)
-          test "${#tlapm_functions[@]}" -eq 1
-          tlapm_stdlib="$(dirname -- "${tlapm_functions[0]}")"
-          test -f "$tlapm_stdlib/Folds.tla"
-          {
-            printf 'TLAPM_BIN=%s\n' "$tlapm_tree/bin/tlapm"
-            printf 'TLAPM_STDLIB=%s\n' "$tlapm_stdlib"
-            printf 'TLA2TOOLS_JAR=%s\n' "$TLA2TOOLS_INSTALL_ROOT/1.7.4/tla2tools.jar"
-            printf 'APALACHE_BIN=%s\n' "$APALACHE_INSTALL_ROOT/v0.52.2/bin/apalache-mc"
-          } >> "$GITHUB_ENV"
-          printf '%s\n' \
-            "$VERUS_INSTALL_ROOT/0.2026.05.31.5dd6d83/x86-linux" \
-            >> "$GITHUB_PATH"
-      - name: Sumeragi v2 TLAPS, bounded TLC, and production Verus gates
-        run: bash ci/check_sumeragi_formal.sh
+          bash scripts/formal/install_tla2tools.sh
+          printf 'TLA2TOOLS_JAR=%s\n' "$TLA2TOOLS_INSTALL_ROOT/1.7.4/tla2tools.jar" >> "$GITHUB_ENV"
       - name: Atomic private settlement bounded TLC corpus
         run: |
           set -euo pipefail
@@ -882,13 +850,6 @@ jobs:
           if document.get("successful") is not expected_success:
               raise SystemExit("formal evidence success classification is inconsistent")
           PY
-      - name: Upload Sumeragi v2 formal logs
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: sumeragi-v2-formal-pr
-          path: ${{ steps.formal_layout.outputs.artifact_root }}/formal/sumeragi_v2
-          if-no-files-found: ignore
       - name: Upload atomic private settlement formal evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

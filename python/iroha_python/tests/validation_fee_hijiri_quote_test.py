@@ -64,7 +64,7 @@ def _projection() -> dict[str, object]:
 class _NativeQuoteBridge:
     @staticmethod
     def connect_norito_bridge_abi_version() -> int:
-        return 23
+        return 24
 
     @staticmethod
     def validation_fee_hijiri_quote_request_v1(account_id: str, count: int) -> bytes:
@@ -144,7 +144,7 @@ def _success_response(**headers: str) -> _ChunkedResponse:
     )
 
 
-def test_quote_codec_uses_only_the_abi_23_native_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_quote_codec_uses_only_the_abi_24_native_bridge(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(quote_module, "load_crypto_extension", lambda: _NativeQuoteBridge)
 
     request = encode_validation_fee_hijiri_quote_request_v1(ACCOUNT_ID, 2)
@@ -167,7 +167,7 @@ def test_quote_codec_uses_only_the_abi_23_native_bridge(monkeypatch: pytest.Monk
             {"connect_norito_bridge_abi_version": staticmethod(lambda: 23)},
         ),
     )
-    with pytest.raises(RuntimeError, match="lacks the ABI 23"):
+    with pytest.raises(RuntimeError, match="lacks the ABI 24"):
         encode_validation_fee_hijiri_quote_request_v1(ACCOUNT_ID, 2)
 
 

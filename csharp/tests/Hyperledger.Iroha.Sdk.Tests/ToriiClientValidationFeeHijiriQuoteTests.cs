@@ -378,7 +378,7 @@ public sealed partial class ToriiClientTests
     [Fact]
     public void HijiriQuoteNativeSurfacePinsAbiAndAdditiveSymbols()
     {
-        Assert.Equal(23U, ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion);
+        Assert.Equal(24U, ValidationFeeHijiriQuoteNative.RequiredBridgeAbiVersion);
         var nativeMethods = typeof(ValidationFeeHijiriQuoteNative)
             .GetMethods(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)
             .Select(method => method.GetCustomAttributes(typeof(DllImportAttribute), false)

@@ -4,8 +4,8 @@ impl State {
         session: &crate::lane_consensus::CommittedLaneBlockSession,
         current_state_height: u64,
         current_state_hash: Option<HashOf<BlockHeader>>,
-    ) -> Option<crate::sumeragi::status::CommittedLaneBlockExecutionStatus> {
-        use crate::sumeragi::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
+    ) -> Option<crate::status::CommittedLaneBlockExecutionStatus> {
+        use crate::status::CommittedLaneBlockExecutionStatus as ExecutionStatus;
         let proposal = &session.proposal;
         let application_receipt_available = if session.prepare_qc.payload_availability_qc.is_some()
         {

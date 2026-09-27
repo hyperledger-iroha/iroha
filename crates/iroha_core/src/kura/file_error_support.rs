@@ -473,11 +473,6 @@ pub enum Error {
         /// Deferred inventory or derived index that cannot safely be represented as empty.
         subsystem: &'static str,
     },
-    /// Authenticated snapshot bootstrap finalization failed: {reason}
-    SnapshotBootstrapFinalization {
-        /// Exact deferred recovery or immutable context-publication failure.
-        reason: String,
-    },
     /// Kura is already bound to a different authoritative consensus output guard
     ConsensusOutputGuardAlreadyBound,
     /// Kura is already bound to a different local peer identity

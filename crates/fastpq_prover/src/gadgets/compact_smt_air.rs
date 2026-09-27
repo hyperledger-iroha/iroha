@@ -44,6 +44,8 @@
 //! logical nor physical native row indices determine the AIR at an LDE point:
 //! the verifier must evaluate the authenticated fixed schedule polynomials.
 
+use zeroize::{Zeroize, Zeroizing};
+
 use super::{
     compact_blake2b_air::{self, CompactHashWitness, CompactRow},
     transfer_integer_air::IntegerAirField,
@@ -210,6 +212,23 @@ pub struct SmtRow<F = u64> {
     pub starting_root: [F; 8],
 }
 
+impl<F: Zeroize> Zeroize for SmtRow<F> {
+    fn zeroize(&mut self) {
+        let Self {
+            hash,
+            old_child,
+            new_child,
+            sibling,
+            starting_root,
+        } = self;
+        hash.zeroize();
+        old_child.zeroize();
+        new_child.zeroize();
+        sibling.zeroize();
+        starting_root.zeroize();
+    }
+}
+
 impl<F: IntegerAirField> SmtRow<F> {
     /// Canonical zero row for inactive programs.
     #[must_use]
@@ -228,6 +247,12 @@ impl<F: IntegerAirField> SmtRow<F> {
 #[derive(Debug, PartialEq, Eq)]
 pub struct SmtWitness<F = u64> {
     rows: Box<[SmtRow<F>]>,
+}
+
+impl<F: Zeroize> Zeroize for SmtWitness<F> {
+    fn zeroize(&mut self) {
+        self.rows.zeroize();
+    }
 }
 
 impl<F> SmtWitness<F> {
@@ -254,6 +279,12 @@ impl<F> SmtWitness<F> {
 #[derive(Debug, PartialEq, Eq)]
 pub struct PhysicalSmtWitness<F = u64> {
     rows: Box<[SmtRow<F>]>,
+}
+
+impl<F: Zeroize> Zeroize for PhysicalSmtWitness<F> {
+    fn zeroize(&mut self) {
+        self.rows.zeroize();
+    }
 }
 
 impl<F> PhysicalSmtWitness<F> {
@@ -342,6 +373,17 @@ impl SmtWitness<u64> {
         statement: &PublicStatement,
         siblings: &[[DigestLimbs; PATH_LEVELS]; UPDATE_COUNT],
     ) -> Option<Self> {
+        Self::from_inputs_guarded(statement, siblings).map(|mut guarded| Self {
+            rows: core::mem::take(&mut guarded.rows),
+        })
+    }
+
+    /// Build directly into a fixed zeroizing logical trace, including failures.
+    /// The node-hash scratch witness is independently guarded at each step.
+    pub(crate) fn from_inputs_guarded(
+        statement: &PublicStatement,
+        siblings: &[[DigestLimbs; PATH_LEVELS]; UPDATE_COUNT],
+    ) -> Option<Zeroizing<Self>> {
         if !marked(&statement.old_root)
             || !marked(&statement.new_root)
             || statement
@@ -352,7 +394,10 @@ impl SmtWitness<u64> {
         {
             return None;
         }
-        let mut rows = Vec::with_capacity(ROW_COUNT);
+        let mut witness = Zeroizing::new(Self {
+            rows: vec![SmtRow::zero(); ROW_COUNT].into_boxed_slice(),
+        });
+        let mut row_index = 0;
         let mut starting_root = statement.old_root;
         for update in 0..UPDATE_COUNT {
             let public = statement.updates[update];
@@ -371,15 +416,18 @@ impl SmtWitness<u64> {
                     payload[..NODE_DOMAIN.len()].copy_from_slice(NODE_DOMAIN);
                     payload[19..51].copy_from_slice(&bytes(&left));
                     payload[51..].copy_from_slice(&bytes(&right));
-                    let hash = CompactHashWitness::from_bytes(&payload)
+                    let hash = CompactHashWitness::from_bytes_guarded(&payload)
                         .expect("exact 83-byte node payload");
-                    rows.extend(hash.rows().iter().copied().map(|hash| SmtRow {
-                        hash,
-                        old_child: old.map(u64::from),
-                        new_child: new.map(u64::from),
-                        sibling: sibling.map(u64::from),
-                        starting_root: starting_root.map(u64::from),
-                    }));
+                    for &hash in hash.rows() {
+                        witness.rows[row_index] = SmtRow {
+                            hash,
+                            old_child: old.map(u64::from),
+                            new_child: new.map(u64::from),
+                            sibling: sibling.map(u64::from),
+                            starting_root: starting_root.map(u64::from),
+                        };
+                        row_index += 1;
+                    }
                     if is_new {
                         new = output_limbs(&hash);
                     } else {
@@ -395,7 +443,36 @@ impl SmtWitness<u64> {
         if starting_root != statement.new_root {
             return None;
         }
-        Self::from_rows(rows)
+        debug_assert_eq!(row_index, ROW_COUNT);
+        Some(witness)
+    }
+
+    /// Pad a guarded logical trace into separately guarded fixed physical storage.
+    /// Both allocations stay guarded throughout copying; neither contains secret
+    /// values during a grow/shrink operation. The logical buffer erases on return.
+    pub(crate) fn into_physical_guarded(
+        logical: Zeroizing<Self>,
+    ) -> Zeroizing<PhysicalSmtWitness<u64>> {
+        let mut physical = Zeroizing::new(PhysicalSmtWitness {
+            rows: vec![SmtRow::zero(); PHYSICAL_ROW_COUNT].into_boxed_slice(),
+        });
+        for hash in 0..HASH_COUNT {
+            let source = hash * compact_blake2b_air::ROW_COUNT;
+            let destination = hash * PHYSICAL_HASH_ROWS;
+            physical.rows[destination..destination + compact_blake2b_air::ROW_COUNT]
+                .copy_from_slice(&logical.rows[source..source + compact_blake2b_air::ROW_COUNT]);
+            let mut padding = physical.rows[destination + compact_blake2b_air::ROW_COUNT - 1];
+            if hash % HASHES_PER_LEVEL == 0 {
+                padding.old_child = padding.hash.digest;
+            } else {
+                padding.new_child = padding.hash.digest;
+            }
+            padding.hash = CompactRow::zero();
+            physical.rows
+                [destination + compact_blake2b_air::ROW_COUNT..destination + PHYSICAL_HASH_ROWS]
+                .fill(padding);
+        }
+        physical
     }
 }
 
@@ -834,6 +911,78 @@ mod tests {
             _ => &mut row.starting_root[limb],
         };
         *value ^= 1;
+    }
+
+    #[test]
+    fn guarded_private_trace_preserves_logical_and_physical_cells_and_rejects_bad_roots() {
+        use crate::gadgets::compact_trace_columns::smt_row_cells;
+        let fixture = fixture();
+        assert_eq!(core::mem::size_of::<SmtRow>(), COLUMN_COUNT * 8);
+        assert_eq!(
+            core::mem::size_of::<CompactRow>(),
+            compact_blake2b_air::COLUMN_COUNT * 8
+        );
+        let guarded_conversion = (ROW_COUNT + PHYSICAL_ROW_COUNT) * core::mem::size_of::<SmtRow>();
+        let physical_and_columns = 2 * PHYSICAL_ROW_COUNT * COLUMN_COUNT * 8;
+        let charged_source = 5 * PHYSICAL_ROW_COUNT * COLUMN_COUNT * 8;
+        assert!(guarded_conversion <= charged_source);
+        assert!(physical_and_columns <= charged_source);
+        let logical =
+            SmtWitness::from_inputs_guarded(&fixture.statement, &fixture.siblings).unwrap();
+        assert_eq!(logical.rows(), fixture.witness.rows());
+        let reference = SmtWitness::from_rows(logical.rows().to_vec())
+            .unwrap()
+            .into_physical();
+        let mut physical = SmtWitness::into_physical_guarded(logical);
+        assert_eq!(physical.rows(), reference.rows());
+        let allocation = physical.rows().as_ptr();
+        physical.zeroize();
+        assert_eq!(physical.rows().as_ptr(), allocation);
+        assert!(
+            physical
+                .rows()
+                .iter()
+                .all(|row| smt_row_cells(row) == [0; COLUMN_COUNT])
+        );
+        drop(physical);
+        drop(reference);
+        let mut wrong = fixture.statement;
+        // Keep the marker canonical so this fails only after constructing the
+        // complete first update and checking its root chain.
+        wrong.old_root[0] ^= 1;
+        assert!(SmtWitness::from_inputs_guarded(&wrong, &fixture.siblings).is_none());
+        wrong = fixture.statement;
+        wrong.new_root[0] ^= 1;
+        assert!(SmtWitness::from_inputs_guarded(&wrong, &fixture.siblings).is_none());
+    }
+
+    #[test]
+    fn logical_and_physical_guards_erase_all_cells_on_return_and_unwind() {
+        use crate::gadgets::compact_trace_columns::smt_row_from_cells;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static ERASED: AtomicUsize = AtomicUsize::new(0);
+        #[derive(Clone, Copy)]
+        struct Cell(u64);
+        impl Zeroize for Cell {
+            fn zeroize(&mut self) {
+                assert_eq!(self.0, 19);
+                self.0.zeroize();
+                ERASED.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let rows = || vec![smt_row_from_cells(&[Cell(19); COLUMN_COUNT]); 2].into_boxed_slice();
+        drop(Zeroizing::new(SmtWitness { rows: rows() }));
+        drop(Zeroizing::new(PhysicalSmtWitness { rows: rows() }));
+        assert_eq!(ERASED.load(Ordering::SeqCst), 4 * COLUMN_COUNT);
+        assert!(
+            std::panic::catch_unwind(|| {
+                let _logical = Zeroizing::new(SmtWitness { rows: rows() });
+                let _physical = Zeroizing::new(PhysicalSmtWitness { rows: rows() });
+                panic!("test guarded SMT unwind");
+            })
+            .is_err()
+        );
+        assert_eq!(ERASED.load(Ordering::SeqCst), 8 * COLUMN_COUNT);
     }
 
     #[test]

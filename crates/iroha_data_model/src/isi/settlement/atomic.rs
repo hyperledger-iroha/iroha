@@ -352,7 +352,7 @@ impl SettleAtomic {
     ///
     /// Core additionally checks exact network identity, expiry against the current
     /// block, unused business identifier, every debit owner's consent and all
-    /// balance/permission/routing policies in the same StateTransaction.
+    /// balance/permission/routing policies in the same `StateTransaction`.
     ///
     /// # Errors
     /// Returns an error for a noncanonical or invalid movement vector.

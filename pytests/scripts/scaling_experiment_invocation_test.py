@@ -166,6 +166,41 @@ def test_changed_control_file_rejected_before_execution(assembled):
     assert not any(event[0]=='execute' for event in assembled.events)
 
 
+@pytest.mark.parametrize('role', (
+    'plan', 'budget', 'python_source_manifest', 'rustc_version', 'binary_manifest',
+    'python_runtime_binding', 'kagami', 'iroha', 'irohad', 'python',
+    *(f'worker:{name}' for name in SOURCE_NAMES),
+))
+def test_original_candidate_and_worker_hashes_reject_mutation_before_runtime_admission(assembled, role):
+    """Every executable and source pin is checked by its original admission owner."""
+    launch=assembled.launch;paths=launch.runtime_paths
+    candidates={
+        'plan':launch.plan_path,
+        'budget':launch.budget_path,
+        'python_source_manifest':paths.python_source_manifest,
+        'rustc_version':paths.rustc_version,
+        'binary_manifest':paths.binary_bundle/invocation.binary_contract._MANIFEST_NAME,
+        'python_runtime_binding':paths.python_runtime_binding,
+        'kagami':paths.binary_bundle/'release/kagami',
+        'iroha':paths.binary_bundle/'release/iroha',
+        'irohad':paths.binary_bundle/'release/irohad',
+        'python':paths.python_evidence/'python-runtime/bin/python3',
+    }
+    if role.startswith('worker:'):
+        path=assembled.root/'workers'/role.partition(':')[2]
+    else:
+        path=candidates[role]
+    mode=path.stat().st_mode & 0o777
+    path.chmod(mode | 0o200)
+    path.write_bytes(path.read_bytes()+b'\n')
+    path.chmod(mode)
+    with pytest.raises((ValueError,OSError)):
+        assembled.create()
+    assert ('runtime_admit',) not in assembled.events
+    assert not any(event[0]=='execute' for event in assembled.events)
+    assert not launch.evidence_root.exists() and not launch.runtime_root.exists()
+
+
 def test_pending_cleanup_retains_all_original_inputs(assembled,monkeypatch):
     owner=assembled.create();original_images=tuple(owner._images);workers=owner._workers;admission=owner._admission
     state=SimpleNamespace(alive=True,closes=0)

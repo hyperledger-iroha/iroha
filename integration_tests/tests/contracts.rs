@@ -19,7 +19,6 @@ use iroha::data_model::{
     },
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
 };
-use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
     governance::CanEnactGovernance,
@@ -1631,8 +1630,9 @@ async fn wait_for_cross_peer_rbc_diagnostics(
 ) -> Result<SumeragiCommittedLaneBlock> {
     let expected_validator_count = u32::try_from(network.peers().len())
         .map_err(|_| eyre!("peer count does not fit in u32"))?;
-    let expected_min_quorum = u32::try_from(commit_quorum_from_len(network.peers().len()).max(1))
-        .map_err(|_| eyre!("commit quorum does not fit in u32"))?;
+    let expected_min_quorum =
+        u32::try_from(iroha_sumeragi::types::quorum(network.peers().len()).max(1))
+            .map_err(|_| eyre!("commit quorum does not fit in u32"))?;
     if required_applied_transaction
         .is_some_and(|(height, _)| height > CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT)
     {

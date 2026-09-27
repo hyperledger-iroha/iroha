@@ -88,13 +88,13 @@ enum FanoutScope {
     Decision {
         subject: Hash,
         context: HeightContextId,
-        completed: BTreeSet<PeerId>,
     },
 }
 struct Fanout {
     scope: FanoutScope,
     instance: HeightContextId,
     message: Arc<BlockMessageWire>,
+    admitted: BTreeSet<PeerId>,
     destinations: VecDeque<Destination>,
 }
 
@@ -164,11 +164,11 @@ impl NativeLaneTransport {
             if packet.destinations != lane.frozen().committee {
                 return Err("native outbox changed its frozen destinations".to_owned());
             }
-            let encoded =
-                norito::encode_canonical(&packet.envelope).map_err(|error| error.to_string())?;
-            if encoded != packet.canonical_bytes {
-                return Err("native outbox changed its original canonical bytes".to_owned());
-            }
+            // The packet already owns its canonical envelope. Compare the exact
+            // frame in place before allocating the distinct P2P BlockMessage
+            // frame; another full envelope copy has no admission owner here.
+            norito::verify_exact_canonical_frame(&packet.envelope, &packet.canonical_bytes)
+                .map_err(|_| "native outbox changed its original canonical bytes".to_owned())?;
             packet
                 .envelope
                 .message
@@ -198,30 +198,39 @@ impl NativeLaneTransport {
         if !observed.is_current(&self.state) {
             return NativeTransportAdmission::Retry(packet);
         }
-        // Retransmission is another delivery attempt of the exact same signed control,
-        // not a second protocol obligation. Preserve every pending actor post and FIFO
-        // ticket, and requeue only already serviced peers on the original bounded fanout.
-        // Checking exact authenticated envelope equality (rather than its subject) prevents
-        // a changed vote, certificate or signature set from borrowing this custody.
-        if let Some(retained) = self.fanouts.iter_mut().find(|fanout| {
+        // Retransmission repeats the same authenticated control while its
+        // original fanout may still own unfinished recipients or actor tickets.
+        // A second fanout would multiply work on every timer tick and can keep
+        // later timeout votes behind an ever-growing queue. The first fanout
+        // remains the sole delivery owner until all of its recipients accept.
+        if let Some(fanout) = self.fanouts.iter_mut().find(|fanout| {
             fanout.instance == id
                 && matches!(fanout.scope, FanoutScope::Control)
-                && matches!(fanout.message.as_message(), BlockMessage::NativeLane(original)
-                    if original == &packet.envelope)
+                && matches!(fanout.message.as_message(), BlockMessage::NativeLane(envelope) if envelope == &packet.envelope)
         }) {
-            for peer in packet.destinations {
-                if peer != self.local_peer
-                    && !retained
-                        .destinations
-                        .iter()
-                        .any(|pending| pending.peer == peer)
-                {
-                    retained.destinations.push_back(Destination {
-                        peer,
-                        returned: None,
-                        ticket: None,
-                    });
-                }
+            // Actor acceptance is not network delivery. A later timer tick
+            // re-arms peers already admitted once while the same fanout still
+            // owns a blocked peer. Each peer has at most one pending attempt;
+            // its original returned Post and ticket are never overwritten.
+            let rearm = packet
+                .destinations
+                .iter()
+                .filter(|peer| {
+                    *peer != &self.local_peer
+                        && fanout.admitted.contains(*peer)
+                        && !fanout
+                            .destinations
+                            .iter()
+                            .any(|destination| &destination.peer == *peer)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for peer in rearm {
+                fanout.destinations.push_back(Destination {
+                    peer,
+                    returned: None,
+                    ticket: None,
+                });
             }
             return NativeTransportAdmission::Retained;
         }
@@ -243,6 +252,7 @@ impl NativeLaneTransport {
                 scope: FanoutScope::Control,
                 instance: id,
                 message,
+                admitted: BTreeSet::new(),
                 destinations,
             });
         }
@@ -331,10 +341,10 @@ impl NativeLaneTransport {
                 scope: FanoutScope::Decision {
                     subject,
                     context: global.context().id(),
-                    completed: BTreeSet::new(),
                 },
                 instance: id,
                 message,
+                admitted: BTreeSet::new(),
                 destinations,
             });
         }
@@ -426,10 +436,7 @@ impl NativeLaneTransport {
                 unfinished_destinations: fanout.destinations.len(),
             });
         }
-        if let FanoutScope::Decision {
-            context, completed, ..
-        } = &mut fanout.scope
-        {
+        if let FanoutScope::Decision { context, .. } = &mut fanout.scope {
             let Some(global) =
                 global.filter(|global| self.global_routing_is_current(observed, global))
             else {
@@ -450,10 +457,10 @@ impl NativeLaneTransport {
                 fanout
                     .destinations
                     .retain(|destination| peers.contains(&destination.peer));
-                completed.retain(|peer| peers.contains(peer));
+                fanout.admitted.retain(|peer| peers.contains(peer));
                 for peer in peers {
                     if peer != self.local_peer
-                        && !completed.contains(&peer)
+                        && !fanout.admitted.contains(&peer)
                         && !fanout
                             .destinations
                             .iter()
@@ -490,9 +497,7 @@ impl NativeLaneTransport {
         });
         let progress = match post(original, destination.ticket.take()) {
             Ok(()) => {
-                if let FanoutScope::Decision { completed, .. } = &mut fanout.scope {
-                    completed.insert(destination.peer.clone());
-                }
+                fanout.admitted.insert(destination.peer.clone());
                 Ok(NativeTransportProgress::Admitted {
                     instance: fanout.instance,
                     peer: destination.peer,

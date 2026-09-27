@@ -40,7 +40,7 @@ use iroha_data_model::{
     isi::{
         Grant, InstructionBox, RemoveAssetKeyValue, RemoveKeyValue, Revoke, SetAssetKeyValue,
         SetKeyValue, decode_instruction_from_pair, framed_instruction_payload,
-        governance::{CastPlainBallot, CastZkBallot, ProposeDeployContract},
+        governance::{CastPlainBallot, CastZkBallot, ProposeDeployContract, UpdatePlainConviction},
         identifier::ClaimIdentifier,
         mint_burn::{Burn, Mint},
         transfer::Transfer,
@@ -165,11 +165,13 @@ pub use kagemusha_core_coordinator_v1::{
     KagemushaCoreCoordinatorMethodV1, KagemushaCoreSenderCandidateArchiveV1,
     KagemushaCoreSenderPreparationArchiveV1, KagemushaCoreSenderPreparationSelectorV1,
     KagemushaCoreSenderRecoveryArchiveV1, KagemushaCoreSenderWalletContextV1,
-    KagemushaEnrollmentAttemptJournalV1, KagemushaEnrollmentJournalDispatchV1,
-    KagemushaEnrollmentJournalErrorV1, KagemushaEnrollmentJournalPinsV1,
-    KagemushaEnrollmentJournalReservationV1, KagemushaEnrollmentJournalResultV1,
-    KagemushaEnrollmentJournalSelectionV1, KagemushaEnrollmentJournalStoreV1,
-    KagemushaEnrollmentLiveSelectionV1, KagemushaExclusiveCoordinatorBackendV1,
+    KagemushaEnrollmentAttemptJournalV1, KagemushaEnrollmentContextProviderV1,
+    KagemushaEnrollmentJournalDispatchV1, KagemushaEnrollmentJournalErrorV1,
+    KagemushaEnrollmentJournalPinsV1, KagemushaEnrollmentJournalReservationV1,
+    KagemushaEnrollmentJournalResultV1, KagemushaEnrollmentJournalSelectionV1,
+    KagemushaEnrollmentJournalStoreV1, KagemushaEnrollmentLiveSelectionV1,
+    KagemushaEnrollmentPhaseOneBackendV1, KagemushaEnrollmentProvisionedContextV1,
+    KagemushaKernelEnrollmentDelegateV1, KagemushaQualifiedEnrollmentDelegateV1,
     PendingIssuerEnrollmentV1, PreparedIssuerProofV1, SignedAppPreparationErrorV1,
     SignedAppPreparationPinsV1, VerifiedSignedAppPreparationV1,
     install_kagemusha_core_coordinator_backend_v1, kagemusha_core_coordinator_decode_request_v1,
@@ -180,19 +182,72 @@ pub use kagemusha_core_coordinator_v1::{
     kagemusha_core_coordinator_validate_storage_path_v1, verify_signed_app_preparation_v1,
 };
 mod kagemusha_device_bridge_v1;
+#[cfg(unix)]
+mod kagemusha_mobile_bootstrap_online_v1;
+mod kagemusha_mobile_bootstrap_v1;
 mod kagemusha_reserve_finality_v1;
+mod kagemusha_testnet_finality_chain_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_mint_runtime_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_mobile_host_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_startup_v1;
+#[cfg(unix)]
+mod kagemusha_testnet_native_value_ledger_v1;
 mod kagemusha_testnet_observation_v1;
+mod kagemusha_testnet_publication_v1;
+#[cfg(unix)]
+pub use kagemusha_mobile_bootstrap_online_v1::{
+    KagemushaNativeBootstrapFreshnessAttemptV1, KagemushaOnlineBootstrapFreshnessV1,
+};
+pub use kagemusha_mobile_bootstrap_v1::{
+    KagemushaVerifiedMobileBootstrapV1, verify_kagemusha_mobile_bootstrap_v1,
+};
 pub use kagemusha_reserve_finality_v1::{
     connect_norito_kagemusha_reserve_finality_hint_v1,
     connect_norito_kagemusha_reserve_finality_verify_v1,
     connect_norito_kagemusha_top_up_signed_request_validate_v1,
 };
+pub use kagemusha_testnet_finality_chain_v1::verify_kagemusha_testnet_finality_anchor_from_chain_v1;
+#[cfg(unix)]
+pub use kagemusha_testnet_native_mint_runtime_v1::KagemushaTestnetNativeMintInstallV1;
+#[cfg(unix)]
+pub use kagemusha_testnet_native_mobile_host_v1::{
+    KagemushaTestnetNativeMobileHostAccessV1, KagemushaTestnetNativeMobileHostV1,
+    KagemushaTestnetNativePinnedMintV1, KagemushaTestnetNativeReservedMintV1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_startup_v1::{
+    KAGEMUSHA_TESTNET_NATIVE_STARTUP_CONTRACT_V1, KagemushaTestnetNativeStartupContextV1,
+    KagemushaTestnetNativeStartupFreshnessProviderV1, KagemushaTestnetNativeStartupFreshnessV1,
+    connect_norito_kagemusha_testnet_native_startup_activate_v1,
+    connect_norito_kagemusha_testnet_native_startup_contract_v1,
+    install_kagemusha_testnet_native_startup_context_v1,
+    with_kagemusha_testnet_native_mobile_host_v1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_native_value_ledger_v1::{
+    KAGEMUSHA_TESTNET_VALUE_CREDIT_MAX_BYTES_V1, KagemushaTestnetMintLedgerCreditArchiveV1,
+    connect_norito_kagemusha_testnet_value_credit_v1, credit_kagemusha_testnet_native_value_v1,
+};
 pub use kagemusha_testnet_observation_v1::{
-    KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
-    KagemushaTestnetObservationInstallErrorV1, KagemushaTestnetStateObservationArchiveV1,
+    KAGEMUSHA_TESTNET_MINT_ANCHOR_ID_BYTES_V1, KAGEMUSHA_TESTNET_MINT_OBSERVATION_MAX_BYTES_V1,
+    KAGEMUSHA_TESTNET_MINT_STATUS_JSON_MAX_BYTES_V1, KAGEMUSHA_TESTNET_STATE_INPUT_MAX_BYTES_V1,
+    KAGEMUSHA_TESTNET_STATE_OBSERVATION_MAX_BYTES_V1,
+    KAGEMUSHA_TESTNET_VALUE_ADMISSION_MAX_BYTES_V1,
+    KagemushaTestnetFinalizedMintObservationArchiveV1, KagemushaTestnetObservationInstallErrorV1,
+    KagemushaTestnetStateObservationArchiveV1,
     connect_norito_kagemusha_testnet_state_proof_observe_v1,
     install_kagemusha_testnet_state_observation_owner_v1,
     load_and_install_kagemusha_testnet_state_observation_owner_v1,
+};
+#[cfg(unix)]
+pub use kagemusha_testnet_observation_v1::{
+    KagemushaTestnetDurableObservationModeV1, KagemushaTestnetValueAdmissionArchiveV1,
+    connect_norito_kagemusha_testnet_finalized_mint_observe_v1,
+    connect_norito_kagemusha_testnet_value_admit_v1,
+    reserve_kagemusha_testnet_mint_before_submission_v1,
 };
 #[cfg(any(test, feature = "dev-tools"))]
 mod kagemusha_sender_release_evidence;
@@ -237,7 +292,8 @@ pub use private_settlement_ffi::{
 const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
 // Increment for NativeSignerBridge JNI descriptor changes that the bridge-wide ABI cannot distinguish.
 // Revision 4 narrowed RegisterZkAsset bindings; revision 5 replaced the chain label with the exact
-// 32-byte genesis-derived NetworkId.
+// 32-byte genesis-derived NetworkId; revision 6 hard-cut reporting permissions; revision 7
+// removes the retired shield verifier parameter.
 #[cfg(any(
     test,
     target_os = "android",
@@ -245,7 +301,7 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = PRIVACY_BRIDGE_ABI_VERSION_V1;
     target_os = "macos",
     windows
 ))]
-const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 6;
+const NATIVE_SIGNER_JNI_CONTRACT_REVISION: u32 = 7;
 const CANONICAL_NETWORK_ID_LITERAL_BYTES: usize = 74;
 const DETACHED_TRANSACTION_SCAFFOLD_MAX_BYTES: usize = 16 * 1024 * 1024;
 const DETACHED_TRANSACTION_JSON_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -356,7 +412,6 @@ const ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1: c_int = -312;
 const ERR_DA_PROOF_SUMMARY: c_int = -401;
 const ERR_MULTISIG_SPEC: c_int = -402;
 const ERR_VERIFYING_KEY_ID: c_int = -403;
-const ERR_ZK_ASSET_POLICY: c_int = -404;
 const ERR_CONNECT_ENCODE: c_int = -405;
 const ERR_IDENTIFIER_RECEIPT: c_int = -406;
 const ERR_CONNECT_KEYPAIR: c_int = -407;
@@ -595,7 +650,6 @@ enum BridgeError {
     MultisigSpec,
     IdentifierReceipt,
     VerifyingKeyId,
-    ZkAssetPolicy,
     SecpParse,
     SecpSign,
     SecpVerify,
@@ -642,7 +696,6 @@ impl BridgeError {
             BridgeError::MultisigSpec => ERR_MULTISIG_SPEC,
             BridgeError::IdentifierReceipt => ERR_IDENTIFIER_RECEIPT,
             BridgeError::VerifyingKeyId => ERR_VERIFYING_KEY_ID,
-            BridgeError::ZkAssetPolicy => ERR_ZK_ASSET_POLICY,
             BridgeError::SecpParse => ERR_SECP_PARSE,
             BridgeError::SecpSign => ERR_SECP_SIGN,
             BridgeError::SecpVerify => ERR_SECP_VERIFY,
@@ -1465,8 +1518,11 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_open_v1(
 ///
 /// The bridge strictly validates the closed method and request frame before
 /// dispatch to the process's install-once backend. It then bounds and validates
-/// the complete response frame before exposure. A monetary result is never
-/// synthesized from host input, and no installed backend means unavailable.
+/// the complete response frame and publishes it while the sole owner lock is held.
+/// A delegated error, invalid response or failed output allocation revokes this
+/// process's handle so recovery starts from authenticated durable state in a new
+/// process. A monetary result is never synthesized from host input, and no
+/// installed backend means unavailable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     handle: u64,
@@ -1509,35 +1565,26 @@ pub unsafe extern "C" fn connect_norito_kagemusha_core_coordinator_invoke_v1(
     else {
         return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
     };
-    let response_frame = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if method == KagemushaCoreCoordinatorMethodV1::InitialEnrollment {
-            backend.invoke_initial_enrollment(handle, &request_frame)
-        } else if method == KagemushaCoreCoordinatorMethodV1::AcknowledgeCommittedAppAttest {
-            backend.acknowledge_committed_app_attest(handle, &request_frame)
-        } else {
-            backend.invoke(handle, method, &request_frame)
-        }
-    })) {
-        Ok(Ok(response_frame)) => response_frame,
-        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Unavailable)) => {
-            return ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1;
-        }
-        Ok(Err(KagemushaCoreCoordinatorBackendErrorV1::Rejected)) | Err(_) => {
-            return ERR_KAGEMUSHA_V1;
-        }
-    };
-    if response_frame.len() > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-        || kagemusha_core_coordinator_v1::archive_boundary::validate_response(
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.invoke_checked_with_output(
+            handle,
             method,
             &request_frame,
-            &response_frame,
+            |response_frame| unsafe { write_bytes_usize(output_ptr, output_len, response_frame) },
         )
-        .is_err()
-    {
-        return ERR_KAGEMUSHA_V1;
+    })) {
+        Ok(Ok(())) => 0,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Backend(
+            KagemushaCoreCoordinatorBackendErrorV1::Unavailable,
+        ))) => ERR_KAGEMUSHA_DEVICE_UNAVAILABLE_V1,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Backend(
+            KagemushaCoreCoordinatorBackendErrorV1::Rejected,
+        )))
+        | Err(_) => ERR_KAGEMUSHA_V1,
+        Ok(Err(kagemusha_core_coordinator_v1::KagemushaCheckedCoordinatorErrorV1::Output(
+            error,
+        ))) => error,
     }
-    unsafe { write_bytes_usize(output_ptr, output_len, &response_frame) }
-        .map_or_else(|error| error, |()| 0)
 }
 
 /// Revoke an opened coordinator handle before delegating hardware-session teardown.
@@ -2693,9 +2740,16 @@ fn parse_identifier_receipt_value(value: JsonValue) -> BridgeResult<IdentifierRe
             .get("attestation")
             .ok_or(BridgeError::IdentifierReceipt)?,
     )?;
+    let phone_retail_canonicality = match object.get("phone_retail_canonicality") {
+        None | Some(JsonValue::Null) => None,
+        Some(value) => Some(
+            norito::json::from_value(value.clone()).map_err(|_| BridgeError::IdentifierReceipt)?,
+        ),
+    };
     Ok(IdentifierResolutionReceipt {
         payload,
         attestation,
+        phone_retail_canonicality,
     })
 }
 fn validate_identifier_claim_account(
@@ -6162,7 +6216,7 @@ mod detached_transaction_scaffold_tests {
         }
         let wrong_kind = InstructionBox::from(iroha_data_model::isi::Log::new(
             iroha_data_model::Level::INFO,
-            "not a transfer",
+            "not a transfer".to_owned(),
         ));
         let invalid = scaffold_transaction(
             &keypair,
@@ -7580,9 +7634,6 @@ define_ed25519_signed_transaction_wrapper! {
             vk_unshield_ptr: *const c_char,
             vk_unshield_len: c_ulong,
             vk_unshield_present: c_uchar,
-            vk_shield_ptr: *const c_char,
-            vk_shield_len: c_ulong,
-            vk_shield_present: c_uchar,
             fee_payment_json_ptr: *const c_uchar,
             fee_payment_json_len: c_ulong,
             private_key_ptr: *const c_uchar,
@@ -7604,15 +7655,9 @@ define_ed25519_signed_transaction_wrapper! {
         let vk_unshield = unsafe {
             parse_optional_verifying_key_id(vk_unshield_ptr, vk_unshield_len, vk_unshield_present)
         }?;
-        let vk_shield = unsafe {
-            parse_optional_verifying_key_id(vk_shield_ptr, vk_shield_len, vk_shield_present)
-        }?;
         let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
         let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
-        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield, vk_shield);
-        register
-            .validate_verifier_roles()
-            .map_err(|_| BridgeError::ZkAssetPolicy)?;
+        let register = zk::RegisterZkAsset::new(asset_definition, vk_unshield);
         let fee_payment =
             unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
         let (signed_bytes, hash_bytes) = encode_asset_transaction(
@@ -7880,6 +7925,81 @@ define_ed25519_signed_transaction_wrapper! {
             InstructionBox::from(ballot),
         )?;
     }
+}
+/// Encode one choice-preserving public conviction update with its exact V1 fields.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg(
+    network_id_ptr: *const c_char,
+    network_id_len: c_ulong,
+    authority_ptr: *const c_char,
+    authority_len: c_ulong,
+    creation_time_ms: u64,
+    ttl_ms: u64,
+    ttl_present: c_uchar,
+    referendum_id_ptr: *const c_char,
+    referendum_id_len: c_ulong,
+    owner_ptr: *const c_char,
+    owner_len: c_ulong,
+    amount_ptr: *const c_char,
+    amount_len: c_ulong,
+    duration_blocks: u64,
+    fee_payment_json_ptr: *const c_uchar,
+    fee_payment_json_len: c_ulong,
+    private_key_ptr: *const c_uchar,
+    private_key_len: c_ulong,
+    algorithm_code: u8,
+    out_signed_ptr: *mut *mut c_uchar,
+    out_signed_len: *mut c_ulong,
+    out_hash_ptr: *mut c_uchar,
+    out_hash_len: c_ulong,
+) -> c_int {
+    clear_signed_transaction_outputs(out_signed_ptr, out_signed_len, out_hash_ptr, out_hash_len);
+    let result = (|| {
+        if out_signed_ptr.is_null()
+            || out_signed_len.is_null()
+            || out_hash_ptr.is_null()
+            || private_key_ptr.is_null()
+        {
+            return Err(BridgeError::NullPtr);
+        }
+        let referendum_id =
+            unsafe { read_governance_selector_bridge(referendum_id_ptr, referendum_id_len) }?;
+        let algorithm = parse_algorithm_code(algorithm_code)?;
+        let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
+        let owner_str = unsafe { read_string_bridge(owner_ptr, owner_len) }?;
+        let amount_str = unsafe { read_string_bridge(amount_ptr, amount_len) }?;
+        let network_id = unsafe { read_network_id_bridge(network_id_ptr, network_id_len) }?;
+        let authority = parse_account_id(authority_str)?;
+        let owner = parse_account_id(owner_str)?;
+        if owner != authority {
+            return Err(BridgeError::Governance);
+        }
+        let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
+        let amount = parse_public_quantity(amount_str)?;
+        let key_slice = unsafe { slice::from_raw_parts(private_key_ptr, private_key_len as usize) };
+        let private_key = parse_private_key_with_algorithm(key_slice, algorithm)?;
+        let fee_payment =
+            unsafe { parse_fee_payment_intent_bridge(fee_payment_json_ptr, fee_payment_json_len)? };
+        let update = UpdatePlainConviction {
+            referendum_id,
+            owner,
+            amount,
+            duration_blocks,
+        };
+        let (signed_bytes, hash_bytes) = encode_instruction_transaction(
+            network_id,
+            authority,
+            creation_time_ms,
+            ttl,
+            fee_payment,
+            private_key,
+            InstructionBox::from(update),
+        )?;
+        write_hash(out_hash_ptr, out_hash_len, &hash_bytes)?;
+        unsafe { write_bytes_bridge(out_signed_ptr, out_signed_len, &signed_bytes) }?;
+        Ok(())
+    })();
+    bridge_result_to_code(result)
 }
 define_ed25519_signed_transaction_wrapper! {
     connect_norito_encode_governance_cast_zk_ballot_signed_transaction =>
@@ -8511,7 +8631,8 @@ mod accel_tests {
             let Executable::Instructions(instructions) = signed.instructions() else {
                 panic!("permission transaction must be a native instruction");
             };
-            assert_eq!(instructions, &[expected]);
+            assert_eq!(instructions.len(), 1);
+            assert_eq!(instructions[0], expected);
             let expected_wire = bytes.to_vec();
             let mut payload_hash = [0_u8; 32];
             let prepared = unsafe {
@@ -9021,6 +9142,110 @@ mod accel_tests {
                 assert_eq!(out_signed_len, 0);
                 assert_eq!(out_hash, [0_u8; 32]);
             }
+        }
+    }
+    fn call_update_plain_conviction_encoder(
+        referendum_id: &str,
+        amount: &str,
+        owner_matches_authority: bool,
+        valid_private_key: bool,
+    ) -> (c_int, *mut u8, c_ulong, [u8; 32]) {
+        let network_id = network_id_cstring("governance-conviction-update");
+        let (authority, private) = sample_account("governance", 30);
+        let other_owner = sample_destination("governance", 31);
+        let owner = if owner_matches_authority {
+            &authority
+        } else {
+            &other_owner
+        };
+        let invalid_private = [0xFF_u8];
+        let private = if valid_private_key {
+            private.as_slice()
+        } else {
+            invalid_private.as_slice()
+        };
+        let mut out_signed_ptr = ptr::null_mut();
+        let mut out_signed_len = 0;
+        let mut out_hash = [0_u8; 32];
+        let status = unsafe {
+            connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg(
+                network_id.as_ptr(),
+                network_id.as_bytes().len() as c_ulong,
+                authority.as_ptr(),
+                authority.as_bytes().len() as c_ulong,
+                1,
+                0,
+                0,
+                referendum_id.as_ptr().cast(),
+                referendum_id.len() as c_ulong,
+                owner.as_ptr(),
+                owner.as_bytes().len() as c_ulong,
+                amount.as_ptr().cast(),
+                amount.len() as c_ulong,
+                42,
+                AUTHORITY_FEE_PAYMENT_JSON.as_ptr(),
+                AUTHORITY_FEE_PAYMENT_JSON.len() as c_ulong,
+                private.as_ptr(),
+                private.len() as c_ulong,
+                Algorithm::Ed25519 as u8,
+                &mut out_signed_ptr,
+                &mut out_signed_len,
+                out_hash.as_mut_ptr(),
+                out_hash.len() as c_ulong,
+            )
+        };
+        (status, out_signed_ptr, out_signed_len, out_hash)
+    }
+    #[test]
+    fn governance_update_plain_conviction_encodes_exact_choice_free_fields() {
+        let _guard = chain_guard();
+        let header = include_str!("../include/connect_norito_bridge.h");
+        let declaration = compact_c_declaration(
+            header,
+            "connect_norito_encode_governance_update_plain_conviction_signed_transaction_alg",
+        );
+        assert!(declaration.contains("duration_blocks"));
+        assert!(!declaration.contains("direction"));
+        for referendum_id in ["ref-update".to_owned(), "a".repeat(128)] {
+            for amount in ["1.25", "340282366920938463463374607431768211456.25"] {
+                let (status, ptr, len, hash) =
+                    call_update_plain_conviction_encoder(&referendum_id, amount, true, true);
+                assert_eq!(status, 0, "canonical update must encode");
+                assert_signed_hash_matches(hash, ptr, len);
+                let signed = decode_signed(ptr, len);
+                let update = match signed.instructions() {
+                    Executable::Instructions(instructions) if instructions.len() == 1 => {
+                        instructions
+                            .first()
+                            .and_then(|instruction| {
+                                instruction.as_any().downcast_ref::<UpdatePlainConviction>()
+                            })
+                            .expect("choice-free conviction update")
+                    }
+                    other => panic!("unexpected executable: {other:?}"),
+                };
+                assert_eq!(update.referendum_id, referendum_id);
+                assert_eq!(update.amount.to_string(), amount);
+                assert_eq!(update.duration_blocks, 42);
+                assert_eq!(&update.owner, signed.authority());
+                unsafe { free(ptr.cast()) };
+            }
+        }
+    }
+    #[test]
+    fn governance_update_plain_conviction_rejects_invalid_input_before_signing() {
+        let _guard = chain_guard();
+        for (selector, amount, owner_matches, expected) in [
+            ("bad/ref", "1", true, ERR_GOVERNANCE),
+            ("ref-update", "1", false, ERR_GOVERNANCE),
+            ("ref-update", "01", true, ERR_QUANTITY_PARSE),
+        ] {
+            let (status, ptr, len, hash) =
+                call_update_plain_conviction_encoder(selector, amount, owner_matches, false);
+            assert_eq!(status, expected);
+            assert!(ptr.is_null());
+            assert_eq!(len, 0);
+            assert_eq!(hash, [0_u8; 32]);
         }
     }
     fn call_confidential_memo_validator(wire: &[u8]) -> (c_int, *mut u8, c_ulong) {
@@ -10094,6 +10319,9 @@ mod accel_tests {
         }
         assert!(header.contains("connect_norito_encode_register_zk_asset_signed_transaction"));
         assert!(header.contains("vk_unshield"));
+        let retired_shield_parameter = ["vk_", "shield"].concat();
+        assert!(!header.contains(&retired_shield_parameter));
+        assert!(!source.contains(&retired_shield_parameter));
         assert!(source.contains("build_confidential_unshield_proof_v3_with_paths"));
     }
     #[test]
@@ -10988,12 +11216,12 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     method: jni::sys::jint,
     fields: jni::objects::JObjectArray<'_>,
 ) -> jni::sys::jobjectArray {
-    let Ok(method) = u8::try_from(method) else {
+    let Ok(method_code) = u8::try_from(method) else {
         return ptr::null_mut();
     };
-    if KagemushaCoreCoordinatorMethodV1::from_code(method).is_none() {
+    let Some(method) = KagemushaCoreCoordinatorMethodV1::from_code(method_code) else {
         return ptr::null_mut();
-    }
+    };
     let Ok(field_count) = env.get_array_length(&fields) else {
         return ptr::null_mut();
     };
@@ -11034,57 +11262,37 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoord
     };
 
     let handle = u64::from_ne_bytes(handle.to_ne_bytes());
-    let mut output_ptr = ptr::null_mut();
-    let mut output_len = 0_usize;
-    let status = unsafe {
-        connect_norito_kagemusha_core_coordinator_invoke_v1(
-            handle,
-            method,
-            request_frame.as_ptr(),
-            request_frame.len(),
-            &mut output_ptr,
-            &mut output_len,
-        )
-    };
-    if status != 0 {
-        connect_norito_free(output_ptr);
+    let Some(backend) =
+        kagemusha_core_coordinator_v1::installed_kagemusha_core_coordinator_backend_v1()
+    else {
         return ptr::null_mut();
+    };
+    // JNI publication is part of the same exclusive hardware operation. A Java allocation
+    // failure after dispatch has an uncertain monetary effect: the checked owner revokes the
+    // handle before another invocation can select a successor.
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        backend.invoke_checked_with_output(handle, method, &request_frame, |response_frame| {
+            let response_fields =
+                kagemusha_core_coordinator_decode_response_v1(response_frame).map_err(|_| ())?;
+            let byte_array_class = env.find_class("[B").map_err(|_| ())?;
+            let output = env
+                .new_object_array(
+                    response_fields.len() as jni::sys::jsize,
+                    byte_array_class,
+                    jni::objects::JObject::null(),
+                )
+                .map_err(|_| ())?;
+            for (index, field) in response_fields.iter().enumerate() {
+                let field = env.byte_array_from_slice(field).map_err(|_| ())?;
+                env.set_object_array_element(&output, index as jni::sys::jsize, &field)
+                    .map_err(|_| ())?;
+            }
+            Ok::<_, ()>(output.into_raw())
+        })
+    })) {
+        Ok(Ok(output)) => output,
+        Ok(Err(_)) | Err(_) => ptr::null_mut(),
     }
-    if output_ptr.is_null()
-        || output_len == 0
-        || output_len > KAGEMUSHA_CORE_COORDINATOR_MAX_RESPONSE_BYTES_V1
-    {
-        connect_norito_free(output_ptr);
-        return ptr::null_mut();
-    }
-    let response_frame = unsafe { slice::from_raw_parts(output_ptr, output_len) }.to_vec();
-    connect_norito_free(output_ptr);
-    let Ok(response_fields) = kagemusha_core_coordinator_decode_response_v1(&response_frame) else {
-        return ptr::null_mut();
-    };
-
-    let Ok(byte_array_class) = env.find_class("[B") else {
-        return ptr::null_mut();
-    };
-    let Ok(output) = env.new_object_array(
-        response_fields.len() as jni::sys::jsize,
-        byte_array_class,
-        jni::objects::JObject::null(),
-    ) else {
-        return ptr::null_mut();
-    };
-    for (index, field) in response_fields.iter().enumerate() {
-        let Ok(field) = env.byte_array_from_slice(field) else {
-            return ptr::null_mut();
-        };
-        if env
-            .set_object_array_element(&output, index as jni::sys::jsize, &field)
-            .is_err()
-        {
-            return ptr::null_mut();
-        }
-    }
-    output.into_raw()
 }
 
 #[cfg(any(
@@ -13215,8 +13423,8 @@ mod tests {
     }
 
     #[test]
-    fn native_signer_jni_contract_revision_is_the_v6_reporting_permission_hard_cut() {
-        assert_eq!(native_signer_jni_contract_revision(), 6);
+    fn native_signer_jni_contract_revision_is_the_v7_shield_verifier_hard_cut() {
+        assert_eq!(native_signer_jni_contract_revision(), 7);
     }
 
     #[test]
@@ -14575,6 +14783,7 @@ mod tests {
                 Signature::try_from_hex(sample_identifier_signature_hex(&payload))
                     .expect("valid checked signature hex"),
             ),
+            phone_retail_canonicality: None,
         };
         let instruction = ClaimIdentifier {
             account: payload.account_id.clone(),

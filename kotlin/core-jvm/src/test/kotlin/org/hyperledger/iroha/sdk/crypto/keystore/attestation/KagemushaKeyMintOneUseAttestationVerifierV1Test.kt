@@ -143,6 +143,40 @@ class KagemushaKeyMintOneUseAttestationVerifierV1Test {
     }
 
     @Test
+    fun signedCoreSubjectMustHaveExactLayoutAndMatchItsSelectedLaneAndIndices() {
+        val key = fixture().expected.committedPublicKeySec1()
+        fun rejectsFrame(frame: ByteArray, lane: ByteArray = LANE,
+                         before: ByteArray = BEFORE, after: ByteArray = AFTER) {
+            assertThrows(IllegalArgumentException::class.java) {
+                KagemushaKeyMintExpectedSelectionV1(frame, lane, before, after, NONCE, key)
+            }
+        }
+        rejectsFrame("core-canonical-selection-v1".toByteArray(StandardCharsets.UTF_8))
+        rejectsFrame(FRAME.copyOfRange(0, FRAME.size - 1))
+        rejectsFrame(FRAME.copyOf().also { it[0] = 0 })
+        rejectsFrame(FRAME.copyOf().also { it[49] = 0 })
+        rejectsFrame(FRAME.copyOf().also { it[57] = 2 })
+        rejectsFrame(FRAME.copyOf().also { it.fill(0, 59, 91) })
+        rejectsFrame(FRAME.copyOf().also { it[331] = 0 })
+        rejectsFrame(FRAME.copyOf().also { it[364] = 1 })
+        rejectsFrame(FRAME.copyOf().also { it[219] = 0 })
+        rejectsFrame(FRAME, ByteArray(32) { 0x22 })
+        rejectsFrame(FRAME, before = ByteArray(16).also { it[0] = 1 },
+            after = ByteArray(16).also { it[0] = 2 })
+        assertEquals(460, KagemushaKeyMintExpectedSelectionV1(
+            FRAME, LANE, BEFORE, AFTER, NONCE, key,
+        ).canonicalSelectionFrame().size)
+        val send = FRAME.copyOf().also {
+            it[331] = 2
+            it[364] = 0x41
+            it[396] = 0x42
+        }
+        assertEquals(460, KagemushaKeyMintExpectedSelectionV1(
+            send, LANE, BEFORE, AFTER, NONCE, key,
+        ).canonicalSelectionFrame().size)
+    }
+
+    @Test
     fun longLivedVerifierRejectsStaleSnapshotAndTrustedTimeRollback() {
         val fixture = fixture()
         var now = EVALUATION_TIME
@@ -325,11 +359,30 @@ class KagemushaKeyMintOneUseAttestationVerifierV1Test {
         private const val APP_VERSION = 7L
         private const val EVALUATION_TIME = 1764547200000L
         private val KEYMINT_OID = org.bouncycastle.asn1.ASN1ObjectIdentifier("1.3.6.1.4.1.11129.2.1.17")
-        private val FRAME = "core-canonical-selection-v1".toByteArray(StandardCharsets.UTF_8)
         private val LANE = ByteArray(32) { 0x21 }
         private val BEFORE = ByteArray(16)
         private val AFTER = ByteArray(16).also { it[0] = 1 }
         private val NONCE = ByteArray(32) { 0x37 }
         private val APP_SIGNER = ByteArray(32) { 0x66 }
+        private val FRAME = ByteArray(460).also { frame ->
+            val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000"
+                .toByteArray(StandardCharsets.US_ASCII)
+            domain.copyInto(frame, 0)
+            frame[49] = 0x93.toByte()
+            frame[50] = 1
+            frame[57] = 1
+            for ((start, value) in listOf(
+                59 to 0x11, 91 to 0x12, 123 to 0x13, 155 to 0x14,
+                187 to 0x15, 251 to 0x16, 291 to 0x17, 332 to 0x18,
+            )) {
+                frame.fill(value.toByte(), start, start + 32)
+            }
+            LANE.copyInto(frame, 219)
+            frame[283] = 1
+            frame[323] = 1
+            frame[331] = 1 // MintFold has no outgoing candidate or terminal body.
+            BEFORE.copyInto(frame, 428)
+            AFTER.copyInto(frame, 444)
+        }
     }
 }

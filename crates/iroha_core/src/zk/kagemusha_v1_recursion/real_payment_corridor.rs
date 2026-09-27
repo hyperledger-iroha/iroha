@@ -4,9 +4,10 @@
 //! proves Bootstrap -> FinalizedMint with one reusable carrier key pair. Certificate preflight
 //! tests are not proof evidence; the explicitly ignored real-proof gate is expensive.
 //!
-//! TODO: connect these funded inputs to the revised terminal/payment-proof corridor once its
-//! post-commit proof shape is fixed. No rotation or fabricated positive bootstrap substitutes
-//! for the pending SendSplit -> transported authorization -> ReceiveFold qualification.
+//! The separate sender-closure diagnostic now decides a generated post-commit payment proof
+//! against Core's exact public projection. TODO: qualify a physical sender commit, durably install
+//! the payment, and generate the receiver's ReceiveFold proof before opening the handoff gate.
+//! No rotation or fabricated positive bootstrap substitutes for that qualification.
 
 use std::fs::{File, OpenOptions, TryLockError};
 
@@ -3020,7 +3021,7 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
         hardware_authorization,
     )
     .expect("Ep mint-authorization SHA queue");
-    let expected_lengths = vec![422, 663, 76, 426, 198, 363, 365, 200, 74, 367];
+    let expected_lengths = vec![457, 697, 76, 459, 198, 363, 365, 200, 74, 367];
 
     assert_eq!(
         eq.iter().map(Vec::len).collect::<Vec<_>>(),
@@ -3066,8 +3067,8 @@ fn mint_authorization_sha_queue_has_exact_job_and_block_profile() {
             .map(|message| (message.len() + 9).div_ceil(64))
             .sum::<usize>()
     };
-    assert_eq!((eq.len(), blocks(&eq)), (10, 55));
-    assert_eq!((ep.len(), blocks(&ep)), (10, 55));
+    assert_eq!((eq.len(), blocks(&eq)), (10, 58));
+    assert_eq!((ep.len(), blocks(&ep)), (10, 58));
 }
 
 #[test]

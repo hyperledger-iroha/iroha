@@ -44,6 +44,10 @@ export {
 } from "./numericV1.js";
 export { blake2b256 } from "./blake2b.js";
 export {
+  verifyContractStateValueInclusionV1,
+  verifyContractStateValueInclusionJsonV1,
+} from "./contractStateProof.js";
+export {
   computeIvmArtifactHashes,
   IVM_ARTIFACT_MAX_BYTES,
   IVM_PROGRAM_HEADER_LENGTH,
@@ -398,6 +402,7 @@ export {
   buildProposeSccpRouteGovernanceTransaction,
   buildCastZkBallotTransaction,
   buildCastPlainBallotTransaction,
+  buildUpdatePlainConvictionTransaction,
   buildRegisterZkAssetTransaction,
   buildScheduleConfidentialPolicyTransitionTransaction,
   buildCancelConfidentialPolicyTransitionTransaction,
@@ -452,6 +457,9 @@ export {
   buildRegisterDomainInstruction,
   buildRegisterAccountInstruction,
   buildRegisterAssetDefinitionInstruction,
+  buildActivateRetailDailyLimitV1InstructionJson,
+  buildBindRetailIdentityV1InstructionJson,
+  buildRetailMonetaryMovementV1InstructionJson,
   buildGrantAccountPermissionInstruction,
   buildSetAccountKeyValueInstruction,
   buildSetAssetDefinitionAliasInstruction,
@@ -504,6 +512,7 @@ export {
   buildProposeSccpRouteGovernanceInstruction,
   buildCastZkBallotInstruction,
   buildCastPlainBallotInstruction,
+  buildUpdatePlainConvictionInstruction,
   buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,

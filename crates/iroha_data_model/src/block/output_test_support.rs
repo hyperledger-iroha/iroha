@@ -8,7 +8,7 @@ use crate::{
 };
 use iroha_crypto::Hash;
 
-pub(crate) fn limits() -> ExecutionOutputLimits {
+pub fn limits() -> ExecutionOutputLimits {
     ExecutionOutputLimits {
         max_outputs: 1024,
         max_output_bytes: 16 * 1024 * 1024,
@@ -16,14 +16,14 @@ pub(crate) fn limits() -> ExecutionOutputLimits {
         max_executed_wire_bytes: super::consensus_v2::MAX_EXECUTED_BLOCK_WIRE_BYTES,
     }
 }
-pub(crate) fn network(index: u32, result: impl Into<TransactionResult>) -> ExecutionOutputV1 {
+pub fn network(index: u32, result: impl Into<TransactionResult>) -> ExecutionOutputV1 {
     ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
         input_index: index,
         result: result.into(),
         completions: vec![],
     })
 }
-pub(crate) fn time(
+pub fn time(
     header: BlockHeader,
     index: u32,
     id: TriggerId,
@@ -50,7 +50,7 @@ pub(crate) fn time(
     })
 }
 #[cfg(feature = "transparent_api")]
-pub(crate) fn install_network(
+pub fn install_network(
     block: &mut SignedBlock,
     results: Vec<TransactionResultInner>,
 ) -> Result<(), super::SetExecutionOutputsError> {
@@ -72,7 +72,7 @@ pub(crate) fn install_network(
 }
 
 #[cfg(feature = "transparent_api")]
-pub(crate) fn proposal(count: usize) -> SignedBlock {
+pub fn proposal(count: usize) -> SignedBlock {
     use crate::{
         Level,
         isi::Log,
@@ -110,7 +110,7 @@ pub(crate) fn proposal(count: usize) -> SignedBlock {
 }
 
 #[cfg(feature = "transparent_api")]
-pub(crate) fn install(
+pub fn install(
     block: &mut SignedBlock,
     outputs: Vec<ExecutionOutputV1>,
     fragments: u64,
@@ -127,7 +127,7 @@ pub(crate) fn install(
     )
 }
 
-pub(crate) fn simple_time(block: &SignedBlock, schedule_index: u32) -> ExecutionOutputV1 {
+pub fn simple_time(block: &SignedBlock, schedule_index: u32) -> ExecutionOutputV1 {
     time(
         block.header(),
         schedule_index,
@@ -137,10 +137,7 @@ pub(crate) fn simple_time(block: &SignedBlock, schedule_index: u32) -> Execution
 }
 
 #[cfg(feature = "transparent_api")]
-pub(crate) fn committed(
-    block: &SignedBlock,
-    input_index: u32,
-) -> crate::query::CommittedTransaction {
+pub fn committed(block: &SignedBlock, input_index: u32) -> crate::query::CommittedTransaction {
     use iroha_crypto::HashOf;
     let entrypoint = block
         .network_entrypoint_at(input_index as usize)

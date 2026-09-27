@@ -118,7 +118,8 @@ pub(super) fn start(
                     &app,
                     peer.id(),
                     publication.as_ref(),
-                );
+                )
+                .await;
                 drop(publication);
                 drop(transport);
             }
@@ -194,7 +195,7 @@ pub(super) async fn dispatch(
     let (peer, _authenticated_via, payload, _bytes, transport) = message.into_parts();
     match payload {
         iroha_core::NetworkMessage::ToriiProxyRequest(request) => {
-            let proxy_memory = match try_acquire_torii_proxy_memory(app) {
+            let proxy_memory = match try_acquire_torii_proxy_receiver_memory(app) {
                 Ok(reservation) => reservation,
                 Err(_) => {
                     reject_incoming_torii_proxy_request_capacity(

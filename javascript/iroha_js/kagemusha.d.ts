@@ -19,8 +19,8 @@ declare namespace Kagemusha {
   const deviceLifecycleVersion: 1;
   const handoffCapability: "kagemusha_handoff_v1";
   const textPrefix: "kgm1:";
-  const maximumRequestRawBytes: 928;
-  const maximumRequestTextBytes: 1243;
+  const maximumRequestRawBytes: 1024;
+  const maximumRequestTextBytes: 1371;
   /** Bounds all three separately transported protocol messages together. */
   const targetCompleteExchangeRawBytes: 8960;
   const maximumCompleteExchangeRawBytes: 9211;

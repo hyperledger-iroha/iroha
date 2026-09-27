@@ -143,6 +143,8 @@ fn cargo_bin_path(bin_name: &str) -> PathBuf {
     }
     path.join(format!("{bin_name}{}", env::consts::EXE_SUFFIX))
 }
+const TEST_NETWORK_ID_ARG: &str =
+    "--network-id=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
 fn sorafs_fetch_cmd() -> AssertCommand {
     AssertCommand::new(cargo_bin_path("sorafs_fetch"))
 }
@@ -174,6 +176,7 @@ fn signed_provider_advert(
 ) -> ProviderAdvertV1 {
     let mut advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
+        network_id: [0xA1; 32],
         issued_at,
         expires_at,
         body,
@@ -1107,6 +1110,7 @@ fn fetch_cli_applies_provider_advert() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--output={}", output_path.display()))
         .assert()
@@ -1141,7 +1145,7 @@ fn fetch_cli_applies_provider_advert() {
             .get("stake_amount")
             .and_then(Value::as_str)
             .expect("stake_amount"),
-        "1000000"
+        "1"
     );
     assert!(
         metadata
@@ -1291,6 +1295,7 @@ fn fetch_cli_persists_scoreboard() {
     sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .arg(format!("--output={}", output_path.display()))
         .arg(format!("--telemetry-json={}", telemetry_path.display()))
@@ -1432,6 +1437,7 @@ fn fetch_cli_score_policy_filters_providers() {
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path_alpha.display()))
         .arg(format!("--provider=beta={}", payload_path_beta.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!(
             "--provider-advert=alpha={}",
             advert_path_alpha.display()
@@ -1543,6 +1549,7 @@ fn fetch_cli_rejects_provider_without_range_capability() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .assert()
         .failure();
@@ -1786,6 +1793,7 @@ fn provider_advert_concurrency_respects_stream_budget() {
     };
     let advert = ProviderAdvertV1 {
         version: PROVIDER_ADVERT_VERSION_V1,
+        network_id: [0xA1; 32],
         issued_at: 0,
         expires_at: 3_600,
         body: advert_body,
@@ -1876,6 +1884,7 @@ fn fetch_cli_rejects_unknown_capabilities_without_allow_flag() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .assert()
         .failure();
@@ -1950,6 +1959,7 @@ fn fetch_cli_ignores_unknown_capabilities_when_allowed() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .assert()
         .success();
@@ -2051,6 +2061,7 @@ fn fetch_cli_exposes_soranet_pq_labels() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .assert()
         .success();
@@ -2159,6 +2170,7 @@ fn fetch_cli_rejects_stale_provider_advert() {
     let assert = sorafs_fetch_cmd()
         .arg(format!("--plan={}", plan_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
+        .arg(TEST_NETWORK_ID_ARG)
         .arg(format!("--provider-advert=alpha={}", advert_path.display()))
         .assert()
         .failure();

@@ -22,7 +22,11 @@ fn receipt_check_retains_distinct_observer_and_operator_through_real_finality() 
         f.commit(NOW, vec![pending.signed_transaction().clone()], true, true),
         [true]
     );
-    let verified = pending.verify_finalized(|| Ok(interval(NOW, NOW))).unwrap();
+    let verified = pending
+        .verify_finalized(FinalPromotionCheckSourceV1::Current, || {
+            Ok(interval(NOW, NOW))
+        })
+        .unwrap();
     assert_eq!(verified.observer(), &observer);
     assert_eq!(verified.expected_operator(), &operator);
     let FinalPromotionAuthorityActionV1::Check(check) = &verified.instruction().action else {
@@ -88,7 +92,9 @@ fn receipt_current_check_requires_the_pinned_operator_registered_and_authorized(
         );
         assert_eq!(
             pending
-                .verify_finalized(|| panic!("failed native operator check precedes clock"))
+                .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
+                    "failed native operator check precedes clock"
+                ))
                 .err(),
             Some(Error::Execution)
         );
@@ -145,7 +151,10 @@ fn receipt_observer_role_permission_and_account_removal_are_rechecked_at_applied
             }
             assert_eq!(
                 pending
-                    .verify_finalized(|| Ok(interval(NOW + 2, NOW + 2)))
+                    .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(interval(
+                        NOW + 2,
+                        NOW + 2
+                    )))
                     .err(),
                 Some(Error::Authority),
                 "{change}, same_block={same_block}"
@@ -178,7 +187,9 @@ fn receipt_observer_permission_revoked_before_execution_cannot_supply_a_success(
     );
     assert_eq!(
         pending
-            .verify_finalized(|| panic!("rejected Check result precedes clock"))
+            .verify_finalized(FinalPromotionCheckSourceV1::Current, || panic!(
+                "rejected Check result precedes clock"
+            ))
             .err(),
         Some(Error::Execution)
     );

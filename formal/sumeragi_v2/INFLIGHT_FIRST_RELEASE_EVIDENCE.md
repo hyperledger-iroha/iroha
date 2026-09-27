@@ -1,5 +1,14 @@
 # In-flight first-release carrier evidence
 
+> **Status (2026-09-27): retired.** The node runs only the new Sumeragi
+> ([`specs/sumeragi.md`](../../specs/sumeragi.md)). The v2 formal tooling this
+> directory refers to (the TLAPS, TLC, Apalache and mutation runners under
+> `scripts/formal/`, the proof-ledger checker, `ci/check_sumeragi_formal.sh`, the
+> v2 release gates and the Verus crate `crates/iroha_sumeragi_core`) was removed
+> with the v2 consensus tooling. The directory remains only because v2 runtime
+> tests still read `SumeragiV2InFlightFirstRelease.tla`; it is deleted together
+> with the v2 runtime.
+
 `SumeragiV2InFlightFirstRelease.tla` is a three-validator bounded safety
 kernel for the in-flight first-release protocol. Its TLC evidence is owned by
 `scripts/formal/run_sumeragi_v2_inflight_first_release.sh`; the fixed model is

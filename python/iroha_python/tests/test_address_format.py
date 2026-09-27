@@ -18,7 +18,6 @@ from iroha_python import (
     AggregateFn,
     AggregateMetric,
     AggregateSpec,
-    MultisigResponse,
     NetworkId,
     QueryEnvelope,
     ToriiClient,
@@ -51,6 +50,8 @@ def _unsigned_multisig_response_fields() -> Dict[str, Any]:
     signing_message[-1] |= 1
     return {
         "submitted": False,
+        "creation_time_ms": 0,
+        "fee_payment": _authority_fee_payment(),
         "transaction_payload_b64": base64.b64encode(transaction_payload).decode("ascii"),
         "signing_message_b64": base64.b64encode(signing_message).decode("ascii"),
     }
@@ -63,6 +64,7 @@ class StubResponse(requests.Response):
         self._payload = payload or {"items": [], "total": 0}
         self.headers = CaseInsensitiveDict({"Content-Type": "application/json"})
         self._content = json.dumps(self._payload).encode("utf-8")
+        self._content_consumed = True
         self.encoding = "utf-8"
 
     def json(self, **kwargs: Any) -> Any:
@@ -187,9 +189,9 @@ def test_pipeline_status_requires_exact_lowercase_full_hashes() -> None:
 
     for tx_hash in invalid_hashes:
         expected_error = TypeError if isinstance(tx_hash, bytes) else ValueError
-        with pytest.raises(expected_error, match="must be (a string|.*HashOf marker)"):
+        with pytest.raises(expected_error, match="must (be a string|match .*canonical Iroha HashOf marker)"):
             client.get_transaction_status(tx_hash)
-        with pytest.raises(expected_error, match="must be (a string|.*HashOf marker)"):
+        with pytest.raises(expected_error, match="must (be a string|match .*canonical Iroha HashOf marker)"):
             client.wait_for_transaction_status(
                 tx_hash,
                 interval=0,
@@ -533,7 +535,7 @@ def test_submit_and_wait_rejects_noncanonical_envelope_hash_before_submission(
         lambda envelope: submissions.append(envelope),
     )
 
-    with pytest.raises(ValueError, match="exact lowercase marked 32-byte hash"):
+    with pytest.raises(ValueError, match="must match .*canonical Iroha HashOf marker"):
         client.submit_transaction_envelope_and_wait(
             SimpleNamespace(hash="AB" * 32),
             interval=0,
@@ -747,6 +749,9 @@ def test_list_asset_holders_omits_canonical_i105() -> None:
 
     client.list_asset_holders("xor#wonderland")
 
+    assert session.calls[0]["url"] == (
+        "http://localhost:8080/v1/assets/xor%23wonderland/holders"
+    )
     assert "canonical_i105" not in session.calls[0]["params"]
 
 
@@ -760,7 +765,7 @@ def test_query_asset_holders_omits_canonical_i105() -> None:
     assert "canonical_i105" not in body
 
 
-def test_propose_multisig_inherited_helper_posts_native_instruction_payload() -> None:
+def test_propose_multisig_posts_native_instruction_payload_and_requires_draft_intent() -> None:
     session = RecordingSession()
     session._response = StubResponse(
         payload={
@@ -771,17 +776,15 @@ def test_propose_multisig_inherited_helper_posts_native_instruction_payload() ->
     )
     client = ToriiClient("http://node.test", session=session)
 
-    response = client.propose_multisig(
-        multisig_account_alias="ops@universal",
-        signer_account_id="signer@universal",
-        instructions=[b"\x01\x02\x03"],
-        fee_payment=_authority_fee_payment(),
-        creation_time_ms=0,
-    )
+    with pytest.raises(ValueError, match="caller-trusted MultisigDraftIntent"):
+        client.propose_multisig(
+            multisig_account_alias="ops@universal",
+            signer_account_id="signer@universal",
+            instructions=[b"\x01\x02\x03"],
+            fee_payment=_authority_fee_payment(),
+            creation_time_ms=0,
+        )
 
-    assert isinstance(response, MultisigResponse)
-    assert response.ok is True
-    assert response.submitted is False
     assert session.calls[0]["method"] == "POST"
     assert session.calls[0]["url"] == "http://node.test/v1/multisig/propose"
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
@@ -1002,7 +1005,7 @@ def test_account_address_rejects_reserved_headers_and_class_mismatches() -> None
         AccountAddress.from_canonical_bytes(b"\x0a" + mldsa[1:])
 
     wrong_class_i105 = "sora3uｵﾔDﾗﾎmXヱ5uxbｻAｸiRB1vﾚｾｿvSHﾅﾕgﾚｼUFPPﾜinｳﾆﾓRSJS4M"
-    with pytest.raises(AccountAddressError, match="class does not match controller tag"):
+    with pytest.raises(AccountAddressError, match="unsupported account address format"):
         AccountAddress.from_i105(wrong_class_i105, 753)
 
     with pytest.raises(AccountAddressError, match="unsupported account address header"):

@@ -28,12 +28,14 @@ async fn tx_order_same_in_validation_and_revalidation() {
     .with_instructions::<InstructionBox>([register_a.into()])
     .sign(alice_keypair.private_key());
     let crypto_cfg = state.crypto();
-    let tx = AcceptedTransaction::accept(
+    let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
+    let tx = AcceptedTransaction::accept_with_time_source(
         tx,
         &state.network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
+        &time_source,
     )
     .expect("Valid");
     let (missing_account_id, _) = gen_account_in("wonderland");
@@ -46,12 +48,14 @@ async fn tx_order_same_in_validation_and_revalidation() {
     )
     .with_instructions::<InstructionBox>([fail_instruction.into()])
     .sign(alice_keypair.private_key());
-    let tx0 = AcceptedTransaction::accept(
+    let (_clock, time_source) = TimeSource::new_mock(tx0.creation_time());
+    let tx0 = AcceptedTransaction::accept_with_time_source(
         tx0,
         &state.network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
+        &time_source,
     )
     .expect("Valid");
     let tx2 = TransactionBuilder::new(
@@ -61,12 +65,14 @@ async fn tx_order_same_in_validation_and_revalidation() {
     )
     .with_instructions::<InstructionBox>([succeed_instruction.into()])
     .sign(alice_keypair.private_key());
-    let tx2 = AcceptedTransaction::accept(
+    let (_clock, time_source) = TimeSource::new_mock(tx2.creation_time());
+    let tx2 = AcceptedTransaction::accept_with_time_source(
         tx2,
         &state.network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
+        &time_source,
     )
     .expect("Valid");
     let fail_hash = tx0.as_ref().hash_as_entrypoint();
@@ -74,7 +80,9 @@ async fn tx_order_same_in_validation_and_revalidation() {
     let succeed_hash = tx2.as_ref().hash_as_entrypoint();
     // Creating a block of two identical transactions and validating it
     let transactions = vec![tx0, tx, tx2];
-    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
+    state
+        .seed_genesis_for_testing()
+        .expect("authenticate ordinary fixture predecessor");
     let unverified_block = BlockBuilder::new(transactions)
         .chain(0, state.view().latest_block().as_deref())
         .sign(alice_keypair.private_key())
@@ -83,9 +91,12 @@ async fn tx_order_same_in_validation_and_revalidation() {
     let valid_block = unverified_block
         .validate_and_record_transactions(&mut state_block)
         .unpack(|_| {});
-    state.commit_executed_block_for_testing(
-        state_block, valid_block.clone().commit_unchecked().unpack(|_| {}),
-    ).expect("publish exact validated fixture outputs");
+    state
+        .commit_executed_block_for_testing(
+            state_block,
+            valid_block.clone().commit_unchecked().unpack(|_| {}),
+        )
+        .expect("publish exact validated fixture outputs");
     // The 1st transaction should fail and 2nd succeed
     let block_ref = valid_block.as_ref();
     let outcomes: Vec<_> = block_ref

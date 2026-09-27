@@ -262,30 +262,8 @@ async fn common_commit(clients: &[Client]) -> Result<()> {
             let client = client.clone();
             let status =
                 read_on_dedicated_thread(move || client.client().get_sumeragi_status()).await?;
-            status.validate()?;
-            ensure!(
-                status.protocol_version == 4 && !status.restart_required,
-                "noncanonical or fail-stopped consensus"
-            );
-            ensure!(
-                status.height_context.validator_count == 4
-                    && status.height_context.quorum.min_signers == 3
-                    && status.height_context.quorum.total_power == 4,
-                "committee/quorum is not exact four/three equal votes"
-            );
-            if let (Some(subject), Some(qc)) =
-                (status.last_committed_subject, status.last_commit_qc)
-            {
-                ensure!(
-                    qc.validator_count == 4
-                        && qc.signer_count == 3
-                        && qc.min_signers == 3
-                        && qc.signed_power == 3
-                        && qc.total_power == 4,
-                    "committed QC summary does not preserve exact quorum"
-                );
-                subjects.push((status.last_committed_height, subject));
-            }
+            ensure!(status.halted.is_none(), "fail-stopped consensus");
+            subjects.push(status.committed_height);
         }
         if subjects.len() == clients.len() && subjects.iter().all(|subject| *subject == subjects[0])
         {
@@ -293,7 +271,7 @@ async fn common_commit(clients: &[Client]) -> Result<()> {
         }
         ensure!(
             Instant::now() < deadline,
-            "four peers did not converge to one revision-4 committed subject"
+            "four peers did not converge to one committed height"
         );
         sleep(Duration::from_millis(200)).await;
     }

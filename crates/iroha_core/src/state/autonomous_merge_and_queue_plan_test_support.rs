@@ -293,10 +293,8 @@ fn autonomous_merge_source_for_queue_plan_admission_test(
     );
     let validator_count =
         u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
-    let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
-        validator_set.len(),
-    ))
-    .expect("fixture quorum fits u32");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()))
+        .expect("fixture quorum fits u32");
     let lane_block_height = 1;
     let lane_block_view = 0;
     let entrypoint_hash = Hash::from(entrypoint.hash());
@@ -584,7 +582,9 @@ fn persist_merge_carrier_finality_chain_for_state_test(
         );
         let network_id = *state.network_id_ref();
         let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(network_id, 100, &roster);
+            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
+                network_id, 100, &roster,
+            );
         let context = HeightContext {
             network_id,
             protocol_version: PROTOCOL_VERSION,
@@ -652,8 +652,7 @@ fn persist_merge_carrier_finality_chain_for_state_test(
             height,
             view: block.header().view_change_index(),
         };
-        let signer_count =
-            crate::sumeragi::network_topology::commit_quorum_from_len(keypairs.len());
+        let signer_count = iroha_sumeragi::types::quorum(keypairs.len());
         let signers = (0..signer_count)
             .map(|index| u32::try_from(index).expect("fixture signer index fits u32"))
             .collect::<Vec<_>>();
@@ -1450,10 +1449,15 @@ fn autonomous_merge_commit_authorization_fixture_with_beacon(
         // Setting the certified execution context leaves a resultless proposal.
         // Only the actual execution owner may attach its rows, fragment count,
         // transcripts and policy; a fixture cannot copy nonexistent results.
-        let mut staged = state
-            .block_with_certified_merge_entry(carrier.header(), &entry, ConsensusMode::Permissioned)
-            .expect("stage the exact native runtime-effect carrier and source");
-        let validated = ValidBlock::validate_unchecked(carrier, &mut staged).unpack(|_| {});
+        let (mut staged, recorder) = state
+            .block_with_recorded_pristine_carrier_stage(
+                &carrier,
+                |staged| staged.stage_certified_merge_entry(&entry, ConsensusMode::Permissioned),
+                MergeLedgerCommitError::ExecutionBatchInvalid,
+            )
+            .expect("record the exact autonomous source before common start effects");
+        let validated =
+            ValidBlock::validate_recorded_unchecked(carrier, &mut staged, recorder).unpack(|_| {});
         carrier = validated.into();
         let committed_fragments = carrier
             .committed_fragment_count()

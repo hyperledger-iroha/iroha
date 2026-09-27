@@ -34,6 +34,7 @@ impl StreamTokenSignerClientV1 for SignerStreamTokenServiceV1 {
         let receipt =
             SignerStreamTokenServiceV1::recover(self, &payload).map_err(|error| match error {
                 SignerStreamTokenErrorV1::Journal
+                | SignerStreamTokenErrorV1::LocalCapacity
                 | SignerStreamTokenErrorV1::Operation(SignerOperationErrorV1::StateUnavailable) => {
                     Error::Unavailable
                 }

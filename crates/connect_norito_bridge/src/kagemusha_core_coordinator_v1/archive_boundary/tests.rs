@@ -229,7 +229,7 @@ fn native_archive_requests_reject_opaque_wrong_schema_and_trailing_bytes() {
 
 #[test]
 fn native_begin_preparation_binds_operation_and_complete_input_preimage() {
-    let prep =
+    let mut prep =
         KagemushaCoreSenderPreparationArchiveV1::decode_canonical_exact(&vector("preparation"))
             .unwrap();
     let fixture: norito::json::Value = norito::json::from_str(include_str!(
@@ -239,13 +239,21 @@ fn native_begin_preparation_binds_operation_and_complete_input_preimage() {
     let mut fields = request_fields("begin-send");
     fields[0] = prep.operation_id.to_vec();
     fields[2] = hex::decode(fixture["payment_request"]["norito_hex"].as_str().unwrap()).unwrap();
+    prep.inputs_digest = SenderPublicInputPreimageV1 {
+        version: 1,
+        operation_id: prep.operation_id,
+        context: prep.context.clone(),
+        inputs: sender_inputs(&fields).unwrap(),
+    }
+    .canonical_digest()
+    .unwrap();
     let method = KagemushaCoreCoordinatorMethodV1::BeginSenderTransition;
     let request = frame(&fields);
     assert_eq!(
         validate_response(
             method,
             &request,
-            &response(&[fields[0].clone(), vector("preparation")])
+            &response(&[fields[0].clone(), prep.encode_canonical().unwrap()])
         ),
         Ok(())
     );
@@ -469,25 +477,30 @@ fn durable_reservations_and_transient_observations_use_disjoint_typed_commands()
     use crate::kagemusha_device_bridge_v1::{
         COMMAND_HEADER_BYTES_V1, canonical_stock_command_for_tests,
     };
+    use iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1;
     for operation in KagemushaDeviceLifecycleOperationV1::ALL {
-        let (id, binding) =
-            if operation == KagemushaDeviceLifecycleOperationV1::PrepareExactNextTransition {
-                let fixture: norito::json::Value = norito::json::from_str(include_str!(
-                    "../../../../../fixtures/offline/kagemusha_sender_reservation_v1.json"
-                ))
-                .unwrap();
-                (
-                    [7; 32],
-                    hex::decode(fixture["send_binding_hex"].as_str().unwrap()).unwrap(),
-                )
-            } else {
-                let command = canonical_stock_command_for_tests(operation)
-                    .expect("every device command has canonical fixture coverage");
-                (
-                    command[12..44].try_into().unwrap(),
-                    command[COMMAND_HEADER_BYTES_V1..].to_vec(),
-                )
-            };
+        let (id, binding) = if operation
+            == KagemushaDeviceLifecycleOperationV1::PrepareExactNextTransition
+        {
+            let fixture: norito::json::Value = norito::json::from_str(include_str!(
+                "../../../../../fixtures/offline/kagemusha_v1.json"
+            ))
+            .unwrap();
+            let request =
+                hex::decode(fixture["payment_request"]["norito_hex"].as_str().unwrap()).unwrap();
+            (
+                [7; 32],
+                norito::encode_canonical(&KagemushaOutgoingPublicInputsV1::SendSplit { request })
+                    .unwrap(),
+            )
+        } else {
+            let command = canonical_stock_command_for_tests(operation)
+                .expect("every device command has canonical fixture coverage");
+            (
+                command[12..44].try_into().unwrap(),
+                command[COMMAND_HEADER_BYTES_V1..].to_vec(),
+            )
+        };
         let observation = is_observation_operation_v1(u32::from(operation.code()));
         let durable_fields = vec![
             u32::from(operation.code()).to_le_bytes().to_vec(),

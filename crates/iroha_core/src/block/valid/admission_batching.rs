@@ -20,8 +20,9 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 #[cfg(all(feature = "bls", feature = "telemetry"))]
 use iroha_model_base::topology::LaneId;
+use iroha_primitives::time::TimeSource;
 use nonzero_ext::nonzero;
-use std::{sync::Arc, time::SystemTime};
+use std::sync::Arc;
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     let kura = Kura::blank_kura_for_testing();
@@ -583,7 +584,15 @@ fn rejects_transaction_signed_with_disallowed_algorithm() {
             &crypto_cfg.allowed_signing,
         );
     state.set_crypto(crypto_cfg.clone());
-    match AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg) {
+    let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
+    match AcceptedTransaction::accept_with_time_source(
+        tx,
+        &network_id,
+        max_clock_drift,
+        tx_limits,
+        &crypto_cfg,
+        &time_source,
+    ) {
         Err(AcceptTransactionFail::SignatureVerification(fail)) => {
             assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
             assert!(
@@ -622,8 +631,16 @@ fn accepts_transaction_once_algorithm_whitelisted() {
         crypto_cfg.allowed_signing.dedup();
     }
     state.set_crypto(crypto_cfg.clone());
-    AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg)
-        .expect("transaction should be accepted after whitelisting");
+    let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
+    AcceptedTransaction::accept_with_time_source(
+        tx,
+        &network_id,
+        max_clock_drift,
+        tx_limits,
+        &crypto_cfg,
+        &time_source,
+    )
+    .expect("transaction should be accepted after whitelisting");
 }
 #[test]
 fn rejects_transaction_when_ttl_expired() {
@@ -648,7 +665,15 @@ fn rejects_transaction_when_ttl_expired() {
     builder.set_ttl(Duration::from_secs(1));
     let tx = builder.sign(kp.private_key());
     let crypto_cfg = (*state.crypto()).clone();
-    match AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg) {
+    let (_clock, time_source) = TimeSource::new_mock(Duration::from_secs(2));
+    match AcceptedTransaction::accept_with_time_source(
+        tx,
+        &network_id,
+        max_clock_drift,
+        tx_limits,
+        &crypto_cfg,
+        &time_source,
+    ) {
         Err(AcceptTransactionFail::TransactionExpired { .. }) => {}
         other => panic!("expected TransactionExpired failure, got {other:?}"),
     }
@@ -666,9 +691,7 @@ fn accepts_transaction_with_valid_ttl() {
         default_limits.max_decompressed_bytes(),
         default_limits.max_metadata_depth(),
     );
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap_or_else(|_| Duration::from_secs(0));
+    let now = Duration::from_secs(10);
     let creation_time = now.saturating_sub(Duration::from_secs(1));
     let mut builder = TransactionBuilder::new(
         network_id,
@@ -680,6 +703,14 @@ fn accepts_transaction_with_valid_ttl() {
     builder.set_ttl(Duration::from_secs(10));
     let tx = builder.sign(kp.private_key());
     let crypto_cfg = (*state.crypto()).clone();
-    AcceptedTransaction::accept(tx, &network_id, max_clock_drift, tx_limits, &crypto_cfg)
-        .expect("transaction with unexpired TTL should be accepted");
+    let (_clock, time_source) = TimeSource::new_mock(now);
+    AcceptedTransaction::accept_with_time_source(
+        tx,
+        &network_id,
+        max_clock_drift,
+        tx_limits,
+        &crypto_cfg,
+        &time_source,
+    )
+    .expect("transaction with unexpired TTL should be accepted");
 }

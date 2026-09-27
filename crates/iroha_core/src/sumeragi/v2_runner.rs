@@ -6,6 +6,7 @@
 //! and performs an explicit Kura-authorized rollover after application.
 
 mod native_candidate;
+pub(crate) mod native_drain;
 pub(in crate::sumeragi) mod native_process;
 mod native_source;
 pub(in crate::sumeragi) use native_process::NativeRunnerProcess;
@@ -162,7 +163,7 @@ struct V2StatusClearGuard {
 
 impl V2StatusClearGuard {
     fn new() -> Self {
-        super::status::clear_v2_status();
+        super::v2_status::clear_v2_status();
         Self {
             clear_on_drop: false,
         }
@@ -176,7 +177,7 @@ impl V2StatusClearGuard {
 impl Drop for V2StatusClearGuard {
     fn drop(&mut self) {
         if self.clear_on_drop {
-            super::status::clear_v2_status();
+            super::v2_status::clear_v2_status();
         }
     }
 }
@@ -582,7 +583,7 @@ struct PendingSuccessorConstruction {
 }
 impl PendingSuccessorConstruction {
     fn begin(predecessor: DurableV2PredecessorIdentity) -> Result<Self, V2RunnerError> {
-        super::status::begin_v2_successor_activation(predecessor)?;
+        super::v2_status::begin_v2_successor_activation(predecessor)?;
         Ok(Self { predecessor })
     }
     fn bind(
@@ -765,6 +766,32 @@ impl LocalProposalState {
         ));
         true
     }
+    fn defer_pre_signing_candidate_history_admission(
+        &mut self,
+        owner: LocalProposalOwner,
+        error: &super::v2_candidate::CandidateError,
+        wake: &std::task::Waker,
+    ) -> bool {
+        let super::v2_candidate::CandidateError::LocalStateAdmission(error) = error else {
+            return false;
+        };
+        self.defer_history_admission(owner, error, wake)
+    }
+    fn defer_evidence_preparation(
+        &mut self,
+        owner: LocalProposalOwner,
+        error: &crate::state::EvidencePreparationError,
+        wake: &std::task::Waker,
+    ) -> bool {
+        let Some(wait) = error.release_wait() else {
+            return false;
+        };
+        self.history_wait = Some((
+            owner,
+            super::v2_body_store::HistoryAdmissionWait::new(wait.clone(), wake),
+        ));
+        true
+    }
     /// Keep retrying deferred autonomous work for the bounded observation
     /// window, then arm one ordinary non-empty recovery retry for this owner.
     ///
@@ -914,7 +941,7 @@ pub(super) fn run(worker: SumeragiWorker, mut startup_recovery: super::StartupRe
         }
         Err(error) => {
             output_guard.activate_restart_required();
-            super::status::mark_v2_restart_required();
+            super::v2_status::mark_v2_restart_required();
             iroha_logger::error!(%error, "authoritative Sumeragi v2 runner stopped fail-closed");
         }
     }
@@ -993,7 +1020,7 @@ fn wait_for_terminal_shutdown(
     debug_assert_eq!(height, u64::MAX);
     ingress_ready.store(false, Ordering::Release);
     block_rx.close();
-    super::status::clear_v2_status();
+    super::v2_status::clear_v2_status();
     iroha_logger::info!(
         height,
         context_id = ?context_id,
@@ -1205,7 +1232,7 @@ fn run_inner(
         }
         pending_successor_activation
     };
-    let liveness_watchdog = super::status::V2LivenessWatchdog::default();
+    let liveness_watchdog = super::v2_status::V2LivenessWatchdog::default();
     let deferred_admission_ordinals = DeferredAdmissionOrdinalSource::new(0);
     let kura_replica_advert_refresh = Arc::new(
         KuraReplicaAdvertRefreshOwner::from_kura(kura.as_ref(), Instant::now())
@@ -1677,6 +1704,16 @@ fn schedule_local_proposal(
             {
                 return Ok(());
             }
+            Err(V2RunnerError::CandidateBuild(
+                super::v2_candidate::CandidateError::LocalEvidencePreparation(error),
+            )) if proposal_state.defer_evidence_preparation(
+                owner,
+                &error,
+                &queue.sumeragi_waker(),
+            ) =>
+            {
+                return Ok(());
+            }
             Err(error) => return Err(error),
         };
         let Some(assembly) = native.assemble_candidate(
@@ -1708,7 +1745,20 @@ fn schedule_local_proposal(
         };
         let super::v2_candidate::NativeCandidateAssembly { source, outcome } = assembly;
         native.retain_candidate_source(source);
-        let assembly = outcome?;
+        let assembly = match outcome {
+            Ok(assembly) => assembly,
+            Err(error)
+                if !output_guard.restart_required()
+                    && proposal_state.defer_pre_signing_candidate_history_admission(
+                        owner,
+                        &error,
+                        &queue.sumeragi_waker(),
+                    ) =>
+            {
+                return Ok(());
+            }
+            Err(error) => return Err(error.into()),
+        };
         let candidate = match assembly {
             CandidateAssemblyOutcome::Assembled(candidate) => candidate,
             CandidateAssemblyOutcome::AwaitingRequiredBeacon(_report) => {
@@ -2938,25 +2988,7 @@ fn candidate_attachments(
             None,
         )
         .derive_npos_consensus_effects(round_header)
-        .map_err(|error| {
-            if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
-                V2RunnerError::CandidateBuild(
-                    super::v2_candidate::CandidateError::LocalStateAdmission(
-                        crate::state::StateBlockStartError::from(refusal.clone()),
-                    ),
-                )
-            } else if let Some(refusal) =
-                error.downcast_ref::<crate::state::StateStorageAdmissionError>()
-            {
-                V2RunnerError::CandidateBuild(
-                    super::v2_candidate::CandidateError::LocalStateAdmission(
-                        crate::state::StateBlockStartError::Storage(refusal.clone()),
-                    ),
-                )
-            } else {
-                V2RunnerError::Candidate(error.to_string())
-            }
-        })?
+        .map_err(classify_penalty_derivation_failure)?
     } else {
         Default::default()
     };
@@ -2984,6 +3016,23 @@ fn candidate_attachments(
         queue_plan_admissions,
         ..CandidateAttachments::default()
     })
+}
+fn classify_penalty_derivation_failure(error: eyre::Report) -> V2RunnerError {
+    if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>() {
+        V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
+            crate::state::StateBlockStartError::from(refusal.clone()),
+        ))
+    } else if let Some(refusal) = error.downcast_ref::<crate::state::StateStorageAdmissionError>() {
+        V2RunnerError::CandidateBuild(super::v2_candidate::CandidateError::LocalStateAdmission(
+            crate::state::StateBlockStartError::Storage(refusal.clone()),
+        ))
+    } else if let Some(refusal) = error.downcast_ref::<crate::state::EvidencePreparationError>() {
+        V2RunnerError::CandidateBuild(
+            super::v2_candidate::CandidateError::LocalEvidencePreparation(refusal.clone()),
+        )
+    } else {
+        V2RunnerError::Candidate(error.to_string())
+    }
 }
 fn adapter_fingerprints(
     build_identity: crate::release_identity::BuildIdentity,
@@ -3414,7 +3463,14 @@ fn dispatch_lane_work_effect_from_snapshot(
             services.post_native_amx_with_reply_routes(peer, reply_routes, message);
         }
         V2LaneWorkEffect::PostLaneDrainVote { peer, vote } => {
-            services.post_lane_drain_vote(peer, vote);
+            let ownership = services
+                .post_lane_drain_vote(peer.clone(), vote.clone())
+                .map_err(V2RunnerError::Service)?;
+            if ownership == ExactFanoutOwnership::SourceRetained {
+                return Ok(LaneWorkEffectDispatch::SourceRetained(
+                    V2LaneWorkEffect::PostLaneDrainVote { peer, vote },
+                ));
+            }
         }
         V2LaneWorkEffect::BroadcastMerge(signature) => {
             services.broadcast_merge_to_voters(signature);
@@ -3485,27 +3541,34 @@ include!("v2_runner/merge_sidecar_recovery.rs");
 // turn prevents an expensive authenticated backlog from starving those owners.
 const OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST: usize = 1;
 
-/// The only relay authority retained by the Native runner is QueuePlan admission.
+/// Route each bounded relay occurrence to its one process-lived owner.
 /// Legacy lane certificates cannot construct another lane safety owner.
 fn drain_lane_relay_prefix(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
+    mut accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
     let mut drained_any = false;
     for _ in 0..limit.max(1) {
         let Ok(message) = lane_relay_rx.try_recv() else {
             break;
         };
-        if let super::LaneRelayMessage::QueuePlanAdmissionCertificate {
-            sender,
-            certificate,
-        } = message
-        {
-            queue_plan.accept_certificate(sender, certificate, active_view)?;
-        } else {
-            iroha_logger::debug!("retired legacy lane relay envelope");
+        match message {
+            super::LaneRelayMessage::QueuePlanAdmissionCertificate {
+                sender,
+                certificate,
+            } => {
+                queue_plan.accept_certificate(sender, certificate, active_view)?;
+            }
+            super::LaneRelayMessage::DrainVote { sender, vote } => {
+                accept_drain_vote(sender, vote)?;
+            }
+            _ => iroha_logger::debug!("retired legacy lane relay envelope"),
         }
         drained_any = true;
     }
@@ -3516,12 +3579,17 @@ fn drain_lane_relay_ingress(
     lane_relay_rx: &std::sync::mpsc::Receiver<super::LaneRelayMessage>,
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
+    accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
     drain_lane_relay_prefix(
         lane_relay_rx,
         queue_plan,
         active_view,
         OPEN_HEIGHT_LANE_RELAY_SERVICE_BURST,
+        accept_drain_vote,
     )
 }
 
@@ -3530,8 +3598,18 @@ fn drain_finalized_lane_relay_prefix(
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
+    accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
-    drain_lane_relay_prefix(lane_relay_rx, queue_plan, active_view, limit)
+    drain_lane_relay_prefix(
+        lane_relay_rx,
+        queue_plan,
+        active_view,
+        limit,
+        accept_drain_vote,
+    )
 }
 
 #[cfg(test)]
@@ -3540,8 +3618,18 @@ pub(in crate::sumeragi) fn drain_finalized_lane_relay_prefix_for_test(
     queue_plan: &mut QueuePlanAdmissionOwner,
     active_view: wire::View,
     limit: usize,
+    accept_drain_vote: impl FnMut(
+        PeerId,
+        crate::lane_consensus::LaneDrainVoteV1,
+    ) -> Result<(), V2LaneWorkError>,
 ) -> Result<bool, V2LaneWorkError> {
-    drain_finalized_lane_relay_prefix(lane_relay_rx, queue_plan, active_view, limit)
+    drain_finalized_lane_relay_prefix(
+        lane_relay_rx,
+        queue_plan,
+        active_view,
+        limit,
+        accept_drain_vote,
+    )
 }
 /// Fail-closed live-runner error.
 #[derive(Debug, Error)]
@@ -3552,7 +3640,7 @@ pub(super) enum V2RunnerError {
     Recovery(#[from] super::v2_recovery::V2RecoveryError),
     /// Runner/status activation ownership was inconsistent.
     #[error(transparent)]
-    SuccessorActivation(#[from] super::status::V2SuccessorActivationError),
+    SuccessorActivation(#[from] super::v2_status::V2SuccessorActivationError),
     /// Successor construction returned authority for another same-height predecessor.
     #[error(
         "Sumeragi v2 successor predecessor authority changed during construction: expected {expected:?}, actual {actual:?}"

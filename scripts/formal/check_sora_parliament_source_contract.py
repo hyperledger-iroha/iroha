@@ -4532,7 +4532,7 @@ def main() -> int:
     workflow = read(workflow_path)
     formal_job = section(
         workflow,
-        "  sumeragi_formal:\n",
+        "  formal_models:\n",
         "\n  nexus_cross_dataspace_localnet:\n",
         workflow_path,
     )

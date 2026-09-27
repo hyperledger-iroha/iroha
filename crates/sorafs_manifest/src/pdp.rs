@@ -2196,6 +2196,12 @@ mod tests {
             compute_advert_body_digest(&advert_body).expect("advert body digest");
         let mut envelope = ProviderAdmissionEnvelopeV1 {
             version: crate::PROVIDER_ADMISSION_ENVELOPE_VERSION_V1,
+            network_id: [0xA1; 32],
+            policy_id: [0xC1; 32],
+            policy_revision: 1,
+            policy_digest: [0xD1; 32],
+            admission_revision: 1,
+            expected_current_event_digest: None,
             proposal,
             proposal_digest,
             advert_body,

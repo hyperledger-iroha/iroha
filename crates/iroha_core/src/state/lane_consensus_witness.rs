@@ -10,7 +10,7 @@ use super::{
     lane_consensus_commitment::LaneConsensusContextsCommitmentV1,
     lane_consensus_state::LANE_CONSENSUS_CONTEXTS_WITNESS_KEY,
 };
-use crate::sumeragi::smt::{KvPair, compute_post_state_root};
+use crate::exec_witness::smt::{KvPair, compute_post_state_root};
 
 /// Canonical fixed-key sparse-Merkle proof retained with global finality.
 ///

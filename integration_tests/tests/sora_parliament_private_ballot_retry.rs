@@ -406,10 +406,8 @@ async fn assert_private_retry_state_and_restore(
         move || client.get_sumeragi_status()
     })
     .await?;
-    status
-        .validate()
-        .map_err(|error| eyre!("invalid restored private retry status: {error}"))?;
-    assert!(!status.restart_required);
+    assert!(!status.is_halted());
+    assert!(status.applied_height <= status.committed_height);
     assert_governed_contract_absent(
         &peer.client(),
         address,

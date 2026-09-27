@@ -4,19 +4,20 @@
 //! evidence without creating a digest cycle. This module keeps the phases explicit: the private
 //! candidate relation binds request/state/outbox commitments, hardware commits that exact
 //! candidate once, and this terminal-authorization relation recursively verifies the candidate,
-//! postcommit terminal Guard, and a complete claim for all original SHA jobs. Their carried
-//! histories are folded into the final accumulator, and both deferred audits bind the same
-//! claim carrier tail. Only an unlinkable projection is exposed by the final proof.
+//! postcommit terminal Guard, and a complete claim for 26 original plus six outgoing SHA jobs.
+//! Their carried histories are folded into the final accumulator, and both deferred audits bind
+//! the same claim carrier tail. Only an unlinkable projection is exposed by the final proof.
 
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_CREDIT_ID_DOMAIN_V1, KAGEMUSHA_PAYMENT_OUTBOX_MIN_BYTES_V1,
     KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_OUTBOX_MIN_BYTES_V1,
     KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1, KAGEMUSHA_WIRE_VERSION_V1,
-    KagemushaCommitCertificateV1, KagemushaCommitEvidenceV1, KagemushaHardwareCredentialV1,
-    KagemushaHardwarePlatformClassV1, KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1,
-    KagemushaOperationKindV1, KagemushaOutboxReservationV1, KagemushaPaymentOutputV1,
-    KagemushaPaymentRequestV1, kagemusha_asset_identity_digest_v1,
-    kagemusha_payment_body_digest_from_digests_v1, kagemusha_prepared_transfer_digest_v1,
+    KagemushaAppAttestHardwareTransitionSelectionV1, KagemushaCommitCertificateV1,
+    KagemushaCommitEvidenceV1, KagemushaHardwareCredentialV1, KagemushaHardwarePlatformClassV1,
+    KagemushaHardwareProfileV1, KagemushaLifecycleBindingV1, KagemushaOperationKindV1,
+    KagemushaOutboxReservationV1, KagemushaPaymentOutputV1, KagemushaPaymentRequestV1,
+    kagemusha_asset_identity_digest_v1, kagemusha_payment_body_digest_from_digests_v1,
+    kagemusha_prepared_transfer_digest_v1,
 };
 use iroha_data_model::nexus::AxtAssetIncarnationV1;
 use sha2::{Digest as _, Sha256};
@@ -70,6 +71,11 @@ use super::{
         constant_bytes, constrain_guard_bundle_semantics_v1, digest_limbs_assigned, hash,
     },
     mint_hash_claim_fold::KAGEMUSHA_MINT_HASH_CLAIM_CARRIER_BINDING_COUNT_V1,
+    terminal_body_commitment::constrain_apple_signed_terminal_body_commitment_v1,
+    terminal_durable_commitments::{
+        KagemushaAuthenticatedTerminalRecoveryOpeningV1,
+        constrain_outgoing_terminal_recovery_opening_v1,
+    },
     typed_sha_consumer::{
         KagemushaRecursiveHashClaimParityWitnessV1, constrain_recursive_hash_claim_v1,
         validate_recursive_hash_claim_v1,
@@ -93,7 +99,7 @@ use iroha_data_model::kagemusha::{
     KAGEMUSHA_HARDWARE_CREDENTIAL_ID_PREIMAGE_FIELD_RANGES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_BYTES_V1,
     KAGEMUSHA_HARDWARE_PROFILE_ID_PREIMAGE_FIELD_RANGES_V1,
-    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+    KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaHardwareSelectionSigningLayoutV1,
     kagemusha_hardware_credential_id_preimage_layout_v1,
     kagemusha_hardware_profile_id_preimage_layout_v1,
 };
@@ -121,6 +127,19 @@ fn require_terminal_assertion_fold_v1(
         Err("Kagemusha ordinary-app terminal assertion fold is unavailable".to_owned())
     } else {
         Ok(())
+    }
+}
+
+fn require_terminal_apple_selection_shape_v1(
+    platform_class: KagemushaHardwarePlatformClassV1,
+    has_apple_selection: bool,
+) -> Result<(), String> {
+    match (platform_class, has_apple_selection) {
+        (KagemushaHardwarePlatformClassV1::AppleAppAttest, false) => {
+            Err("terminal Apple assertion selection is missing".to_owned())
+        }
+        (KagemushaHardwarePlatformClassV1::AppleAppAttest, true) | (_, false) => Ok(()),
+        (_, true) => Err("non-Apple terminal cannot carry an App Attest selection".to_owned()),
     }
 }
 
@@ -450,15 +469,20 @@ pub(crate) struct KagemushaTerminalAuthorizationPrivateTransitionV1 {
     pub(crate) terminal_payload_digest: DigestV1,
     /// Exact receiver opening for SendSplit; absent for redemption.
     pub(crate) send: Option<KagemushaTerminalSendPrivateV1>,
-    /// Exact prepared send streams retained by the producer. These are private witness bytes,
-    /// not hardware attestation or proof authority until opened against State's SHA carriers.
-    pub(crate) send_sealed_streams: Option<[Vec<u8>; 2]>,
+    /// Exact prepared outgoing streams retained by the producer for SendSplit or RedeemSplit.
+    /// These are private witness bytes, not hardware attestation or proof authority until opened
+    /// against State's SHA carriers.
+    pub(crate) outgoing_sealed_streams: Option<[Vec<u8>; 2]>,
     pub(crate) journal_revision_before: u128,
     pub(crate) journal_revision_after: u128,
     pub(crate) authorization_counter_before: u128,
     pub(crate) authorization_counter_after: u128,
     pub(crate) hardware_profile: KagemushaHardwareProfileV1,
     pub(crate) hardware_credential: KagemushaHardwareCredentialV1,
+    /// Original Apple assertion and its canonical signed selection. The body field is bound
+    /// to the SHA-derived terminal body inside both terminal parities. The complete assertion
+    /// and issuer fold remains fail-closed until it is part of this same relation.
+    pub(crate) apple_selection: Option<KagemushaAppAttestHardwareTransitionSelectionV1>,
 }
 
 /// Exact private receiver context authenticated by a postcommit send.
@@ -470,27 +494,109 @@ pub(crate) struct KagemushaTerminalSendPrivateV1 {
     pub(crate) encrypted_credit_digest: DigestV1,
 }
 
-/// Reject malformed optional producer bytes without granting them proof authority.
+/// Require well-shaped outgoing producer bytes without granting them proof authority.
 ///
-/// Existing testnet admission may omit this witness. When supplied, the dormant terminal SHA
-/// opening must still authenticate every active byte and length against the verified State
-/// carriers before it can be used for outgoing monetary authorization.
-fn validate_send_sealed_stream_witness_shape_v1(
-    send: bool,
+/// The complete terminal SHA opening authenticates every active byte and length against the
+/// verified State carriers. No outgoing proof path may omit this witness.
+fn validate_outgoing_sealed_stream_witness_shape_v1(
+    operation: KagemushaOperationV1,
     streams: Option<&[Vec<u8>; 2]>,
 ) -> Result<(), String> {
-    let Some(streams) = streams else {
-        return Ok(());
-    };
-    if !send
-        || streams[0].is_empty()
+    if !matches!(
+        operation,
+        KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
+    ) {
+        return Err("terminal sealed-byte witness requires an outgoing operation".to_owned());
+    }
+    let streams = streams
+        .ok_or_else(|| "terminal outgoing sealed-byte producer witness is missing".to_owned())?;
+    if streams[0].is_empty()
         || streams[0].len() > KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize
         || streams[1].is_empty()
         || streams[1].len() > KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize
     {
-        return Err("terminal send sealed-byte producer witness has invalid shape".to_owned());
+        return Err("terminal outgoing sealed-byte producer witness has invalid shape".to_owned());
     }
     Ok(())
+}
+
+/// Copy-bind the original App Attest subject's terminal-body field to the body derived from
+/// the recursively verified candidate, terminal Guard, and complete outgoing SHA opening.
+/// Returning the same assigned subject cells keeps the future assertion equation from using
+/// a detached second copy. Ordinary-app monetary admission remains closed until that equation
+/// and issuer enrollment are folded into both terminal parities. Every platform uses the same
+/// fixed-width assignment and equality gates so one authenticated terminal key has one shape.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(super) fn constrain_terminal_apple_signed_body_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    platform_class: KagemushaHardwarePlatformClassV1,
+    canonical_s: Option<&[u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES]>,
+    non_apple_subject: &[u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    derived_body: &[PastaSha256ByteV1<F>; 32],
+) -> Result<[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES], String> {
+    require_terminal_apple_selection_shape_v1(platform_class, canonical_s.is_some())?;
+    let subject = canonical_s.unwrap_or(non_apple_subject);
+    let assigned =
+        std::array::from_fn(|index| ctx.load_witness(F::from(u64::from(subject[index]))));
+    constrain_apple_signed_terminal_body_commitment_v1(ctx, range, &assigned, derived_body);
+    Ok(assigned)
+}
+
+/// Bind the signed Apple subject to the release and credential already proved by this terminal
+/// relation. OEM profiles supply a synthetic subject with the same source values, so these exact
+/// equalities have one fixed circuit shape and no witness-controlled enable bit.
+#[cfg(feature = "zk-halo2-ipa")]
+struct TerminalAppleSignedContextV1<F: KagemushaPoseidonFieldV1> {
+    release: [AssignedValue<F>; 2],
+    profile: [AssignedValue<F>; 2],
+    candidate: [AssignedValue<F>; 2],
+    credential_id: [PastaSha256ByteV1<F>; 32],
+    app_policy: [PastaSha256ByteV1<F>; 32],
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+fn constrain_terminal_apple_signed_context_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut Context<F>,
+    range: &RangeChip<F>,
+    signed_subject: &[AssignedValue<F>; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES],
+    sources: TerminalAppleSignedContextV1<F>,
+) {
+    use KagemushaHardwareSelectionSigningLayoutV1 as Layout;
+
+    let fields = [
+        (
+            Layout::RELEASE_ID,
+            assigned_limbs_to_bytes_v1(ctx, range, sources.release),
+        ),
+        (
+            Layout::HARDWARE_PROFILE_ID,
+            assigned_limbs_to_bytes_v1(ctx, range, sources.profile),
+        ),
+        (
+            Layout::CANDIDATE_ENVELOPE_DIGEST,
+            assigned_limbs_to_bytes_v1(ctx, range, sources.candidate),
+        ),
+        (Layout::CREDENTIAL_ID, sources.credential_id.to_vec()),
+        (Layout::APP_POLICY_DIGEST, sources.app_policy.to_vec()),
+    ];
+    for (field, expected) in fields {
+        assert_eq!(
+            field.len(),
+            expected.len(),
+            "signed terminal context field width changed"
+        );
+        for (signed, expected) in signed_subject[field].iter().zip(expected) {
+            // Every expected byte carries a Range8 or bit-decomposition provenance. Equality
+            // therefore also range-constrains this exact signed-subject byte without a second
+            // lookup, preserving the terminal key's row budget.
+            let difference =
+                range
+                    .gate()
+                    .sub(ctx, QuantumCell::Existing(*signed), expected.quantum_cell());
+            range.gate().assert_is_const(ctx, &difference, &F::ZERO);
+        }
+    }
 }
 
 impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
@@ -499,9 +605,9 @@ impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
         public: &KagemushaTerminalAuthorizationPublicInputsV1,
     ) -> Result<(), String> {
         public.validate()?;
-        validate_send_sealed_stream_witness_shape_v1(
-            self.send.is_some(),
-            self.send_sealed_streams.as_ref(),
+        validate_outgoing_sealed_stream_witness_shape_v1(
+            public.operation,
+            self.outgoing_sealed_streams.as_ref(),
         )?;
         self.lifecycle
             .validate()
@@ -517,6 +623,10 @@ impl KagemushaTerminalAuthorizationPrivateTransitionV1 {
             .map_err(|error| {
                 format!("invalid terminal-authorization hardware credential: {error}")
             })?;
+        require_terminal_apple_selection_shape_v1(
+            self.hardware_profile.platform_class,
+            self.apple_selection.is_some(),
+        )?;
         require_terminal_assertion_fold_v1(self.hardware_profile.platform_class)?;
         let lifecycle_digest = self
             .lifecycle
@@ -2695,9 +2805,9 @@ where
         public_cells,
         history_cells,
         assigned_terminal_guard,
-        prepared_source_cells: mut prepared_source_cells,
+        mut prepared_source_cells,
         candidate_instances: assigned_candidate_instances,
-        sha_jobs,
+        mut sha_jobs,
     } = terminal_semantic_pipeline::assign_terminal_semantic_pipeline_v1(
         &mut builder,
         &range,
@@ -2891,14 +3001,103 @@ where
         );
     }
 
-    // Authenticate the entire original queue before consuming it. Fixed-shape inactive
-    // transcripts remain part of all 26 jobs; there is no optional inline-SHA fallback.
-    // TODO: consume the prepared send sealed-byte witness and release-pinned redemption
-    // manifest source, then replan the claim and generator as one fixed-shape change for the two
-    // bounded stream hashes, preparation-ID transcript, and durable journal/recovery/body
-    // openings. Qualify full 2048/512-byte capacities at k=16 in both parities first.
-    if sha_jobs.claim_jobs()?.len() != 26 {
-        return Err("terminal authorization requires the complete 26-job SHA queue".to_owned());
+    // Only the recursively verified State and Guard cells can supply the prepared opening.
+    // The exact producer bytes remain private and become authoritative only when the six
+    // appended SHA jobs are bound to this same typed recursive claim and its complete history.
+    let outgoing_opening =
+        KagemushaAuthenticatedTerminalRecoveryOpeningV1::from_verified_assigned_sources_v1(
+            prepared_source_cells,
+            &assigned_terminal_guard,
+            witness.private_transition.outgoing_sealed_streams.as_ref(),
+        )?;
+    let derived_body = constrain_outgoing_terminal_recovery_opening_v1(
+        loader.ctx_mut().main(),
+        &range,
+        &mut sha_jobs,
+        Some(&outgoing_opening),
+    )?;
+    let apple_signed_s: Option<[u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES]> =
+        witness
+            .private_transition
+            .apple_selection
+            .as_ref()
+            .map(|selection| {
+                selection
+                    .subject
+                    .canonical_signing_bytes()
+                    .map_err(|error| format!("invalid terminal Apple selection subject: {error}"))?
+                    .try_into()
+                    .map_err(|_| "terminal Apple selection has wrong signed width".to_owned())
+            })
+            .transpose()?;
+    let mut non_apple_subject = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+    for (field, digest) in [
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::RELEASE_ID,
+            &public.release_id,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::HARDWARE_PROFILE_ID,
+            &public.hardware_profile_id,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::CANDIDATE_ENVELOPE_DIGEST,
+            &public.candidate_envelope_digest,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::CREDENTIAL_ID,
+            &witness.private_transition.hardware_credential.credential_id,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::APP_POLICY_DIGEST,
+            &witness
+                .private_transition
+                .hardware_credential
+                .app_policy_binding_digest,
+        ),
+        (
+            KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT,
+            &witness
+                .private_transition
+                .commit_certificate
+                .hardware_terminal_commitment,
+        ),
+    ] {
+        non_apple_subject[field].copy_from_slice(digest);
+    }
+    let apple_signed_subject = constrain_terminal_apple_signed_body_v1(
+        loader.ctx_mut().main(),
+        &range,
+        witness.private_transition.hardware_profile.platform_class,
+        apple_signed_s.as_ref(),
+        &non_apple_subject,
+        &derived_body,
+    )?;
+    constrain_terminal_apple_signed_context_v1(
+        loader.ctx_mut().main(),
+        &range,
+        &apple_signed_subject,
+        TerminalAppleSignedContextV1 {
+            release: [
+                public_cells[public_instance::RELEASE_LO],
+                public_cells[public_instance::RELEASE_LO + 1],
+            ],
+            profile: [
+                public_cells[public_instance::HARDWARE_PROFILE_LO],
+                public_cells[public_instance::HARDWARE_PROFILE_LO + 1],
+            ],
+            candidate: [
+                public_cells[public_instance::CANDIDATE_LO],
+                public_cells[public_instance::CANDIDATE_LO + 1],
+            ],
+            credential_id: assigned_terminal_guard.credential_issuance_digests[0],
+            app_policy: assigned_terminal_guard.credential_app_policy_binding_digests[0],
+        },
+    );
+    // TODO: Fold the original assertion equation and issuer enrollment using these exact
+    // assigned subject cells and bind its remaining fields before opening ordinary-app admission.
+    if sha_jobs.typed_claim_jobs()?.len() != 32 {
+        return Err("terminal authorization requires the complete 32-job SHA queue".to_owned());
     }
     let (complete, claim_tail, claim_current_end) = constrain_recursive_hash_claim_v1(
         &loader,
@@ -3975,7 +4174,20 @@ pub(super) struct KagemushaCandidatePreparationTranscriptCellsV1<F: KagemushaPos
 }
 
 #[cfg(feature = "zk-halo2-ipa")]
-/// Existing terminal relation cells available to a future prepared-intent opening.
+/// Terminal values retained from their assigned SHA and certificate cells.
+///
+/// These cells are not an outgoing authorization on their own. The complete body opening binds
+/// them to the verified State and Guard proofs, durable SHA outputs, and typed SHA claim.
+#[derive(Clone, Copy)]
+pub(super) struct KagemushaTerminalDerivedCommitCellsV1<F: KagemushaPoseidonFieldV1> {
+    pub(super) transition_nullifier: [AssignedValue<F>; 2],
+    pub(super) evidence_tag: AssignedValue<F>,
+    pub(super) evidence_commitment: [AssignedValue<F>; 2],
+    pub(super) hardware_terminal_commitment: [AssignedValue<F>; 2],
+}
+
+#[cfg(feature = "zk-halo2-ipa")]
+/// Terminal relation cells retained for the complete prepared-intent opening.
 ///
 /// These are derived in the circuit and linked to the recursively verified candidate and Guard
 /// on the terminal branch. The State candidate authenticates only the carried preparation ID
@@ -3983,6 +4195,8 @@ pub(super) struct KagemushaCandidatePreparationTranscriptCellsV1<F: KagemushaPos
 #[derive(Clone, Copy)]
 pub(super) struct KagemushaTerminalPreparedSourceCellsV1<F: KagemushaPoseidonFieldV1> {
     pub(super) terminal_branch: AssignedValue<F>,
+    /// SHA-derived and certificate-linked terminal cells, retained without granting authority.
+    pub(super) derived_commit_cells: Option<KagemushaTerminalDerivedCommitCellsV1<F>>,
     /// Only a complete in-circuit opening of the carried pre-proof transcript may populate this.
     pub(super) verified_preparation_id: Option<[AssignedValue<F>; 2]>,
     /// State's SHA-derived transition digest, installed only after the candidate proof and
@@ -3997,6 +4211,11 @@ pub(super) struct KagemushaTerminalPreparedSourceCellsV1<F: KagemushaPoseidonFie
     /// Transcript fields exported from the same verified candidate column as the carriers.
     pub(super) candidate_preparation_transcript:
         Option<KagemushaCandidatePreparationTranscriptCellsV1<F>>,
+    /// Hardware profile from the recursively verified State candidate, retained separately
+    /// from the terminal and Guard fields for the terminal-body equality relation.
+    pub(super) candidate_hardware_profile_id: Option<[AssignedValue<F>; 2]>,
+    /// Policy epoch from that same recursively verified State candidate.
+    pub(super) candidate_policy_epoch: Option<AssignedValue<F>>,
     /// Terminal request digest, constrained by the send opening and zero on redemption.
     pub(super) request_digest: [AssignedValue<F>; 2],
     /// Zero for send; for redemption the terminal public instance is fixed by the verifier's
@@ -4026,6 +4245,8 @@ fn install_verified_candidate_semantic_carriers_v1<F: KagemushaPoseidonFieldV1>(
         || sources.candidate_preparation_id_carrier.is_some()
         || sources.candidate_stream_digest_carriers.is_some()
         || sources.candidate_preparation_transcript.is_some()
+        || sources.candidate_hardware_profile_id.is_some()
+        || sources.candidate_policy_epoch.is_some()
     {
         return Err("verified State semantic carriers are already installed".to_owned());
     }
@@ -4062,6 +4283,9 @@ fn install_verified_candidate_semantic_carriers_v1<F: KagemushaPoseidonFieldV1>(
             lifecycle_binding_digest: digest(state_relation::public_instance::LIFECYCLE_LO),
             normalized_guard_statement_digest: digest(state_relation::public_instance::GUARD_LO),
         });
+    sources.candidate_hardware_profile_id =
+        Some(digest(state_relation::public_instance::HARDWARE_PROFILE_LO));
+    sources.candidate_policy_epoch = Some(candidate[state_relation::public_instance::POLICY_EPOCH]);
     Ok(())
 }
 
@@ -4265,7 +4489,9 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         ]
         .concat(),
     )?;
-    for (actual, expected) in digest_limbs_assigned(ctx, &derived_transition_nullifier)
+    let derived_transition_nullifier_limbs =
+        digest_limbs_assigned(ctx, &derived_transition_nullifier);
+    for (actual, expected) in derived_transition_nullifier_limbs
         .into_iter()
         .zip(&public[public_instance::TRANSITION_NULLIFIER_LO..][..2])
     {
@@ -4407,7 +4633,8 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
         evidence_commitment_v1(private.commit_certificate.commit_evidence),
     );
     let certificate_evidence_limbs = digest_limbs_assigned(ctx, &certificate_evidence_commitment);
-    for (actual, expected) in digest_limbs_assigned(ctx, &evidence_commitment)
+    let derived_evidence_commitment_limbs = digest_limbs_assigned(ctx, &evidence_commitment);
+    for (actual, expected) in derived_evidence_commitment_limbs
         .into_iter()
         .zip(certificate_evidence_limbs)
     {
@@ -4775,15 +5002,22 @@ fn constrain_terminal_commit_semantics_v1<F: KagemushaPoseidonFieldV1>(
     }
     Ok(KagemushaTerminalPreparedSourceCellsV1 {
         terminal_branch,
-        // TODO: consume the prepared send sealed-byte witness and install the dormant exact
-        // preparation transcript and two stream SHA
-        // openings in the complete typed claim. The 93-cell State prefix only carries an ID;
-        // the live fold cannot promote it to a verified opening.
+        derived_commit_cells: Some(KagemushaTerminalDerivedCommitCellsV1 {
+            transition_nullifier: derived_transition_nullifier_limbs,
+            evidence_tag: evidence_kind.value,
+            evidence_commitment: derived_evidence_commitment_limbs,
+            hardware_terminal_commitment: hardware_terminal_limbs,
+        }),
+        // The State prefix carries only a preparation ID. Keep it unverified here; after the
+        // nested State proof is checked, the six-job opening SHA-verifies its exact transcript
+        // and sealed bytes before this ID can authorize the durable terminal commitments.
         verified_preparation_id: None,
         verified_state_transition_digest: None,
         candidate_preparation_id_carrier: None,
         candidate_stream_digest_carriers: None,
         candidate_preparation_transcript: None,
+        candidate_hardware_profile_id: None,
+        candidate_policy_epoch: None,
         request_digest: [
             public[public_instance::REQUEST_LO],
             public[public_instance::REQUEST_LO + 1],
@@ -4882,11 +5116,32 @@ mod tests {
     }
 
     #[test]
-    fn optional_send_sealed_byte_witness_rejects_bad_shape_without_changing_admission() {
+    fn outgoing_sealed_byte_witness_is_required_for_both_outgoing_operations() {
+        use super::KagemushaOperationV1::{Bootstrap, RedeemSplit, SendSplit};
+
         let valid = [vec![0x11], vec![0x22]];
-        assert!(super::validate_send_sealed_stream_witness_shape_v1(true, None).is_ok());
-        assert!(super::validate_send_sealed_stream_witness_shape_v1(false, None).is_ok());
-        assert!(super::validate_send_sealed_stream_witness_shape_v1(true, Some(&valid)).is_ok());
+        let maximum = [
+            vec![0x11; super::KAGEMUSHA_SEALED_TRANSITION_INPUTS_MAX_BYTES_V1 as usize],
+            vec![0x22; super::KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize],
+        ];
+        for operation in [SendSplit, RedeemSplit] {
+            assert_eq!(
+                super::validate_outgoing_sealed_stream_witness_shape_v1(operation, None),
+                Err("terminal outgoing sealed-byte producer witness is missing".to_owned())
+            );
+            assert!(
+                super::validate_outgoing_sealed_stream_witness_shape_v1(operation, Some(&valid))
+                    .is_ok()
+            );
+            assert!(
+                super::validate_outgoing_sealed_stream_witness_shape_v1(operation, Some(&maximum))
+                    .is_ok()
+            );
+        }
+        assert_eq!(
+            super::validate_outgoing_sealed_stream_witness_shape_v1(Bootstrap, None),
+            Err("terminal sealed-byte witness requires an outgoing operation".to_owned())
+        );
         let invalid = [
             [Vec::new(), vec![0x22]],
             [vec![0x11], Vec::new()],
@@ -4899,16 +5154,250 @@ mod tests {
                 vec![0x22; super::KAGEMUSHA_RECOVERY_SEEDS_MAX_BYTES_V1 as usize + 1],
             ],
         ];
-        for streams in &invalid {
-            assert_eq!(
-                super::validate_send_sealed_stream_witness_shape_v1(true, Some(streams)),
-                Err("terminal send sealed-byte producer witness has invalid shape".to_owned())
-            );
+        let error =
+            Err("terminal outgoing sealed-byte producer witness has invalid shape".to_owned());
+        for operation in [SendSplit, RedeemSplit] {
+            for streams in &invalid {
+                assert_eq!(
+                    super::validate_outgoing_sealed_stream_witness_shape_v1(
+                        operation,
+                        Some(streams)
+                    ),
+                    error
+                );
+            }
         }
         assert_eq!(
-            super::validate_send_sealed_stream_witness_shape_v1(false, Some(&valid)),
-            Err("terminal send sealed-byte producer witness has invalid shape".to_owned())
+            super::validate_outgoing_sealed_stream_witness_shape_v1(Bootstrap, Some(&valid)),
+            Err("terminal sealed-byte witness requires an outgoing operation".to_owned())
         );
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn terminal_apple_selection_class_is_checked_before_the_closed_assertion_gate() {
+        use iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1;
+
+        assert!(
+            super::require_terminal_apple_selection_shape_v1(
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                false,
+            )
+            .unwrap_err()
+            .contains("missing")
+        );
+        assert!(
+            super::require_terminal_apple_selection_shape_v1(
+                KagemushaHardwarePlatformClassV1::AndroidOemService,
+                true,
+            )
+            .unwrap_err()
+            .contains("non-Apple")
+        );
+        super::require_terminal_apple_selection_shape_v1(
+            KagemushaHardwarePlatformClassV1::AndroidOemService,
+            false,
+        )
+        .expect("OEM terminal carries no Apple selection");
+        super::require_terminal_apple_selection_shape_v1(
+            KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            true,
+        )
+        .expect("Apple terminal carries an original assertion selection");
+        assert!(
+            super::require_terminal_assertion_fold_v1(
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+            )
+            .unwrap_err()
+            .contains("unavailable")
+        );
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn terminal_apple_signed_release_and_credential_sources_bind_in_both_parities() {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_proofs::{
+            dev::MockProver,
+            halo2curves::pasta::{Fp, Fq},
+        };
+        use iroha_data_model::kagemusha::KagemushaHardwareSelectionSigningLayoutV1 as Layout;
+
+        fn check<F: super::KagemushaPoseidonFieldV1>(changed_offset: Option<usize>) -> bool {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(13)
+                .use_lookup_bits(12)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let release = [0x11; 32];
+            let profile = [0x22; 32];
+            let candidate = [0x33; 32];
+            let credential_id = [0x44; 32];
+            let app_policy = [0x55; 32];
+            let mut subject = [0_u8; Layout::TOTAL_BYTES];
+            for (field, digest) in [
+                (Layout::RELEASE_ID, release),
+                (Layout::HARDWARE_PROFILE_ID, profile),
+                (Layout::CANDIDATE_ENVELOPE_DIGEST, candidate),
+                (Layout::CREDENTIAL_ID, credential_id),
+                (Layout::APP_POLICY_DIGEST, app_policy),
+            ] {
+                subject[field].copy_from_slice(&digest);
+            }
+            if let Some(offset) = changed_offset {
+                subject[offset] ^= 1;
+            }
+            let signed_subject =
+                std::array::from_fn(|index| ctx.load_witness(F::from(u64::from(subject[index]))));
+            let sources = super::TerminalAppleSignedContextV1 {
+                release: crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(release)
+                    .map(|limb| ctx.load_witness(limb)),
+                profile: crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(profile)
+                    .map(|limb| ctx.load_witness(limb)),
+                candidate: crate::zk::kagemusha_v1_poseidon::digest_limbs::<F>(candidate)
+                    .map(|limb| ctx.load_witness(limb)),
+                credential_id: super::constant_bytes(&credential_id)
+                    .try_into()
+                    .expect("fixed credential ID width"),
+                app_policy: super::constant_bytes(&app_policy)
+                    .try_into()
+                    .expect("fixed app policy width"),
+            };
+            super::constrain_terminal_apple_signed_context_v1(
+                ctx,
+                &range,
+                &signed_subject,
+                sources,
+            );
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(9));
+            MockProver::run(13, &builder, vec![Vec::new()])
+                .expect("signed context circuit")
+                .verify()
+                .is_ok()
+        }
+
+        for check_field in [
+            Layout::RELEASE_ID,
+            Layout::HARDWARE_PROFILE_ID,
+            Layout::CANDIDATE_ENVELOPE_DIGEST,
+            Layout::CREDENTIAL_ID,
+            Layout::APP_POLICY_DIGEST,
+        ] {
+            assert!(!check::<Fp>(Some(check_field.start)));
+            assert!(!check::<Fq>(Some(check_field.start)));
+        }
+        assert!(check::<Fp>(None));
+        assert!(check::<Fq>(None));
+    }
+
+    #[cfg(feature = "zk-halo2-ipa")]
+    #[test]
+    fn terminal_apple_body_requires_an_exclusive_signed_subject_in_both_parities() {
+        use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+        use halo2_proofs::{
+            dev::MockProver,
+            halo2curves::pasta::{Fp, Fq},
+        };
+        use iroha_data_model::kagemusha::{
+            KagemushaHardwarePlatformClassV1, KagemushaHardwareSelectionSigningLayoutV1,
+        };
+
+        fn check<F: super::KagemushaPoseidonFieldV1>() {
+            let mut builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(11)
+                .use_lookup_bits(10)
+                .use_instance_columns(1);
+            let range = builder.range_chip();
+            let ctx = builder.main(0);
+            let derived = std::array::from_fn(|_| {
+                let byte = ctx.load_witness(F::from(0x5a));
+                super::PastaSha256ByteV1::range_checked(ctx, &range, byte)
+            });
+            let mut subject = [0_u8; KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES];
+            subject[KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT].fill(0x5a);
+            let non_apple_subject = subject;
+            assert!(
+                super::constrain_terminal_apple_signed_body_v1(
+                    ctx,
+                    &range,
+                    KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                    None,
+                    &non_apple_subject,
+                    &derived,
+                )
+                .unwrap_err()
+                .contains("missing")
+            );
+            assert!(
+                super::constrain_terminal_apple_signed_body_v1(
+                    ctx,
+                    &range,
+                    KagemushaHardwarePlatformClassV1::AndroidOemService,
+                    Some(&subject),
+                    &non_apple_subject,
+                    &derived,
+                )
+                .unwrap_err()
+                .contains("non-Apple")
+            );
+            super::constrain_terminal_apple_signed_body_v1(
+                ctx,
+                &range,
+                KagemushaHardwarePlatformClassV1::AndroidOemService,
+                None,
+                &non_apple_subject,
+                &derived,
+            )
+            .expect("non-Apple fixed-width subject placeholder");
+            super::constrain_terminal_apple_signed_body_v1(
+                ctx,
+                &range,
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                Some(&subject),
+                &non_apple_subject,
+                &derived,
+            )
+            .expect("Apple signed subject body");
+            builder.assigned_instances = vec![Vec::new()];
+            builder.calculate_params(Some(9));
+            MockProver::run(11, &builder, vec![Vec::new()])
+                .expect("terminal Apple body binding circuit")
+                .assert_satisfied();
+
+            let mut changed_builder = BaseCircuitBuilder::<F>::new(false)
+                .use_k(11)
+                .use_lookup_bits(10)
+                .use_instance_columns(1);
+            let changed_range = changed_builder.range_chip();
+            let changed_ctx = changed_builder.main(0);
+            let changed_derived = std::array::from_fn(|_| {
+                let byte = changed_ctx.load_witness(F::from(0x5a));
+                super::PastaSha256ByteV1::range_checked(changed_ctx, &changed_range, byte)
+            });
+            subject[KagemushaHardwareSelectionSigningLayoutV1::TERMINAL_BODY_COMMITMENT.start] ^= 1;
+            super::constrain_terminal_apple_signed_body_v1(
+                changed_ctx,
+                &changed_range,
+                KagemushaHardwarePlatformClassV1::AppleAppAttest,
+                Some(&subject),
+                &non_apple_subject,
+                &changed_derived,
+            )
+            .expect("mutated subject retains canonical field width");
+            changed_builder.assigned_instances = vec![Vec::new()];
+            changed_builder.calculate_params(Some(9));
+            assert!(
+                MockProver::run(11, &changed_builder, vec![Vec::new()])
+                    .expect("mutated terminal Apple body binding circuit")
+                    .verify()
+                    .is_err()
+            );
+        }
+
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[cfg(feature = "zk-halo2-ipa")]
@@ -5158,11 +5647,14 @@ mod tests {
             let digest = [zero; 2];
             let mut sources = super::KagemushaTerminalPreparedSourceCellsV1 {
                 terminal_branch: zero,
+                derived_commit_cells: None,
                 verified_preparation_id: None,
                 verified_state_transition_digest: None,
                 candidate_preparation_id_carrier: None,
                 candidate_stream_digest_carriers: None,
                 candidate_preparation_transcript: None,
+                candidate_hardware_profile_id: None,
+                candidate_policy_epoch: None,
                 request_digest: digest,
                 verified_artifact_manifest_digest: None,
                 candidate_envelope_digest: digest,
@@ -5271,6 +5763,24 @@ mod tests {
                     assert_eq!(*cell.value(), F::from((offset + limb + 1) as u64));
                 }
             }
+            let profile = sources
+                .candidate_hardware_profile_id
+                .expect("candidate hardware profile cells");
+            for (limb, cell) in profile.into_iter().enumerate() {
+                assert_eq!(
+                    *cell.value(),
+                    F::from(
+                        (state_relation::public_instance::HARDWARE_PROFILE_LO + limb + 1) as u64
+                    )
+                );
+            }
+            assert_eq!(
+                *sources
+                    .candidate_policy_epoch
+                    .expect("candidate policy epoch cell")
+                    .value(),
+                F::from((state_relation::public_instance::POLICY_EPOCH + 1) as u64)
+            );
             assert!(
                 super::install_verified_candidate_semantic_carriers_v1(&mut sources, &candidate)
                     .is_err(),
@@ -5452,8 +5962,6 @@ mod tests {
             meta: &mut halo2_proofs::plonk::ConstraintSystem<F>,
             params: Self::Params,
         ) -> Self::Config {
-            use halo2_proofs::plonk::Circuit as _;
-
             let usable_rows = (1_usize << params.k) - super::MINIMUM_UNUSABLE_ROWS;
             let mut base = halo2_base::gates::circuit::BaseConfig::configure(meta, params);
             base.set_usable_rows(usable_rows);
@@ -5472,8 +5980,6 @@ mod tests {
             config: Self::Config,
             mut layouter: impl halo2_proofs::circuit::Layouter<F>,
         ) -> Result<(), halo2_proofs::plonk::Error> {
-            use halo2_proofs::plonk::Circuit as _;
-
             self.builder.synthesize(
                 config.base,
                 layouter.namespace(|| "candidate envelope Base"),
@@ -5697,5 +6203,8 @@ mod terminal_semantic_pipeline;
 
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) use terminal_semantic_pipeline::{
-    TerminalSemanticPlanInputsV1, TerminalSemanticPlanParityV1, plan_terminal_semantic_sha_v1,
+    TerminalSemanticPlanInputsV1, TerminalSemanticPlanParityV1, plan_terminal_outgoing_sha_v1,
 };
+
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+pub(crate) use terminal_semantic_pipeline::plan_terminal_semantic_sha_v1;

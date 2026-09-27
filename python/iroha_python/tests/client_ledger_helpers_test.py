@@ -60,6 +60,7 @@ CANONICAL_GENESIS_HASH = bytes([0xA5]) * 32
 NETWORK_ID = NetworkId.from_bytes(CANONICAL_GENESIS_HASH)
 FEE_PAYMENT = authority_fee_payment(charge_limits=[])
 FAUCET_ASSET_DEFINITION_ID = "4rPeAP6jAjiLVZThZYwwPRBuQagt"
+ALTERNATE_FAUCET_ASSET_DEFINITION_ID = "61CtjvNd9T3THAR65GsMVHr82Bjc"
 FAUCET_AMOUNT = "100"
 VK_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
 TRANSACTION_LOCAL_SIGNING_CONTEXT = LocalSigningContext(NETWORK_ID)
@@ -135,13 +136,13 @@ def test_signed_pipeline_details_is_exact_network_bound_and_one_shot(
     details = client.get_pipeline_transaction_details(
         transaction_hash,
         authority="alice@wonderland",
-        private_key=b"private-key",
+        private_key=bytes([0x51]) * 32,
     )
 
     assert details["hash"] == transaction_hash
     assert captured == {
         "authority": "alice@wonderland",
-        "private_key": b"private-key",
+        "private_key": bytes([0x51]) * 32,
         "network_id": NETWORK_ID,
         "entrypoint_hash": transaction_hash,
     }
@@ -177,7 +178,7 @@ def test_signed_pipeline_details_never_replays_redirects(
         client.get_pipeline_transaction_details(
             "cd" * 32,
             authority="alice@wonderland",
-            private_key=b"private-key",
+            private_key=bytes([0x51]) * 32,
         )
 
     assert len(session.calls) == 1
@@ -274,6 +275,7 @@ def response(
     else:
         result._content = json.dumps(payload).encode("utf-8")
         result.headers["Content-Type"] = "application/json"
+    result._content_consumed = True
     return result
 
 
@@ -424,7 +426,7 @@ def test_prepared_transaction_rejects_hash_without_iroha_marker() -> None:
     prepared = prepared_onboarding()
     prepared["transaction_hash_hex"] = "22" * 32
 
-    with pytest.raises(ValueError, match="lowercase marked 32-byte hash"):
+    with pytest.raises(ValueError, match="canonical Iroha HashOf marker"):
         client_module._copy_prepared_transaction(
             prepared,
             expected_operation="onboarding",
@@ -651,7 +653,7 @@ def test_prepared_transaction_v1_rejects_signed_ordinary_admission(name: str) ->
             "amount": prepared["amount"],
         }
     )
-    with pytest.raises(ValueError, match="requires QueuePlanSynced admission"):
+    with pytest.raises(ValueError, match="invalid prepared transaction context"):
         crypto_module.verify_prepared_transaction_context_v1(
             ordinary_wire,
             network_id,
@@ -1553,7 +1555,7 @@ def test_account_faucet_is_explicit_prepare_then_exact_submit(
 @pytest.mark.parametrize(
     ("field", "substituted", "message"),
     [
-        ("asset_definition_id", "usd#sora", "asset_definition_id differs"),
+        ("asset_definition_id", ALTERNATE_FAUCET_ASSET_DEFINITION_ID, "asset_definition_id differs"),
         ("amount", "101", "amount differs"),
     ],
 )
@@ -1594,7 +1596,7 @@ def test_faucet_prepare_rejects_independent_policy_substitution(
 @pytest.mark.parametrize(
     ("field", "substituted", "message"),
     [
-        ("asset_definition_id", "usd#sora", "asset_definition_id differs"),
+        ("asset_definition_id", ALTERNATE_FAUCET_ASSET_DEFINITION_ID, "asset_definition_id differs"),
         ("amount", "101", "amount differs"),
     ],
 )
@@ -4360,13 +4362,13 @@ def test_zk_instruction_helpers_serialize_full_surface() -> None:
         Instruction.register_zk_asset(
             asset_definition_id,
             vk_unshield={"backend": "halo2/ipa", "name": "vk_unshield"},
-            vk_shield="halo2/ipa:vk_shield",
         ),
         Instruction.verify_proof(proof),
     ]
 
     encoded = [instruction.to_json() for instruction in instructions]
     assert all(payload for payload in encoded)
+    assert "\"vk_shield\"" not in encoded[0]
     assert [Instruction.from_json(payload).to_json() for payload in encoded] == encoded
 
 
@@ -4432,6 +4434,7 @@ def test_retired_generic_confidential_instruction_and_client_surfaces_are_absent
             id="vk-transfer",
         ),
         pytest.param("allow_shield", True, id="allow-shield"),
+        pytest.param("vk_shield", "halo2/ipa:vk_shield", id="retired-shield-role"),
         pytest.param("allow_unshield", True, id="allow-unshield"),
     ),
 )
@@ -4476,13 +4479,8 @@ def test_register_zk_asset_entry_surfaces_reject_transitional_keywords(
 def test_zk_registration_helper_rejects_adversarial_inputs() -> None:
     asset_definition_id = "7MBRDd8cGFBZkFGdDMwV7S6FPwbw"
 
-    with pytest.raises(ValueError, match="vk_shield requires vk_unshield"):
-        Instruction.register_zk_asset(
-            asset_definition_id,
-            vk_shield={"backend": "halo2/ipa", "name": "vk_shield"},
-        )
     with pytest.raises(ValueError, match="backend:name"):
-        Instruction.register_zk_asset(asset_definition_id, vk_shield="halo2/ipa")
+        Instruction.register_zk_asset(asset_definition_id, vk_unshield="halo2/ipa")
 
 
 def test_zk_client_helpers_build_transaction_drafts() -> None:
@@ -4504,7 +4502,6 @@ def test_zk_client_helpers_build_transaction_drafts() -> None:
         private_key_hex="11" * 32,
         asset_definition_id=asset_definition_id,
         vk_unshield="halo2/ipa:vk_unshield",
-        vk_shield="halo2/ipa:vk_shield",
         transaction_metadata={"purpose": "zk-register"},
         wait=False,
     ) == {"hash": "zk-1"}
@@ -4632,7 +4629,7 @@ def test_batch_helpers_reject_invalid_records(
                 "account_id": "adult@is",
                 "permission_name": "CanEnrollFeeSponsorProgram",
             },
-            "invalid account id",
+            "exact canonical I105 account id",
         ),
         (
             {"account_id": account_address(0x49), "permission_name": ""},

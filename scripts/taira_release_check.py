@@ -41,12 +41,12 @@ that separate diagnostic graph never qualifies a release.
 After mandatory startup checks, both scopes run the exact reset-scope CLI test
 and canonical outcome, transaction-details and prepared-account admission Torii
 groups from the completed native graph. They collect failures before the
-production shipping metadata check. The four-peer network fixture then runs
+production shipping build. The four-peer network fixture then runs
 before the remaining independent tests, so an unusable fresh testnet fails
 before the long regression census.
-The shipping check also reruns when an independent checkpoint
-is reused; it supplies no test pass or artifact qualification. Later shipping
-codegen and network execution remain required.
+The required shipping codegen checks every authoritative binary and rejects
+Core/Torii fixture features from its own Cargo artifact stream, including when
+an independent checkpoint is reused. Network execution remains required.
 Full additionally executes advanced Core recovery and proof-production matrices.
 Both scopes require strict runtime catalog readback codecs and the lifecycle HTTP
 endpoint, compiled in the same native graph; no runtime security policy is relaxed.
@@ -400,22 +400,22 @@ if sys.platform == "linux":
 
 
 TORII_STAGES = (("routed onboarding and faucet contracts", (
-    "accounts_faucet::accounts_faucet_accepts_alias_selector_config",
-    "accounts_faucet::accounts_faucet_adds_amount_to_prefunded_accounts",
-    "accounts_faucet::accounts_faucet_allows_repeated_claims_for_same_account",
+    "accounts_faucet::accounts_faucet_prepares_alias_selector_config_but_needs_quorum",
+    "accounts_faucet::accounts_faucet_preserves_prefunded_balance_without_quorum",
+    "accounts_faucet::accounts_faucet_repeated_claims_do_not_spend_without_quorum",
     "accounts_faucet::accounts_faucet_puzzle_exposes_current_anchor",
-    "accounts_faucet::accounts_faucet_puzzle_raises_difficulty_after_recent_claim",
-    "accounts_faucet::accounts_faucet_registers_missing_account_before_transfer",
+    "accounts_faucet::accounts_faucet_puzzle_ignores_uncertified_claim",
+    "accounts_faucet::accounts_faucet_prepares_registration_without_mutating_unfunded_account",
     "accounts_faucet::accounts_faucet_rejects_missing_pow_when_required",
-    "accounts_faucet::accounts_faucet_transfers_starter_balance_to_empty_account",
+    "accounts_faucet::accounts_faucet_prepared_transfer_fails_closed_without_quorum",
     "accounts_faucet::faucet_account_fixture_uses_checked_ed25519_key_generation",
     "accounts_faucet::faucet_block_leader_fixture_uses_checked_bls_key_generation",
-    "accounts_faucet::faucet_prepared_envelope_survives_pow_anchor_aging",
-    "accounts_faucet::faucet_submit_rejects_old_and_tampered_shapes_and_deduplicates_exact_replay",
-    "accounts_onboard::expired_onboarding_envelope_only_reconciles_an_already_known_hash",
+    "accounts_faucet::faucet_prepared_envelope_aging_reaches_quorum_gate",
+    "accounts_faucet::faucet_submit_rejects_old_tampered_and_uncertified_exact_retries",
+    "accounts_onboard::expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed",
     "accounts_onboard::sponsored_onboarding_catalog_contains_plan_prepare_submit_and_readiness",
-    "accounts_onboard::sponsored_onboarding_fresh_receipt_and_submit_work_after_idle_anchor",
-    "accounts_onboard::sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay_safe",
+    "accounts_onboard::sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_but_needs_quorum",
+    "accounts_onboard::sponsored_onboarding_prepared_submit_fails_closed_without_quorum",
     "accounts_onboard::sponsored_onboarding_receipt_binds_exact_network_and_active_signer",
     "accounts_onboard::sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys",
     "accounts_onboard::sponsored_onboarding_rejects_signed_expired_receipt_without_block_progress",
@@ -714,6 +714,13 @@ TORII_UNIT_STAGES = TORII_STARTUP_STAGES + (("public node capabilities and exact
     "openapi::tests::checked_openapi_assets_match_package_authority",
 )),)
 
+TORII_UNIT_STAGES += (("single-operator funding, deployment and proof admission", (
+    "tests_runtime_handlers::single_operator_demo_budgets_admit_batched_tools_and_weighted_deployment",
+    "tests_runtime_handlers::one_external_operator_walk_passes_the_real_preauth_gate",
+    "tests_runtime_handlers::solo_finality_walk_fits_the_proof_egress_budget",
+    "tests_runtime_handlers::solo_heavy_read_waits_for_a_bounded_permit_instead_of_immediate_429",
+)),)
+
 TORII_UNIT_STAGES += (("exact transaction visibility and restricted history isolation", (
     "tests_runtime_handlers::transaction_details_http_sdk_preserves_exact_absence_and_authorization",
     "tests_runtime_handlers::transaction_details_allows_sender_and_batch_recipient_but_rejects_other_accounts",
@@ -768,7 +775,7 @@ TORII_ADMISSION_HANDOFF_STAGES = (("bounded transaction admission and exact rece
     "tests_runtime_handlers::incoming_queue_plan_handoff_expiry_never_creates_journal_claim",
     "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_certificate_and_times_out_indeterminate",
     "tests_runtime_handlers::incoming_queue_plan_handoff_partial_journal_retry_preserves_uncertainty",
-    "tests_runtime_handlers::queue_plan_handoff_after_quorum_resumes_exact_certificate_publication",
+    "tests_runtime_handlers::queue_plan_handoff_after_quorum_retains_exact_input_until_canonical_carrier",
     "tests_runtime_handlers::queue_plan_handoff_expiry_before_aggregation_preserves_partial_journal_uncertainty",
     "tests_runtime_handlers::incoming_queue_plan_expired_retry_preserves_partial_journal_uncertainty",
     "tests_runtime_handlers::incoming_queue_plan_capacity_unavailable_never_creates_a_journal_claim",
@@ -1118,7 +1125,7 @@ CORE_REWARD_ACCOUNTING_STAGES = (("retained reward cursors, unpaid custody and r
     'smartcontracts::isi::staking::tests::reward_obligation_audit_rejects_corrupt_record_keys',
     'smartcontracts::isi::staking::tests::reward_claim_uses_recorded_custody_after_fee_policy_changes',
     'smartcontracts::isi::staking::tests::reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
-    'smartcontracts::isi::staking::tests::reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+    'smartcontracts::isi::staking::tests::reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback',
     'smartcontracts::isi::staking::tests::claim_rewards_transfers_and_marks_epoch',
     'smartcontracts::isi::staking::tests::claim_rewards_defers_dust_without_marking_paid',
     'smartcontracts::isi::staking::tests::claim_rewards_rejects_mismatched_reward_record_rows_without_releasing_reserves',
@@ -1133,6 +1140,10 @@ CORE_MONETARY_AUTHORITY_STAGES = (("exact signed staking and reward monetary aut
     'smartcontracts::isi::staking::tests::genesis_monetary_scope_requires_exact_height_without_npos_parameters',
 )), )
 CORE_ADMISSION_STARTUP_STAGES += CORE_MONETARY_AUTHORITY_STAGES
+
+CORE_ADMISSION_STARTUP_STAGES += (("committed catalog snapshot restart with complete configured baseline", (
+    "state::tests::snapshot_runtime_catalog_restart_authenticates_full_configured_dataspace_baseline",
+)),)
 
 
 CORE_STARTUP_STAGES = CORE_ADMISSION_STARTUP_STAGES + (("authenticated snapshot owner policy and startup custody", (
@@ -1279,6 +1290,7 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
     "tests::genesis_preexecution_preserves_selected_profile_across_threads",
     "tests::validated_genesis_cache_reuses_exact_block_and_network_identity",
     "tests::file_backed_genesis_keeps_fresh_preexecution_validation",
+    "tests::consensus_first_boot_never_reasserts_a_key_after_history_loss",
 )),)
 
 NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure observation", (
@@ -1298,6 +1310,9 @@ NETWORK_OBSERVATION_STAGES = (("signed genesis paid authority and public failure
     "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
 )), ("exact retained-height replay observation", (
     "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
+)), ("native beacon configuration and original signing custody", (
+    "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
+    "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
 )),)
 # Every platform qualifies retained authority generations against the same four
 # independent genesis-anchored chains and full application workload.
@@ -1596,6 +1611,9 @@ CORE_BEACON_STAGES = (('height-bound beacon readiness and actual custody', (
 )), )
 DAEMON_BEACON_STAGES = (('native beacon bootstrap, broker and consumed credential custody', (
     'taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity',
+    'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',
+    'taira_runtime_signer::tests::disposable_broker_rejects_catalog_and_credential_substitution',
+    'taira_runtime_signer::tests::disposable_broker_rejects_unsupported_slots_before_reading_credentials',
     'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_attestation_round_trips_over_authenticated_broker',
     'runtime_provider_broker::protocol::platform::tests::global_beacon_capability_typed_proxy_requalifies_before_and_after_lookup',
     'runtime_provider_broker::protocol::platform::tests::correlated_wrong_beacon_session_id_is_rejected_by_typed_proxy',
@@ -1624,13 +1642,13 @@ TORII_BEACON_STAGES = (('production beacon readiness leaves setup ingress open',
     'tests_runtime_handlers::readiness_rejects_uninitialized_beacon_without_closing_bootstrap_ingress',
 )), )
 STAGES += (("exact-height native lifecycle installation", (
-    'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+    'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
     'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
     'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
 )), )
 TORII_BEACON_STAGES += (("authenticated exact-roster Ordinary lifecycle ingress", (
     'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
-    'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+    'tests_runtime_handlers::ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
     'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
 )), )
@@ -1754,6 +1772,7 @@ def shipping_harnesses(root: Path) -> tuple[str, ...]:
 
 
 STAGES += (("native beacon reset authority, bounded recovery and public input assembly", (
+    'taira_public_reset::host::beacon::tests::beacon_observation_clients_dispatch_with_the_retained_operator_signer',
     'taira_public_reset::host::beacon::tests::signed_beacon_plan_binds_roster_seats_and_exact_final_units',
     'taira_public_reset::host::beacon::tests::beacon_config_projection_changes_only_exact_provider_fields',
     'taira_public_reset::host::beacon::tests::lost_beacon_ceremony_cannot_restart_or_repeat_committed_canaries',
@@ -2125,13 +2144,13 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
         'state::tests::native_candidate_handoff_rejects_foreign_original_state',
         'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
-        'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+        'sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot',
         'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
         'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
         'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
-        'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier',
-        'sumeragi::v2_apply::tests::current_carrier_rejects_unrelated_ordinary_external_transaction',
-        'block::valid::tests::only_exact_height_lifecycle_control_exempts_lane_ownership_coverage',
+        'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_preempts_independent_ordinary_input',
+        'sumeragi::v2_apply::tests::current_carrier_accepts_signed_direct_ordinary_route_without_local_queue',
+        'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
         'state::tests::native_preparation_preserves_local_recorder_conflict',
     )),
     ('native preparation and recorded controls preserve original validation', (
@@ -2150,19 +2169,22 @@ CORE_NATIVE_CONNECTION_STAGES = (
         'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
         'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
     )),
-    ('native service preparation retains original source and archive owners', (
-        'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
-        'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
-        'state::tests::native_service_preparation_index_busy_precedes_execution',
-        'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
-        'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
-        'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
-        'state::tests::native_service_preparation_recorder_conflict_releases_archives',
-        'state::tests::native_service_single_body_store_retries_reuse_original_execution',
-        'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
+    ('native source and recorded execution retain original custody', (
+        'state::tests::native_consumer_source_custody_moves_original_all_route_owners',
+        'state::tests::native_recorded_execution_retains_sources_results_aliases_and_complete_witness',
+        'state::tests::native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer',
+        'state::tests::native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged',
+        'state::tests::native_consumer_source_preparation_retains_exact_recovery_positions_then_stages',
+        'state::tests::native_consumer_source_refuses_authentically_resigned_first_carrier_substitution',
+        'state::tests::native_recorded_execution_nested_recorder_refuses_without_mutation_or_reset',
+        'state::tests::native_recorded_execution_late_failure_discards_hook_effects_and_recorder',
+        'state::tests::native_completed_history_rejects_reapplication_after_second_economic_commit',
     )),
     ('native failure provenance retains local dependencies', (
-        'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+        'sumeragi::v2_apply::tests::native_preparation_errors::local_admission_retains_original_release_and_runner_through_all_native_origins',
+        'sumeragi::v2_apply::tests::native_preparation_errors::npos_application_semantic_error_remains_a_deterministic_rejection',
+        'sumeragi::v2_apply::tests::native_preparation_errors::evidence_preparation_refusal_is_local_and_keeps_its_original_release',
+        'sumeragi::v2_apply::tests::native_preparation_errors::evidence_decode_scope_refusal_is_local_recovery_without_consensus_rejection',
         'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
         'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
         'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
@@ -2357,7 +2379,8 @@ CORE_NATIVE_CONNECTION_STAGES += (('Native process publication and bootstrap iso
     'state::tests::native_driver_owned_capacity_retry_retains_original_payload_and_fair_evidence',
     'state::tests::native_driver_owned_rejection_returns_original_payload_without_poisoning_output',
     'state::tests::native_driver_owned_ingress_without_original_fair_evidence_fails_closed',
-    'state::tests::native_service_production_shell_pool_refuses_before_execution_and_retries',
+    'state::native_execution_resources::tests::source_layouts_reserve_and_refund_exact_original_bytes',
+    'state::native_execution_resources::tests::final_execution_charge_remains_with_source_admission',
     'state::carrier_preparation::journals::decision_binding::tests::original_capture_pool_remains_reserved_through_decision_binding_and_handoff',
     'state::carrier_preparation::journals::decision_binding::tests::other_signed_context_retains_original_capture_owner_for_retry',
     'state::carrier_preparation::journals::decision_binding::physical_publication::tests::retained_publication_facade_refuses_foreign_authority_before_io_and_retries_original_checkpoint',
@@ -2373,8 +2396,6 @@ CORE_NATIVE_CONNECTION_STAGES += (('Native retained local-source completion and 
     'sumeragi::v2_lifecycle_coordinator::work_registry::tests::native_source_validate_decision_drains_recovery_batch_without_releasing_wait',
     'sumeragi::v2_runner::tests::native_source_barrier_preserves_progress_physical_completion_and_dependency_service',
     'sumeragi::v2_lifecycle_coordinator::work_registry::tests::obsolete_sidecar_outcome_is_refused_and_leaves_waiting_row_original',
-    'state::tests::native_service_postpublication_refusal_retains_original_owner_and_notifies_once',
-    'state::tests::native_service_control_only_admission_retains_one_execution_and_publishes',
     'sumeragi::v2_apply::tests::retained_current_genesis_executes_once_and_publishes_original_owner',
 )), )
 
@@ -2517,6 +2538,7 @@ CONCREAD_STAGES = (
         'release::tests::retained_phase_transfer_and_refusal_keep_original_source_without_early_wake',
         'release::tests::retained_phase_unwind_records_actual_release_without_running_waiter',
         'release::tests::retained_observed_release_preserves_poison_predating_normal_cleanup',
+        'release::tests::charged_notification_retains_original_control_through_observers_and_deferred_releases',
     )),
     ('failed native cursor retains cleanup after unlock', (
         'bptree::abandonment_tests::failed_cursor_abandonment_unlocks_without_reopening_publication_authority',
@@ -3050,6 +3072,37 @@ def check_shipping_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int
           "shipping codegen and network qualification remain required", flush=True)
 
 
+PRODUCTION_LIBRARY_FORBIDDEN_FEATURES = {
+    "iroha_core": "iroha-core-tests", "iroha_torii": "test-fixtures",
+}
+
+
+def observe_shipping_production_library(event: dict, observed: set[str]) -> None:
+    """Audit Core/Torii features in the required default-feature build stream.
+
+    Cargo reports fresh and rebuilt compiler artifacts alike. A missing library
+    report is an evidence failure, even when every binary artifact is present.
+    """
+    if event.get("reason") != "compiler-artifact":
+        return
+    target, profile = event.get("target"), event.get("profile")
+    if not isinstance(target, dict) or not isinstance(profile, dict):
+        return
+    name, kinds = target.get("name"), target.get("kind")
+    if (not isinstance(name, str) or name not in PRODUCTION_LIBRARY_FORBIDDEN_FEATURES
+            or not isinstance(kinds, list) or "lib" not in kinds):
+        return
+    if profile.get("test") is not False:
+        raise CheckError("shipping codegen reported non-production library profile: " + name)
+    features = event.get("features")
+    if not isinstance(features, list) or not all(isinstance(feature, str) for feature in features):
+        raise CheckError("shipping codegen omitted production library features: " + name)
+    forbidden = PRODUCTION_LIBRARY_FORBIDDEN_FEATURES[name]
+    if forbidden in features:
+        raise CheckError(f"shipping codegen enabled forbidden fixture feature: {name}/{forbidden}")
+    observed.add(name)
+
+
 def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
                      harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> NativeArtifactCopies:
     label = "; ".join(HARNESS_TARGETS[harness][0] for harness in harnesses)
@@ -3212,7 +3265,8 @@ def native_artifact_guard(root: Path, target: Path, env: dict[str, str]):
     """Lock actual Cargo outputs only after Cargo exits, through source validation and copy."""
     if root.is_relative_to(target):
         from taira_cargo_cache import local_package_names, source_fingerprints
-        # Metadata has no artifact authority and must run before acquiring Cargo's locks.
+        # Cargo progress observations have no artifact authority; source
+        # fingerprints remain guarded while copying verified executables.
         packages = local_package_names(root, env)
         with source_fingerprints(root, target, "aarch64-unknown-linux-gnu", packages, repair=False):
             yield
@@ -3571,7 +3625,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
     copies = None
     completed = False
     try:
-        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control"} for key in records):
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha", "iroha3d-message-control", "iroha_test_runtime_provider_broker"} for key in records):
             raise CheckError("native artifact isolation requires known nonempty selections")
         for directory in (root, target):
             info = directory.stat()
@@ -3582,7 +3636,8 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
         paths = {}
         for selection, record in records.items():
             package = {"iroha3d": "irohad", "iroha": "iroha_cli",
-                       "iroha3d-message-control": "irohad"}.get(selection)
+                       "iroha3d-message-control": "irohad",
+                       "iroha_test_runtime_provider_broker": "irohad"}.get(selection)
             if package is None:
                 package = HARNESS_TARGETS[selection][3][1]
             if record["manifest_path"] != str(native_package_root(root, package) / "Cargo.toml"):
@@ -3890,14 +3945,19 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
                              *, message_control: bool = False,
+                             disposable_broker: bool = False,
                              focused_fixture: bool = False) -> NativeArtifactCopies:
     """Copy each build before a separate fixture feature graph can replace Cargo outputs."""
-    if message_control and focused_fixture:
-        raise CheckError("message-control codegen cannot use the focused fixture graph")
-    expected = {"iroha3d": ("iroha3d-message-control", "irohad")} if message_control else {
-        "iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
-        "iroha3d_taira": ("taira-launcher", "irohad")}
-    if not message_control:
+    if (message_control and disposable_broker) or (focused_fixture and (message_control or disposable_broker)):
+        raise CheckError("feature-isolated codegen cannot use another fixture graph")
+    if message_control:
+        expected = {"iroha3d": ("iroha3d-message-control", "irohad")}
+    elif disposable_broker:
+        expected = {"iroha_test_runtime_provider_broker": ("iroha_test_runtime_provider_broker", "irohad")}
+    else:
+        expected = {"iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli"),
+                    "iroha3d_taira": ("taira-launcher", "irohad")}
+    if not message_control and not disposable_broker:
         # Audit the complete shipping table even in the mutable diagnostic.
         # Only its known four-peer inputs need production codegen there; the
         # immutable release and signed build retain every shipping binary.
@@ -3916,8 +3976,10 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                *(argument for package in packages for argument in ("-p", package)),
                *(argument for name in expected for argument in ("--bin", name)),
                *(["--features", "irohad/test-network-message-control"] if message_control else []),
+               *(["--features", "irohad/test-network-disposable-broker"] if disposable_broker else []),
                "--message-format=json-render-diagnostics"]
     phase = ("message-control fixture codegen" if message_control else
+             "disposable broker fixture codegen" if disposable_broker else
              "focused four-peer fixture codegen" if focused_fixture else "shipping codegen")
     print(f"[taira-check] build native network binaries: {phase}", flush=True)
     progress = CargoBuildProgress(phase, {("bin", name) for name in expected},
@@ -3925,6 +3987,9 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     started = time.monotonic()
     artifacts: dict[str, str] = {}
     records: dict[str, dict[str, object]] = {}
+    production_libraries: set[str] = set()
+    audit_production_graph = not message_control and not disposable_broker and not focused_fixture
+    stream_error: CheckError | None = None
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds,
                           umask=0o077) as child, progress.heartbeat():
@@ -3938,25 +4003,41 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                 continue
             if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
                 continue
-            target = event.get("target", {})
-            name = target.get("name")
-            executable = event.get("executable")
-            if (isinstance(name, str) and name in expected and "bin" in target.get("kind", [])
-                    and event.get("profile", {}).get("test") is False
-                    and isinstance(executable, str) and executable):
-                if name in artifacts and artifacts[name] != executable:
-                    raise CheckError("native network binary has conflicting Cargo artifacts")
-                record = native_artifact_record(event)
-                selection = expected[name][0]
-                if selection in records and records[selection] != record:
-                    raise CheckError("native network binary has conflicting Cargo metadata")
-                artifacts[name] = executable
-                records[selection] = record
-                print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
+            if stream_error is not None:
+                # Keep consuming Cargo's pipe until it exits. Closing stdout
+                # after an early evidence failure can strand or abort its build.
+                continue
+            try:
+                if audit_production_graph:
+                    observe_shipping_production_library(event, production_libraries)
+                target = event.get("target", {})
+                name = target.get("name")
+                executable = event.get("executable")
+                if (isinstance(name, str) and name in expected and "bin" in target.get("kind", [])
+                        and event.get("profile", {}).get("test") is False
+                        and isinstance(executable, str) and executable):
+                    if name in artifacts and artifacts[name] != executable:
+                        raise CheckError("native network binary has conflicting Cargo artifacts")
+                    record = native_artifact_record(event)
+                    selection = expected[name][0]
+                    if selection in records and records[selection] != record:
+                        raise CheckError("native network binary has conflicting Cargo metadata")
+                    artifacts[name] = executable
+                    records[selection] = record
+                    print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
+            except CheckError as error:
+                stream_error = error
         code = child.wait()
     progress.report(f"Cargo exited {code}")
+    if stream_error is not None:
+        raise stream_error
     if code or set(artifacts) != set(expected):
         raise CheckError(f"native network build did not produce every required executable artifact (exit {code})")
+    if audit_production_graph:
+        missing = sorted(PRODUCTION_LIBRARY_FORBIDDEN_FEATURES.keys() - production_libraries)
+        if missing:
+            raise CheckError("shipping codegen omitted production library feature evidence: " + ", ".join(missing))
+        print("[taira-check] shipping production binary and Core/Torii feature evidence passed", flush=True)
     print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
     return isolate_native_artifacts(root, env, records)
 
@@ -4019,9 +4100,9 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
                 if "kagami" not in binaries:
                     raise CheckError("beacon fixture requires the isolated shipping Kagami artifact")
                 private_fixture_root = beacon_fixture_root()
-                with compile_network_binaries(root, env, lock_fds, message_control=True) as control:
+                with compile_network_binaries(root, env, lock_fds, disposable_broker=True) as broker:
                     beacon_env = network_env | {
-                        "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL": control["iroha3d-message-control"],
+                        "TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER": broker["iroha_test_runtime_provider_broker"],
                         "TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private_fixture_root),
                         "KAGAMI_BIN": binaries["kagami"],
                     }
@@ -4075,11 +4156,66 @@ def require_network_fixture_capacity(directory: Path) -> None:
             f"for bounded storage and scratch space; {available} available at {directory}")
 
 
-def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
-    """Run every production reducer test without Cargo or adapter dependencies."""
-    _run_standalone_checks(root, env, lock_fds,
-        source="crates/iroha_sumeragi_core/src/lib.rs", output_name="sumeragi-core-tests",
-        label="pure FSM", description="pure consensus FSM (exact production reducer)")
+def validate_selected_source_test_inventory(root: Path, scoped_stages: dict[str, tuple]) -> None:
+    """Reject absent selected test declarations in captured source before Cargo.
+
+    This is an early lexical guard, not a substitute for the executable's exact
+    ``--list`` inventory. The latter remains authoritative for module paths,
+    cfg expansion, macro expansion, and test registration.
+    """
+    selected_by_package: dict[str, list[tuple[str, str]]] = {}
+    for harness, stages in scoped_stages.items():
+        if harness not in HARNESS_TARGETS:
+            raise CheckError(f"selected source inventory has unknown harness: {harness}")
+        package = HARNESS_TARGETS[harness][3][1]
+        names = [name for _, tests in stages for name in tests]
+        if len(names) != len(set(names)):
+            raise CheckError(f"selected source inventory repeats a test in {harness}")
+        selected_by_package.setdefault(package, []).extend((harness, name) for name in names)
+
+    try:
+        helper = root / "scripts/formal/rust_text.py"
+        namespace = {"__name__": "taira_selected_source_text", "__file__": str(helper)}
+        exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
+        mask = namespace["mask_rust_comments"]
+        declarations = (
+            re.compile(r"\bfn\s+([A-Za-z_]\w*)\s*\("),
+            re.compile(r"\b(?:state_test|routing_test)!\s*[({]\s*"
+                       r"(?:sync|async|consensus_stack)\s+([A-Za-z_]\w*)"),
+            re.compile(r"\b(?:source_contract_test|v2_apply_test)!\s*[({]\s*"
+                       r"([A-Za-z_]\w*)"),
+        )
+        missing = []
+        for package, selections in selected_by_package.items():
+            if not selections:
+                continue
+            package_root = native_package_root(root, package)
+            if not package_root.is_dir():
+                raise ValueError(f"native package source is absent: {package}")
+            wanted = {name.rsplit("::", 1)[-1] for _, name in selections}
+            found = set()
+            for source in package_root.rglob("*.rs"):
+                text = source.read_text(encoding="utf-8")
+                # Most package files cannot contain any selected declaration.
+                # Scan their raw syntax first; only candidate files need the
+                # slower comment/literal masker from this captured source.
+                candidates = {match.group(1) for pattern in declarations
+                              for match in pattern.finditer(text) if match.group(1) in wanted}
+                if not candidates:
+                    continue
+                masked = mask(text)
+                found.update(match.group(1) for pattern in declarations
+                             for match in pattern.finditer(masked) if match.group(1) in candidates)
+                if found == wanted:
+                    break
+            missing.extend(f"{harness}: {name}" for harness, name in selections
+                           if name.rsplit("::", 1)[-1] not in found)
+        if missing:
+            raise ValueError(f"{len(missing)} selected test declarations absent from captured source: "
+                             + "; ".join(missing[:20])
+                             + (f"; and {len(missing) - 20} more" if len(missing) > 20 else ""))
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError) as error:
+        raise CheckError("selected source test inventory failed: " + str(error)) from error
 
 
 def validate_mv_test_registration(root: Path) -> None:
@@ -4107,7 +4243,7 @@ def validate_mv_test_registration(root: Path) -> None:
         ("storage::touches::tests::", "storage/touches.rs", "storage/touches_tests.rs", "tests"),
     )
     try:
-        helper = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        helper = root / "scripts/formal/rust_text.py"
         namespace = {"__name__": "taira_mv_source_text", "__file__": str(helper)}
         exec(compile(helper.read_bytes(), str(helper), "exec"), namespace)
         mask = namespace["mask_rust_comments"]
@@ -4198,8 +4334,11 @@ def validate_torii_lifecycle_test_registration(root: Path) -> None:
         raise CheckError("Torii lifecycle test source registration failed: " + str(error)) from error
 
 
-def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
+                                scoped_stages: dict[str, tuple] | None = None) -> None:
     """Reject invalid source assets, then run shared contracts before Cargo."""
+    if scoped_stages is not None:
+        validate_selected_source_test_inventory(root, scoped_stages)
     validate_mv_test_registration(root)
     validate_torii_lifecycle_test_registration(root)
     started = time.monotonic()
@@ -4431,8 +4570,6 @@ def run_prequalification(root: Path, *, focused_regressions, qualification_scope
     env.pop("CARGO_BUILD_TARGET", None)
     env.update(VERGEN_GIT_SHA=head, IROHA_GIT_COMMIT_HASH=head)
     print(f"[taira-prequalify] mutable source {head}; {root}; diagnostic only", flush=True)
-    run_pure_fsm_checks(root, env, lock_fds)
-    source_unchanged("lifecycle source checks")
     run_lifecycle_source_checks(root, env, lock_fds)
     shipping = shipping_harnesses(root)
     _, complete_selections, _ = native_harness_plan(scoped, shipping)
@@ -4627,8 +4764,7 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     print(f"[taira-check] source {head}; {root}", flush=True)
     print(f"[taira-check] qualification scope {qualification_scope}; "
           f"{selected_regression_count(qualification_scope)} selected native regressions", flush=True)
-    run_pure_fsm_checks(root, env, lock_fds)
-    run_lifecycle_source_checks(root, env, lock_fds)
+    run_lifecycle_source_checks(root, env, lock_fds, scoped_stages)
     shipping = shipping_harnesses(root)
     print(f"[taira-check] shipping source coverage passed ({len(shipping)} binaries)", flush=True)
     # Include the configuration integration target in this same Cargo graph:
@@ -4650,10 +4786,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
     # scopes. Deferred cases have compile coverage, never fabricated test passes.
     early_stages, selections, compile_only = native_harness_plan(scoped_stages, shipping)
     if selections:
-        # The complete --no-run build type-checks this same selected feature graph
-        # and requires one executable for every selected native harness. Keep the
-        # faster metadata-only failure probe in focused prequalification; repeating
-        # it before release codegen adds no qualification evidence.
+        # Check the complete selected test graph before code generation so Rust
+        # import and type errors in any harness stop early. This publishes no test
+        # pass or qualification checkpoint; the complete --no-run build still
+        # requires one executable for every selected native harness.
+        check_test_harnesses(root, env, harnesses=selections, lock_fds=lock_fds)
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
             for name in compile_only:
@@ -4726,11 +4863,11 @@ def run_checks(root: Path, *, qualification_scope: str = "basic",
                         failures.extend(error.failures)
                 if failures:
                     raise SelectedRegressionFailures(failures)
-            # Test-harness dev dependencies can conceal production-only errors.
-            # Always check the separate shipping graph, even when the exact
-            # independent test pass is reused. This creates no checkpoint claim.
-            if shipping:
-                check_shipping_binaries(root, env, lock_fds)
+            # The mandatory network fixture's normal shipping build separately
+            # checks production codegen and Core/Torii features. Its Cargo JSON
+            # artifacts are audited before any peer starts, including on reuse.
+            if shipping and not split_network_stages(scoped_stages["network"])[1]:
+                raise CheckError("shipping graph requires a selected runtime network fixture")
             if scoped_stages["network"]:
                 # A fresh testnet that cannot commit its first transaction is a
                 # release blocker. Qualify the real four-peer path before the

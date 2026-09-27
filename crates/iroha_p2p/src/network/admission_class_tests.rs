@@ -495,3 +495,40 @@ fn admission_class_codes_bind_geometry_and_record_order() {
         assert_eq!(class.index(), usize::from(code));
     }
 }
+
+/// The Sumeragi route is variant-disjoint: its semantic FIFOs never receive the general
+/// route's messages and never overlap a general subscriber of the same class, while a second
+/// Sumeragi subscriber of a class it already owns is an overlap (single consumer).
+#[test]
+fn sumeragi_route_owns_its_semantic_fifos() {
+    use super::SubscriberFilter;
+    use super::message::SubscriberRoute;
+    for class in [A::Safety, A::Payload, A::BlockSync] {
+        let sumeragi = SubscriberFilter::SemanticClass {
+            class,
+            route: SubscriberRoute::Sumeragi,
+        };
+        let general = SubscriberFilter::semantic_class(class);
+        for fixture in AdmissionFixture::all() {
+            let (topic, fixture_class) = (fixture.topic(), fixture.admission_class());
+            assert_eq!(
+                sumeragi.matches(topic, SubscriberRoute::Sumeragi, fixture_class),
+                fixture_class == class
+            );
+            assert!(!sumeragi.matches(topic, SubscriberRoute::General, fixture_class));
+            assert!(!general.matches(topic, SubscriberRoute::Sumeragi, fixture_class));
+        }
+        assert!(!sumeragi.overlaps_reliable(&general));
+        assert!(sumeragi.overlaps_reliable(&sumeragi.clone()));
+        assert!(sumeragi.overlaps_reliable(&SubscriberFilter::All));
+    }
+    assert!(
+        !SubscriberFilter::topics([Topic::ConsensusSafety]).overlaps_reliable(
+            &SubscriberFilter::SemanticClass {
+                class: A::Safety,
+                route: SubscriberRoute::Sumeragi,
+            }
+        ),
+        "topic-only subscribers own the general route"
+    );
+}

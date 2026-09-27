@@ -5,7 +5,6 @@
 //! borrows at most one already-public proof payload and its typed commitment.
 //! It never caches witness coefficients or changes the construction on a hit.
 
-#[cfg(test)]
 use super::rns_native_proof_hash::RnsNativeProofHashWorkV1;
 use super::{
     rns_native_profile::{
@@ -209,13 +208,11 @@ fn with_node_frame_v1<T>(
 
 impl RnsNativeOracleV1 {
     /// Exact leaf count from the governed oracle identity; callers cannot choose a smaller tree.
-    #[cfg(test)]
     pub(super) fn length(self) -> Result<u32, RnsNativeLeafErrorV1> {
         self.geometry().map(|(_, _, length)| length)
     }
 
     /// Reconstruct the actual payload/index/node frames and count arithmetic without hashing.
-    #[cfg(test)]
     pub(super) fn full_tree_frame_work(
         self,
         parameter_digest: [u8; 32],

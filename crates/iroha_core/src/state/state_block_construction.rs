@@ -35,6 +35,7 @@ impl State {
         let mut chain_id;
         let mut settlement_accumulator;
         let mut fastpq_transcripts;
+        let mut fastpq_quantity_candidate;
         let mut fastpq_entry_dataspaces;
         let mut fastpq_source_captures;
         let mut axt_envelopes;
@@ -95,6 +96,8 @@ impl State {
         chain_id = Some(self.chain_id.clone());
         settlement_accumulator = Some(crate::settlement::SettlementAccumulator::default());
         fastpq_transcripts = Some(BTreeMap::new());
+        fastpq_quantity_candidate =
+            Some(fastpq_quantity_capture::QuantityCandidateArchive::default());
         fastpq_entry_dataspaces = Some(BTreeMap::new());
         fastpq_source_captures = Some(crate::fastpq::FastpqSourceCaptureAccumulator::default());
         axt_envelopes = Some(Vec::new());
@@ -143,6 +146,7 @@ impl State {
         assert!(chain_id.is_some());
         assert!(settlement_accumulator.is_some());
         assert!(fastpq_transcripts.is_some());
+        assert!(fastpq_quantity_candidate.is_some());
         assert!(fastpq_entry_dataspaces.is_some());
         assert!(fastpq_source_captures.is_some());
         assert!(axt_envelopes.is_some());
@@ -188,6 +192,7 @@ impl State {
                 world,
                 merge_ledger: &self.merge_ledger,
                 transactions: storage_transactions::TransactionsBlockField::new(transactions),
+                ordinary_carrier_membership_source: None,
                 commit_topology: block_field::BlockField::new(commit_topology),
                 prev_commit_topology: block_field::BlockField::new(prev_commit_topology),
                 lane_consensus_contexts: block_field::BlockField::new(lane_consensus_contexts),
@@ -230,11 +235,17 @@ impl State {
                     .take()
                     .expect("prepared State input"),
                 fastpq_transcripts: fastpq_transcripts.take().expect("prepared State input"),
+                fastpq_quantity_candidate: fastpq_quantity_candidate
+                    .take()
+                    .expect("prepared State input"),
                 fastpq_tx_set_hash: None,
                 fastpq_entry_dataspaces: fastpq_entry_dataspaces
                     .take()
                     .expect("prepared State input"),
                 fastpq_source_context: None,
+                fastpq_source_policy_at_block_start: None,
+                fastpq_source_quota: None,
+                merge_execution_prefix: None,
                 fastpq_source_captures: fastpq_source_captures
                     .take()
                     .expect("prepared State input"),
@@ -302,6 +313,7 @@ impl State {
                 gas_limit_per_block: gas_limit_per_block.take().expect("prepared State input"),
                 frozen_execution_output_capacity: None,
                 execution_output_plan: None,
+                sumeragi_schedule: crate::sumeragi::schedule::ScheduleStep::Off,
                 #[cfg(feature = "telemetry")]
                 telemetry: &self.telemetry,
                 state_write_lock: &self.state_write_lock,

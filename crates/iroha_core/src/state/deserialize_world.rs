@@ -7476,6 +7476,7 @@ fn parse_world(
     }
     let parameters = take_parameters_cell(&mut map, "parameters")?;
     let peers: Cell<Peers> = take_required(&mut map, "peers")?;
+    let consensus_schedule = take_required(&mut map, "consensus_schedule")?;
     let domain_committees = take_required(&mut map, "domain_committees")?;
     let domain_endorsement_policies = take_required(&mut map, "domain_endorsement_policies")?;
     let domain_endorsements = take_required(&mut map, "domain_endorsements")?;
@@ -8161,6 +8162,7 @@ fn parse_world(
     let mut world = World(Box::new(WorldData {
         parameters,
         peers,
+        consensus_schedule,
         domains,
         domains_by_owner: Storage::default(),
         kaigi_relay_registry: Storage::default(),
@@ -8454,6 +8456,12 @@ fn parse_world(
         }
     })?;
     validate_asset_transfer_control_persistence_v1(&world)?;
+    super::retail_daily_limit_state::validate_persistence(&mut world).map_err(|message| {
+        json::Error::InvalidField {
+            field: "world.smart_contract_state.retail_day_v1".to_owned(),
+            message,
+        }
+    })?;
     world
         .rebuild_global_beacon_pulse_slots()
         .map_err(invalid_global_beacon_persistence)?;
@@ -8747,7 +8755,12 @@ fn parse_world(
     world
         .rebuild_governance_read_indexes()
         .map_err(|message| json::Error::InvalidField {
-            field: "parliament_attempts".into(),
+            field: if message.starts_with(ELECTION_RESTORE_ERROR_PREFIX_V1) {
+                "elections"
+            } else {
+                "parliament_attempts"
+            }
+            .into(),
             message,
         })?;
     world.rebuild_nft_owner_index();
@@ -8952,7 +8965,7 @@ fn build_state(
         ))
     })?;
     if !emergency_fast {
-        crate::sumeragi::evidence::validate_persisted_v2_evidence_records(
+        crate::sumeragi::v2_evidence::validate_persisted_v2_evidence_records(
             &world.view(),
             kura.as_ref(),
             &network_id,
@@ -9059,6 +9072,8 @@ fn build_state(
             .and_then(|height| kura.get_block(height))
             .map(|block| block.header())
     };
+    let evidence_preparation_bytes = nexus.storage.consensus_evidence_preparation_bytes;
+    let stake_index_bytes = nexus.storage.consensus_stake_index_bytes;
     let mut state = Box::new(State {
         world,
         block_hashes,
@@ -9110,6 +9125,10 @@ fn build_state(
         canonical_runtime,
         nexus_runtime_restored_from_snapshot,
         nexus_storage_budget_last_check_height: AtomicU64::new(0),
+        evidence_preparation_budget: mv::allocation::AllocationBudget::new(
+            evidence_preparation_bytes,
+        ),
+        stake_index_budget: mv::allocation::AllocationBudget::new(stake_index_bytes),
         tiered_backend: Arc::clone(&tiered_backend),
         tiered_snapshot_worker,
         fraud_monitoring: default_fraud_monitoring_cfg(),
@@ -9605,6 +9624,40 @@ mod decode_tests {
         ));
         validate_no_standalone_governance_state_for_typed_proposals_v1(&typed_world())
             .expect("typed proposal without standalone state is valid");
+    }
+
+    #[test]
+    fn restored_invalid_election_reports_the_elections_field() {
+        let mut world = World::default();
+        world.elections.insert(
+            "invalid-option-count".to_owned(),
+            ElectionState {
+                options: 1,
+                tally: vec![0],
+                ..ElectionState::default()
+            },
+        );
+        let encoded = json::to_json(&world).expect("serialize malformed election fixture");
+        let operation_index_budget = crate::state::kagemusha_operation_indexes::default_budget();
+        let operation_index_refusal = std::cell::RefCell::new(None);
+        let ivm = IVM::new(0);
+        let error = match parse_world(
+            SnapshotJsonMap::parse(&encoded, "world").expect("parse election fixture"),
+            &IvmSeed {
+                operation_index_budget: &operation_index_budget,
+                operation_index_refusal: &operation_index_refusal,
+                ivm: &ivm,
+                _marker: PhantomData,
+            },
+        ) {
+            Ok(_) => panic!("one-option election must fail restore"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            json::Error::InvalidField { ref field, ref message }
+                if field == "elections" && message.contains("below the minimum")
+        ));
     }
 
     fn musubi_package(name: &str) -> MusubiPackageIdV1 {

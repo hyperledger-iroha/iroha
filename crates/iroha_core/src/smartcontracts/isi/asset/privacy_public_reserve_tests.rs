@@ -38,6 +38,7 @@ fn seed_test_orchard_public_reserve(
     );
     owner
 }
+
 #[test]
 fn privacy_public_reserve_refuses_owner_delegate_general_bridge_and_burn() {
     let (state, definition_id, reserve_asset_id) = build_asset_transfer_control_test_state(10);

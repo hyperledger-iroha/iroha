@@ -14,10 +14,10 @@ use std::{
 };
 
 const NANOS_PER_SECOND: u128 = 1_000_000_000;
-const MAX_LIFETIME: Duration = Duration::from_secs(120);
+pub(crate) const MAX_LIFETIME: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum NativeDeadlineErrorV1 {
+pub(crate) enum NativeDeadlineErrorV1 {
     Unavailable,
     Invalid,
     Expired,
@@ -27,13 +27,13 @@ type Result<T> = std::result::Result<T, NativeDeadlineErrorV1>;
 
 /// Native-created same-process clock reading. No host timestamp constructor or wire codec.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct NativeContinuousInstantV1 {
+pub(crate) struct NativeContinuousInstantV1 {
     process_id: u32,
     nanos: u128,
 }
 
 impl NativeContinuousInstantV1 {
-    pub(super) fn now() -> Result<Self> {
+    pub(crate) fn now() -> Result<Self> {
         let process_id = std::process::id();
         let nanos = platform_nanos()?;
         if process_id == 0 || process_id != std::process::id() {
@@ -42,8 +42,7 @@ impl NativeContinuousInstantV1 {
         Ok(Self { process_id, nanos })
     }
 
-    #[cfg(test)]
-    pub(super) fn checked_duration_since(self, earlier: Self) -> Option<Duration> {
+    pub(crate) fn checked_duration_since(self, earlier: Self) -> Option<Duration> {
         if self.process_id != earlier.process_id {
             return None;
         }
@@ -52,6 +51,18 @@ impl NativeContinuousInstantV1 {
             (nanos / NANOS_PER_SECOND).try_into().ok()?,
             (nanos % NANOS_PER_SECOND).try_into().ok()?,
         ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn before_for_test(elapsed: Duration) -> Self {
+        let now = Self::now().expect("native continuous test clock");
+        Self {
+            process_id: now.process_id,
+            nanos: now
+                .nanos
+                .checked_sub(elapsed.as_nanos())
+                .expect("test process has enough continuous clock history"),
+        }
     }
 }
 
@@ -64,14 +75,23 @@ struct DeadlineState {
 /// Clones retain the original expiry and shared monotonic floor; cloning never renews a lease.
 /// A forked process cannot reuse its parent's pending challenge even within the same boot.
 #[derive(Clone)]
-pub(super) struct NativeDeadlineV1(Arc<DeadlineState>);
+pub(crate) struct NativeDeadlineV1(Arc<DeadlineState>);
 
 impl NativeDeadlineV1 {
     pub(super) fn start(lifetime: Duration) -> Result<Self> {
         Self::from_reading(NativeContinuousInstantV1::now()?, lifetime)
     }
 
-    fn from_reading(started: NativeContinuousInstantV1, lifetime: Duration) -> Result<Self> {
+    /// Fixed suspend-inclusive expiry for app-side early rejection only. Native phase checks
+    /// remain authoritative, and this value must never be interpreted as Unix time.
+    pub(super) fn expiry_continuous_ms(&self) -> Result<u64> {
+        u64::try_from(self.0.expires_nanos / 1_000_000).map_err(|_| NativeDeadlineErrorV1::Invalid)
+    }
+
+    pub(crate) fn from_reading(
+        started: NativeContinuousInstantV1,
+        lifetime: Duration,
+    ) -> Result<Self> {
         if lifetime.is_zero() || lifetime > MAX_LIFETIME || started.process_id == 0 {
             return Err(NativeDeadlineErrorV1::Invalid);
         }
@@ -87,7 +107,12 @@ impl NativeDeadlineV1 {
     }
 
     /// Check against the actual continuous clock, returning the exact successful observation.
-    pub(super) fn check(&self) -> Result<NativeContinuousInstantV1> {
+    pub(crate) fn check(&self) -> Result<NativeContinuousInstantV1> {
+        // After fork, a mutex may still belong to a thread that exists only in the parent.
+        // Reject its immutable process identity before acquiring any inherited lock.
+        if self.0.started.process_id != std::process::id() {
+            return Err(NativeDeadlineErrorV1::Invalid);
+        }
         let mut last_seen = self
             .0
             .last_seen
@@ -135,7 +160,7 @@ impl NativeDeadlineV1 {
     }
 
     #[cfg(test)]
-    pub(super) fn expired_for_test() -> Self {
+    pub(crate) fn expired_for_test() -> Self {
         let now = NativeContinuousInstantV1::now().unwrap();
         Self(Arc::new(DeadlineState {
             started: now,
@@ -241,6 +266,31 @@ mod tests {
     }
 
     #[test]
+    fn exported_continuous_millisecond_expiry_is_fixed_and_never_wall_clock_time() {
+        let deadline =
+            NativeDeadlineV1::from_reading(tick(1_000_000_001), Duration::from_millis(2)).unwrap();
+        assert_eq!(deadline.expiry_continuous_ms(), Ok(1_002));
+        assert_eq!(deadline.clone().expiry_continuous_ms(), Ok(1_002));
+        assert_eq!(
+            deadline.check_reading(tick(1_002_000_000)),
+            Ok(tick(1_002_000_000))
+        );
+        assert_eq!(
+            deadline.check_reading(tick(1_002_000_001)),
+            Err(NativeDeadlineErrorV1::Expired)
+        );
+        let overflow = NativeDeadlineV1::from_reading(
+            tick((u128::from(u64::MAX) + 1) * 1_000_000),
+            Duration::from_nanos(1),
+        )
+        .unwrap();
+        assert_eq!(
+            overflow.expiry_continuous_ms(),
+            Err(NativeDeadlineErrorV1::Invalid)
+        );
+    }
+
+    #[test]
     fn elapsed_suspension_expires_a_pending_challenge_without_intermediate_polls() {
         let deadline = NativeDeadlineV1::from_reading(tick(0), MAX_LIFETIME).unwrap();
         // A continuous clock includes time asleep even though application code never ran.
@@ -270,6 +320,27 @@ mod tests {
             }),
             Err(NativeDeadlineErrorV1::Invalid)
         );
+    }
+
+    #[test]
+    fn inherited_process_deadline_rejects_before_waiting_for_its_clock_lock() {
+        let deadline = NativeDeadlineV1::from_reading(
+            NativeContinuousInstantV1 {
+                process_id: std::process::id().wrapping_add(1),
+                nanos: 100,
+            },
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        let locked = deadline.0.last_seen.lock().unwrap();
+        let copy = deadline.clone();
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || send.send(copy.check()).unwrap());
+        let observed = receive.recv_timeout(Duration::from_secs(1));
+        // Always release and join, including on regression, so this test cannot strand a thread.
+        drop(locked);
+        worker.join().unwrap();
+        assert_eq!(observed, Ok(Err(NativeDeadlineErrorV1::Invalid)));
     }
 
     #[test]

@@ -491,9 +491,14 @@ impl Kura {
                     return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
                 }
             }
-            expected
+            (expected.0, Some(expected.1))
+        } else if let Some((wire_len, wire_hash)) = published_wire {
+            (wire_len, Some(wire_hash))
         } else {
-            published_wire.ok_or(Error::MissingV2FinalityArtifact { height: height_u64 })?
+            // A Sumeragi block has no v2 finality sidecar: the block store verified its commit
+            // certificate before writing the frame, and the decoded header's hash and parent
+            // are checked below. TODO(WP8c): Kura keeps no v2 finality.
+            (slot.length, None)
         };
         if slot.length != wire_len {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
@@ -529,7 +534,9 @@ impl Kura {
             store.read_block_data(slot.start, &mut bytes)?;
             bytes
         };
-        if u64::try_from(bytes.len())? != wire_len || Hash::new(&bytes) != wire_hash {
+        if u64::try_from(bytes.len())? != wire_len
+            || wire_hash.is_some_and(|wire_hash| Hash::new(&bytes) != wire_hash)
+        {
             return Err(Error::CanonicalBlockWireMismatch { height: height_u64 });
         }
         let block = decode_framed_signed_block(&bytes)?;

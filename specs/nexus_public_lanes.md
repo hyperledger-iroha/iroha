@@ -386,6 +386,9 @@ account migration and entity deletion preserve these obligations.
   frozen topology are refused until a prepared, certified epoch transition
   activates them. Non-zero participant lanes require a live, unbounded
   `Committee` key and do not add that peer to global quorum.
+  A global validator proposed for an autoscaled participant lane needs both
+  role records: its `Validator` key does not satisfy the lane's `Committee`
+  authority check. Provision the Committee record before scale-out.
   Stake-elected operators can repair a stale
   binding with `RebindPublicLaneValidatorPeer` only before the pre-state freeze
   for its `activation_height`; an activated tenure must exit and release

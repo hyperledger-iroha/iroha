@@ -1,8 +1,9 @@
 //! Disposable per-peer broker using the stock credential decoder and server.
 //!
 //! Only explicit network qualification builds include this executable. Its
-//! inherited standard input carries one exact threshold credential bundle;
-//! neither credentials nor provider selectors are accepted in argv or env.
+//! Inherited standard input carries one exact threshold credential bundle. A
+//! configured Soracloud signer consumes the same owner-private FD198 record as
+//! the shipping Taira launcher. Credentials never enter arguments or environment.
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
@@ -13,7 +14,7 @@ fn main() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() {
     use clap::Parser as _;
-    use irohad::external_software_signer::RuntimeConsensusThresholdSignerBackendsV1;
+    use irohad::taira_runtime_signer::load_disposable_runtime_provider_broker_v1;
     use irohad::{
         RuntimeProviderBrokerExecutableArgsV1, RuntimeProviderBrokerExecutableV1,
         load_owner_private_runtime_provider_broker_catalog_file_v1,
@@ -24,15 +25,12 @@ fn main() {
     let catalog = load_owner_private_runtime_provider_broker_catalog_file_v1(args.catalog_path())
         .expect("load exact owner-private public catalog");
     let backends =
-        RuntimeConsensusThresholdSignerBackendsV1::load_from_launchd_credential_bundle_v1(
-            &catalog,
-            &mut std::io::stdin().lock(),
-        )
-        .expect("load exact inherited threshold credential bundle");
+        load_disposable_runtime_provider_broker_v1(&catalog, &mut std::io::stdin().lock())
+            .expect("load exact inherited runtime provider credentials");
     let executable = RuntimeProviderBrokerExecutableV1::try_from_owner_private_catalog_v1(
         catalog,
         args.broker_endpoint().clone(),
-        &backends,
+        backends.as_ref(),
     )
     .expect("qualify disposable broker catalog");
     executable

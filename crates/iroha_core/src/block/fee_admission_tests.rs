@@ -1,10 +1,10 @@
 #[test]
 fn fee_enabled_single_transfer_uses_canonical_output_owner() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-single-transfer-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -123,7 +123,7 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
         errors.is_empty(),
         "fee-enabled transfer should be accepted: {errors:?}"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     assert_eq!(
@@ -151,11 +151,11 @@ fn fee_enabled_single_transfer_uses_canonical_output_owner() {
 }
 #[test]
 fn fee_enabled_account_metadata_uses_canonical_output_owner() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-non-transfer-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -253,7 +253,7 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
             .is_none(),
         "supported non-transfer fee transaction should be accepted by its canonical owner"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(
         snapshot.pipeline_execution.detached_fallback_total, 0,
@@ -288,11 +288,11 @@ fn fee_enabled_account_metadata_uses_canonical_output_owner() {
 }
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-insufficient-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -451,11 +451,11 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_missing() 
 }
 #[test]
 fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-data-trigger-fallback-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -596,7 +596,7 @@ fn fee_enabled_single_transfer_with_active_data_trigger_retains_callback_outputs
             .is_none(),
         "fee-enabled transfer and its callback must share the same canonical output owner"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     assert_eq!(
@@ -952,11 +952,11 @@ fn prepared_execute_trigger_retains_nested_gas_on_success_and_rejection() {
 }
 #[test]
 fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_missing() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-missing-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1110,11 +1110,11 @@ fn fee_enabled_single_transfer_rejects_without_partial_state_when_fee_asset_miss
 }
 #[test]
 fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_work() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-same-asset-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1216,12 +1216,14 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
         Some(0),
         "fee debit must reject when the payer only has enough balance for the transfer itself"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     let assets = state_block.world.assets();
     assert_eq!(
-        assets.get(&payer_asset).map_or_else(Quantity::zero, |asset| asset.0.clone()),
+        assets
+            .get(&payer_asset)
+            .map_or_else(Quantity::zero, |asset| asset.0.clone()),
         Quantity::zero(),
         "the rejected transfer must retain exactly its execution-owned base fee"
     );
@@ -1233,11 +1235,11 @@ fn fee_enabled_transfer_fee_same_asset_rolls_back_business_and_settles_actual_wo
 }
 #[test]
 fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_prior_success() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-shared-fee-balance-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1373,7 +1375,7 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
         1,
         "only one of the two transfers can pay the configured base fee"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(
         snapshot.pipeline_execution.detached_merged_total, 0,
         "the accepted transfer executes within the canonical output owner"
@@ -1428,11 +1430,11 @@ fn fee_enabled_shared_fee_balance_rejects_later_transfer_without_rolling_back_pr
 }
 #[test]
 fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-transfer-then-fail-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1548,7 +1550,7 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
         Some(0),
         "the failing instruction after the transfer must reject the whole transaction"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     assert_eq!(
@@ -1609,11 +1611,11 @@ fn fee_enabled_transfer_then_failing_instruction_rolls_back_business_effects() {
 }
 #[test]
 fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-sequence-admission-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -1742,7 +1744,7 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
         Some(0),
         "non-increasing tx_sequence must reject before transfer or fee application"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(snapshot.pipeline_execution.detached_fallback_total, 0);
     let (_, rejection) = valid_block
@@ -1792,11 +1794,11 @@ fn fee_enabled_non_increasing_sequence_rejects_before_transfer_or_fee() {
 }
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_mutation() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-default-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -1902,11 +1904,11 @@ fn legacy_fee_sponsor_metadata_rejects_before_block_admission_without_state_muta
 }
 #[test]
 fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("legacy-fee-sponsor-metadata-configured-fees-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
@@ -2021,11 +2023,11 @@ fn legacy_fee_sponsor_metadata_rejects_when_nexus_fees_are_configured() {
 }
 #[test]
 fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
-    crate::sumeragi::status::reset_rbc_backlog_stats_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
+    crate::status::reset_rbc_backlog_stats_for_tests();
     let chain_id = ChainId::from("fee-detached-invalid-fee-asset-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (recipient_id, _recipient_keypair) = gen_account_in("wonderland");
@@ -2124,7 +2126,7 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
         Some(0),
         "invalid configured fee asset must reject the transaction"
     );
-    let snapshot = crate::sumeragi::status::snapshot();
+    let snapshot = crate::status::snapshot();
     assert_eq!(snapshot.pipeline_execution.detached_merged_total, 0);
     assert_eq!(
         snapshot.pipeline_execution.detached_fallback_total, 0,
@@ -2163,10 +2165,10 @@ fn fee_enabled_invalid_fee_asset_rejects_without_partial_transfer_or_fee() {
 }
 #[test]
 fn rejected_data_trigger_execution_still_charges_nexus_fee() {
-    let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+    let _guard = crate::status::nexus_fee_test_lock()
         .lock()
         .expect("nexus fee test lock");
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    crate::status::reset_nexus_economics_for_tests();
     let chain_id = ChainId::from("rejected-trigger-fee-test");
     let (payer_id, payer_keypair) = gen_account_in("wonderland");
     let (sink_id, _sink_keypair) = gen_account_in("wonderland");
@@ -2365,15 +2367,19 @@ async fn validate_and_record_transactions_allows_missing_authority_self_register
     ])
     .sign(keypair.private_key());
     let crypto_cfg = state.crypto();
-    let tx = AcceptedTransaction::accept(
+    let (_clock, time_source) = TimeSource::new_mock(tx.creation_time());
+    let tx = AcceptedTransaction::accept_with_time_source(
         tx,
         &state.network_id,
         max_clock_drift,
         tx_limits,
         crypto_cfg.as_ref(),
+        &time_source,
     )
     .expect("admission should accept transaction shape");
-    state.seed_genesis_for_testing().expect("authenticate ordinary fixture predecessor");
+    state
+        .seed_genesis_for_testing()
+        .expect("authenticate ordinary fixture predecessor");
     let unverified_block = BlockBuilder::new(vec![tx])
         .chain(0, state.view().latest_block().as_deref())
         .sign(keypair.private_key())

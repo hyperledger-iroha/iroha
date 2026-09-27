@@ -3,6 +3,8 @@
 fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
     let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let asset_source_path = source_root.join("smartcontracts/isi/asset.rs");
+    let private_delta_test_path =
+        source_root.join("smartcontracts/isi/asset/prepared_source_additional_owner_tests.rs");
     let state_source_path = source_root.join("state.rs");
     let asset_source =
         std::fs::read_to_string(&asset_source_path).expect("read asset implementation");
@@ -33,8 +35,14 @@ fn raw_numeric_balance_mutation_is_reachable_only_inside_asset_module() {
                 [".deposit_numeric_asset_exact", "("].concat(),
                 [".apply_prechecked_numeric_asset_transfer_delta_exact", "("].concat(),
             ] {
+                // This exact file is included by asset.rs's private #[cfg(test)]
+                // prepared_source_additional_owner_tests module. Its low-level
+                // delta checks must remain able to exercise the private primitive.
+                let private_delta_test = path == private_delta_test_path
+                    && raw_call
+                        == [".apply_prechecked_numeric_asset_transfer_delta_exact", "("].concat();
                 assert!(
-                    !source.contains(&raw_call),
+                    private_delta_test || !source.contains(&raw_call),
                     "{} reaches raw balance mutation through {raw_call}",
                     path.display()
                 );
@@ -141,8 +149,7 @@ fn fee_sponsor_custody_transfer_needs_no_custody_signature_and_conserves_balance
     assert_ne!(custody, *ALICE_ID, "submitting authority is not custody");
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xC5);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xC5; Hash::LENGTH]));
     let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
         ALICE_ID.clone(),
         "custody-transfer-test"
@@ -257,8 +264,7 @@ fn user_transfer_rejects_third_party_source_before_mutation() {
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA1);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA1; Hash::LENGTH]));
     let event_count = stx.world.internal_event_buf.len();
     let error = execute_user_numeric_asset_transfer(
         &mut stx,
@@ -294,8 +300,7 @@ fn user_transfer_accepts_exact_direct_asset_permission() {
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA2);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA2; Hash::LENGTH]));
     stx.world.add_account_permission(
         &BOB_ID,
         Permission::from(
@@ -327,8 +332,7 @@ fn user_transfer_accepts_exact_definition_permission_from_assigned_role() {
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA3);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA3; Hash::LENGTH]));
     let role_id: RoleId = "asset_transfer_delegate".parse().expect("valid role id");
     let role = Role::new(role_id.clone(), BOB_ID.clone())
         .add_permission(Permission::from(
@@ -365,8 +369,7 @@ fn user_transfer_rejects_same_name_permissions_with_wrong_payloads() {
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xA4);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xA4; Hash::LENGTH]));
     stx.world.add_account_permission(
         &BOB_ID,
         Permission::new("CanTransferAsset".into(), Json::new(())),
@@ -929,8 +932,7 @@ fn transfer_removes_metadata_when_balance_zero() {
     let state = State::new(world, kura, query_store);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xB1);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB1; Hash::LENGTH]));
     let key: Name = "tag".parse().expect("metadata key");
     let value = Json::from(norito::json!("seed"));
     SetAssetKeyValue::new(alice_asset_id.clone(), key, value)
@@ -962,8 +964,7 @@ fn full_balance_self_transfer_preserves_asset_metadata_and_indexes() {
     );
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xB2);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
     let key: Name = "tag".parse().expect("metadata key parses");
     SetAssetKeyValue::new(
         asset_id.clone(),
@@ -1370,8 +1371,7 @@ fn availability_is_revisioned_and_only_blocks_account_transfers_until_reopened()
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xCB);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xCB; Hash::LENGTH]));
     SetAssetTransferAvailability::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1551,8 +1551,7 @@ fn holding_limit_applies_to_transfer_and_mint_credit_paths() {
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xCA);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xCA; Hash::LENGTH]));
     SetAssetHoldingLimit::new(
         BOB_ID.clone(),
         asset_definition_id.clone(),
@@ -1733,7 +1732,7 @@ fn prepared_numeric_transfer_rejects_stale_balance_without_applying() {
     let destination_asset_id = AssetId::new(asset_definition_id, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
+    let mut stx = block.transaction_for_fastpq_protocol_testing();
     let error = super::super::isi::apply_prepared_numeric_transfer_after_source_credit_for_test(
         &mut stx,
         &ALICE_ID,
@@ -1793,8 +1792,7 @@ fn typed_movement_rejects_empty_purpose_binding_even_with_call_hash() {
     let destination_id = AssetId::new(asset_definition_id, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xD5);
+    let stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD5; Hash::LENGTH]));
     let error = super::super::isi::resolve_social_send_movement_identity_for_test(
         &stx,
         &ALICE_ID,
@@ -1810,8 +1808,7 @@ fn atomic_batch_aggregates_repeated_source_before_enforcing_cap() {
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xD4);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD4; Hash::LENGTH]));
     SetAssetTransferControl::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1873,8 +1870,7 @@ fn transfer_allows_exact_cap_and_preserves_usage_on_rejected_overage() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 86_400_000, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xB2);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xB2; Hash::LENGTH]));
     SetAssetTransferControl::new(
         ALICE_ID.clone(),
         asset_definition_id.clone(),
@@ -1965,8 +1961,7 @@ fn transfer_rejects_materialized_kagemusha_reserve_source() {
     let state = State::new(world, kura, query_store);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xD6);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD6; Hash::LENGTH]));
     let asset_definition = stx
         .world
         .asset_definition(&asset_def_id)
@@ -2066,8 +2061,7 @@ fn transfer_rejects_deterministically_derived_kagemusha_reserve_source() {
         .insert(asset_def_id.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0xD7);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0xD7; Hash::LENGTH]));
     let err = Transfer::asset_quantity(escrow_asset_id.clone(), 1_u32, BOB_ID.clone())
         .execute(&escrow_account, &mut stx)
         .expect_err("deterministically derived escrow source must be rejected");
@@ -2484,8 +2478,7 @@ fn nominal_asset_mutation_boundaries_reject_negative_values_and_underflow() {
     let (state, asset_definition_id, source_asset_id) = build_asset_transfer_control_test_state(10);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    seed_test_call_hash(&mut stx, 0x91);
+    let mut stx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     let negative = Numeric::new(-1_i32, 0);
     let destination_asset_id = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert!(
@@ -2760,15 +2753,15 @@ fn mint_global_asset_rejects_non_authoritative_dataspace_route() {
 
 #[test]
 fn prepared_movement_records_exact_delta_under_current_apply_context() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition.clone(), BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash = iroha_crypto::Hash::new(b"identity at movement apply");
+    block.admit_fastpq_source_for_testing(hash);
     {
-        let mut tx = block.transaction();
-        seed_test_call_hash(&mut tx, 0x70);
+        let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x70; Hash::LENGTH]));
         super::super::isi::apply_prepared_numeric_movement_for_test(
             &mut tx,
             &ALICE_ID,
@@ -2824,14 +2817,14 @@ fn prepared_movement_records_exact_delta_under_current_apply_context() {
 
 #[test]
 fn prepared_movement_preserves_direct_typed_purpose_identity() {
-    let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+    let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
     let hash;
     {
-        let mut tx = block.transaction();
+        let mut tx = block.transaction_for_fastpq_protocol_testing();
         assert!(tx.tx_call_hash.is_none());
         hash = super::super::isi::resolve_social_send_movement_identity_for_test(
             &tx,
@@ -2861,14 +2854,13 @@ fn prepared_movement_preserves_direct_typed_purpose_identity() {
 
 #[test]
 fn stale_prepared_movement_discards_its_prepared_occurrence() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
     let mut block = state.block(header);
-    let mut tx = block.transaction();
-    seed_test_call_hash(&mut tx, 0x72);
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x72; Hash::LENGTH]));
     let error = super::super::isi::apply_prepared_numeric_movement_for_test(
         &mut tx,
         &ALICE_ID,
@@ -2892,7 +2884,7 @@ fn stale_prepared_movement_discards_its_prepared_occurrence() {
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );
@@ -2900,8 +2892,8 @@ fn stale_prepared_movement_discards_its_prepared_occurrence() {
 
 #[test]
 fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
-    let _guard = crate::sumeragi::witness::exec_witness_guard();
-    crate::sumeragi::witness::start_block();
+    let _guard = crate::exec_witness::exec_witness_guard();
+    crate::exec_witness::start_block();
     let (state, definition, source) = build_asset_transfer_control_test_state(10);
     let destination = AssetId::new(definition, BOB_ID.clone());
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 7, 0);
@@ -2942,7 +2934,7 @@ fn suppressed_prepared_movement_keeps_events_without_source_occurrence() {
             .is_empty()
     );
     assert!(
-        crate::sumeragi::witness::drain_exec_witness()
+        crate::exec_witness::drain_exec_witness()
             .fastpq_transcripts
             .is_empty()
     );

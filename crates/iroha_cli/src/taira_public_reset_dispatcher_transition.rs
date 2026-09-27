@@ -99,6 +99,8 @@ struct Predecessor {
     inventory_sha256: String,
     authorization_sha256: String,
     authorization_nonce: String,
+    /// The selected host session ended with a complete native rollback.
+    rolled_back: bool,
     completed_next_step: u16,
     sealed_forward_ordinal: u16,
     completed: Pin,

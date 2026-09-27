@@ -18,20 +18,23 @@ bounded canonical Norito action and Check claims, exact reviewed-request/intent
 and original-operation phase preflight, and an independent role-13 namespace.
 It is separate from the existing private four-signature service. Decoding or
 preflighting those claims cannot authenticate execution, custody, finality,
-challenge freshness or completion time. The new module has no ISI, native State
-owner, query, daemon state source, or public JSON/schema surface. Its underlying
-`SignerReleaseManifestRequestV1` has a canonical Norito codec but currently no
-JSON/`IntoSchema` derives, so production API exposure must establish one strict
-shared representation rather than an alternate layout.
+challenge freshness or completion time. At this audit point the new module had
+no ISI, native State owner, query, daemon state source, or public JSON/schema
+surface. The subsequent closed ISI slice below adds one strict JSON/schema
+representation of the existing Manifest request and role-13 claims; it does
+not add native State authority.
 
 `SignerOperationStateSourceV1` still needs a fresh
 same-finalized-snapshot custody/audit predecessor, durable Reserve and Complete
 CAS with retained replay tombstones, and phase-specific Current Checks. Current
 Core authority provides StreamToken custody without its ordinary operation
 journal, and separate role-14 custody/operation and role-15 account-custody
-histories with same-State Check consumers. The closed shared
-custody-history purpose adapters and `signer_check` admit the two final-promotion
-roles, not role 13. Reusing role 14 records would mix independent purposes.
+histories with same-State Check consumers. At the initial audit, the closed
+shared custody-history purpose adapters and `signer_check` admitted the two
+final-promotion roles, not role 13. The bounded custody slice below adds a
+distinct role-13 adapter and raw committed-height readback; `signer_check`
+still has no role-13 finalized Check consumer. Reusing role-14 records would
+mix independent purposes.
 The generic external software signer deliberately rejects ReleaseManifest in
 `valid_software_signer_handle`; enabling its raw payload service would bypass
 the existing purpose-specific four-signature receipt and authoritative
@@ -87,9 +90,9 @@ first cut are:
    in `crates/iroha_data_model/src/isi/sorafs/release_manifest_authority.rs`.
    Register one V1 wire ID through `isi/sorafs.rs`, `isi/mod.rs`, and
    `isi/registry/wire_ids.rs`, with codec, unknown-field, foreign-role and
-   direct-box tests. The existing Manifest
-   `SignerReleaseManifestRequestV1` lacks JSON/`IntoSchema`; the same canonical
-   representation must be established there before the wrapper is public.
+   direct-box tests. The closed ISI slice below supplies the one canonical
+   JSON/schema representation for the existing Manifest
+   `SignerReleaseManifestRequestV1` and role-13 DTOs.
 2. Add distinct Manage, Operate and Check permissions under
    `crates/iroha_executor_data_model/src/permission.rs`. They must be scoped to
    the deployment and not reuse any role-14/15 grant. Tests must reject
@@ -157,14 +160,60 @@ reserve, complete, mutate custody or authorize signing. The validation-fee
 classifier has no asset-effect admission for this closed instruction. The raw
 external software signer remains closed to role 13.
 
-The instruction is Norito-only at this stage: the underlying Manifest request
-still lacks strict JSON/`IntoSchema`, so no second JSON representation was
-invented. The new codec/permission/Core tests cover canonical wire identity,
+The instruction and underlying Manifest request now have the same strict
+JSON/`IntoSchema` model as their canonical Norito types; no alternate wire
+layout was invented. The action uses one purpose-owned tuple
+`ReleaseManifestRevocationV1` because the canonical schema does not admit named
+enum fields; no first-release compatibility variant was retained. The new
+codec/permission/Core tests cover canonical wire identity,
 foreign frames and grants, deployment/boundary rejection, observer/operator
 separation and closed execution for every action. Their Cargo selectors are
 `iroha_data_model release_manifest_authority`,
 `iroha_executor_data_model release_manifest_permission`, and
-`iroha_core sorafs_release_manifest_authority`; they are pending while the
-shared Cargo slot is occupied by BFV validation. The next implementation cut
-is the role-13 purpose-owned control/operation rows and finalized Check
-consumer described above. No HSM access is required.
+`iroha_core sorafs_release_manifest_authority`. The focused Manifest request
+JSON/Norito test passed 1/1; the DataModel role-13 selector passed 6/6 and its
+production library check passed; the executor permission selector passed 2/2;
+the Core closed-admission selector passed 3/3. These are local source and
+simulated-State tests, not finalized role-13 operation qualification. The next
+implementation cut is the role-13 purpose-owned operation rows,
+authoritative control publication and finalized Check consumer described
+above. No HSM access is required.
+
+## Role-13 custody record and raw committed-height slice
+
+The role-13 DataModel now has one bounded canonical
+`ReleaseManifestExecutionV1` and `ReleaseManifestCustodyRecordV1` schema with
+its own immutable record domain and finite revision limits. Core's sealed
+`ManifestPurpose` uses the existing bounded custody-history machinery with a
+separate namespace, role and purpose. That machinery derives execution
+coordinates from the applying transaction, prepares immutable revision,
+height and key-first-use indexes without publishing partial writes, and
+rejects rollback or reuse of prior key generations. The new
+`read_release_manifest_custody_at_v1` reads one selected committed-height
+snapshot, checks the role-13 chain/network/deployment binding and retained
+history, and binds the control digest to the selected block hash.
+
+This is a **raw committed State reader**, not a QC-finalized Check or signing
+authority. The public role-13 `Execute` handler and instruction disposition
+remain Closed for Configure, Enroll, Revoke, Reserve, Complete, Expire and
+Check. The internal Core tests stage and commit purpose-owned control rows
+only in simulated State, with an exact manager permission check before
+preparation; they cover foreign-purpose refusal, unpublished preparation,
+committed readback, stale compare-and-swap, revocation history and unavailable
+heights. The DataModel test covers the single canonical Norito/strict JSON
+record shape and its independent domain. Focused selectors are
+`iroha_data_model role13_custody_record` and
+`iroha_core sorafs_release_manifest_authority::tests::custody`. The integration
+owner ran both against the combined source: the DataModel record selector
+passed 1/1 and the Core custody selector passed 3/3 on a fresh test binary.
+`rustfmt --edition 2024` on the owned Rust files, `git diff --check` and
+`scripts/check_no_legacy_codec.sh` passed. The repository-wide source-file
+budget checker reported 239 other existing or parallel findings and none in
+the role-13 files; it is not a passing release gate.
+
+Production still needs an authorized State owner that publishes these prepared
+custody rows and invalidates active operation slots atomically, immutable
+Reserve/Complete/Expire operation and audit journals, exact successful Check
+execution authenticated against Kura/QC finality, and the daemon state source
+joined to the existing four-signature private service. This slice does not
+enable raw role-13 software signing, synthetic finality or promotion.

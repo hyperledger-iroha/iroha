@@ -3613,6 +3613,21 @@ mod incremental_source_rns_native_basis_extension_v2;
 // CAS publication receipts, an inhabited V1 callback coordinator, and a typed
 // existing-reader contract. The live Phase-23 owner, provider integration,
 // resource evidence, readiness, and release gates remain unavailable.
+/// A source snapshot retaining the original opening material and its one
+/// proof-session budget. No blanket implementation exists: a concrete source
+/// adapter must keep both owners together for the entire verifier lineage.
+pub(super) trait RnsNativeOriginalBudgetedSourceV1:
+    super::super::rns_native_source::ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1
+{
+    /// Borrow the original ledger only while the complete source owner lives.
+    fn original_budget_mut_v1(
+        &mut self,
+    ) -> Result<
+        &mut super::super::rns_native_resource_budget::RnsNativeProofResourceBudgetV1,
+        super::super::ZkAmsMkheErrorV1,
+    >;
+}
+
 #[path = "incremental_source_rns_native_tail_publication_v2.rs"]
 mod incremental_source_rns_native_tail_publication_v2;
 pub(in crate::vega::zk_ams::mkhe) use incremental_source_rns_native_tail_publication_v2::{

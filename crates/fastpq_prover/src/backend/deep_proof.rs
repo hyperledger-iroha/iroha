@@ -1,12 +1,13 @@
 //! Canonical bounded wire owner for the inactive DEEP compact candidate.
 //!
 //! This DTO fixes 301 retained columns, 64 initial queries, a paired quotient,
-//! five folds [16,16,8,8,4], and all 128 terminal values. Minimal frontiers derive
+//! five folds [16,16,8,8,4], fixed raw FRI fibers, and all 128 terminal values. Minimal frontiers derive
 //! from sorted unique positions; a distinct frame admits no legacy fallback.
 //! Decoding checks bytes and cumulative resource budgets before shape preflight.
 //!
-//! TODO: Bind this DTO to the complete replacement transcript, public statement,
-//! OOD/AIR checks and authenticated openings before any production admission.
+//! The offline engine binds this DTO to its transcript, public statement,
+//! OOD/AIR checks and authenticated openings. TODO: Qualify the integrated
+//! protocol and authenticate ledger context before production admission.
 //! Successful decode or shape preflight is not proof verification. In particular,
 //! the verifier must compare the positions to its own final transcript challenge.
 
@@ -26,6 +27,9 @@ use crate::{Error, GoldilocksFp4V1 as Fp4, Result};
 #[path = "deep_proof/row_values.rs"]
 mod row_values;
 pub(super) use row_values::RowValues;
+#[path = "deep_proof/fri_values.rs"]
+mod fri_values;
+pub(super) use fri_values::FriValues;
 
 pub(super) use super::deep_geometry::{FRI_ARITIES as ARITIES, LDE_ROWS, QUERY_COUNT};
 /// Merkle leaf counts for the five grouped FRI commitments.
@@ -39,13 +43,14 @@ pub(super) const GROUP_LEAVES: [usize; 5] = [
 /// Full terminal vector, checked by the eventual verifier rather than sampled.
 pub(super) const TERMINAL_VALUES: usize = FRI_LENGTHS[5];
 /// Exact serialized upper envelope for the fixed canonical DTO.
-pub(super) const MAX_FRAME_BYTES: usize = 506_351;
+pub(super) const MAX_FRAME_BYTES: usize = 500_783;
 /// Existing production-sized single-proof byte target; this is not admission.
+#[cfg(test)]
 pub(super) const PROOF_BYTE_TARGET: usize = 512 * 1024;
 /// Fixed maximum cumulative Norito allocation charges for one proof decode.
 pub(super) const MAX_ALLOCATION_CHARGES: usize = 8 * 1024 * 1024;
 const MAX_SEQUENCE_ELEMENTS: usize = 1088;
-const MAX_TOTAL_ELEMENTS: usize = 8743;
+const MAX_TOTAL_ELEMENTS: usize = 5415;
 const MAX_DECODE_DEPTH: usize = 16;
 
 /// Sole canonical frame for the proposed DEEP proof layout.
@@ -101,7 +106,7 @@ pub(super) struct FriRound {
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(super) struct FriGroup {
     pub(super) index: u32,
-    pub(super) values: Vec<Fp4>,
+    pub(super) values: FriValues,
 }
 
 /// Fixed-profile plans, derived from caller-owned transcript query positions.
@@ -133,6 +138,7 @@ fn limit(name: &'static str, actual: usize, maximum: usize) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn maximum_siblings(leaves: usize, selected: usize) -> usize {
     let depth = leaves.ilog2() as usize;
     (0..depth)
@@ -263,12 +269,17 @@ pub(super) fn preflight(proof: &DeepProof, queries: &[usize]) -> Result<OpeningP
 }
 
 /// Exact finite aggregate limits for the sole canonical DTO, before raw decoding.
+#[cfg(test)]
 pub(super) fn decode_limits(frame_bytes: usize) -> DecodeLimits {
+    decode_limits_with_allocation(frame_bytes, MAX_ALLOCATION_CHARGES)
+}
+
+fn decode_limits_with_allocation(frame_bytes: usize, allocation_charges: usize) -> DecodeLimits {
     DecodeLimits::new(
         MAX_SEQUENCE_ELEMENTS,
         frame_bytes,
         MAX_TOTAL_ELEMENTS,
-        MAX_ALLOCATION_CHARGES,
+        allocation_charges.min(MAX_ALLOCATION_CHARGES),
         MAX_DECODE_DEPTH,
     )
 }
@@ -279,13 +290,27 @@ pub(super) fn decode_limits(frame_bytes: usize) -> DecodeLimits {
 /// budgets remain active through canonical re-encoding. The proof's positions
 /// are checked for internal shape only: final verification must call `preflight`
 /// again with independently transcript-derived positions after replay.
+#[cfg(test)]
 pub(super) fn decode(bytes: &[u8], caller_max_bytes: usize) -> Result<DeepProof> {
+    decode_with_allocation(bytes, caller_max_bytes, MAX_ALLOCATION_CHARGES)
+}
+
+/// Canonical decode with the stricter caller/profile allocation-charge ceiling.
+/// Enclosing request scopes remain cumulative and cannot be reset by this call.
+pub(super) fn decode_with_allocation(
+    bytes: &[u8],
+    caller_max_bytes: usize,
+    allocation_charges: usize,
+) -> Result<DeepProof> {
     limit(
         "max_proof_bytes",
         bytes.len(),
         caller_max_bytes.min(MAX_FRAME_BYTES),
     )?;
-    let proof: DeepProof = norito::decode_canonical_with_limits(bytes, decode_limits(bytes.len()))?;
+    let proof: DeepProof = norito::decode_canonical_with_limits(
+        bytes,
+        decode_limits_with_allocation(bytes.len(), allocation_charges),
+    )?;
     if proof.rows.len() != QUERY_COUNT {
         return Err(shape("DEEP proof needs exactly 64 complete retained rows"));
     }
@@ -298,6 +323,7 @@ pub(super) fn decode(bytes: &[u8], caller_max_bytes: usize) -> Result<DeepProof>
 ///
 /// Each frontier maximum is attainable simultaneously by the linked query set
 /// in the size test. Fixed field payload lengths do not depend on scalar values.
+#[cfg(test)]
 pub(super) fn maximum_frame_bytes() -> usize {
     let field = |payload| {
         payload
@@ -311,7 +337,7 @@ pub(super) fn maximum_frame_bytes() -> usize {
         .iter()
         .enumerate()
         .map(|(round, &arity)| {
-            let group = field(4) + field(vector(arity, Fp4::BYTES));
+            let group = field(4) + field(FriValues::encoded_bytes(arity));
             field(
                 field(vector(QUERY_COUNT, group))
                     + field(vector(

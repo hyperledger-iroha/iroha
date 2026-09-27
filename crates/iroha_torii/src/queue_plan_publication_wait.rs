@@ -115,7 +115,7 @@ impl PersistenceDeadline {
     }
 }
 
-fn publication_overlap_height(error: &MergeLedgerCommitError) -> Option<u64> {
+pub(super) fn publication_overlap_height(error: &MergeLedgerCommitError) -> Option<u64> {
     match error {
         MergeLedgerCommitError::Persistence(
             iroha_core::kura::Error::QueuePlanAdmissionDurableHeightMismatch {

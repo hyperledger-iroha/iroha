@@ -60,10 +60,7 @@ fn autonomous_initial_author_loss_counterexample_retains_work_without_preproposa
         )
         .expect("plan the exact initial autonomous slot from State and Kura");
         assert_eq!(slot.validator_set.len(), 4);
-        assert_eq!(
-            crate::sumeragi::network_topology::commit_quorum_from_len(slot.validator_set.len()),
-            3
-        );
+        assert_eq!(iroha_sumeragi::types::quorum(slot.validator_set.len()), 3);
         assert_eq!(slot.author, slot.validator_set[0]);
         assert_eq!(
             adapter.local_peer,

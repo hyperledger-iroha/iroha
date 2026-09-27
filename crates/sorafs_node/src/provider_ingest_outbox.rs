@@ -35,7 +35,7 @@ use std::os::unix::fs::{
     DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
 };
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, BinaryHeap},
     fmt,
     fs::{self, File},
     path::{Path, PathBuf},
@@ -4519,17 +4519,52 @@ impl ProviderIngestOutbox {
             return Err(ProviderIngestOutboxError::InvalidPageLimit);
         }
         let state = self.lock_state()?;
-        let mut rows = state
+        // Select the first `limit + 1` identities before cloning any status or Musubi receipt.
+        // The ordinal preserves the former stable-sort order if a corrupt in-memory snapshot
+        // contains duplicate job IDs; valid checkpoints reject duplicates during installation.
+        let selection_limit = limit + 1;
+        let mut selected = BinaryHeap::new();
+        selected
+            .try_reserve(selection_limit)
+            .map_err(|_| ProviderIngestOutboxError::StateUnavailable)?;
+        for (ordinal, job_id) in state
             .checkpoint
             .active
             .iter()
-            .map(active_status)
-            .chain(state.checkpoint.terminal.iter().map(terminal_status))
-            .filter(|row| after_job_id.is_none_or(|after| row.job_id > after))
-            .collect::<Vec<_>>();
-        rows.sort_by_key(|row| row.job_id);
-        let has_more = rows.len() > limit;
-        rows.truncate(limit);
+            .map(|entry| entry.authorization.job_id)
+            .chain(
+                state
+                    .checkpoint
+                    .terminal
+                    .iter()
+                    .map(|entry| entry.authorization.job_id),
+            )
+            .enumerate()
+        {
+            if after_job_id.is_some_and(|after| job_id <= after) {
+                continue;
+            }
+            let candidate = (job_id, ordinal);
+            if selected.len() < selection_limit {
+                selected.push(candidate);
+            } else if selected.peek().is_some_and(|last| candidate < *last) {
+                selected.pop();
+                selected.push(candidate);
+            }
+        }
+        let selected = selected.into_sorted_vec();
+        let has_more = selected.len() > limit;
+        let mut rows = Vec::new();
+        rows.try_reserve(selected.len().min(limit))
+            .map_err(|_| ProviderIngestOutboxError::StateUnavailable)?;
+        let active_len = state.checkpoint.active.len();
+        for (_, ordinal) in selected.into_iter().take(limit) {
+            rows.push(if ordinal < active_len {
+                active_status(&state.checkpoint.active[ordinal])
+            } else {
+                terminal_status(&state.checkpoint.terminal[ordinal - active_len])
+            });
+        }
         let next_after_job_id = has_more.then(|| {
             rows.last()
                 .expect("has_more implies at least one returned row")
@@ -6240,7 +6275,7 @@ pub enum ProviderIngestOutboxError {
     /// Status page limit is outside the governed bound.
     #[error("provider-ingest status page limit is invalid")]
     InvalidPageLimit,
-    /// Runtime mutex was poisoned.
+    /// Runtime state lock or bounded status-page reservation is unavailable.
     #[error("provider-ingest outbox state is unavailable")]
     StateUnavailable,
     /// Atomic rename committed but directory durability is uncertain.
@@ -6319,6 +6354,7 @@ mod tests {
         }
     }
     include!("provider_ingest_outbox/tests/canonical_completion.rs");
+    include!("provider_ingest_outbox/tests/status_page.rs");
 
     fn assert_ingest_frame<T>(value: &T, name: &str) -> Vec<u8>
     where

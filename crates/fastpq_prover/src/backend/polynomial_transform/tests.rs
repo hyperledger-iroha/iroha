@@ -16,6 +16,65 @@ fn horner(coefficients: &[F], point: F) -> F {
 }
 
 #[test]
+fn explicit_deep_transform_binds_full_domain_existing_subgroup_and_payload_cap() {
+    use super::super::deep_geometry::{DeepGeometry, LDE_ROWS, TRACE_ROWS};
+    let geometry = DeepGeometry::new().unwrap();
+    let bytes = 2 * LDE_ROWS * F::BYTES;
+    let large = PolynomialDomain::for_deep(&geometry, bytes).unwrap();
+    assert_eq!(large.rows(), LDE_ROWS);
+    assert_eq!(large.workspace_bytes(), bytes);
+    assert_eq!(large.generator(), geometry.domain().generator);
+    assert_eq!(large.numerator_rotation(TRACE_ROWS).unwrap(), 128);
+    assert!(matches!(PolynomialDomain::for_deep(&geometry, bytes-1),
+        Err(Error::VerifierLimitExceeded { limit: "max_polynomial_transform_bytes", actual, max }) if actual==bytes && max==bytes-1));
+    // The old source-root constructor cannot be relabeled as this larger domain.
+    assert!(PolynomialDomain::new(LDE_ROWS, F::ONE, LDE_ROWS, bytes).is_err());
+    let old = domain(1 << 19, large.point(0).unwrap());
+    for index in [0, 1, 7, 255, 65535, (1 << 19) - 1] {
+        assert_eq!(large.point(16 * index).unwrap(), old.point(index).unwrap());
+    }
+    for index in [0, 1, 65535, LDE_ROWS - 128, LDE_ROWS - 1] {
+        assert_eq!(
+            large.point((index + 128) % LDE_ROWS).unwrap(),
+            large
+                .point(index)
+                .unwrap()
+                .mul_base(geometry.trace_generator())
+        );
+    }
+    assert!(large.point(LDE_ROWS).is_err());
+}
+
+#[test]
+#[ignore = "full 8M-point transform; explicitly selected by the DEEP producer qualification"]
+fn explicit_deep_transform_full_four_lane_fft_matches_coefficient_oracle() {
+    use super::super::deep_geometry::{DeepGeometry, LDE_ROWS, TRACE_ROWS};
+    let geometry = DeepGeometry::new().unwrap();
+    let domain = PolynomialDomain::for_deep(&geometry, 2 * LDE_ROWS * F::BYTES).unwrap();
+    let mut coefficients = vec![F::ZERO; TRACE_ROWS];
+    coefficients[0] = f(3);
+    coefficients[1] = f(7);
+    coefficients[TRACE_ROWS - 1] = f(11);
+    let evaluated = domain.evaluate(&coefficients, TRACE_ROWS).unwrap();
+    for index in (0..128).chain([65535, 65536, 1048575, LDE_ROWS - 1]) {
+        let point = domain.point(index).unwrap();
+        let expected = coefficients[0]
+            .add(coefficients[1].mul(point))
+            .add(coefficients[TRACE_ROWS - 1].mul(point.power((TRACE_ROWS - 1) as u64)));
+        assert_eq!(evaluated.value(index).unwrap(), expected);
+    }
+    // This checks actual full-domain FFT output. The inverse produces every
+    // coefficient and must recover all high zero padding as well.
+    let recovered = domain.interpolate_lanes(evaluated).unwrap();
+    assert_eq!(&recovered[..TRACE_ROWS], &coefficients);
+    assert!(
+        recovered[TRACE_ROWS..]
+            .iter()
+            .all(|&value| value == F::ZERO)
+    );
+}
+
+#[test]
 fn full_extension_fft_and_inverse_match_dense_horner_at_every_small_point() {
     for rows in [1, 2, 4, 8, 16, 32] {
         for offset in [

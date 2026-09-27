@@ -35,9 +35,27 @@ satisfy the closed registry.
 Public PLAIN arithmetic now uses an explicit pre-vote frozen smallest-unit
 context, funded escrow even at a zero minimum, immutable-choice monotonic
 updates, and a durable closed result independent of released locks. Core and
-Torii share the checked public tally. This is a public-account correctness repair;
+Torii share the checked public tally. The exact integer-square-root and capped
+conviction multiplier live in `conviction_weight_from_units_v1`, a pure checked
+reference taking the asset's smallest units. A future private ballot relation
+must prove that same equation against its confidential bond. This is a
+public-account correctness repair;
 it supplies neither anonymous credentials nor a confidential position/ballot or
 sound private tally proof, and does not open any registry admission gate.
+
+Core's retained standalone ZK election state now has one bounded, ordered
+sequence of fixed 32-byte `(nullifier, commitment)` pairs. Snapshot and restore
+validation preserve the exact pair and admission order, reject duplicate
+nullifiers, and refuse the retired split-field layout. This is only durable
+corpus structure: the current nullifier is still derived from a public
+commitment, and no credential, confidential bond, choice-preserving update, or
+dropout-resilient closed-corpus tally relation has been qualified. Ballot and
+tally production admission remain closed. Both ballot routes still clone the
+retained election before the bounded append; whole-owner allocation admission
+for that clone and its publication remains a separate resource gate.
+Create, Submit and Finalize now declare the same whole-election scheduler key
+because each replaces the entire retained record; field-suffixed election hint
+keys are rejected rather than treated as independent writes.
 
 Core's current `ballot_inputs_from_columns` reads only commitment and eligible
 root. `SubmitBallot` requires the supplied ciphertext to equal those commitment

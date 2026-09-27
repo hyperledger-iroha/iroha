@@ -1,7 +1,13 @@
 {
   "council_signature_count": 1,
-  "envelope_digest_hex": "18609199622ef5f3d94488c52857a3a42ba2529c2f189625878898937e840c2e",
+  "envelope_digest_hex": "6583a44c4ca5fec411ea83207f8bec48b97de9d835a595d98f655e823b9e54a2",
+  "expected_current_event_digest_hex": "6583a44c4ca5fec411ea83207f8bec48b97de9d835a595d98f655e823b9e54a2",
+  "network_id_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+  "policy_digest_hex": "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1",
+  "policy_id_hex": "c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1",
+  "policy_revision": 1,
   "reason": "endpoint compromise",
-  "revocation_digest_hex": "60e83a7d59c83a6d6995bc4d29b18cb7901bd81725ed0d40981b272a66d324dc",
-  "revoked_at": 970
+  "revocation_digest_hex": "0c286de308fee9a436442ab1382c3e1fcda28da5033da1e0d663e640b9f5651d",
+  "revoked_at": 970,
+  "transition_revision": 2
 }

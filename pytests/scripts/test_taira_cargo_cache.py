@@ -10,6 +10,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts/taira_cargo_cache.py"
@@ -28,6 +29,38 @@ def record(paths):
 
 
 class CargoSourceAdmissionTests(unittest.TestCase):
+    def test_missing_offline_package_reports_bounded_sanitized_cargo_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary).resolve()
+            stderr = (b"\x1b[31merror: no matching package named `missing-crate` found\x1b[0m\n"
+                      b"required by package at /private/workspace TOKEN=private-value "
+                      b"https://private.example.invalid/registry\n" + b"x" * 10000)
+            result = subprocess.CompletedProcess([], 101, b"", stderr)
+            with patch.object(cache.subprocess, "run", return_value=result) as run:
+                with self.assertRaisesRegex(ValueError, "missing-crate") as failure:
+                    cache.local_package_names(source, {"CARGO": "/fixture/cargo"})
+            command = run.call_args.args[0]
+            self.assertIn("--locked", command)
+            self.assertIn("--offline", command)
+            self.assertFalse(run.call_args.kwargs["check"])
+            message = str(failure.exception)
+            self.assertLessEqual(len(message), 610)
+            for unsafe in ("\x1b", "/private/workspace", "private-value", "private.example.invalid"):
+                self.assertNotIn(unsafe, message)
+            self.assertIn("<path>", message)
+            self.assertIn("<credential>", message)
+            self.assertIn("<url>", message)
+
+    def test_offline_metadata_timeout_has_no_command_or_stderr_dump(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary).resolve()
+            with patch.object(cache.subprocess, "run", side_effect=subprocess.TimeoutExpired(
+                    ["/private/cargo"], 60, stderr=b"private stderr")):
+                with self.assertRaisesRegex(ValueError, "timed out after 60s") as failure:
+                    cache.local_package_names(source, {"CARGO": "/private/cargo"})
+            self.assertNotIn("/private/cargo", str(failure.exception))
+            self.assertNotIn("private stderr", str(failure.exception))
+
     def test_metadata_child_creates_private_cache_without_changing_parent_umask(self):
         with tempfile.TemporaryDirectory() as temporary:
             source = Path(temporary).resolve()

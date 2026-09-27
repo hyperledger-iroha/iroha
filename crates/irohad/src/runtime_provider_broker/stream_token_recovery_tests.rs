@@ -94,6 +94,33 @@ fn ambiguous_sign_allows_only_explicit_exact_recovery_and_never_clears_sign_latc
 }
 
 #[test]
+fn reconstructed_client_without_retained_owner_cannot_recover_ambiguous_sign() {
+    let mut fixture = fixture();
+    lose_one_sign(&mut fixture);
+    // A new process would lose this latch. Its exact body and operation ID alone cannot
+    // authorize a read or another Sign until a finalized native owner can be authenticated.
+    let reconstructed = StreamTokenSignerBrokerClient {
+        session: Arc::clone(&fixture.signer.session),
+        binding: fixture.signer.binding.clone(),
+        metadata_digest: fixture.signer.metadata_digest,
+        latch: Arc::new(Mutex::new(StreamTokenSignLatchV1::Idle)),
+    };
+    assert_eq!(
+        reconstructed.recover(&expected(), &token_body()).err(),
+        Some(StreamTokenSignerCallErrorV1::Refused)
+    );
+    assert_eq!(
+        fixture
+            .reconnect_listener
+            .accept()
+            .expect_err("unretained owner cannot open a recovery connection")
+            .kind(),
+        io::ErrorKind::WouldBlock
+    );
+    assert_no_request_bytes(&mut fixture.peer);
+}
+
+#[test]
 fn recovery_failure_and_substituted_receipt_cannot_reopen_signing() {
     for substituted in [false, true] {
         let mut fixture = fixture();

@@ -233,11 +233,20 @@ membership and direct permissions are not proved by the role-table root.
 
 ## Activation requirements
 
-TODO: implement execution-owned resource reservations and per-entry rollback,
-source-aware proposal packing, and bounded mandatory trigger/native outcomes
-before inserting D7 into the final ordinary commitment. A final-capture limit
-alone can repeatedly invalidate a selected block. Truncation or omission of an
-applied source is invalid. Candidate measurements are not shipping defaults.
+The September 26 candidate now freezes the required on-chain source policy before
+block-start work, retains ordinary entry ownership before attempts, and keeps
+ordinary and mandatory reservation journals inside the disposable State/witness
+transaction. Complete entry framing is charged before transfer mutation; intrinsic
+refusals roll back business effects and retain one rejected invocation. Fee and
+ballot-penalty tail shapes are checked before execution, and proposal packing uses
+the same frozen policy. The bootstrap ordinary prefix is conservatively eleven
+Network entries; it is not a qualified throughput optimum. In-genesis parameter
+changes cannot enlarge that carrier's pre-frozen capacity.
+
+TODO: complete current-source Core execution and genesis qualification, then bind
+these journals to atomic D7 publication. The combined implementation is applied;
+its actual Core tests remain pending. Truncation or omission of an applied source
+is invalid. Final-capture limits alone cannot provide proposal liveness.
 
 TODO: bind prepared D7 contents to checked capture, authoritative source finality,
 exact AXT spending/replay protection and durable archive publication/retention.

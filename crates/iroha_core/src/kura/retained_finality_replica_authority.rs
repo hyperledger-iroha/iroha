@@ -393,8 +393,7 @@ impl Kura {
         path: &Path,
         bytes: &[u8],
     ) -> Result<KuraRetainedBlockRecord> {
-        let mut input = bytes;
-        KuraRetainedBlockRecord::decode_all(&mut input)
+        decode_bounded_kura_sidecar::<KuraRetainedBlockRecord>(bytes)
             .ok()
             .filter(|record| {
                 let canonical_len = {
@@ -989,33 +988,7 @@ impl Kura {
         blocks_dir: &Path,
         first_removed_height: u64,
     ) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::Authenticated;
-        self.prune_retained_block_records_from_with_authority(
-            blocks_dir,
-            first_removed_height,
-            &authority,
-        )
-    }
-    fn prune_retained_block_records_from_during_snapshot_finalization(
-        &self,
-        blocks_dir: &Path,
-        first_removed_height: u64,
-        authority: &SnapshotFinalizationMutationAuthority<'_>,
-    ) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::SnapshotFinalization(authority);
-        self.prune_retained_block_records_from_with_authority(
-            blocks_dir,
-            first_removed_height,
-            &authority,
-        )
-    }
-    fn prune_retained_block_records_from_with_authority(
-        &self,
-        blocks_dir: &Path,
-        first_removed_height: u64,
-        authority: &StartupRecoveryMutationAuthority<'_>,
-    ) -> Result<()> {
-        authority.validate_for(self)?;
+        self.durable_mutation_authorized()?;
         let directory = Self::retained_block_record_dir_for(blocks_dir);
         let durable_height = self.block_store.lock().read_durable_index_count()?;
         let mut heights =
@@ -1040,13 +1013,13 @@ impl Kura {
                     )
                 })?;
             removed_bytes = removed_bytes.saturating_add(Self::file_len_or_zero(&path)?);
-            authority.validate_for(self)?;
+            self.durable_mutation_authorized()?;
             std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
             resources.finish();
             removed = true;
         }
         if removed {
-            authority.validate_for(self)?;
+            self.durable_mutation_authorized()?;
             sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
             self.sub_total_disk_usage_bytes(removed_bytes);
         }
@@ -1391,23 +1364,7 @@ impl Kura {
         }
     }
     fn recover_retained_block_rewrite_stage_on_startup(&self, blocks_dir: &Path) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::Authenticated;
-        self.recover_retained_block_rewrite_stage_with_authority(blocks_dir, &authority)
-    }
-    fn recover_retained_block_rewrite_stage_during_snapshot_finalization(
-        &self,
-        blocks_dir: &Path,
-        authority: &SnapshotFinalizationMutationAuthority<'_>,
-    ) -> Result<()> {
-        let authority = StartupRecoveryMutationAuthority::SnapshotFinalization(authority);
-        self.recover_retained_block_rewrite_stage_with_authority(blocks_dir, &authority)
-    }
-    fn recover_retained_block_rewrite_stage_with_authority(
-        &self,
-        blocks_dir: &Path,
-        authority: &StartupRecoveryMutationAuthority<'_>,
-    ) -> Result<()> {
-        authority.validate_for(self)?;
+        self.durable_mutation_authorized()?;
         let staging_directory = Self::retained_block_rewrite_staging_dir_for(blocks_dir);
         #[cfg(test)]
         if self
@@ -1428,7 +1385,7 @@ impl Kura {
         )?;
         if heights.is_empty() {
             if staging_directory.exists() {
-                authority.validate_for(self)?;
+                self.durable_mutation_authorized()?;
                 let accounting_mutation = self
                     .begin_total_disk_usage_mutation()
                     .removing_resource_tree(&staging_directory);
@@ -1441,7 +1398,7 @@ impl Kura {
             }
             return Ok(());
         }
-        authority.validate_for(self)?;
+        self.durable_mutation_authorized()?;
         let mut accounting_mutation = self
             .begin_total_disk_usage_mutation()
             .with_resource_children(heights.len());
@@ -1460,7 +1417,7 @@ impl Kura {
             let destination = Self::retained_block_record_path_for(blocks_dir, height);
             let resources =
                 accounting_mutation.resource_child(vec![path.clone(), destination.clone()]);
-            authority.validate_for(self)?;
+            self.durable_mutation_authorized()?;
             if canonical_hash == Some(record.block_hash) {
                 if let Some(existing) =
                     self.decode_retained_block_record_at(&destination, &retained_directory)?
@@ -1474,15 +1431,15 @@ impl Kura {
                     if existing != record {
                         return Err(Error::ConflictingRetainedBlockRecord { height });
                     }
-                    authority.validate_for(self)?;
+                    self.durable_mutation_authorized()?;
                     std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
                 } else {
-                    authority.validate_for(self)?;
+                    self.durable_mutation_authorized()?;
                     std::fs::rename(&path, &destination)
                         .map_err(|error| Error::IO(error, path.clone()))?;
                 }
             } else {
-                authority.validate_for(self)?;
+                self.durable_mutation_authorized()?;
                 std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
             }
             resources.finish();
@@ -1491,7 +1448,7 @@ impl Kura {
             .map_err(|error| Error::IO(error, retained_directory.clone()))?;
         sync_dir(&staging_directory)
             .map_err(|error| Error::IO(error, staging_directory.clone()))?;
-        authority.validate_for(self)?;
+        self.durable_mutation_authorized()?;
         std::fs::remove_dir(&staging_directory)
             .map_err(|error| Error::IO(error, staging_directory.clone()))?;
         if let Some(parent) = staging_directory.parent() {

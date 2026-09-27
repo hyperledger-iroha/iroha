@@ -97,7 +97,7 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
     }
     // Register the first-release hybrid ledger, then emulate a completed
     // governance transition to ShieldedOnly.
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -159,7 +159,7 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
             .expect("setup instruction should succeed");
     }
     // Start in convertible mode so transparent mint succeeds.
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -228,7 +228,7 @@ fn schedule_shielded_only_requires_window() {
             .execute_instruction(&mut stx, &owner, instr)
             .expect("setup instruction should succeed");
     }
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -286,7 +286,7 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
             .execute_instruction(&mut stx, &owner, instr)
             .expect("setup instruction should succeed");
     }
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()
@@ -404,7 +404,7 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
             .execute_instruction(&mut stx, &owner, instr)
             .expect("setup instruction should succeed");
     }
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None, None);
+    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
     stx.world
         .executor()
         .clone()

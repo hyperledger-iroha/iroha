@@ -231,12 +231,12 @@ def _load_crypto_extension():
 
 
 def require_account_codec_v1():
-    """Require ABI 23 and the complete Rust account-address validation surface."""
+    """Require ABI 24 and the complete Rust account-address validation surface."""
     native = load_crypto_extension()
     version = getattr(native, "connect_norito_bridge_abi_version", None)
-    if not callable(version) or version() != 23 or any(
+    if not callable(version) or version() != 24 or any(
         not callable(getattr(native, name, None))
         for name in ("_validate_account_address_v1", "_parse_account_address_v1", "_render_account_address_v1", "_validate_sccp_account_id_v1")
     ):
-        raise NativeUnavailableError("account identities require the complete ABI-23 iroha-native owner")
+        raise NativeUnavailableError("account identities require the complete ABI-24 iroha-native owner")
     return native

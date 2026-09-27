@@ -1,4 +1,36 @@
 #[test]
+fn sumeragi_seed_custody_and_local_overrides_are_validated_together() {
+    use iroha_config::parameters::user::Root as User;
+
+    let parse = |role: &str, descriptor: u16| {
+        let overrides = format!(
+            "[sumeragi]\nrole = {role:?}\nmint_finality_seed_fd = {descriptor}\nview_timeout_base_ms = 250\n"
+        )
+        .parse::<Table>()
+        .expect("custody and timing overrides");
+        ConfigReader::new()
+            .read_toml_with_extends(fixtures_dir().join("base.toml"))
+            .expect("base fixture")
+            .with_toml_source(TomlSource::inline(overrides))
+            .read_and_complete::<User>()
+            .expect("user config")
+            .parse()
+    };
+    let config = parse("validator", 199).expect("validator custody and override");
+    assert_eq!(config.sumeragi.mint_finality_seed_fd, Some(199));
+    assert_eq!(
+        config.sumeragi.local.t_base,
+        Some(Duration::from_millis(250))
+    );
+
+    let error = parse("validator", 198).expect_err("wrong private descriptor");
+    assert!(format!("{error:?}").contains("fixed private descriptor 199"));
+
+    let error = parse("observer", 199).expect_err("observer cannot hold a validator seed");
+    assert!(format!("{error:?}").contains("observer must not configure a mint-finality seed"));
+}
+
+#[test]
 fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use defaults::sumeragi::npos;
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};

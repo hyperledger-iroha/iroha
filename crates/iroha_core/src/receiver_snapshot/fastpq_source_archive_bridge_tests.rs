@@ -2,15 +2,13 @@
 
 use super::prepare_fastpq_ordinary_source_archive_v1;
 use crate::{
+    exec_witness,
     fastpq::{
         FastpqSourceOpeningBuildLimits,
         fastpq_ordinary_source_statement_archive_v1 as build_archive,
         fastpq_ordinary_source_statement_opening_v1,
     },
-    sumeragi::{
-        exec::{NativeAmxApplicationManifestV1, execution_commitment_from_witness_for_tests},
-        witness,
-    },
+    sumeragi::exec::{NativeAmxApplicationManifestV1, execution_commitment_from_witness_for_tests},
 };
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
@@ -114,11 +112,11 @@ fn fixture(count: u32, entries: u32) -> (ExecWitness, Vec<FastpqOrdinarySourceSt
     );
     let alice_asset = AssetId::of(definition.clone(), (*ALICE_ID).clone());
     let bob_asset = AssetId::of(definition.clone(), (*BOB_ID).clone());
-    witness::start_block();
-    witness::record_read_asset(&bob_asset, Some(&Quantity::from(3_u32)));
-    witness::record_write_asset(&alice_asset, &Quantity::from(9_u32));
-    witness::record_write_asset_def_total(&definition, &Quantity::from(12_u32));
-    let mut witness = witness::drain_exec_witness();
+    exec_witness::start_block();
+    exec_witness::record_read_asset(&bob_asset, Some(&Quantity::from(3_u32)));
+    exec_witness::record_write_asset(&alice_asset, &Quantity::from(9_u32));
+    exec_witness::record_write_asset_def_total(&definition, &Quantity::from(12_u32));
+    let mut witness = exec_witness::drain_exec_witness();
     assert_eq!(witness.reads.len(), 1);
     assert_eq!(witness.writes.len(), 2);
     assert!(witness.writes.iter().any(|write| write.key.first() == Some(&(ExecutionWitnessKeyTagV1::AssetBalance as u8))));
@@ -163,7 +161,7 @@ fn exact_build_limits(
 
 #[test]
 fn public_bridge_moves_complete_leaves_and_roundtrips_the_real_ordinary_root() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for count in [1, 2, 3] {
         let (archive, root) = {
             let (witness, leaves) = fixture(count, 5);
@@ -224,7 +222,7 @@ fn public_bridge_moves_complete_leaves_and_roundtrips_the_real_ordinary_root() {
 
 #[test]
 fn empty_transport_keeps_the_real_manifest_path_at_zero_statement_caps() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for entries in [0, 5] {
         let (witness, leaves) = fixture(0, entries);
         let expected_root = execution_ordinary_root(&witness);
@@ -281,7 +279,7 @@ fn empty_transport_keeps_the_real_manifest_path_at_zero_statement_caps() {
 
 #[test]
 fn bridge_preserves_all_preparation_caps_and_does_not_modify_the_witness() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (witness, leaves) = fixture(3, 5);
     let original = witness.clone();
     let exact = exact_build_limits(&witness, 5, 3);
@@ -330,7 +328,7 @@ fn bridge_preserves_all_preparation_caps_and_does_not_modify_the_witness() {
 
 #[test]
 fn bridge_preserves_reserved_key_canonical_manifest_and_completeness_rejections() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (witness, leaves) = fixture(3, 5);
     for mutation in 0..9 {
         let mut changed_witness = witness.clone();
@@ -382,7 +380,7 @@ fn bridge_preserves_reserved_key_canonical_manifest_and_completeness_rejections(
 
 #[test]
 fn bridge_and_one_existing_opening_share_the_same_ordinary_manifest_path() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (mut witness, leaves) = fixture(3, 5);
     // The actual asset key keeps ordinary last-write-wins behavior at the bridge boundary.
     let mut last = witness.writes[0].clone();
@@ -433,7 +431,7 @@ fn bridge_and_one_existing_opening_share_the_same_ordinary_manifest_path() {
 
 #[test]
 fn model_decoder_enforces_exact_transport_caps_for_core_built_payloads() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for count in [0, 3] {
         let (witness, leaves) = fixture(count, 5);
         let (archive, root) = build_archive(
@@ -486,7 +484,7 @@ fn model_decoder_enforces_exact_transport_caps_for_core_built_payloads() {
 
 #[test]
 fn model_rejects_tampered_core_built_path_content_and_independent_expectations() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     let (witness, leaves) = fixture(3, 5);
     let (archive, root) = build_archive(
         &witness,
@@ -552,7 +550,7 @@ fn model_rejects_tampered_core_built_path_content_and_independent_expectations()
 
 #[test]
 fn bridge_and_model_decode_preserve_one_cumulative_outer_allocation_budget() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for count in [0, 3] {
         let (witness, leaves) = fixture(count, 5);
         let expected_root = execution_ordinary_root(&witness);
@@ -595,7 +593,7 @@ fn bridge_and_model_decode_preserve_one_cumulative_outer_allocation_budget() {
 
 #[test]
 fn core_bridge_and_model_roundtrip_preserve_every_supported_ambient_layout() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for count in [0, 3] {
         let (witness, leaves) = fixture(count, 5);
         let (expected, root) = build_archive(
@@ -640,7 +638,7 @@ fn core_bridge_and_model_roundtrip_preserve_every_supported_ambient_layout() {
 
 #[test]
 fn bridge_requires_independent_nontransfer_entries_for_empty_and_nonempty_archives() {
-    let _guard = witness::exec_witness_guard();
+    let _guard = exec_witness::exec_witness_guard();
     for count in [0, 3] {
         let (witness, leaves) = fixture(count, 5);
         let expected_entries = source_entries(5);

@@ -317,7 +317,7 @@ fn atomic_overlay_final_scope_policy_mismatch_rejects_without_partial_execution(
             .expect_err("final exact signed bucket violates the live definition policy");
         assert!(
             matches!(&error, ValidationFail::InstructionFailed(iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(message)) if message.contains("global asset definition requires the global public balance scope")),
-            "{error}"
+            "{error:?}"
         );
         assert_eq!(observable(&state_tx), before);
         assert!(state_tx.sccp_ivm_proved_execution_binding.is_none());

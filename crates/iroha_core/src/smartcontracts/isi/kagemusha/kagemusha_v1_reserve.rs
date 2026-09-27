@@ -1401,6 +1401,25 @@ pub(crate) fn validate_persisted_reserve_entries_v1<'a>(
     book.validate()
 }
 
+/// Check that a retained operation still names its exact reserve pool before retirement.
+///
+/// Looking up only the operation's pool ID is insufficient: corrupted storage could put a
+/// different asset or incarnation in that slot and allow the original backing asset to retire.
+///
+/// # Errors
+///
+/// Returns an invariant error when the pool is missing or has a different canonical key.
+pub(in crate::smartcontracts::isi) fn validate_retirement_operation_pool_v1(
+    operation_pool: &KagemushaReservePoolKeyV1,
+    stored_pool: Option<&KagemushaReservePoolV1>,
+) -> Result<(), KagemushaReserveErrorV1> {
+    match stored_pool {
+        Some(stored_pool) if stored_pool.key == *operation_pool => Ok(()),
+        Some(_) => Err(state_invariant("retirement_operation_pool_key_mismatch")),
+        None => Err(state_invariant("retirement_operation_missing_pool")),
+    }
+}
+
 /// Verify that restored transparent custody covers every outstanding reserve liability.
 ///
 /// Liabilities are aggregated across asset incarnations before comparison. This prevents a
@@ -3017,6 +3036,52 @@ mod tests {
         );
         assert_eq!(book.operation_count(), 4);
         book.validate().expect("valid mixed reserve");
+    }
+
+    #[test]
+    fn retirement_operation_requires_exact_pool_key_not_just_a_populated_slot() {
+        let operation_pool =
+            KagemushaReservePoolKeyV1::new(network(), asset(), asset_incarnation(1))
+                .expect("operation pool");
+        let matching = KagemushaReservePoolV1::empty(operation_pool.clone(), 0);
+        validate_retirement_operation_pool_v1(&operation_pool, Some(&matching))
+            .expect("exact pool remains available for retirement audit");
+        assert_eq!(
+            validate_retirement_operation_pool_v1(&operation_pool, None),
+            Err(KagemushaReserveErrorV1::StateInvariant {
+                reason: "retirement_operation_missing_pool",
+            })
+        );
+        let wrong_keys = [
+            KagemushaReservePoolKeyV1::new(other_network(), asset(), asset_incarnation(1))
+                .expect("foreign network pool"),
+            KagemushaReservePoolKeyV1::new(
+                network(),
+                AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
+                    "other".parse().expect("asset name"),
+                ),
+                asset_incarnation(1),
+            )
+            .expect("foreign asset pool"),
+            KagemushaReservePoolKeyV1::new(network(), asset(), asset_incarnation(2))
+                .expect("foreign incarnation pool"),
+        ];
+        for key in wrong_keys {
+            let occupant = KagemushaReservePoolV1::empty(key, 0);
+            let mut slots = BTreeMap::new();
+            slots.insert(operation_pool.liability_pool_id, occupant);
+            assert_eq!(
+                validate_retirement_operation_pool_v1(
+                    &operation_pool,
+                    slots.get(&operation_pool.liability_pool_id),
+                ),
+                Err(KagemushaReserveErrorV1::StateInvariant {
+                    reason: "retirement_operation_pool_key_mismatch",
+                }),
+                "another pool occupying the operation's map slot cannot satisfy retirement",
+            );
+        }
     }
 
     #[test]

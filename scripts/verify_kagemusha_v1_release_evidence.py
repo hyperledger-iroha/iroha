@@ -36,6 +36,9 @@ from release_artifact_contract import (
 
 MANIFEST_SCHEMA = "iroha.kagemusha_v1.release_evidence_manifest"
 PROJECTION_SCHEMA = "iroha.kagemusha_v1.authority_review_projection"
+TESTNET_MANIFEST_SCHEMA = "iroha.kagemusha_v1.testnet_experiment_evidence_manifest"
+TESTNET_PROJECTION_SCHEMA = "iroha.kagemusha_v1.testnet_experiment_authority_review_projection"
+TESTNET_PROFILE_REPORT_SCHEMA = "iroha.kagemusha_v1.testnet_profile_structural_report"
 SCHEMA_VERSION = 1
 WIRE_VERSION = 1
 
@@ -356,6 +359,7 @@ REPORT_SCHEMAS = frozenset(
         "iroha.kagemusha_v1.fuzz_report",
         "iroha.kagemusha_v1.resource_report",
         "iroha.kagemusha_v1.hardware_profile_qualification_report",
+        TESTNET_PROFILE_REPORT_SCHEMA,
         "iroha.kagemusha_v1.oem_attestation_verification_report",
         "iroha.kagemusha_v1.sender_release_command_projection",
         "iroha.kagemusha_v1.relation_qualification_report",
@@ -571,10 +575,16 @@ def _artifact_payload(value: Mapping[str, object]) -> bytes:
     )
 
 
-def _evidence_file_payload(value: Mapping[str, object]) -> bytes:
+def _evidence_file_payload(
+    value: Mapping[str, object], *, allow_absent: bool = False
+) -> bytes:
+    digest = _hex_bytes(value["sha256"], "evidence SHA-256")
+    length = _integer(value["byte_len"], "evidence length", minimum=0 if allow_absent else 1)
+    if allow_absent and ((length == 0) != (digest == bytes(32))):
+        _fail("optional evidence binding must be wholly absent or wholly present")
     return _norito_struct(
-        _hex_bytes(value["sha256"], "evidence SHA-256"),
-        _u64(_integer(value["byte_len"], "evidence length", minimum=1)),
+        digest,
+        _u64(length),
     )
 
 
@@ -905,7 +915,7 @@ def _aggregate_payload(value: Mapping[str, object]) -> bytes:
         _u32(int(value["independent_payments"])),
         _u32(int(value["folded_credits"])),
         _u32(int(value["spend_payments"])),
-        _evidence_file_payload(_object(value["report"], "aggregate report", {"sha256", "byte_len"})),
+        _evidence_file_payload(_object(value["report"], "aggregate report", {"sha256", "byte_len"}), allow_absent=True),
     )
 
 
@@ -915,7 +925,7 @@ def _thermal_payload(value: Mapping[str, object]) -> bytes:
         _u32(int(value["fold_p95_ms"])),
         _u64(int(value["process_rss_bytes"])),
         _u64(int(value["operation_energy_millijoules"])),
-        _evidence_file_payload(_object(value["report"], "thermal report", {"sha256", "byte_len"})),
+        _evidence_file_payload(_object(value["report"], "thermal report", {"sha256", "byte_len"}), allow_absent=True),
     )
 
 
@@ -924,7 +934,7 @@ def _envelope_payload(value: Mapping[str, object]) -> bytes:
         _u32(int(value["raw_complete_exchange_bytes"])),
         _u32(int(value["text_complete_exchange_bytes"])),
         _u32(int(value["handoff_p95_ms"])),
-        _evidence_file_payload(_object(value["report"], "envelope report", {"sha256", "byte_len"})),
+        _evidence_file_payload(_object(value["report"], "envelope report", {"sha256", "byte_len"}), allow_absent=True),
     )
 
 
@@ -1594,6 +1604,9 @@ def physical_oem_challenge(
 class EvidenceVerifier:
     """Stateful verifier for one immutable evidence closure."""
 
+    expected_manifest_schema = MANIFEST_SCHEMA
+    projection_schema = PROJECTION_SCHEMA
+
     def __init__(
         self,
         *,
@@ -1643,7 +1656,7 @@ class EvidenceVerifier:
             "commands",
         }
         _object(self.manifest, "evidence manifest", required)
-        if self.manifest["schema"] != MANIFEST_SCHEMA:
+        if self.manifest["schema"] != self.expected_manifest_schema:
             _fail("evidence manifest schema is unsupported")
         if self.manifest["schema_version"] != SCHEMA_VERSION:
             _fail("evidence manifest schema version is unsupported")
@@ -1756,7 +1769,7 @@ class EvidenceVerifier:
             "reproducible_builds": builds,
         }
         return {
-            "schema": PROJECTION_SCHEMA,
+            "schema": self.projection_schema,
             "schema_version": SCHEMA_VERSION,
             "manifest_sha256": self.manifest_sha256,
             "artifact_inventory": artifact_projection,
@@ -1765,6 +1778,11 @@ class EvidenceVerifier:
             "receipt_projection": receipt_projection,
             "verifier_commands": command_projection,
             "verification_scope": (
+                "testnet experiment only: closed structural evidence, exact "
+                "Rust-compatible release identities, and threshold-signed "
+                "observations; no production hardware, endurance, resource, "
+                "or independent-review qualification"
+                if self.expected_manifest_schema == TESTNET_MANIFEST_SCHEMA else
                 "closed filesystem provenance, exact Rust-compatible release "
                 "identities, derived measurements, and threshold-signed observations "
                 "from a separately pinned trusted verifier policy; candidate code is "
@@ -3508,6 +3526,187 @@ class EvidenceVerifier:
         if policy_info != self.observer_policy.info or policy_bytes != self.observer_policy.payload:
             _fail("trusted observer policy changed while evidence was verified")
 
+class TestnetExperimentEvidenceVerifier(EvidenceVerifier):
+    """Verify signed structural testnet evidence without production qualification claims.
+
+    Every required relation/helper report, proof sample, artifact, source file, and
+    threshold-signed observation is still checked by the ordinary verifier code.
+    Physical, endurance, fuzz, review, and reproducible-build reports are absent
+    from this distinct manifest schema and become zero optional receipt bindings.
+    """
+
+    expected_manifest_schema = TESTNET_MANIFEST_SCHEMA
+    projection_schema = TESTNET_PROJECTION_SCHEMA
+
+    def _candidate_profile_inputs(self, raw_rows: object) -> list[dict[str, object]]:
+        rows = _array(raw_rows, "testnet candidate profile inputs")
+        result: list[dict[str, object]] = []
+        for index, raw in enumerate(rows):
+            row = _object(raw, f"testnet profile input {index}", {
+                "hardware_profile", "provider_policy", "suite_id",
+                "qualification_report", "relations", "helpers",
+            })
+            hardware = _object(
+                row["hardware_profile"], f"testnet hardware profile {index}",
+                _HARDWARE_PROFILE_FIELDS,
+            )
+            result.append({
+                "hardware_profile": dict(hardware),
+                "provider_policy": dict(_object(
+                    row["provider_policy"], "testnet provider policy", PROVIDER_POLICY_FIELDS,
+                )),
+                "suite_id": _digest(row["suite_id"], f"testnet profile {index} suite id"),
+            })
+        return result
+
+    def _verify_global_reports(
+        self, raw: object, *, source: Mapping[str, object],
+        artifact_set_digest: str, protocols: Mapping[str, object],
+    ) -> dict[str, object]:
+        del source, artifact_set_digest
+        reports = _object(raw, "testnet global reports", {"circuit_shape"})
+        path = self._path(reports["circuit_shape"], "testnet circuit-shape report")
+        shape = self._report(path, "iroha.kagemusha_v1.circuit_shape_report", {
+            "k", "relations", "helpers", "native_profile",
+        })
+        if shape["k"] != HALO2_K:
+            _fail("testnet circuit-shape report must exercise k = 16")
+        native_profile_digest = rust_native_profile_digest(shape["native_profile"], protocols)
+        self.circuit_shapes = {
+            "relations": self._shape_rows(shape["relations"], RELATIONS, "relation"),
+            "helpers": self._shape_rows(shape["helpers"], HELPERS, "helper"),
+        }
+        self._bind_report_command(path, shape, {path})
+        empty = {"sha256": "0" * 64, "byte_len": 0}
+        return {
+            "circuit_shape_report": _binding(self.files[path]),
+            "native_profile_digest": native_profile_digest,
+            "security_review_report": dict(empty),
+            "kat_report": dict(empty),
+            "fuzz_report": dict(empty),
+            "resource_report": dict(empty),
+            "fuzz_cases": 0,
+        }
+
+    def _verify_profile(
+        self, raw: object, *, index: int, protocols: Mapping[str, object], vk_digest: str,
+    ) -> dict[str, object]:
+        profile = _object(raw, f"testnet profile {index}", {
+            "hardware_profile", "provider_policy", "suite_id",
+            "qualification_report", "relations", "helpers",
+        })
+        hardware = _object(
+            profile["hardware_profile"], f"testnet hardware profile {index}",
+            _HARDWARE_PROFILE_FIELDS,
+        )
+        profile_id = _digest(hardware["hardware_profile_id"], "testnet hardware profile id")
+        suite_id = _digest(profile["suite_id"], "testnet suite id")
+        policy_epoch = _integer(hardware["policy_epoch"], "testnet policy epoch", minimum=1)
+        if (
+            rust_hardware_profile_id(hardware) != profile_id
+            or hardware["version"] != WIRE_VERSION
+            or hardware["protocol_version"] != WIRE_VERSION
+            or hardware["capability_mask"] != _required_platform_guarantees(str(hardware["platform_class"]))
+            or hardware["valid_from_ms"] >= hardware["expires_at_ms"]
+            or hardware["allowed_suite_commitment"] != _suite_commitment(suite_id)
+        ):
+            _fail("testnet profile is not the exact governed hardware/suite binding")
+        for field in (
+            "provider_id", "product_class_digest", "firmware_policy_digest",
+            "enrollment_attestation_verifier_digest", "attestation_trust_roots_digest",
+            "allowed_suite_commitment", "qualification_report_digest",
+            "app_attestation_authority_policy_digest",
+        ):
+            _digest(hardware[field], f"testnet profile {profile_id} {field}")
+        qualification_path = self._path(profile["qualification_report"], "testnet structural report")
+        qualification = self._report(qualification_path, TESTNET_PROFILE_REPORT_SCHEMA, {
+            "provider_id", "policy_epoch", "vk_digest", "artifact_set_digest", "testnet_only",
+        })
+        if (
+            qualification["provider_id"] != hardware["provider_id"]
+            or qualification["policy_epoch"] != policy_epoch
+            or qualification["vk_digest"] != vk_digest
+            or qualification["artifact_set_digest"] != self.artifact_set_digest
+            or qualification["testnet_only"] is not True
+            or hardware["qualification_report_digest"] != self.files[qualification_path].sha256
+        ):
+            _fail("testnet structural report substitutes its governed candidate or claims production")
+        self._bind_report_command(qualification_path, qualification, {qualification_path})
+        enabled: dict[str, object] = {
+            "hardware_profile": dict(hardware),
+            "hardware_profile_id": profile_id,
+            "suite_id": suite_id,
+            "vk_digest": vk_digest,
+            "qualification_digest": "0" * 64,
+            "policy_epoch": policy_epoch,
+            "qualification_report": _binding(self.files[qualification_path]),
+        }
+        relation_rows = _array(profile["relations"], "testnet relation matrix")
+        if len(relation_rows) != len(RELATIONS):
+            _fail("testnet relation matrix must contain every release relation")
+        relations = []
+        for position, (raw_row, expected) in enumerate(zip(relation_rows, RELATIONS)):
+            row = _object(raw_row, f"testnet relation row {position}", {"relation", "report"})
+            if row["relation"] != expected:
+                _fail("testnet relation matrix is not in canonical order")
+            path = self._path(row["report"], f"testnet {expected} report")
+            relations.append(self._verify_relation(
+                path, profile_id=profile_id, relation=expected, protocols=protocols,
+            ))
+        helper_rows = _array(profile["helpers"], "testnet helper matrix")
+        if len(helper_rows) != len(HELPERS):
+            _fail("testnet helper matrix must contain every release helper")
+        helpers = []
+        for position, (raw_row, expected) in enumerate(zip(helper_rows, HELPERS)):
+            row = _object(raw_row, f"testnet helper row {position}", {"helper", "report"})
+            if row["helper"] != expected:
+                _fail("testnet helper matrix is not in canonical order")
+            path = self._path(row["report"], f"testnet {expected} helper report")
+            helpers.append(self._verify_helper(
+                path, profile_id=profile_id, helper=expected, protocols=protocols,
+            ))
+        empty = {"sha256": "0" * 64, "byte_len": 0}
+        projection = {
+            "profile": enabled,
+            "relations": relations,
+            "helper_circuits": helpers,
+            "recursive_depths": [],
+            "aggregate_balance": {
+                "independent_payments": 0, "folded_credits": 0, "spend_payments": 0,
+                "report": dict(empty),
+            },
+            "thermal": {
+                "folded_credits": 0, "fold_p95_ms": 0, "process_rss_bytes": 0,
+                "operation_energy_millijoules": 0, "report": dict(empty),
+            },
+            "envelope": {
+                "raw_complete_exchange_bytes": 0,
+                "text_complete_exchange_bytes": 0,
+                "handoff_p95_ms": 0,
+                "report": dict(empty),
+            },
+            "acceptance_cases": [],
+        }
+        enabled["qualification_digest"] = rust_profile_qualification_digest(projection)
+        return projection
+
+    def _verify_reproducible_builds(
+        self, raw: object, *, source: Mapping[str, object], artifact_set_digest: str,
+    ) -> list[dict[str, object]]:
+        del source, artifact_set_digest
+        if _array(raw, "testnet reproducible builds"):
+            _fail("testnet structural evidence cannot claim unverified reproducible builds")
+        return []
+
+    def _performance_metrics(self, report: Mapping[str, object], label: str) -> dict[str, int]:
+        return {
+            "prove_p95_ms": _integer(report["prove_p95_ms"], f"{label} prove p95", minimum=1, maximum=(1 << 32) - 1),
+            "verify_p95_ms": _integer(report["verify_p95_ms"], f"{label} verify p95", minimum=1, maximum=(1 << 32) - 1),
+            "process_rss_bytes": _integer(report["process_rss_bytes"], f"{label} RSS", minimum=1, maximum=(1 << 64) - 1),
+            "operation_energy_millijoules": _integer(report["operation_energy_millijoules"], f"{label} energy", minimum=1, maximum=(1 << 64) - 1),
+        }
+
+
 def verify_evidence(
     *,
     manifest_path: Path,
@@ -3515,6 +3714,7 @@ def verify_evidence(
     evidence_root: Path,
     observer_policy_path: Path,
     expected_observer_policy_sha256: str,
+    testnet_experiment: bool = False,
 ) -> dict[str, object]:
     """Verify one explicit immutable manifest/root pair and return its projection."""
 
@@ -3555,7 +3755,8 @@ def verify_evidence(
         raise KagemushaEvidenceError("evidence manifest is not canonical JSON") from error
     if canonical != payload:
         _fail("evidence manifest is not canonical JSON")
-    verifier = EvidenceVerifier(
+    verifier_type = TestnetExperimentEvidenceVerifier if testnet_experiment else EvidenceVerifier
+    verifier = verifier_type(
         root=evidence_root,
         manifest_path=manifest_path,
         manifest_info=manifest_info,
@@ -3576,6 +3777,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--evidence-root", required=True, type=Path)
     parser.add_argument("--observer-policy", required=True, type=Path)
     parser.add_argument("--observer-policy-sha256", required=True)
+    parser.add_argument("--testnet-experiment", action="store_true")
     return parser
 
 
@@ -3588,6 +3790,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             evidence_root=args.evidence_root,
             observer_policy_path=args.observer_policy,
             expected_observer_policy_sha256=args.observer_policy_sha256,
+            testnet_experiment=args.testnet_experiment,
         )
     except (KagemushaEvidenceError, ReleaseArtifactError, OSError, ValueError) as error:
         print(f"KAGEMUSHA release evidence rejected: {error}", file=sys.stderr)

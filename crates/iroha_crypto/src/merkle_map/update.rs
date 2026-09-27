@@ -36,6 +36,10 @@ pub trait MerkleMapNodeStore {
     ///
     /// # Errors
     /// Returns the original local failure without replacing it with absence.
+    #[expect(
+        clippy::type_complexity,
+        reason = "the store returns the exact authenticated node and its original error type"
+    )]
     fn read(
         &mut self,
         reference: &MerkleMapNodeRef<Self::NodeLocation>,
@@ -63,6 +67,10 @@ pub trait MerkleMapNodeStore {
 /// Stale public descriptors may remain after a call, but each new operation
 /// uses only its own authenticated path, including after error or unwind.
 pub struct MerkleMapUpdateWorkspace<N: Copy, V: Copy> {
+    #[expect(
+        clippy::type_complexity,
+        reason = "the fixed path stores one exact node reference and value at each depth"
+    )]
     path: [Option<(MerkleMapNodeRef<N>, MerkleMapNode<N, V>)>; super::MAX_PATH_NODES],
 }
 

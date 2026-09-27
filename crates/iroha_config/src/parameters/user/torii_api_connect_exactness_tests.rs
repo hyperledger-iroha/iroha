@@ -34,12 +34,50 @@ fn torii_app_api_limits_reject_zero_instead_of_repairing_it() {
         "app_api_default_list_limit",
         "app_api_max_list_limit",
         "app_api_max_fetch_size",
-        "app_api_rate_limit_cost_per_row",
+        "app_api_rate_limit_cost_per_page",
     ] {
         let mut table = base_table();
         exactness_torii_table_mut(&mut table).insert(field.into(), Value::Integer(0));
         exactness_rejection(table, &format!("torii.{field} must be greater than zero"));
     }
+}
+
+#[test]
+fn torii_app_api_page_cost_defaults_and_explicit_multiplier() {
+    assert_eq!(
+        load_root(base_table())
+            .torii
+            .app_api
+            .rate_limit_cost_per_page
+            .get(),
+        1
+    );
+    let mut table = base_table();
+    exactness_torii_table_mut(&mut table)
+        .insert("app_api_rate_limit_cost_per_page".into(), Value::Integer(3));
+    assert_eq!(
+        load_root(table)
+            .torii
+            .app_api
+            .rate_limit_cost_per_page
+            .get(),
+        3
+    );
+}
+
+#[test]
+fn torii_app_api_cost_rejects_retired_per_row_parameter() {
+    let mut table = base_table();
+    exactness_torii_table_mut(&mut table)
+        .insert("app_api_rate_limit_cost_per_row".into(), Value::Integer(1));
+    let error = actual::Root::from_toml_source(TomlSource::inline(table))
+        .expect_err("retired per-row rate accounting must not be accepted");
+    let report = format!("{error:?}");
+    assert!(report.contains("unknown parameter"), "{report}");
+    assert!(
+        report.contains("app_api_rate_limit_cost_per_row"),
+        "{report}"
+    );
 }
 
 #[test]
@@ -65,7 +103,7 @@ fn torii_app_api_limit_ordering_is_exact() {
         "app_api_default_list_limit",
         "app_api_max_list_limit",
         "app_api_max_fetch_size",
-        "app_api_rate_limit_cost_per_row",
+        "app_api_rate_limit_cost_per_page",
     ] {
         torii.insert(field.into(), Value::Integer(1));
     }
@@ -73,7 +111,7 @@ fn torii_app_api_limit_ordering_is_exact() {
     assert_eq!(parsed.torii.app_api.default_list_limit.get(), 1);
     assert_eq!(parsed.torii.app_api.max_list_limit.get(), 1);
     assert_eq!(parsed.torii.app_api.max_fetch_size.get(), 1);
-    assert_eq!(parsed.torii.app_api.rate_limit_cost_per_row.get(), 1);
+    assert_eq!(parsed.torii.app_api.rate_limit_cost_per_page.get(), 1);
 }
 
 #[test]

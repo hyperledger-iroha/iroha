@@ -11,6 +11,7 @@ use crate::smartcontracts::isi::triggers::{
     specialized::{LoadedActionTrait, TimeTriggerRetryState},
 };
 use iroha_data_model::{
+    ValidationFail,
     block::execution_output::{
         INTERNAL_REJECTION_DIAGNOSTIC_OMITTED, InvocationCompletionV1, PipelineExecutionOutputV1,
         PipelineInvocationV1, TimeExecutionOutputV1, TimeInvocationV1, TriggerFailureRootV1,
@@ -195,6 +196,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .as_mut()
             .ok_or("output budget already consumed")?
             .begin(invocation.terminal())?;
+        self.state.retain_fastpq_source_invocation(call)?;
         let mut attempt = OutputTransaction::new(self.state)?;
         let tx = attempt
             .transaction
@@ -214,7 +216,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             )),
         };
         let root = tx.execute_trigger(id, action.authority(), action.executable(), event, 0, nft);
-        let execution = match root {
+        let mut execution = match root {
             Err(reason) => Err((reason, None)),
             Ok(step) => {
                 // Pipeline consumes its root repeat before chained callbacks;
@@ -229,6 +231,14 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                     .map_err(|reason| (reason, Some(step)))
             }
         };
+        if tx.fastpq_source_quota.intrinsic_rejected()? {
+            execution = Err((
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                    crate::fastpq::source_reservation::admission::SOURCE_INTRINSIC_REJECTION.into(),
+                )),
+                None,
+            ));
+        }
         if tx.tx_call_hash != Some(call)
             || tx.current_tx_hash.is_some()
             || tx.current_entrypoint_index.is_some()

@@ -1495,6 +1495,34 @@ impl ProductionLifecycleOwnerV1 {
                         };
                     }
                     AdapterEffectAdmissionTransaction::Returned { decision, prepared } => {
+                        if matches!(
+                            decision,
+                            AdmissionDecision::Rejected(super::AdmissionRejection::ForeignOwner)
+                        ) {
+                            let candidate = prepared.candidate();
+                            let incumbent = self
+                                .coordinator
+                                .key_index
+                                .get(&candidate.key)
+                                .and_then(|ordinal| self.coordinator.records.get(ordinal));
+                            let same_replay_authority = incumbent.is_some_and(|record| {
+                                self.coordinator
+                                    .durable_records
+                                    .get(&record.ordinal)
+                                    .is_some_and(|metadata| {
+                                        metadata.replay_authority == candidate.replay_authority
+                                    })
+                            });
+                            iroha_logger::error!(
+                                key = ?candidate.key,
+                                candidate_root = ?candidate.causal_root,
+                                candidate_work_class = ?candidate.work_class,
+                                candidate_stage = ?candidate.stage,
+                                incumbent = ?incumbent.map(|record| (record.ordinal, record.owner.causal_root(), record.work_class, record.stage, record.state)),
+                                same_replay_authority,
+                                "signed lifecycle output collided with a different active owner"
+                            );
+                        }
                         let pending = PendingLifecycleOutputAdmissionV1::reclaim_returned(
                             prepared, execution,
                         );

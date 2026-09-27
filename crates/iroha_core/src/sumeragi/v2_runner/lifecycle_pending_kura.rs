@@ -58,7 +58,7 @@ pub(super) fn pending_tip_recovery_deadline_error(
     stage: Option<PendingKuraApplyRecoveryStage>,
 ) -> V2RunnerError {
     output_guard.activate_restart_required();
-    super::super::status::mark_v2_restart_required();
+    super::super::v2_status::mark_v2_restart_required();
     V2RunnerError::PendingTipRecoveryDeadlineExceeded {
         timeout,
         attempts,
@@ -467,7 +467,7 @@ fn run_pending_active_height(
     shutdown_signal: &iroha_futures::supervisor::ShutdownSignal,
     output_guard: &Arc<ConsensusOutputGuard>,
     cleanup_supervisor: &mut V2CleanupSupervisor,
-    liveness_watchdog: &mut crate::sumeragi::status::V2LivenessWatchdog,
+    liveness_watchdog: &mut crate::sumeragi::v2_status::V2LivenessWatchdog,
     block_sync_server: &mut V2BlockSyncServer,
     genesis_account: &AccountId,
     control_queue_capacity: usize,
@@ -514,10 +514,13 @@ fn run_pending_active_height(
         activated.with_runner_runtime(
             &mut active_runner,
             |executor, _services| -> Result<_, V2RunnerError> {
-                // Relay ingress only updates QueuePlan. The next runtime turn
-                // dispatches its effects under the configured queue capacity.
-                drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view())
-                    .map_err(V2RunnerError::LaneWork)
+                drain_lane_relay_ingress(
+                    lane_relay_rx,
+                    queue_plan,
+                    executor.current_tag().view(),
+                    |sender, vote| native.accept_lane_drain_vote(sender, vote),
+                )
+                .map_err(V2RunnerError::LaneWork)
             },
         )?;
         let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
@@ -579,7 +582,12 @@ fn run_pending_active_height(
                     block_sync_server,
                     DecidedLaneRecoveryIngressDrainMode::OpenPreflight,
                 )?;
-                drain_lane_relay_ingress(lane_relay_rx, queue_plan, executor.current_tag().view())?;
+                drain_lane_relay_ingress(
+                    lane_relay_rx,
+                    queue_plan,
+                    executor.current_tag().view(),
+                    |sender, vote| native.accept_lane_drain_vote(sender, vote),
+                )?;
                 dispatch_queue_plan_admission_effects(queue_plan, services, control_queue_capacity)
                     .map(|_| ())?;
                 let _ = services
@@ -669,6 +677,7 @@ fn run_pending_active_height(
                         queue_plan,
                         executor.current_tag().view(),
                         control_queue_capacity,
+                        |sender, vote| native.accept_lane_drain_vote(sender, vote),
                     )?;
                     dispatch_queue_plan_admission_effects(
                         queue_plan,
@@ -886,7 +895,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
     reservation_reconciliation_pending: bool,
     _eager_block_sync: bool,
     mut cleanup_supervisor: V2CleanupSupervisor,
-    mut liveness_watchdog: crate::sumeragi::status::V2LivenessWatchdog,
+    mut liveness_watchdog: crate::sumeragi::v2_status::V2LivenessWatchdog,
     deferred_admission_ordinals: DeferredAdmissionOrdinalSource,
     kura_replica_advert_refresh: Arc<KuraReplicaAdvertRefreshOwner>,
     mut block_sync_server: Option<V2BlockSyncServer>,
@@ -926,7 +935,7 @@ pub(super) fn run_pending_kura_lifecycle_height(
             context.da_layout,
         )
         .map_err(ingress_capacity_error)?;
-    super::super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
+    super::super::v2_status::set_v2_network_ingress(context.id(), context.height, &block_rx);
     let fingerprints = adapter_fingerprints(build_identity, &local_peer, &shared_config);
     let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
     let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;

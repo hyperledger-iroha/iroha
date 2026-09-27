@@ -40,6 +40,8 @@ export function browserSumeragiStatusFixture() {
     merge_carrier: null,
     executed_block_wire_len: 123,
     executed_block_wire_hash: browserSumeragiHash(0x37),
+    transaction_input_commitment: null,
+    transaction_output_commitment: null,
   };
   const heightContextId = [browserSumeragiHash(0x14)];
   const commitContextId = [browserSumeragiHash(0x41)];

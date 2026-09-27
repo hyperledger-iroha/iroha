@@ -51,12 +51,8 @@ impl ValidBlock {
             .ok_or_else(|| {
                 Self::execution_context_error("carrier height exceeds host membership width")
             })?;
-        let membership = crate::tx::canonical_carrier_membership_hashes(
-            state,
-            block.external_entrypoints_slice(),
-        );
         state
-            .stage_canonical_carrier_membership(membership, height)
+            .stage_prepaid_ordinary_carrier_membership(block, height)
             .map_err(BlockValidationError::from_certified_merge_stage_error)?;
         state
             .resolve_queue_plan_pending_obligations_from_block(block)
@@ -195,7 +191,7 @@ impl ValidBlock {
             .map(|account| authenticate_genesis_block_intents(block, account))
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        let _guard = crate::exec_witness::exec_witness_guard();
         Self::execute_and_record_canonical_outputs(
             block,
             state,
@@ -223,7 +219,7 @@ impl ValidBlock {
             .map(|account| authenticate_genesis_block_intents(block, account))
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
-        let _guard = crate::sumeragi::witness::exec_witness_guard();
+        let _guard = crate::exec_witness::exec_witness_guard();
         Self::execute_and_record_canonical_outputs(
             block,
             state,

@@ -53,8 +53,15 @@ pub(crate) struct ValidatedExecutionPrefix {
 /// merge projection as its authority. All original Native owners survive capture.
 enum PrefixSourceAuthority {
     Ordinary,
+    // Only the private metadata-tail owner may hold this intermediate phase.
+    PreparingMerge(Box<PreparingMergeSource>),
+    Merge(Box<MergeSourceCustody>),
     Native(Box<lane_decision_batch::NativeExecutionCustody>),
 }
+
+#[path = "merge_custody.rs"]
+mod merge_custody;
+use merge_custody::{MergeSourceCustody, PreparingMergeSource};
 
 impl ValidatedExecutionPrefix {
     /// Authenticate original execution and immutable sources under the held Kura
@@ -70,6 +77,11 @@ impl ValidatedExecutionPrefix {
     ) -> Result<(), CarrierSourceAuthenticationError> {
         use CarrierSourceAuthenticationError::Identity;
 
+        if matches!(&self.authority, PrefixSourceAuthority::PreparingMerge(_)) {
+            return Err(Identity(
+                "merge source has not completed its private metadata tail".into(),
+            ));
+        }
         self.sealed.verify_wire_binding(block).map_err(Identity)?;
         let source_context = self.sources().source_context();
         if source_context.network_id != context.network_id
@@ -85,7 +97,8 @@ impl ValidatedExecutionPrefix {
         }
         let manifest =
             exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
-                block, None,
+                block,
+                self.merge_entry(),
             )
             .map_err(Identity)?;
         let lanes =
@@ -131,6 +144,18 @@ impl ValidatedExecutionPrefix {
                 }) {
                     return Err(Identity(
                         "ordinary execution cannot substitute another source family".into(),
+                    ));
+                }
+            }
+            PrefixSourceAuthority::PreparingMerge(_) => {
+                return Err(Identity("merge source is still being prepared".into()));
+            }
+            PrefixSourceAuthority::Merge(merge) => {
+                if !merge.retains_carrier(block, self.sources())
+                    || !merge.retains_carrier(&durable_body, self.sources())
+                {
+                    return Err(Identity(
+                        "durable merge carrier differs from its original source".into(),
                     ));
                 }
             }
@@ -194,13 +219,18 @@ impl ValidatedExecutionPrefix {
     ) -> bool {
         self.sealed.proposal() == block.hash()
             && self.sealed.sources().proposal() == block.hash()
+            && self.sources().source_context().network_id == context.network_id
+            && self.sources().source_context().height == context.height
+            && context.height == block.header().height().get()
             && match &self.authority {
                 PrefixSourceAuthority::Ordinary => {
                     !self.sealed.sources().is_native()
-                        && !block
-                            .execution_context()
-                            .is_some_and(|bundle| bundle.native_lane_decisions.is_some())
+                        && !block.execution_context().is_some_and(|bundle| {
+                            bundle.native_lane_decisions.is_some() || bundle.merge_entry.is_some()
+                        })
                 }
+                PrefixSourceAuthority::PreparingMerge(_) => false,
+                PrefixSourceAuthority::Merge(merge) => merge.retains_carrier(block, self.sources()),
                 PrefixSourceAuthority::Native(native) => {
                     self.sealed.sources().is_native() && native.retains_carrier(block, context)
                 }
@@ -209,7 +239,9 @@ impl ValidatedExecutionPrefix {
     /// Borrow the exact source custody without granting publication authority.
     pub(in crate::state) fn native(&self) -> Option<&lane_decision_batch::NativeExecutionCustody> {
         match &self.authority {
-            PrefixSourceAuthority::Ordinary => None,
+            PrefixSourceAuthority::Ordinary
+            | PrefixSourceAuthority::PreparingMerge(_)
+            | PrefixSourceAuthority::Merge(_) => None,
             PrefixSourceAuthority::Native(native) => Some(native),
         }
     }
@@ -219,7 +251,9 @@ impl ValidatedExecutionPrefix {
         &self,
     ) -> Option<&lane_decision_batch::NativeExecutionCustody> {
         match &self.authority {
-            PrefixSourceAuthority::Ordinary => None,
+            PrefixSourceAuthority::Ordinary
+            | PrefixSourceAuthority::PreparingMerge(_)
+            | PrefixSourceAuthority::Merge(_) => None,
             PrefixSourceAuthority::Native(native) => Some(native),
         }
     }
@@ -269,7 +303,31 @@ impl ValidatedExecutionPrefix {
             && state.fastpq_witness_context.is_none()
             && state.parliament_timed_ovn_casting_bindings.is_none()
             && match &self.authority {
-                PrefixSourceAuthority::Ordinary => state.native_lane_stage.is_none(),
+                PrefixSourceAuthority::Ordinary => {
+                    state.native_lane_stage.is_none()
+                        && state.staged_merge_entry.is_none()
+                        && state.merge_prefix_seal().is_none()
+                }
+                PrefixSourceAuthority::PreparingMerge(merge) => {
+                    merge.retains_state(state)
+                        && state
+                            .verify_captured_merge_prefix(
+                                self.sources(),
+                                &self._inventory,
+                                &self.witness,
+                            )
+                            .is_ok()
+                }
+                PrefixSourceAuthority::Merge(merge) => {
+                    merge.retains_closed_state(state, self.sources())
+                        && state
+                            .verify_captured_merge_prefix(
+                                self.sources(),
+                                &self._inventory,
+                                &self.witness,
+                            )
+                            .is_ok()
+                }
                 PrefixSourceAuthority::Native(native) => native.retains_state(state),
             }
     }
@@ -297,9 +355,9 @@ impl<'state> PrefixPreparation<'state> {
         MergeLedgerCommitError,
     > {
         let block = valid.as_ref();
-        // Certified merge retains its separate, unfinished source consumer.
-        // A Native source must arrive from the exact globally checked recorded
-        // constructor, retaining the actual stage, groups and verified context.
+        // Keep each source family explicit. Certified merge retains its original
+        // State entry and economic authorization throughout the metadata tail;
+        // only that private tail may move them into the final prefix owner.
         let authority = match native {
             Some(native)
                 if native.retains_state(&state)
@@ -309,25 +367,33 @@ impl<'state> PrefixPreparation<'state> {
             {
                 PrefixSourceAuthority::Native(Box::new(native))
             }
+            None if state.staged_merge_entry.is_some() => PrefixSourceAuthority::PreparingMerge(
+                Box::new(PreparingMergeSource::capture(&mut state, block)?),
+            ),
             None if state.native_lane_stage.is_none()
                 && !block
                     .execution_context()
                     .is_some_and(|context| context.native_lane_decisions.is_some())
-                && state.merge_carrier_entrypoints.is_empty() =>
+                && state.merge_carrier_entrypoints.is_empty()
+                && state.merge_prefix_seal().is_none()
+                && !block
+                    .execution_context()
+                    .is_some_and(|context| context.merge_entry.is_some()) =>
             {
                 PrefixSourceAuthority::Ordinary
             }
             _ => {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "carrier prefix has no exact Native or ordinary source owner".to_owned(),
+                    "carrier prefix has no exact Native, merge or ordinary source owner".to_owned(),
                 ));
             }
         };
-        if state.staged_merge_entry.is_some()
-            || state.canonical_wsv_merge_commit_authorization.is_some()
-            || state
-                .canonical_carrier_commit_metadata_authorization
-                .is_some()
+        if state
+            .canonical_carrier_commit_metadata_authorization
+            .is_some()
+            || (!matches!(&authority, PrefixSourceAuthority::PreparingMerge(_))
+                && (state.staged_merge_entry.is_some()
+                    || state.canonical_wsv_merge_commit_authorization.is_some()))
         {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                 "carrier prefix has no active certified-merge source owner".to_owned(),
@@ -351,7 +417,8 @@ impl<'state> PrefixPreparation<'state> {
         })?;
         let manifest =
             exec::NativeAmxApplicationManifestV1::from_result_bearing_block_and_merge_entry(
-                block, None,
+                block,
+                state.staged_merge_entry.as_ref(),
             )
             .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
         let lanes = exec::LaneFinalityManifestV1::from_result_bearing_block(block)
@@ -393,6 +460,9 @@ impl<'state> PrefixPreparation<'state> {
                 "carrier prefix lost its original execution witness".to_owned(),
             )
         })?;
+        state
+            .verify_captured_merge_prefix(sealed.sources(), &inventory, &witness)
+            .map_err(MergeLedgerCommitError::ExecutionBatchInvalid)?;
         let prefix = ValidatedExecutionPrefix {
             sealed,
             authority,
@@ -508,6 +578,7 @@ pub(super) fn prepare<'state>(
         let publication_events = preparation
             .state
             .prepare_carrier_publication_events(block.header())?;
+        preparation.finish_merge_source(block)?;
         Ok((
             preparation,
             native_amx_manifest,
@@ -546,3 +617,7 @@ pub(super) fn prepare<'state>(
 #[cfg(test)]
 #[path = "execution_prefix_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "merge_custody_tests.rs"]
+mod merge_custody_tests;

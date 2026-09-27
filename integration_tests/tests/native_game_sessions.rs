@@ -391,15 +391,15 @@ async fn assert_partition_round_is_covered(peer: &NetworkPeer, fault_height: u64
     let client = peer.client();
     let status = read_on_dedicated_thread(move || client.client().get_sumeragi_status()).await?;
     ensure!(
-        !status.restart_required
-            && status.last_committed_height < fault_height
+        !status.halted.is_some()
+            && status.committed_height < fault_height
             && status.height <= fault_height
             && (status.height < fault_height || status.view < PARTITION_VIEWS),
         "partition escaped its controlled round inventory: height={}, view={}, committed={}, restart_required={}",
         status.height,
         status.view,
-        status.last_committed_height,
-        status.restart_required,
+        status.committed_height,
+        status.halted.is_some(),
     );
     Ok(())
 }

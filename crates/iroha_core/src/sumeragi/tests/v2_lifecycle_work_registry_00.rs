@@ -565,8 +565,8 @@ fn register_production_ready_validate_remote_body(
 #[cfg(feature = "bls")]
 #[allow(clippy::too_many_lines)]
 fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let marker = production_ready_validate_dispatch_marker();
     for row in ProductionReadyValidateDispatchRow::ALL {
         let (owned, recovered_apply, recovered_validate_retry_census, recovered_validator_keys) =
@@ -1037,7 +1037,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     .unwrap_or_else(|error| {
                         panic!("{row:?}: park LocalProposalReady behind the Sign fence: {error}")
                     });
-                let initial_deferred_completion_depth = crate::sumeragi::status::v2_status()
+                let initial_deferred_completion_depth = crate::sumeragi::v2_status::v2_status()
                     .and_then(|status| {
                         status.liveness.queues.into_iter().find_map(|queue| {
                             (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
@@ -1070,7 +1070,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                             });
                         let fence = executor.lifecycle_reducer_fence_observation();
                         let status = executor.status();
-                        let deferred_completion_depth = crate::sumeragi::status::v2_status()
+                        let deferred_completion_depth = crate::sumeragi::v2_status::v2_status()
                             .and_then(|status| {
                                 status.liveness.queues.into_iter().find_map(|queue| {
                                     (queue.queue == wire::SumeragiV2QueueKind::DeferredCompletion)
@@ -1466,7 +1466,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
                     "{row:?}: settled post-Apply Broadcast retained rollover blockers: {:?}",
                     executor.ready_to_finish_blockers()
                 );
-                crate::sumeragi::status::clear_v2_status();
+                crate::sumeragi::v2_status::clear_v2_status();
             }
 
             let ledger_after = std::fs::read(&ledger_path)
@@ -1546,7 +1546,7 @@ fn production_completion_dispatch_publishes_all_ready_validate_outcomes_fixture(
         drop(adapter_directory);
         drop(_directory);
     }
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 #[cfg(feature = "bls")]

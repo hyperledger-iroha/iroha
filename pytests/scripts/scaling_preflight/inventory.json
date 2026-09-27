@@ -5193,7 +5193,7 @@
   },
   "schema": "iroha.sumeragi_v2.fixed_scaling.preflight.v1",
   "sources": {
-    "ci/check_sumeragi_v2_multilane_release_inventory.sh": "0324a38d61b4d704d8412c3485a6d0a8484389585dd5563688a7e6eb29570a5b",
+    "ci/check_sumeragi_v2_multilane_release_inventory.sh": "1a4bcc10366ed45a25b0b19d3f6a5de720e28d1f364dfd794769519f37592342",
     "crates/iroha/src/client.rs": "e9ac3b0e619a0c3a0492c70bb7d28bfe41b2f0fe82335b6e0904fb405a8044b4",
     "crates/iroha/src/client/activation_attestation_tests.rs": "3d0e143daac3df66a8143d7770a546a4a5e47a9cc16f7484cdc76e4b9521fce1",
     "crates/iroha/src/client/activation_evidence.rs": "249328ee2388b4bfc967161ecb43b15443521a18b804bfc95d2b9cbd597d9884",

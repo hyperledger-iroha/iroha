@@ -66,6 +66,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
+use mv::storage::StorageReadOnly;
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -235,10 +236,8 @@ fn lifecycle_payload_for_validators_with_count_and_lane(
         .iter()
         .map(|entrypoint| Hash::from(entrypoint.hash()))
         .collect::<Vec<_>>();
-    let min_quorum = u32::try_from(
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1),
-    )
-    .expect("lifecycle validator quorum fits u32");
+    let min_quorum = u32::try_from(iroha_sumeragi::types::quorum(validator_set.len()).max(1))
+        .expect("lifecycle validator quorum fits u32");
     let mut descriptor = LaneBlockDescriptorV1 {
         lane_id,
         dataspace_id: DataSpaceId::UNIVERSAL,
@@ -595,25 +594,33 @@ fn install_lifecycle_queue_plan_validator_authority(
             .find(|signer| signer.public_key() == validator.validator.public_key())
             .expect("lifecycle QueuePlan authority key must match every roster member");
         let public_key = signer.public_key().clone();
-        let id = crate::state::derive_validator_key_id(&public_key);
-        let record = ConsensusKeyRecord {
-            id: id.clone(),
-            public_key,
-            pop: Some(
-                iroha_crypto::bls_normal_pop_prove(signer.private_key())
-                    .expect("lifecycle QueuePlan validator PoP"),
-            ),
-            activation_height: 0,
-            expiry_height: None,
-            replaces: None,
-            status: ConsensusKeyStatus::Active,
-        };
-        world_block
-            .consensus_keys
-            .insert(id.clone(), record.clone());
-        world_block
-            .consensus_keys_by_pk
-            .insert(record.public_key.to_string(), vec![id]);
+        let pop = iroha_crypto::bls_normal_pop_prove(signer.private_key())
+            .expect("lifecycle QueuePlan validator PoP");
+        for id in [
+            crate::state::derive_validator_key_id(&public_key),
+            crate::state::derive_committee_key_id(&public_key),
+        ] {
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: public_key.clone(),
+                pop: Some(pop.clone()),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world_block.consensus_keys.insert(id, record.clone());
+            let pk = record.public_key.to_string();
+            let mut by_pk = world_block
+                .consensus_keys_by_pk
+                .get(&pk)
+                .cloned()
+                .unwrap_or_default();
+            if !by_pk.contains(&record.id) {
+                by_pk.push(record.id);
+                world_block.consensus_keys_by_pk.insert(pk, by_pk);
+            }
+        }
     }
     world_block.commit();
     let validators = context

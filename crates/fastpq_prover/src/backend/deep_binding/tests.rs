@@ -14,6 +14,38 @@ fn context() -> Context {
     Context::new(b"complete immutable public statement").unwrap()
 }
 
+#[test]
+fn doubled_degree_geometry_changes_the_bound_context_and_root_commitment() {
+    let current = context();
+    let old_descriptor = StatementContext {
+        layout: LAYOUT_ID.to_owned(),
+        relation: FIXTURE_RELATION_IDENTITY.to_owned(),
+        trace_rows: TRACE_ROWS as u32,
+        lde_rows: LDE_ROWS as u32,
+        columns: COMMITTED_COLUMN_COUNT as u32,
+        constraints: CONSTRAINTS as u32,
+        modulus: MODULUS,
+        extension_nonresidue: 7,
+        lde_root: LDE_ROOT,
+        coset_offset: COSET_OFFSET,
+        fri_arities: FRI_ARITIES.map(|v| v as u32),
+        fri_lengths: FRI_LENGTHS.map(|v| v as u32),
+        fri_degrees: [65_536, 4_096, 256, 32, 4, 1],
+        query_count: QUERY_COUNT as u32,
+        query_candidates: QUERY_CANDIDATES as u32,
+        statement: b"complete immutable public statement".to_vec(),
+    };
+    let old = Context {
+        framing: FramingContext::new_deep(&norito::encode_canonical(&old_descriptor).unwrap())
+            .unwrap(),
+    };
+    let row = vec![0; COMMITTED_COLUMN_COUNT * 8];
+    assert_ne!(
+        current.hash_leaf(Oracle::Row, 0, &row).unwrap(),
+        old.hash_leaf(Oracle::Row, 0, &row).unwrap()
+    );
+}
+
 fn raw_challenge(transcript: &mut Transcript, round: Round) -> Result<Message> {
     transcript.challenge_with(|_, actual, _, output| {
         assert_eq!(actual, round);
@@ -350,4 +382,66 @@ fn real_challenge_uses_every_block_and_preserves_full_raw_tape() {
     assert_ne!(&raw[..48], &raw[48..96]);
     assert_ne!(&raw[..48], &raw[615 * 48..]);
     assert_eq!(decode(*round, raw).unwrap(), Message::Fields(alpha));
+}
+
+#[test]
+fn prepared_relation_identity_is_explicit_bounded_and_separate_from_raw_fixtures() {
+    use crate::{
+        backend::compact_transfer_air::CompactTransferAir,
+        gadgets::compact_smt_air::{PublicStatement, PublicUpdate},
+    };
+    let mut marker = [0; 8];
+    marker[7] = 1 << 24;
+    let statement = PublicStatement {
+        updates: [PublicUpdate {
+            old_leaf: marker,
+            new_leaf: marker,
+            path: 0,
+        }; 2],
+        old_root: marker,
+        new_root: marker,
+    };
+    let relation =
+        CompactTransferAir::new(&statement, Some(b"complete prepared statement")).unwrap();
+    let actual = Context::for_relation(&relation).unwrap();
+    let exact =
+        Context::with_identity(relation.schema().identity, relation.statement_bytes()).unwrap();
+    let fixture = Context::new(relation.statement_bytes()).unwrap();
+    let zero = Digest::default();
+    let root = actual.hash_parent(Oracle::Row, 1, 0, zero, zero).unwrap();
+    assert_eq!(
+        root,
+        exact.hash_parent(Oracle::Row, 1, 0, zero, zero).unwrap()
+    );
+    assert_ne!(
+        root,
+        fixture.hash_parent(Oracle::Row, 1, 0, zero, zero).unwrap()
+    );
+    let different = Context::with_identity(
+        "another prepared relation identity",
+        relation.statement_bytes(),
+    )
+    .unwrap();
+    assert_ne!(
+        root,
+        different
+            .hash_parent(Oracle::Row, 1, 0, zero, zero)
+            .unwrap()
+    );
+    assert!(Context::with_identity("", relation.statement_bytes()).is_err());
+    assert!(
+        Context::with_identity(
+            &"x".repeat(MAX_RELATION_IDENTITY_BYTES + 1),
+            relation.statement_bytes()
+        )
+        .is_err()
+    );
+    assert!(
+        Context::with_identity(
+            &"x".repeat(MAX_RELATION_IDENTITY_BYTES),
+            relation.statement_bytes()
+        )
+        .is_ok()
+    );
+    assert!(core::ptr::eq(&relation, relation.deep_relation()));
 }

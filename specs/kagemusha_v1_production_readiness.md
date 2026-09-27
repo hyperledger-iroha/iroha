@@ -5,7 +5,72 @@ qualified**. This record tracks implementation and validation work; it is not an
 independent cryptographic audit, hardware certification, or authorization to
 enable an offline monetary profile.
 
-## Release goals
+## Current bounded goal — 2026-09-26
+
+Finish and validate the existing signed-bootstrap-to-native-startup implementation
+in `/Users/takemiyamakoto/dev/iroha` on `optimizations`, then deliver one reviewable
+signed change. This replaces the open-ended production-readiness work scope for
+the current milestone. Production qualification remains a separate outcome.
+
+Completion requires all of the following:
+
+1. Compile and pass the focused shared bootstrap/freshness model, native
+   bootstrap/startup/publication/deadline, and Kagami issuance tests. Fix failures
+   in this scope, including signed time, replay, process ownership, partial
+   installation and panic-recovery regressions.
+2. Regenerate Kagami command help and pass its generated-help comparison and
+   canonical-command checks. Pass formatting for changed files and the codec
+   guard. Keep first-release APIs canonical, with no compatibility adapters.
+3. Commit only this milestone's reviewed implementation, tests, generated help
+   and source-coupled documentation with signing enabled. Preserve unrelated
+   working-tree changes and record the exact tests that actually completed.
+
+Scope is frozen to those acceptance criteria. New server issuer/storage work,
+HTTP deployment, app provisioning, recursive inventory/slice/root completion,
+hardware qualification and release-wide performance/security evidence are later
+milestones. Preserve their current work; do not pull them into this milestone.
+Collect already-running test results without expanding the implementation scope.
+Stop this milestone after its acceptance criteria pass; do not automatically
+continue into the later milestones or claim production readiness.
+
+Current validation blocker: the merged native target fails before tests in
+`crates/sorafs_car/src/multi_fetch.rs`: its `runtime` module is absent, and its
+wrappers require `InternalFetchOutcome` while the inner fetch still returns
+`FetchOutcome` (`E0583`, `E0609`). Merge `44ac7ef9f1` introduced this incomplete
+dependency change; neither merge parent contains the missing implementation.
+Repair belongs to the SoraFS dependency owner, followed by the focused native
+rerun. The earlier 94 passing native tests remain component evidence from that
+build; they do not establish native compilation of the merged candidate. The
+bounded goal remains incomplete while this acceptance gate is blocked.
+
+Completed focused validation on September 26: 70 model tests and 29 Kagami tests
+pass, including the immutable capture, separate identities for the two later
+experimental-release declarations, all 28 bootstrap/release CLI cases and the
+generated-help comparison. The capture fixture itself is unchanged. Exact command:
+
+```sh
+scripts/cargo_fast.sh --target-slot kagemusha-v1 --stable-local-metadata --incremental -- \
+  test -p iroha_data_model -p iroha_kagami --lib --bin kagami \
+  --features iroha_core/default,iroha_core/zk-halo2-ipa -- \
+  mobile_bootstrap kagemusha_release_v1 'kagemusha::tests::' \
+  tests::checked_in_markdown_help_matches_generated_help --nocapture
+```
+
+The normal Kagami binary regenerated `crates/iroha_kagami/CommandLineHelp.md`
+using `advanced markdown-help`; an independent byte comparison also passes.
+`python3 -m unittest scripts.tests.kagemusha_release_cli_hard_cut_test` passes
+all nine checks; changed-source formatting passes for 31 Rust files using
+`rustfmt --edition 2024 --check --config skip_children=true`, and
+`scripts/check_no_legacy_codec.sh` passes. These are host component checks,
+not physical-device, full-workspace or production qualification.
+
+The separate dependency regression suite passes 35 tests, including
+`revocation_structural_validation_preserves_signature_verification`, with
+`scripts/cargo_fast.sh --target-slot kagemusha-v1 --stable-local-metadata --incremental -- test -p sorafs_manifest --lib provider_admission::tests -- --nocapture`.
+This validates the extracted structural validator without weakening signature
+verification; it does not repair the separate SoraFS fetch blocker above.
+
+## Subsequent production milestones
 
 1. Close monetary proof authority: constrain original recipient credentials,
    plaintext openings, finalized reserve credits, normalized hardware guards,
@@ -37,6 +102,42 @@ not current achieved measurements or a claim of optimality.
 Work remains confined to `/Users/takemiyamakoto/dev/iroha`, branch
 `optimizations`. The following combines source inspection with the scoped
 component validation below; it is not a security audit or hardware qualification.
+
+The September 25 native installer now derives its complete release and finality
+configuration from a threshold-authenticated mobile bootstrap token. The bounded
+canonical package pins network, asset/reserve, release, first context and freshness;
+its independent native policy cannot be selected by a downloaded response. The
+installer checks a suspend-inclusive token deadline before journal access and
+publication. A signed checkpoint still requires native trusted time and retained
+replay state and approved deployment signatures. The native startup entrypoint
+now accepts only a bounded signed checkpoint, authenticates it against an
+install-once Rust context, retains its replay pin and installs the real native
+host. Swift and Kotlin expose this activation without root keys, storage paths
+or private mint openings. Exact retries reauthenticate; partial installation
+cannot be reset in process. Concrete deployment provisioning and native mint
+preparation remain required before an app can execute the complete testnet flow.
+The September 26 startup correction shares exclusive publication ownership
+across C/JNI and public Rust mutations, with scoped guard-borrowed permits and
+revocation checked again before returning success. Kagami prepares, signs and
+assembles the canonical bootstrap package; its generated command help matches the
+normal binary. Native verification anchors its lease before reading freshness to
+charge suspension during the read. The signed freshness model and native
+nonce/deadline owner bind authority time uncertainty and exact retained
+checkpoints. The earlier focused run passed 94 native tests; current native
+revalidation is blocked by the unrelated SoraFS dependency described above.
+Operational authority deployment and app provisioning remain required.
+The Pixel restart
+diagnostic now verifies a fresh StrongBox control before classifying exhaustion;
+its six unit tests pass and instrumentation compiles, but the revised check has
+not run on a device. Recursive proof qualification remains a separate milestone.
+The September 25 bridge suite passed 355 tests with one existing ignored test.
+The fixed five-slice arithmetic and shared dense MSM suite passed 40 tests with two
+benchmark-only cases ignored, including both-parity full-capacity, empty-slice,
+padding and source-binding controls. The dense witness now derives a complete
+offset bound from its active additions; the previously rejecting 256-offset
+case emits a valid full trace in both fields. Each arithmetic slice configures
+55 advice, three fixed and 21 permutation columns at k15. This excludes global
+source authentication and recursive joins, so it is not a phone RSS pass.
 
 The stored IPA implementation now continues from consuming assignment through
 scalar evaluation, guarded outer multiopening and guarded inner IPA to final c/f
@@ -249,19 +350,73 @@ hardware no-fork evidence. Its internal eSE is connected, but no access rule
 for the current applet was observed. An app-accessible, provisioned hardware
 counter/checkpoint profile or another physically proven no-fork primitive is
 required to support this device for production offline money.
-The connected Pixel 6 was rechecked on an Android 17 user build with locked,
-green verified boot. It still advertises neither hardware single-use nor
-limited-use Keystore support, and does not advertise the hardware Identity
-Credential feature. `eSE1` is connected but has no observed access
-rule for the current applet AID. The earlier StrongBox attestation was collected
-on Android 16, so the Android 17 feature recheck does not replace a fresh
-attestation or an applet SELECT/recovery qualification.
+The connected Pixel 6 was rechecked on an Android 17 user build
+(`google/oriole/oriole:17/CP2A.260705.006/15641320`) with locked, green
+verified boot. It still advertises neither hardware single-use nor limited-use
+Keystore support, and does not advertise the hardware Identity Credential
+feature. On 2026-09-24, Android `PackageManager.hasSystemFeature` on that
+API-37 device returned `FEATURE_KEYSTORE_SINGLE_USE_KEY=false` and
+`FEATURE_KEYSTORE_LIMITED_USE_KEY=false`; the hardware one-use qualification
+test rejected with `hardware single-use feature absent`. A fresh nonmonetary
+StrongBox one-use instrumentation
+test passed on that build: the new key's attestation reported StrongBox security
+level 2 for both attestation and KeyMint, hardware tag 303 absent, hardware tag
+405 absent, software tag 303 absent, and software tag 405 equal to one. Its first signature verified and
+its second signing attempt failed with `KeyPermanentlyInvalidatedException`.
+On 2026-09-25, the three-stage physical restart probe also passed after a
+fresh device boot and PIN unlock: the consumed alias could not sign again.
+This demonstrates software-enforced one-use only; it does not qualify a
+hardware no-fork monetary ratchet. `eSE1` is connected, but the 2026-09-24
+ordinary-app OMAPI discovery returned `ONLINE_ONLY` for the current applet AID;
+no app access rule was observed and applet SELECT/recovery remains untested.
+Android's [setMaxUsageCount contract](https://developer.android.com/reference/android/security/keystore/KeyGenParameterSpec.Builder#setMaxUsageCount(int))
+explicitly allows software enforcement when secure hardware lacks the feature;
+the [PackageManager feature definitions](https://developer.android.com/reference/android/content/pm/PackageManager#FEATURE_KEYSTORE_SINGLE_USE_KEY)
+identify hardware support. A successful first signature and rejected second
+signature therefore do not override the missing feature flags and hardware
+attestation tags.
+The same Pixel 6 advertises neither `android.hardware.identity_credential`
+nor `android.hardware.identity_credential_direct_access` in `pm list
+features`, so the [hardware Identity Credential feature](https://developer.android.com/reference/android/content/pm/PackageManager#FEATURE_IDENTITY_CREDENTIAL_HARDWARE)
+cannot supply this device's missing ratchet. That API's authentication-key
+use count is an app-readable replacement indicator; its presentation request
+[allows exhausted-key reuse by default](https://developer.android.com/reference/android/security/identity/CredentialDataRequest.Builder#setAllowUsingExhaustedKeys(boolean))
+and can even skip incrementing the count. The
+[device-signed presentation](https://developer.android.com/reference/android/security/identity/CredentialDataResult)
+authenticates session and credential data, not a monotonic count. Android's
+ordinary passkey API likewise cannot presently qualify this profile: the
+[FIDO2 selection criteria](https://developers.google.com/android/reference/com/google/android/gms/fido/fido2/api/common/AuthenticatorSelectionCriteria.Builder)
+do not require a hardware-backed non-backup credential or nonzero counter,
+and [WebAuthn permits a constant-zero signature counter](https://www.w3.org/TR/webauthn-3/#sctn-sign-counter).
 An experimental Pixel 6 StrongBox observation collector and testnet-only app
-entry point are source-staged with exact selection/network/release binding and
-local lost-result freezing. Four collector JVM tests and one physical device
-test passed before the latest frame and nonce hardening; the new source and app
-tests still need reruns. Their output is explicitly non-qualified and is not a
-production monetary certificate.
+entry point retain exact selection/network/release binding and local lost-result
+freezing. On 2026-09-24, both Android JNI slices were built and source-sealed
+at commit `95acc0ac374fc00f2a7fdbb8e69289cd2ae89b7d`, Android source
+final Android source fingerprint
+`67f7c4e912d0de7d97980fbc1584e14ec9c9586a66ae6a65d740e5349cbc91dd`.
+The APK was installed on the locked/verified-boot Pixel 6; the physical
+StrongBox observation and native retained-proof export each passed one
+instrumentation test. Its leaf-first public attestation chain is retained in
+an owner-only artifact outside this repository. Independent parsing found
+StrongBox levels 2/2 and software-enforced tag 405 equal to one, while hardware
+tags 303 and 405 remain absent. Three additional nonmonetary instrumentation
+stages passed: an unused key persisted into a new app process, that process
+made one verified signature, and after reboot the consumed alias was absent
+and a second signing attempt failed. This is observed Android service behavior,
+not a hardware-enforced no-fork guarantee. The collector now checks the exact
+460-byte Core S before touching its intent store or one-use key; its 16 focused
+Android JVM tests and the Core/JVM KeyMint verifier tests pass. The final
+post-edit Android seal verified again, and both physical instrumented checks
+passed after reinstalling that APK (SHA-256
+`2ba9f08755ad99731d465e261817d398ff90c28b48f1d855ba12637208bb1f3e`).
+Observation output is explicitly non-qualified and is not a production
+monetary certificate.
+The captured self-signed root is DER-identical to Google's first
+[previously issued Android attestation root](https://developer.android.com/privacy-and-security/security-key-attestation#root_certificates).
+Google advises retaining that factory chain's trust despite certificate expiry
+only with a successful revocation check. The current application verifier pins
+the two newer published roots and has not admitted this older chain; adding an
+unverified root or skipping the missing hardware tags would be unsound.
 
 | Family | Integration work and evidence required |
 | --- | --- |
@@ -284,21 +439,22 @@ contract](https://source.android.com/docs/security/features/keystore/attestation
 and [phone algorithm](kagemusha_v1_phone_algorithm.md).
 
 The Android SDK now has typed method-12 enrollment framing over the existing
-native coordinator. Debug and release Kotlin compilation pass. Its six focused
-managed tests compile but cannot execute on the current host without a rebuilt
-ABI-23 `connect_norito_bridge` address validator; the prior four-test invocation
-failed during account fixture construction, before exercising the adapter.
-The adapter retains one
-phase-1 selection in process, freezes an ambiguous selection response and
-rejects issuer completion after a changed proof result. It
-does not create the missing qualified native backend or admit Android money.
+native coordinator. A rebuilt ABI-23 host bridge runs nine focused Android
+host-native tests, including original-ticket phase-6 cancellation retry after a
+lost response or a locally poisoned proof response. The adapter retains one
+phase-1 selection in process, can read its byte-identical response after a lost
+return through the same live owner, and rejects issuer completion after a changed proof
+result. It does not create the missing qualified native backend or admit Android
+money.
 The iOS app's native coordinator also dispatches method 12 through the exact
 schema-2 frame validator. It retains the original ticket, phase order, signed
 preparation selection and exact response/proof retries before exposure.
-Its focused transport source parses and its isolated state machine typechecks;
-the app still
-lacks an installed qualified enrollment components factory and current-source
-XCFramework for executable iOS qualification.
+Nine focused tests passed on the connected iPhone 17 Pro Max, including exact
+phase-2 response correlation, phase-3 challenge identity, and lost phase-6
+cancellation reply retry even after local response poisoning. This uses the
+development-signed diagnostic bridge;
+the app still lacks an installed qualified enrollment components factory and a
+source-sealed monetary XCFramework.
 
 ## Security findings and implementation work
 
@@ -712,12 +868,20 @@ XCFramework for executable iOS qualification.
   6,654,443,520 bytes; all 5,249 inputs, executable, guard and supervisor remain
   unchanged, and the reviewed guard reaps its child correctly. Reusable typed-SHA generation
   completes with each Claim PK/VK at 799,022,510/6,058 bytes and each shard PK/VK
-  at 8,533,246/13,290 bytes. These are actual serialized diagnostic artifacts;
-  the Claim PK fails the unchanged 64 MiB release limit. The run reaches
+  at 8,533,246/13,290 bytes. These are actual diagnostic artifacts from the
+  then-current `Processed` serializer; that Claim PK fails the unchanged 64 MiB
+  release limit. The later structured-v1 serializer has not been measured for
+  this Claim graph, so the historical 799,022,510-byte result is not its size.
+  The run reaches
   credential typed-SHA proving but provides no full State pass. Its cached-key
   path uses the borrowed prover, whose eager advice buffers are separate from
   the already improved consuming-key path. Reducing either allocation alone
   cannot establish the unchanged 128 MiB device gate.
+  The current structured-v1 resource preflight configures the Claim circuit
+  with a strict minimum legal Base profile and computes an 8,668,355-byte
+  proving-key bound, but its 96 advice columns require a 192 MiB dense advice
+  basis at k16. Those are source-level bounds, not a generated full Claim key
+  or a measured device RSS result; the 128 MiB whole-process gate remains open.
   The next private candidate moves selected complete ordinary transcripts into
   the existing two native Poseidon lanes after reserving mandatory work. Static
   comparison preserves the original complete ordinary/hybrid verifier bodies;

@@ -5,8 +5,9 @@
 //! The complete receipt is durably staged before authoritative completion and stays internal until
 //! both journal identity and fresh completed custody are rechecked. Recovery never signs again.
 //! The private ceremony owner derives every ordered message from one reviewed subject, original
-//! verified custody, exact intent/reservation and verified signature prefix. It grants no native
-//! authority and cannot activate the role-13 external software adapter.
+//! verified custody, exact intent/reservation and verified signature prefix. The owner-only
+//! software-credential constructor still requires an injected independent operation source; it
+//! grants no native authority and cannot activate the role-13 external software adapter.
 //! TODO: Wire this producer into the canonical runtime/CLI contract and authenticated software
 //! signer/finalized state adapters before retiring role-local raw-key signing sites. This is not
 //! deployment qualification, and injected test providers cannot qualify production custody.
@@ -27,6 +28,7 @@ use sorafs_manifest::signer::{
         validate_release_manifest_signatures_v1,
     },
 };
+use std::path::Path;
 use zeroize::Zeroize as _;
 
 pub(super) mod ceremony;
@@ -41,12 +43,15 @@ pub enum SignerReleaseManifestErrorV1 {
     Operation(SignerOperationErrorV1),
     /// Durable journal bounds, permissions, identity, immutability or I/O failed.
     Journal,
+    /// Finite local inventory resources are busy; reconcile the original operation.
+    LocalCapacity,
 }
 impl fmt::Display for SignerReleaseManifestErrorV1 {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::Receipt(_) => "release manifest receipt binding rejected",
             Self::Operation(_) => "release manifest signer operation rejected",
+            Self::LocalCapacity => "local signer-journal inventory capacity unavailable",
             Self::Journal => "release manifest private journal unavailable",
         })
     }
@@ -64,8 +69,12 @@ impl From<SignerOperationErrorV1> for SignerReleaseManifestErrorV1 {
 }
 
 impl From<SignerReceiptJournalErrorV1> for SignerReleaseManifestErrorV1 {
-    fn from(_: SignerReceiptJournalErrorV1) -> Self {
-        Self::Journal
+    fn from(error: SignerReceiptJournalErrorV1) -> Self {
+        if error.is_local_capacity() {
+            Self::LocalCapacity
+        } else {
+            Self::Journal
+        }
     }
 }
 
@@ -88,6 +97,38 @@ impl fmt::Debug for SignerReleaseManifestServiceV1 {
     }
 }
 impl SignerReleaseManifestServiceV1 {
+    /// Assemble the reviewed release-manifest ceremony with an owner-only software credential.
+    ///
+    /// The caller must supply the same independently authenticated, durable operation source
+    /// used by the coordinator and key provider. This constructor cannot create a native
+    /// reservation, finalized observation or release authority from local journal files.
+    /// Purpose and review coordinates are checked before the credential is opened.
+    ///
+    /// # Errors
+    /// Rejects absent authoritative state, wrong role or journal purpose, invalid review
+    /// coordinates, or any credential/custody failure before constructing the service.
+    pub fn from_software_supervisor_credential(
+        path: &Path,
+        binding: SignerCustodyBindingV1,
+        record: Vec<u8>,
+        trust: SignerCustodyTrustV1,
+        source: Option<Arc<dyn SignerOperationStateSourceV1>>,
+        expected: SignerReleaseManifestExpectedV1,
+        previous_audit: SignerOperationAuditHeadV1,
+        journal: SignerReceiptJournalV1,
+    ) -> Result<Self, SignerReleaseManifestErrorV1> {
+        let source = source.ok_or(SignerOperationErrorV1::StateUnavailable)?;
+        Self::validate_inputs(&binding, &expected, previous_audit, &journal)?;
+        let coordinator = SignerOperationCoordinatorV1::from_software_supervisor_credential(
+            path,
+            binding,
+            record,
+            trust,
+            Some(source),
+        )?;
+        Self::new(coordinator, expected, previous_audit, journal)
+    }
+
     /// Bind an independently configured coordinator, reviewed exact manifest and private journal.
     ///
     /// # Errors
@@ -98,15 +139,31 @@ impl SignerReleaseManifestServiceV1 {
         previous_audit: SignerOperationAuditHeadV1,
         journal: SignerReceiptJournalV1,
     ) -> Result<Self, SignerReleaseManifestErrorV1> {
+        Self::validate_inputs(&coordinator.binding, &expected, previous_audit, &journal)?;
+        coordinator.verify(&coordinator.source.observe(&coordinator.binding)?)?;
+        Ok(Self {
+            coordinator,
+            expected,
+            previous_audit,
+            journal,
+        })
+    }
+
+    fn validate_inputs(
+        binding: &SignerCustodyBindingV1,
+        expected: &SignerReleaseManifestExpectedV1,
+        previous_audit: SignerOperationAuditHeadV1,
+        journal: &SignerReceiptJournalV1,
+    ) -> Result<(), SignerReleaseManifestErrorV1> {
         if journal.purpose() != SignerReceiptPurposeV1::ReleaseManifest {
             return Err(SignerReleaseManifestErrorV1::Journal);
         }
-        if coordinator.binding.role != SignerRoleV1::ReleaseManifest
+        if binding.role != SignerRoleV1::ReleaseManifest
             || !matches!(
-                coordinator.binding.purpose,
+                &binding.purpose,
                 SignerPurposeBindingV1::ReleaseManifest { .. }
             )
-            || coordinator.binding.algorithm != SignerKeyAlgorithmV1::Ed25519
+            || binding.algorithm != SignerKeyAlgorithmV1::Ed25519
         {
             return Err(SignerReceiptErrorV1::WrongPurpose.into());
         }
@@ -119,13 +176,7 @@ impl SignerReleaseManifestServiceV1 {
         {
             return Err(SignerReceiptErrorV1::InvalidReceipt.into());
         }
-        coordinator.verify(&coordinator.source.observe(&coordinator.binding)?)?;
-        Ok(Self {
-            coordinator,
-            expected,
-            previous_audit,
-            journal,
-        })
+        Ok(())
     }
 
     /// Sign only the constructor-pinned reviewed bytes and release one fully committed receipt.
@@ -146,6 +197,10 @@ impl SignerReleaseManifestServiceV1 {
             return Err(SignerOperationErrorV1::ReservationConflict.into());
         }
         let request = SignerReleaseManifestRequestV1::new(&custody, &self.expected, manifest)?;
+        // The native source must permanently tombstone every admitted ID. Also refuse a
+        // duplicate staged receipt before reserving or repeating any key operation if that
+        // independent source is stale or restored from an older snapshot.
+        self.journal.ensure_unstaged(self.expected.operation_id)?;
         let intent = SignerOperationIntentV1 {
             action: SignerOperationActionV1::Sign,
             operation_id: self.expected.operation_id,

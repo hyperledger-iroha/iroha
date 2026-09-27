@@ -139,7 +139,7 @@ fn complete_tip_decision_activation_requires_exact_replayed_wal() {
 
 #[cfg(feature = "bls")]
 fn complete_tip_decision_activation_requires_exact_replayed_wal_body() {
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _guard = crate::status::rbc_status_test_guard();
     let (_kura, _state, verified, _storage, _signer, _retirement) =
         super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let (_, keys, _) = authenticated_context();
@@ -249,7 +249,7 @@ fn complete_tip_decision_activation_rejects_incomplete_pending_and_applied_state
 
 #[cfg(feature = "bls")]
 fn complete_tip_decision_activation_rejects_incomplete_pending_and_applied_state_body() {
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _guard = crate::status::rbc_status_test_guard();
     let (_kura, _state, verified, _storage, _signer, _retirement) =
         super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let (_, keys, _) = authenticated_context();
@@ -335,7 +335,7 @@ fn complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cac
 
 #[cfg(feature = "bls")]
 fn complete_tip_decision_activation_preserves_exact_quorum_despite_reference_cache_body() {
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _guard = crate::status::rbc_status_test_guard();
     let (_kura, _state, verified, _storage, _signer, _retirement) =
         super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let (_, keys, _) = authenticated_context();

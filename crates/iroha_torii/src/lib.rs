@@ -2414,8 +2414,11 @@ struct AppState {
     query_ingress_envelope: QueryIngressMemoryEnvelope,
     /// Complete bounded HTTP peer-proxy body/decode/forwarding accounting.
     torii_proxy_http_ingress_envelope: ToriiProxyHttpIngressEnvelope,
-    /// Serializes complete proxy working sets across local, P2P, and HTTP ingress.
+    /// One complete locally originated proxy request, including quorum collection.
     torii_proxy_memory_inflight: Arc<tokio::sync::Semaphore>,
+    /// One complete peer-originated proxy request. A local quorum collector must
+    /// not occupy the only slot needed to answer another peer's collector.
+    torii_proxy_receiver_memory_inflight: Arc<tokio::sync::Semaphore>,
     /// Limits concurrent signed-query body reads independently of fanout work.
     query_ingress_inflight: Arc<tokio::sync::Semaphore>,
     /// Byte-weighted capacity shared by complete fanout and ordinary-query work.
@@ -2541,7 +2544,7 @@ struct AppState {
     da_ingest: iroha_config::parameters::actual::DaIngest,
     da_ingest_compute_inflight: Arc<tokio::sync::Semaphore>,
     da_spooler: Option<Arc<da::DaSpooler>>,
-    sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
+    sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
@@ -4164,6 +4167,7 @@ async fn enforce_preauth(
         }
         Err(reason) => {
             app.record_preauth_reject(reason);
+            let retry_after_seconds = reason.retry_after_seconds();
             let (status, code, message) = match reason {
                 limits::RejectReason::GlobalCap => (
                     StatusCode::SERVICE_UNAVAILABLE,
@@ -4175,24 +4179,24 @@ async fn enforce_preauth(
                     "preauth_ip_capacity",
                     "Torii pre-auth per-IP connection limit reached.",
                 ),
-                limits::RejectReason::RateLimited => (
+                limits::RejectReason::RateLimited { .. } => (
                     StatusCode::TOO_MANY_REQUESTS,
                     "preauth_rate_limited",
                     "Torii pre-auth rate limit exceeded.",
                 ),
-                limits::RejectReason::Banned => (
+                limits::RejectReason::Banned { .. } => (
                     StatusCode::TOO_MANY_REQUESTS,
                     "preauth_temporarily_banned",
                     "Torii pre-auth temporary ban is in effect.",
                 ),
                 limits::RejectReason::SchemeCap => (
-                    StatusCode::TOO_MANY_REQUESTS,
+                    StatusCode::SERVICE_UNAVAILABLE,
                     "preauth_scheme_capacity",
                     "Torii pre-auth transport connection limit reached.",
                 ),
             };
             let payload = ErrorEnvelope::new(code, message).with_details(ErrorDetails {
-                retry_after_seconds: Some(1),
+                retry_after_seconds: Some(retry_after_seconds),
                 ..Default::default()
             });
             let mut response = utils::respond_with_status_and_format(
@@ -4202,7 +4206,8 @@ async fn enforce_preauth(
             );
             response.headers_mut().insert(
                 axum::http::header::RETRY_AFTER,
-                HeaderValue::from_static("1"),
+                HeaderValue::from_str(&retry_after_seconds.to_string())
+                    .expect("unsigned retry delay is a valid header value"),
             );
             append_vary_accept(response.headers_mut());
             Ok(response)
@@ -11238,8 +11243,39 @@ fn derive_identifier_request_draft(
     policy: &iroha_data_model::identifier::IdentifierPolicy,
     program_policy: &iroha_data_model::ram_lfe::RamLfeProgramPolicy,
     request: &routing::IdentifierResolveRequestDto,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<identifier_resolution::IdentifierResolutionDraft, Error> {
     let ciphertext = parse_encrypted_identifier_ciphertext(&request.encrypted_input)?;
+    let phone_like = policy.id.kind.as_ref() == "phone"
+        || policy.normalization == iroha_data_model::identifier::IdentifierNormalization::PhoneE164
+        || policy.program_id.to_string() == "phone_retail";
+    if phone_like {
+        if !policy.id.is_phone_retail() {
+            return Err(identifier_conversion_error(
+                "first-release phone requests require exactly phone#retail",
+            ));
+        }
+        let canonicality = request.phone_retail_canonicality.clone().ok_or_else(|| {
+            identifier_conversion_error(
+                "phone#retail requires a trusted canonical E.164 nullifier attestation",
+            )
+        })?;
+        return resolver
+            .derive_phone_retail_encrypted(
+                policy,
+                program_policy,
+                &ciphertext,
+                request.output_opening.clone(),
+                canonicality,
+                network_id,
+            )
+            .map_err(|err| identifier_conversion_error(err.to_string()));
+    }
+    if request.phone_retail_canonicality.is_some() {
+        return Err(identifier_conversion_error(
+            "phone canonicality attestation is only valid for phone#retail",
+        ));
+    }
     match program_policy.commitment.backend {
         iroha_crypto::RamLfeBackend::BfvAffineSha3_256V1
         | iroha_crypto::RamLfeBackend::BfvProgrammedSha3_256V1 => resolver
@@ -11388,6 +11424,10 @@ fn identifier_policy_summary_dto(
         output_opening_public_key: program_policy
             .map(|policy| policy.output_opening_public_key.to_string())
             .unwrap_or_default(),
+        phone_retail_attestor_public_key: policy
+            .phone_retail_attestor_public_key
+            .as_ref()
+            .map(ToString::to_string),
         backend: program_policy
             .map(|policy| policy.commitment.backend.as_str().to_owned())
             .unwrap_or_default(),
@@ -11457,6 +11497,7 @@ fn identifier_receipt_response(
     Ok(routing::IdentifierResolveResponseDto {
         payload: identifier_resolution_receipt_payload_dto(&receipt.payload),
         attestation: ram_lfe_receipt_attestation_dto(&receipt.attestation),
+        phone_retail_canonicality: receipt.phone_retail_canonicality.clone(),
     })
 }
 #[cfg(feature = "app_api")]
@@ -11467,6 +11508,7 @@ fn identifier_claim_lookup_response(
         policy_id: claim.policy_id.to_string(),
         opaque_id: claim.opaque_id.to_string(),
         receipt_hash: claim.receipt_hash.to_string(),
+        phone_retail_nullifier: claim.phone_retail_nullifier.map(|value| value.to_string()),
         uaid: claim.uaid.to_string(),
         account_id: claim.account_id.to_string(),
         verified_at_ms: claim.verified_at_ms,
@@ -14034,18 +14076,13 @@ async fn handler_readyz(State(app): State<SharedAppState>) -> AxResponse {
         || app
             .sumeragi
             .as_ref()
-            .is_some_and(|sumeragi| !sumeragi.admission_ready())
+            .is_some_and(|sumeragi| !sumeragi.ready())
     {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             "Consensus admission is unavailable",
         )
             .into_response();
-    }
-    if let Some(sumeragi) = &app.sumeragi
-        && let Err(reason) = sumeragi.global_beacon_readiness(app.state.as_ref())
-    {
-        return (StatusCode::SERVICE_UNAVAILABLE, reason.to_string()).into_response();
     }
     let replay_archive_required = app
         .state
@@ -23074,14 +23111,10 @@ fn queue_plan_service_input_capacity(
     entrypoint: &TransactionEntrypoint,
     binding: &QueuePlanAdmissionBindingV1,
 ) -> Result<(), iroha_core::sumeragi::QueuePlanInputCapacityErrorV1> {
-    use iroha_core::sumeragi::{AdmissionCapacityUnavailableV1, QueuePlanInputCapacityErrorV1};
-    let handle = app
-        .sumeragi
-        .as_ref()
-        .ok_or(QueuePlanInputCapacityErrorV1::Unavailable(
-            AdmissionCapacityUnavailableV1::Pending,
-        ))?;
-    handle.check_queue_plan_input_capacity(app.state.network_id_ref(), entrypoint, binding)
+    // TODO(WP8a): QueuePlan admission is deleted with the lanes; Sumeragi admits its inputs
+    // as ordinary transactions and reserves no capacity for them.
+    let _ = (app, entrypoint, binding);
+    Ok(())
 }
 #[cfg(feature = "connect")]
 async fn queue_plan_service_input_capacity_error(
@@ -25097,47 +25130,53 @@ enum QueuePlanAdmissionPublicationIngestOutcome {
     },
 }
 #[cfg(feature = "connect")]
+#[derive(Debug, thiserror::Error)]
+enum QueuePlanAdmissionPublicationIngestError {
+    #[error("{0}")]
+    Invalid(String),
+    #[error("QueuePlan publication persistence failed: {0}")]
+    Persistence(#[from] iroha_core::state::MergeLedgerCommitError),
+}
+#[cfg(feature = "connect")]
 fn ingest_queue_plan_admission_publication(
     app: &SharedAppState,
     publication: &QueuePlanAdmissionPublicationV1,
-) -> Result<QueuePlanAdmissionPublicationIngestOutcome, String> {
+) -> Result<QueuePlanAdmissionPublicationIngestOutcome, QueuePlanAdmissionPublicationIngestError> {
     if publication.schema_version != QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1 {
-        return Err(format!(
+        return Err(QueuePlanAdmissionPublicationIngestError::Invalid(format!(
             "unsupported QueuePlan admission publication schema_version `{}`",
             publication.schema_version
-        ));
+        )));
     }
     let local_peer = app.local_peer_id.as_ref().ok_or_else(|| {
-        "QueuePlan admission publication receiver has no configured peer identity".to_owned()
+        QueuePlanAdmissionPublicationIngestError::Invalid(
+            "QueuePlan admission publication receiver has no configured peer identity".to_owned(),
+        )
     })?;
     // Authentication, receiver authorization and durable classification share one State-owned
     // graph. The bounded canonical complete input is decoded once by that owner.
-    let outcome = app
-        .state
-        .persist_classified_queue_plan_admission(
-            &publication.certificate,
-            iroha_core::state::QueuePlanAdmissionPersistenceScope::CoordinatorPublication(
-                local_peer,
-            ),
-        )
-        .map_err(|error| format!("QueuePlan publication persistence failed: {error}"))?;
+    let outcome = app.state.persist_classified_queue_plan_admission(
+        &publication.certificate,
+        iroha_core::state::QueuePlanAdmissionPersistenceScope::CoordinatorPublication(local_peer),
+    )?;
     let certificate_hash = match outcome {
         PendingQueuePlanAdmissionPersistenceOutcome::Applied { .. } => {
             return Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted);
         }
         PendingQueuePlanAdmissionPersistenceOutcome::Rejected { disposition, .. } => {
-            return Err(match disposition {
-                PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
-                    "canonical WSV raced this publication with another QueuePlan admission"
-                        .to_owned()
-                }
-                PendingQueuePlanAdmissionDisposition::Stale => {
-                    "QueuePlan admission became stale during publication ingestion".to_owned()
-                }
-                _ => {
-                    "QueuePlan admission persistence returned an invalid rejection state".to_owned()
-                }
-            });
+            return Err(QueuePlanAdmissionPublicationIngestError::Invalid(
+                match disposition {
+                    PendingQueuePlanAdmissionDisposition::DefinitiveConflict => {
+                        "canonical WSV raced this publication with another QueuePlan admission"
+                            .to_owned()
+                    }
+                    PendingQueuePlanAdmissionDisposition::Stale => {
+                        "QueuePlan admission became stale during publication ingestion".to_owned()
+                    }
+                    _ => "QueuePlan admission persistence returned an invalid rejection state"
+                        .to_owned(),
+                },
+            ));
         }
         PendingQueuePlanAdmissionPersistenceOutcome::Durable {
             certificate_hash, ..
@@ -25146,7 +25185,10 @@ fn ingest_queue_plan_admission_publication(
     let sumeragi_notified = app
         .sumeragi
         .as_ref()
-        .is_some_and(iroha_core::sumeragi::SumeragiHandle::notify_pending_queue_plan_admission);
+        .is_some_and(|sumeragi| {
+            sumeragi.transactions_available();
+            true
+        });
     Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
         certificate_hash,
         sumeragi_notified,
@@ -25318,7 +25360,10 @@ async fn persist_queue_plan_admission_certificate(
     let notification_delivered = app
         .sumeragi
         .as_ref()
-        .map(iroha_core::sumeragi::SumeragiHandle::notify_pending_queue_plan_admission);
+        .map(|sumeragi| {
+            sumeragi.transactions_available();
+            true
+        });
     match notification_delivered {
         Some(true) => {}
         Some(false) => {
@@ -25443,7 +25488,7 @@ fn normalize_proxied_transaction_submission_response(
     response
 }
 #[cfg(feature = "connect")]
-mod threshold_key_lifecycle_ingress;
+mod ordinary_transaction_ingress;
 
 #[cfg(feature = "connect")]
 async fn execute_torii_transaction_via_proxy(
@@ -25462,7 +25507,7 @@ async fn execute_torii_transaction_via_proxy(
     let entrypoint_hash = transaction.hash();
     let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
     if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
-        return threshold_key_lifecycle_ingress::submit(
+        return ordinary_transaction_ingress::submit(
             app.clone(),
             accepted_transaction,
             routing_plan,
@@ -28605,12 +28650,41 @@ async fn process_incoming_torii_proxy_response(
     }
 }
 #[cfg(feature = "connect")]
-fn process_incoming_queue_plan_admission_publication(
+async fn process_incoming_queue_plan_admission_publication(
     app: &SharedAppState,
     sender_peer_id: &PeerId,
     publication: &QueuePlanAdmissionPublicationV1,
 ) {
-    match ingest_queue_plan_admission_publication(app, publication) {
+    let deadline = tokio::time::Instant::now() + TORII_PROXY_EXECUTION_BUDGET;
+    let outcome = loop {
+        let result = ingest_queue_plan_admission_publication(app, publication);
+        let Some(required_height) = result.as_ref().err().and_then(|error| match error {
+            QueuePlanAdmissionPublicationIngestError::Persistence(error) => {
+                queue_plan_publication_wait::publication_overlap_height(error)
+            }
+            QueuePlanAdmissionPublicationIngestError::Invalid(_) => None,
+        }) else {
+            break result;
+        };
+        // Kura may durably store a block before State publishes its view. The
+        // authenticated publication remains owned by this bounded worker while
+        // State catches up; a wakeup grants no authority without reclassification.
+        if tokio::time::timeout_at(
+            deadline,
+            app.state.wait_for_committed_height(required_height),
+        )
+        .await
+        .is_err()
+        {
+            iroha_logger::warn!(
+                peer_id = %sender_peer_id,
+                required_height,
+                "deferred QueuePlan publication after State did not catch up; sender and gossip retain the durable input"
+            );
+            return;
+        }
+    };
+    match outcome {
         Ok(QueuePlanAdmissionPublicationIngestOutcome::AlreadyCommitted) => {
             iroha_logger::debug!(
                 peer_id = %sender_peer_id,
@@ -31864,7 +31938,7 @@ async fn handler_debug_witness(
             &app.telemetry,
         ));
     }
-    let witness = iroha_core::sumeragi::witness::snapshot_exec_witness();
+    let witness = iroha_core::exec_witness::snapshot_exec_witness();
     let format =
         crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)).map_err(|_| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(
@@ -31938,11 +32012,11 @@ async fn handler_sumeragi_status(
         ));
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    let restart_required = app
+    let status = app
         .sumeragi
         .as_ref()
-        .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-    routing::handle_v1_sumeragi_status(State(app.state.clone()), accept, restart_required)
+        .and_then(iroha_core::sumeragi::node::NodeHandle::status_dto);
+    routing::handle_v1_sumeragi_status(accept, status)
         .await
         .map(axum::response::IntoResponse::into_response)
 }
@@ -32144,8 +32218,10 @@ async fn handler_bridge_finality_attestation_inner(
     let restart_required = app
         .sumeragi
         .as_ref()
-        .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
-    let status = iroha_core::sumeragi::status::v2_status_with_restart_required(restart_required);
+        .is_some_and(iroha_core::sumeragi::node::NodeHandle::restart_required);
+    // TODO(WP8b): bridge finality attestations from Sumeragi commit certificates; the v2
+    // status is never published, so the endpoint reports consensus as uninitialized.
+    let status = iroha_core::sumeragi::v2_status::v2_status_with_restart_required(restart_required);
     if let Some(reason) = bridge_attestation::startup_failure(restart_required, status.as_ref()) {
         return Ok(bridge_attestation::failure_response(
             reason, challenge, height, None, format,
@@ -39955,10 +40031,25 @@ async fn handler_identifier_resolve(
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    let draft = derive_identifier_request_draft(resolver, &policy, &program_policy, &request)?;
+    let draft = derive_identifier_request_draft(
+        resolver,
+        &policy,
+        &program_policy,
+        &request,
+        &app.signed_query_admission.network_id(),
+    )?;
     let Some(claim) = world.resolve_identifier_claim(&policy.id, &draft.opaque_id) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+    if policy.id.is_phone_retail()
+        && claim.phone_retail_nullifier
+            != draft
+                .phone_retail_canonicality
+                .as_ref()
+                .map(|proof| proof.payload.canonical_phone_nullifier)
+    {
+        return Ok(StatusCode::CONFLICT.into_response());
+    }
     if claim
         .expires_at_ms
         .is_some_and(|expires_at_ms| expires_at_ms <= draft.resolved_at_ms)
@@ -40030,7 +40121,13 @@ async fn handler_identifier_claim_receipt(
     let Some(resolver) = app.identifier_resolver.as_ref() else {
         return Ok(StatusCode::SERVICE_UNAVAILABLE.into_response());
     };
-    let draft = derive_identifier_request_draft(resolver, &policy, &program_policy, &request)?;
+    let draft = derive_identifier_request_draft(
+        resolver,
+        &policy,
+        &program_policy,
+        &request,
+        &app.signed_query_admission.network_id(),
+    )?;
     let receipt = resolver
         .issue_claim_receipt(&policy, &program_policy, &draft, uaid, account_id)
         .map_err(|err| {
@@ -41637,7 +41734,7 @@ pub struct Torii {
     peer_telemetry_urls: Vec<telemetry::peers::ToriiUrl>,
     #[cfg(all(feature = "app_api", feature = "telemetry"))]
     peer_geo: telemetry::peers::GeoLookupConfig,
-    sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
+    sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
     p2p: Option<iroha_core::IrohaNetwork>,
     #[cfg(any(feature = "app_api", feature = "connect"))]
@@ -45561,7 +45658,7 @@ impl Torii {
         state: Arc<CoreState>,
         da_receipt_signer: KeyPair,
         online_peers: OnlinePeersProvider,
-        sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
+        sumeragi: Option<iroha_core::sumeragi::node::NodeHandle>,
         runtime_deps: ToriiRuntimeDeps,
     ) -> Result<Self, ToriiBuildError> {
         if state.network_id != network_id {
@@ -45829,7 +45926,7 @@ impl Torii {
             config.app_api.default_list_limit.get().into(),
             config.app_api.max_list_limit.get().into(),
             config.app_api.max_fetch_size.get().into(),
-            config.app_api.rate_limit_cost_per_row.get().into(),
+            config.app_api.rate_limit_cost_per_page.get().into(),
         );
         let app_auth_config = crate::app_auth::CanonicalRequestAuthConfig::from(&config.app_api);
         app_auth_config.validate().map_err(|error| {
@@ -46141,7 +46238,7 @@ impl Torii {
             })?;
         #[cfg(all(feature = "app_api", feature = "telemetry"))]
         let peer_geo = telemetry::peers::GeoLookupConfig::from(&config.peer_geo);
-        let sorafs_admission = load_sorafs_admission(&config)?;
+        let sorafs_admission = load_sorafs_admission(&config, state.network_id_ref())?;
         #[cfg(feature = "app_api")]
         let sorafs_potr_runtime_signers = require_sorafs_potr_finalized_reader_inputs(
             config.sorafs_por.enabled,
@@ -47966,7 +48063,12 @@ impl Torii {
                         "transaction content limit cannot admit internal proxy HTTP ingress",
                     )
                 })?;
+        // These are two distinct bounded working sets. If every validator
+        // originates an admission concurrently, each holds its local collector
+        // slot while waiting for peer receipts. Sharing a single slot with
+        // receivers makes all peers reject each other and prevents a quorum.
         let torii_proxy_memory_inflight = Arc::new(tokio::sync::Semaphore::new(1));
+        let torii_proxy_receiver_memory_inflight = Arc::new(tokio::sync::Semaphore::new(1));
         let query_ingress_slots =
             validate_semaphore_permits("query.ingress_slots", query_memory.ingress_slots.get())?;
         let query_ingress_inflight = Arc::new(tokio::sync::Semaphore::new(query_ingress_slots));
@@ -48105,6 +48207,7 @@ impl Torii {
             query_ingress_envelope: query_memory.ingress,
             torii_proxy_http_ingress_envelope,
             torii_proxy_memory_inflight,
+            torii_proxy_receiver_memory_inflight,
             query_ingress_inflight,
             query_fanout_inflight,
             #[cfg(feature = "app_api")]
@@ -49662,6 +49765,7 @@ fn require_sorafs_potr_finalized_reader_inputs(
 }
 fn load_sorafs_admission(
     config: &iroha_config::parameters::actual::Torii,
+    network_id: &iroha_data_model::NetworkId,
 ) -> Result<Option<Arc<sorafs::AdmissionRegistry>>, ToriiBuildError> {
     let Some(admission_cfg) = config.sorafs_discovery.admission.as_ref() else {
         if config.sorafs_discovery.discovery_enabled {
@@ -49702,8 +49806,12 @@ fn load_sorafs_admission(
         admission_cfg.signature_threshold.get(),
     )
     .map_err(|error| ToriiBuildError::invalid_configuration("sorafs.discovery.admission", error))?;
-    let registry = sorafs::AdmissionRegistry::load_from_dir(&admission_cfg.envelopes_dir, policy)
-        .map_err(|error| {
+    let registry = sorafs::AdmissionRegistry::load_from_dir(
+        &admission_cfg.envelopes_dir,
+        *network_id.as_bytes(),
+        policy,
+    )
+    .map_err(|error| {
         ToriiBuildError::component_initialization(
             "sorafs.discovery.admission.registry",
             format!(

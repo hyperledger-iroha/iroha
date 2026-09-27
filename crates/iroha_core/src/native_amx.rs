@@ -2936,8 +2936,7 @@ fn native_amx_body_shape_valid(body: &NativeAmxAttestationBodyV2) -> bool {
     let Ok(min_quorum) = usize::try_from(body.participant_min_quorum) else {
         return false;
     };
-    let expected_quorum =
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_count).max(1);
+    let expected_quorum = iroha_sumeragi::types::quorum(validator_count).max(1);
     body.round.height != 0
         && !native_amx_hash_is_zero_sentinel(body.round.context_id.0.as_ref())
         && body.authority_context_height == body.round.height
@@ -3202,8 +3201,7 @@ pub fn validate_native_amx_qc(
     if &qc.body != expected_body {
         return Err(NativeAmxQcValidationError::BodyMismatch);
     }
-    let expected_quorum =
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+    let expected_quorum = iroha_sumeragi::types::quorum(validator_set.len()).max(1);
     if validator_set.is_empty()
         || validator_set.len() > MAX_NATIVE_AMX_VALIDATORS
         || validator_set.windows(2).any(|pair| pair[0] >= pair[1])
@@ -3355,9 +3353,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
             let common_qc_shape = |qc: &NativeAmxAttestationQcV2, phase: NativeAmxPhase| {
                 let body = &qc.body;
                 let validator_count = qc.validator_set().len();
-                let expected_quorum =
-                    crate::sumeragi::network_topology::commit_quorum_from_len(validator_count)
-                        .max(1);
+                let expected_quorum = iroha_sumeragi::types::quorum(validator_count).max(1);
                 let signer_count = qc
                     .signers_bitmap
                     .iter()
@@ -3505,8 +3501,7 @@ pub fn aggregate_votes_to_qc(
     if votes.is_empty() {
         return Err(NativeAmxQcBuildError::EmptyVotes);
     }
-    let expected_quorum =
-        crate::sumeragi::network_topology::commit_quorum_from_len(validator_set.len()).max(1);
+    let expected_quorum = iroha_sumeragi::types::quorum(validator_set.len()).max(1);
     if validator_set.is_empty()
         || validator_set.len() > MAX_NATIVE_AMX_VALIDATORS
         || validator_set.windows(2).any(|pair| pair[0] >= pair[1])

@@ -12,7 +12,7 @@ import java.util.Objects;
  */
 public final class ValidationFeeHijiriQuoteBridge {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  private static final int REQUIRED_BRIDGE_ABI_VERSION = 23;
+  private static final int REQUIRED_BRIDGE_ABI_VERSION = 24;
 
   private static boolean loadAttempted;
   private static Throwable loadFailure;
@@ -83,7 +83,7 @@ public final class ValidationFeeHijiriQuoteBridge {
       return invocation.invoke();
     } catch (final UnsatisfiedLinkError failure) {
       throw new IllegalStateException(
-          "native Hijiri validation-fee quote bridge is unavailable: required ABI-23 method "
+          "native Hijiri validation-fee quote bridge is unavailable: required ABI-24 method "
               + method
               + " is missing",
           failure);

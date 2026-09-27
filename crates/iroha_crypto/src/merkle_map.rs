@@ -15,6 +15,8 @@
 use std::sync::Arc;
 
 use crate::Hash;
+use iroha_schema::IntoSchema;
+use norito::codec::{Decode, Encode};
 
 #[path = "merkle_map/external.rs"]
 mod external;
@@ -37,6 +39,72 @@ const ROOT: &[u8] = b"iroha:merkle-map:root:v1\0";
 pub struct MerkleMap {
     node: Option<Arc<Node>>,
     len: u64,
+}
+
+/// One sibling on an exact-key membership path through the compressed tree.
+///
+/// Steps are ordered from root to leaf. `prefix` is the raw, masked key prefix
+/// at `bit`; it is not a `Hash` value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::merkle_map::MerkleMapProofStep")]
+pub struct MerkleMapProofStep {
+    /// MSB-first split bit in `0..256`.
+    pub bit: u16,
+    /// Shared key prefix with every bit at or after `bit` cleared.
+    pub prefix: [u8; Hash::LENGTH],
+    /// Hash of the other child at this split.
+    pub sibling: Hash,
+}
+
+/// Inclusion of one exact key/value hash in a canonical accumulated map root.
+///
+/// This proves membership against a caller-supplied root. It does not establish
+/// that the root was committed by consensus or that the raw value matches the
+/// owner-specific value-hash convention.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::merkle_map::MerkleMapProof")]
+pub struct MerkleMapProof {
+    /// Exact hashed key.
+    pub key: Hash,
+    /// Exact hashed value.
+    pub value: Hash,
+    /// Number of leaves in the authenticated map version.
+    pub len: u64,
+    /// Canonical compressed path from root to leaf.
+    pub steps: Vec<MerkleMapProofStep>,
+}
+
+impl MerkleMapProof {
+    /// Verify this exact membership against an independently authenticated map root.
+    #[must_use]
+    pub fn verify(&self, expected_root: Hash) -> bool {
+        if self.len == 0
+            || self.steps.len() > Hash::LENGTH * 8
+            || (self.len == 1 && !self.steps.is_empty())
+            || (self.len > 1 && self.steps.is_empty())
+        {
+            return false;
+        }
+        let mut previous_bit = None;
+        for step in &self.steps {
+            if step.bit >= 256
+                || previous_bit.is_some_and(|previous| step.bit <= previous)
+                || step.prefix != prefix(&self.key, step.bit)
+            {
+                return false;
+            }
+            previous_bit = Some(step.bit);
+        }
+        let mut current = leaf_hash(self.key, self.value);
+        for step in self.steps.iter().rev() {
+            current = if key_bit(&self.key, step.bit) {
+                branch_hash(step.bit, &step.prefix, step.sibling, current)
+            } else {
+                branch_hash(step.bit, &step.prefix, current, step.sibling)
+            };
+        }
+        root_hash(self.len, Some(current)) == expected_root
+    }
 }
 
 /// A rejected update leaves the entire map and its root unchanged.
@@ -103,6 +171,40 @@ impl MerkleMap {
                         return None;
                     }
                     node = if key_bit(key, *bit) { right } else { left };
+                }
+            }
+        }
+    }
+
+    /// Construct the exact-key membership path for this immutable map version.
+    ///
+    /// An absent key returns `None`; callers must never interpret that result as
+    /// a non-membership proof.
+    #[must_use]
+    pub fn proof(&self, key: &Hash) -> Option<MerkleMapProof> {
+        let mut node = self.node.as_deref()?;
+        let mut steps = Vec::new();
+        loop {
+            match &node.kind {
+                NodeKind::Leaf(value) => {
+                    return (node.first == *key).then_some(MerkleMapProof {
+                        key: *key,
+                        value: *value,
+                        len: self.len,
+                        steps,
+                    });
+                }
+                NodeKind::Branch { bit, left, right } => {
+                    if common_bits(key, &node.first) < *bit {
+                        return None;
+                    }
+                    let is_right = key_bit(key, *bit);
+                    steps.push(MerkleMapProofStep {
+                        bit: *bit,
+                        prefix: prefix(key, *bit),
+                        sibling: if is_right { left.hash } else { right.hash },
+                    });
+                    node = if is_right { right } else { left };
                 }
             }
         }

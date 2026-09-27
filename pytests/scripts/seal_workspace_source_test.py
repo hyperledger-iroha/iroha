@@ -138,14 +138,6 @@ def test_independent_mirror_reproduces_identity_without_mutating_candidate_git(
 ) -> None:
     seal = load_module()
     manifest = load_manifest_module()
-    release_runner = (
-        ROOT_DIR / "scripts" / "run_sumeragi_v2_release_gates.sh"
-    ).read_text(encoding="utf-8")
-    assert "worktree add" not in release_runner
-    assert "worktree remove" not in release_runner
-    assert "--no-local --no-hardlinks --no-checkout" in release_runner
-    assert "independent release mirror unexpectedly uses alternate objects" in release_runner
-    assert "release mirror shares a Git object inode with the candidate" in release_runner
     repository = tmp_path / "repository"
     sealed = tmp_path / "sealed"
     output = tmp_path / "output"

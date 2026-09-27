@@ -81,13 +81,145 @@ use super::{
 };
 use crate::zk::kagemusha_v1_poseidon::{KagemushaPoseidonFieldV1, decode, digest_limbs, from_u128};
 use iroha_data_model::kagemusha::{
-    KAGEMUSHA_HALO2_K_V1, KagemushaArtifactRoleV1, KagemushaMintAuthorizationV1,
-    KagemushaPaymentRequestV1, KagemushaPaymentV1, kagemusha_asset_identity_digest_v1,
+    KAGEMUSHA_HALO2_K_V1, KagemushaArtifactRoleV1, KagemushaEnabledProfileV1,
+    KagemushaMintAuthorizationV1, KagemushaPaymentRequestV1, KagemushaPaymentV1,
+    KagemushaReleasePurposeV1, KagemushaTestnetExperimentScopeV1,
+    kagemusha_asset_identity_digest_v1, kagemusha_liability_pool_id_v1,
 };
+use iroha_data_model::{NetworkId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
 
 const RECURSIVE_PROFILE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:paired-recursive-circuit-profile";
 const RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize =
     RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
+
+#[derive(Clone, Copy)]
+enum ReleaseAdmissionV1 {
+    ProductionMonetary,
+    ExperimentalProofOnly,
+}
+
+fn require_release_admission_purpose_v1(
+    purpose: KagemushaReleasePurposeV1,
+    admission: ReleaseAdmissionV1,
+) -> Result<(), String> {
+    match (purpose, admission) {
+        (KagemushaReleasePurposeV1::Production, ReleaseAdmissionV1::ProductionMonetary)
+        | (
+            KagemushaReleasePurposeV1::TestnetExperiment(_),
+            ReleaseAdmissionV1::ExperimentalProofOnly,
+        ) => Ok(()),
+        _ => Err("Kagemusha release purpose cannot enter this verifier authority".to_owned()),
+    }
+}
+
+fn require_authenticated_release_network_v1(
+    release_network: NetworkId,
+    operation_network: NetworkId,
+) -> Result<(), String> {
+    if release_network != operation_network {
+        return Err(
+            "Kagemusha operation network differs from the authenticated release".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+fn require_experimental_asset_scope_v1(
+    scope: KagemushaTestnetExperimentScopeV1,
+    network_id: NetworkId,
+    asset: &AssetDefinitionId,
+    asset_incarnation: AxtAssetIncarnationV1,
+    scale: u32,
+    liability_pool_id: [u8; 32],
+) -> Result<(), String> {
+    let asset_digest = kagemusha_asset_identity_digest_v1(asset)
+        .map_err(|error| format!("invalid Experimental mint asset: {error}"))?;
+    let canonical_pool = kagemusha_liability_pool_id_v1(&network_id, asset, asset_incarnation)
+        .map_err(|error| format!("invalid Experimental mint liability pool: {error}"))?;
+    if asset_digest != scope.asset_identity_digest
+        || *asset_incarnation.as_bytes() != scope.asset_incarnation
+        || scale != scope.asset_scale
+        || liability_pool_id != scope.liability_pool_id
+        || liability_pool_id != canonical_pool
+    {
+        return Err("Experimental mint differs from its signed asset scope".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod release_network_tests {
+    use iroha_crypto::{Hash, HashOf};
+    use iroha_data_model::{
+        NetworkId,
+        asset::AssetDefinitionId,
+        block::BlockHeader,
+        kagemusha::{
+            KagemushaTestnetExperimentScopeV1, kagemusha_asset_identity_digest_v1,
+            kagemusha_liability_pool_id_v1,
+        },
+        nexus::AxtAssetIncarnationV1,
+    };
+    use iroha_model_base::domain::DomainId;
+
+    use super::{require_authenticated_release_network_v1, require_experimental_asset_scope_v1};
+
+    #[test]
+    fn monetary_verification_requires_the_signed_release_network() {
+        let release = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"kagemusha-signed-release-network"),
+        ));
+        let foreign = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new(b"kagemusha-foreign-operation-network"),
+        ));
+        assert!(require_authenticated_release_network_v1(release, release).is_ok());
+        assert!(require_authenticated_release_network_v1(release, foreign).is_err());
+    }
+
+    #[test]
+    fn experimental_proof_verification_requires_the_signed_asset_scope() {
+        let network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"experimental-native-scope-network",
+            )));
+        let asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("experimental-native-scope", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
+        let other_asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("experimental-native-scope", "universal").unwrap(),
+            "other".parse().unwrap(),
+        );
+        let incarnation = AxtAssetIncarnationV1::try_from_bytes(
+            Hash::new(b"experimental-native-scope-incarnation").into(),
+        )
+        .unwrap();
+        let pool = kagemusha_liability_pool_id_v1(&network_id, &asset, incarnation).unwrap();
+        let scope = KagemushaTestnetExperimentScopeV1 {
+            asset_identity_digest: kagemusha_asset_identity_digest_v1(&asset).unwrap(),
+            asset_incarnation: *incarnation.as_bytes(),
+            asset_scale: 2,
+            liability_pool_id: pool,
+        };
+        let check = |asset, incarnation, scale, pool| {
+            require_experimental_asset_scope_v1(scope, network_id, asset, incarnation, scale, pool)
+        };
+        assert!(check(&asset, incarnation, 2, pool).is_ok());
+        assert!(check(&other_asset, incarnation, 2, pool).is_err());
+        assert!(check(&asset, incarnation, 3, pool).is_err());
+        assert!(check(&asset, incarnation, 2, [1; 32]).is_err());
+        assert!(
+            check(
+                &asset,
+                AxtAssetIncarnationV1::try_from_bytes(Hash::new(b"other-incarnation").into())
+                    .unwrap(),
+                2,
+                pool,
+            )
+            .is_err()
+        );
+    }
+}
 
 /// Check the fixed KAGEMUSHA layout and the actual `BaseConfig` allocation order.
 ///
@@ -497,12 +629,14 @@ impl KagemushaRecursiveVerifierProfileV1 {
 /// Construction authenticates every key byte, validates the circuit profile, recompiles all
 /// protocols, and checks the state protocol identities recorded by the release. Verification
 /// then supplies the exact Guard protocol identities derived from the authenticated Guard keys.
-/// State/payment/terminal acceptance requires explicit admission of the independently authenticated
-/// release matching the provider-policy root fixed in the loaded recursive credential circuits.
+/// Production mint/payment/terminal acceptance requires an independently authenticated
+/// Production release matching the provider-policy root in the loaded credential circuits.
+/// A signed Experimental release may authorize only the explicit testnet top-up and proof-lineage
+/// paths; Guard, payment, redemption, and qualified hardware claims remain unavailable.
 /// Raw proof diagnostics and the independent consensus-backed mint-finality verifier do not
 /// establish device authority. Loading artifacts alone leaves monetary acceptance unavailable.
 pub struct KagemushaAuthenticatedRecursiveVerifierV1 {
-    monetary_release:
+    authenticated_release:
         Option<std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>>,
     native_profile_digest: [u8; 32],
     eq_parameters: halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
@@ -886,7 +1020,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
             ));
         }
         let verifier = Self {
-            monetary_release: None,
+            authenticated_release: None,
             native_profile_digest: artifacts.native_profile_digest(),
             eq_parameters,
             ep_parameters,
@@ -937,8 +1071,39 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
     /// against its independently pinned authority policy, never a policy read from wallet storage.
     /// Every compiled role, provider registry root and native layout must match the loaded keys.
     /// Repeating the same admission is harmless; changing the admitted release requires a new
-    /// verifier and the protocol's separately authorized rotation flow.
+    /// verifier and the protocol's separately authorized rotation flow. An experimental signed
+    /// release is rejected here and must use the proof-only testnet entrypoint.
     pub fn authorize_monetary_release(
+        &mut self,
+        release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+    ) -> Result<(), String> {
+        require_release_admission_purpose_v1(
+            release.purpose(),
+            ReleaseAdmissionV1::ProductionMonetary,
+        )?;
+        self.authorize_release_proof_material(release)
+    }
+
+    /// Install a threshold-signed testnet release solely for proof-lineage experiments.
+    ///
+    /// The verified purpose must be `TestnetExperiment`. This cannot create a production
+    /// wallet, GuardBundle, hardware transaction verifier, or redemption capability. An
+    /// explicitly configured testnet node may use its mint proofs for reserve top-up trials.
+    ///
+    /// # Errors
+    /// Rejects a production purpose or any mismatch with the loaded artifact package.
+    pub fn authorize_experimental_proof_release(
+        &mut self,
+        release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
+    ) -> Result<(), String> {
+        require_release_admission_purpose_v1(
+            release.purpose(),
+            ReleaseAdmissionV1::ExperimentalProofOnly,
+        )?;
+        self.authorize_release_proof_material(release)
+    }
+
+    fn authorize_release_proof_material(
         &mut self,
         release: std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>,
     ) -> Result<(), String> {
@@ -961,22 +1126,34 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         {
             return Err("Kagemusha monetary release differs from loaded artifacts".to_owned());
         }
-        if let Some(current) = &self.monetary_release {
+        if let Some(current) = &self.authenticated_release {
             if current.attestation_digest() != release.attestation_digest()
                 || current.authority_policy_digest() != release.authority_policy_digest()
             {
                 return Err("Kagemusha monetary authority is already installed".to_owned());
             }
         }
-        self.monetary_release = Some(release);
+        self.authenticated_release = Some(release);
         Ok(())
+    }
+
+    pub(super) fn proof_release(
+        &self,
+    ) -> Result<std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, String>
+    {
+        require_authenticated_proof_release_v1(self.authenticated_release.as_ref()).cloned()
     }
 
     pub(super) fn monetary_release(
         &self,
     ) -> Result<std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, String>
     {
-        require_monetary_release_v1(self.monetary_release.as_ref()).cloned()
+        let release = self.proof_release()?;
+        require_release_admission_purpose_v1(
+            release.purpose(),
+            ReleaseAdmissionV1::ProductionMonetary,
+        )?;
+        Ok(release)
     }
 
     fn require_authenticated_provider_policy_authority_v1(&self) -> Result<(), String> {
@@ -1120,6 +1297,43 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         authorization: &KagemushaMintAuthorizationV1,
     ) -> Result<(), String> {
         self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.monetary_release()?;
+        self.verify_mint_authorization_proof(authorization, &release)
+    }
+
+    /// Verify a mint-authorization proof for the signed testnet top-up and observer lanes.
+    /// The result is never a production mint or spend capability.
+    pub(crate) fn verify_experimental_mint_authorization_for_testnet_observation(
+        &self,
+        authorization: &KagemushaMintAuthorizationV1,
+    ) -> Result<(), String> {
+        let release = self.proof_release()?;
+        let KagemushaReleasePurposeV1::TestnetExperiment(scope) = release.purpose() else {
+            return Err(
+                "testnet mint authorization requires a signed Experimental release".to_owned(),
+            );
+        };
+        let context = &authorization.statement.context;
+        require_experimental_asset_scope_v1(
+            scope,
+            context.network_id,
+            &context.asset,
+            context.asset_incarnation,
+            context.scale,
+            context.liability_pool_id,
+        )?;
+        self.verify_mint_authorization_proof(authorization, &release)
+    }
+
+    fn verify_mint_authorization_proof(
+        &self,
+        authorization: &KagemushaMintAuthorizationV1,
+        release: &iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1,
+    ) -> Result<(), String> {
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            authorization.statement.context.network_id,
+        )?;
         authorization
             .validate_shape()
             .map_err(|error| error.to_string())?;
@@ -1204,6 +1418,33 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         checkpoint: &KagemushaMintAuthorityCheckpointV1,
     ) -> Result<(KagemushaEqAccumulatorV1, KagemushaEpAccumulatorV1), String> {
+        let release = self.monetary_release()?;
+        self.verify_mint_authority_checkpoint_proof(checkpoint, &release)
+    }
+
+    /// Reverify a mint checkpoint only for the signed Experimental node top-up lane.
+    /// This cannot grant Guard, payment, or redemption authority.
+    pub(crate) fn verify_experimental_mint_authority_checkpoint_for_testnet(
+        &self,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
+    ) -> Result<(KagemushaEqAccumulatorV1, KagemushaEpAccumulatorV1), String> {
+        let release = self.proof_release()?;
+        require_release_admission_purpose_v1(
+            release.purpose(),
+            ReleaseAdmissionV1::ExperimentalProofOnly,
+        )?;
+        self.verify_mint_authority_checkpoint_proof(checkpoint, &release)
+    }
+
+    fn verify_mint_authority_checkpoint_proof(
+        &self,
+        checkpoint: &KagemushaMintAuthorityCheckpointV1,
+        release: &iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1,
+    ) -> Result<(KagemushaEqAccumulatorV1, KagemushaEpAccumulatorV1), String> {
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            checkpoint.statement.lifecycle.network_id,
+        )?;
         checkpoint.validate_shape()?;
         validate_mint_checkpoint_release_v1(
             checkpoint,
@@ -1277,6 +1518,14 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         payment: &KagemushaPaymentV1,
     ) -> Result<(), String> {
         self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(release.network_id(), request.network_id)?;
+        validate_payment_receiver_profile_v1(
+            request,
+            release.enabled_profile(request.hardware_credential.hardware_profile_id),
+            self.suite_id,
+            self.vk_set_digest,
+        )?;
         payment
             .validate_shape_against(request)
             .map_err(|error| error.to_string())?;
@@ -1335,7 +1584,11 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
         &self,
         request: &KagemushaParityVerificationRequestV1<'_>,
     ) -> Result<(), String> {
-        self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.monetary_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            request.public_output.lifecycle.network_id,
+        )?;
         if request.public_output.lifecycle.release_id != self.release_id
             || request.public_output.lifecycle.suite_id != self.suite_id
             || request.public_output.lifecycle.vk_digest != self.vk_set_digest
@@ -1404,7 +1657,17 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
         &self,
         request: &KagemushaStateProofVerificationRequestV1<'_>,
     ) -> Result<(), String> {
-        self.require_authenticated_provider_policy_authority_v1()?;
+        let release = self.proof_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            request.public_inputs.successor.lane.network_id,
+        )?;
+        if let Some(predecessor) = request.public_inputs.predecessor.as_ref() {
+            require_authenticated_release_network_v1(
+                release.network_id(),
+                predecessor.lane.network_id,
+            )?;
+        }
         if request.public_inputs.commit_wrapper_eq_protocol_digest
             != self.commit_wrapper_eq_protocol_digest
             || request.public_inputs.commit_wrapper_ep_protocol_digest
@@ -1461,6 +1724,22 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
         &self,
         request: &super::KagemushaMintFinalityHelperVerificationRequestV1<'_>,
     ) -> Result<(), String> {
+        let release = self.proof_release()?;
+        require_authenticated_release_network_v1(
+            release.network_id(),
+            request.statement.lifecycle.network_id,
+        )?;
+        if let KagemushaReleasePurposeV1::TestnetExperiment(scope) = release.purpose() {
+            let lifecycle = &request.statement.lifecycle;
+            require_experimental_asset_scope_v1(
+                scope,
+                lifecycle.network_id,
+                &lifecycle.asset,
+                lifecycle.asset_incarnation,
+                lifecycle.scale,
+                lifecycle.liability_pool_id,
+            )?;
+        }
         validate_mint_finality_release_v1(
             request,
             self.release_id,
@@ -1519,12 +1798,37 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
     }
 }
 
-fn require_monetary_release_v1(
+fn require_authenticated_proof_release_v1(
     release: Option<&std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>>,
 ) -> Result<&std::sync::Arc<iroha_data_model::kagemusha::KagemushaAuthenticatedReleaseV1>, String> {
     release.ok_or_else(|| {
         super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string()
     })
+}
+
+/// Authenticate a signed receiver request against the exact profile in the admitted release.
+fn validate_payment_receiver_profile_v1(
+    request: &KagemushaPaymentRequestV1,
+    enabled: Option<&KagemushaEnabledProfileV1>,
+    suite_id: [u8; 32],
+    vk_set_digest: [u8; 32],
+) -> Result<(), String> {
+    let enabled = enabled.ok_or_else(|| {
+        "Kagemusha payment receiver hardware profile is not release-enabled".to_owned()
+    })?;
+    let credential = &request.hardware_credential;
+    if enabled.hardware_profile_id != credential.hardware_profile_id
+        || enabled.hardware_profile.hardware_profile_id != enabled.hardware_profile_id
+        || enabled.suite_id != suite_id
+        || credential.suite_id != enabled.suite_id
+        || enabled.vk_digest != vk_set_digest
+        || credential.policy_epoch != enabled.policy_epoch
+    {
+        return Err("Kagemusha payment receiver release-profile binding mismatch".to_owned());
+    }
+    request
+        .validate_against_profile(&enabled.hardware_profile)
+        .map_err(|error| format!("Kagemusha payment receiver credential rejected: {error}"))
 }
 
 fn append_base_params(bytes: &mut Vec<u8>, params: &BaseCircuitParams) -> Result<(), String> {
@@ -1809,7 +2113,11 @@ mod checked_loader_tests {
         plonk::{Advice, Circuit, Column, ConstraintSystem, Error, Selector, keygen_vk_custom},
         poly::{Rotation, ipa::commitment::ParamsIPA},
     };
-    use iroha_data_model::kagemusha::KagemushaArtifactBindingV1;
+    use iroha_data_model::kagemusha::{
+        KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1, KagemushaArtifactBindingV1,
+        KagemushaDevicePublicKeyV1, KagemushaEvidenceFileV1, KagemushaHardwarePlatformClassV1,
+        KagemushaHardwareProfileV1, kagemusha_suite_commitment_v1,
+    };
 
     use super::*;
 
@@ -1841,14 +2149,10 @@ mod checked_loader_tests {
     #[test]
     fn native_monetary_entrypoints_fail_closed_before_caller_proof_or_policy_values() {
         let source = include_str!("native_backend.rs");
-        // These are the four provider-dependent accepting paths, including recipient mint
-        // authorization. Each must reject before caller input is read; independent finalized
-        // reserve authority does not claim device-provider authority and remains separate.
+        // Production mint authorization and payment require provider policy before caller input.
         for declaration in [
             "    pub fn verify_mint_authorization(",
             "    pub fn verify_payment_and_decide(",
-            "    fn verify_terminal_authorization_request(",
-            "    fn verify_state_proof_and_decide(",
         ] {
             let method = source
                 .split_once(declaration)
@@ -1863,12 +2167,196 @@ mod checked_loader_tests {
                     .starts_with("self.require_authenticated_provider_policy_authority_v1()?;")
             );
         }
+        // Direct terminal verification must use the Production-only release accessor. The
+        // State relation stays available to the separate signed Experimental proof observer.
+        for (declaration, expected_start) in [
+            (
+                "    fn verify_terminal_authorization_request(",
+                "let release = self.monetary_release()?;",
+            ),
+            (
+                "    fn verify_state_proof_and_decide(",
+                "let release = self.proof_release()?;",
+            ),
+            (
+                "    fn verify_mint_finality_helper(",
+                "let release = self.proof_release()?;",
+            ),
+        ] {
+            let method = source
+                .split_once(declaration)
+                .expect("verifier entrypoint")
+                .1;
+            let body = method
+                .split_once(") -> Result<(), String> {")
+                .expect("verifier method body")
+                .1;
+            assert!(body.trim_start().starts_with(expected_start));
+        }
+        let experimental = source
+            .split_once(
+                "    pub(crate) fn verify_experimental_mint_authorization_for_testnet_observation(",
+            )
+            .expect("proof-only experimental mint method")
+            .1;
+        let body = experimental
+            .split_once(") -> Result<(), String> {")
+            .expect("experimental method body")
+            .1;
+        assert!(
+            body.trim_start()
+                .starts_with("let release = self.proof_release()?;")
+        );
+        assert!(body.contains("ReleaseAdmissionV1::ExperimentalProofOnly"));
         // Even well-shaped, nonzero canonical scalar/root choices never become gate inputs.
         for scalar in [Fp::from(1), Fp::from(2), Fp::from(3)] {
             assert_ne!(crate::zk::kagemusha_v1_poseidon::encode(scalar), [0; 32]);
-            assert_eq!(require_monetary_release_v1(None).err(), Some(
+            assert_eq!(require_authenticated_proof_release_v1(None).err(), Some(
                 super::super::KagemushaGuardVerificationErrorV1::ProviderPolicyAuthorityUnavailable.to_string()
             ));
+        }
+    }
+
+    #[test]
+    fn production_and_experimental_release_authorization_are_disjoint() {
+        let production = KagemushaReleasePurposeV1::Production;
+        let experimental = KagemushaReleasePurposeV1::TestnetExperiment(
+            iroha_data_model::kagemusha::KagemushaTestnetExperimentScopeV1 {
+                asset_identity_digest: [1; 32],
+                asset_incarnation: [2; 32],
+                asset_scale: 2,
+                liability_pool_id: [3; 32],
+            },
+        );
+        assert!(
+            require_release_admission_purpose_v1(
+                production,
+                ReleaseAdmissionV1::ProductionMonetary
+            )
+            .is_ok()
+        );
+        assert!(
+            require_release_admission_purpose_v1(
+                experimental,
+                ReleaseAdmissionV1::ExperimentalProofOnly
+            )
+            .is_ok()
+        );
+        assert!(
+            require_release_admission_purpose_v1(
+                experimental,
+                ReleaseAdmissionV1::ProductionMonetary
+            )
+            .is_err()
+        );
+        assert!(
+            require_release_admission_purpose_v1(
+                production,
+                ReleaseAdmissionV1::ExperimentalProofOnly
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn payment_receiver_requires_release_enabled_profile_and_governance_signature() {
+        use super::super::tests::{incoming_payment_fixture, p256_signing_key, sign};
+
+        let mut request = incoming_payment_fixture(0x41, 9, 7, 11, 128, 128).request;
+        let issuer = p256_signing_key(8);
+        let issuer_public_key = KagemushaDevicePublicKeyV1::from_sec1_bytes(
+            issuer.verifying_key().to_encoded_point(false).as_bytes(),
+        )
+        .expect("fixture issuer public key");
+        let suite_id = request.hardware_credential.suite_id;
+        let vk_set_digest = [0x35; 32];
+        let profile = KagemushaHardwareProfileV1 {
+            app_attestation_authority_policy_digest: [0xA5; 32],
+            version: request.version,
+            protocol_version: request.version,
+            hardware_profile_id: [0; 32],
+            provider_id: [1; 32],
+            platform_class: KagemushaHardwarePlatformClassV1::DedicatedSecureElement,
+            product_class_digest: [2; 32],
+            firmware_policy_digest: request.hardware_credential.firmware_policy_digest,
+            enrollment_attestation_verifier_digest: [4; 32],
+            attestation_trust_roots_digest: [5; 32],
+            allowed_suite_commitment: kagemusha_suite_commitment_v1(suite_id),
+            policy_epoch: request.hardware_credential.policy_epoch,
+            governance_credential_public_key: issuer_public_key,
+            capability_mask: KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1,
+            qualification_report_digest: [8; 32],
+            valid_from_ms: 1,
+            expires_at_ms: 25_000,
+        }
+        .seal_hardware_profile_id()
+        .expect("fixture profile identity");
+        request.hardware_credential.hardware_profile_id = profile.hardware_profile_id;
+        request.hardware_credential = request
+            .hardware_credential
+            .seal_credential_id()
+            .expect("fixture credential identity");
+        request.hardware_credential.governance_signature = sign(
+            &issuer,
+            &request
+                .hardware_credential
+                .canonical_signing_bytes()
+                .expect("fixture credential signing bytes"),
+        );
+        request.signature = sign(
+            &p256_signing_key(7),
+            &request
+                .canonical_signing_bytes()
+                .expect("fixture request signing bytes"),
+        );
+        request.validate_shape().expect("self-signed request shape");
+        let enabled = KagemushaEnabledProfileV1 {
+            hardware_profile: profile,
+            hardware_profile_id: profile.hardware_profile_id,
+            suite_id,
+            vk_digest: vk_set_digest,
+            qualification_digest: [9; 32],
+            policy_epoch: profile.policy_epoch,
+            qualification_report: KagemushaEvidenceFileV1 {
+                sha256: profile.qualification_report_digest,
+                byte_len: 1,
+            },
+        };
+        let check = |request: &KagemushaPaymentRequestV1,
+                     enabled: Option<&KagemushaEnabledProfileV1>| {
+            validate_payment_receiver_profile_v1(request, enabled, suite_id, vk_set_digest)
+        };
+        check(&request, Some(&enabled)).expect("governed receiver is release-enabled");
+        assert!(check(&request, None).is_err(), "unknown receiver profile");
+
+        let mut wrong_governance = request.clone();
+        wrong_governance.hardware_credential.governance_signature = sign(
+            &p256_signing_key(9),
+            &wrong_governance
+                .hardware_credential
+                .canonical_signing_bytes()
+                .expect("forged credential signing bytes"),
+        );
+        wrong_governance
+            .validate_shape()
+            .expect("receiver signature remains valid without issuer authority");
+        assert!(
+            check(&wrong_governance, Some(&enabled)).is_err(),
+            "a self-signed request cannot launder a forged governance credential"
+        );
+
+        for mutation in 0..4 {
+            let mut changed = enabled;
+            match mutation {
+                0 => changed.hardware_profile_id = [0x91; 32],
+                1 => changed.suite_id = [0x92; 32],
+                2 => changed.vk_digest = [0x93; 32],
+                _ => changed.policy_epoch += 1,
+            }
+            assert!(
+                check(&request, Some(&changed)).is_err(),
+                "release profile metadata mutation {mutation} must fail"
+            );
         }
     }
 

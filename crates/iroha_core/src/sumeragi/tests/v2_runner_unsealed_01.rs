@@ -25,7 +25,7 @@ fn open_height_lane_relay_drain_services_exactly_one_occurrence_per_turn() {
     assert_eq!(returned.view, 9);
     assert_eq!(returned.bls_sig, vec![0xA5]);
     assert!(
-        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
+        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0, |_, _| unreachable!())
             .expect("rejected relay cannot enter the runner queue")
     );
     for certificate in [vec![0_u8], vec![1_u8]] {
@@ -39,17 +39,81 @@ fn open_height_lane_relay_drain_services_exactly_one_occurrence_per_turn() {
     }
 
     assert!(
-        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
+        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0, |_, _| unreachable!())
             .expect("service the first open-height relay occurrence")
     );
     assert!(
-        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
+        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0, |_, _| unreachable!())
             .expect("service the second open-height relay occurrence"),
         "the first open-height turn must leave the second relay queued"
     );
     assert!(
-        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0)
+        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0, |_, _| unreachable!())
             .expect("observe the exhausted open-height relay queue")
+    );
+}
+
+#[test]
+fn open_height_lane_relay_delivers_drain_vote_to_native_owner_once() {
+    let (_adapter, keys, mut queue_plan, _) =
+        super::super::v2_lane_work::tests::queue_plan_owner_fixture(2);
+    let signer = PeerId::new(keys[1].public_key().clone());
+    let validator_set = vec![signer.clone()];
+    let incarnation = Hash::new(b"native-runner-drain-relay");
+    let frontier = iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+        iroha_model_base::topology::LaneId::new(3),
+        iroha_model_base::topology::DataSpaceId::new(5),
+        incarnation,
+        0,
+        None,
+    );
+    let vote = crate::lane_consensus::LaneDrainVoteV1::new_signed(
+        iroha_data_model::merge::LaneDrainCertificateBodyV1 {
+            version: 1,
+            intent: iroha_data_model::merge::LaneDrainIntentV1 {
+                version: 1,
+                network_id: crate::sumeragi::synthetic_network_id("native-runner-drain-relay"),
+                lane_id: frontier.lane_id,
+                dataspace_id: frontier.dataspace_id,
+                lane_incarnation: incarnation,
+                close_global_height: 1,
+                initial_frontier: frontier,
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: iroha_crypto::HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                min_quorum: 1,
+            },
+            final_frontier: frontier,
+        },
+        signer.clone(),
+        keys[1].private_key(),
+    )
+    .expect("well-formed drain relay vote");
+    let (handle, _ingress, lane_relay_rx) = super::super::test_sumeragi_handle(1);
+    handle
+        .ingress_ready
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert!(matches!(
+        handle.try_incoming_lane_relay_owned(LaneRelayMessage::DrainVote {
+            sender: signer.clone(),
+            vote: vote.clone(),
+        }),
+        super::super::SumeragiIngressDisposition::Accepted
+    ));
+    let mut delivered = None;
+    assert!(
+        drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0, |sender, vote| {
+            delivered = Some((sender, vote));
+            Ok(())
+        })
+        .expect("dispatch exact drain relay")
+    );
+    assert_eq!(delivered, Some((signer, vote)));
+    assert!(
+        !drain_lane_relay_ingress(&lane_relay_rx, &mut queue_plan, 0, |_, _| unreachable!())
+            .expect("the drain relay has one bounded owner")
     );
 }
 

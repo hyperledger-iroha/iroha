@@ -1,5 +1,11 @@
 # Sumeragi v2 liveness contract and release gate
 
+> **Status (2026-09-27): retired.** The node runs only the new Sumeragi
+> ([`sumeragi.md`](sumeragi.md)). The v2 release gates, release bootstrap,
+> formal runners and SDK/multilane inventory scripts this document names were
+> removed with the v2 consensus tooling. This document is deleted together with
+> the v2 runtime.
+
 Sumeragi v2 does not promise unconditional termination. An unbounded network
 partition, the absence of a responsive `2f + 1` equal-vote quorum, or local disk, signing,
 validation, and application work which never completes can prevent progress.
@@ -1638,7 +1644,7 @@ without allocating a new work ID; tag drift or a conflicting post-completion
 certificate still fails closed. This extends an existing named regression and
 therefore does not change the inventory cardinality.
 Its canonical module/test TSV inventory SHA-256 is
-`6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815`.
+`123fafed34cddd1f488af19ceccf1fb4e80c3cfba2f59e889e02c565a3b01892`.
 
 This is the prospective source inventory: six Native participant-role tests,
 the Ready Validate WAL-append crash test, two Certified-Serve corruption tests,

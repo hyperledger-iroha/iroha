@@ -26,8 +26,10 @@ pub(super) trait CompactTransferValue: sealed::Sealed + Sized {
     /// Whether the distinct full-domain quantity context is mandatory.
     const QUANTITY_CONTEXT: bool;
     /// Fixed single-transfer relation identity.
+    #[cfg(test)]
     const TRANSFER_IDENTITY: &'static str;
     /// Fixed single AXT relation identity.
+    #[cfg(test)]
     const AXT_IDENTITY: &'static str;
     /// Fixed ordinary bundle segment identity.
     const BATCH_IDENTITY: &'static str;
@@ -46,8 +48,10 @@ pub(super) trait CompactTransferValue: sealed::Sealed + Sized {
 
 impl CompactTransferValue for u64 {
     const QUANTITY_CONTEXT: bool = false;
+    #[cfg(test)]
     const TRANSFER_IDENTITY: &'static str =
         "fastpq:compact:v1:public-transfer:v1:342cols:923slots:65536rows";
+    #[cfg(test)]
     const AXT_IDENTITY: &'static str =
         "fastpq:compact:v1:axt-public-transfer:v1:342cols:923slots:65536rows";
     const BATCH_IDENTITY: &'static str =
@@ -68,8 +72,10 @@ impl CompactTransferValue for u64 {
 
 impl CompactTransferValue for FastpqQuantityUnits {
     const QUANTITY_CONTEXT: bool = true;
+    #[cfg(test)]
     const TRANSFER_IDENTITY: &'static str =
         "fastpq:compact:v1:quantity-public-transfer:v1:342cols:923slots:65536rows";
+    #[cfg(test)]
     const AXT_IDENTITY: &'static str =
         "fastpq:compact:v1:quantity-axt-public-transfer:v1:342cols:923slots:65536rows";
     const BATCH_IDENTITY: &'static str =

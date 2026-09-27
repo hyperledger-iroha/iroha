@@ -37,7 +37,6 @@ use iroha::{
         trigger::Trigger,
     },
 };
-use iroha_core::sumeragi::network_topology::commit_quorum_from_len;
 use iroha_crypto::{
     BfvEvaluationKeyBundle, BfvParameters, Hash, RamLfeBackend, RamLfeVerificationMode, Signature,
     SignatureOf, bfv_programmed_policy_commitment_with_program,
@@ -721,6 +720,7 @@ fn realistic_ram_lfe_email_receipt(
     IdentifierResolutionReceipt {
         payload,
         attestation: RamLfeReceiptAttestation::Signed(signature),
+        phone_retail_canonicality: None,
     }
 }
 fn expected_realistic_ram_lfe_email_claim_counts(
@@ -6024,6 +6024,7 @@ fn realistic_ram_lfe_email_receipt_is_signed_for_generated_email_claim() {
     assert_eq!(receipt.payload.policy_id, policy.id);
     assert_eq!(receipt.payload.account_id, account.id);
     assert_eq!(receipt.payload.uaid, account.uaid);
+    assert!(receipt.phone_retail_canonicality.is_none());
     assert_eq!(
         receipt.payload.execution.associated_data_hash,
         Hash::new(&context.program_id_bytes)
@@ -7035,7 +7036,7 @@ async fn wait_for_height_quorum_with_bounded_lag(
 ) -> Result<Vec<iroha_torii_shared::status::Status>> {
     let deadline = Instant::now() + timeout;
     let peer_count = network.peers().len();
-    let quorum = commit_quorum_from_len(peer_count).max(1);
+    let quorum = iroha_sumeragi::types::quorum(peer_count).max(1);
     let tolerated_lagging = tolerated_lagging_peers(peer_count);
     let mut last_snapshot: Vec<StatusSnapshot> = Vec::new();
     let mut last_log = Instant::now()
@@ -7107,7 +7108,7 @@ fn status_height_span(statuses: &[iroha_torii_shared::status::Status]) -> Option
     Some((min_height, max_height))
 }
 fn tolerated_lagging_peers(peer_count: usize) -> usize {
-    peer_count.saturating_sub(commit_quorum_from_len(peer_count).max(1))
+    peer_count.saturating_sub(iroha_sumeragi::types::quorum(peer_count).max(1))
 }
 fn quorum_low_watermark_height(
     statuses: &[iroha_torii_shared::status::Status],

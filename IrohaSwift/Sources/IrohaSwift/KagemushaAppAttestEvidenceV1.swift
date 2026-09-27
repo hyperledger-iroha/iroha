@@ -4,29 +4,74 @@ import Foundation
 /// Client-data binding for Core's canonical, domain-separated hardware selection.
 ///
 /// Core must construct and verify the fixed V1 subject body from its durable transition intent.
-/// This type checks only the outer frame before giving the exact bytes to App Attest.
+/// This type rejects malformed V1 fields before giving the exact bytes to App Attest.
 public struct KagemushaAppAttestTransitionBindingV1: Sendable {
   private static let signingDomain = Data("iroha:kagemusha:v1:hardware-transition-selection\0".utf8)
   private static let bodyBytes = 403
   private static let totalBytes = 460
+  // Absolute offsets in KagemushaHardwareSelectionSigningLayoutV1.
+  private static let version = 57..<59
+  private static let scopedDigests = [59..<91, 91..<123, 123..<155, 155..<187,
+    187..<219, 219..<251, 251..<283, 291..<323, 332..<364]
+  private static let policyEpoch = 283..<291
+  private static let hardwareEpochGeneration = 323..<331
+  private static let operationTag = 331
+  private static let candidateDigest = 364..<396
+  private static let terminalCommitment = 396..<428
+  private static let secureIndexBefore = 428..<444
+  private static let secureIndexAfter = 444..<460
 
   public let canonicalSelectionSigningBytes: Data
 
   public init(coreSelectionSigningBytes: Data) throws {
+    let bytes = [UInt8](coreSelectionSigningBytes)
     let headerLength = Self.signingDomain.count + MemoryLayout<UInt64>.size
-    guard coreSelectionSigningBytes.count == Self.totalBytes,
+    guard bytes.count == Self.totalBytes,
       headerLength + Self.bodyBytes == Self.totalBytes,
-      coreSelectionSigningBytes.starts(with: Self.signingDomain) else {
+      bytes.starts(with: Self.signingDomain) else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
     }
     var bodyLength: UInt64 = 0
-    for (offset, byte) in coreSelectionSigningBytes[Self.signingDomain.count..<headerLength].enumerated() {
+    for (offset, byte) in bytes[Self.signingDomain.count..<headerLength].enumerated() {
       bodyLength |= UInt64(byte) << (offset * 8)
     }
     guard bodyLength == UInt64(Self.bodyBytes) else {
       throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
     }
-    canonicalSelectionSigningBytes = coreSelectionSigningBytes
+    let operation = bytes[Self.operationTag]
+    let outgoing = operation == 2 || operation == 4
+    guard bytes[Self.version].elementsEqual([1, 0]), (1...5).contains(operation),
+      Self.scopedDigests.allSatisfy({ range in bytes[range].contains(where: { $0 != 0 }) }),
+      bytes[Self.policyEpoch].contains(where: { $0 != 0 }),
+      bytes[Self.hardwareEpochGeneration].contains(where: { $0 != 0 }),
+      bytes[Self.candidateDigest].contains(where: { $0 != 0 }) == outgoing,
+      bytes[Self.terminalCommitment].contains(where: { $0 != 0 }) == outgoing else {
+      throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
+    }
+    var carry: UInt16 = 1
+    for offset in 0..<16 {
+      let sum = UInt16(bytes[Self.secureIndexBefore.lowerBound + offset]) + carry
+      guard bytes[Self.secureIndexAfter.lowerBound + offset] == UInt8(truncatingIfNeeded: sum) else {
+        throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
+      }
+      carry = sum >> 8
+    }
+    guard carry == 0 else {
+      throw KagemushaAppAttestEvidenceErrorV1.invalidCanonicalSelection
+    }
+    canonicalSelectionSigningBytes = Data(bytes)
+  }
+
+  /// Compare Core's trusted predecessor to the signed secure index before spending hardware.
+  func validateExpectedPreviousCounter(_ expected: UInt32) throws {
+    let bytes = [UInt8](canonicalSelectionSigningBytes)
+    let offset = Self.secureIndexBefore.lowerBound
+    guard bytes[(offset + 4)..<Self.secureIndexBefore.upperBound].allSatisfy({ $0 == 0 }),
+      (0..<4).allSatisfy({ index in
+        bytes[offset + index] == UInt8(truncatingIfNeeded: expected >> (index * 8))
+      }) else {
+      throw KagemushaAppAttestEvidenceErrorV1.assertionCounterMismatch
+    }
   }
 
   /// Apple signs SHA256(authenticatorData || clientDataHash); here clientDataHash = SHA256(S).
@@ -371,6 +416,7 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
     default:
       throw KagemushaAppAttestEvidenceErrorV1.journalMismatch
     }
+    try binding.validateExpectedPreviousCounter(expectedPreviousCounter)
     try intentStore.reserve(keyID: keyID, previousCounter: expectedPreviousCounter,
       selectionDigest: digest)
     guard try intentStore.load(keyID: keyID) == .pending(
@@ -427,6 +473,7 @@ public actor KagemushaAppAttestEvidenceProviderV1 {
       throw KagemushaAppAttestEvidenceErrorV1.assertionOutcomeUnknown
     case .complete(let counter, let selectionDigest, let rawAssertion)
       where counter == expectedPreviousCounter + 1 && selectionDigest == digest:
+      try binding.validateExpectedPreviousCounter(expectedPreviousCounter)
       let evidence = try KagemushaAppAttestAssertionEvidenceV1(
         rawAssertion: rawAssertion, clientDataHash: digest,
         expectedAppIDHash: expectedAppIDHash, expectedRelease: expectedRelease,

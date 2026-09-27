@@ -28,8 +28,8 @@ EXPECTED_BEACON_NETWORK_TEST = (
     'production_beacon_bootstrap::four_peer_fresh_custody_bootstrap_reaches_mandatory_pulse'
 )
 PLATFORM_REGRESSION_COUNT = 1 if sys.platform == "linux" else 0
-EXPECTED_BASIC_REGRESSION_COUNT = 1586 + PLATFORM_REGRESSION_COUNT
-EXPECTED_REGRESSION_COUNT = 1750 + PLATFORM_REGRESSION_COUNT
+EXPECTED_BASIC_REGRESSION_COUNT = 1612 + PLATFORM_REGRESSION_COUNT
+EXPECTED_REGRESSION_COUNT = 1776 + PLATFORM_REGRESSION_COUNT
 
 REWARD_ACCOUNTING_SOURCE_TESTS = {
     'domain.rs': ('smartcontracts::isi::domain::tests::', (
@@ -51,7 +51,7 @@ REWARD_ACCOUNTING_SOURCE_TESTS = {
         'reward_obligation_audit_rejects_corrupt_record_keys',
         'reward_claim_uses_recorded_custody_after_fee_policy_changes',
         'reward_recording_excludes_bonded_custody_from_a_shared_fee_sink',
-        'reward_failed_second_asset_rolls_back_the_enclosing_transaction',
+        'reward_failed_second_source_preserves_all_claim_state_without_overlay_rollback',
     )),
     'staking.rs': ('smartcontracts::isi::staking::tests::', (
         'claim_rewards_transfers_and_marks_epoch',
@@ -74,6 +74,12 @@ SPEC = importlib.util.spec_from_file_location("taira_release_check", SCRIPT)
 assert SPEC and SPEC.loader
 gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
+
+
+def production_library_events():
+    return [{"reason": "compiler-artifact", "target": {"name": name, "kind": ["lib"]},
+             "profile": {"test": False}, "features": ["default"]}
+            for name in ("iroha_core", "iroha_torii")]
 
 
 def isolate_shipping_fixture(case, *, keep_network_prerequisites=False):
@@ -253,11 +259,11 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_candidate_handoff_rejects_retired_merge_before_signing',
             'state::tests::native_candidate_handoff_rejects_foreign_original_state',
             'state::tests::native_candidate_partial_atomic_handoff_retains_waits_and_independent_work',
-            'sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback',
+            'sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot',
             'sumeragi::v2_candidate::tests::native_candidate_selects_only_exact_height_lifecycle_control',
             'sumeragi::v2_candidate::tests::lifecycle_control_defers_queue_plan_admission_attachment',
             'sumeragi::v2_candidate::tests::invalid_exact_height_lifecycle_certificate_is_deferred_before_signing',
-            'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_crosses_queue_plan_fifo_barrier',
+            'sumeragi::v2_candidate::tests::exact_height_lifecycle_control_preempts_independent_ordinary_input',
             'state::tests::native_preparation_preserves_local_recorder_conflict',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_marker_failures_return_exact_wait_and_original_owner',
             'sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::retained_dispatch_capture_refusal_keeps_exact_wait_without_success_marker',
@@ -278,16 +284,21 @@ class BeaconGateTests(unittest.TestCase):
             'query::archive_capture::tests::old_wait_remains_released_while_a_new_owner_is_active',
             'query::archive_capture::tests::move_to_another_worker_preserves_custody_without_retaining_the_archive',
             'query::archive_capture::tests::concurrent_attempts_retain_exactly_one_original_owner',
-            'state::tests::native_service_preparation_single_preserves_original_sources_and_archives',
-            'state::tests::native_service_preparation_atomic_preserves_original_sources_and_archives',
-            'state::tests::native_service_preparation_index_busy_precedes_execution',
-            'state::tests::native_service_preparation_capture_busy_releases_partial_owner',
-            'state::tests::native_service_preparation_stale_source_skips_archives_and_execution',
-            'state::tests::native_service_preparation_foreign_source_and_body_are_rejected',
-            'state::tests::native_service_preparation_recorder_conflict_releases_archives',
-            'state::tests::native_service_single_body_store_retries_reuse_original_execution',
-            'state::tests::native_service_atomic_body_store_retries_reuse_original_execution',
-            'sumeragi::v2_apply::tests::native_preparation_errors::hash_admission_retains_original_release_and_runner_through_all_native_origins',
+            'state::tests::native_consumer_source_custody_moves_original_all_route_owners',
+            'state::tests::native_recorded_execution_retains_sources_results_aliases_and_complete_witness',
+            'state::tests::native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer',
+            'state::tests::native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged',
+            'state::tests::native_consumer_source_preparation_retains_exact_recovery_positions_then_stages',
+            'state::tests::native_consumer_source_refuses_authentically_resigned_first_carrier_substitution',
+            'state::tests::native_recorded_execution_nested_recorder_refuses_without_mutation_or_reset',
+            'state::tests::native_recorded_execution_late_failure_discards_hook_effects_and_recorder',
+            'state::tests::native_completed_history_rejects_reapplication_after_second_economic_commit',
+            'state::native_execution_resources::tests::source_layouts_reserve_and_refund_exact_original_bytes',
+            'state::native_execution_resources::tests::final_execution_charge_remains_with_source_admission',
+            'sumeragi::v2_apply::tests::native_preparation_errors::local_admission_retains_original_release_and_runner_through_all_native_origins',
+            'sumeragi::v2_apply::tests::native_preparation_errors::npos_application_semantic_error_remains_a_deterministic_rejection',
+            'sumeragi::v2_apply::tests::native_preparation_errors::evidence_preparation_refusal_is_local_and_keeps_its_original_release',
+            'sumeragi::v2_apply::tests::native_preparation_errors::evidence_decode_scope_refusal_is_local_recovery_without_consensus_rejection',
             'sumeragi::v2_apply::tests::native_preparation_errors::native_controls_preserve_local_storage_failure_and_semantic_rejection',
             'sumeragi::v2_apply::tests::native_preparation_errors::metadata_and_recorder_diagnostics_cannot_authorize_negative_markers',
             'sumeragi::v2_apply::tests::native_preparation_errors::governed_native_batch_limit_remains_a_semantic_body_verdict',
@@ -304,7 +315,7 @@ class BeaconGateTests(unittest.TestCase):
             'state::tests::native_recorded_control_rejects_changed_opening_and_stale_verified_height',
             'state::tests::native_recorded_control_rejects_missing_corrupt_and_foreign_parent_beacon',
         )
-        self.assertEqual(len(required), 59)
+        self.assertEqual(len(required), 64)
         for platform in ("darwin", "linux"):
             spec = importlib.util.spec_from_file_location("native_connection_gate", gate.__file__)
             selected_gate = importlib.util.module_from_spec(spec)
@@ -356,8 +367,8 @@ class BeaconGateTests(unittest.TestCase):
         required.update("sumeragi::v2_lifecycle_coordinator::work_registry::tests::retained_dispatch::" + name
                         for name in dispatch_names)
         for path, pattern, regression in (
-            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_never_selects_ordinary_fallback\s*\(",
-             "sumeragi::v2_candidate::tests::native_source_wait_never_selects_ordinary_fallback"),
+            ("sumeragi/v2_candidate.rs", r"#\[test\]\s*fn\s+native_source_wait_allows_independent_ordinary_snapshot\s*\(",
+             "sumeragi::v2_candidate::tests::native_source_wait_allows_independent_ordinary_snapshot"),
             ("state/native_lane_preparation_tests.rs", r"state_test!\s*\{\s*sync\s+native_preparation_preserves_local_recorder_conflict\b",
              "state::tests::native_preparation_preserves_local_recorder_conflict"),
         ):
@@ -375,17 +386,46 @@ class BeaconGateTests(unittest.TestCase):
         ):
             self.assertRegex(control_source, r"state_test!\s*\{\s*sync\s+" + name + r"\b")
             required.add("state::tests::" + name)
-        self.assertIn('include!("native_lane_service_preparation_tests.rs");', source("state/tests.rs"))
-        service_names = re.findall(r"state_test!\s*\{\s*sync\s+(native_service_preparation_\w+)",
-                                   source("state/native_lane_service_preparation_tests.rs"))
-        self.assertEqual(len(service_names), 7)
-        required.update("state::tests::" + name for name in service_names)
+        # Source custody lives in the maintained State owners. Archive waits and
+        # retained dispatch/publication are checked in their own modules below.
+        self.assertFalse((root / "state/native_lane_service_preparation_tests.rs").exists())
+        source_owners = {
+            "native_lane_consumer_stage_tests.rs": (
+                "native_consumer_source_custody_moves_original_all_route_owners",
+                "native_consumer_source_custody_refusal_keeps_state_and_storage_unchanged",
+                "native_consumer_source_preparation_retains_exact_recovery_positions_then_stages",
+                "native_consumer_source_refuses_authentically_resigned_first_carrier_substitution",
+            ),
+            "native_lane_recorded_execution_tests.rs": (
+                "native_recorded_execution_retains_sources_results_aliases_and_complete_witness",
+                "native_recorded_execution_nested_owner_refuses_before_waiting_for_state_writer",
+                "native_recorded_execution_nested_recorder_refuses_without_mutation_or_reset",
+                "native_recorded_execution_late_failure_discards_hook_effects_and_recorder",
+            ),
+            "native_completed_history_tests.rs": (
+                "native_completed_history_rejects_reapplication_after_second_economic_commit",
+            ),
+        }
+        for filename, names in source_owners.items():
+            self.assertIn('include!("' + filename + '");', source("state/tests.rs"))
+            for name in names:
+                self.assertEqual(len(re.findall(
+                    r"state_test!\s*[({]\s*(?:sync|consensus_stack)\s+" + re.escape(name) + r"\b",
+                    source("state/" + filename))), 1)
+                required.add("state::tests::" + name)
+        self.assertIn("mod native_execution_resources;", source("state.rs"))
+        resources = source("state/native_execution_resources.rs")
+        self.assertRegex(resources, r"#\[cfg\(test\)\]\s*mod tests\s*\{")
+        resource_names = re.findall(r"#\[test\]\s*fn\s+(\w+)", resources)
+        self.assertEqual(len(resource_names), 2)
+        required.update("state::native_execution_resources::tests::" + name
+                        for name in resource_names)
         self.assertRegex(source("sumeragi/v2_apply.rs"),
                          r'#\[path = "v2_apply_tests\.rs"\]\s*mod tests;')
         apply_tests = source("sumeragi/v2_apply_tests.rs")
         for filename, module, count in (
             ("archive_reservations_tests.rs", "archive_reservations", 7),
-            ("native_preparation_error_tests.rs", "native_preparation_errors", 4),
+            ("native_preparation_error_tests.rs", "native_preparation_errors", 7),
         ):
             self.assertIn('include!("v2_apply/' + filename + '");', apply_tests)
             leaf = source("sumeragi/v2_apply/" + filename)
@@ -401,6 +441,8 @@ class BeaconGateTests(unittest.TestCase):
         required.update("query::archive_capture::tests::" + name for name in capture_names)
         registered = {name for _, names in gate.CORE_NATIVE_CONNECTION_STAGES for name in names}
         self.assertEqual(required - registered, set())
+        self.assertFalse(any(name.startswith("state::tests::native_service_")
+                             for name in registered))
 
     def test_partial_publication_refusal_controls_are_required_in_both_scopes(self):
         required = ('queue::tests::lane_retirement_observer::refused_cut_retains_original_notifications_through_outer_fence', 'state::carrier_geometry_preparation::tests::queue_retirement_tests::route_refusal_retains_original_cut_cleanup_through_lifecycle', 'state::carrier_preparation::journals::decision_binding::physical_publication::tests::queue_publication_tests::state_fence_refusal_defers_callbacks_through_original_queue_and_kura', 'sumeragi::v2_apply::retirement_release_tests::autoscale_queue_scan_and_refusal_release_lifecycle_before_queue_wake')
@@ -632,10 +674,10 @@ class BeaconGateTests(unittest.TestCase):
     def test_exact_height_lifecycle_controls_are_unique_and_focused_in_both_scopes(self):
         required = {
             'core': (
-                'block::valid::tests::only_exact_height_lifecycle_control_exempts_lane_ownership_coverage',
+                'block::valid::tests::direct_ordinary_entries_and_exact_lifecycle_need_no_lane_ownership',
             ),
             'cli': (
-                'tests::fee_quote_signing_preserves_explicit_ordinary_payload_and_expiry',
+                'tests::fee_quote_signing_preserves_selected_admission_payload_and_expiry',
                 'taira_public_reset::host::beacon::tests::beacon_install_envelope_requires_ordinary_exact_certificate',
                 'taira_public_reset::public_inputs::tests::beacon_bootstrap_window_reserves_real_queue_plan_canary_and_install',
             ),
@@ -644,7 +686,7 @@ class BeaconGateTests(unittest.TestCase):
             ),
             'torii-unit': (
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_accepts_exact_quorum_and_preserves_wire_identity',
-                'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_general_and_mixed_transactions',
+                'tests_runtime_handlers::ordinary_single_route_application_is_durable_and_mixed_lifecycle_is_rejected',
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_rejects_invalid_certificate_authority',
                 'tests_runtime_handlers::lifecycle_ordinary_ingress_requires_authenticated_parent_and_global_route',
             ),
@@ -723,17 +765,49 @@ class BeaconGateTests(unittest.TestCase):
         real = EXPECTED_BEACON_NETWORK_TEST
         root = "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody"
         exact_height = "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip"
+        launch_controls = (
+            "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
+            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
+        )
         seam = "taira_runtime_signer::tests::production_beacon_fixture_guard_keeps_exact_core_only_taira_identity"
+        fixture_root = SCRIPT.resolve().parents[1] / "crates/iroha_test_network/tests"
+        self.assertRegex((fixture_root / "taira_consensus_contracts.rs").read_text(),
+                         r'#\[path = "support/production_beacon_bootstrap\.rs"\]\s*mod production_beacon_bootstrap;')
+        for control in launch_controls:
+            self.assertEqual(len(re.findall(
+                r"#\[test\]\s*fn\s+" + control.rsplit("::", 1)[1] + r"\s*\(",
+                (fixture_root / "support/production_beacon_bootstrap.rs").read_text())), 1)
+        first_boot = "tests::consensus_first_boot_never_reasserts_a_key_after_history_loss"
+        self.assertEqual(len(re.findall(
+            r"#\[test\]\s*fn\s+" + first_boot.rsplit("::", 1)[1] + r"\s*\(",
+            (fixture_root.parent / "src/lib.rs").read_text())), 1)
         self.assertEqual([name for _, names in gate.BEACON_NETWORK_STAGES for name in names], [real])
         self.assertIn(root, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
         self.assertIn(exact_height, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
+        for control in launch_controls:
+            self.assertIn(control, [name for _, names in gate.NETWORK_OBSERVATION_STAGES for name in names])
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
+            harness = [name for _, names in selected["test-network"] for name in names]
+            self.assertEqual(harness.count(first_boot), 1)
+            focus = gate.focused_regression_stages(scope, ("test-network=" + first_boot,))
+            self.assertEqual([name for _, names in focus["test-network"] for name in names], [first_boot])
+            listing = "\n".join(name + ": test" for name in harness if name != first_boot)
+            with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                gate.require_tests(listing, selected["test-network"])
             network = [name for _, names in selected["network"] for name in names]
             self.assertEqual(network.count(real), 1)
             self.assertEqual(network.count(root), 1)
             self.assertEqual(network.count(exact_height), 1)
             self.assertLess(network.index(exact_height), network.index(real))
+            for control in launch_controls:
+                self.assertEqual(network.count(control), 1)
+                self.assertLess(network.index(control), network.index(real))
+                focus = gate.focused_regression_stages(scope, ("network=" + control,))
+                self.assertEqual([name for _, names in focus["network"] for name in names], [control])
+                listing = "\n".join(name + ": test" for name in network if name != control)
+                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                    gate.require_tests(listing, selected["network"])
             focused = gate.focused_regression_stages(scope, ("network=" + exact_height,))
             self.assertEqual(tuple(focused), ("network",))
             self.assertEqual([name for _, names in focused["network"] for name in names], [exact_height])
@@ -748,8 +822,25 @@ class BeaconGateTests(unittest.TestCase):
             self.assertEqual([name for _, names in selected["daemon"] for name in names].count(seam), 1)
 
     def test_beacon_setup_and_custody_run_once_in_startup_for_every_scope(self):
+        broker_controls = (
+            'taira_runtime_signer::tests::disposable_broker_composes_exact_soracloud_and_threshold_catalogs',
+            'taira_runtime_signer::tests::disposable_broker_rejects_catalog_and_credential_substitution',
+            'taira_runtime_signer::tests::disposable_broker_rejects_unsupported_slots_before_reading_credentials',
+        )
+        broker_source = (SCRIPT.resolve().parents[1] / "crates/irohad/src/taira_runtime_signer.rs").read_text()
+        for name in broker_controls:
+            self.assertEqual(len(re.findall(
+                r"#\[test\]\s*fn\s+" + name.rsplit("::", 1)[1] + r"\s*\(", broker_source)), 1)
         for scope in gate.QUALIFICATION_SCOPES:
             selected = gate.qualification_stages(scope)
+            daemon = [name for _, names in selected["daemon"] for name in names]
+            for control in broker_controls:
+                self.assertEqual(daemon.count(control), 1)
+                focus = gate.focused_regression_stages(scope, ("daemon=" + control,))
+                self.assertEqual([name for _, names in focus["daemon"] for name in names], [control])
+                listing = "\n".join(name + ": test" for name in daemon if name != control)
+                with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                    gate.require_tests(listing, selected["daemon"])
             for harness, required, startup in (
                 ("core", gate.CORE_BEACON_STAGES, gate.CORE_STARTUP_STAGES),
                 ("daemon", gate.DAEMON_BEACON_STAGES, gate.DAEMON_STARTUP_STAGES),
@@ -817,7 +908,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_mv_ownership_census_is_exact_required_and_focused_on_both_platforms(self):
         root = Path(gate.__file__).resolve().parents[1]
         gate.validate_mv_test_registration(root)
-        paths = ("scripts/formal/sumeragi_v2_rust_text.py", "crates/mv/src/lib.rs",
+        paths = ("scripts/formal/rust_text.py", "crates/mv/src/lib.rs",
                  "crates/mv/src/allocation.rs", "crates/mv/src/allocation_tests.rs",
                  "crates/mv/src/publication.rs", "crates/mv/src/publication_nonblocking_tests.rs",
                  "crates/mv/src/release_tests.rs", "crates/mv/src/capture_tests.rs",
@@ -898,7 +989,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 self.assertEqual(len(library), 98)
                 for prefix, count in library_groups.items():
                     self.assertEqual(sum(name.startswith(prefix) for name in library), count)
-                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 151)):
+                for harness, count in (("mv", 98), ("mv-ebr", 5), ("mv-map", 24), ("mv-admitted-map", 72), ("concread", 152)):
                     names = [test for _, tests in selected[harness] for test in tests]
                     self.assertEqual(len(names), count)
                     self.assertEqual(len(set(names)), count)
@@ -941,7 +1032,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
         for unknown in ("foreign", "../concread", "vendor/concread"):
             with self.assertRaisesRegex(gate.CheckError, "maintained source owner"):
                 gate.native_package_root(root, unknown)
-        lexer = root / "scripts/formal/sumeragi_v2_rust_text.py"
+        lexer = root / "scripts/formal/rust_text.py"
         namespace = {"__name__": "closed_source_test_census", "__file__": str(lexer)}
         exec(compile(lexer.read_bytes(), str(lexer), "exec"), namespace)
         names = lambda text: re.findall(r"#\[test\]\s*fn\s+(\w+)", namespace["mask_rust_comments"](text))
@@ -1645,6 +1736,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "status_observation_tests::status_observation_propagates_auth_other_service_and_decode_failures",
             "production_beacon_bootstrap::production_beacon_fixture_root_rejects_git_symlink_and_shared_custody",
             "production_beacon_bootstrap::production_beacon_exact_height_wait_preserves_retained_tip",
+            "production_beacon_bootstrap::production_beacon_fresh_key_assertion_is_only_for_the_original_launch",
+            "production_beacon_bootstrap::production_beacon_stock_config_preserves_providers_and_configures_seed_custody",
             'production_beacon_bootstrap::epoch_retention::production_epoch_retention_requires_exact_source_identity_before_setup',
             'production_beacon_bootstrap::epoch_retention::production_epoch_retention_binds_exact_generation_beacon_and_interval',
             'production_beacon_bootstrap::epoch_retention::production_epoch_retention_rejects_changed_generation_beacon_parent_and_schedule',
@@ -1829,7 +1922,7 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             "kagami": (
                 "localnet::tests::localnet_runtime_bundle_separates_ledger_and_http_operator_custody",
                 "localnet::tests::generated_nexus_localnet_serves_xor_faucet_from_client_signer",
-                "localnet::tests::generated_permissioned_localnet_grants_operator_exact_fee_asset_mint_permission",
+                "localnet::tests::generated_permissioned_localnet_cannot_mint_additional_xor",
                 "localnet::tests::canonical_taira_generation_binds_four_runtime_signers_to_validator_peers",
             ),
             "cli": (
@@ -1994,11 +2087,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
     def test_unknown_scope_fails_before_any_source_or_build_action(self):
         for scope in ("", "skip", "core_testnet", None):
             with self.subTest(scope=scope), patch.object(gate, "shipping_harnesses") as shipping, \
-                 patch.object(gate, "run_pure_fsm_checks") as fsm:
+                 patch.object(gate, "run_lifecycle_source_checks") as source:
                 with self.assertRaisesRegex(gate.CheckError, "scope must be basic or full"):
                     gate.run_checks(Path("/unread"), qualification_scope=scope)
                 shipping.assert_not_called()
-                fsm.assert_not_called()
+                source.assert_not_called()
 
     def test_codegen_failure_stops_fixtures_and_checkpoint_changes_without_metadata_pass(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
@@ -2010,7 +2103,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             for completed in (None, {"existing": "independent pass"}):
                 with self.subTest(scope=scope, completed=completed), contextlib.ExitStack() as stack:
                     checkpoint = MagicMock()
-                    stack.enter_context(patch.object(gate, "run_pure_fsm_checks"))
                     stack.enter_context(patch.object(gate, "run_lifecycle_source_checks"))
                     stack.enter_context(patch.object(gate, "shipping_harnesses", return_value=shipping))
                     downstream = [stack.enter_context(patch.object(gate, name)) for name in later]
@@ -2023,9 +2115,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                             source_commit="a" * 40, lock_fds=(77, 88),
                             completed_independent_checks=completed, update_independent_checks=checkpoint)
                     self.assertIs(caught.exception, failure)
-                    self.test_metadata.assert_not_called()
-                    compile.assert_called_once()
+                    self.test_metadata.assert_called_once()
                     expected = gate.native_harness_plan(gate.qualification_stages(scope), shipping)[1]
+                    self.assertEqual(self.test_metadata.call_args.kwargs,
+                                     {"harnesses": expected, "lock_fds": (77, 88)})
+                    compile.assert_called_once()
                     self.assertEqual(compile.call_args.kwargs,
                                      {"harnesses": expected, "lock_fds": (77, 88)})
                     for action in downstream:
@@ -2042,7 +2136,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 order.append("codegen")
                 raise gate.CheckError("stop after codegen graph assertion")
             with self.subTest(scope=scope), \
-                 patch.object(gate, "run_pure_fsm_checks"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
                  patch.object(gate, "compile_test_harnesses", side_effect=stop_at_codegen) as compile, \
@@ -2051,7 +2144,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     gate.run_checks(Path("/frozen"), qualification_scope=scope, environment=env,
                                     source_commit="a" * 40, lock_fds=(77, 88))
             self.assertEqual(order, ["codegen"])
-            self.test_metadata.assert_not_called()
+            self.test_metadata.assert_called_once()
+            self.assertEqual(self.test_metadata.call_args.kwargs, compile.call_args.kwargs)
             self.assertEqual({key: compile.call_args.args[1][key] for key in env}, env)
             self.assertEqual(compile.call_args.kwargs["lock_fds"], (77, 88))
             graphs.append(compile.call_args.kwargs["harnesses"])
@@ -2077,7 +2171,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             with self.subTest(scope=scope), \
                  patch.object(gate, "shipping_harnesses", return_value=("cli", "kagami", "taira-launcher", "sorafs-bin")), \
                  patch.object(gate, "require_network_fixture_capacity"), \
-                 patch.object(gate, "run_pure_fsm_checks"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
                  patch.object(copies, "release") as release, \
@@ -2085,13 +2178,16 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                  patch.object(gate, "check_shipping_binaries", side_effect=lambda *args:
                               order.append(("shipping-metadata", ()))) as metadata, \
                  patch.object(gate, "run_network_checks", side_effect=lambda *args, **kwargs:
-                              executed.extend(("network", test) for _, tests in kwargs["stages"] for test in tests)), \
+                              (order.append(("shipping-codegen-network", ())),
+                               executed.extend(("network", test) for _, tests in kwargs["stages"] for test in tests))), \
                  contextlib.redirect_stdout(output):
                 gate.run_checks(Path("/frozen"), qualification_scope=scope,
                                 environment={"CARGO": "/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"},
                                 source_commit="a" * 40, update_independent_checks=checkpoint)
             builds.append(compile.call_args.kwargs["harnesses"])
-            self.test_metadata.assert_not_called()
+            self.test_metadata.assert_called_once()
+            self.assertEqual(self.test_metadata.call_args.kwargs,
+                             {"harnesses": builds[-1], "lock_fds": ()})
             selected = gate.qualification_stages(scope)
             expected = [(name, test) for name, stages in selected.items()
                         for _, tests in stages for test in tests]
@@ -2129,8 +2225,8 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     for test in tests:
                         if (name, test) in expected:
                             self.assertLess(executed.index((name, test)), cli_start)
-            metadata.assert_called_once()
-            shipping_index = order.index(("shipping-metadata", ()))
+            metadata.assert_not_called()
+            shipping_index = order.index(("shipping-codegen-network", ()))
             self.assertLess(order.index(("cli", priority_cli)), shipping_index)
             self.assertLess(order.index(("torii-unit", priority_torii)), shipping_index)
             self.assertLess(shipping_index, order.index(("cli", deferred_cli)))
@@ -2172,7 +2268,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             with self.subTest(scope=scope), \
                  patch.object(gate, "shipping_harnesses", return_value=("kagami",)), \
                  patch.object(gate, "require_network_fixture_capacity"), \
-                 patch.object(gate, "run_pure_fsm_checks"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "compile_test_harnesses", return_value=self.copies()), \
                  patch.object(gate, "run_stages", side_effect=fail_startup), \
@@ -2207,7 +2302,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 with self.subTest(scope=scope, error=type(error).__name__), \
                      patch.object(gate, "shipping_harnesses", return_value=("kagami",)), \
                      patch.object(gate, "require_network_fixture_capacity"), \
-                     patch.object(gate, "run_pure_fsm_checks"), \
                      patch.object(gate, "run_lifecycle_source_checks"), \
                      patch.object(gate, "compile_test_harnesses", side_effect=compile_batch) as compile, \
                      patch.object(gate, "run_stages", side_effect=run), \
@@ -2251,7 +2345,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     with self.subTest(scope=scope, failed=failed, error=type(error).__name__), \
                          patch.object(gate, "shipping_harnesses", return_value=()), \
                          patch.object(gate, "require_network_fixture_capacity"), \
-                         patch.object(gate, "run_pure_fsm_checks"), \
                          patch.object(gate, "run_lifecycle_source_checks"), \
                          patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
                          patch.object(FixtureCopies, "__exit__", return_value=False) as close, \
@@ -2310,7 +2403,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     with self.subTest(scope=scope, harness=harness, changed=changed), \
                          patch.object(gate, "shipping_harnesses", return_value=()), \
                          patch.object(gate, "require_network_fixture_capacity"), \
-                         patch.object(gate, "run_pure_fsm_checks"), \
                          patch.object(gate, "run_lifecycle_source_checks"), \
                          patch.object(gate, "compile_test_harnesses", return_value=copies), \
                          patch.object(gate, "run_stages", side_effect=run) as execute, \
@@ -2339,7 +2431,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             with self.subTest(scope=scope), \
                  patch.object(gate, "shipping_harnesses", return_value=shipping), \
                  patch.object(gate, "require_network_fixture_capacity"), \
-                 patch.object(gate, "run_pure_fsm_checks"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "compile_test_harnesses", return_value=copies) as compile, \
                  patch.object(gate, "run_stages") as run, \
@@ -2352,11 +2443,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
             compile.assert_called_once()
             run.assert_called_once()
             self.assertEqual(run.call_args.args[3], gate.CONFIG_STAGES)
-            metadata.assert_called_once()
+            metadata.assert_not_called()
             network.assert_called_once()
             checkpoint.assert_not_called()
 
-    def test_shipping_metadata_failure_stops_long_tests_network_and_new_checkpoint(self):
+    def test_shipping_codegen_failure_stops_long_tests_and_new_checkpoint(self):
         shipping = ("taira-launcher", "cli", "sorafs-bin", "kagami")
         for scope in gate.QUALIFICATION_SCOPES:
             for reuse in (False, True):
@@ -2365,17 +2456,15 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                 early, _, _ = gate.native_harness_plan(selected, shipping)
                 evidence = gate.independent_check_evidence(
                     copies, (("cli", selected["cli"]),) + early, qualification_scope=scope)
-                failure = gate.CheckError("shipping metadata check failed (exit 101)")
+                failure = gate.CheckError("shipping codegen feature evidence failed")
                 with self.subTest(scope=scope, reuse=reuse), \
                      patch.object(gate, "shipping_harnesses", return_value=shipping), \
-                     patch.object(gate, "run_pure_fsm_checks"), \
                      patch.object(gate, "run_lifecycle_source_checks"), \
                      patch.object(gate, "compile_test_harnesses", return_value=copies), \
                      patch.object(gate, "run_stages", side_effect=lambda name, root, env, stages, locks, **kwargs:
                                   executed.append((name, stages))), \
-                     patch.object(gate, "check_shipping_binaries", side_effect=failure) as metadata, \
-                     patch.object(gate, "run_network_checks") as network, \
-                     patch.object(gate, "compile_network_binaries") as codegen, \
+                     patch.object(gate, "check_shipping_binaries") as metadata, \
+                     patch.object(gate, "run_network_checks", side_effect=failure) as network, \
                      contextlib.redirect_stdout(output):
                     with self.assertRaises(gate.CheckError) as error:
                         gate.run_checks(Path("/frozen"), qualification_scope=scope,
@@ -2384,10 +2473,11 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                                         completed_independent_checks=evidence if reuse else None,
                                         update_independent_checks=checkpoint)
                 self.assertIs(error.exception, failure)
-                metadata.assert_called_once()
-                self.assertEqual(metadata.call_args.args[0], Path("/frozen"))
-                self.assertEqual(metadata.call_args.args[1]["CARGO_TARGET_DIR"], "/warm")
-                self.assertEqual(metadata.call_args.args[2], (77, 88))
+                metadata.assert_not_called()
+                network.assert_called_once()
+                self.assertEqual(network.call_args.args[0], Path("/frozen"))
+                self.assertEqual(network.call_args.args[2]["CARGO_TARGET_DIR"], "/warm")
+                self.assertEqual(network.call_args.args[3], (77, 88))
                 priority_cli, _ = gate.partition_priority_stages(
                     selected["cli"], test_names=gate.PRIORITY_CLI_TESTS)
                 priority_torii, _ = gate.partition_priority_stages(
@@ -2403,8 +2493,6 @@ class BasicReleaseQualificationTests(unittest.TestCase):
                     checkpoint.assert_not_called()
                 else:
                     checkpoint.assert_called_once_with(None)
-                network.assert_not_called()
-                codegen.assert_not_called()
                 self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_standalone_cli_selects_basic_by_default_and_forwards_explicit_full(self):
@@ -2510,7 +2598,7 @@ class MutableSourceObservationTests(unittest.TestCase):
         for request in requests:
             with self.subTest(request=request), contextlib.ExitStack() as stack:
                 for name in ("require_native_artifact_inspector", "require_network_fixture_prerequisites",
-                             "run_pure_fsm_checks", "run_lifecycle_source_checks"):
+                             "run_lifecycle_source_checks"):
                     stack.enter_context(patch.object(gate, name))
                 metadata = stack.enter_context(patch.object(gate, "check_test_harnesses",
                     side_effect=lambda *args, **kwargs: self.tracked.write_bytes(
@@ -2535,7 +2623,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
         self.core = "state::tests::historical_autonomous_merge_recovers_certified_carrier_before_world_replay"
         self.cli = next(name for _, names in gate.STAGES for name in names)
         self.network = EXPECTED_BEACON_NETWORK_TEST
-        for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
+        for name in ("run_lifecycle_source_checks", "require_network_fixture_capacity"):
             mock = patch.object(gate, name)
             mock.start()
             self.addCleanup(mock.stop)
@@ -2552,7 +2640,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             selected = gate.qualification_stages(scope)
             requested = tuple(harness + "=" + test for harness in gate.MV_OWNERSHIP_HARNESSES
                               for _, tests in selected[harness] for test in tests)
-            self.assertEqual(len(requested), 350)
+            self.assertEqual(len(requested), 351)
             copies = FixtureCopies({name: "/copies/" + name for name in gate.HARNESS_TARGETS})
             output = io.StringIO()
             with self.subTest(scope=scope), \
@@ -2578,7 +2666,7 @@ class FocusedPrequalificationTests(unittest.TestCase):
             shipping.assert_not_called()
             network.assert_not_called()
             evidence.assert_not_called()
-            self.assertIn("350 focused regressions", output.getvalue())
+            self.assertIn("351 focused regressions", output.getvalue())
             self.assertIn("NOT release qualification", output.getvalue())
             self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
@@ -2796,7 +2884,10 @@ class FocusedPrequalificationTests(unittest.TestCase):
                 gate.run_checks(Path("/mutable"), qualification_scope=scope,
                                 environment=self.env, source_commit="a" * 40, lock_fds=(91,))
                 complete_graph = compile.call_args.kwargs["harnesses"]
-                self.metadata.assert_not_called()
+                self.metadata.assert_called_once()
+                self.assertEqual(self.metadata.call_args.kwargs,
+                                 {"harnesses": complete_graph, "lock_fds": (91,)})
+                self.metadata.reset_mock()
                 compile.reset_mock(); run.reset_mock(); network.reset_mock()
                 output.seek(0); output.truncate(0)
                 gate.run_prequalification(Path("/mutable"), qualification_scope=scope,
@@ -3162,9 +3253,6 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         metadata = patch.object(gate, "check_test_harnesses")
         metadata.start()
         self.addCleanup(metadata.stop)
-        mock = patch.object(gate, "run_pure_fsm_checks")
-        self.pure_fsm = mock.start()
-        self.addCleanup(mock.stop)
         source = patch.object(gate, "run_lifecycle_source_checks")
         self.lifecycle_source = source.start()
         self.addCleanup(source.stop)
@@ -3622,7 +3710,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         for selected, accepted in ((events, True), (events[:1], False),
                                    ([event | {"profile": {"test": True}} for event in events], False)):
             child = MagicMock()
-            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in selected))
+            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in
+                                                     [*production_library_events(), *selected]))
             child.wait.return_value = 0
             process = MagicMock()
             process.__enter__.return_value = child
@@ -3648,7 +3737,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                        "profile": {"test": False}, "executable": "/warm/" + name}
                       for name in sorted(expected_names)]
             child = MagicMock()
-            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in events))
+            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in
+                                                     [*production_library_events(), *events]))
             child.wait.return_value = 0
             process = MagicMock()
             process.__enter__.return_value = child
@@ -3666,9 +3756,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             self.assertEqual(len(records), len(expected_names))
             self.assertEqual("-p" in command and "sorafs_node" in command, not focused)
 
-    def test_beacon_fixture_daemon_has_a_separate_explicit_feature_build(self):
-        event = {"reason": "compiler-artifact", "target": {"name": "iroha3d", "kind": ["bin"]},
-                 "profile": {"test": False}, "executable": "/warm/iroha3d"}
+    def test_beacon_fixture_broker_has_a_separate_explicit_feature_build(self):
+        event = {"reason": "compiler-artifact", "target": {"name": "iroha_test_runtime_provider_broker", "kind": ["bin"]},
+                 "profile": {"test": False}, "executable": "/warm/broker"}
         child = MagicMock()
         child.stdout = io.StringIO(json.dumps(event))
         child.wait.return_value = 0
@@ -3678,21 +3768,45 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: rows), \
              contextlib.redirect_stdout(io.StringIO()):
             records = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"},
-                                                     (77,), message_control=True)
-        self.assertEqual(set(records), {"iroha3d-message-control"})
+                                                     (77,), disposable_broker=True)
+        self.assertEqual(set(records), {"iroha_test_runtime_provider_broker"})
         command = spawn.call_args.args[0]
-        self.assertEqual(command[command.index("--features") + 1], "irohad/test-network-message-control")
+        self.assertEqual(command[command.index("--features") + 1],
+                         "irohad/test-network-disposable-broker")
         self.assertEqual(command.count("--bin"), 1)
+        self.assertEqual(command[command.index("--bin") + 1], "iroha_test_runtime_provider_broker")
+        self.assertNotIn("iroha3d", command)
         self.assertNotIn("iroha3d_taira", command)
         self.assertNotIn("--target-dir", command)
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
 
-    def test_message_control_rejects_focused_shipping_graph(self):
-        with patch.object(gate.subprocess, "Popen") as spawn:
-            with self.assertRaisesRegex(gate.CheckError, "message-control codegen"):
-                gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
-                                              message_control=True, focused_fixture=True)
-        spawn.assert_not_called()
+    def test_disposable_broker_rejects_daemon_and_test_artifacts(self):
+        for name, is_test in (("iroha3d", False), ("iroha_test_runtime_provider_broker", True)):
+            event = {"reason": "compiler-artifact", "target": {"name": name, "kind": ["bin"]},
+                     "profile": {"test": is_test}, "executable": "/warm/" + name}
+            child = MagicMock()
+            child.stdout = io.StringIO(json.dumps(event))
+            child.wait.return_value = 0
+            process = MagicMock()
+            process.__enter__.return_value = child
+            with self.subTest(name=name, is_test=is_test), \
+                 patch.object(gate.subprocess, "Popen", return_value=process), \
+                 patch.object(gate, "isolate_native_artifacts") as isolate, \
+                 contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, "every required executable artifact"):
+                    gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
+                                                  disposable_broker=True)
+            isolate.assert_not_called()
+
+    def test_fixture_codegen_rejects_combined_feature_graphs(self):
+        for options in ({"message_control": True, "focused_fixture": True},
+                        {"disposable_broker": True, "focused_fixture": True},
+                        {"message_control": True, "disposable_broker": True}):
+            with self.subTest(options=options), patch.object(gate.subprocess, "Popen") as spawn:
+                with self.assertRaisesRegex(gate.CheckError, "feature-isolated codegen"):
+                    gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (),
+                                                  **options)
+            spawn.assert_not_called()
 
     def test_focused_fixture_requires_audited_runtime_shipping_inputs(self):
         with patch.object(gate, "shipping_harnesses", return_value=("taira-launcher", "cli", "sorafs-bin")), \
@@ -3727,7 +3841,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_network_gate_forbids_fallback_builds_and_sandbox_skips(self):
         env = {"CARGO_TARGET_DIR": "/warm"}
-        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client", "taira-launcher": "/warm/taira", "kagami": "/warm/kagami", "iroha3d-message-control": "/warm/control"})) as binaries, \
+        with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/warm/node", "iroha": "/warm/client", "taira-launcher": "/warm/taira", "kagami": "/warm/kagami", "iroha_test_runtime_provider_broker": "/warm/broker"})) as binaries, \
              patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")) as private, \
              patch.object(gate, "compile_harness", return_value=FixtureCopies("/warm/network")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
@@ -3745,15 +3859,16 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                          gate.BASIC_NETWORK_STAGES)
         self.assertTrue(all(call.args[4] == (77, 88) for call in run.call_args_list))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
-        self.assertEqual([call.kwargs for call in binaries.call_args_list], [{}, {"message_control": True}])
+        self.assertEqual([call.kwargs for call in binaries.call_args_list], [{}, {"disposable_broker": True}])
         private.assert_called_once_with()
         for call in run.call_args_list:
             beacon = call.args[3] == gate.BEACON_NETWORK_STAGES
             self.assertEqual("KAGAMI_BIN" in call.args[2], beacon)
-            self.assertEqual("TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL" in call.args[2], beacon)
+            self.assertEqual("TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER" in call.args[2], beacon)
             if beacon:
+                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD"], "/warm/node")
                 self.assertEqual(call.args[2]["KAGAMI_BIN"], "/warm/kagami")
-                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"], "/warm/control")
+                self.assertEqual(call.args[2]["TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER"], "/warm/broker")
                 self.assertEqual(call.args[2]["TAIRA_TESTNET_BEACON_FIXTURE_DIR"], "/private/beacon")
 
     def test_beacon_fixture_missing_kagami_stops_without_build_fallback(self):
@@ -3802,7 +3917,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                                   "test result: ok. 1 passed; 0 failed; 0 ignored;\n")
                     return subprocess.CompletedProcess(command, 0, output, "")
                 with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                        "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-message-control": "/control"})), \
+                        "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha_test_runtime_provider_broker": "/broker"})), \
                      patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
                      patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
                      patch.object(gate.subprocess, "run", side_effect=native), \
@@ -3825,7 +3940,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0,
                 f"test {command[1]} ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")
         with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({
-                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha3d-message-control": "/control"})), \
+                "iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira", "kagami": "/kagami", "iroha_test_runtime_provider_broker": "/broker"})), \
              patch.object(gate, "beacon_fixture_root", return_value=Path("/private/beacon")), \
              patch.object(gate.tempfile, "mkdtemp", return_value="/warm/fixture"), \
              patch.object(gate.subprocess, "run", side_effect=native), \
@@ -4034,13 +4149,12 @@ class EarlyConfigurationGateTests(unittest.TestCase):
             events.append("config-pass" if stages == gate.CONFIG_STAGES else harness)
 
         def compile_libraries(*args, **kwargs):
-            self.assertEqual(events, ["fsm", "source"])
+            self.assertEqual(events, ["source"])
             self.assertEqual(kwargs, {"lock_fds": (77,), "harnesses": libraries})
             events.append("library-build")
             return FixtureCopies({name: "/warm/" + name for name in libraries})
 
         with patch.object(gate, "require_network_fixture_capacity"), \
-             patch.object(gate, "run_pure_fsm_checks", side_effect=lambda *args: events.append("fsm")), \
              patch.object(gate, "run_lifecycle_source_checks", side_effect=lambda *args: events.append("source")), \
              patch.object(gate, "compile_harness") as separate, \
              patch.object(gate, "compile_test_harnesses", side_effect=compile_libraries) as batch, \
@@ -4053,7 +4167,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                                 source_commit="a" * 40, lock_fds=(77,))
         separate.assert_not_called()
         self.assertEqual(batch.call_count, 1)
-        self.assertEqual(events, ["fsm", "source", "library-build", "config-pass",
+        self.assertEqual(events, ["source", "library-build", "config-pass",
                                   *["/warm/" + name for name in ("mv", "mv-ebr", "mv-map", "mv-admitted-map", "concread", "core", "core", "torii-unit", "daemon", "cli", "torii-unit")]])
 
     def test_batch_or_configuration_failure_stops_all_later_execution_and_passes(self):
@@ -4062,7 +4176,6 @@ class EarlyConfigurationGateTests(unittest.TestCase):
             with self.subTest(phase=phase), \
                  patch.object(gate, "shipping_harnesses", return_value=("kagami",)), \
                  patch.object(gate, "require_network_fixture_capacity"), \
-                 patch.object(gate, "run_pure_fsm_checks"), \
                  patch.object(gate, "run_lifecycle_source_checks"), \
                  patch.object(gate, "compile_harness") as compile, \
                  patch.object(gate, "run_stages", side_effect=gate.SelectedRegressionFailures(["config schema failed"])) as run, \
@@ -4101,7 +4214,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                                         "cargo_artifact": {"name": name}}
                                        for index, name in enumerate(copies, 1)]
                 evidence = gate.independent_check_evidence(copies, (("cli", gate.STAGES),), qualification_scope="full")
-                for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "require_network_fixture_capacity"):
+                for name in ("run_lifecycle_source_checks", "require_network_fixture_capacity"):
                     stack.enter_context(patch.object(gate, name))
                 batch = stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
                 separate = stack.enter_context(patch.object(gate, "compile_harness"))
@@ -4156,11 +4269,11 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         with patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=0)), \
              patch.object(gate, "compile_harness") as compile, \
-             patch.object(gate, "run_pure_fsm_checks") as fsm, contextlib.redirect_stdout(io.StringIO()):
+             patch.object(gate, "run_lifecycle_source_checks") as source, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40)
         compile.assert_not_called()
-        fsm.assert_not_called()
+        source.assert_not_called()
 
     def test_capacity_is_checked_again_after_builds_before_starting_peers(self):
         with patch.object(gate, "compile_network_binaries", return_value=FixtureCopies({"iroha3d": "/node", "iroha": "/cli", "taira-launcher": "/taira"})), \
@@ -4267,7 +4380,8 @@ class CargoQuietBuildProgressTests(unittest.TestCase):
             (lambda env: gate.compile_test_harnesses(Path("/frozen"), env, harnesses=("config",)),
              [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
             (lambda env: gate.compile_network_binaries(Path("/frozen"), env, ()),
-             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha", "iroha3d_taira")]),
+             [*production_library_events(), *(CargoBuildProgressTests.event(name, "bin", test=False)
+                                               for name in ("iroha3d", "iroha", "iroha3d_taira"))]),
         )
         for operation, events in phases:
             with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
@@ -4310,7 +4424,8 @@ class CargoQuietBuildProgressTests(unittest.TestCase):
             ("test codegen", lambda: gate.compile_test_harnesses(Path("/frozen"), {"CARGO": "/unused"}, harnesses=("config",)),
              [CargoBuildProgressTests.event("taira_config_contracts", "test")]),
             ("shipping codegen", lambda: gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/unused"}, ()),
-             [CargoBuildProgressTests.event(name, "bin", test=False) for name in ("iroha3d", "iroha", "iroha3d_taira")]),
+             [*production_library_events(), *(CargoBuildProgressTests.event(name, "bin", test=False)
+                                               for name in ("iroha3d", "iroha", "iroha3d_taira"))]),
         )
         for phase, operation, events in phases:
             for code in (0, 101):
@@ -4597,7 +4712,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(stderr.getvalue(), diagnostic)
 
     def test_failed_batch_stops_before_any_native_test_or_network_start(self):
-        with patch.object(gate, "run_pure_fsm_checks"), patch.object(gate, "run_lifecycle_source_checks"), \
+        with patch.object(gate, "run_lifecycle_source_checks"), \
              patch.object(gate, "check_test_harnesses"), \
              patch.object(gate, "run_config_checks"), \
              patch.object(gate, "require_network_fixture_capacity"), \
@@ -5450,11 +5565,24 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 self.assertTrue(Path(path).parent.name.startswith("taira-native-artifacts-"))
                 self.assertEqual(Path(path).read_bytes(), executable.read_bytes())
         rows = [self.artifact(selection, shipping=True) for selection in ("iroha3d", "iroha", "taira-launcher")]
-        with patch.object(gate.subprocess, "Popen", return_value=self.process([row[2] for row in rows])):
+        with patch.object(gate.subprocess, "Popen", return_value=self.process(
+                [*production_library_events(), *(row[2] for row in rows)])):
             copied = gate.compile_network_binaries(self.source, self.env, (77,))
         self.assertEqual(set(copied), {"iroha3d", "iroha", "taira-launcher"})
         for selection, path in copied.items():
             self.assertNotEqual(path, str(self.target / "debug" / selection))
+        self.assert_profile_unlocked()
+
+    def test_disposable_broker_uses_an_isolated_execution_path(self):
+        selection = "iroha_test_runtime_provider_broker"
+        executable, _, event = self.artifact(selection, shipping=True)
+        with patch.object(gate.subprocess, "Popen", return_value=self.process([event])):
+            with gate.compile_network_binaries(self.source, self.env, (77,),
+                                               disposable_broker=True) as copied:
+                self.assertEqual(set(copied), {selection})
+                self.assertNotEqual(copied[selection], str(executable))
+                self.assertEqual(Path(copied[selection]).read_bytes(), executable.read_bytes())
+                self.assertTrue(Path(copied[selection]).parent.name.startswith("taira-native-artifacts-"))
         self.assert_profile_unlocked()
 
     def test_batched_libraries_and_integrations_copy_every_accepted_artifact_before_returning(self):
@@ -5643,7 +5771,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
                 with contextlib.ExitStack() as stack:
                     for name in ("MV_OWNERSHIP_STAGES", "MV_EBR_STAGES", "MV_MAP_STAGES", "MV_ADMITTED_MAP_STAGES", "CONCREAD_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "DAEMON_STAGES", "TEST_NETWORK_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "TORII_SHARED_STAGES", "TORII_LIFECYCLE_STAGES", "NETWORK_STAGES"):
                         stack.enter_context(patch.object(gate, name, ()))
-                    for name in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "check_test_harnesses"):
+                    for name in ("run_lifecycle_source_checks", "run_config_checks", "check_test_harnesses"):
                         stack.enter_context(patch.object(gate, name))
                     stack.enter_context(patch.object(gate, "compile_test_harnesses", return_value=copies))
                     network = stack.enter_context(patch.object(gate, "compile_network_binaries"))
@@ -5729,13 +5857,19 @@ class NativeArtifactIsolationTests(unittest.TestCase):
         self.metadata.assert_not_called()
         self.assert_profile_unlocked()
 
-class PureFsmGateTests(unittest.TestCase):
+class StandaloneCheckGateTests(unittest.TestCase):
     def setUp(self):
         isolate_shipping_fixture(self)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.target = Path(self.directory.name).resolve()
         self.env = {"RUSTC": "/pinned/rustc", "CARGO_TARGET_DIR": str(self.target)}
+
+    @staticmethod
+    def run_standalone(root, env, lock_fds):
+        gate._run_standalone_checks(root, env, lock_fds,
+            source="crates/fixture/src/lib.rs", output_name="fixture-tests",
+            label="fixture", description="standalone fixture")
 
     def test_standalone_compile_list_and_execution_use_private_child_umask(self):
         real_run = subprocess.run
@@ -5754,7 +5888,7 @@ class PureFsmGateTests(unittest.TestCase):
         original_umask = os.umask(0o002)
         try:
             with patch.object(gate.subprocess, "run", side_effect=child), contextlib.redirect_stdout(io.StringIO()):
-                gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+                self.run_standalone(Path("/frozen"), self.env, ())
             self.assertEqual(os.umask(0o002), 0o002)
         finally:
             os.umask(original_umask)
@@ -5773,17 +5907,17 @@ class PureFsmGateTests(unittest.TestCase):
     def test_exact_production_source_all_tests_and_lock_custody(self):
         output = io.StringIO()
         with patch.object(gate.subprocess, "run", side_effect=self.results()) as run, contextlib.redirect_stdout(output):
-            gate.run_pure_fsm_checks(Path("/frozen"), self.env, (77, 88))
-        executable = str(self.target / "taira-consensus-fsm-check/sumeragi-core-tests")
+            self.run_standalone(Path("/frozen"), self.env, (77, 88))
+        executable = str(self.target / "taira-consensus-fsm-check/fixture-tests")
         self.assertEqual(run.call_args_list[0].args[0], ["/pinned/rustc", "--edition=2024", "--test",
-            "/frozen/crates/iroha_sumeragi_core/src/lib.rs", "-o", executable])
+            "/frozen/crates/fixture/src/lib.rs", "-o", executable])
         self.assertEqual(run.call_args_list[1].args[0], [executable, "--list", "--format", "terse"])
         self.assertEqual(run.call_args_list[2].args[0], [executable, "--color", "never", "--test-threads=6"])
         for call in run.call_args_list:
             self.assertEqual(call.kwargs["pass_fds"], (77, 88))
             self.assertEqual(call.kwargs["env"], self.env)
             self.assertEqual(call.kwargs["cwd"], "/")
-        self.assertIn("pure FSM PASS: 2 listed, 2 passed, 0 ignored", output.getvalue())
+        self.assertIn("fixture PASS: 2 listed, 2 passed, 0 ignored", output.getvalue())
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_standalone_rustc_uses_exact_coordinated_native_linker_pair(self):
@@ -5795,7 +5929,7 @@ class PureFsmGateTests(unittest.TestCase):
                         flags["CARGO_ENCODED_RUSTFLAGS"].split("\x1f"))
             with self.subTest(flags=flags), patch.object(gate.subprocess, "run", side_effect=self.results()) as run, \
                  contextlib.redirect_stdout(io.StringIO()):
-                gate.run_pure_fsm_checks(Path("/frozen"), self.env | flags, (77, 88))
+                self.run_standalone(Path("/frozen"), self.env | flags, (77, 88))
             self.assertEqual(run.call_args_list[0].args[0][:5], ["/pinned/rustc", *expected, "--edition=2024", "--test"])
             self.assertEqual(run.call_args_list[0].kwargs["env"], self.env | flags)
             self.assertEqual(run.call_args_list[0].kwargs["pass_fds"], (77, 88))
@@ -5815,7 +5949,7 @@ class PureFsmGateTests(unittest.TestCase):
         ):
             with self.subTest(flags=flags), patch.object(gate.subprocess, "run") as run, \
                  self.assertRaises(gate.CheckError):
-                gate.run_pure_fsm_checks(Path("/frozen"), self.env | flags, ())
+                self.run_standalone(Path("/frozen"), self.env | flags, ())
             run.assert_not_called()
 
     def test_empty_duplicate_or_malformed_census_never_executes_suite(self):
@@ -5823,7 +5957,7 @@ class PureFsmGateTests(unittest.TestCase):
             results = self.results(); results[1] = subprocess.CompletedProcess([], 0, listing, "")
             with patch.object(gate.subprocess, "run", side_effect=results) as run, contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(gate.CheckError, "census"):
-                    gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+                    self.run_standalone(Path("/frozen"), self.env, ())
             self.assertEqual(run.call_count, 2)
 
     def test_lifecycle_source_gate_uses_captured_shared_assertions_and_same_locks(self):
@@ -5867,9 +6001,9 @@ class PureFsmGateTests(unittest.TestCase):
     def test_asset_audit_failure_stops_before_rust_or_cargo_and_preserves_diagnostic(self):
         env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
         diagnostic = "AssertionError: invalid region edge: from/before\n"
-        with patch.object(gate, "run_pure_fsm_checks"), \
-             patch.object(gate, "validate_mv_test_registration"), \
+        with patch.object(gate, "validate_mv_test_registration"), \
              patch.object(gate, "validate_torii_lifecycle_test_registration"), \
+             patch.object(gate, "validate_selected_source_test_inventory"), \
              patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", diagnostic)) as run, \
              patch.object(gate, "_run_standalone_checks") as rust, \
              patch.object(gate, "run_config_checks") as config, \
@@ -5890,17 +6024,16 @@ class PureFsmGateTests(unittest.TestCase):
 
     def test_lifecycle_failure_stops_before_any_cargo_or_network_work(self):
         env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
-        with patch.object(gate, "run_pure_fsm_checks") as fsm, \
-             patch.object(gate, "run_lifecycle_source_checks", side_effect=gate.CheckError("source contract failed")) as source, \
+        with patch.object(gate, "run_lifecycle_source_checks", side_effect=gate.CheckError("source contract failed")) as source, \
              patch.object(gate, "compile_test_harnesses") as libraries, \
              patch.object(gate, "compile_harness") as compile, \
              patch.object(gate, "run_network_checks") as network, \
              contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "source contract failed"):
                 gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
-        fsm.assert_called_once()
         source.assert_called_once_with(Path("/frozen"),
-            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,))
+            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,),
+            gate.qualification_stages("full"))
         libraries.assert_not_called()
         compile.assert_not_called()
         network.assert_not_called()
@@ -5916,34 +6049,23 @@ class PureFsmGateTests(unittest.TestCase):
             with patch.object(gate.subprocess, "run", side_effect=self.results(text, code)), \
                  contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 with self.assertRaisesRegex(gate.CheckError, "without skips"):
-                    gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+                    self.run_standalone(Path("/frozen"), self.env, ())
 
     def test_compiler_failure_never_runs_stale_output(self):
         with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "compile failure")) as run, \
              contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "compilation failed"):
-                gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+                self.run_standalone(Path("/frozen"), self.env, ())
         self.assertEqual(run.call_count, 1)
-
-    def test_fsm_failure_precedes_any_native_network_or_cargo_build(self):
-        env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
-        with patch.object(gate, "run_pure_fsm_checks", side_effect=gate.CheckError("FSM failed")) as fsm, \
-             patch.object(gate, "run_network_checks") as network, patch.object(gate, "compile_harness") as compile, \
-             contextlib.redirect_stdout(io.StringIO()):
-            with self.assertRaisesRegex(gate.CheckError, "FSM failed"):
-                gate.run_checks(Path("/frozen"), qualification_scope="full", environment=env, source_commit="a" * 40, lock_fds=(77,))
-        fsm.assert_called_once()
-        self.assertEqual(fsm.call_args.args[2], (77,))
-        network.assert_not_called(); compile.assert_not_called()
 
     def test_unpinned_compiler_and_symlink_output_rejected_before_compilation(self):
         with patch.object(gate.subprocess, "run") as run:
             for compiler in ("rustc", ""):
                 with self.assertRaisesRegex(gate.CheckError, "pinned RUSTC"):
-                    gate.run_pure_fsm_checks(Path("/frozen"), self.env | {"RUSTC": compiler}, ())
+                    self.run_standalone(Path("/frozen"), self.env | {"RUSTC": compiler}, ())
             (self.target / "taira-consensus-fsm-check").symlink_to(self.target, target_is_directory=True)
             with self.assertRaisesRegex(gate.CheckError, "direct directory"):
-                gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+                self.run_standalone(Path("/frozen"), self.env, ())
         run.assert_not_called()
 
 
@@ -6195,7 +6317,7 @@ class FocusedTmpdirPrerequisiteTests(unittest.TestCase):
                 with self.subTest(configured=configured), \
                      patch.object(gate, "require_native_artifact_inspector") as inspector, \
                      patch.object(gate, "mutable_source_observation") as source, \
-                     patch.object(gate, "run_pure_fsm_checks") as compiler:
+                     patch.object(gate, "run_lifecycle_source_checks") as compiler:
                     with self.assertRaisesRegex(gate.CheckError, "TMPDIR must be an existing absolute directory") as failed:
                         self.run_focus(configured)
                 self.assertIn(repr(configured), str(failed.exception))
@@ -6208,13 +6330,13 @@ class FocusedTmpdirPrerequisiteTests(unittest.TestCase):
             configured = str(Path(temporary).resolve())
             with patch.object(gate.tempfile, "TemporaryDirectory",
                               side_effect=PermissionError("permission denied")), \
-                 patch.object(gate, "run_pure_fsm_checks") as compiler:
+                 patch.object(gate, "run_lifecycle_source_checks") as compiler:
                 with self.assertRaisesRegex(gate.CheckError, "TMPDIR is not writable"):
                     self.run_focus(configured)
             compiler.assert_not_called()
             with patch.object(gate, "require_native_artifact_inspector"), \
                  patch.object(gate, "mutable_source_observation", return_value={"git_head": "a" * 40}), \
-                 patch.object(gate, "run_pure_fsm_checks",
+                 patch.object(gate, "run_lifecycle_source_checks",
                               side_effect=RuntimeError("compiler boundary")) as compiler, \
                  contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaisesRegex(RuntimeError, "compiler boundary"):
@@ -6270,7 +6392,7 @@ class BeaconFixturePrerequisiteTests(unittest.TestCase):
                          patch.object(gate, "beacon_fixture_root", side_effect=lambda: order.append("root")), \
                          patch.object(gate, "require_network_fixture_capacity", side_effect=lambda path: order.append(("capacity", path))), \
                          patch.object(gate.subprocess, "check_output", side_effect=lambda *a, **k: order.append("head") or "a" * 40 + "\n"), \
-                         patch.object(gate, "run_pure_fsm_checks", side_effect=RuntimeError("first compile reached")) as compile, \
+                         patch.object(gate, "run_lifecycle_source_checks", side_effect=RuntimeError("first compile reached")) as compile, \
                          contextlib.redirect_stdout(io.StringIO()):
                         with self.assertRaisesRegex(RuntimeError, "first compile reached"):
                             self.invoke(mode, scope, source_commit=source_commit)
@@ -6288,7 +6410,7 @@ class BeaconFixturePrerequisiteTests(unittest.TestCase):
                      patch.object(gate, "beacon_fixture_root") as root, \
                      patch.object(gate, "require_network_fixture_capacity") as capacity, \
                      patch.object(gate.subprocess, "check_output", return_value="a" * 40 + "\n"), \
-                     patch.object(gate, "run_pure_fsm_checks", side_effect=RuntimeError("first compile reached")), \
+                     patch.object(gate, "run_lifecycle_source_checks", side_effect=RuntimeError("first compile reached")), \
                      contextlib.redirect_stdout(io.StringIO()):
                     with self.assertRaisesRegex(RuntimeError, "first compile reached"):
                         self.invoke("focused", scope, test=selected)
@@ -6307,7 +6429,7 @@ class BeaconFixturePrerequisiteTests(unittest.TestCase):
                             stack.enter_context(patch.dict(os.environ, {"TAIRA_TESTNET_BEACON_FIXTURE_DIR": str(private)}))
                             stack.enter_context(patch.object(gate, "require_native_artifact_inspector"))
                             actions = [stack.enter_context(patch.object(gate, name)) for name in (
-                                "require_network_fixture_capacity", "run_pure_fsm_checks", "run_lifecycle_source_checks",
+                                "require_network_fixture_capacity", "run_lifecycle_source_checks",
                                 "shipping_harnesses", "check_test_harnesses", "compile_test_harnesses", "compile_network_binaries")]
                             head = stack.enter_context(patch.object(gate.subprocess, "check_output"))
                             with self.assertRaisesRegex(gate.CheckError, "ancestor.*group or world write") as failed:
@@ -6407,7 +6529,7 @@ class NativeArtifactInspectorPrerequisiteTests(unittest.TestCase):
                                 stack.enter_context(patch.object(gate, "native_artifact_inspector_path",
                                                                  return_value=inspector))
                                 actions = [stack.enter_context(patch.object(gate, name)) for name in (
-                                    "require_network_fixture_capacity", "run_pure_fsm_checks",
+                                    "require_network_fixture_capacity",
                                     "run_lifecycle_source_checks", "shipping_harnesses", "check_test_harnesses",
                                     "compile_test_harnesses", "compile_network_binaries", "run_network_checks")]
                                 git = stack.enter_context(patch.object(gate.subprocess, "check_output"))
@@ -6433,7 +6555,7 @@ class NativeArtifactInspectorPrerequisiteTests(unittest.TestCase):
                              patch.object(gate, "native_artifact_inspector_path", return_value=inspector), \
                              patch.object(gate, "require_network_fixture_prerequisites"), \
                              patch.object(gate.subprocess, "check_output", return_value="a" * 40 + "\n"), \
-                             patch.object(gate, "run_pure_fsm_checks",
+                             patch.object(gate, "run_lifecycle_source_checks",
                                           side_effect=RuntimeError("first compile reached")) as first_compile, \
                              contextlib.redirect_stdout(io.StringIO()):
                             with self.assertRaisesRegex(RuntimeError, "first compile reached"):

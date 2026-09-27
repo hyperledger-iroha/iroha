@@ -52,6 +52,9 @@ use std::{
     convert::TryFrom,
 };
 mod privacy;
+mod relay_lifecycle_guard_v1;
+#[cfg(test)]
+mod relay_restore_key_tests;
 mod storage_reservation_v1;
 
 type KaigiAccountDependencyLocator = (u8, DomainId, Name);
@@ -634,6 +637,16 @@ impl Execute for RegisterKaigiRelay {
             )?;
             return Ok(());
         }
+        if existing
+            .as_ref()
+            .is_some_and(|current| current.hpke_public_key != registration.hpke_public_key)
+        {
+            relay_lifecycle_guard_v1::ensure_no_active_manifest_reference(
+                state_transaction,
+                &registration.relay_id,
+                "rotate the HPKE key for",
+            )?;
+        }
         ensure_relay_allowed_by_governance_with_graph(
             state_transaction,
             &registration.relay_id,
@@ -765,6 +778,11 @@ impl Execute for UnregisterKaigiRelay {
                 ));
             }
         }
+        relay_lifecycle_guard_v1::ensure_no_active_manifest_reference(
+            state_transaction,
+            &self.relay_id,
+            "unregister",
+        )?;
 
         let registration_dependency = (
             KAIGI_DEPENDENCY_RELAY_REGISTRATION,
@@ -876,6 +894,11 @@ impl Execute for ReportKaigiRelayHealth {
                 if !manifest_contains_relay {
                     return Err(relay_error(
                         "relay health updates require the relay to appear in the active manifest",
+                    ));
+                }
+                if reported_at_ms < record.created_at_ms {
+                    return Err(relay_error(
+                        "relay health report timestamp precedes Kaigi creation",
                     ));
                 }
                 if reported_at_ms > stx.block_unix_timestamp_ms() {
@@ -1502,7 +1525,7 @@ pub(crate) fn is_reserved_kaigi_metadata_key(key: &Name) -> bool {
 }
 
 enum IndexedKaigiDependency {
-    ActiveCall(KaigiId),
+    ActiveCall(KaigiRecord),
     RelayRegistration,
     RelayFeedback,
 }
@@ -1546,7 +1569,7 @@ fn validate_indexed_kaigi_dependency(
                         .into(),
                 ));
             }
-            Ok(IndexedKaigiDependency::ActiveCall(record.id))
+            Ok(IndexedKaigiDependency::ActiveCall(record))
         }
         _ => Err(Error::InvariantViolation(
             "Kaigi account-dependency index contains an unknown dependency kind".into(),
@@ -1674,8 +1697,9 @@ fn ensure_kaigi_rekey_component_has_no_stranded_dependencies(
             continue;
         }
         let message = match indexed {
-            IndexedKaigiDependency::ActiveCall(call) => format!(
-                "cannot {operation} account {representative}: it is referenced by active Kaigi {call}"
+            IndexedKaigiDependency::ActiveCall(record) => format!(
+                "cannot {operation} account {representative}: it is referenced by active Kaigi {}",
+                record.id
             ),
             IndexedKaigiDependency::RelayRegistration => format!(
                 "cannot {operation} account {representative}: it owns retained Kaigi relay registration"
@@ -2317,6 +2341,15 @@ fn collect_kaigi_relay_registry_from_domains<D>(
 where
     D: Borrow<Domain>,
 {
+    collect_kaigi_relay_registry_from_domains_with(domains, |_| {})
+}
+fn collect_kaigi_relay_registry_from_domains_with<D>(
+    domains: impl IntoIterator<Item = D>,
+    mut on_registration: impl FnMut(&KaigiRelayRegistration),
+) -> Result<BTreeMap<AccountId, DomainId>, Error>
+where
+    D: Borrow<Domain>,
+{
     let mut rebuilt = BTreeMap::new();
     for domain in domains {
         let domain = domain.borrow();
@@ -2332,20 +2365,19 @@ where
                 continue;
             }
             let registration = decode_stored_relay_registration(domain.id(), key, value.clone())?;
-            if rebuilt
-                .insert(registration.relay_id, domain.id().clone())
-                .is_some()
-            {
+            if rebuilt.contains_key(&registration.relay_id) {
                 return Err(Error::InvariantViolation(
                     "duplicate Kaigi relay registration found across domains".into(),
                 ));
             }
+            if rebuilt.len() >= KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 {
+                return Err(privacy_error(
+                    "retained Kaigi relay registry exceeds the final V1 capacity",
+                ));
+            }
+            rebuilt.insert(registration.relay_id.clone(), domain.id().clone());
+            on_registration(&registration);
         }
-    }
-    if rebuilt.len() > KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 {
-        return Err(privacy_error(
-            "retained Kaigi relay registry exceeds the final V1 capacity",
-        ));
     }
     Ok(rebuilt)
 }
@@ -2364,20 +2396,59 @@ fn collect_kaigi_account_dependencies_from_domains<D>(
 where
     D: Borrow<Domain>,
 {
-    let domains = domains.into_iter().collect::<Vec<_>>();
-    let relay_registry = collect_kaigi_relay_registry_from_domains(
+    let mut domains = domains.into_iter().collect::<Vec<_>>();
+    domains.sort_unstable_by(|left, right| {
+        <D as Borrow<Domain>>::borrow(left)
+            .id()
+            .cmp(<D as Borrow<Domain>>::borrow(right).id())
+    });
+    let mut relay_keys = BTreeMap::<AccountId, Vec<u8>>::new();
+    let relay_registry = collect_kaigi_relay_registry_from_domains_with(
         domains
             .iter()
             .map(|domain| <D as Borrow<Domain>>::borrow(domain)),
+        |registration| {
+            relay_keys.insert(
+                registration.relay_id.clone(),
+                registration.hpke_public_key.clone(),
+            );
+        },
     )?;
     let mut feedback_relays = BTreeSet::new();
     let mut rebuilt = BTreeMap::<AccountId, BTreeSet<KaigiAccountDependencyLocator>>::new();
-    for domain in domains {
-        let domain = domain.borrow();
+    for domain in &domains {
+        let domain = <D as Borrow<Domain>>::borrow(domain);
         for (key, value) in domain.metadata().iter() {
             let literal = key.as_ref();
             let (kind, accounts) = if literal.starts_with("kaigi__") {
                 let record = decode_stored_kaigi_record(domain.id(), key, value)?;
+                if record.status == KaigiStatus::Active {
+                    if let Some(manifest) = record.relay_manifest.as_ref() {
+                        for hop in &manifest.hops {
+                            match relay_keys.get(&hop.relay_id) {
+                                None => {
+                                    return Err(Error::InvariantViolation(
+                                        format!(
+                                            "active Kaigi {} manifest relay {} has no registered descriptor at restore",
+                                            record.id, hop.relay_id
+                                        )
+                                        .into(),
+                                    ));
+                                }
+                                Some(registered_key) if registered_key != &hop.hpke_public_key => {
+                                    return Err(Error::InvariantViolation(
+                                        format!(
+                                            "active Kaigi {} manifest relay {} HPKE key differs from its registered descriptor at restore",
+                                            record.id, hop.relay_id
+                                        )
+                                        .into(),
+                                    ));
+                                }
+                                Some(_) => {}
+                            }
+                        }
+                    }
+                }
                 if let Some(maximum) = max_retained_timestamp_ms {
                     if record.created_at_ms > maximum {
                         return Err(Error::InvariantViolation(
@@ -2439,6 +2510,60 @@ where
                         format!(
                             "retained Kaigi relay feedback timestamp {} exceeds restored ledger time {maximum}",
                             feedback.reported_at_ms
+                        )
+                        .into(),
+                    ));
+                }
+                let call_domain = domains
+                    .binary_search_by(|candidate| {
+                        <D as Borrow<Domain>>::borrow(candidate)
+                            .id()
+                            .cmp(&feedback.call.domain_id)
+                    })
+                    .ok()
+                    .map(|index| <D as Borrow<Domain>>::borrow(&domains[index]))
+                    .ok_or_else(|| {
+                        Error::InvariantViolation(
+                            format!(
+                                "retained Kaigi relay feedback references missing call {}",
+                                feedback.call
+                            )
+                            .into(),
+                        )
+                    })?;
+                let call_key = metadata_key(&feedback.call).map_err(|error| {
+                    Error::InvariantViolation(
+                        format!("invalid retained Kaigi relay feedback call identity: {error}")
+                            .into(),
+                    )
+                })?;
+                let call_value = call_domain.metadata().get(&call_key).ok_or_else(|| {
+                    Error::InvariantViolation(
+                        format!(
+                            "retained Kaigi relay feedback references missing call {}",
+                            feedback.call
+                        )
+                        .into(),
+                    )
+                })?;
+                let call = decode_stored_kaigi_record(call_domain.id(), &call_key, call_value)?;
+                if feedback.reported_at_ms < call.created_at_ms {
+                    return Err(Error::InvariantViolation(
+                        format!(
+                            "retained Kaigi relay feedback for {} predates its creation",
+                            feedback.call
+                        )
+                        .into(),
+                    ));
+                }
+                if call
+                    .ended_at_ms
+                    .is_some_and(|ended_at_ms| feedback.reported_at_ms > ended_at_ms)
+                {
+                    return Err(Error::InvariantViolation(
+                        format!(
+                            "retained Kaigi relay feedback for {} is later than its finalized end",
+                            feedback.call
                         )
                         .into(),
                     ));
@@ -4261,7 +4386,7 @@ mod tests {
             assert_invariant_error(error, "key does not match its embedded alias");
         });
     }
-    fn sample_ids() -> (DomainId, AccountId, AccountId) {
+    pub(super) fn sample_ids() -> (DomainId, AccountId, AccountId) {
         let domain = DomainId::try_new("nexus", "universal").expect("domain id");
         let (host, _) = gen_account_in("nexus");
         let (participant, _) = gen_account_in("nexus");
@@ -6723,15 +6848,9 @@ mod tests {
                     feedback_key.clone(),
                     Json::try_new(feedback).expect("serialize valid feedback"),
                 );
-            let rebuilt = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
-                .expect("valid feedback remains restorable");
-            assert!(rebuilt.get(&relay_id).is_some_and(|dependencies| {
-                dependencies.contains(&(
-                    KAIGI_DEPENDENCY_RELAY_FEEDBACK,
-                    home.clone(),
-                    feedback_key.clone(),
-                ))
-            }));
+            let error = collect_kaigi_account_dependencies_at(&stx.world, Some(20))
+                .expect_err("feedback without an authoritative call must fail restore");
+            assert_invariant_error(error, "references missing call");
         });
     }
     #[test]
@@ -7937,11 +8056,11 @@ mod tests {
         });
     }
     #[test]
-    fn relay_health_reports_are_monotonic_and_idempotent() {
-        let (domain, host, _participant) = sample_ids();
+    fn relay_health_report_rejects_observation_before_call_creation() {
+        let (domain, host, _) = sample_ids();
         let call = KaigiId::new(
             domain.clone(),
-            Name::from_str("health-ordering").expect("call name"),
+            Name::from_str("health-precreation").expect("call name"),
         );
         let manifest = sample_manifest();
         let relay_id = manifest.hops[0].relay_id.clone();
@@ -7963,7 +8082,70 @@ mod tests {
                 proof: None,
             }
             .execute(&host, stx)
-            .expect("create kaigi");
+            .expect("create call at block time 20");
+            stx.world.take_external_events();
+            let record_before = load_call_record(stx, &call);
+            assert_eq!(record_before.created_at_ms, 20);
+            let internal_events_before = stx.world.internal_event_buf.len();
+
+            let error = ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 19,
+                notes: None,
+            }
+            .execute(&host, stx)
+            .expect_err("observation before creation must not be admitted");
+            assert_smart_contract_error(error, "precedes Kaigi creation");
+            assert_eq!(load_call_record(stx, &call), record_before);
+            assert!(
+                load_relay_feedback(stx, &relay_id)
+                    .expect("load feedback")
+                    .is_none()
+            );
+            assert!(stx.world.take_external_events().is_empty());
+            assert_eq!(stx.world.internal_event_buf.len(), internal_events_before);
+
+            ReportKaigiRelayHealth {
+                call_id: call.clone(),
+                relay_id: relay_id.clone(),
+                status: KaigiRelayHealthStatus::Healthy,
+                reported_at_ms: 20,
+                notes: None,
+            }
+            .execute(&host, stx)
+            .expect("observation at creation time is valid");
+            assert_eq!(
+                load_relay_feedback(stx, &relay_id)
+                    .expect("load feedback")
+                    .expect("stored feedback")
+                    .reported_at_ms,
+                20
+            );
+        });
+    }
+    #[test]
+    fn relay_health_reports_are_monotonic_and_idempotent() {
+        let (domain, host, _participant) = sample_ids();
+        let call = KaigiId::new(
+            domain.clone(),
+            Name::from_str("health-ordering").expect("call name"),
+        );
+        let manifest = sample_manifest();
+        let relay_id = manifest.hops[0].relay_id.clone();
+        with_state_transaction_at(20, |stx| {
+            Register::domain(Domain::new(domain.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register domain");
+            Register::account(Account::new(host.clone()))
+                .execute(&ALICE_ID, stx)
+                .expect("register host");
+            register_manifest_relays(stx, &domain, &manifest);
+            let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
+            template.relay_manifest = Some(manifest.clone());
+            store_kaigi_record_for_testing(stx, &KaigiRecord::from_new(&template, 0))
+                .expect("retain a call created before this observation block");
             stx.world.take_external_events();
 
             let initial_record = load_call_record(stx, &call);
@@ -8140,15 +8322,8 @@ mod tests {
             ] {
                 let mut template = NewKaigi::with_defaults(call, host.clone());
                 template.relay_manifest = Some(manifest.clone());
-                CreateKaigi {
-                    call: template,
-                    commitment: None,
-                    nullifier: None,
-                    roster_root: None,
-                    proof: None,
-                }
-                .execute(&host, stx)
-                .expect("create kaigi");
+                store_kaigi_record_for_testing(stx, &KaigiRecord::from_new(&template, 0))
+                    .expect("retain a call created before this observation block");
             }
             stx.world.take_external_events();
 
@@ -8209,15 +8384,8 @@ mod tests {
             register_manifest_relays(stx, &domain, &manifest);
             let mut template = NewKaigi::with_defaults(call.clone(), host.clone());
             template.relay_manifest = Some(manifest.clone());
-            CreateKaigi {
-                call: template,
-                commitment: None,
-                nullifier: None,
-                roster_root: None,
-                proof: None,
-            }
-            .execute(&host, stx)
-            .expect("create kaigi");
+            store_kaigi_record_for_testing(stx, &KaigiRecord::from_new(&template, 0))
+                .expect("retain a call created before this observation block");
             stx.world.take_external_events();
 
             let accepted_notes = "界".repeat(512);
@@ -8534,7 +8702,7 @@ mod tests {
             },
         );
     }
-    fn register_manifest_relays(
+    pub(super) fn register_manifest_relays(
         stx: &mut StateTransaction<'_, '_>,
         domain_id: &DomainId,
         manifest: &KaigiRelayManifest,
@@ -8707,7 +8875,10 @@ mod tests {
             &BTreeSet::new(),
         );
     }
-    fn load_call_record(stx: &StateTransaction<'_, '_>, call_id: &KaigiId) -> KaigiRecord {
+    pub(super) fn load_call_record(
+        stx: &StateTransaction<'_, '_>,
+        call_id: &KaigiId,
+    ) -> KaigiRecord {
         let key = kaigi_metadata_key(&call_id.call_name).expect("metadata key");
         stx.world
             .domain(&call_id.domain_id)
@@ -8719,7 +8890,7 @@ mod tests {
             .try_into_any_norito()
             .expect("deserialize record")
     }
-    fn load_relay_registration(
+    pub(super) fn load_relay_registration(
         stx: &StateTransaction<'_, '_>,
         domain_id: &DomainId,
         relay_id: &AccountId,
@@ -8740,7 +8911,7 @@ mod tests {
     fn assert_kaigi_not_active(error: Error) {
         assert_invariant_error(error, "Kaigi is not active");
     }
-    fn assert_invariant_error(error: Error, expected: &str) {
+    pub(super) fn assert_invariant_error(error: Error, expected: &str) {
         match error {
             Error::InvariantViolation(message) => {
                 assert!(message.contains(expected), "unexpected error: {message}");
@@ -8748,7 +8919,7 @@ mod tests {
             other => panic!("unexpected error variant {other:?}"),
         }
     }
-    fn assert_smart_contract_error(error: Error, expected: &str) {
+    pub(super) fn assert_smart_contract_error(error: Error, expected: &str) {
         match error {
             Error::InvalidParameter(InvalidParameterError::SmartContract(message)) => {
                 assert!(message.contains(expected), "unexpected error: {message}");
@@ -8767,7 +8938,7 @@ mod tests {
         .execute(host, stx)
         .expect("create kaigi");
     }
-    fn sample_manifest() -> KaigiRelayManifest {
+    pub(super) fn sample_manifest() -> KaigiRelayManifest {
         let (relay_a, _) = gen_account_in("relay");
         let (relay_b, _) = gen_account_in("relay");
         let (relay_c, _) = gen_account_in("relay");

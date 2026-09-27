@@ -16,6 +16,9 @@ use mv::storage::StorageReadOnly as _;
 /// `iroha_config`.
 #[derive(Clone, Default)]
 pub struct IrohaRuntimeDeps {
+    /// The operator's one-shot `--sumeragi-assert-fresh-key` boot flag (§7.4): the node's
+    /// consensus keys never signed for this chain. Never a configuration key.
+    sumeragi_assert_fresh_key: bool,
     sumeragi_global_beacon_partial_signer:
         Option<Arc<dyn iroha_core::beacon::GlobalThresholdBeaconPartialSignerV1>>,
     kagemusha_mint_finality_authority: Option<
@@ -1577,7 +1580,7 @@ mod parliament_tle_release_tests {
     #[test]
     fn threshold_signer_preflight_rejects_before_consensus_startup() {
         let startup = include_str!("../main.rs")
-            .split_once("let sumeragi = if emergency_fast")
+            .split_once("let sumeragi = match prepared_sumeragi")
             .expect("consensus startup branch")
             .1
             .split_once("let tx_gossiper = if emergency_fast")
@@ -1586,7 +1589,7 @@ mod parliament_tle_release_tests {
         let preflight = startup
             .find("validate_threshold_signer_startup_readiness_v1")
             .expect("threshold-signer startup preflight");
-        let consensus_start = startup.find("SumeragiStartArgs").expect("Sumeragi startup");
+        let consensus_start = startup.find("start_on_network").expect("Sumeragi startup");
         let guarded_preflight: String = startup[preflight..consensus_start]
             .chars()
             .filter(|character| !character.is_whitespace())
@@ -1599,5 +1602,19 @@ mod parliament_tle_release_tests {
         );
         assert!(!startup.contains("ParliamentTleShareUnavailable"));
         assert!(!startup.contains("local Parliament TLE committee seat is not operational"));
+    }
+}
+
+impl IrohaRuntimeDeps {
+    /// Carry the operator's one-shot fresh-key assertion (`--sumeragi-assert-fresh-key`).
+    #[must_use]
+    pub fn with_sumeragi_fresh_key_assertion(mut self, asserted: bool) -> Self {
+        self.sumeragi_assert_fresh_key = asserted;
+        self
+    }
+
+    /// Whether the operator asserted fresh consensus keys at this boot.
+    pub(crate) fn sumeragi_assert_fresh_key(&self) -> bool {
+        self.sumeragi_assert_fresh_key
     }
 }

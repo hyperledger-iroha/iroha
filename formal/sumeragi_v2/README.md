@@ -1,5 +1,14 @@
 # Sumeragi v2 formal verification
 
+> **Status (2026-09-27): retired.** The node runs only the new Sumeragi
+> ([`specs/sumeragi.md`](../../specs/sumeragi.md)). The v2 formal tooling this
+> directory refers to (the TLAPS, TLC, Apalache and mutation runners under
+> `scripts/formal/`, the proof-ledger checker, `ci/check_sumeragi_formal.sh`, the
+> v2 release gates, source-binding inventory and the Verus crate `crates/iroha_sumeragi_core`) was removed
+> with the v2 consensus tooling. The directory remains only because v2 runtime
+> tests still read `SumeragiV2InFlightFirstRelease.tla`; it is deleted together
+> with the v2 runtime.
+
 This directory is the first-release formal corridor for the production
 Sumeragi v2 consensus protocol. There is no legacy Sumeragi proof corridor.
 The model fixes protocol revision 4 and is parameterized over arbitrary finite
@@ -1840,7 +1849,7 @@ generation and preserves retained responder state. A new same-roster requester
 against a full table, an unauthorized active-state replacement, or overflow
 returns `Capacity` atomically.
 The canonical module/test TSV inventory SHA-256 is
-`6045ac0993327ed787010c626227580899c1561aae9366318438840870f0c815`.
+`123fafed34cddd1f488af19ceccf1fb4e80c3cfba2f59e889e02c565a3b01892`.
 
 This is the prospective source inventory: six Native participant-role tests,
 the Ready Validate WAL-append crash test, two Certified-Serve corruption tests,

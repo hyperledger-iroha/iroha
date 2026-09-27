@@ -60,8 +60,8 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch() 
 }
 
 fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch_body() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("temporary recovered-vote safety store");
     let storage = TempDir::new().expect("temporary recovered-vote lifecycle stores");
     let ledger_root = storage.path().join("ledger");
@@ -85,7 +85,7 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch_bo
         assert!(summary.parent_advanced() && summary.child_live());
         drop(durable);
     }
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let authenticated = open_recovered_startup_test(&safety)
         .expect("reopen the exact recovered-vote adapter startup")
         .authenticate_final_wal_startup_authority()
@@ -118,10 +118,10 @@ fn production_lifecycle_owner_factory_opens_the_private_recovered_vote_branch_bo
         )
         .unwrap_or_else(|error| panic!("open complete recovered-vote lifecycle owner: {error}"));
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "the recovered-vote owner remains unpublished until sealed launch activation"
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 #[test]
@@ -177,8 +177,8 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout() {
 }
 
 fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let kura = Kura::blank_kura_for_testing();
     let storage_root = kura.sumeragi_v2_storage_root();
     let canonical_wal_path = storage_root
@@ -300,7 +300,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
     let mut launched = owner
         .launch(launch_inputs)
         .unwrap_or_else(|error| panic!("launch exact Kura-bound lifecycle owner: {error}"));
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
 
@@ -324,7 +324,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
                 ));
                 assert!(executor.lifecycle_live_clocks_are_unarmed());
                 assert!(services.matches_lifecycle_executor_output_guard(executor));
-                assert!(crate::sumeragi::status::v2_status().is_none());
+                assert!(crate::sumeragi::v2_status::v2_status().is_none());
                 Ok::<
                     _,
                     super::super::v2_lifecycle_coordinator::ProductionLifecyclePreActivationErrorV1,
@@ -335,7 +335,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
     assert!(!output_guard.restart_required());
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
     let directive = launched
         .with_runner_setup(&mut setup_runner, |executor, _services| {
             executor.local_proposal_directive().map_err(
@@ -379,7 +379,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
     assert!(ingress_ready.load(Ordering::Acquire));
     assert!(leader_wire_ingress.state.lock().open);
     assert_eq!(
-        crate::sumeragi::status::v2_status()
+        crate::sumeragi::v2_status::v2_status()
             .expect("sealed lifecycle activation publishes status")
             .height_context_id,
         context.id()
@@ -437,7 +437,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
     assert!(outcome.wal_retirement_warning().is_none());
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 
     let mismatched_kura = Kura::blank_kura_for_testing();
     let mismatched_root = mismatched_kura.sumeragi_v2_storage_root();
@@ -589,7 +589,7 @@ fn production_lifecycle_owner_factory_binds_the_exact_kura_storage_layout_body()
         wrong_lifecycle_before,
         "rejected factory must preserve its existing lifecycle namespace"
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 #[cfg(feature = "bls")]
@@ -604,8 +604,8 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches() {
 
 #[cfg(feature = "bls")]
 fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let (kura, state, verified, storage_authority, local_signer, retirement) =
         super::super::v2_recovery::production_genesis_complete_tip_fixture_for_test();
     let context = verified.context().clone();
@@ -650,7 +650,7 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
         }]
     ));
     drop(adapter);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let authenticated = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
         wal_path,
         verified.clone(),
@@ -872,14 +872,14 @@ fn production_genesis_complete_tip_adopts_control_repair_and_launches_body() {
     drop(ingress_state);
     assert!(!output_guard.restart_required());
     assert_eq!(
-        crate::sumeragi::status::v2_status()
+        crate::sumeragi::v2_status::v2_status()
             .expect("recovered startup publishes status")
             .build_fingerprint,
         fingerprints().build,
         "recovery preserves the executable build identity"
     );
-    crate::sumeragi::status::clear_v2_status();
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    crate::sumeragi::v2_status::clear_v2_status();
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 }
 
 #[test]
@@ -1239,7 +1239,7 @@ fn exercise_pending_kura_production_lifecycle(
     }
     assert!(!ingress_ready.load(Ordering::Acquire));
     assert!(!leader_wire_ingress.state.lock().open);
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 
     use super::super::v2_effects::PendingKuraApplyRecoveryStage as Stage;
     let completion_deadline = Instant::now() + Duration::from_secs(5);
@@ -1288,7 +1288,7 @@ fn exercise_pending_kura_production_lifecycle(
         }
         assert!(!ingress_ready.load(Ordering::Acquire));
         assert!(!leader_wire_ingress.state.lock().open);
-        assert!(crate::sumeragi::status::v2_status().is_none());
+        assert!(crate::sumeragi::v2_status::v2_status().is_none());
         if completed {
             break;
         }
@@ -1337,7 +1337,7 @@ fn exercise_pending_kura_production_lifecycle(
     assert!(ingress_ready.load(Ordering::Acquire));
     assert!(leader_wire_ingress.state.lock().open);
     assert_eq!(
-        crate::sumeragi::status::v2_status()
+        crate::sumeragi::v2_status::v2_status()
             .expect("recovered startup publishes status")
             .build_fingerprint,
         fingerprints().build,
@@ -1380,7 +1380,7 @@ fn exercise_pending_kura_production_lifecycle(
         assert!(!ingress_ready.load(Ordering::Acquire));
         assert!(!leader_wire_ingress.state.lock().open);
         assert!(!output_guard.restart_required());
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         return;
     }
 
@@ -1412,7 +1412,7 @@ fn exercise_pending_kura_production_lifecycle(
     assert!(outcome.cleanup().warnings().is_empty());
     assert!(outcome.wal_retirement_warning().is_none());
     assert!(!output_guard.restart_required());
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 #[cfg(feature = "bls")]
@@ -1517,8 +1517,8 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
         .expect("the recovery fixture logger requires a Tokio reactor");
     let _runtime_guard = logging_runtime.enter();
     let _logger = iroha_logger::test_logger();
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     for &(
         marker,
         persist_matching_outcome,
@@ -1878,7 +1878,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             assert_eq!(kura.exact_durable_blocks_count().unwrap(), 1);
             // The original live adapter and body store are gone at this crash
             // boundary. A fresh process cannot retain their published status.
-            crate::sumeragi::status::clear_v2_status();
+            crate::sumeragi::v2_status::clear_v2_status();
             let expected = super::super::v2_recovery::PendingKuraApply::for_test(
                 recovered_context.id(),
                 recovered_context.height,
@@ -2346,7 +2346,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 assert!(!ingress_ready.load(Ordering::Acquire));
                 assert!(!leader_wire_ingress.state.lock().open);
                 assert!(!output_guard.restart_required());
-                assert!(crate::sumeragi::status::v2_status().is_none());
+                assert!(crate::sumeragi::v2_status::v2_status().is_none());
                 continue;
             }
             let mut launched = owner
@@ -3258,13 +3258,13 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
                 assert!(!leader_wire_ingress.state.lock().open);
                 assert!(!output_guard.restart_required());
                 assert_eq!(
-                    crate::sumeragi::status::v2_status()
+                    crate::sumeragi::v2_status::v2_status()
                         .expect("recovered startup publishes status")
                         .build_fingerprint,
                     fingerprints().build,
                     "recovery preserves the executable build identity"
                 );
-                crate::sumeragi::status::clear_v2_status();
+                crate::sumeragi::v2_status::clear_v2_status();
                 continue;
             }
             settle_terminal_fixture_runner_handoff(
@@ -3304,7 +3304,7 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             assert!(outcome.wal_retirement_warning().is_none());
             assert!(!ingress_ready.load(Ordering::Acquire));
             assert!(!leader_wire_ingress.state.lock().open);
-            crate::sumeragi::status::clear_v2_status();
+            crate::sumeragi::v2_status::clear_v2_status();
         } else {
             let error = match result {
                 Ok(_owner) => panic!("a changed semantic marker outcome must fail closed"),
@@ -3467,6 +3467,13 @@ fn recovered_prepare_wal_vote_fsyncs_repair_and_installs_exact_sign_body() {
 
 #[test]
 fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot",
+        recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot_body,
+    );
+}
+
+fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot_body() {
     let directory = TempDir::new().expect("temporary stale Prepare recovery directory");
     let (startup, _expected_vote, proposal, manifest, validated) =
         reopen_with_prepare_intent(&directory, 0xD3);
@@ -3507,6 +3514,13 @@ fn recovered_prepare_outer_fsync_rejects_a_stale_opened_ledger_snapshot() {
 
 #[test]
 fn recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation",
+        recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation_body,
+    );
+}
+
+fn recovered_prepare_sign_install_rejects_wrong_store_before_registry_mutation_body() {
     let directory = TempDir::new().expect("temporary wrong-store Prepare recovery directory");
     let (startup, _expected_vote, proposal, manifest, validated) =
         reopen_with_prepare_intent(&directory, 0xD4);
@@ -3706,8 +3720,15 @@ fn recovered_owner_seal_cannot_relabel_the_authenticated_payload_store_body() {
 
 #[test]
 fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_prepare_opens_exact_coordinator_before_status_publication",
+        recovered_prepare_opens_exact_coordinator_before_status_publication_body,
+    );
+}
+
+fn recovered_prepare_opens_exact_coordinator_before_status_publication_body() {
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("temporary published Prepare recovery directory");
     let ledger = TempDir::new().expect("temporary published Prepare ledger");
     let payload = TempDir::new().expect("temporary published payload store");
@@ -3726,8 +3747,8 @@ fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
             .installed
             .seed_parent_recovery_for_test(&mut recovery)
     );
-    crate::sumeragi::status::clear_v2_status();
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    crate::sumeragi::v2_status::clear_v2_status();
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 
     let published = installed
         .open_coordinator_and_publish_for_test(ledger.path(), &mut payload_store, recovery)
@@ -3739,13 +3760,13 @@ fn recovered_prepare_opens_exact_coordinator_before_status_publication() {
         });
     assert!(published.exact_published_join_for_test());
     assert_eq!(
-        crate::sumeragi::status::v2_status()
+        crate::sumeragi::v2_status::v2_status()
             .expect("status is published only after the exact join")
             .height,
         verified.context().height
     );
     drop(published);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 #[test]
@@ -3757,11 +3778,11 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status() {
 }
 
 fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
 
     // A same-context cut with no exact parent or child is rejected before
     // coordinator preparation.
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     {
         let safety = TempDir::new().expect("missing-recovery safety directory");
         let ledger = TempDir::new().expect("missing-recovery ledger");
@@ -3778,7 +3799,7 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             payload.path(),
             body.path(),
         );
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let error = expect_recovered_open_error(
             installed.open_coordinator_and_publish_for_test(
                 ledger.path(),
@@ -3792,11 +3813,11 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             "authenticated recovery lacks the exact recovered WAL handoff"
         );
         assert!(error.retains_exact_installed_for_test(ledger.path()));
-        assert!(crate::sumeragi::status::v2_status().is_none());
+        assert!(crate::sumeragi::v2_status::v2_status().is_none());
     }
 
     // A cut from another authenticated height context cannot be spliced.
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     {
         let safety = TempDir::new().expect("foreign-recovery safety directory");
         let ledger = TempDir::new().expect("foreign-recovery ledger");
@@ -3816,7 +3837,7 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             payload.path(),
             body.path(),
         );
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let error = expect_recovered_open_error(
             installed.open_coordinator_and_publish_for_test(
                 ledger.path(),
@@ -3830,12 +3851,12 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             "authenticated recovery lacks the exact recovered WAL handoff"
         );
         assert!(error.retains_exact_installed_for_test(ledger.path()));
-        assert!(crate::sumeragi::status::v2_status().is_none());
+        assert!(crate::sumeragi::v2_status::v2_status().is_none());
     }
 
     // Both exact sides are an ambiguous recovery shape and must be
     // preserved rather than normalized by overwriting either key.
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     {
         let safety = TempDir::new().expect("wrong-recovery safety directory");
         let ledger = TempDir::new().expect("wrong-recovery ledger");
@@ -3857,7 +3878,7 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
                 .installed
                 .seed_both_recovery_for_test(&mut recovery)
         );
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let error = expect_recovered_open_error(
             installed.open_coordinator_and_publish_for_test(
                 ledger.path(),
@@ -3871,12 +3892,12 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             "authenticated recovery lacks the exact recovered WAL handoff"
         );
         assert!(error.retains_exact_installed_for_test(ledger.path()));
-        assert!(crate::sumeragi::status::v2_status().is_none());
+        assert!(crate::sumeragi::v2_status::v2_status().is_none());
     }
 
     // A foreign ledger root fails during non-publishing preparation while
     // the exact receipt-bound installed row remains sealed.
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     {
         let safety = TempDir::new().expect("wrong-ledger safety directory");
         let ledger = TempDir::new().expect("wrong-ledger exact ledger");
@@ -3899,7 +3920,7 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
                 .installed
                 .seed_parent_recovery_for_test(&mut recovery)
         );
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let error = expect_recovered_open_error(
             installed.open_coordinator_and_publish_for_test(
                 wrong_ledger.path(),
@@ -3913,12 +3934,12 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             "repaired lifecycle ledger could not prepare an exact coordinator open"
         );
         assert!(error.retains_exact_installed_for_test(ledger.path()));
-        assert!(crate::sumeragi::status::v2_status().is_none());
+        assert!(crate::sumeragi::v2_status::v2_status().is_none());
     }
 
     // A corrupt opaque registry seal cannot mint the logical projection;
     // its closed row remains owned by the fail-stop error.
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     {
         let safety = TempDir::new().expect("wrong-registry safety directory");
         let ledger = TempDir::new().expect("wrong-registry ledger");
@@ -3941,7 +3962,7 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
                 .seed_parent_recovery_for_test(&mut recovery)
         );
         installed.installed.corrupt_registry_seal_for_test();
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let error = expect_recovered_open_error(
             installed.open_coordinator_and_publish_for_test(
                 ledger.path(),
@@ -3955,12 +3976,12 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             "installed recovered Sign registry seal is inconsistent"
         );
         assert!(error.retains_closed_registry_row_for_test());
-        assert!(crate::sumeragi::status::v2_status().is_none());
+        assert!(crate::sumeragi::v2_status::v2_status().is_none());
     }
 
     // Even after the exact coordinator and both stores are committed, a
     // status construction error retains that whole opened authority.
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     {
         let safety = TempDir::new().expect("status-failure safety directory");
         let ledger = TempDir::new().expect("status-failure ledger");
@@ -3983,7 +4004,7 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
                 .seed_parent_recovery_for_test(&mut recovery)
         );
         installed.adapter.registry.validators.clear();
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let error = expect_recovered_open_error(
             installed.open_coordinator_and_publish_for_test(
                 ledger.path(),
@@ -3997,9 +4018,9 @@ fn recovered_prepare_open_failures_retain_authority_and_publish_no_status_body()
             "adapter status publication failed after exact lifecycle open"
         );
         assert!(error.retains_exact_installed_for_test(ledger.path()));
-        assert!(crate::sumeragi::status::v2_status().is_none());
+        assert!(crate::sumeragi::v2_status::v2_status().is_none());
     }
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 include!("v2_adapter_04b_lifecycle_startup_tail.rs");

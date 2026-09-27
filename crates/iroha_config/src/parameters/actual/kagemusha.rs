@@ -25,10 +25,13 @@ pub struct Kagemusha {
     pub reserve_accounts: BTreeMap<AssetDefinitionId, AccountId>,
     /// Optional threshold-authenticated proof release loaded before replay.
     pub proof_release: Option<KagemushaV1ProofReleaseFiles>,
+    /// Explicit node permission to install a signed TestnetExperiment release.
+    pub allow_testnet_experimental_release: bool,
 }
 impl_default!(Kagemusha => {
     Self {
         reserve_accounts: BTreeMap::new(),
         proof_release: None,
+        allow_testnet_experimental_release: false,
     }
 });

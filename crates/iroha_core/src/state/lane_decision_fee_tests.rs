@@ -34,7 +34,7 @@ fn assert_native_direct_fee_balance(
 }
 
 fn assert_native_direct_fee_status(fee_asset: &AssetId, charged_executions: u64) {
-    let status = crate::sumeragi::status::nexus_fee_snapshot();
+    let status = crate::status::nexus_fee_snapshot();
     assert_eq!(status.charged_total, charged_executions);
     assert_eq!(status.charged_via_payer_total, charged_executions);
     assert_eq!(status.charged_via_sponsor_total, 0);
@@ -50,10 +50,7 @@ fn assert_native_direct_fee_status(fee_asset: &AssetId, charged_executions: u64)
             status.last_asset_id,
             Some(fee_asset.definition().canonical_address())
         );
-        assert_eq!(
-            status.last_payer,
-            Some(crate::sumeragi::status::NexusFeePayer::Payer)
-        );
+        assert_eq!(status.last_payer, Some(crate::status::NexusFeePayer::Payer));
         assert_eq!(status.last_payer_id, Some(fee_asset.account().to_string()));
     }
 }
@@ -139,8 +136,8 @@ state_test! { sync native_economic_direct_fee_exact_burn_and_event_survive_scrat
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     // The existing reentrant status guard isolates actual production Charged
     // events; it does not intercept, fabricate or mutate the economic result.
-    let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    let _status = crate::status::nexus_fee_test_lock().lock().unwrap();
+    crate::status::reset_nexus_economics_for_tests();
     let prepared = state.prepare_native_batch_on_carrier(header, groups.clone()).unwrap();
     let batch = prepared.batch().clone();
     assert!(prepared.executions()[0].result.is_ok(), "{:?}", prepared.executions()[0].result);
@@ -191,8 +188,8 @@ state_test! { sync native_economic_direct_fee_cap_and_payer_rejections_settle_he
         assert_eq!(error.code(), expected_code);
         assert!(error.reason().contains(reason), "{error:?}");
         let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
-        let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
-        crate::sumeragi::status::reset_nexus_economics_for_tests();
+        let _status = crate::status::nexus_fee_test_lock().lock().unwrap();
+        crate::status::reset_nexus_economics_for_tests();
         let prepared = state.prepare_native_batch_on_carrier(header, groups.clone())
             .expect("an authenticated admitted input that cannot pay is terminally rejected, not an endlessly invalid carrier");
         let batch = prepared.batch().clone();
@@ -242,8 +239,8 @@ state_test! { sync native_economic_direct_fee_late_batch_failure_discards_real_b
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
     let carrier = empty_global_block_after(Some(&fixture.native.block)).header();
     let header = carrier.clone();
-    let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    let _status = crate::status::nexus_fee_test_lock().lock().unwrap();
+    crate::status::reset_nexus_economics_for_tests();
     let error = state.prepare_native_batch_on_carrier(header, groups.clone()).err().expect("late marker conflict");
     assert!(matches!(error, MergeLedgerCommitError::ExecutionMarkerConflict(_)), "{error}");
     assert_native_direct_fee_status(&fee_asset, 1);
@@ -283,8 +280,8 @@ state_test! { sync native_economic_direct_fee_execution_time_exhaustion_rejects_
             "both exact signed inputs can pay before the earlier native input executes");
     }
     let before = crate::snapshot::canonical_state_snapshot_hash(state).expect("stable valid fixture snapshot");
-    let _status = crate::sumeragi::status::nexus_fee_test_lock().lock().unwrap();
-    crate::sumeragi::status::reset_nexus_economics_for_tests();
+    let _status = crate::status::nexus_fee_test_lock().lock().unwrap();
+    crate::status::reset_nexus_economics_for_tests();
     let prepared = state.prepare_native_batch_on_carrier(header, groups.clone()).unwrap();
     let batch = prepared.batch().clone();
     assert_eq!(batch.groups.len(), 2);

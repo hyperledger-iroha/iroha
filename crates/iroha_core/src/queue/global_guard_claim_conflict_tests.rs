@@ -1,11 +1,19 @@
 #[test]
-fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
-    let fixture = globally_bound_guard_fixture();
+fn globally_bound_absent_registry_skips_unadmitted_claim_without_blocking_ready_work() {
+    let mut fixture = globally_bound_guard_fixture();
     let hash = fixture.transaction.hash_as_entrypoint();
-    let follower_hash = fixture.follower_transaction.hash_as_entrypoint();
+    let follower_key = KeyPair::random();
+    let (_, time_source) = TimeSource::new_mock(Duration::default());
+    let follower = accepted_tx_by(
+        AccountId::new(follower_key.public_key().clone()),
+        &follower_key,
+        &time_source,
+    );
+    register_accepted_tx_authority_for_queue_test(&mut fixture.state, &follower);
+    let follower_hash = follower.hash_as_entrypoint();
     fixture
         .queue
-        .push_with_lane_with_state(fixture.follower_transaction.clone(), &fixture.state)
+        .push_with_lane_with_state(follower, &fixture.state)
         .expect("enqueue FIFO follower");
     let mut expired = Vec::new();
     assert!(
@@ -21,26 +29,41 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
     let (pending, lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), two)
-        .expect("absent marker is a healthy selection wait");
-    assert!(pending.is_empty(), "the FIFO follower must not overtake");
-    drop(lease);
-    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
-    let (pending, lease) = fixture
-        .queue
-        .bounded_pending_snapshot(&fixture.state.view(), two)
-        .expect("exact marker enables selection");
+        .expect("absent marker leaves the leader free to sample ready work");
     assert_eq!(
         pending
             .iter()
             .map(AcceptedTransaction::hash_as_entrypoint)
             .collect::<Vec<_>>(),
-        vec![hash, follower_hash]
+        vec![follower_hash],
+        "an unadmitted local claim cannot block unrelated proposal work"
+    );
+    fixture.assert_live_journal_claim();
+    drop(lease);
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    let (pending, lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), two)
+        .expect("exact marker leaves QueuePlan selection with the autonomous owner");
+    assert_eq!(
+        pending
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>(),
+        vec![follower_hash]
+    );
+    assert!(
+        !fixture
+            .queue
+            .global_selection_owners
+            .lock()
+            .contains_key(&hash)
     );
     drop(lease);
 
     // A durable autonomous owner leaves the physical FIFO but keeps its
-    // immutable ordinal. That virtual predecessor must fence an ordinary
-    // follower until the reservation reaches a terminal release.
+    // immutable ordinal for custody. The leader can still sample an
+    // independent Ordinary input that arrived later on this node.
     let fixture = globally_bound_guard_fixture_with_journals(0, true);
     let hash = fixture.transaction.hash_as_entrypoint();
     let follower_hash = fixture.follower_transaction.hash_as_entrypoint();
@@ -85,12 +108,156 @@ fn globally_bound_absent_registry_blocks_selection_and_preserves_exact_fifo() {
     let (pending, lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), nonzero!(2_usize))
-        .expect("a live autonomous FIFO cut is a healthy selection wait");
-    assert!(
-        pending.is_empty(),
-        "ordinary work must not overtake the reservation"
+        .expect("a live autonomous reservation does not block leader sampling");
+    assert_eq!(
+        pending
+            .iter()
+            .map(AcceptedTransaction::hash_as_entrypoint)
+            .collect::<Vec<_>>(),
+        vec![follower_hash],
     );
+    assert!(
+        fixture
+            .queue
+            .global_selection_owners
+            .lock()
+            .contains_key(&follower_hash)
+    );
+    drop(lease);
     assert!(fixture.queue.global_selection_owners.lock().is_empty());
+}
+
+#[test]
+fn bounded_leader_scan_reaches_ready_work_behind_unadmitted_claims() {
+    let mut fixture = globally_bound_guard_fixture();
+    let first_hash = fixture.transaction.hash_as_entrypoint();
+    let (_, time_source) = TimeSource::new_mock(Duration::default());
+    let mut claim_hashes = vec![first_hash];
+    for _ in 0..2 {
+        let claim_key = KeyPair::random();
+        let transaction = accepted_queue_plan_tx_with(
+            AccountId::new(claim_key.public_key().clone()),
+            &claim_key,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            Metadata::default(),
+        );
+        register_accepted_tx_authority_for_queue_test(&mut fixture.state, &transaction);
+        let routing_plan = fixture
+            .queue
+            .route_plan_with_state(&transaction, &fixture.state)
+            .expect("route additional QueuePlan claim");
+        let context = fixture
+            .queue
+            .plan_admission_context_with_state(&fixture.state, &routing_plan)
+            .expect("capture additional QueuePlan admission context");
+        let binding = crate::torii_proxy::new_queue_plan_admission_binding(
+            fixture.state.network_id_ref(),
+            transaction.entrypoint(),
+            &routing_plan,
+            context,
+            fixture.queue.queue_plan_admission_timestamp_ms(),
+        )
+        .expect("bind additional QueuePlan claim");
+        claim_hashes.push(transaction.hash_as_entrypoint());
+        fixture
+            .queue
+            .push_with_lane_with_state_and_routing_plan_strict_global_admission_claim(
+                transaction,
+                &fixture.state,
+                routing_plan,
+                &binding,
+            )
+            .expect("enqueue additional unadmitted claim");
+    }
+    let follower_key = KeyPair::random();
+    let follower = accepted_tx_by(
+        AccountId::new(follower_key.public_key().clone()),
+        &follower_key,
+        &time_source,
+    );
+    register_accepted_tx_authority_for_queue_test(&mut fixture.state, &follower);
+    let follower_hash = follower.hash_as_entrypoint();
+    fixture
+        .queue
+        .push_with_lane_with_state(follower, &fixture.state)
+        .expect("enqueue ready follower");
+    let (wake_tx, wake_rx) = std::sync::mpsc::sync_channel(1);
+    fixture.queue.set_sumeragi_wake(wake_tx);
+    let one = nonzero!(1_usize);
+    for _ in &claim_hashes {
+        let (pending, lease) = fixture
+            .queue
+            .bounded_pending_snapshot(&fixture.state.view(), one)
+            .expect("each bounded leader turn stays healthy");
+        assert!(
+            pending.is_empty(),
+            "unadmitted claims are local availability only"
+        );
+        wake_rx
+            .try_recv()
+            .expect("an unvisited bounded window must wake the leader again");
+        drop(lease);
+    }
+    let (pending, lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), one)
+        .expect("bounded turns eventually reach the ready follower");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].hash_as_entrypoint(), follower_hash);
+    assert_eq!(fixture.queue.active_len(), 4);
+    assert!(!fixture.queue.accepted_work_validation_faulted());
+    drop(lease);
+
+    // A new committed parent can make a claim canonical, but it cannot reset
+    // the local scan to that autonomous claim ahead of later Ordinary work.
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    seed_committed_height_for_queue_test(&fixture.state, 1);
+    let (pending, lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), one)
+        .expect("new parent preserves bounded local scan progress");
+    assert!(pending.is_empty());
+    wake_rx
+        .try_recv()
+        .expect("remaining bounded windows must stay reachable after a parent change");
+    for _ in 0..2 {
+        let (pending, skipped_lease) = fixture
+            .queue
+            .bounded_pending_snapshot(&fixture.state.view(), one)
+            .expect("unadmitted claims keep their own custody");
+        assert!(pending.is_empty());
+        wake_rx
+            .try_recv()
+            .expect("the next bounded window remains reachable");
+        drop(skipped_lease);
+    }
+    let (pending, follower_lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), one)
+        .expect("local QueuePlan arrival order cannot hide ready Ordinary work");
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].hash_as_entrypoint(), follower_hash);
+    drop(follower_lease);
+    assert!(
+        fixture
+            .queue
+            .reject_exact_queue_plan_admission_claim(&fixture.binding)
+            .expect("ordinary leader lease cannot retain autonomous QueuePlan custody")
+    );
+    assert!(!fixture.queue.replay_terminal_cleanup_pending(first_hash));
+    assert!(!fixture.queue.contains_entrypoint_hash(first_hash));
+    let (available, available_lease) = fixture
+        .queue
+        .bounded_pending_snapshot(&fixture.state.view(), nonzero!(4_usize))
+        .expect("terminal QueuePlan removal leaves later Ordinary work available");
+    assert_eq!(available.len(), 1);
+    assert_eq!(available[0].hash_as_entrypoint(), follower_hash);
+    assert!(
+        wake_rx.try_recv().is_err(),
+        "the completed bounded window has no unvisited work"
+    );
+    drop(available_lease);
     drop(lease);
 }
 
@@ -116,29 +283,80 @@ fn exact_queue_plan_rejection_waits_for_popped_guard_release() {
 }
 
 #[test]
-fn exact_queue_plan_rejection_waits_for_global_selection_lease() {
+fn exact_queue_plan_rejection_ignores_ordinary_leader_snapshot() {
     let fixture = globally_bound_guard_fixture();
     let hash = fixture.transaction.hash_as_entrypoint();
     install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
     let (pending, lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
-        .expect("select the exact QueuePlan claim");
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].hash_as_entrypoint(), hash);
+        .expect("the global leader cannot select autonomous QueuePlan work");
+    assert!(pending.is_empty());
+    assert!(
+        !fixture
+            .queue
+            .global_selection_owners
+            .lock()
+            .contains_key(&hash)
+    );
 
+    assert!(
+        fixture
+            .queue
+            .reject_exact_queue_plan_admission_claim(&fixture.binding)
+            .expect("terminal claim is independent of the ordinary leader lease"),
+        "terminal rejection must consume unreserved autonomous custody"
+    );
+    assert!(!fixture.queue.replay_terminal_cleanup_pending(hash));
+
+    drop(lease);
+    fixture.assert_terminally_removed();
+}
+
+#[test]
+fn reservation_ownership_projection_includes_tombstone_and_commit_phases() {
+    let fixture = globally_bound_guard_fixture_with_journals(0, true);
+    let hash = fixture.transaction.hash_as_entrypoint();
+    install_queue_plan_registry_value_for_test(&fixture.state, &fixture.binding);
+    let reserved = fixture
+        .queue
+        .reserve_transactions_for_lane(
+            &fixture.state,
+            lane_reservation_scope(
+                &fixture.state,
+                b"reservation-projection-owner",
+                b"reservation-projection-proposal",
+            ),
+            nonzero!(1_usize),
+        )
+        .expect("reserve the exact QueuePlan claim");
+    let key = *reserved[0].key();
     assert!(
         !fixture
             .queue
             .reject_exact_queue_plan_admission_claim(&fixture.binding)
-            .expect("defer exact terminal claim while selection owns it"),
-        "terminal rejection must not tombstone a globally selected QueuePlan owner"
+            .expect("the autonomous reservation retains terminal custody")
     );
-    assert!(fixture.queue.replay_terminal_cleanup_pending(hash));
     fixture.assert_live_journal_claim();
 
-    drop(lease);
-    fixture.assert_terminally_removed();
+    let mut phases = LaneQueueReservationStore::default();
+    assert!(!phases.owns_entrypoint(hash));
+    phases.plan_tombstoned.push(key);
+    assert!(phases.owns_entrypoint(hash));
+    phases.plan_tombstoned.clear();
+    phases.commit_barriers.push(key);
+    assert!(phases.owns_entrypoint(hash));
+    phases.commit_barriers.clear();
+    let live = fixture
+        .queue
+        .lane_reservations
+        .lock()
+        .live_by_entrypoint
+        .get(&hash)
+        .cloned()
+        .expect("reservation keeps its exact live record");
+    phases.live_by_entrypoint.insert(hash, live);
+    assert!(phases.owns_entrypoint(hash));
 }
 
 #[test]
@@ -490,13 +708,12 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
     let bounded_snapshot_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&bounded_snapshot_fixture);
     let state_view = bounded_snapshot_fixture.state.view();
-    assert!(
-        bounded_snapshot_fixture
-            .queue
-            .bounded_pending_snapshot(&state_view, nonzero!(1_usize))
-            .is_none(),
-        "malformed expired global ownership must stop bounded selection"
-    );
+    let (pending, lease) = bounded_snapshot_fixture
+        .queue
+        .bounded_pending_snapshot(&state_view, nonzero!(1_usize))
+        .expect("unselected autonomous corruption cannot stop ordinary leader sampling");
+    assert!(pending.is_empty());
+    drop(lease);
     drop(state_view);
     assert!(
         bounded_snapshot_fixture
@@ -504,7 +721,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
             .push_remove_lock
             .try_lock()
             .is_some(),
-        "bounded failure publication must release the Queue mutation lock"
+        "bounded exclusion must release the Queue mutation lock"
     );
     assert!(
         bounded_snapshot_fixture
@@ -512,7 +729,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
             .queued_age_ring
             .try_lock()
             .is_some(),
-        "bounded failure publication must release the Queue age lock"
+        "bounded exclusion must release the Queue age lock"
     );
     assert!(
         bounded_snapshot_fixture
@@ -520,9 +737,14 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
             .global_selection_owners
             .try_lock()
             .is_some(),
-        "bounded failure publication must release the selection-owner lock"
+        "bounded exclusion must release the selection-owner lock"
     );
-    assert_faulted_owner_retained(&bounded_snapshot_fixture);
+    assert!(
+        !bounded_snapshot_fixture
+            .queue
+            .accepted_work_validation_faulted()
+    );
+    bounded_snapshot_fixture.assert_live_journal_claim();
     let revalidation_fixture = globally_bound_guard_fixture();
     poison_expired_global_identity(&revalidation_fixture);
     let revalidation_hash = revalidation_fixture.transaction.hash_as_entrypoint();
@@ -572,7 +794,7 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
         "revalidation fault publication must release the transition-index lock"
     );
     assert_faulted_owner_retained(&revalidation_fixture);
-    let fixture = globally_bound_guard_fixture();
+    let fixture = globally_bound_guard_fixture_with_journals(0, true);
     let hash = fixture.transaction.hash_as_entrypoint();
     assert_eq!(
         fixture
@@ -612,18 +834,33 @@ fn globally_bound_claim_validation_fails_closed_and_rejects_conflict() {
     let (pending, _lease) = fixture
         .queue
         .bounded_pending_snapshot(&fixture.state.view(), nonzero!(1_usize))
-        .expect("conflicting marker is durably rejected without a selection fault");
+        .expect("ordinary leader sampling leaves conflict reconciliation to the autonomous owner");
     assert!(
         pending.is_empty(),
         "the conflicting globally admitted owner must be rejected, not selected"
     );
     assert!(
         fixture.queue.global_selection_owners.lock().is_empty(),
-        "conflict rejection must not publish a candidate lease"
+        "autonomous conflict cannot publish an ordinary candidate lease"
     );
     assert!(
-        !fixture.queue.removed_hashes.contains_key(&hash),
-        "bounded conflict rejection must synchronously remove its FIFO cell"
+        fixture.queue.contains_entrypoint_hash(hash),
+        "the ordinary leader cannot terminalize autonomous custody"
+    );
+    assert!(
+        fixture
+            .queue
+            .reserve_transactions_for_lane(
+                &fixture.state,
+                lane_reservation_scope(
+                    &fixture.state,
+                    b"conflicting-owner-reconciliation",
+                    b"conflicting-owner-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("autonomous owner terminalizes its exact conflicting claim")
+            .is_empty()
     );
     fixture.assert_terminally_removed();
 }

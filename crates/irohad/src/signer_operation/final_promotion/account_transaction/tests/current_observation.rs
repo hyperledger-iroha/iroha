@@ -1,16 +1,18 @@
-//! Finalized Current Check handoff tests use the same native State/Kura fixture as the signer.
+//! Current and Reserved Check handoff tests use the real native State/Kura fixture.
 
 use super::*;
 use crate::signer_operation::final_promotion::current_observation::{
-    FinalPromotionCurrentCheckPayloadV1, FinalPromotionCurrentCheckRuntimeV1,
-    FinalPromotionCurrentCheckSignerV1, FinalPromotionCurrentCheckSubmissionV1,
-    FinalPromotionCurrentCheckSubmitOutcomeV1,
-    FinalPromotionCurrentObservationErrorV1 as CurrentError, FinalPromotionQualifiedUtcV1,
-    FinalPromotionRetainedFloorV1,
+    FinalPromotionCheckObservationErrorV1 as CurrentError, FinalPromotionCurrentCheckRuntimeV1,
+    FinalPromotionNativeSubmissionV1, FinalPromotionNativeSubmitOutcomeV1,
+    FinalPromotionObserverCheckPayloadV1, FinalPromotionObserverCheckSignerV1,
+    FinalPromotionQualifiedUtcV1, FinalPromotionRetainedFloorV1,
 };
 use crate::signer_operation::final_promotion::observer_transaction::FinalPromotionObserverKeyRequestV1;
+use crate::signer_operation::final_promotion::pending_reserve_journal::FinalPromotionPendingReserveJournalV1;
+use crate::signer_operation::final_promotion::reserved_observation::FinalPromotionReservedCheckRuntimeV1;
 use iroha_core::{
-    query::final_promotion_authority::observation::PendingFinalPromotionCheckV1, state::State,
+    query::final_promotion_authority::observation::PendingFinalPromotionCheckV1,
+    state::{State, StateReadOnly},
 };
 use iroha_data_model::{
     isi::sorafs::MutateSorafsFinalPromotionAuthority,
@@ -20,7 +22,24 @@ use iroha_data_model::{
 use sorafs_manifest::signer::{
     custody::SignerCustodyBindingV1, protocol::SignerOperationAuditHeadV1,
 };
-use std::collections::VecDeque;
+use std::{collections::VecDeque, os::unix::fs::MetadataExt as _};
+
+fn pending_reserve_journal() -> (tempfile::TempDir, FinalPromotionPendingReserveJournalV1) {
+    let directory = tempfile::tempdir().expect("private operation directory");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    for leaf in ["receipts", "pending-reserve-v1"] {
+        let path = directory.path().join(leaf);
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    let path = directory
+        .path()
+        .join("pending-reserve-v1")
+        .canonicalize()
+        .unwrap();
+    let journal = FinalPromotionPendingReserveJournalV1::open_test(&path).unwrap();
+    (directory, journal)
+}
 
 struct QualifiedClock {
     intervals: VecDeque<Result<FinalPromotionEligibilityTimeIntervalV1, CurrentError>>,
@@ -135,7 +154,7 @@ fn current_handoff_uses_one_finalized_snapshot_and_retains_floor_before_returnin
     assert_eq!(clock.calls, 2);
     assert_eq!(floor.advances, 1);
     assert_eq!(observation.applied_floor(), floor.current);
-    let signing = observation.into_signing_state().unwrap();
+    let (verified, signing) = observation.into_reserve_context().unwrap();
     assert_eq!(signing.audit_head, expected.operations.audit);
     assert_eq!(signing.custody.current_anchor, expected.custody_anchor);
     assert_eq!(
@@ -144,6 +163,30 @@ fn current_handoff_uses_one_finalized_snapshot_and_retains_floor_before_returnin
     );
     assert_eq!(signing.custody.now_unix_ms, NOW + 2);
     assert_eq!(signing.custody.anchor_observed_at_unix_ms, NOW);
+    assert_eq!(verified.snapshot().operations.audit, signing.audit_head);
+    assert_eq!(
+        verified.snapshot().custody_anchor,
+        signing.custody.current_anchor
+    );
+    let prepared = f.prepare(verified);
+    let FinalPromotionAuthorityActionV1::Check(current) =
+        &prepared.receipt_check.instruction().action
+    else {
+        panic!("original verified Current Check");
+    };
+    let Executable::Instructions(instructions) = &prepared.payload.instructions else {
+        panic!("direct role-15 Reserve");
+    };
+    let reserve = instructions[0]
+        .as_any()
+        .downcast_ref::<MutateSorafsFinalPromotionAuthority>()
+        .unwrap();
+    let FinalPromotionAuthorityActionV1::Reserve(reserve) = &reserve.action else {
+        panic!("role-15 Reserve");
+    };
+    assert_eq!(reserve.intent.operation_id, current.request.operation_id);
+    assert_eq!(reserve.intent.previous_audit, signing.audit_head);
+    assert_eq!(reserve.custody, current.request.original_custody);
 }
 
 #[test]
@@ -207,7 +250,7 @@ fn current_handoff_rejects_another_subject_and_changed_custody() {
     assert!(matches!(
         f.observer_transactions()
             .finish_current_with(pending, &mut clock, &mut floor),
-        Err(CurrentError::Binding)
+        Err(CurrentError::Check)
     ));
     assert_eq!(floor.advances, 0);
 
@@ -327,6 +370,201 @@ fn current_runtime(f: &Fixture) -> FinalPromotionCurrentCheckRuntimeV1 {
     .unwrap()
 }
 
+fn signed_reserve(
+    f: &mut Fixture,
+) -> (
+    SignerFinalPromotionRequestV1,
+    SignedFinalPromotionAccountTransactionV1,
+) {
+    let checked = f.receipt_check(None);
+    let FinalPromotionAuthorityActionV1::Check(current) = &checked.instruction().action else {
+        panic!("native Current Check");
+    };
+    let request = current.request;
+    let prepared = f.prepare(checked);
+    let account_check = f.execute_account_check(f.begin_account_check(&prepared));
+    let authorized = prepared
+        .authorize(account_check, times().0, times().1)
+        .unwrap();
+    let (pending, after_account) = authorized
+        .sign_with(
+            Arc::clone(f.native.state()),
+            Duration::from_secs(60),
+            || Ok(times()),
+            |key_request| {
+                Signature::try_new(key(2).private_key(), key_request.signing_message())
+                    .map_err(|_| Error::Provider)
+            },
+        )
+        .unwrap();
+    let after_account = f.execute_account_check(after_account);
+    let (pending, after_receipt) = pending
+        .check_account(after_account, times().0, times().1)
+        .unwrap();
+    let after_receipt = f.execute_receipt_check(after_receipt);
+    let signed = pending
+        .release(after_receipt, times().0, times().1)
+        .unwrap();
+    (request, signed)
+}
+
+fn reserved_runtime(
+    f: &Fixture,
+    request: SignerFinalPromotionRequestV1,
+    signed: SignedFinalPromotionAccountTransactionV1,
+    floor: &mut RetainedFloor,
+) -> (FinalPromotionReservedCheckRuntimeV1, tempfile::TempDir) {
+    let (directory, journal) = pending_reserve_journal();
+    let runtime = FinalPromotionReservedCheckRuntimeV1::new(
+        Arc::clone(f.native.state()),
+        f.observer_transactions(),
+        request,
+        signed,
+        Duration::from_secs(60),
+        floor,
+        journal,
+    )
+    .unwrap();
+    (runtime, directory)
+}
+
+#[test]
+fn pending_reserve_rejects_a_finalized_but_rolled_back_floor_before_staging() {
+    let mut f = Fixture::new();
+    let prepared_check = f.prepare_receipt_check(None, Duration::from_secs(60));
+    let payload = f.observer_payload(prepared_check.instruction().clone().into());
+    let pending_check = f
+        .observer_transactions()
+        .sign_receipt_with(prepared_check, payload, |request| {
+            Signature::try_new(key(3).private_key(), request.signing_message())
+                .map_err(|_| ObserverError::Provider)
+        })
+        .unwrap();
+    assert_eq!(
+        f.native
+            .commit(NOW, vec![pending_check.signed_transaction().clone()]),
+        [true]
+    );
+    assert!(f.native.commit(NOW, Vec::new()).is_empty());
+    let checked = pending_check
+        .verify_finalized(FinalPromotionCheckSourceV1::Current, || Ok(times().0))
+        .unwrap();
+    let check_height = checked.check_height();
+    assert_eq!(checked.applied_floor().height, check_height + 1);
+    let FinalPromotionAuthorityActionV1::Check(current) = &checked.instruction().action else {
+        panic!("original Current Check");
+    };
+    let request = current.request;
+    let prepared = f.prepare(checked);
+    let account_check = f.execute_account_check(f.begin_account_check(&prepared));
+    let authorized = prepared
+        .authorize(account_check, times().0, times().1)
+        .unwrap();
+    let (pending, after_account) = authorized
+        .sign_with(
+            Arc::clone(f.native.state()),
+            Duration::from_secs(60),
+            || Ok(times()),
+            |key_request| {
+                Signature::try_new(key(2).private_key(), key_request.signing_message())
+                    .map_err(|_| Error::Provider)
+            },
+        )
+        .unwrap();
+    let after_account = f.execute_account_check(after_account);
+    let (pending, after_receipt) = pending
+        .check_account(after_account, times().0, times().1)
+        .unwrap();
+    let after_receipt = f.execute_receipt_check(after_receipt);
+    let signed = pending
+        .release(after_receipt, times().0, times().1)
+        .unwrap();
+
+    let mut floor = RetainedFloor::new(&f);
+    let view = f.native.state().view();
+    let artifact = view
+        .kura()
+        .v2_finality_artifact(check_height)
+        .unwrap()
+        .unwrap();
+    floor.current = FinalPromotionCheckFloorV1 {
+        height: check_height,
+        block_hash: *artifact.block_hash.as_ref(),
+        context_id: artifact.context_id(),
+    };
+    drop(view);
+    let (directory, journal) = pending_reserve_journal();
+    assert!(matches!(
+        FinalPromotionReservedCheckRuntimeV1::new(
+            Arc::clone(f.native.state()),
+            f.observer_transactions(),
+            request,
+            signed,
+            Duration::from_secs(60),
+            &mut floor,
+            journal,
+        ),
+        Err(CurrentError::Floor)
+    ));
+    assert_eq!(
+        std::fs::read_dir(directory.path().join("pending-reserve-v1"))
+            .unwrap()
+            .count(),
+        0,
+        "rollback must be rejected before staging a durable operation ID"
+    );
+}
+
+#[test]
+fn pending_reserve_restart_recovers_only_the_original_signed_attempt() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let source_floor = floor.current;
+    let (runtime, directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let pending = directory
+        .path()
+        .join("pending-reserve-v1")
+        .canonicalize()
+        .unwrap();
+    let file = pending.join(format!(
+        "{}.pending-reserve.norito",
+        hex::encode(request.operation_id)
+    ));
+    assert_eq!(std::fs::metadata(&file).unwrap().mode() & 0o7777, 0o400);
+    assert!(FinalPromotionPendingReserveJournalV1::open_test(&pending).is_err());
+    drop(runtime);
+    let reopened = FinalPromotionPendingReserveJournalV1::open_test(&pending).unwrap();
+    let recovered = reopened.recover(request.operation_id).unwrap();
+    assert_eq!(recovered.operation_id(), request.operation_id);
+    assert_eq!(recovered.source_floor(), source_floor);
+    recovered.recheck().unwrap();
+    assert_eq!(floor.advances, 0);
+    // Recovery retains only exact evidence; no Reserve submission method exists on this owner.
+}
+
+#[test]
+fn changed_pending_reserve_file_blocks_transport_before_submit() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let (runtime, directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let file = directory.path().join("pending-reserve-v1").join(format!(
+        "{}.pending-reserve.norito",
+        hex::encode(request.operation_id)
+    ));
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(&file, b"changed pending bytes").unwrap();
+    std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let mut submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    assert!(matches!(
+        runtime.submit_reserve_with(times().0, times().1, &mut floor, &mut submission),
+        Err(CurrentError::Journal)
+    ));
+    assert_eq!(submission.submits, 0);
+    assert_eq!(floor.advances, 0);
+}
+
 struct RuntimePayload {
     state: Arc<State>,
     calls: usize,
@@ -341,7 +579,7 @@ impl RuntimePayload {
         }
     }
 }
-impl FinalPromotionCurrentCheckPayloadV1 for RuntimePayload {
+impl FinalPromotionObserverCheckPayloadV1 for RuntimePayload {
     fn prepare(
         &mut self,
         instruction: &MutateSorafsFinalPromotionAuthority,
@@ -371,7 +609,7 @@ struct RuntimeSigner {
     calls: usize,
     seed: u8,
 }
-impl FinalPromotionCurrentCheckSignerV1 for RuntimeSigner {
+impl FinalPromotionObserverCheckSignerV1 for RuntimeSigner {
     fn sign(
         &mut self,
         request: &FinalPromotionObserverKeyRequestV1<'_>,
@@ -413,29 +651,29 @@ impl<'a> RuntimeSubmission<'a> {
         }
     }
 }
-impl FinalPromotionCurrentCheckSubmissionV1 for RuntimeSubmission<'_> {
+impl FinalPromotionNativeSubmissionV1 for RuntimeSubmission<'_> {
     fn submit_exact(
         &mut self,
         transaction: &SignedTransaction,
-    ) -> Result<FinalPromotionCurrentCheckSubmitOutcomeV1, CurrentError> {
+    ) -> Result<FinalPromotionNativeSubmitOutcomeV1, CurrentError> {
         self.submits += 1;
         self.submitted = Some(transaction.clone());
         match &self.mode {
             SubmissionMode::Applied => {
                 assert_eq!(self.native.commit(NOW, vec![transaction.clone()]), [true]);
-                Ok(FinalPromotionCurrentCheckSubmitOutcomeV1::Accepted)
+                Ok(FinalPromotionNativeSubmitOutcomeV1::Accepted)
             }
             SubmissionMode::Rejected => {
                 assert_eq!(self.native.commit(NOW, vec![transaction.clone()]), [false]);
-                Ok(FinalPromotionCurrentCheckSubmitOutcomeV1::Accepted)
+                Ok(FinalPromotionNativeSubmitOutcomeV1::Accepted)
             }
             SubmissionMode::AcceptedWithoutApplication => {
-                Ok(FinalPromotionCurrentCheckSubmitOutcomeV1::Accepted)
+                Ok(FinalPromotionNativeSubmitOutcomeV1::Accepted)
             }
             SubmissionMode::AmbiguousThenApplied
             | SubmissionMode::AmbiguousReconciledWithoutApplication
             | SubmissionMode::AmbiguousUnresolved => {
-                Ok(FinalPromotionCurrentCheckSubmitOutcomeV1::Ambiguous)
+                Ok(FinalPromotionNativeSubmitOutcomeV1::Ambiguous)
             }
             SubmissionMode::AdvanceAudit {
                 reserve,
@@ -484,7 +722,7 @@ impl FinalPromotionCurrentCheckSubmissionV1 for RuntimeSubmission<'_> {
                     .unwrap();
                 assert_eq!(self.native.commit(NOW, vec![completed]), [true]);
                 assert_eq!(self.native.commit(NOW, vec![transaction.clone()]), [false]);
-                Ok(FinalPromotionCurrentCheckSubmitOutcomeV1::Accepted)
+                Ok(FinalPromotionNativeSubmitOutcomeV1::Accepted)
             }
         }
     }
@@ -556,9 +794,10 @@ fn current_runtime_uses_original_signed_envelope_through_ambiguous_reconciliatio
             panic!("signed native Current Check");
         };
         assert_eq!(check.request, reviewed_request);
-        let state = observation.into_signing_state().unwrap();
+        let (verified, state) = observation.into_reserve_context().unwrap();
         assert_eq!(state.audit_head.sequence, 0);
         assert_eq!(state.custody.current_anchor.height, floor.current.height);
+        assert_eq!(verified.snapshot().operations.audit, state.audit_head);
     }
 }
 
@@ -751,4 +990,267 @@ fn current_runtime_rejects_invalid_reviewed_request_at_construction() {
         ),
         Err(CurrentError::Binding)
     ));
+}
+
+#[test]
+fn reserved_runtime_keeps_original_role15_envelope_through_reconciliation_and_finalized_check() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let pre_reserve = floor.current;
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let mut reserve_submission =
+        RuntimeSubmission::new(&mut f.native, SubmissionMode::AmbiguousThenApplied);
+    let submitted = runtime
+        .submit_reserve_with(times().0, times().1, &mut floor, &mut reserve_submission)
+        .unwrap();
+    assert_eq!(reserve_submission.submits, 1);
+    assert_eq!(reserve_submission.reconciles, 1);
+    assert!(
+        reserve_submission
+            .submitted
+            .as_ref()
+            .unwrap()
+            .verify_signature()
+            .is_ok()
+    );
+    drop(reserve_submission);
+
+    let mut payload = RuntimePayload::new(&f);
+    let mut signer = RuntimeSigner { calls: 0, seed: 3 };
+    let mut clock = QualifiedClock::fixed();
+    let mut check_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    let mut post_persistence = submitted
+        .observe_before_provider_with(
+            &mut payload,
+            &mut signer,
+            &mut check_submission,
+            &mut clock,
+            &mut floor,
+        )
+        .unwrap();
+    assert_eq!(check_submission.submits, 1);
+    assert_eq!(check_submission.reconciles, 0);
+    assert_eq!(payload.calls, 1);
+    assert_eq!(signer.calls, 1);
+    assert_eq!(clock.calls, 1);
+    assert_eq!(floor.advances, 1);
+    assert_ne!(floor.current, pre_reserve);
+    assert_eq!(post_persistence.applied_floor(), Some(floor.current));
+    let observation = post_persistence.finish_with(&mut clock).unwrap();
+    assert_eq!(clock.calls, 2);
+    assert_eq!(observation.applied_floor(), floor.current);
+    let (verified, custody) = observation.into_reserved_context().unwrap();
+    let FinalPromotionAuthorityActionV1::Check(check) = &verified.instruction().action else {
+        panic!("native BeforeProvider Check");
+    };
+    let FinalPromotionCheckSubjectV1::BeforeProvider(row) = &check.subject else {
+        panic!("original Reserved subject");
+    };
+    assert_eq!(row.intent.operation_id, request.operation_id);
+    assert!(row.reserved.height > pre_reserve.height);
+    assert_eq!(custody.current_anchor, verified.snapshot().custody_anchor);
+    assert_eq!(custody.now_unix_ms, NOW);
+}
+
+#[test]
+fn reserved_post_persistence_clock_failure_retains_the_in_memory_check_owner() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let mut reserve_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    let submitted = runtime
+        .submit_reserve_with(times().0, times().1, &mut floor, &mut reserve_submission)
+        .unwrap();
+    drop(reserve_submission);
+    let mut payload = RuntimePayload::new(&f);
+    let mut signer = RuntimeSigner { calls: 0, seed: 3 };
+    let mut clock = QualifiedClock {
+        intervals: VecDeque::from([Ok(times().0), Err(CurrentError::Clock), Ok(times().0)]),
+        calls: 0,
+    };
+    let mut check_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    let mut post_persistence = submitted
+        .observe_before_provider_with(
+            &mut payload,
+            &mut signer,
+            &mut check_submission,
+            &mut clock,
+            &mut floor,
+        )
+        .unwrap();
+    assert_eq!(floor.advances, 1);
+    assert_eq!(post_persistence.applied_floor(), Some(floor.current));
+    assert!(matches!(
+        post_persistence.finish_with(&mut clock),
+        Err(CurrentError::Clock)
+    ));
+    assert_eq!(post_persistence.applied_floor(), Some(floor.current));
+    let observation = post_persistence.finish_with(&mut clock).unwrap();
+    assert_eq!(observation.applied_floor(), floor.current);
+    assert_eq!(clock.calls, 3);
+    assert_eq!(floor.advances, 1);
+}
+
+#[test]
+fn reserved_runtime_refuses_floor_advance_before_reserve_transport() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let concurrent = pending_current(&f);
+    assert_eq!(
+        f.native
+            .commit(NOW, vec![concurrent.signed_transaction().clone()]),
+        [true]
+    );
+    floor.current = RetainedFloor::new(&f).current;
+    let mut reserve_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    assert!(matches!(
+        runtime.submit_reserve_with(times().0, times().1, &mut floor, &mut reserve_submission),
+        Err(CurrentError::Floor)
+    ));
+    assert_eq!(reserve_submission.submits, 0);
+    assert_eq!(reserve_submission.reconciles, 0);
+    drop(reserve_submission);
+    let view = f.native.state().view();
+    let snapshot = read_final_promotion_authority_at_v1(
+        &view,
+        &f.receipt_policy.binding,
+        view.height() as u64,
+        Some(request.operation_id),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(snapshot.operation.is_none());
+}
+
+#[test]
+fn reserved_runtime_rejects_wrong_finalized_floor_context_before_construction() {
+    let mut f = Fixture::new();
+    let earlier_context = f.native.finalized_floor().unwrap().2;
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    assert_ne!(earlier_context, floor.current.context_id);
+    floor.current.context_id = earlier_context;
+    let (_journal_directory, journal) = pending_reserve_journal();
+    assert!(matches!(
+        FinalPromotionReservedCheckRuntimeV1::new(
+            Arc::clone(f.native.state()),
+            f.observer_transactions(),
+            request,
+            signed,
+            Duration::from_secs(60),
+            &mut floor,
+            journal,
+        ),
+        Err(CurrentError::Floor)
+    ));
+    assert_eq!(floor.advances, 0);
+    let view = f.native.state().view();
+    let snapshot = read_final_promotion_authority_at_v1(
+        &view,
+        &f.receipt_policy.binding,
+        view.height() as u64,
+        Some(request.operation_id),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(snapshot.operation.is_none());
+}
+
+#[test]
+fn reserved_runtime_rejects_unapplied_or_substituted_reserve_before_floor_advance() {
+    for substitute in [false, true] {
+        let mut f = Fixture::new();
+        let (request, signed) = signed_reserve(&mut f);
+        let mut floor = RetainedFloor::new(&f);
+        let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
+        let mut reserve_submission =
+            RuntimeSubmission::new(&mut f.native, SubmissionMode::AcceptedWithoutApplication);
+        let submitted = runtime
+            .submit_reserve_with(times().0, times().1, &mut floor, &mut reserve_submission)
+            .unwrap();
+        let original = reserve_submission.submitted.clone().unwrap();
+        drop(reserve_submission);
+        if substitute {
+            let Executable::Instructions(instructions) = &original.payload().instructions else {
+                panic!("direct role-15 Reserve");
+            };
+            let alternate = f.signed(instructions[0].clone(), 2, NOW - 1);
+            assert_ne!(alternate.payload(), original.payload());
+            assert_eq!(f.native.commit(NOW, vec![alternate]), [true]);
+        }
+        let mut payload = RuntimePayload::new(&f);
+        let mut signer = RuntimeSigner { calls: 0, seed: 3 };
+        let mut clock = QualifiedClock::fixed();
+        let mut check_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+        assert!(matches!(
+            submitted.observe_before_provider_with(
+                &mut payload,
+                &mut signer,
+                &mut check_submission,
+                &mut clock,
+                &mut floor,
+            ),
+            Err(CurrentError::Check)
+        ));
+        assert_eq!(payload.calls, usize::from(substitute));
+        assert_eq!(signer.calls, usize::from(substitute));
+        assert_eq!(clock.calls, 0);
+        assert_eq!(floor.advances, 0);
+    }
+}
+
+#[test]
+fn reserved_runtime_rejects_post_reserve_floor_and_late_reconstruction() {
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let mut floor = RetainedFloor::new(&f);
+    let (runtime, _journal_directory) = reserved_runtime(&f, request, signed, &mut floor);
+    let mut reserve_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    let submitted = runtime
+        .submit_reserve_with(times().0, times().1, &mut floor, &mut reserve_submission)
+        .unwrap();
+    drop(reserve_submission);
+    floor.current = RetainedFloor::new(&f).current;
+    let mut payload = RuntimePayload::new(&f);
+    let mut signer = RuntimeSigner { calls: 0, seed: 3 };
+    let mut clock = QualifiedClock::fixed();
+    let mut check_submission = RuntimeSubmission::new(&mut f.native, SubmissionMode::Applied);
+    assert!(matches!(
+        submitted.observe_before_provider_with(
+            &mut payload,
+            &mut signer,
+            &mut check_submission,
+            &mut clock,
+            &mut floor,
+        ),
+        Err(CurrentError::Floor)
+    ));
+    assert_eq!(payload.calls, 0);
+    assert_eq!(signer.calls, 0);
+    assert_eq!(check_submission.submits, 0);
+    assert_eq!(floor.advances, 0);
+
+    let mut f = Fixture::new();
+    let (request, signed) = signed_reserve(&mut f);
+    let original = signed.for_submission(times().0, times().1).unwrap().clone();
+    assert_eq!(f.native.commit(NOW, vec![original]), [true]);
+    let mut floor = RetainedFloor::new(&f);
+    let (_journal_directory, journal) = pending_reserve_journal();
+    assert!(matches!(
+        FinalPromotionReservedCheckRuntimeV1::new(
+            Arc::clone(f.native.state()),
+            f.observer_transactions(),
+            request,
+            signed,
+            Duration::from_secs(60),
+            &mut floor,
+            journal,
+        ),
+        Err(CurrentError::Check)
+    ));
+    assert_eq!(floor.advances, 0);
 }

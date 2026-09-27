@@ -8,7 +8,7 @@ use crate::smartcontracts::isi::asset::isi::{
 #[cfg(test)]
 use crate::smartcontracts::isi::error::MathError;
 #[cfg(feature = "telemetry")]
-use crate::sumeragi::status::SettlementOutcomeKind;
+use crate::status::SettlementOutcomeKind;
 pub(in crate::smartcontracts::isi) use atomic::VerifiedSettlementNumericBatch;
 pub(crate) use atomic::admission_validate_atomic;
 #[cfg(any(feature = "telemetry", test))]

@@ -14,6 +14,8 @@ const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 const PROPOSE_DEPLOY_CONTRACT = "ProposeDeployContract";
 const CAST_ZK_BALLOT = "CastZkBallot";
+const CAST_PLAIN_BALLOT = "CastPlainBallot";
+const UPDATE_PLAIN_CONVICTION = "UpdatePlainConviction";
 const GOVERNANCE_INSTRUCTION_CONTEXT = "governance instruction";
 const ELECTION_ID_FIELD = "election_id";
 const PUBLIC_INPUTS_JSON_FIELD = "public_inputs_json";
@@ -73,7 +75,9 @@ export function createNoritoGovernanceInstructionBoundary({
       isPlainObject(value) &&
       (
         hasOwn(value, PROPOSE_DEPLOY_CONTRACT) ||
-        hasOwn(value, CAST_ZK_BALLOT)
+        hasOwn(value, CAST_ZK_BALLOT) ||
+        hasOwn(value, CAST_PLAIN_BALLOT) ||
+        hasOwn(value, UPDATE_PLAIN_CONVICTION)
       )
     );
   }
@@ -103,7 +107,8 @@ export function createNoritoGovernanceInstructionBoundary({
     }
     for (const [variant, field] of [
       [CAST_ZK_BALLOT, ELECTION_ID_FIELD],
-      ["CastPlainBallot", REFERENDUM_ID_FIELD],
+      [CAST_PLAIN_BALLOT, REFERENDUM_ID_FIELD],
+      [UPDATE_PLAIN_CONVICTION, REFERENDUM_ID_FIELD],
     ]) {
       validateGovernanceSelectorPayload(instruction[variant], field, variant);
     }
@@ -369,6 +374,35 @@ export function createNoritoGovernanceInstructionBoundary({
     return value;
   }
 
+  function validateUpdatePlainConvictionPayload(value) {
+    const context = UPDATE_PLAIN_CONVICTION;
+    assertExactGovernanceObjectKeys(
+      value,
+      [REFERENDUM_ID_FIELD, "owner", "amount", DURATION_BLOCKS_FIELD],
+      [REFERENDUM_ID_FIELD, "owner", "amount", DURATION_BLOCKS_FIELD],
+      context,
+    );
+    assertCanonicalGovernanceSelectorV1(value.referendum_id, `${context}.referendum_id`);
+    ensureCanonicalAccountId(value.owner, `${context}.owner`);
+    normalizeGovernanceQuantity(value.amount, `${context}.amount`);
+    normalizeGovernanceU64(value.duration_blocks, `${context}.duration_blocks`);
+    return value;
+  }
+
+  function validateCastPlainBallotPayload(value) {
+    const context = CAST_PLAIN_BALLOT;
+    const fields = [REFERENDUM_ID_FIELD, "owner", "amount", DURATION_BLOCKS_FIELD, "direction"];
+    assertExactGovernanceObjectKeys(value, fields, fields, context);
+    assertCanonicalGovernanceSelectorV1(value.referendum_id, `${context}.referendum_id`);
+    if (!Number.isInteger(value.direction) || value.direction < 0 || value.direction > 2) {
+      throw new TypeError(`${context}.direction must be exactly 0, 1, or 2`);
+    }
+    ensureCanonicalAccountId(value.owner, `${context}.owner`);
+    normalizeGovernanceQuantity(value.amount, `${context}.amount`);
+    normalizeGovernanceU64(value.duration_blocks, `${context}.duration_blocks`);
+    return value;
+  }
+
   function validateGovernanceInstructionBoundary(instruction) {
     validateGovernanceInstructionSelectors(instruction);
     if (!isStrictGovernanceInstructionCandidate(instruction)) {
@@ -380,6 +414,20 @@ export function createNoritoGovernanceInstructionBoundary({
       validateProposeDeployContractPayload(instruction.ProposeDeployContract);
       return;
     }
+    if (hasOwn(instruction, UPDATE_PLAIN_CONVICTION)) {
+      assertOnlyObjectKeys(
+        instruction,
+        [UPDATE_PLAIN_CONVICTION],
+        GOVERNANCE_INSTRUCTION_CONTEXT,
+      );
+      validateUpdatePlainConvictionPayload(instruction.UpdatePlainConviction);
+      return;
+    }
+    if (hasOwn(instruction, CAST_PLAIN_BALLOT)) {
+      assertOnlyObjectKeys(instruction, [CAST_PLAIN_BALLOT], GOVERNANCE_INSTRUCTION_CONTEXT);
+      validateCastPlainBallotPayload(instruction.CastPlainBallot);
+      return;
+    }
     assertOnlyObjectKeys(instruction, [CAST_ZK_BALLOT], GOVERNANCE_INSTRUCTION_CONTEXT);
     validateCastZkBallotPayload(instruction.CastZkBallot);
   }
@@ -388,6 +436,8 @@ export function createNoritoGovernanceInstructionBoundary({
     assertCanonicalGovernanceSelectorV1,
     isStrictGovernanceInstructionCandidate,
     validateCastZkBallotPayload,
+    validateCastPlainBallotPayload,
+    validateUpdatePlainConvictionPayload,
     validateGovernanceInstructionBoundary,
     validateProposeDeployContractPayload,
   });

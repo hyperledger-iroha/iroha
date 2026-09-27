@@ -63,6 +63,11 @@ use std::{
 
 use zeroize::Zeroizing;
 
+#[cfg(any(test, feature = "test-network-disposable-broker"))]
+mod disposable_broker;
+#[cfg(feature = "test-network-disposable-broker")]
+pub use disposable_broker::load_disposable_runtime_provider_broker_v1;
+
 fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
     matches!(
         argument.to_str(),
@@ -168,34 +173,43 @@ fn validate_taira_launcher_profile_v1(
     }
     let inrou = &runtime.inrou;
     if !inrou.enabled {
-        return Err("Taira launcher requires enabled Inrou PortableVM V1 hosting".to_owned());
-    }
-    let uid = inrou
-        .portable_vm_uid
-        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_uid".to_owned())?
-        .get();
-    let gid = inrou
-        .portable_vm_gid
-        .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_gid".to_owned())?
-        .get();
-    if soracloud_runtime_defaults::inrou_portable_vm_identity_slot(uid, gid).is_none() {
-        return Err(format!(
-            "Taira Inrou uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
-            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE,
-            soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
-        ));
-    }
-    if inrou.guest_image_max_bytes.get() != TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1
-        || inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
-        || inrou.max_memory_bytes.get() != TAIRA_INROU_MAX_MEMORY_BYTES_V1
-        || inrou.max_storage_bytes.get() != TAIRA_INROU_MAX_STORAGE_BYTES_V1
-    {
-        return Err("Taira launcher requires the exact V1 Inrou resource ceilings".to_owned());
-    }
-    if inrou.start_grace != Duration::from_millis(TAIRA_INROU_START_GRACE_MS_V1)
-        || inrou.stop_grace != Duration::from_millis(TAIRA_INROU_STOP_GRACE_MS_V1)
-    {
-        return Err("Taira launcher requires the exact V1 Inrou lifecycle graces".to_owned());
+        if inrou.portable_vm_uid.is_some()
+            || inrou.portable_vm_gid.is_some()
+            || inrou.trusted_guest_artifact.is_some()
+        {
+            return Err(
+                "disabled Taira Inrou hosting cannot retain a PortableVM identity or trusted guest artifact"
+                    .to_owned(),
+            );
+        }
+    } else {
+        let uid = inrou
+            .portable_vm_uid
+            .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_uid".to_owned())?
+            .get();
+        let gid = inrou
+            .portable_vm_gid
+            .ok_or_else(|| "enabled Taira Inrou hosting requires portable_vm_gid".to_owned())?
+            .get();
+        if soracloud_runtime_defaults::inrou_portable_vm_identity_slot(uid, gid).is_none() {
+            return Err(format!(
+                "Taira Inrou uid/gid must be one equal canonical slot pair in {}..{} (upper bound exclusive)",
+                soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE,
+                soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_MAX_EXCLUSIVE,
+            ));
+        }
+        if inrou.guest_image_max_bytes.get() != TAIRA_INROU_GUEST_IMAGE_MAX_BYTES_V1
+            || inrou.max_cpu_millis.get() != TAIRA_INROU_MAX_CPU_MILLIS_V1
+            || inrou.max_memory_bytes.get() != TAIRA_INROU_MAX_MEMORY_BYTES_V1
+            || inrou.max_storage_bytes.get() != TAIRA_INROU_MAX_STORAGE_BYTES_V1
+        {
+            return Err("Taira launcher requires the exact V1 Inrou resource ceilings".to_owned());
+        }
+        if inrou.start_grace != Duration::from_millis(TAIRA_INROU_START_GRACE_MS_V1)
+            || inrou.stop_grace != Duration::from_millis(TAIRA_INROU_STOP_GRACE_MS_V1)
+        {
+            return Err("Taira launcher requires the exact V1 Inrou lifecycle graces".to_owned());
+        }
     }
     let egress = &runtime.egress;
     if egress.default_allow
@@ -845,6 +859,13 @@ mod tests {
         runtime
     }
 
+    fn canonical_core_runtime_profile() -> SoracloudRuntime {
+        let mut runtime = canonical_runtime_profile();
+        // Core testnet has no Inrou table; its disabled limits use the typed defaults.
+        runtime.inrou = Default::default();
+        runtime
+    }
+
     #[test]
     fn offline_introspection_never_requires_the_runtime_signer() {
         for argument in ["--check-config", "--help", "-h", "--version", "-V"] {
@@ -886,20 +907,14 @@ mod tests {
             )
             .is_err()
         );
-        let mut disabled_inrou = runtime.clone();
-        disabled_inrou.inrou.enabled = false;
-        disabled_inrou.inrou.portable_vm_uid = None;
-        disabled_inrou.inrou.portable_vm_gid = None;
-        assert!(
-            validate_taira_launcher_profile_v1(
-                TAIRA_CHAIN_ID_V1,
-                TAIRA_CHAIN_DISCRIMINANT_V1,
-                TAIRA_VALIDATOR_COUNT_V1,
-                TAIRA_VALIDATOR_COUNT_V1,
-                &disabled_inrou,
-            )
-            .is_err()
-        );
+        validate_taira_launcher_profile_v1(
+            TAIRA_CHAIN_ID_V1,
+            TAIRA_CHAIN_DISCRIMINANT_V1,
+            TAIRA_VALIDATOR_COUNT_V1,
+            TAIRA_VALIDATOR_COUNT_V1,
+            &canonical_core_runtime_profile(),
+        )
+        .expect("canonical Core-only Taira profile");
         let mut exact_inrou = runtime.clone();
         for slot in 0..soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_SLOT_COUNT {
             let id = soracloud_runtime_defaults::INROU_PORTABLE_VM_ID_BASE + slot;
@@ -939,6 +954,39 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn launcher_core_profile_rejects_stale_inrou_custody() {
+        let runtime = canonical_core_runtime_profile();
+        let assert_rejected = |runtime: &SoracloudRuntime| {
+            let error = validate_taira_launcher_profile_v1(
+                TAIRA_CHAIN_ID_V1,
+                TAIRA_CHAIN_DISCRIMINANT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                TAIRA_VALIDATOR_COUNT_V1,
+                runtime,
+            )
+            .expect_err("disabled Inrou cannot retain guest custody");
+            assert!(error.contains("disabled Taira Inrou hosting"), "{error}");
+        };
+
+        let mut stale_uid = runtime.clone();
+        stale_uid.inrou.portable_vm_uid = NonZeroU32::new(70_000);
+        assert_rejected(&stale_uid);
+
+        let mut stale_gid = runtime.clone();
+        stale_gid.inrou.portable_vm_gid = NonZeroU32::new(70_000);
+        assert_rejected(&stale_gid);
+
+        let mut stale_guest = runtime;
+        stale_guest.inrou.trusted_guest_artifact = Some(
+            iroha_data_model::soracloud::SoraPublishedInrouGuestImageArtifactV1 {
+                manifest_digest_hex: String::new(),
+                content_cid: String::new(),
+            },
+        );
+        assert_rejected(&stale_guest);
     }
 
     #[test]
@@ -1758,6 +1806,124 @@ mod tests {
                 .expect("fixture Soracloud signer"),
             ),
         }
+    }
+
+    #[test]
+    fn disposable_broker_composes_exact_soracloud_and_threshold_catalogs() {
+        use crate::{
+            RuntimeProviderBrokerBackendRegistryV1 as _,
+            external_software_signer::encode_consensus_threshold_credential_bundle_v1,
+        };
+
+        let beacon =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        let signer = fixture_registry();
+        for (with_soracloud, with_beacon) in [(true, false), (false, true), (true, true)] {
+            let catalog = if with_soracloud {
+                IrohaRuntimeProviderBindingsV1::try_from_config(&beacon_config(
+                    &signer,
+                    *beacon.catalog.network_id(),
+                    with_beacon.then(|| beacon.catalog.iter().next().unwrap()),
+                ))
+                .unwrap()
+            } else {
+                beacon.catalog.clone()
+            };
+            let bundle = encode_consensus_threshold_credential_bundle_v1(
+                with_beacon.then_some(beacon.credential.as_slice()),
+                None,
+            )
+            .unwrap();
+            let (_directory, path) = key_file(&signer.signer.key_pair);
+            let mut loaded_signer = false;
+            let registry =
+                disposable_broker::load_with_signer(&catalog, &mut bundle.as_slice(), || {
+                    loaded_signer = true;
+                    Ok(Arc::new(TairaRuntimeSignerV1::from_key_pair(
+                        load_key_pair_from_file(open_consumable_key_file(&path))?,
+                    )?))
+                })
+                .expect("complete exact broker custody");
+            assert_eq!(loaded_signer, with_soracloud);
+            assert_eq!(
+                fs::metadata(path).unwrap().len(),
+                if with_soracloud {
+                    0
+                } else {
+                    TAIRA_RUNTIME_SIGNER_KEY_FILE_BYTES_V1
+                }
+            );
+            registry.resolve(&catalog).expect("complete backend set");
+            let substituted =
+                catalog
+                    .clone()
+                    .with_network_id_for_test(NetworkId::from_genesis_hash(
+                        iroha_crypto::HashOf::from_untyped_unchecked(
+                            iroha_crypto::Hash::prehashed([0xD8; 32]),
+                        ),
+                    ));
+            assert!(matches!(
+                registry.resolve(&substituted),
+                Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+            ));
+        }
+    }
+
+    #[test]
+    fn disposable_broker_rejects_catalog_and_credential_substitution() {
+        use crate::external_software_signer::encode_consensus_threshold_credential_bundle_v1;
+
+        let beacon =
+            crate::external_software_signer::consensus_threshold_beacon_broker_test_fixture_v1();
+        let signer = fixture_registry();
+        let catalog = IrohaRuntimeProviderBindingsV1::try_from_config(&beacon_config(
+            &signer,
+            *beacon.catalog.network_id(),
+            beacon.catalog.iter().next(),
+        ))
+        .unwrap();
+        let complete =
+            encode_consensus_threshold_credential_bundle_v1(Some(&beacon.credential), None)
+                .unwrap();
+        let empty = encode_consensus_threshold_credential_bundle_v1(None, None).unwrap();
+        assert!(
+            disposable_broker::load_with_signer(&catalog, &mut empty.as_slice(), || {
+                panic!("missing beacon custody must fail before consuming signer custody")
+            })
+            .is_err()
+        );
+        let wrong = KeyPair::from_seed(vec![0x38; 32], Algorithm::Ed25519);
+        assert!(matches!(
+            disposable_broker::load_with_signer(&catalog, &mut complete.as_slice(), || {
+                Ok(Arc::new(TairaRuntimeSignerV1::from_key_pair(wrong)?))
+            }),
+            Err(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)
+        ));
+        assert!(matches!(
+            disposable_broker::load_with_signer(&catalog, &mut complete.as_slice(), || {
+                Err(TairaRuntimeSignerErrorV1::DescriptorUnavailable)
+            }),
+            Err(IrohaRuntimeProviderRegistryErrorV1::Unavailable)
+        ));
+    }
+
+    #[test]
+    fn disposable_broker_rejects_unsupported_slots_before_reading_credentials() {
+        let unsupported = IrohaRuntimeProviderBindingsV1::qualified_for_test(
+            "disposable-catalog-test",
+            IrohaRuntimeProviderSlotV1::PrivacyCyclePrfProvider,
+            "software://private/prf",
+            1,
+            [0x91; 32],
+        );
+        let mut input = std::io::Cursor::new([0xA5; 32]);
+        assert!(matches!(
+            disposable_broker::load_with_signer(&unsupported, &mut input, || {
+                panic!("unrequested signer credential must remain untouched")
+            }),
+            Err(IrohaRuntimeProviderRegistryErrorV1::IncompleteResolution)
+        ));
+        assert_eq!(input.position(), 0);
     }
 
     #[test]

@@ -168,6 +168,11 @@ encoding:
   - If set: unsigned varint (7-bit continuation).
   - If not set: fixed 8-byte little-endian u64.
 - Sequence length headers are fixed 8-byte little-endian u64 in v1.
+- The first-release standalone election finalization instruction, retained
+  `ElectionState`, Torii tally response, and IVM `VoteGetTallyResponse` encode
+  each option weight as canonical `u128`. Proof public-input limbs are 32-byte
+  little-endian values whose upper 16 bytes must be zero; no `u64` tally layout
+  or fallback decoder is admitted.
 - `Vec<u8>` is encoded as a fixed-size sequence: `[len_u64][raw-bytes]` (no per-element
   length prefixes), regardless of `PACKED_SEQ`. Decoders reject per-element
   length-prefixed byte vectors.
@@ -1160,3 +1165,31 @@ derived named structs with a value-independent object shape, applying the same
 renaming and skipped-field rules as serialization. Conditional omissions and
 flattened objects return `None`. Snapshot readers use this metadata without
 constructing a default World or serializing its stores; this changes no bytes.
+
+### Retail phone identifier attestation
+
+`IdentifierResolutionReceipt` now encodes three derived-struct fields in
+order: `payload`, `attestation`, and
+`Option<PhoneRetailCanonicalityAttestationV1>`. The option is part of the
+Norito payload even when absent for a non-phone receipt. The phone attestation
+encodes its signed `PhoneRetailCanonicalityPayloadV1` followed by the
+signature. The payload fixes the field order as exact `NetworkId`, policy ID,
+program ID, input ciphertext hash, output ciphertext hash, opened output
+hash, canonical phone nullifier, UAID, account ID, issue time, and expiry
+time. The signed payload's schema identity is
+`iroha_data_model::identifier::PhoneRetailCanonicalityPayloadV1`; the
+attestation's is
+`iroha_data_model::identifier::PhoneRetailCanonicalityAttestationV1`.
+
+### KAGEMUSHA release network binding
+
+`KagemushaReleaseManifestV1` encodes its exact genesis-derived `NetworkId`
+immediately after `version`, before `release_id`. Its private
+`KagemushaReleaseSubjectV1` uses the same placement. The domain-separated
+release ID therefore commits to the network, and threshold release approvals
+sign both that ID and the complete manifest digest. A node rejects a release
+whose signed network differs from its configured genesis identity before Kura
+replay; mobile enrollment, concrete mint/state/payment/terminal and Guard
+verification, hardware transaction admission, and testnet proof observation
+enforce the same release-to-operation network match. There is one first-release
+layout and no decoder for the networkless pre-release shape.

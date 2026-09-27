@@ -689,8 +689,8 @@ fn finalized_rollover_closes_ingress_before_successor_replay() {
 }
 #[test]
 fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
-    let _status_guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let configured_ingress = || {
         let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
         ingress
@@ -714,7 +714,7 @@ fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
     assert!(aperture.close_and_verify());
     assert!(!ready.load(Ordering::Acquire));
     assert!(!ingress.state.lock().open);
-    assert!(super::super::status::v2_status().is_none());
+    assert!(super::super::v2_status::v2_status().is_none());
 
     let complete_tip_ready = Arc::new(AtomicBool::new(false));
     let complete_tip_ingress = configured_ingress();
@@ -731,7 +731,7 @@ fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
     }
     assert!(!complete_tip_ready.load(Ordering::Acquire));
     assert!(!complete_tip_ingress.state.lock().open);
-    assert!(super::super::status::v2_status().is_none());
+    assert!(super::super::v2_status::v2_status().is_none());
     complete_tip
         .retire_unpublished(&complete_tip_ingress)
         .expect("retire unpublished CompleteTip activation");
@@ -751,7 +751,7 @@ fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
     }
     assert!(!pending_ready.load(Ordering::Acquire));
     assert!(!pending_ingress.state.lock().open);
-    assert!(super::super::status::v2_status().is_none());
+    assert!(super::super::v2_status::v2_status().is_none());
     pending
         .retire_unpublished(&pending_ingress)
         .expect("retire unpublished pending-Kura activation");
@@ -770,8 +770,8 @@ fn lifecycle_preactivation_recovery_aperture_borrows_exact_future_activation() {
 
 #[test]
 fn pending_kura_runner_activation_publishes_current_height_without_successor_authority() {
-    let _status_guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let (context, _) = context();
     let ready = Arc::new(AtomicBool::new(false));
     let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0));
@@ -788,7 +788,7 @@ fn pending_kura_runner_activation_publishes_current_height_without_successor_aut
         .expect("publish recovered current-height status without successor authority");
     assert!(ready.load(Ordering::Acquire));
     assert!(ingress.state.lock().open);
-    assert_eq!(super::super::status::v2_status(), Some(expected));
+    assert_eq!(super::super::v2_status::v2_status(), Some(expected));
 
     assert!(matches!(
         ingress.try_push(InboundBlockMessage::from_authenticated_peer(
@@ -834,7 +834,7 @@ fn pending_kura_runner_activation_publishes_current_height_without_successor_aut
     drop(activated);
     assert!(!ready.load(Ordering::Acquire));
     assert!(!ingress.state.lock().open);
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 }
 
 #[test]
@@ -875,8 +875,8 @@ fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_hand
     // consistent Kura receipt/finality artifact. It does not exercise the
     // QC -> body recovery -> store -> validation -> application pipeline or
     // claim end-to-end catch-up coverage.
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let context = super::super::v2_worker::tests::production_output_handoff_with_dead_target();
     publish_applied_runner_status(&context);
     let predecessor = test_predecessor(&context, b"dead target rollover");
@@ -917,7 +917,7 @@ fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_hand
     )
     .expect("dead-target durable handoff permits successor activation");
     assert!(ready.load(Ordering::Acquire));
-    let active = super::super::status::v2_status().expect("active successor status");
+    let active = super::super::v2_status::v2_status().expect("active successor status");
     assert_eq!(active.height, successor.height);
     assert_eq!(active.last_committed_height, context.height);
     assert!(matches!(
@@ -928,12 +928,12 @@ fn synthesized_durable_rollover_contract_allows_successor_after_dead_target_hand
         })
     ));
     close_ingress_for_rollover(&ready, &ingress);
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 }
 #[test]
 fn successor_activation_is_published_only_after_ingress_is_open() {
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let (context, _) = context();
     publish_applied_runner_status(&context);
     let predecessor = test_predecessor(&context, b"live ingress rollover");
@@ -944,7 +944,7 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
     ingress
         .configure_roster(std::iter::empty())
         .expect("configure untrusted test lane");
-    let before = super::super::status::v2_status().expect("predecessor status");
+    let before = super::super::v2_status::v2_status().expect("predecessor status");
     assert_eq!(before.height, context.height);
     assert_eq!(
         before.liveness.work.successor_height,
@@ -1005,7 +1005,7 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
             authenticated_peer_for_test(),
         ))
         .expect("activation publication follows open ingress");
-    let active = super::super::status::v2_status().expect("active successor status");
+    let active = super::super::v2_status::v2_status().expect("active successor status");
     assert_eq!(active.height, successor.height);
     let marker = active
         .liveness
@@ -1019,7 +1019,7 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
     assert_eq!(marker.round.context_id, successor.height_context_id);
     assert_eq!(marker.round.height, successor.height);
     close_ingress_for_rollover(&ready, &ingress);
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
     publish_applied_runner_status(&context);
     let predecessor = test_predecessor(&context, b"foreign successor context");
     let construction =
@@ -1057,7 +1057,7 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
         ),
         "foreign-context rejection must close ingress again"
     );
-    let predecessor = super::super::status::v2_status()
+    let predecessor = super::super::v2_status::v2_status()
         .expect("foreign-context rejection retains the predecessor");
     assert_eq!(predecessor.height, context.height);
     assert_eq!(
@@ -1072,12 +1072,12 @@ fn successor_activation_is_published_only_after_ingress_is_open() {
             .transition,
         wire::SumeragiV2ProgressTransition::Applied
     );
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 }
 #[test]
 fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let (parent_context, keys) = context();
     let ready = AtomicBool::new(false);
     let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
@@ -1106,7 +1106,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
     ));
     assert!(!ready.load(Ordering::Acquire));
     assert!(
-        super::super::status::v2_status().is_none(),
+        super::super::v2_status::v2_status().is_none(),
         "unretired CompleteTip recovery must not publish successor status"
     );
     assert!(
@@ -1119,7 +1119,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         ),
         "unretired CompleteTip recovery must leave ingress closed"
     );
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
     #[cfg(feature = "bls")]
     {
         let successor_status = |context: &wire::HeightContext| {
@@ -1160,13 +1160,13 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         .expect("exact retired CompleteTip publishes its authenticated successor");
         assert!(exact_ready.load(Ordering::Acquire));
         assert!(!exact_output_guard.restart_required());
-        let published = super::super::status::v2_status()
+        let published = super::super::v2_status::v2_status()
             .expect("exact CompleteTip restart publishes H+1 status");
         assert_eq!(published.height_context_id, exact_context.id());
         assert_eq!(published.height, exact_context.height);
         assert_eq!(published.last_committed_height + 1, published.height);
         close_ingress_for_rollover(&exact_ready, &exact_ingress);
-        super::super::status::clear_v2_status();
+        super::super::v2_status::clear_v2_status();
         let (_kura, _predecessor_root, typed_context, retirement) =
             super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
         let typed_ready = Arc::new(AtomicBool::new(false));
@@ -1183,7 +1183,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
             .expect("typed CompleteTip activation retains retirement through publication");
         assert!(typed_ready.load(Ordering::Acquire));
         assert_eq!(
-            super::super::status::v2_status()
+            super::super::v2_status::v2_status()
                 .expect("typed CompleteTip activation publishes H+1")
                 .height_context_id,
             typed_context.id()
@@ -1191,7 +1191,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         drop(activated);
         assert!(!typed_ready.load(Ordering::Acquire));
         assert!(!typed_ingress.state.lock().open);
-        super::super::status::clear_v2_status();
+        super::super::v2_status::clear_v2_status();
         let (_kura, _predecessor_root, invalid_context, retirement) =
             super::super::v2_lifecycle_coordinator::complete_tip_restart_activation_fixture();
         let invalid_ready = Arc::new(AtomicBool::new(true));
@@ -1248,7 +1248,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(!drift_ready.load(Ordering::Acquire));
         assert!(drift_output_guard.restart_required());
         assert!(drift_output_guard.acquire().is_none());
-        assert!(super::super::status::v2_status().is_none());
+        assert!(super::super::v2_status::v2_status().is_none());
         let (predecessor_kura, predecessor_root, predecessor_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
         let predecessor_ledger = predecessor_root.join("lifecycle-ledger-v1.norito");
@@ -1282,7 +1282,7 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(!predecessor_ready.load(Ordering::Acquire));
         assert!(predecessor_output_guard.restart_required());
         assert!(predecessor_output_guard.acquire().is_none());
-        assert!(super::super::status::v2_status().is_none());
+        assert!(super::super::v2_status::v2_status().is_none());
         drop(predecessor_kura);
         let (_foreign_kura, _predecessor_root, foreign_context, retirement) =
             super::super::v2_first_release_recovery::complete_tip_restart_activation_fixture();
@@ -1322,13 +1322,13 @@ fn complete_tip_recovery_requires_authenticated_predecessor_retirement() {
         assert!(!foreign_ready.load(Ordering::Acquire));
         assert!(foreign_output_guard.restart_required());
         assert!(foreign_output_guard.acquire().is_none());
-        assert!(super::super::status::v2_status().is_none());
+        assert!(super::super::v2_status::v2_status().is_none());
     }
 }
 #[test]
 fn successor_construction_rejects_foreign_same_height_predecessor_authority() {
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let (context, _) = context();
     publish_applied_runner_status(&context);
     let expected = test_predecessor(&context, b"expected predecessor");
@@ -1349,17 +1349,17 @@ fn successor_construction_rejects_foreign_same_height_predecessor_authority() {
             actual,
         } if actual_expected == expected && actual == foreign
     ));
-    let predecessor = super::super::status::v2_status().expect("predecessor remains visible");
+    let predecessor = super::super::v2_status::v2_status().expect("predecessor remains visible");
     assert_eq!(
         predecessor.liveness.work.successor_height,
         wire::SumeragiV2LocalWorkStage::Running
     );
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 }
 #[test]
 fn successor_startup_failure_stays_running_and_fails_closed_without_activation() {
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let (context, keys) = context();
     publish_applied_runner_status(&context);
     let activation = PendingSuccessorConstruction::begin(test_predecessor(
@@ -1415,7 +1415,7 @@ fn successor_startup_failure_stays_running_and_fails_closed_without_activation()
         )),
         Err(FairV2IngressPushError::Closed(_))
     ));
-    let stalled = super::super::status::v2_status().expect("stalled predecessor status");
+    let stalled = super::super::v2_status::v2_status().expect("stalled predecessor status");
     assert_eq!(stalled.height, context.height);
     assert_eq!(
         stalled.liveness.work.successor_height,
@@ -1430,25 +1430,25 @@ fn successor_startup_failure_stays_running_and_fails_closed_without_activation()
         wire::SumeragiV2ProgressTransition::Applied,
         "dropping an incomplete activation token must not claim successor activation"
     );
-    super::super::status::clear_v2_status();
+    super::super::v2_status::clear_v2_status();
 }
 #[test]
 fn status_guard_retains_failure_snapshot_and_clears_clean_shutdown() {
-    let _guard = super::super::status::rbc_status_test_guard();
-    super::super::status::clear_v2_status();
+    let _guard = crate::status::rbc_status_test_guard();
+    super::super::v2_status::clear_v2_status();
     let (context, _) = context();
     let failure_status_guard = V2StatusClearGuard::new();
     publish_applied_runner_status(&context);
-    super::super::status::mark_v2_restart_required();
+    super::super::v2_status::mark_v2_restart_required();
     drop(failure_status_guard);
-    let retained = super::super::status::v2_status().expect("retained failure snapshot");
+    let retained = super::super::v2_status::v2_status().expect("retained failure snapshot");
     assert_eq!(retained.height, context.height);
     assert!(retained.restart_required);
     let mut clean_status_guard = V2StatusClearGuard::new();
     publish_applied_runner_status(&context);
     clean_status_guard.clear_on_drop();
     drop(clean_status_guard);
-    assert!(super::super::status::v2_status().is_none());
+    assert!(super::super::v2_status::v2_status().is_none());
 }
 #[test]
 fn ingress_capacity_error_preserves_message_and_byte_units() {
@@ -1694,6 +1694,99 @@ fn proposal_history_wait_retries_only_on_original_release_and_retires_with_owner
         next,
         &crate::state::StateBlockStartError::Stage(()),
         wake
+    ));
+    assert!(state.is_pristine());
+}
+#[test]
+fn candidate_history_wait_accepts_only_pre_signing_inner_refusal() {
+    let (context, _) = context();
+    let owner = proposal_owner(
+        &context,
+        EventTag::new(context.height, 3, Generation::new(17)),
+        None,
+        None,
+    );
+    let notification = concread::release::ReleaseNotification::default();
+    let post_signing = super::super::v2_candidate::CandidateError::BuiltWithoutProposalWork;
+    let pre_signing = super::super::v2_candidate::CandidateError::LocalStateAdmission(
+        crate::state::StateBlockStartError::History(
+            crate::state::BlockHashAdmissionError::Busy(notification.observe()),
+        ),
+    );
+    let wake = std::task::Waker::noop();
+    let mut state = LocalProposalState::default();
+    assert!(!state.defer_pre_signing_candidate_history_admission(owner, &post_signing, wake));
+    assert!(state.is_pristine());
+    assert!(state.defer_pre_signing_candidate_history_admission(owner, &pre_signing, wake));
+    assert!(state.history_admission_pending(owner, wake));
+    assert!(state.attempted.is_none());
+    drop(notification.guard(()));
+    assert!(!state.history_admission_pending(owner, wake));
+    assert!(state.is_pristine());
+}
+#[test]
+fn penalty_preparation_failure_keeps_typed_local_candidate_refusal() {
+    let budget = mv::allocation::AllocationBudget::new(8);
+    let original_owner = budget.try_reserve_bytes(7).expect("original pool owner");
+    let refusal = match budget.try_reserve_bytes(2) {
+        Ok(_) => panic!("occupied pool must refuse the exact demand"),
+        Err(refusal) => refusal,
+    };
+    let mapped = classify_penalty_derivation_failure(eyre::Report::new(
+        crate::state::EvidencePreparationError::Admission(refusal),
+    ));
+    assert!(matches!(
+        mapped,
+        V2RunnerError::CandidateBuild(
+            super::super::v2_candidate::CandidateError::LocalEvidencePreparation(
+                crate::state::EvidencePreparationError::Admission(
+                    mv::allocation::AllocationRefusal::Capacity { .. }
+                )
+            )
+        )
+    ));
+    drop(original_owner);
+    assert_eq!(budget.reserved_bytes(), 0);
+}
+#[test]
+fn penalty_preparation_wait_retries_only_after_original_pool_release() {
+    let (context, _) = context();
+    let owner = proposal_owner(
+        &context,
+        EventTag::new(context.height, 3, Generation::new(19)),
+        None,
+        None,
+    );
+    let next = proposal_owner(
+        &context,
+        EventTag::new(context.height, 4, Generation::new(19)),
+        None,
+        None,
+    );
+    let budget = mv::allocation::AllocationBudget::new(8);
+    let original_owner = budget.try_reserve_bytes(7).expect("original pool owner");
+    let refusal = match budget.try_reserve_bytes(2) {
+        Ok(_) => panic!("occupied pool must refuse the exact demand"),
+        Err(refusal) => refusal,
+    };
+    let error = crate::state::EvidencePreparationError::Admission(refusal);
+    let wake = std::task::Waker::noop();
+    let mut state = LocalProposalState::default();
+    assert!(state.defer_evidence_preparation(owner, &error, wake));
+    assert!(state.history_admission_pending(owner, wake));
+    assert!(state.attempted.is_none());
+    drop(original_owner);
+    assert!(!state.history_admission_pending(owner, wake));
+    assert!(state.is_pristine());
+    assert!(state.defer_evidence_preparation(owner, &error, wake));
+    state.reconcile(next);
+    assert!(state.is_pristine());
+    assert!(!state.defer_evidence_preparation(
+        next,
+        &crate::state::EvidencePreparationError::Admission(
+            mv::allocation::AllocationRefusal::DemandOverflow,
+        ),
+        wake,
     ));
     assert!(state.is_pristine());
 }

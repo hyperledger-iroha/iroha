@@ -1087,7 +1087,7 @@ impl LifecycleCoordinator {
     }
     /// Select one ready unit for execution outside the coordinator lock.
     fn plan_turn(&mut self, inputs: SchedulerInputs) -> TurnPlan {
-        self.plan_turn_with_required_ordinal(inputs, None)
+        self.plan_turn_with_ordinal_policy(inputs, None, None)
     }
 
     /// Select only when the same authenticated census naturally chooses the
@@ -1098,14 +1098,31 @@ impl LifecycleCoordinator {
         inputs: SchedulerInputs,
         required_ordinal: u128,
     ) -> TurnPlan {
-        self.plan_turn_with_required_ordinal(inputs, Some(required_ordinal))
+        self.plan_turn_with_ordinal_policy(inputs, Some(required_ordinal), None)
     }
 
-    fn plan_turn_with_required_ordinal(
+    /// Give an already-retained physical Validate completion its causal
+    /// scheduler opportunity. An unrelated Ready row may have a better rank
+    /// because it arrived earlier or has fewer stages left; that cannot make
+    /// this authenticated completion invalid. Missing physical or output
+    /// capacity retains the same completion without publishing another lease.
+    fn plan_turn_prioritizing_ordinal(
+        &mut self,
+        inputs: SchedulerInputs,
+        preferred_ordinal: u128,
+    ) -> TurnPlan {
+        self.plan_turn_with_ordinal_policy(inputs, None, Some(preferred_ordinal))
+    }
+
+    fn plan_turn_with_ordinal_policy(
         &mut self,
         inputs: SchedulerInputs,
         required_ordinal: Option<u128>,
+        preferred_ordinal: Option<u128>,
     ) -> TurnPlan {
+        if required_ordinal.is_some() && preferred_ordinal.is_some() {
+            return TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs);
+        }
         if let Some(fault) = self.fault {
             return TurnPlan::FailClosed(fault);
         }
@@ -1216,20 +1233,33 @@ impl LifecycleCoordinator {
             self.fault = Some(CoordinatorFault::InvalidSchedulerInputs);
             return TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs);
         }
-        let selected = prospective_ready
+        let natural_selected = prospective_ready
             .iter()
             .copied()
             .filter(|ordinal| selectable_ready.contains(ordinal))
             .filter(|ordinal| self.ready_entry_is_eligible(*ordinal, &selectable_ready))
             .map(|ordinal| (ranks[&ordinal], ordinal))
             .min();
+        if preferred_ordinal.is_some_and(|preferred| !prospective_ready.contains(&preferred)) {
+            return TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs);
+        }
+        let selected = match preferred_ordinal {
+            Some(preferred)
+                if selectable_ready.contains(&preferred)
+                    && self.ready_entry_is_eligible(preferred, &selectable_ready) =>
+            {
+                Some((ranks[&preferred], preferred))
+            }
+            Some(_) => None,
+            None => natural_selected,
+        };
         if required_ordinal.is_some_and(|required| {
             !prospective_ready.contains(&required)
                 || selected.is_some_and(|(_, selected)| selected != required)
         }) {
             return TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs);
         }
-        if required_ordinal.is_some() && selected.is_none() {
+        if (required_ordinal.is_some() || preferred_ordinal.is_some()) && selected.is_none() {
             // Exact-successor retry is drop-inert. In particular, do not
             // publish unrelated prospective fence generations merely because
             // the retained target's physical corridor is full.
@@ -1970,6 +2000,63 @@ mod tests {
             TurnPlan::FailClosed(CoordinatorFault::InvalidSchedulerInputs)
         );
         assert_eq!(format!("{coordinator:?}"), before);
+    }
+
+    #[test]
+    fn retained_physical_validate_precedes_an_independent_ready_apply() {
+        let mut coordinator = LifecycleCoordinator::new(context(), 0, capacities(8));
+        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            0x71,
+            LifecycleWorkClass::Validate,
+            LifecyclePhase::Validate,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        admitted(coordinator.admit(AdmissionRequest::Candidate(candidate(
+            0x72,
+            LifecycleWorkClass::Apply,
+            LifecyclePhase::Apply,
+            InitialLifecycleState::Ready,
+            PredecessorScope::Independent,
+        ))));
+        let inputs = |owner: &LifecycleCoordinator, validate_available| {
+            SchedulerInputs::new(
+                [],
+                [
+                    (
+                        1,
+                        SchedulerReadyInputs::new(&owner.records[&1], Some(false), [0; 6])
+                            .with_physical_capacity_for_test(validate_available),
+                    ),
+                    (
+                        2,
+                        SchedulerReadyInputs::new(&owner.records[&2], None, [0; 6]),
+                    ),
+                ],
+            )
+            .expect("both independent Ready rows form one closed census")
+        };
+        let mut natural = coordinator.clone();
+        let natural_inputs = inputs(&natural, true);
+        assert_eq!(execute(natural.plan_turn(natural_inputs)).ordinal(), 2);
+
+        let mut unavailable = coordinator.clone();
+        let preferred_inputs = inputs(&coordinator, true);
+        assert_eq!(
+            execute(coordinator.plan_turn_prioritizing_ordinal(preferred_inputs, 1)).ordinal(),
+            1,
+            "a retained physical Validate result must resolve before unrelated Apply rank"
+        );
+        assert_eq!(coordinator.records[&2].state, LifecycleState::Ready);
+
+        let unavailable_inputs = inputs(&unavailable, false);
+        let before = format!("{unavailable:?}");
+        assert_eq!(
+            unavailable.plan_turn_prioritizing_ordinal(unavailable_inputs, 1),
+            TurnPlan::Idle,
+            "a physically unavailable result must retain its owner before another Ready lease"
+        );
+        assert_eq!(format!("{unavailable:?}"), before);
     }
 
     #[test]

@@ -620,12 +620,14 @@ Code Size Cap
     `CastPlainBallot`; it does not cast a Parliament body ballot and its tally
     cannot authorize a typed proposal or be embedded in
     `GovernanceCertificateV1`.
-  - Notes: Re-votes are extend-only — a new ballot cannot reduce the existing
-    lock’s amount or expiry. The `owner` must equal the transaction authority.
+  - Notes: This route drafts an initial cast only. A second `CastPlainBallot`
+    is rejected; the explicit `UpdatePlainConviction` instruction increases
+    an existing bond or extends its lock without carrying a new choice. Its
+    `owner` must equal the transaction authority.
     Minimum duration is `conviction_step_blocks`, and the resulting lock must
     remain active through the referendum's inclusive `h_end`.
     Both conviction parameters are non-zero, and one standalone PLAIN
-    referendum retains at most 1,000 voter locks; replacement ballots do not
+    referendum retains at most 1,000 voter locks; conviction updates do not
     consume another slot. This bounds the exact pre-admission tally scan.
     Context identifiers use the canonical first-release governance selector
     grammar: 1–128 RFC 3986 unreserved ASCII bytes without a leading dot.

@@ -148,6 +148,35 @@
             "max_pipeline_triggers": 256,
             "max_time_triggers": 4096,
             "max_time_invocations": 512
+          },
+          "fastpq_source": {
+            "intrinsic": {
+              "max_executed_entries": 1,
+              "max_transcripts": 16,
+              "max_deltas": 16,
+              "max_input_transcript_bytes": 137200,
+              "max_statement_bytes": 272175,
+              "max_total_statement_bytes": 272175
+            },
+            "block": {
+              "max_executed_entries": 3659,
+              "max_transcripts": 57584,
+              "max_deltas": 57584,
+              "max_input_transcript_bytes": 501314448,
+              "max_statement_bytes": 272175,
+              "max_total_statement_bytes": 994636613
+            },
+            "mandatory": {
+              "max_retained_obligations": 64,
+              "per_obligation": {
+                "max_executed_entries": 1,
+                "max_transcripts": 1,
+                "max_deltas": 1,
+                "max_input_transcript_bytes": 126257,
+                "max_statement_bytes": 252617,
+                "max_total_statement_bytes": 252617
+              }
+            }
           }
         },
         "custom": {
@@ -180,6 +209,7 @@
           "sumeragi_npos_parameters": {
             "id": "sumeragi_npos_parameters",
             "payload": {
+              "xor_asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
               "epoch_seed": "3E448A9DBA73125E26B0178E036E291374CE17CD39AC321D7BC605963577332D",
               "activation_lag_blocks": 1,
               "xor_asset_definition_id": null,

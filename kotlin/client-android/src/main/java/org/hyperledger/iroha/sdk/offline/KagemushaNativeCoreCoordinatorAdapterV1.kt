@@ -4,6 +4,32 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.math.BigInteger
+import org.hyperledger.iroha.sdk.offline.probe.KagemushaTestnetStateProofObservationV1
+
+/** Detached, non-authorizing original paired State proof from one retained Core operation. */
+class KagemushaOutgoingStateProofArchivesV1 internal constructor(
+    operationId: ByteArray,
+    publicInputsArchive: ByteArray,
+    pairedProofArchive: ByteArray,
+) {
+    private val operation = operationId.copyOf()
+    private val publicInputs = publicInputsArchive.copyOf()
+    private val proof = pairedProofArchive.copyOf()
+
+    init {
+        require(operation.size == 32 && operation.any { it != 0.toByte() })
+        require(publicInputs.size in 1..4 * 1024)
+        require(proof.size in 1..6_528)
+    }
+
+    fun operationId(): ByteArray = operation.copyOf()
+    fun publicInputsArchive(): ByteArray = publicInputs.copyOf()
+    fun pairedProofArchive(): ByteArray = proof.copyOf()
+
+    /** Verify this exact pair with the independently installed, non-authorizing testnet observer. */
+    fun observeWith(observer: KagemushaTestnetStateProofObservationV1): ByteArray =
+        observer.observeStateProof(publicInputs, proof)
+}
 
 /**
  * Typed coordinator backed exclusively by the qualified native JNI implementation.
@@ -31,6 +57,16 @@ class KagemushaNativeCoreCoordinatorAdapterV1 private constructor(
             listOf(u32(operation), canonicalCommand)).single().also {
             KagemushaDeviceOperationCodecV1.decodeControlCommand(operation, it, canonicalCommand)
         }
+
+    /** Copy the original retained outgoing proof into an unqualified testnet observer input. */
+    fun exportOutgoingStateProof(operationId: ByteArray): KagemushaOutgoingStateProofArchivesV1 {
+        val id = operationId.copyOf()
+        val response = bridge.invoke(
+            KagemushaCoreCoordinatorMethodV1.EXPORT_OUTGOING_STATE_PROOF,
+            listOf(id),
+        )
+        return KagemushaOutgoingStateProofArchivesV1(response[0], response[1], response[2])
+    }
 
     override fun reserveOperationId(operation: Int, operationId: ByteArray, publicBinding: ByteArray): ByteArray =
         bridge.invoke(KagemushaCoreCoordinatorMethodV1.RESERVE_OPERATION_ID,

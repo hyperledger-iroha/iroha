@@ -27,11 +27,7 @@ use iroha::{
         account::AccountId,
         block::{
             SignedBlock,
-            consensus_v2::{
-                PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2LocalWorkStage,
-                SumeragiV2ProgressTransition, SumeragiV2Status, SumeragiV2StatusPhase,
-                recommended_data_availability_layout,
-            },
+            consensus_v2::{PROTOCOL_VERSION, recommended_data_availability_layout},
         },
         governance::types::{
             AbiVersion, BallotAttemptId, BallotAttemptStatusV1, BeaconPulseId, BeaconSessionId,
@@ -81,6 +77,7 @@ use iroha::{
         },
         query::dsl::IntoPredicate as _,
         smart_contract::ContractAddress,
+        sumeragi::SumeragiStatus,
     },
 };
 use iroha_core::{
@@ -2297,11 +2294,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
             move || client.get_sumeragi_status()
         })
         .await?;
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid enacted Parliament peer status: {error}"))?;
         assert!(
-            !status.restart_required,
+            !status.is_halted(),
             "an enacted Parliament validator must not be live-but-fail-stopped",
         );
     }
@@ -2354,11 +2348,8 @@ async fn four_validator_policy_jury_uses_future_pulses_and_mandatory_timed_ovn_i
         move || client.get_sumeragi_status()
     })
     .await?;
-    restarted_status
-        .validate()
-        .map_err(|error| eyre!("invalid restarted Parliament peer status: {error}"))?;
     assert!(
-        !restarted_status.restart_required,
+        !restarted_status.is_halted(),
         "normal restart must restore a live non-fail-stopped consensus reducer",
     );
     no_result_paths::exercise_public_finding_no_result_retries_and_restore(
@@ -2574,18 +2565,36 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
             move || client.get_sumeragi_status()
         })
         .await?;
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid successor NPoS status: {error}"))?;
         assert!(
-            !status.restart_required,
+            !status.is_halted(),
             "a successful mandatory beacon transition must not fail-stop a validator",
         );
-        assert!(status.last_committed_height >= boundary_height + 1);
-        assert_eq!(status.height_context.epoch, successor_epoch);
-        assert_eq!(status.height_context.epoch_seed, successor_seed);
+        assert!(status.committed_height >= boundary_height + 1);
+        assert!(status.applied_height <= status.committed_height);
+        // Epoch state is certified finality evidence, not a local status field.
+        let (proof, certified_hash) = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            let network_id = network.network_id();
+            move || {
+                client.get_bridge_finality_anchor(
+                    NonZeroU64::new(boundary_height + 1).unwrap(),
+                    network_id,
+                )
+            }
+        })
+        .await?;
         assert_eq!(
-            status.height_context.epoch_end_height,
+            exact_block(&peer.client(), boundary_height + 1)
+                .await?
+                .header()
+                .hash(),
+            certified_hash,
+        );
+        let context = &proof.finality_artifact.height_context;
+        assert_eq!(context.epoch, successor_epoch);
+        assert_eq!(context.leader_seed, successor_seed);
+        assert_eq!(
+            context.epoch_end_height,
             boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
         );
     }
@@ -2651,15 +2660,33 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
             move || client.get_sumeragi_status()
         })
         .await?;
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid retained-session NPoS status: {error}"))?;
-        assert!(!status.restart_required);
-        assert!(status.last_committed_height >= second_boundary_height + 1);
-        assert_eq!(status.height_context.epoch, second_successor_epoch);
-        assert_eq!(status.height_context.epoch_seed, second_successor_seed);
+        assert!(!status.is_halted());
+        assert!(status.committed_height >= second_boundary_height + 1);
+        assert!(status.applied_height <= status.committed_height);
+        // Epoch state is certified finality evidence, not a local status field.
+        let (proof, certified_hash) = read_on_dedicated_thread({
+            let client = peer.client().client().clone();
+            let network_id = network.network_id();
+            move || {
+                client.get_bridge_finality_anchor(
+                    NonZeroU64::new(second_boundary_height + 1).unwrap(),
+                    network_id,
+                )
+            }
+        })
+        .await?;
         assert_eq!(
-            status.height_context.epoch_end_height,
+            exact_block(&peer.client(), second_boundary_height + 1)
+                .await?
+                .header()
+                .hash(),
+            certified_hash,
+        );
+        let context = &proof.finality_artifact.height_context;
+        assert_eq!(context.epoch, second_successor_epoch);
+        assert_eq!(context.leader_seed, second_successor_seed);
+        assert_eq!(
+            context.epoch_end_height,
             second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
         );
     }
@@ -2723,6 +2750,23 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
                         .clone();
                 }
                 if [boundary_height + 1, second_boundary_height + 1].contains(&height) {
+                    let (expected_epoch, expected_seed, expected_end) =
+                        if height == boundary_height + 1 {
+                            (
+                                successor_epoch,
+                                successor_seed,
+                                boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+                            )
+                        } else {
+                            (
+                                second_successor_epoch,
+                                second_successor_seed,
+                                second_boundary_height + MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS,
+                            )
+                        };
+                    assert_eq!(context.epoch, expected_epoch);
+                    assert_eq!(context.leader_seed, expected_seed);
+                    assert_eq!(context.epoch_end_height, expected_end);
                     let authorization = &context.kagemusha_mint_finality_authorization;
                     assert_eq!(
                         authorization.epoch,
@@ -2895,61 +2939,25 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     );
     network.ensure_blocks(predecessor_height).await?;
     assert_eq!(current_height(&client).await?, predecessor_height);
-    let pulse_status_is_active = |status: &SumeragiV2Status| -> Result<bool> {
-        status
-            .validate()
-            .map_err(|error| eyre!("invalid fail-closed NPoS status: {error}"))?;
+    let pulse_status_is_active = |status: &SumeragiStatus| -> bool {
         assert!(
-            !status.restart_required,
+            !status.is_halted(),
             "below-threshold beacon liveness must stall without fail-stopping consensus",
         );
-        assert_eq!(status.last_committed_height, predecessor_height);
-        if status.height != predecessor_height {
-            assert_eq!(status.height, pulse_height);
-            return Ok(true);
+        assert_eq!(status.committed_height, predecessor_height);
+        assert!(status.applied_height <= status.committed_height);
+        if status.height == predecessor_height {
+            // A committed round remains current only until its successor
+            // configuration is available. Keep polling through that handoff.
+            assert!(status.awaiting);
+            return false;
         }
-
-        // Status publication deliberately retains the applied predecessor while
-        // the serialized runner constructs and activates its successor. Accept
-        // only that exact authenticated handoff, never an arbitrary stale height.
-        assert_eq!(status.phase, SumeragiV2StatusPhase::PendingApply);
-        if status.body_state == SumeragiV2BodyState::PendingApply {
-            // A durable Decision is published before its asynchronous local
-            // application completes. It authenticates the predecessor but is
-            // not yet the successor handoff, so keep polling instead of either
-            // accepting it as active or treating normal progress as a failure.
-            assert_eq!(status.pending_persistence_id, None);
-            assert!(matches!(
-                status.liveness.work.application,
-                SumeragiV2LocalWorkStage::Queued | SumeragiV2LocalWorkStage::Running
-            ));
-            assert_eq!(
-                status.liveness.work.successor_height,
-                SumeragiV2LocalWorkStage::Idle,
-            );
-            return Ok(false);
-        }
-        assert_eq!(status.body_state, SumeragiV2BodyState::Applied);
-        assert_eq!(
-            status.liveness.work.application,
-            SumeragiV2LocalWorkStage::Complete,
-        );
-        assert!(matches!(
-            status.liveness.work.successor_height,
-            SumeragiV2LocalWorkStage::Queued
-                | SumeragiV2LocalWorkStage::Running
-                | SumeragiV2LocalWorkStage::Complete
-        ));
-        assert!(matches!(
-            status.liveness.last_progress,
-            Some(marker)
-                if marker.generation == status.liveness.generation
-                    && marker.round.context_id == status.height_context_id
-                    && marker.round.height == status.height
-                    && marker.round.view == status.view
-                    && marker.transition == SumeragiV2ProgressTransition::Applied
-        ));
-        Ok(false)
+        assert_eq!(status.height, pulse_height);
+        // Round entry and durable application are reported separately. Begin
+        // the observation only once the predecessor is applied and the pulse
+        // round has its configuration, so configuration/application lag cannot
+        // masquerade as a below-threshold beacon stall.
+        !status.awaiting && status.applied_height == predecessor_height
     };
     // Keep each synchronous request short and check one monotonic deadline
     // before and after it. The complete wait can therefore exceed its nominal
@@ -3033,7 +3041,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                     last_activation_status_error.as_deref().unwrap_or("none"),
                 ));
             }
-            all_pulse_heights_active &= pulse_status_is_active(&status)?;
+            all_pulse_heights_active &= pulse_status_is_active(&status);
         }
         if all_pulse_heights_active {
             break;
@@ -3123,7 +3131,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
                 ));
             }
             assert!(
-                pulse_status_is_active(&status)?,
+                pulse_status_is_active(&status),
                 "the bounded below-threshold observation must begin and end in the active pulse context",
             );
         }

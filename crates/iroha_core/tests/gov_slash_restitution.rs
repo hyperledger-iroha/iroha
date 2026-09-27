@@ -155,7 +155,7 @@ fn lock_slash_restitute(
 #[test]
 fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
     // Direct retained-custody movements share the execution witness recorder.
-    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let (receiver_id, _) = gen_account_in("wonderland");
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -215,7 +215,7 @@ fn frozen_units_reject_fractional_slash_and_accept_majority_and_full_restitution
     use iroha_data_model::isi::governance::{
         CastPlainBallot, RestituteGovernanceLock, SlashGovernanceLock,
     };
-    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let (receiver, _) = gen_account_in("wonderland");
     let definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -327,7 +327,7 @@ fn restitution_rechecks_aggregate_capacity_and_preserves_closed_decision() {
             governance::{CastPlainBallot, RestituteGovernanceLock, SlashGovernanceLock},
         },
     };
-    let _witness_guard = iroha_core::sumeragi::witness::exec_witness_guard();
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let (receiver, _) = gen_account_in("wonderland");
     let (second, _) = gen_account_in("wonderland");
     let (third, _) = gen_account_in("wonderland");

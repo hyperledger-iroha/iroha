@@ -2,7 +2,7 @@
 
 This command does not create proof keys, validation evidence, or release signatures.
 Its input must already satisfy the complete first-release Kagami verifier. The
-bundle retains the review projection and ABI23 native evidence for a replay of
+bundle retains the review projection and ABI24 native evidence for a replay of
 that verification from copied bytes. The separate operator-pin file is a review
 candidate; apps must obtain their trust anchors through an independent
 operator-controlled channel and must not load this output automatically. No
@@ -116,8 +116,8 @@ def verify_report(report: Any, args: argparse.Namespace) -> list[tuple[str, int]
         or len(signers) < threshold
     ):
         raise BundleError("release lacks a threshold of independent approvals")
-    if report.get("native_sdk") != "c-jni" or report.get("native_bridge_abi_version") != 23:
-        raise BundleError("Kagami report lacks the authenticated ABI23 c-jni loader")
+    if report.get("native_sdk") != "c-jni" or report.get("native_bridge_abi_version") != 24:
+        raise BundleError("Kagami report lacks the authenticated ABI24 c-jni loader")
     digest_arg(report.get("native_artifact_sha256"), "native artifact SHA-256")
     native_size = report.get("native_artifact_size")
     if (

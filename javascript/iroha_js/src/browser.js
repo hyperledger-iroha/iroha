@@ -14,6 +14,10 @@ export {
   AUTHENTICATED_BLOCK_PROOFS_MAX_PROOF_BYTES_V1,
   verifyAuthenticatedBlockProofsV1,
 } from "./authenticatedBlockProofs.browser.js";
+export {
+  verifyContractStateValueInclusionV1,
+  verifyContractStateValueInclusionJsonV1,
+} from "./contractStateProof.js";
 
 export {
   buildMintAssetInstruction,

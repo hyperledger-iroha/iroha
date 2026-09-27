@@ -323,7 +323,7 @@ impl State {
         mut admission: NativeExecutionResourceAdmission,
         context: crate::sumeragi::v2::VerifiedHeightContext,
     ) -> Result<RecordedNativeLaneBatchV1<'_>> {
-        crate::sumeragi::witness::ensure_exec_witness_capture_available()
+        crate::exec_witness::ensure_exec_witness_capture_available()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
             let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
@@ -349,7 +349,7 @@ impl State {
                 &groups,
                 &mut admission,
                 |overlay| {
-                    let recorder = crate::sumeragi::witness::begin_exec_witness_capture()
+                    let recorder = crate::exec_witness::begin_exec_witness_capture()
                         .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
                     let context = controls.apply(overlay).map_err(|error| {
                         MergeLedgerCommitError::NativeControlValidation(Box::new(error))
@@ -397,7 +397,7 @@ impl State {
         &self,
         groups: &[VerifiedLaneDecisionGroupV1],
     ) -> Result<LaneDecisionBatchV1> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
             let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
@@ -440,7 +440,7 @@ impl State {
         groups: Vec<VerifiedLaneDecisionGroupV1>,
         admission: NativeExecutionResourceAdmission,
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
             let invalid = MergeLedgerCommitError::ExecutionBatchInvalid;
@@ -488,10 +488,10 @@ impl State {
         groups: Vec<VerifiedLaneDecisionGroupV1>,
         mut admission: NativeExecutionResourceAdmission,
     ) -> Result<PreparedLaneDecisionBatchV1<'_>> {
-        crate::sumeragi::witness::ensure_state_access_without_exec_witness()
+        crate::exec_witness::ensure_state_access_without_exec_witness()
             .map_err(MergeLedgerCommitError::ExecutionRecorderConflict)?;
         with_stable_observation(self, || {
-            let _suppression = crate::sumeragi::witness::suppress_recording_for_current_thread();
+            let _suppression = crate::exec_witness::suppress_recording_for_current_thread();
             let batch = self.prepare_lane_decision_batch(&groups)?;
             let (overlay, executions) = self.with_native_lane_execution_scope(
                 header,

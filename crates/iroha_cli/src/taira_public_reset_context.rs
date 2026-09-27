@@ -116,7 +116,7 @@ pub(in super::super) fn decode_reset_topology_intent(
     validate_topology_intent(&intent)?;
     Ok((intent, guard))
 }
-pub(super) fn validate_topology_intent(intent: &ResetTopologyIntentV1) -> Result<()> {
+pub(in super::super) fn validate_topology_intent(intent: &ResetTopologyIntentV1) -> Result<()> {
     if intent.schema != "iroha.taira.public-reset.topology-intent.v1"
         || intent.validators.len() != 4
         || intent.validator_clients.len() != 4

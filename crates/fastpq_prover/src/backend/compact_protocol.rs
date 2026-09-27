@@ -1,6 +1,6 @@
-//! Private compact AIR engine for bounded candidate verification.
+//! Fixed AIR interfaces and test-only predecessor proof diagnostics.
 //!
-//! The prover commits complete base-field LDE rows before full-Fp4 column
+//! The predecessor diagnostic prover commits complete base-field LDE rows before full-Fp4 column
 //! mixing, commits the mixed oracle before independent Fp4 constraint alphas,
 //! then commits the quotient before joint trace/quotient FRI challenges. The
 //! verifier checks only bounded authenticated openings and caller-fixed AIR and
@@ -9,44 +9,52 @@
 //! TODO: Independently qualify the connected SMT/public statement relation,
 //! proximity/Fiat-Shamir/query security and the concrete six-lane construction,
 //! and close the proof-size and resource gaps before production admission. The
-//! fixed 375-query profile remains unqualified. Production still requires replay;
+//! fixed 375-query diagnostic profile is absent from normal builds. Production still requires replay;
 //! explicit offline byte budgets are not production admission limits. This
 //! proof is not a zero-knowledge claim.
 
+#[cfg(test)]
 use fastpq_isi::{FASTPQ_FINAL_V1, GoldilocksDigest384V1 as Digest};
+#[cfg(test)]
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
 #[cfg(test)]
-use norito::DeserializePayload;
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{DeserializePayload, NoritoDeserialize, NoritoSerialize};
+#[cfg(test)]
 use rayon::prelude::*;
 
+#[cfg(test)]
 use super::{
     AirQuotientDomain, ExecutionMode, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1,
     JointFriBatch, MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
 };
 #[cfg(test)]
-use crate::proof::PublicIO;
+use crate::Result;
+#[cfg(test)]
 use crate::{
-    Error, Result,
+    Error,
     fft::Planner,
-    proof::{FriQueryOpening, VerifyLimits, compact_fri_support},
+    proof::{FriQueryOpening, PublicIO, VerifyLimits, compact_fri_support},
 };
-
-#[path = "compact_protocol/shared_openings.rs"]
-pub(super) mod shared_openings;
 
 #[cfg(test)]
 #[path = "compact_protocol/metal_diagnostic.rs"]
 pub(super) mod metal_diagnostic;
+#[cfg(test)]
 #[path = "compact_protocol/profile.rs"]
 mod profile;
 #[cfg(test)]
+#[path = "compact_protocol/shared_openings.rs"]
+pub(super) mod shared_openings;
+#[cfg(test)]
 #[path = "compact_protocol/constant_fixture.rs"]
 mod test_fixture;
+#[cfg(test)]
 use profile::{Binding, ProtocolTranscript};
 
+#[cfg(test)]
 const MAX_CONSTRAINTS: usize = 1024;
 /// Maximum independently allocated row/evaluator workspaces in one proof phase.
+#[cfg(test)]
 pub(super) const MAX_PROVER_JOBS: usize = 32;
 
 /// Exact trusted relation geometry and circuit identity; never taken from a proof.
@@ -63,10 +71,12 @@ pub(super) struct FixedAirSchema {
 }
 
 /// Prepared prover callback; mutable captures may retain per-proof scratch space.
+#[cfg(test)]
 pub(super) type ProverEvaluator<'a> =
     Box<dyn FnMut(usize, u64, &[u64], &[u64]) -> Result<Vec<u64>> + Send + 'a>;
 
 /// Immutable prover preparation shared across jobs; each evaluator owns its scratch.
+#[cfg(test)]
 pub(super) trait PreparedAir: Sync {
     /// Create a worker-local evaluator borrowing only immutable prepared data.
     fn evaluator(&self) -> ProverEvaluator<'_>;
@@ -85,8 +95,10 @@ pub(super) trait FixedAir: Sync {
     /// Exact canonical public bytes, already authenticated by the surrounding caller.
     fn statement_bytes(&self) -> &[u8];
     /// Evaluate every base-field numerator at x from complete current/next rows.
+    #[cfg(test)]
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>>;
     /// Prepare prover-only acceleration without changing the verifier relation.
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>>
     where
         Self: Sized,
@@ -95,10 +107,12 @@ pub(super) trait FixedAir: Sync {
     }
 }
 
+#[cfg(test)]
 struct DirectPrepared<'a, R: FixedAir + ?Sized> {
     relation: &'a R,
 }
 
+#[cfg(test)]
 impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
     fn evaluator(&self) -> ProverEvaluator<'_> {
         Box::new(move |_, point, current, next| self.relation.evaluate(point, current, next))
@@ -111,6 +125,7 @@ impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
     name = "fastpq_prover::backend::compact_protocol::CompactProof",
     frame = "fastpq_prover::compact_v1::SinglePhaseProofV1"
 )]
+#[cfg(test)]
 pub(super) struct CompactProof {
     row_root: WireDigest,
     mixed_root: WireDigest,
@@ -120,6 +135,7 @@ pub(super) struct CompactProof {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[cfg(test)]
 struct CompactQuery {
     index: u32,
     current: Vec<u64>,
@@ -136,6 +152,7 @@ struct CompactQuery {
 /// Measured successful verification work; no counter depends on a private trace.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[cfg(test)]
 pub(super) struct VerificationWork {
     /// Exact canonical framed proof bytes, counted before cryptographic hashing.
     pub(super) proof_bytes: usize,
@@ -149,6 +166,7 @@ pub(super) struct VerificationWork {
     pub(super) fri_queries: usize,
 }
 
+#[cfg(test)]
 struct Geometry {
     schema: FixedAirSchema,
     lde_rows: usize,
@@ -157,6 +175,7 @@ struct Geometry {
     terminal_degree: usize,
 }
 
+#[cfg(test)]
 impl Geometry {
     fn new(relation: &impl FixedAir) -> Result<Self> {
         let schema = relation.schema();
@@ -203,16 +222,19 @@ impl Geometry {
 // Canonical compact-length Norito framing: fields carry a varint byte length,
 // vectors carry an eight-byte count and framed elements. All arithmetic is
 // checked even though normal proving fixes the geometry before using it.
+#[cfg(test)]
 fn wire_add(left: usize, right: usize) -> Result<usize> {
     left.checked_add(right)
         .ok_or_else(|| shape("compact wire-size arithmetic overflow"))
 }
 
+#[cfg(test)]
 fn wire_field(payload: usize) -> Result<usize> {
     let bits = (usize::BITS - payload.leading_zeros()).max(1) as usize;
     wire_add(payload, bits.div_ceil(7))
 }
 
+#[cfg(test)]
 fn wire_vector(count: usize, element: usize) -> Result<usize> {
     let elements = count
         .checked_mul(wire_field(element)?)
@@ -220,6 +242,7 @@ fn wire_vector(count: usize, element: usize) -> Result<usize> {
     wire_add(8, elements)
 }
 
+#[cfg(test)]
 fn wire_struct(fields: &[usize]) -> Result<usize> {
     fields
         .iter()
@@ -228,6 +251,7 @@ fn wire_struct(fields: &[usize]) -> Result<usize> {
 
 /// Exact fixed-layout size of the prover's temporary repeated openings.
 /// This internal representation is not the caller's shared-output byte budget.
+#[cfg(test)]
 fn repeated_wire_bytes(geometry: &Geometry) -> Result<usize> {
     let depth = geometry.lde_rows.ilog2() as usize;
     let layers = geometry.fri_lengths.len();
@@ -270,6 +294,7 @@ fn repeated_wire_bytes(geometry: &Geometry) -> Result<usize> {
 
 /// Evaluate at most 32 contiguous ranges, preserving both row and error order.
 /// Each range owns one scratch workspace; Rayon cannot subdivide its evaluator.
+#[cfg(test)]
 fn collect_prover_rows<T: Send>(
     length: usize,
     evaluate: impl Fn(std::ops::Range<usize>) -> Result<Vec<T>> + Sync + Send,
@@ -301,6 +326,7 @@ fn collect_prover_rows<T: Send>(
 }
 
 /// Reusable committed prover data. It is never constructed by verification.
+#[cfg(test)]
 struct PreparedTrace {
     geometry: Geometry,
     columns: Vec<Vec<u64>>,
@@ -309,11 +335,13 @@ struct PreparedTrace {
     bound_statement: Vec<u8>,
 }
 
+#[cfg(test)]
 struct CommittedTree {
     levels: Vec<Vec<Digest>>,
     leaf_count: usize,
 }
 
+#[cfg(test)]
 impl CommittedTree {
     fn root(&self) -> Digest {
         self.levels.last().expect("nonempty tree")[0]
@@ -341,6 +369,7 @@ pub(super) fn prove(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Co
     let trace = prepare_trace(relation, columns)?;
     prove_prepared(relation, &trace)
 }
+#[cfg(test)]
 fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<PreparedTrace> {
     let geometry = Geometry::new(relation)?;
     check_limit(
@@ -429,6 +458,7 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
     })
 }
 
+#[cfg(test)]
 fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<CompactProof> {
     let geometry = &trace.geometry;
     if relation.schema() != geometry.schema {
@@ -610,6 +640,7 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
 
 // The fixed binding owns every commitment and transcript message; the FRI
 // fold arithmetic and retained opening owner share one deterministic schedule.
+#[cfg(test)]
 fn fold_protocol_layers(
     evaluations: &[GoldilocksFp4V1],
     geometry: &Geometry,
@@ -734,6 +765,7 @@ fn verify_recorded(
     result
 }
 
+#[cfg(test)]
 fn preflight(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -856,6 +888,7 @@ fn preflight(
     }
     Ok(bytes)
 }
+#[cfg(test)]
 fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4V1> {
     if residues.len() != alphas.len() {
         return Err(shape("fixed AIR returned another exact numerator count"));
@@ -868,15 +901,18 @@ fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4
     Ok(value)
 }
 
+#[cfg(test)]
 fn fill_row(columns: &[Vec<u64>], index: usize, row: &mut [u64]) {
     for (value, column) in row.iter_mut().zip(columns) {
         *value = column[index];
     }
 }
 
+#[cfg(test)]
 fn next_index(index: usize, lde_rows: usize) -> usize {
     (index + FASTPQ_FINAL_V1.fri.blowup_factor as usize) % lde_rows
 }
+#[cfg(test)]
 fn canonical_base(value: u64, context: &'static str, indices: &[usize]) -> Result<()> {
     if value >= GOLDILOCKS_MODULUS {
         return Err(Error::NonCanonicalGoldilocksElement {
@@ -887,6 +923,7 @@ fn canonical_base(value: u64, context: &'static str, indices: &[usize]) -> Resul
     Ok(())
 }
 
+#[cfg(test)]
 fn canonical_extension(value: GoldilocksFp4V1, indices: &[usize]) -> Result<()> {
     for (lane, coefficient) in value.coefficients().into_iter().enumerate() {
         if coefficient >= GOLDILOCKS_MODULUS {
@@ -901,6 +938,7 @@ fn canonical_extension(value: GoldilocksFp4V1, indices: &[usize]) -> Result<()> 
     Ok(())
 }
 
+#[cfg(test)]
 fn check_limit(limit: &'static str, actual: usize, max: usize) -> Result<()> {
     if actual > max {
         return Err(Error::VerifierLimitExceeded { limit, actual, max });
@@ -908,6 +946,7 @@ fn check_limit(limit: &'static str, actual: usize, max: usize) -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn shape(details: &str) -> Error {
     Error::InvalidTraceShape {
         details: details.to_owned(),
@@ -1254,13 +1293,14 @@ mod tests {
         WireDigest::new(words).unwrap()
     }
 
-    fn rejected_before_hashing(proof: &CompactProof, limits: VerifyLimits) {
+    fn rejected_before_hashing(case: &str, proof: &CompactProof, limits: VerifyLimits) -> Error {
         let relation = FixedColumnsAir {
             public: fixture().digest,
         };
         let mut work = VerificationWork::default();
-        assert!(verify_recorded(&relation, proof, limits, &mut work).is_err());
-        assert_eq!(work, VerificationWork::default());
+        let error = verify_recorded(&relation, proof, limits, &mut work).expect_err(case);
+        assert_eq!(work, VerificationWork::default(), "{case}");
+        error
     }
 
     #[test]
@@ -1303,7 +1343,11 @@ mod tests {
             "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=375; replay_byte_budget_admitted=false; profile_security_qualified=false",
             started.elapsed()
         );
-        rejected_before_hashing(&fixture.compact, byte_limit_policy());
+        rejected_before_hashing(
+            "default replay proof-byte ceiling",
+            &fixture.compact,
+            byte_limit_policy(),
+        );
     }
 
     #[test]
@@ -1539,12 +1583,27 @@ mod tests {
                     proof.queries[0].fri.final_values.pop();
                 }
             }
-            rejected_before_hashing(&proof, diagnostic_limits());
+            rejected_before_hashing(
+                &format!("malformed shape {malformed}"),
+                &proof,
+                diagnostic_limits(),
+            );
         }
-        for column in [0, 31, 80, 272, 300, 309, 310, 341] {
-            let mut proof = base.clone();
-            proof.queries[0].current[column] = GOLDILOCKS_MODULUS;
-            rejected_before_hashing(&proof, diagnostic_limits());
+        for side in 0..2 {
+            for column in [0, 31, 80, 272, 300, 309, 310, 341] {
+                let mut proof = base.clone();
+                let row = if side == 0 {
+                    &mut proof.queries[0].current
+                } else {
+                    &mut proof.queries[0].next
+                };
+                row[column] = GOLDILOCKS_MODULUS;
+                rejected_before_hashing(
+                    &format!("noncanonical row: side={side}, column={column}"),
+                    &proof,
+                    diagnostic_limits(),
+                );
+            }
         }
         for lane in 0..4 {
             let mut coefficients = [0; 4];
@@ -1560,36 +1619,100 @@ mod tests {
                     3 => query.fri.rounds[0].folded_value = bad,
                     _ => query.fri.final_values[0] = bad,
                 }
-                rejected_before_hashing(&proof, diagnostic_limits());
+                rejected_before_hashing(
+                    &format!("noncanonical Fp4: target={target}, lane={lane}"),
+                    &proof,
+                    diagnostic_limits(),
+                );
             }
         }
-        for limits in [
-            VerifyLimits {
-                max_queries: 374,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_air_row_values: 341,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_query_path_len: 18,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_fri_layers: 17,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_fri_round_values: 3,
-                ..diagnostic_limits()
-            },
-            VerifyLimits {
-                max_batch_bytes: 31,
-                ..diagnostic_limits()
-            },
+        let relation = FixedColumnsAir {
+            public: fixture().digest,
+        };
+        let geometry = Geometry::new(&relation).unwrap();
+        let proof_bytes = preflight(&relation, base, diagnostic_limits(), &geometry).unwrap();
+        let exact = VerifyLimits {
+            max_queries: base.queries.len(),
+            max_air_row_values: relation.schema().width,
+            max_query_path_len: geometry.lde_rows.ilog2() as usize,
+            max_fri_layers: geometry.fri_lengths.len(),
+            max_fri_round_values: *geometry.fri_lengths.last().unwrap(),
+            // The active constant-column fixture binds eight public bytes.
+            // Derive the boundary from the relation so a fixture change cannot
+            // silently turn this rejection case into an admitted statement.
+            max_batch_bytes: relation.statement_bytes().len(),
+            max_proof_bytes: proof_bytes,
+            ..diagnostic_limits()
+        };
+        assert_eq!(
+            preflight(&relation, base, exact, &geometry).unwrap(),
+            proof_bytes,
+            "all exact resource boundaries must admit the valid shape"
+        );
+        for (name, actual, limits) in [
+            (
+                "max_queries",
+                exact.max_queries,
+                VerifyLimits {
+                    max_queries: exact.max_queries - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_air_row_values",
+                exact.max_air_row_values,
+                VerifyLimits {
+                    max_air_row_values: exact.max_air_row_values - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_query_path_len",
+                exact.max_query_path_len,
+                VerifyLimits {
+                    max_query_path_len: exact.max_query_path_len - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_fri_layers",
+                exact.max_fri_layers,
+                VerifyLimits {
+                    max_fri_layers: exact.max_fri_layers - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_fri_round_values",
+                exact.max_fri_round_values,
+                VerifyLimits {
+                    max_fri_round_values: exact.max_fri_round_values - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_compact_statement_bytes",
+                exact.max_batch_bytes,
+                VerifyLimits {
+                    max_batch_bytes: exact.max_batch_bytes - 1,
+                    ..exact
+                },
+            ),
+            (
+                "max_proof_bytes",
+                exact.max_proof_bytes,
+                VerifyLimits {
+                    max_proof_bytes: exact.max_proof_bytes - 1,
+                    ..exact
+                },
+            ),
         ] {
-            rejected_before_hashing(base, limits);
+            let error = rejected_before_hashing(name, base, limits);
+            assert!(
+                matches!(error, Error::VerifierLimitExceeded { limit, actual: observed, max }
+                    if limit == name && observed == actual && max == actual - 1),
+                "{name}: expected exact limit error for actual={actual}, got {error:?}"
+            );
         }
     }
 

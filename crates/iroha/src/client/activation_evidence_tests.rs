@@ -91,6 +91,26 @@ fn canonical_executed_network_fixture(
         output,
     };
     assert!(committed.verify_inclusion_in_block(&block));
+    let commitment = synthetic_executed_commitment(&block);
+    assert!(
+        committed.verify_inclusion_in_authenticated_execution(&block, &commitment),
+        "fixture commitment must bind its source block"
+    );
+    let decoded = decode_framed_signed_block(&block.encode_wire().unwrap()).unwrap();
+    assert_eq!(decoded.execution_context(), block.execution_context());
+    assert_eq!(
+        decoded.network_input_merkle_commitment(),
+        commitment.transaction_input_commitment
+    );
+    assert_eq!(
+        decoded.output_merkle_commitment(),
+        commitment.transaction_output_commitment
+    );
+    assert!(committed.verify_inclusion_in_block(&decoded));
+    assert!(
+        committed.verify_inclusion_in_authenticated_execution(&decoded, &commitment),
+        "fixture commitment must bind its decoded wire"
+    );
     if include_internal {
         assert_eq!(
             block
@@ -117,6 +137,8 @@ fn synthetic_executed_commitment(
         Hash::new(b"fixture parent state"), Hash::new(b"fixture post state"),
         Hash::new(b"fixture ordinary writes"), wire.len() as u64, Hash::new(&wire),
     )
+    .with_transaction_commitments_from_block(block)
+    .expect("fixture exact input/output commitments")
 }
 
 #[test]
@@ -211,6 +233,32 @@ fn canonical_executed_block_reader_requires_authenticated_execution_commitment()
             .expect_err("forged successful result with unchanged consensus hash must fail")
             .to_string()
             .contains("authenticated execution commitment")
+    );
+}
+
+#[test]
+fn canonical_executed_block_reader_rejects_a_transaction_from_another_network() {
+    let (height, block, committed) = canonical_executed_block_fixture();
+    let wire = block.encode_wire().expect("canonical executed block wire");
+    let commitment = synthetic_executed_commitment(&block);
+    let mut client = client_with_base_url(base_url());
+    client.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"another network for executed block reader",
+    )));
+    let response = capture_request(
+        mk_response(StatusCode::OK, wire, Some(APPLICATION_NORITO)),
+        |transport| {
+            let client = client.clone().with_test_http_transport(transport);
+            mark_data_model_compatible(&client);
+            client.get_canonical_executed_block_wire(height, &committed, &commitment)
+        },
+    )
+    .0;
+    assert!(
+        response
+            .expect_err("a valid committed transaction from another network must fail")
+            .to_string()
+            .contains("authenticated client network")
     );
 }
 

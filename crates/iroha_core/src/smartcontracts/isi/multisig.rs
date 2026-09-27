@@ -7,6 +7,7 @@ use crate::{
     state::{
         StateTransaction, WorldReadOnly, public_lane_reward_record_matches_key,
         public_lane_stake_share_matches_key, public_lane_validator_record_matches_key,
+        retail_daily_limit_state as retail_state,
     },
 };
 use iroha_crypto::{Hash, HashOf};
@@ -445,6 +446,28 @@ fn rekey_account_id(
     new_account: &AccountId,
     home_domain: Option<&iroha_model_base::domain::DomainId>,
 ) -> Result<(), InstructionExecutionError> {
+    // A controller change cannot silently create a new retail identity or
+    // discard an existing issuer attestation. A future owner-governed rekey
+    // instruction must preserve the exact identity and DAY usage atomically.
+    let has_retail_binding =
+        retail_state::account_is_retained(state_transaction.world(), old_account)
+            .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
+    let holds_retail_governed_asset = state_transaction
+        .world
+        .assets_in_account_iter(old_account)
+        .try_fold(false, |found, asset| {
+            retail_state::has_policy_for_definition(
+                state_transaction.world(),
+                asset.id().definition(),
+            )
+            .map(|governed| found || governed)
+        })
+        .map_err(|reason| InstructionExecutionError::InvariantViolation(reason.into()))?;
+    if has_retail_binding || holds_retail_governed_asset {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("cannot rekey account {old_account}: retail identity continuity requires an owner-governed transition").into(),
+        ));
+    }
     if let Some(contract) = crate::smartcontracts::code::historical_contract_for_subject(
         &state_transaction.world,
         old_account,
@@ -730,6 +753,9 @@ fn rekey_account_id(
         })
         .collect::<BTreeSet<_>>();
     state_transaction
+        .validate_fastpq_governance_rekey(old_account, new_account)
+        .map_err(|error| InstructionExecutionError::InvariantViolation(error.into()))?;
+    state_transaction
         .world
         .triggers
         .replace_account_id(old_account, new_account)
@@ -826,6 +852,10 @@ fn rekey_account_id(
         state_transaction.world.account_roles.insert(new_key, ());
     }
     for asset_id in assets_to_move {
+        // Rekey has its own verified authority, but its quantity-source owner is
+        // not part of the complete effect relation yet. Preserve the mutation
+        // and poison only the rollback-local candidate instead of omitting it.
+        state_transaction.world.quantity_mutation_observation.changed();
         let new_asset_id = iroha_data_model::asset::AssetId::with_scope(
             asset_id.definition().clone(),
             new_account.clone(),

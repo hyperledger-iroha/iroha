@@ -7,8 +7,8 @@ fn recovered_prepare_already_repaired_child_reopens_and_publishes() {
 }
 
 fn recovered_prepare_already_repaired_child_reopens_and_publishes_body() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("repaired-child safety directory");
     let ledger = TempDir::new().expect("repaired-child ledger");
     let payload = TempDir::new().expect("repaired-child payload store");
@@ -64,7 +64,7 @@ fn recovered_prepare_already_repaired_child_reopens_and_publishes_body() {
             .installed
             .seed_child_recovery_for_test(&mut recovery)
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let published = installed
         .open_coordinator_and_publish_for_test(ledger.path(), &mut payload_store, recovery)
         .unwrap_or_else(|error| {
@@ -74,9 +74,9 @@ fn recovered_prepare_already_repaired_child_reopens_and_publishes_body() {
             )
         });
     assert!(published.exact_published_join_for_test());
-    assert!(crate::sumeragi::status::v2_status().is_some());
+    assert!(crate::sumeragi::v2_status::v2_status().is_some());
     drop(published);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 #[cfg(feature = "bls")]
@@ -182,6 +182,13 @@ fn recovered_commit_vote_sign_retains_the_exact_authenticated_prepare_qc() {
 
 #[test]
 fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert() {
+    run_lifecycle_fixture_on_large_stack(
+        "recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert",
+        recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert_body,
+    );
+}
+
+fn recovered_vote_sign_startup_cut_is_one_shot_and_drop_inert_body() {
     let directory = TempDir::new().expect("temporary recovery seal directory");
     let (startup, _expected_vote, _proposal, _manifest, _validated) =
         reopen_with_prepare_intent(&directory, 0xD3);

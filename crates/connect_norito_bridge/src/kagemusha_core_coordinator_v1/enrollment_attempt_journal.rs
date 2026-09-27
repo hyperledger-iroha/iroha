@@ -35,6 +35,7 @@ const MAX_PROOF_RESPONSE_BYTES: usize = 96 * 1024;
 const MAX_FINISH_RESPONSE_BYTES: usize = 4 * 1024;
 const DEADLINE: Duration = Duration::from_secs(120);
 const REQUEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:native-enrollment-phase-request\0";
+const OWNER_SCOPE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:native-enrollment-owner-scope\0";
 
 /// Closed attempt-journal failures. None constructs a verified Core capability.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,7 +88,7 @@ pub struct KagemushaEnrollmentJournalPinsV1 {
 }
 
 impl KagemushaEnrollmentJournalPinsV1 {
-    fn validate(self) -> Result<()> {
+    pub(super) fn validate(self) -> Result<()> {
         if [
             self.release_id,
             self.hardware_profile_id,
@@ -135,6 +136,14 @@ impl KagemushaEnrollmentLiveSelectionV1 {
     #[must_use]
     pub fn pins(&self) -> KagemushaEnrollmentJournalPinsV1 {
         self.pins
+    }
+
+    /// Compare two live references to the same process-local journal and original attempt.
+    pub(super) fn same_attempt(&self, other: &Self) -> Result<bool> {
+        if !Arc::ptr_eq(&self.journal, &other.journal) || self.pins != other.pins {
+            return Ok(false);
+        }
+        Ok(self.require_live()? == other.require_live()?)
     }
 
     /// Check the exact retained journal record and original continuous deadline.
@@ -434,12 +443,22 @@ impl KagemushaEnrollmentAttemptJournalV1 {
     }
 
     fn persist(&self, state: &mut StateV1, mut next: ImageV1) -> Result<()> {
-        next.revision = state
-            .image
-            .revision
-            .checked_add(1)
-            .ok_or(KagemushaEnrollmentJournalErrorV1::Store)?;
-        let bytes = next.encode_checked()?;
+        next.revision = match state.image.revision.checked_add(1) {
+            Some(revision) => revision,
+            None => {
+                state.poisoned = true;
+                state.deadlines.clear();
+                return Err(KagemushaEnrollmentJournalErrorV1::Store);
+            }
+        };
+        let bytes = match next.encode_checked() {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                state.poisoned = true;
+                state.deadlines.clear();
+                return Err(error);
+            }
+        };
         let prior = state.persisted.then_some(state.image.revision);
         if self.store.compare_and_swap(prior, &bytes).is_err() {
             state.poisoned = true;
@@ -510,6 +529,9 @@ impl KagemushaEnrollmentAttemptJournalV1 {
         }
         let deadline = NativeDeadlineV1::start(DEADLINE)
             .map_err(|_| KagemushaEnrollmentJournalErrorV1::Unavailable)?;
+        let native_deadline_continuous_ms = deadline
+            .expiry_continuous_ms()
+            .map_err(|_| KagemushaEnrollmentJournalErrorV1::Unavailable)?;
         let ticket = (0..16)
             .find_map(|_| {
                 let mut raw = [0; 8];
@@ -553,6 +575,26 @@ impl KagemushaEnrollmentAttemptJournalV1 {
             finish_request_digest: [0; 32],
             finish_response: Vec::new(),
         };
+        // This digest scopes the app's local cache to the original native attempt. It is not
+        // the eventual retail enrollment ID or a credential, and no app-supplied bytes can
+        // replace the independently pinned release, policies, or random selected lane.
+        let owner_scope: [u8; 32] = {
+            let mut hash = Sha256::new();
+            hash.update(OWNER_SCOPE_DOMAIN);
+            hash.update((account_i105.len() as u64).to_le_bytes());
+            hash.update(account_i105.as_bytes());
+            hash.update(ticket.to_le_bytes());
+            hash.update(client_nonce);
+            hash.update(pins.release_id);
+            hash.update(pins.hardware_profile_id);
+            hash.update(pins.issuer_policy_id);
+            hash.update(pins.app_policy_digest);
+            hash.update(lane_id);
+            hash.finalize().into()
+        };
+        if owner_scope == [0; 32] {
+            return Err(KagemushaEnrollmentJournalErrorV1::Invalid);
+        }
         let mut next = state.image.clone();
         next.records.push(record);
         self.persist(&mut state, next)?;
@@ -563,6 +605,8 @@ impl KagemushaEnrollmentAttemptJournalV1 {
             pins.release_id.to_vec(),
             pins.hardware_profile_id.to_vec(),
             lane_id.to_vec(),
+            owner_scope.to_vec(),
+            native_deadline_continuous_ms.to_le_bytes().to_vec(),
         ])
         .map_err(|_| KagemushaEnrollmentJournalErrorV1::Invalid)?;
         archive_boundary::validate_response(method, request_frame, &response)
@@ -845,6 +889,15 @@ impl KagemushaEnrollmentAttemptJournalV1 {
         }
         state.deadlines.clear();
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn expire_ticket_for_test(&self, ticket: u64) {
+        self.state
+            .lock()
+            .unwrap()
+            .deadlines
+            .insert(ticket, NativeDeadlineV1::expired_for_test());
     }
 }
 

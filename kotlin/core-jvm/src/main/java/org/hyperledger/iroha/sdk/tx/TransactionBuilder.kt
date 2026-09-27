@@ -4,7 +4,6 @@ import org.hyperledger.iroha.sdk.crypto.SigningException
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.crypto.SignatureAdmission
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
-import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.tx.norito.NoritoCodecAdapter
 import org.hyperledger.iroha.sdk.tx.norito.NoritoException
@@ -19,17 +18,18 @@ class TransactionBuilder(
     /**
      * Encodes the payload for public Torii submission and signs it using the provided signer.
      *
-     * Public submission requires the signature-bound QueuePlan admission intent. The caller's
-     * payload remains unchanged so direct codec users continue to produce ordinary transactions.
+     * The caller selects the signature-bound admission intent. Ordinary is the
+     * default for direct single-route work; specialized multi-route protocols
+     * must set QueuePlanSynced before signing.
      */
     @Throws(NoritoException::class, SigningException::class)
     fun encodeAndSign(payload: TransactionPayload, signer: Signer): SignedTransaction =
-        encodeAndSignInternal(payload.withQueuePlanSyncedAdmission(), signer, null)
+        encodeAndSignInternal(payload, signer, null)
 
     /** Encodes a public-submission payload and signs it using the provided signer with a key alias. */
     @Throws(NoritoException::class, SigningException::class)
     fun encodeAndSign(payload: TransactionPayload, signer: Signer, alias: String): SignedTransaction =
-        encodeAndSignInternal(payload.withQueuePlanSyncedAdmission(), signer, alias)
+        encodeAndSignInternal(payload, signer, alias)
 
     private fun encodeAndSignInternal(
         payload: TransactionPayload,
@@ -63,7 +63,4 @@ class TransactionBuilder(
             .build()
     }
 
-    private fun TransactionPayload.withQueuePlanSyncedAdmission(): TransactionPayload {
-        return copy(admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
-    }
 }

@@ -26,6 +26,29 @@ import uuid
 from release_artifact_contract import ensure_private_directory
 
 
+def metadata_stderr_excerpt(stderr: bytes) -> str:
+    """Project a short, single-line Cargo error without terminal controls or private paths."""
+    text = stderr[:8192].decode("utf-8", "replace")
+    text = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\|$)", "", text)
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+    lines = []
+    for raw in text.splitlines():
+        line = " ".join("".join(char if char.isprintable() else " " for char in raw).split())
+        if not line:
+            continue
+        line = re.sub(r"(?i)\b(?:[a-z+]+)://\S+", "<url>", line)
+        line = re.sub(r"(?<![\w])(?:~|/)[^\s`'\"\])}]+", "<path>", line)
+        line = re.sub(
+            r"(?i)\b(?:bearer\s+|(?:token|password|secret|api[_-]?key|authorization)\s*[:=]\s*)\S+",
+            "<credential>", line,
+        )
+        lines.append(line[:240] + ("..." if len(line) > 240 else ""))
+        if len(lines) == 3:
+            break
+    excerpt = " | ".join(lines)
+    return excerpt[:512] + ("..." if len(excerpt) > 512 else "")
+
+
 def dependency_paths(raw: bytes) -> list[tuple[int, Path]]:
     """Read the pinned Cargo 1.93 version-one dependency record, including EOF."""
     offset = 0
@@ -74,13 +97,20 @@ def dependency_paths(raw: bytes) -> list[tuple[int, Path]]:
 
 
 def local_package_names(source: Path, environment: dict[str, str]) -> set[str]:
-    result = subprocess.run(
-        [environment["CARGO"], "--config", str(source / ".cargo/config.toml"),
-         "metadata", "--manifest-path", str(source / "Cargo.toml"),
-         "--locked", "--offline", "--format-version=1"],
-        cwd="/", env=environment, stdin=subprocess.DEVNULL, capture_output=True,
-        check=True, timeout=60, umask=0o077,
-    )
+    try:
+        result = subprocess.run(
+            [environment["CARGO"], "--config", str(source / ".cargo/config.toml"),
+             "metadata", "--manifest-path", str(source / "Cargo.toml"),
+             "--locked", "--offline", "--format-version=1"],
+            cwd="/", env=environment, stdin=subprocess.DEVNULL, capture_output=True,
+            check=False, timeout=60, umask=0o077,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise ValueError("offline Cargo package preflight timed out after 60s") from error
+    if result.returncode != 0:
+        excerpt = metadata_stderr_excerpt(result.stderr)
+        detail = f"; Cargo stderr: {excerpt}" if excerpt else "; Cargo stderr was empty"
+        raise ValueError(f"offline Cargo package preflight failed (exit {result.returncode}){detail}")
     return {package["name"] for package in json.loads(result.stdout)["packages"]
             if package["source"] is None}
 

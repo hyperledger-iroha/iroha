@@ -103,7 +103,7 @@ fn canonical_output_owner_does_not_allocate_detached_journals() {
         .commit_executed_block_for_testing(sb, cb)
         .expect("publish canonical work for the configured apply setting");
     let (prep_s, merged_s, fallback_s) = state_seq.view().metrics().pipeline_detached_counts();
-    let status_s = iroha_core::sumeragi::status::snapshot();
+    let status_s = iroha_core::status::snapshot();
     assert_eq!(prep_s, 0, "sequential: prepared must be zero");
     assert_eq!(merged_s, 0, "sequential: merged must be zero");
     assert_eq!(fallback_s, 0, "sequential: fallback must be zero");
@@ -126,7 +126,7 @@ fn canonical_output_owner_does_not_allocate_detached_journals() {
         .commit_executed_block_for_testing(sb, cb)
         .expect("publish canonical work for the configured apply setting");
     let (prep_p, _merged_p, _fallback_p) = state_par.view().metrics().pipeline_detached_counts();
-    let status_p = iroha_core::sumeragi::status::snapshot();
+    let status_p = iroha_core::status::snapshot();
     assert_eq!(prep_p, 0, "canonical owner retains its original journal");
     assert_eq!(status_p.pipeline_execution.detached_prepared_total, 0);
 }
@@ -148,7 +148,7 @@ fn parallel_apply_knob_compiles_without_telemetry() {
         state
             .commit_executed_block_for_testing(sb, cb)
             .expect("publish canonical work for the configured apply setting");
-        let status = iroha_core::sumeragi::status::snapshot();
+        let status = iroha_core::status::snapshot();
         assert_eq!(
             status.pipeline_execution.detached_prepared_total, 0,
             "canonical execution retains its original journal for either setting"

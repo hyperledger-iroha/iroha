@@ -390,6 +390,7 @@ state_test! { sync native_recorded_control_suffix_opens_exact_next_context_and_r
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
             .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("exact original first-source owners"); };
+        drop(carrier);
         let recorded = source.record_execution(fixture.applying.clone())
             .unwrap().expect("same applying pre-State");
         assert_native_control_suffix(&fixture, &recorded);
@@ -437,6 +438,7 @@ state_test! { sync native_recorded_control_rejects_changed_opening_and_stale_ver
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
             .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("exact original first-source owners"); };
+        drop(carrier);
         let error = source.record_execution(other).err().expect("verified foreign context is not applying authority");
         assert!(matches!(error, MergeLedgerCommitError::NativeControlValidation(_)), "{error}");
         assert_eq!(crate::snapshot::canonical_state_snapshot_hash(state).unwrap(), before);
@@ -543,6 +545,7 @@ state_test! { sync native_recorded_control_executes_requested_beacon_before_suff
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
             .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("actual source with mandatory beacon control"); };
+        drop(carrier);
         let recorded = source.record_execution(fixture.applying.clone())
             .unwrap().expect("same complete original pre-State");
         assert_native_control_suffix(&fixture, &recorded);
@@ -585,6 +588,7 @@ state_test! { sync native_recorded_control_rejects_missing_corrupt_and_foreign_p
         let NativeLaneBatchSourcePreparationV1::Ready(source) = state
             .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
             else { panic!("first input and Decisions remain authentic independently of controls"); };
+        drop(carrier);
         let error = source.record_execution(fixture.applying.clone())
             .err().expect("real requested beacon must be exact");
         assert!(matches!(error, MergeLedgerCommitError::NativeControlValidation(_)), "{error}");
@@ -626,6 +630,7 @@ state_test! { sync native_recorded_control_admits_same_carrier_input_without_exe
     let NativeLaneBatchSourcePreparationV1::Ready(source) = state
         .prepare_proposed_native_lane_batch_source(carrier.clone(), &[], crate::state::NativeExecutionResourceAdmission::for_test_carrier(&carrier)).unwrap()
         else { panic!("earlier exact source remains independent from the fresh admission"); };
+    drop(carrier);
     let recorded = source.record_execution(fixture.applying.clone())
         .unwrap().expect("same applying pre-State");
     assert_native_control_suffix(&fixture, &recorded);

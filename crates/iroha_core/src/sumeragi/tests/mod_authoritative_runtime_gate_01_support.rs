@@ -476,29 +476,12 @@ fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
         block_hash: HashOf::from_untyped_unchecked(Hash::new(b"fair-v2-ingress-max-timeout-block")),
         payload_hash: Hash::new(b"fair-v2-ingress-max-timeout-payload"),
     };
-    let ordinary_writes_root = Hash::new(b"fair-v2-ingress-max-writes");
-    let kagemusha_top_up_root = Hash::new(b"fair-v2-ingress-max-topup-root");
-    let kagemusha_top_up_count = u32::MAX;
-    let post_state_root = wire::ExecutionCommitment::kagemusha_post_state_root_v1(
-        kagemusha_top_up_count,
-        ordinary_writes_root,
-        kagemusha_top_up_root,
-    );
     let highest_prepare_qc = wire::QuorumCertificate {
         round,
         proposal_round: round,
         phase: wire::GlobalPhase::Prepare,
         subject,
-        execution_commitment: wire::ExecutionCommitment::new_without_merge_carrier(
-            Hash::new(b"fair-v2-ingress-max-parent-state"),
-            post_state_root,
-            ordinary_writes_root,
-            Some(kagemusha_top_up_root),
-            kagemusha_top_up_count,
-            1,
-            Hash::new(b"fair-v2-ingress-max-executed-wire"),
-        )
-        .expect("maximum top-up projection is canonical"),
+        execution_commitment: v2_maximum_execution_commitment_wire(),
         signers: (0..wire::MAX_VALIDATORS_PER_HEIGHT)
             .map(|index| u32::try_from(index).expect("validator bound fits u32"))
             .collect(),
@@ -514,23 +497,7 @@ fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
         }),
     ))
 }
-fn v2_maximum_structural_proposal_wire(
-    layout: wire::DataAvailabilityLayout,
-    roster_len: usize,
-) -> BlockMessage {
-    assert!(roster_len <= wire::MAX_VALIDATORS_PER_HEIGHT);
-    let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-        b"fair-v2-ingress-max-proposal-context",
-    )));
-    let subject = wire::BlockSubject {
-        parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
-            b"fair-v2-ingress-max-proposal-parent",
-        ))),
-        block_hash: HashOf::from_untyped_unchecked(Hash::new(
-            b"fair-v2-ingress-max-proposal-block",
-        )),
-        payload_hash: Hash::new(b"fair-v2-ingress-max-proposal-payload"),
-    };
+fn v2_maximum_execution_commitment_wire() -> wire::ExecutionCommitment {
     let ordinary_writes_root = Hash::new(b"fair-v2-ingress-max-proposal-writes");
     let kagemusha_top_up_root = Hash::new(b"fair-v2-ingress-max-proposal-topup-root");
     let kagemusha_top_up_count = u32::MAX;
@@ -539,7 +506,7 @@ fn v2_maximum_structural_proposal_wire(
         ordinary_writes_root,
         kagemusha_top_up_root,
     );
-    let execution_commitment = wire::ExecutionCommitment::new_with_manifests(
+    let mut execution_commitment = wire::ExecutionCommitment::new_with_manifests(
         Hash::new(b"fair-v2-ingress-max-proposal-parent-state"),
         post_state_root,
         ordinary_writes_root,
@@ -564,6 +531,48 @@ fn v2_maximum_structural_proposal_wire(
         Hash::new(b"fair-v2-ingress-max-proposal-executed-wire"),
     )
     .expect("maximum bounded execution projection is canonical");
+    // Both selective trees are present on a result-bearing block. Their roots
+    // and counts are CommitQC-authenticated, so omitting them here understates
+    // every nested QC and TimeoutCertificate admission byte ceiling. A leaf
+    // count no greater than the executed-wire byte bound has the same fixed
+    // eight-byte representation as every smaller legal count.
+    let maximum_leaf_count = NonZeroU64::new(wire::MAX_EXECUTED_BLOCK_WIRE_BYTES)
+        .expect("maximum leaf count is non-zero");
+    execution_commitment.transaction_input_commitment = Some(MerkleTreeCommitment::new(
+        HashOf::<MerkleTree<iroha_data_model::transaction::TransactionEntrypoint>>::from_untyped_unchecked(
+            Hash::new(b"fair-v2-ingress-max-proposal-inputs"),
+        ),
+        maximum_leaf_count,
+    ));
+    execution_commitment.transaction_output_commitment = Some(MerkleTreeCommitment::new(
+        HashOf::<MerkleTree<iroha_data_model::block::execution_output::ExecutionOutputV1>>::from_untyped_unchecked(
+            Hash::new(b"fair-v2-ingress-max-proposal-outputs"),
+        ),
+        maximum_leaf_count,
+    ));
+    execution_commitment
+        .validate()
+        .expect("maximum selective commitments are canonical");
+    execution_commitment
+}
+fn v2_maximum_structural_proposal_wire(
+    layout: wire::DataAvailabilityLayout,
+    roster_len: usize,
+) -> BlockMessage {
+    assert!(roster_len <= wire::MAX_VALIDATORS_PER_HEIGHT);
+    let context_id = wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+        b"fair-v2-ingress-max-proposal-context",
+    )));
+    let subject = wire::BlockSubject {
+        parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"fair-v2-ingress-max-proposal-parent",
+        ))),
+        block_hash: HashOf::from_untyped_unchecked(Hash::new(
+            b"fair-v2-ingress-max-proposal-block",
+        )),
+        payload_hash: Hash::new(b"fair-v2-ingress-max-proposal-payload"),
+    };
+    let execution_commitment = v2_maximum_execution_commitment_wire();
     let signers = (0..roster_len)
         .map(|index| u32::try_from(index).expect("validator bound fits u32"))
         .collect::<Vec<_>>();

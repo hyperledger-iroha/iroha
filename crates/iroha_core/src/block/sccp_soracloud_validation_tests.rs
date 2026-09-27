@@ -546,6 +546,7 @@ fn sccp_commitment_root_validation_rejects_short_result_vector() {
         signatures: BTreeSet<iroha_data_model::block::BlockSignature>,
         payload: iroha_data_model::block::BlockPayload,
         result: Option<iroha_data_model::block::BlockResult>,
+        commit_certificate: Option<iroha_data_model::block::CommitCertificate>,
     }
     use norito::codec::{DecodeAll as _, Encode as _};
     let mut forged = MutableSccpOutputBlock::decode_all(&mut block.encode().as_slice()).unwrap();

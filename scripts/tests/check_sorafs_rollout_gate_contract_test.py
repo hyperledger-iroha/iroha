@@ -20005,7 +20005,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "Remaining SF-11 work is native qualification, release evidence, and SDK distribution: clean five-target ABI-23 rebuilds, skip-free parity replay, published archives and bindings, signed manifests, and live operator smokes.",
+        "Remaining SF-11 work is native qualification, release evidence, and SDK distribution: clean five-target ABI-24 rebuilds, skip-free parity replay, published archives and bindings, signed manifests, and live operator smokes.",
         "Remaining downstream work is signed release packaging, publication, and live SDK smoke evidence for those bindings.",
         "Cross-target release evidence is still a production gate; archive published checksums and smoke outputs for each supported release target and require the SF-11 release evidence gate to pass before declaring those artifacts production-ready.",
         "Final release-specific URLs, signatures, and package versions remain SF-11 release evidence.",
@@ -21609,7 +21609,7 @@ def test_orderbook_docs_distinguish_shipped_native_ledger_from_remaining_service
         "javascript/iroha_js/src/toriiClient.js": ("responseStatusWithoutUserGetter(response) !== 202", "_readBoundedResponseBytes(", "x-iroha-signed-transaction-hash"),
         "python/iroha_torii_client/orderbook_submission.py": ("SorafsOrderbookSubmissionAmbiguousError", "_HTTP_ADAPTER_SEND(", "stream=True", "require_orderbook_https_base_url", "Transfer-Encoding"),
         "python/iroha_torii_client/tests/orderbook_submission_test.py": ("test_redirect_body_is_never_consumed_by_the_one_shot_adapter_path", "test_noncanonical_or_insecure_base_url_fails_before_http"),
-        "scripts/check_native_sdk_abi23_artifact.py": ("inspectSorafsOrderbookSubmissionForDiscriminantV1", "verify_sorafs_orderbook_submission_receipt_v1"),
+        "scripts/check_native_sdk_artifact.py": ("inspectSorafsOrderbookSubmissionForDiscriminantV1", "verify_sorafs_orderbook_submission_receipt_v1"),
     }
     assert all(marker in read(REPO_ROOT / path) for path, markers in sdk_contract.items() for marker in markers)
     assert "sdk_release" in required_release_kinds("orderbook")

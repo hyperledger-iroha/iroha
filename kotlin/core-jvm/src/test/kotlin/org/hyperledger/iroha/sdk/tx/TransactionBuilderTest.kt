@@ -21,7 +21,7 @@ import kotlin.test.assertFailsWith
 class TransactionBuilderTest {
 
     @Test
-    fun `public builder binds QueuePlan admission while direct codec stays ordinary`() {
+    fun `public builder signs the caller's ordinary admission bytes unchanged`() {
         val codec = NoritoJavaCodecAdapter(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val payload = payload(metadata = mapOf("channel" to JsonValue.string("sdk-test")))
         val directBytes = codec.encodeTransaction(payload)
@@ -39,12 +39,13 @@ class TransactionBuilderTest {
         val decoded = codec.decodeTransaction(signed.encodedPayload())
         NoritoJavaCodecAdapter.validateCanonicalTransactionPayload(
             signed.encodedPayload(),
-            TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
+            TransactionAdmissionIntent.ORDINARY,
         )
 
-        assertEquals(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED, decoded.admissionIntent)
+        assertEquals(TransactionAdmissionIntent.ORDINARY, decoded.admissionIntent)
         assertEquals(JsonValue.string("sdk-test"), decoded.metadata["channel"])
         assertEquals(TransactionAdmissionIntent.ORDINARY, payload.admissionIntent)
+        assertContentEquals(directBytes, signed.encodedPayload())
         assertContentEquals(signed.encodedPayload(), signer.lastMessage)
     }
 

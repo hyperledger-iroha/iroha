@@ -51,7 +51,7 @@ fn vrf_restart_drops_revoked_provider_entries_but_keeps_replay_high_water() {
         let restored = load_vrf_state(
             &path,
             16,
-            &crate::sorafs::AdmissionRegistry::empty(),
+            &crate::sorafs::AdmissionRegistry::empty([0xA1; 32]),
             &network_id,
         )
         .expect("revoked-provider state must not brick restart");
@@ -76,7 +76,7 @@ fn vrf_restart_rejects_state_from_another_exact_network() {
             load_vrf_state(
                 &path,
                 16,
-                &crate::sorafs::AdmissionRegistry::empty(),
+                &crate::sorafs::AdmissionRegistry::empty([0xA1; 32]),
                 &foreign,
             ),
             Err(VrfError::Persistence(_))
@@ -124,7 +124,7 @@ fn vrf_restart_rejects_foreign_network_entry_inside_local_snapshot() {
             load_vrf_state(
                 &path,
                 16,
-                &crate::sorafs::AdmissionRegistry::empty(),
+                &crate::sorafs::AdmissionRegistry::empty([0xA1; 32]),
                 &local,
             ),
             Err(VrfError::Persistence(_))
@@ -152,8 +152,12 @@ fn vrf_restart_drops_entries_invalidated_by_active_key_rotation() {
             .collect::<HashSet<_>>();
         let policy = ProviderAdmissionCouncilPolicy::new(trusted_signers, 1)
             .expect("fixture council policy");
-        let admission = crate::sorafs::AdmissionRegistry::from_envelopes(policy, [envelope])
-            .expect("active admission fixture");
+        let admission = crate::sorafs::AdmissionRegistry::from_envelopes(
+            envelope.network_id,
+            policy,
+            [envelope],
+        )
+        .expect("active admission fixture");
         let manifest_digest = [0x52; 32];
         let submission = ProviderVrfSubmissionV1 {
             version: POR_VRF_SUBMISSION_VERSION_V1,

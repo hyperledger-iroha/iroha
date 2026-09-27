@@ -240,8 +240,8 @@ fn assert_native_economic_relay_effects(
 }
 
 fn assert_native_economic_relay_recorder_released() {
-    let guard = crate::sumeragi::witness::begin_exec_witness_capture().unwrap();
-    let empty = crate::sumeragi::witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
+    let guard = crate::exec_witness::begin_exec_witness_capture().unwrap();
+    let empty = crate::exec_witness::drain_exec_witness_checked(|_| Ok(())).unwrap();
     assert!(
         empty.reads.is_empty() && empty.writes.is_empty() && empty.fastpq_transcripts.is_empty()
     );
@@ -275,6 +275,7 @@ fn native_recorded_economic_relay_success(atomic_group: bool) {
         group.decisions().as_ptr(),
         group.contexts().as_ptr(),
     );
+    drop(carrier);
     let recorded = source
         .record_execution(applying)
         .unwrap()
@@ -420,6 +421,7 @@ fn native_recorded_economic_relay_missing_manifest(atomic_group: bool) {
     else {
         panic!("the complete source remains authentic without a relay policy root");
     };
+    drop(carrier);
     let error = source
         .record_execution(applying)
         .err()

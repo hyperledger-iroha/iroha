@@ -9,7 +9,7 @@ namespace Hyperledger.Iroha.Kagemusha;
 /// </summary>
 public static class KagemushaNativeShapeV1
 {
-    public const uint RequiredBridgeAbiVersion = 23;
+    public const uint RequiredBridgeAbiVersion = 24;
 
     private const string LibraryName = "connect_norito_bridge";
 
@@ -26,7 +26,7 @@ public static class KagemushaNativeShapeV1
         "connect_norito_kagemusha_v1_redemption_voucher_validate",
     ];
 
-    /// <summary>Whether the exact ABI-23 native validation boundary is loadable.</summary>
+    /// <summary>Whether the exact ABI-24 native validation boundary is loadable.</summary>
     public static bool IsAvailable
     {
         get
@@ -265,7 +265,7 @@ public static class KagemushaNativeShapeV1
     }
 
     private static InvalidOperationException Unavailable(Exception? inner = null) => new(
-        "ABI-23 connect_norito_bridge with KAGEMUSHA V1 shape symbols is required; no managed fallback exists.",
+        "ABI-24 connect_norito_bridge with KAGEMUSHA V1 shape symbols is required; no managed fallback exists.",
         inner);
 
     private delegate int NativeOneUnix(byte[] first, UIntPtr firstLength);

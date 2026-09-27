@@ -1,5 +1,7 @@
 //! Taira public testnet diagnostics and write canaries.
-use crate::{CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_expiry};
+use crate::{
+    CliOutputFormat, Run, RunContext, quote_and_sign_transaction_with_admission_and_expiry,
+};
 use eyre::{Context, Result, eyre};
 use iroha::{
     blocking::Client as BlockingIrohaClient,
@@ -19,7 +21,7 @@ use iroha::{
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
         prelude::{SignedTransaction, TransactionEntrypoint},
-        transaction::{Executable, FeePaymentIntent},
+        transaction::{Executable, FeePaymentIntent, TransactionAdmissionIntent},
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -4398,11 +4400,12 @@ fn prepare_final_canary_operation(
     insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_sha256)?;
     let instruction = Log::new(LogLevel::INFO, message);
     let executable = Executable::Instructions(vec![InstructionBox::from(instruction)].into());
-    let (transaction, fee_quote) = quote_and_sign_transaction_with_expiry(
+    let (transaction, fee_quote) = quote_and_sign_transaction_with_admission_and_expiry(
         &client,
         executable,
         fee_payment.clone(),
         metadata,
+        TransactionAdmissionIntent::QueuePlanSynced,
         binding.execution_expires_at_unix_ms,
     )
     .wrap_err("failed to quote and sign exact Taira canary transaction")?;
@@ -4853,6 +4856,9 @@ fn validate_prepared_transaction_closure(
     }
     match operation {
         PreparedTransactionOperationV1::FinalCanary(operation) => {
+            if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+                eyre::bail!("prepared final canary requires QueuePlanSynced admission");
+            }
             let expected_message = prepared_canary_message(&operation.binding)?;
             let expected_semantic = prepared_semantic_sha256(
                 &operation.binding,
@@ -9178,6 +9184,88 @@ mod tests {
             network_id: "fixture-network".to_owned(),
             authority: account.to_string(),
             operation: PreparedTransactionOperationV1::FinalCanary(operation),
+        }
+    }
+
+    #[test]
+    fn prepared_final_canary_requires_signed_queue_plan_admission() {
+        use iroha::data_model::transaction::TransactionBuilder;
+
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let network_id = crate::fallback_config().network_id;
+        let key_pair = fixture_key_pair(0x45);
+        let envelope = final_canary_envelope_fixture();
+        let binding = envelope.binding;
+        let message = prepared_canary_message(&binding).unwrap();
+        let semantic_hash =
+            prepared_semantic_sha256(&binding, WRITE_CANARY_OPERATION, &message).unwrap();
+        let binding_value = json::to_value(&binding).unwrap();
+        let mut metadata = Metadata::default();
+        insert_string_metadata(&mut metadata, "taira_canary", "write-canary").unwrap();
+        insert_string_metadata(
+            &mut metadata,
+            "taira_write_canary_idempotency_v1",
+            &binding.idempotency_key,
+        )
+        .unwrap();
+        metadata.insert(
+            Name::from_str(PREPARED_BINDING_METADATA).unwrap(),
+            IrohaJson::from_norito_value_ref(&binding_value).unwrap(),
+        );
+        insert_string_metadata(
+            &mut metadata,
+            PREPARED_OPERATION_METADATA,
+            WRITE_CANARY_OPERATION,
+        )
+        .unwrap();
+        insert_string_metadata(&mut metadata, PREPARED_SEMANTIC_METADATA, &semantic_hash).unwrap();
+
+        for intent in [
+            TransactionAdmissionIntent::QueuePlanSynced,
+            TransactionAdmissionIntent::Ordinary,
+        ] {
+            let PreparedTransactionOperationV1::FinalCanary(mut operation) =
+                final_canary_envelope_fixture().operation
+            else {
+                unreachable!("final canary fixture")
+            };
+            let transaction = TransactionBuilder::new(
+                network_id,
+                AccountId::new(key_pair.public_key().clone()),
+                operation.fee_payment.clone(),
+            )
+            .with_executable(Executable::Instructions(
+                vec![InstructionBox::from(Log::new(
+                    LogLevel::INFO,
+                    message.clone(),
+                ))]
+                .into(),
+            ))
+            .with_metadata(metadata.clone())
+            .with_admission_intent(intent)
+            .try_sign(key_pair.private_key())
+            .unwrap();
+            let wire = transaction.encode_wire_v1().unwrap();
+            operation.transaction_hash_hex = hex::encode(transaction.hash().as_ref());
+            operation.signed_transaction_wire_hex = hex::encode(&wire);
+            operation.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
+            operation.semantic_hash_hex = semantic_hash.clone();
+            let value = json::to_value(&operation).unwrap();
+            let result = verify_final_canary_prepared_operation_v1(
+                &value,
+                &network_id,
+                transaction.authority(),
+            );
+            if intent == TransactionAdmissionIntent::QueuePlanSynced {
+                assert_eq!(result.unwrap(), transaction);
+            } else {
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("QueuePlanSynced admission")
+                );
+            }
         }
     }
 

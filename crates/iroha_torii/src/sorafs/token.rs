@@ -249,6 +249,9 @@ impl StreamTokenIssuer {
             token_pk_version: self.defaults.key_version,
         };
         validate_token_body(&body)?;
+        // Refuse before charging issuance quota when finalized completed-operation proof has
+        // no production source. The signer repeats this check before provider I/O.
+        self.signer.require_completed_proof_source()?;
         let remaining_quota = self.reserve_issuance_budget(quota_subject, Instant::now())?;
         let token = self.signer.sign(body)?;
         Ok(TokenIssue {

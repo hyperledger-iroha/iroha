@@ -6,11 +6,12 @@ use super::super::{
     journal::{SignerReceiptJournalV1, SignerReceiptPurposeV1},
     release_manifest::*,
 };
+use super::credential_provider::credential;
 use super::*;
 use sorafs_manifest::signer::{
     protocol::{SignerOperationActionV1, signer_operation_signatures_digest_v1},
     receipt::{
-        SignerCompletedOperationV1, SignerOperationFinalizedAnchorV1,
+        SignerCompletedOperationV1, SignerOperationFinalizedAnchorV1, SignerReceiptErrorV1,
         SignerReleaseManifestExpectedV1, signer_release_manifest_digest_v1,
         verify_release_manifest_signer_receipt_v1,
     },
@@ -44,7 +45,8 @@ fn ceremony(
         fixture.coordinator,
         expected(),
         intent(SignerOperationActionV1::Sign).previous_audit,
-        SignerReceiptJournalV1::open(directory, SignerReceiptPurposeV1::ReleaseManifest).unwrap(),
+        SignerReceiptJournalV1::open_test(directory, SignerReceiptPurposeV1::ReleaseManifest)
+            .unwrap(),
     )
     .unwrap();
     (service, fixture.source, fixture.provider)
@@ -53,6 +55,145 @@ fn private_directory() -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
     directory
+}
+
+#[test]
+fn software_release_manifest_signing_commits_and_recovers_without_retrying_the_key() {
+    let directory = private_directory();
+    let canonical = directory.path().canonicalize().unwrap();
+    let (_credential_directory, credential_path) = credential(0x21);
+    let fixture = fixture_for(
+        SignerRoleV1::ReleaseManifest,
+        SignerPurposeBindingV1::ReleaseManifest {
+            deployment_id: "production-primary".into(),
+        },
+    );
+    fixture.source.state.lock().unwrap().expected_journal = Some(canonical.clone());
+    let source = Arc::clone(&fixture.source);
+    let service = SignerReleaseManifestServiceV1::from_software_supervisor_credential(
+        &credential_path,
+        fixture.coordinator.binding.clone(),
+        fixture.coordinator.record.clone(),
+        fixture.coordinator.trust.clone(),
+        Some(source.clone()),
+        expected(),
+        intent(SignerOperationActionV1::Sign).previous_audit,
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            .unwrap(),
+    )
+    .expect("reviewed release manifest with enrolled software key");
+    let receipt = service.sign(manifest()).expect("durable completion");
+    assert_eq!(receipt.signatures.len(), 4);
+    assert_eq!(source.state.lock().unwrap().commits, 1);
+    let reserved_reads_after_sign = source.state.lock().unwrap().reserved_reads;
+    fs::remove_file(&credential_path).expect("remove credential after construction");
+    assert_eq!(service.recover(manifest()).unwrap(), receipt);
+    assert_eq!(
+        source.state.lock().unwrap().reserved_reads,
+        reserved_reads_after_sign
+    );
+    assert!(
+        service.sign(manifest()).is_err(),
+        "operation id cannot be reused"
+    );
+    assert_eq!(source.state.lock().unwrap().commits, 1);
+    assert_eq!(
+        source.state.lock().unwrap().reserved_reads,
+        reserved_reads_after_sign
+    );
+    source.state.lock().unwrap().mutate(Mutation::SignerRevoked);
+    assert!(
+        service.recover(manifest()).is_err(),
+        "revoked custody cannot release"
+    );
+}
+
+#[test]
+fn software_release_manifest_assembly_refuses_unreviewed_purpose_and_absent_state_before_key_io() {
+    let directory = private_directory();
+    let canonical = directory.path().canonicalize().unwrap();
+    let missing_credential = canonical.join("missing-private-key");
+    let fixture = fixture_for(
+        SignerRoleV1::ReleaseManifest,
+        SignerPurposeBindingV1::ReleaseManifest {
+            deployment_id: "production-primary".into(),
+        },
+    );
+    let binding = fixture.coordinator.binding.clone();
+    let record = fixture.coordinator.record.clone();
+    let trust = fixture.coordinator.trust.clone();
+    let source = Arc::clone(&fixture.source);
+    let journal = || {
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            .unwrap()
+    };
+    assert!(matches!(
+        SignerReleaseManifestServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            binding.clone(),
+            record.clone(),
+            trust.clone(),
+            None,
+            expected(),
+            intent(SignerOperationActionV1::Sign).previous_audit,
+            journal(),
+        ),
+        Err(SignerReleaseManifestErrorV1::Operation(
+            SignerOperationErrorV1::StateUnavailable
+        ))
+    ));
+    let mut wrong_role = binding.clone();
+    wrong_role.role = SignerRoleV1::Promotion;
+    assert!(matches!(
+        SignerReleaseManifestServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            wrong_role,
+            record.clone(),
+            trust.clone(),
+            Some(source.clone()),
+            expected(),
+            intent(SignerOperationActionV1::Sign).previous_audit,
+            journal(),
+        ),
+        Err(SignerReleaseManifestErrorV1::Receipt(
+            SignerReceiptErrorV1::WrongPurpose
+        ))
+    ));
+    let mut wrong_review = expected();
+    wrong_review.manifest_size = 0;
+    assert!(matches!(
+        SignerReleaseManifestServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            binding,
+            record,
+            trust,
+            Some(source.clone()),
+            wrong_review,
+            intent(SignerOperationActionV1::Sign).previous_audit,
+            journal(),
+        ),
+        Err(SignerReleaseManifestErrorV1::Receipt(
+            SignerReceiptErrorV1::InvalidReceipt
+        ))
+    ));
+    assert!(matches!(
+        SignerReleaseManifestServiceV1::from_software_supervisor_credential(
+            &missing_credential,
+            fixture.coordinator.binding.clone(),
+            fixture.coordinator.record.clone(),
+            fixture.coordinator.trust.clone(),
+            Some(source.clone()),
+            expected(),
+            intent(SignerOperationActionV1::Sign).previous_audit,
+            SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::StreamToken)
+                .unwrap(),
+        ),
+        Err(SignerReleaseManifestErrorV1::Journal)
+    ));
+    let state = source.state.lock().unwrap();
+    assert_eq!(state.signing_reads, 0);
+    assert_eq!(state.reserved_reads, 0);
+    assert!(state.used_ids.is_empty());
 }
 
 #[test]
@@ -132,7 +273,7 @@ fn wrong_reviewed_bytes_and_wrong_purpose_never_invoke_key_provider() {
             fixture.coordinator,
             expected(),
             intent(SignerOperationActionV1::Sign).previous_audit,
-            SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
                 .unwrap()
         )
         .is_err()
@@ -158,7 +299,8 @@ fn wrong_reviewed_predecessor_refuses_signing_before_reservation_or_key_use() {
         fixture.coordinator,
         expected(),
         unreviewed_head,
-        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).unwrap(),
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            .unwrap(),
     )
     .unwrap();
     assert!(matches!(
@@ -240,7 +382,8 @@ fn committed_receipt_recovers_after_journal_reopen_with_original_predecessor() {
         fixture.coordinator,
         expected(),
         original_head,
-        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).unwrap(),
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            .unwrap(),
     )
     .unwrap();
     let receipt = service.sign(manifest()).unwrap();
@@ -255,21 +398,59 @@ fn committed_receipt_recovers_after_journal_reopen_with_original_predecessor() {
         restarted,
         expected(),
         original_head,
-        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).unwrap(),
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            .unwrap(),
     )
     .unwrap();
     assert_eq!(recovered_service.recover(manifest()).unwrap(), receipt);
     assert_eq!(source.state.lock().unwrap().signing_reads, 1);
     assert_eq!(source.state.lock().unwrap().commits, 1);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
-    assert!(matches!(
-        recovered_service.sign(manifest()),
-        Err(SignerReleaseManifestErrorV1::Operation(
-            SignerOperationErrorV1::ReservationConflict
-        ))
-    ));
+    let repeated = recovered_service.sign(manifest());
+    assert!(
+        matches!(
+            &repeated,
+            Err(SignerReleaseManifestErrorV1::Operation(
+                SignerOperationErrorV1::ReservationConflict
+            ))
+        ),
+        "repeated completed sign must be fenced by the advanced authoritative audit: {repeated:?}"
+    );
     assert_eq!(source.state.lock().unwrap().signing_reads, 2);
     assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn staged_release_receipt_fences_key_replay_after_source_rollback() {
+    let directory = private_directory();
+    let canonical = directory.path().canonicalize().unwrap();
+    let (service, source, provider) = ceremony(&canonical);
+    service.sign(manifest()).expect("first completed operation");
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+    {
+        let mut state = source.state.lock().unwrap();
+        // Simulate an invalid restored source that would otherwise reserve this same ID.
+        state.audit = intent(SignerOperationActionV1::Sign).previous_audit;
+        state.used_ids.clear();
+        state.completed = None;
+        state.reservation = None;
+    }
+    assert!(matches!(
+        service.sign(manifest()),
+        Err(SignerReleaseManifestErrorV1::Journal)
+    ));
+    let state = source.state.lock().unwrap();
+    assert!(
+        state.used_ids.is_empty(),
+        "no second reservation was attempted"
+    );
+    assert_eq!(state.commits, 1);
+    assert_eq!(provider.calls.load(Ordering::SeqCst), 4);
+    drop(state);
+    assert!(
+        service.recover(manifest()).is_err(),
+        "journal cannot invent native completion"
+    );
 }
 
 #[test]
@@ -314,9 +495,11 @@ fn journal_refuses_insecure_paths_links_permissions_and_unexpected_entries() {
     let target = canonical.join("journal");
     fs::create_dir(&target).unwrap();
     fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
-    assert!(SignerReceiptJournalV1::open(&target, SignerReceiptPurposeV1::ReleaseManifest).is_ok());
     assert!(
-        SignerReceiptJournalV1::open(
+        SignerReceiptJournalV1::open_test(&target, SignerReceiptPurposeV1::ReleaseManifest).is_ok()
+    );
+    assert!(
+        SignerReceiptJournalV1::open_test(
             std::path::Path::new("relative"),
             SignerReceiptPurposeV1::ReleaseManifest
         )
@@ -324,15 +507,19 @@ fn journal_refuses_insecure_paths_links_permissions_and_unexpected_entries() {
     );
     let link = canonical.join("link");
     symlink(&target, &link).unwrap();
-    assert!(SignerReceiptJournalV1::open(&link, SignerReceiptPurposeV1::ReleaseManifest).is_err());
+    assert!(
+        SignerReceiptJournalV1::open_test(&link, SignerReceiptPurposeV1::ReleaseManifest).is_err()
+    );
     fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).unwrap();
     assert!(
-        SignerReceiptJournalV1::open(&target, SignerReceiptPurposeV1::ReleaseManifest).is_err()
+        SignerReceiptJournalV1::open_test(&target, SignerReceiptPurposeV1::ReleaseManifest)
+            .is_err()
     );
     fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
     fs::write(target.join("unexpected"), b"not a receipt").unwrap();
     assert!(
-        SignerReceiptJournalV1::open(&target, SignerReceiptPurposeV1::ReleaseManifest).is_err()
+        SignerReceiptJournalV1::open_test(&target, SignerReceiptPurposeV1::ReleaseManifest)
+            .is_err()
     );
 }
 
@@ -398,7 +585,7 @@ fn journal_lease_is_exclusive_across_instances_and_processes() {
     const CHILD_DIRECTORY: &str = "IROHA_RELEASE_JOURNAL_LEASE_TEST_CHILD_DIRECTORY";
     if let Some(path) = std::env::var_os(CHILD_DIRECTORY) {
         assert!(
-            SignerReceiptJournalV1::open(
+            SignerReceiptJournalV1::open_test(
                 std::path::Path::new(&path),
                 SignerReceiptPurposeV1::ReleaseManifest
             )
@@ -410,9 +597,11 @@ fn journal_lease_is_exclusive_across_instances_and_processes() {
     let directory = private_directory();
     let canonical = directory.path().canonicalize().unwrap();
     let owner =
-        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).unwrap();
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            .unwrap();
     assert!(
-        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest).is_err(),
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+            .is_err(),
         "independent descriptor in the same process must not bypass the retention lease"
     );
     let child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -426,7 +615,7 @@ fn journal_lease_is_exclusive_across_instances_and_processes() {
         "child lock contention regression failed"
     );
     drop(owner);
-    SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
+    SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::ReleaseManifest)
         .expect("lease releases only after the original owner drops");
 }
 
@@ -444,7 +633,7 @@ fn release_constructor_rejects_stream_token_journal_before_current_state_or_key_
     // result prove the purpose guard runs before any fresh-state access or reservation.
     fixture.source.state.lock().unwrap().fail_observe = true;
     let journal =
-        SignerReceiptJournalV1::open(&canonical, SignerReceiptPurposeV1::StreamToken).unwrap();
+        SignerReceiptJournalV1::open_test(&canonical, SignerReceiptPurposeV1::StreamToken).unwrap();
     let error = SignerReleaseManifestServiceV1::new(
         fixture.coordinator,
         expected(),

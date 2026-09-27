@@ -115,7 +115,7 @@ These types sit alongside the existing Ed25519/BLS/ML-DSA primitives and become 
 ## Parameters and Configuration
 
 - System parameter families (all `Default`ed, carry getters, and convert to individual enums):
-- `SumeragiParameters { block_cadence_ms, max_clock_drift_ms, key_activation_lead_blocks, key_overlap_grace_blocks, key_expiry_grace_blocks, key_allowed_algorithms }`. The cadence and key policy are signed chain context; only the clock-drift variant remains mutable through the generic parameter enum.
+- `SumeragiParameters { block_cadence_ms, max_clock_drift_ms, key_activation_lead_blocks, key_overlap_grace_blocks, key_expiry_grace_blocks, key_allowed_algorithms, idle_block_interval_ms, exec_budget_ms, apply_budget_ms, max_block_bytes, empty_after_views, epoch_length_blocks, demotion_window }`. The cadence (default 1000 ms, the core's `block_time`) and key policy are signed chain context. The Sumeragi chain parameters `idle_block_interval_ms` (5000), `exec_budget_ms` (4000), `apply_budget_ms` (1000), `max_block_bytes` (4 MiB), `empty_after_views` (2) and `epoch_length_blocks` (3600) map 1:1 onto the core's `ChainParams` and have `SumeragiParameter` variants; `demotion_window` (128) is a genesis constant whose variant is accepted only in the genesis block. Until the Sumeragi driver lands, the node records none of these variants (TODO(WP5)).
   - `BlockParameters { max_transactions: NonZeroU64 }`.
   - `TransactionParameters { max_signatures, max_instructions, ivm_bytecode_size, max_tx_bytes, max_decompressed_bytes, max_time_to_live_ms }`. `max_time_to_live_ms` defaults to one day and bounds every signature-bound transaction lifetime.
   - `SmartContractParameters { fuel, memory, execution_depth, max_output_items, max_output_bytes }`. The output limits bound the aggregate queued instructions, durable writes, FastPQ entries, completed AXT states, and access artifacts retained by one IVM execution.
@@ -201,7 +201,14 @@ the first release does not decode superseded data-model layouts.
   - `payload: BlockPayload` with the header, the sole canonical
     `external_entrypoints: Vec<TransactionEntrypoint>` sequence, and the required
     V1 DA, NPoS, and execution-context option fields,
-  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`, AXT and trigger records, the AXT policy snapshot, and lane-finality statements.
+  - `result: BlockResult` (secondary execution state) containing `time_triggers`, entry/result Merkle trees, `transaction_results`, `committed_fragment_count`, `fastpq_transcripts: BTreeMap<Hash, Vec<TransferTranscript>>`, AXT and trigger records, the AXT policy snapshot, and lane-finality statements,
+  - `commit_certificate: Option<CommitCertificate>`: the Sumeragi finality proof of a
+    committed block, as opaque canonical Norito bytes of the core block header, its
+    `CommitQC` and the preimage of the certified result `R` (`specs/sumeragi.md` §3.2, §3.4,
+    §4.1; decoded and verified by `iroha_core`). It is `None` on proposals, on executed
+    blocks before commit and on genesis; `canonical_resultless_proposal` clears it, and it
+    is not covered by the block hash (a header hash), the proposal wire hash or the
+    executed block wire hash.
 - Utilities: `presigned`, fallible `set_transaction_results(...)` and `set_transaction_results_with_transcripts(...)`, `header()`, `signatures()`, `hash()`, `add_signature`, `replace_signatures`.
 - Every `BlockPayload` and `BlockResult` V1 field is present on wire, including
   empty vectors and `None` options. Pre-release layouts that omitted empty

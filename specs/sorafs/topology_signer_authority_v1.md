@@ -1,6 +1,7 @@
 # Topology signer authority V1 prerequisite
 
-Status: open. The topology receipt contract is a pure consistency prerequisite. It does not
+Status: open. The topology receipt contract is a pure consistency prerequisite; the typed V1
+topology instruction is registered but explicitly closed in Core. It does not
 integrate topology approval into production promotion, authenticate native execution, qualify a
 software provider, or prove that a topology was deployed. Authenticated software custody is
 supported; hardware is optional and provides no implicit signing authority.
@@ -45,8 +46,9 @@ The next implementation owner is a dedicated topology authority, following the *
 final-promotion authority without reusing its role, permissions, schema identities or namespace.
 These work packages are dependencies, not implemented types or completed release evidence:
 
-1. **Data model and execution state.** Add a topology-owned module under
-   `crates/iroha_data_model/src/sorafs/` and a typed ISI in `src/isi/sorafs.rs`. It must own bounded
+1. **Data model and execution state.** The topology-owned module under
+   `crates/iroha_data_model/src/sorafs/` and typed ISI in `src/isi/sorafs.rs` are registered without
+   native admission. Core must own bounded
    custody-control revisions, exact request authorization, exclusive reserve/fence/expiry, immutable
    completion and challenge-bearing current Checks. Record the actual executing account, block
    height, ordered instruction index and execution time. Deployment/candidate/request subjects

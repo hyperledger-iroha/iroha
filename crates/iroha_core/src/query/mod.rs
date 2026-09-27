@@ -17,6 +17,8 @@ pub mod projection_checkpoint_journal;
 pub mod projection_rowset;
 pub mod projection_shard;
 pub mod provider_ingest_finalized;
+/// Raw role-13 custody history and same-State block finality; signing still requires executed Check.
+pub mod release_manifest_authority;
 pub mod reputation_finalized;
 pub(crate) mod signer_check;
 #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -29,8 +31,11 @@ pub mod snapshot;
 #[cfg(any(test, feature = "iroha-core-tests"))]
 pub mod standalone_plain_test_fixture;
 pub mod store;
+pub mod stream_token_authority;
 /// Same-State historical native StreamToken custody control reader.
 pub mod stream_token_custody;
+/// Read-only bounded role-16 native row and index decoder; admission remains closed.
+pub mod topology_authority;
 use crate::state::{WorldReadOnly, WorldStateSnapshot};
 use iroha_data_model::block::consensus::EvidenceRecord;
 use mv::storage::StorageReadOnly;
@@ -143,7 +148,7 @@ pub fn insert_evidence_record_for_test(state: &mut crate::state::State, record: 
     let header = iroha_data_model::block::BlockHeader::new(height_u64, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let key = crate::sumeragi::evidence::evidence_key(&record.evidence);
+    let key = crate::sumeragi::v2_evidence::evidence_key(&record.evidence);
     stx.world.consensus_evidence.insert(key, record);
     stx.apply();
     block

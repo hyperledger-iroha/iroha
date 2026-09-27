@@ -306,8 +306,11 @@ async fn unsupported_runtime_returns_precise_error() {
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn response_dispatch_ignores_full_admission_queues_and_owned_proxy_slot() {
+async fn response_dispatch_ignores_full_admission_queues_and_separate_proxy_slots() {
     let app = crate::mk_app_state_for_tests();
+    // Every peer may hold its locally originated quorum collector at once.
+    // Receiving another peer's request must remain possible in that state.
+    let local_collector = crate::try_acquire_torii_proxy_memory(&app).unwrap();
     let network = iroha_core::IrohaNetwork::closed_for_tests();
     let keypair =
         iroha_crypto::KeyPair::from_seed(vec![0x79; 32], iroha_crypto::Algorithm::Ed25519);
@@ -346,6 +349,10 @@ async fn response_dispatch_ignores_full_admission_queues_and_owned_proxy_slot() 
     .await;
     assert_eq!(requests.capacity(), 0);
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+    assert_eq!(
+        app.torii_proxy_receiver_memory_inflight.available_permits(),
+        0
+    );
     // This deliberately unvalidated publication only fills the bounded queue;
     // no physical persistence worker is started by this dispatcher test.
     let publication_payload = iroha_core::NetworkMessage::QueuePlanAdmissionPublication(Arc::new(
@@ -400,7 +407,17 @@ async fn response_dispatch_ignores_full_admission_queues_and_owned_proxy_slot() 
     assert_eq!(requests.capacity(), 0);
     assert_eq!(publications.capacity(), 0);
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+    assert_eq!(
+        app.torii_proxy_receiver_memory_inflight.available_permits(),
+        0
+    );
     drop(request_rx);
     drop(publication_rx);
+    assert_eq!(
+        app.torii_proxy_receiver_memory_inflight.available_permits(),
+        1
+    );
+    assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 0);
+    drop(local_collector);
     assert_eq!(app.torii_proxy_memory_inflight.available_permits(), 1);
 }

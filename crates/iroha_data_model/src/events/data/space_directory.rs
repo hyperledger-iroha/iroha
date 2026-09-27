@@ -101,7 +101,7 @@ mod model {
 }
 /// Common re-exports for the Space Directory event module.
 pub mod prelude {
-    pub use super::{
+    pub use super::model::{
         SpaceDirectoryEvent, SpaceDirectoryManifestActivated, SpaceDirectoryManifestExpired,
         SpaceDirectoryManifestRevoked,
     };

@@ -23,6 +23,8 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
     private class Device : Pixel6TestnetObservationDeviceV1 {
         override var apiLevel = 31
         var pixel6 = true
+        var userUnlocked = true
+        var failUserUnlockProbe = false
         var strongBox = true
         var generated = 0
         var signed = 0
@@ -33,6 +35,9 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
         var observedChallenge: ByteArray? = null
         var observedMessage: ByteArray? = null
         override fun isPixel6(): Boolean = pixel6
+        override fun isUserUnlocked(): Boolean =
+            if (failUserUnlockProbe) throw IllegalStateException("unlock state unavailable")
+            else userUnlocked
         override fun hasStrongBox(): Boolean = strongBox
         override fun newNonce(): ByteArray = ByteArray(32) { 0x31 }
         override fun hasAlias(alias: String): Boolean = aliasExists
@@ -59,7 +64,11 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
         var intent: ByteArray? = null
         var evidence: Pixel6TestnetObservationResultV1.Evidence? = null
         var reserves = 0
-        override fun <T> withSlotLock(slot: String, action: () -> T): T = action()
+        var locks = 0
+        override fun <T> withSlotLock(slot: String, action: () -> T): T {
+            locks++
+            return action()
+        }
         override fun lookup(slot: String, intent: ByteArray): Pixel6TestnetObservationLookupV1 {
             val existing = this.intent ?: return Pixel6TestnetObservationLookupV1.Empty
             if (this.slot != slot || !existing.copyOfRange(0, 32).contentEquals(intent)) {
@@ -123,6 +132,25 @@ class AndroidPixel6TestnetStrongBoxObservationV1Test {
         selectionFrame: ByteArray = frame,
     ): Pixel6TestnetObservationResultV1 = Pixel6TestnetObservationRunnerV1(device, store)
         .collect(networkId, releaseId, selectionFrame, lane, before, after)
+
+    @Test fun lockedAfterRebootDoesNotReserveOrConsumeTheDiagnosticSlot() {
+        val device = Device().also { it.userUnlocked = false }
+        val store = Store()
+        assertIs<Pixel6TestnetObservationResultV1.Unavailable>(collect(device, store))
+        assertEquals(0, store.locks)
+        assertEquals(0, store.reserves)
+        assertEquals(0, device.generated)
+        assertEquals(0, device.signed)
+        device.failUserUnlockProbe = true
+        assertIs<Pixel6TestnetObservationResultV1.Unavailable>(collect(device, store))
+        assertEquals(0, store.locks)
+        assertEquals(0, store.reserves)
+        device.failUserUnlockProbe = false
+        device.userUnlocked = true
+        assertIs<Pixel6TestnetObservationResultV1.Evidence>(collect(device, store))
+        assertEquals(1, store.reserves)
+        assertEquals(1, device.signed)
+    }
 
     @Test fun evidenceIsExplicitlyUnqualifiedAndScopeBound() {
         val device = Device()

@@ -162,7 +162,7 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
         XCTAssertEqual(NativeBridgeError.fromStatus(-503), .canonicalJSON)
     }
 
-    func testLinkedABI23CanonicalizerRunsEndToEndAndRejectsHostileJSON() throws {
+    func testLinkedABI24CanonicalizerRunsEndToEndAndRejectsHostileJSON() throws {
         let bridge = NoritoNativeBridge.shared
         XCTAssertTrue(bridge.isDetachedTransactionVerificationAvailable)
 

@@ -18437,7 +18437,7 @@ impl SumeragiV2Adapter {
         }
         let status = self.status()?;
         if self.status_publication_enabled {
-            super::status::set_v2_status(status);
+            super::v2_status::set_v2_status(status);
         }
         Ok(())
     }

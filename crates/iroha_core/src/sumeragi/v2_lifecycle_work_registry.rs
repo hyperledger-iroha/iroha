@@ -1981,7 +1981,14 @@ impl DurableRecoveredLifecycleSignedBroadcastWork {
         effect: &AdapterEffect,
         pending: &PendingRuntimeEffectBinding,
     ) -> bool {
-        self.matches_current_finalization_record(address, installed_digest, coordinator)
+        self.validates_at(address, installed_digest)
+            && self.parent.source_matches_coordinator(coordinator)
+            && self.broadcast.matches_current_retransmit_record(
+                coordinator.active_context,
+                address,
+                installed_digest,
+                coordinator,
+            )
             && self
                 .broadcast
                 .exactly_matches_runtime_retransmit(&self.verified, effect, pending)

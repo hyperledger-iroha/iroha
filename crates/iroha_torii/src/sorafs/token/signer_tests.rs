@@ -24,6 +24,7 @@ impl TryRngCore for FailingTryRng {
 }
 impl TryCryptoRng for FailingTryRng {}
 use super::signer_test_support::*;
+use sorafs_manifest::signer::stream_token::SignerStreamTokenExpectedV1;
 use sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenObservationPhaseV1 as Phase;
 
 fn issuer_and_signer(limit: u32, mode: TestSignerMode) -> (StreamTokenIssuer, Arc<SignedFixture>) {
@@ -420,6 +421,53 @@ fn runtime_signer_qualification_is_fenced_before_and_after_signing() {
             Err(StreamTokenIssuerError::IssuanceQuotaExceeded { .. })
         ));
     }
+}
+#[test]
+fn unavailable_completed_proof_source_prevents_provider_call() {
+    let signer = SignedFixture::new(1, TestSignerMode::Sign);
+    let issuer = signer.issuer().expect("signed startup");
+    signer
+        .finality
+        .completed_proof_source_available
+        .store(false, Ordering::SeqCst);
+    assert!(matches!(
+        issuer.issue_token(
+            quota_subject("missing-completion-source"),
+            vec![0xAA],
+            PROVIDER,
+            "sorafs.sf1@1.0.0".into(),
+            TokenOverrides::default(),
+        ),
+        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+    ));
+    assert_eq!(signer.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(signer.recover_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(signer.observer_calls.load(Ordering::SeqCst), 1);
+    assert!(issuer.issuance_budgets.lock().unwrap().is_empty());
+}
+#[test]
+fn signer_rechecks_completed_proof_source_before_provider_io() {
+    let signer = SignedFixture::new(1, TestSignerMode::Sign);
+    let issuer = signer.issuer().expect("signed startup");
+    let mut body = sample_body();
+    body.provider_id = PROVIDER;
+    body.token_pk_version = u32::try_from(issuer.signer.pins().binding().key_revision)
+        .expect("fixture key revision fits token field");
+    body.issued_at = NOW_MS / 1_000;
+    body.ttl_epoch = body.issued_at + 60;
+    SignerStreamTokenExpectedV1::new(&body, issuer.signer.pins().binding())
+        .expect("fixture reaches the completed-proof preflight");
+    signer
+        .finality
+        .completed_proof_source_available
+        .store(false, Ordering::SeqCst);
+    assert!(matches!(
+        issuer.signer.sign(body),
+        Err(StreamTokenIssuerError::SignerFinalityUnavailable)
+    ));
+    assert_eq!(signer.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(signer.recover_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(signer.observer_calls.load(Ordering::SeqCst), 1);
 }
 #[test]
 fn runtime_signer_probe_unavailability_before_signing_is_payload_free() {

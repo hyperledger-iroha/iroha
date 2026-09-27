@@ -1,4 +1,4 @@
-//! Replicated lane-drain frontier checks for an exact authenticated replay carrier.
+//! Replicated lane-drain frontier checks for live and replayed carriers.
 
 use super::*;
 
@@ -72,11 +72,11 @@ impl State {
         Ok(())
     }
 
-    /// Reconstruct the historical frontier from the isolated WSV prefix. Callers
-    /// first bind `certified` to the exact verified replay entry. Evidence hashes
-    /// absent from WSV remain authenticated by that entry's certificate; current
-    /// node-local receipts and pending work are never historical authority.
-    pub(super) fn lane_drain_frontier_from_replay_state(
+    /// Reconstruct the drain frontier from the committed WSV prefix. Callers
+    /// first authenticate `certified` against the incoming vote or carrier.
+    /// Evidence hashes absent from WSV remain bound by that signed certificate;
+    /// current node-local receipts and pending work are never voting authority.
+    pub(super) fn lane_drain_frontier_from_committed_state(
         state: &impl StateReadOnly,
         certified: LaneDrainFrontierV1,
     ) -> Result<LaneDrainFrontierV1, MergeLedgerCommitError> {
@@ -230,7 +230,7 @@ mod tests {
                 latest_index_artifact_hash: Hash::new(b"replay-drain-index"),
             });
         assert_eq!(
-            State::lane_drain_frontier_from_replay_state(&state.view(), frontier).unwrap(),
+            State::lane_drain_frontier_from_committed_state(&state.view(), frontier).unwrap(),
             frontier
         );
         for attack in ["missing-native", "settlement", "source-count", "descriptor"] {
@@ -252,7 +252,7 @@ mod tests {
                 _ => unreachable!(),
             }
             assert!(
-                State::lane_drain_frontier_from_replay_state(&state.view(), changed).is_err(),
+                State::lane_drain_frontier_from_committed_state(&state.view(), changed).is_err(),
                 "{attack}"
             );
         }
@@ -261,6 +261,6 @@ mod tests {
             hashes.push(HashOf::from_untyped_unchecked(Hash::new(b"foreign-prefix")));
             hashes.commit_for_tests();
         }
-        assert!(State::lane_drain_frontier_from_replay_state(&state.view(), frontier).is_err());
+        assert!(State::lane_drain_frontier_from_committed_state(&state.view(), frontier).is_err());
     }
 }

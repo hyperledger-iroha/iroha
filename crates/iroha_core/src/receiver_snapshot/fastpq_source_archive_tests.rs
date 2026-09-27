@@ -110,7 +110,7 @@ fn fixture(
 }
 
 fn expected_root(manifest: &FastpqOrdinarySourceStatementManifestV1) -> Hash {
-    crate::sumeragi::smt::compute_post_state_root(
+    crate::exec_witness::smt::compute_post_state_root(
         &[],
         &[
             KvPair::new(vec![0x10], b"last".to_vec()),
@@ -458,7 +458,7 @@ fn d7_only_empty_archive_accepts_exact_zero_entry_and_statement_caps() {
         .unwrap()
         .build()
         .unwrap();
-    let expected = crate::sumeragi::smt::compute_post_state_root(
+    let expected = crate::exec_witness::smt::compute_post_state_root(
         &[],
         &[KvPair::new(
             FASTPQ_ORDINARY_SOURCE_STATEMENTS_WITNESS_KEY_V1,
@@ -470,7 +470,7 @@ fn d7_only_empty_archive_accepts_exact_zero_entry_and_statement_caps() {
     assert_eq!(archive.ordinary_root, expected);
     assert_ne!(
         archive.ordinary_root,
-        crate::sumeragi::smt::compute_post_state_root(&[], &[]),
+        crate::exec_witness::smt::compute_post_state_root(&[], &[]),
         "an explicit empty manifest remains an ordinary write",
     );
     assert_eq!(archive.manifest_siblings, vec![Hash::new([]); 256]);

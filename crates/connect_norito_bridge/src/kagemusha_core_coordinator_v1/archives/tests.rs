@@ -224,21 +224,39 @@ fn coordinator_archive_fixture_material_is_canonical() {
             "byte_len": (vectors[3].1.len()),
         },
     });
-    if let Some(destination) = std::env::var_os("PRINT_KAGEMUSHA_CORE_COORDINATOR_ARCHIVES_V1") {
-        let destination = std::path::PathBuf::from(destination);
-        let destination = if destination.is_absolute() {
-            destination
-        } else {
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../..")
-                .join(destination)
-        };
+    // Opt-in test-only exporter: the destination is fixed under this checkout's real target
+    // directory. Keep the fixture assertions below active so an outdated tracked fixture fails.
+    if let Some(export) = std::env::var_os("PRINT_KAGEMUSHA_CORE_COORDINATOR_ARCHIVES_V1") {
+        assert_eq!(
+            export, "1",
+            "archive fixture export requires the exact value 1"
+        );
         let rendered = format!(
             "{}\n",
             norito::json::to_string_pretty(&expected).expect("render canonical archive fixture")
         );
-        std::fs::write(destination, rendered).expect("write canonical archive fixture");
-        return;
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .canonicalize()
+            .expect("canonical repository root");
+        let target = root.join("target");
+        assert!(
+            target
+                .symlink_metadata()
+                .expect("existing repository target directory")
+                .is_dir(),
+            "archive fixture export requires a real repository target directory"
+        );
+        let output = target.join("kagemusha_core_coordinator_archives_v1.json");
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output)
+            .expect("create new ignored archive fixture export under target");
+        use std::io::Write as _;
+        file.write_all(rendered.as_bytes())
+            .expect("write canonical archive fixture export");
+        file.sync_all().expect("sync archive fixture export");
     }
     let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),

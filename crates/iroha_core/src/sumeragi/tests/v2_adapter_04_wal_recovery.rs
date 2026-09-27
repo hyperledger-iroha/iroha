@@ -905,8 +905,8 @@ fn empty_authenticated_lifecycle_recovery(
 }
 #[test]
 fn production_lifecycle_owner_factory_opens_the_private_no_vote_branch() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("temporary no-vote safety store");
     let storage = TempDir::new().expect("temporary no-vote lifecycle stores");
     let authenticated = open_recovered_startup_test(&safety)
@@ -944,10 +944,10 @@ fn production_lifecycle_owner_factory_opens_the_private_no_vote_branch() {
         .unwrap_or_else(|error| panic!("open complete no-vote lifecycle owner: {error}"));
     assert!(owner.exact_recovered_body_pipeline_join_for_test());
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "owner construction must keep status sealed until runner activation"
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
     let safety = TempDir::new().expect("temporary control safety store");
@@ -957,15 +957,15 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
     } else {
         persist_timeout_intent_for_control_recovery(&safety);
     }
-    crate::sumeragi::status::clear_v2_status();
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    crate::sumeragi::v2_status::clear_v2_status();
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
     let mut first = open_control_owner_for_test(&safety, &storage, proposal_intent);
     let first_summary = first
         .recovered_control_row_summary_for_test()
         .expect("missing-row repair installs one exact control row and carrier");
     assert_eq!(first_summary.0, first_summary.1);
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "control owner construction keeps status sealed until runner activation"
     );
     let ledger_path = storage.path().join("ledger/lifecycle-ledger-v1.norito");
@@ -978,7 +978,7 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
             .ino()
     };
     drop(first);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let mut reopened = open_control_owner_for_test(&safety, &storage, proposal_intent);
     let reopened_summary = reopened
         .recovered_control_row_summary_for_test()
@@ -1001,19 +1001,19 @@ fn assert_control_repair_and_coalesce(proposal_intent: bool, marker: u8) {
         );
     }
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "coalesced control owner remains unpublished until runner activation"
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 #[test]
 fn bls_proposal_intent_control_sign_repairs_and_coalesces_exactly() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     assert_control_repair_and_coalesce(true, 0xC1);
 }
 #[test]
 fn bls_timeout_intent_control_sign_repairs_and_coalesces_exactly() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     assert_control_repair_and_coalesce(false, 0xC2);
 }
 
@@ -1075,7 +1075,7 @@ fn ready_proposal_sign_boundary_predicate_authenticates_exact_control_carrier() 
         }
         return;
     }
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     assert_eq!(
         recovered_control_producer_boundary_result(true, false, 0xC3),
         Ok(true),
@@ -1110,7 +1110,7 @@ fn ready_local_proposal_sign_and_exact_output_precede_pending_timeout_certificat
         }
         return;
     }
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     super::super::v2_lifecycle_coordinator::ProductionLifecycleOwnerV1::run_ready_local_proposal_sign_boundary_fixture_for_test();
 }
 
@@ -1236,7 +1236,7 @@ fn assert_control_owner_rejected_without_rewrite(
     proposal: bool,
     expected_frame: &[u8],
 ) -> String {
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let startup = if proposal {
         open_recovered_leader_startup_test(safety)
     } else {
@@ -1266,25 +1266,25 @@ fn assert_control_owner_rejected_without_rewrite(
         expected_frame,
         "rejected supersession cannot rewrite the lifecycle frame"
     );
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
     error.to_string()
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_recovery() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary superseded timeout WAL");
     let storage = TempDir::new().expect("temporary superseded timeout lifecycle stores");
     let obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let first_owner = open_control_owner_for_test(&safety, &storage, false);
     assert!(
         first_owner.has_owner_open_successor_for_test(),
         "the initial authenticated Sign repair retains its exact owner-open publication"
     );
     drop(first_owner);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let lifecycle_context = lifecycle_context_for_control_test();
     let ledger_root = storage.path().join("ledger");
     assert!(install_timeout_broadcasts_before_current_control_for_test(
@@ -1339,7 +1339,7 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
         "the exact first cancellation CAS retains one move-only CompleteTip join witness"
     );
     drop(repeated_owner);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     assert_eq!(
         control_timeout_supersession_summary_for_test(&ledger_root, lifecycle_context),
         Some((3, 1, 1)),
@@ -1360,7 +1360,7 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
         "the byte-identical cold stutter cannot mint another successor witness"
     );
     drop(owner);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     assert_eq!(
         std::fs::read(&ledger_path).expect("read repeated exact supersession frame"),
         repaired,
@@ -1382,18 +1382,18 @@ fn obsolete_timeout_broadcast_is_atomically_cancelled_before_current_control_rec
 #[cfg(feature = "bls")]
 #[test]
 fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary missing-current timeout WAL");
     let storage = TempDir::new().expect("temporary missing-current lifecycle stores");
     let obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let initial_owner = open_control_owner_for_test(&safety, &storage, false);
     assert!(
         initial_owner.has_owner_open_successor_for_test(),
         "the initial authenticated Sign repair retains its exact owner-open publication"
     );
     drop(initial_owner);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let lifecycle_context = lifecycle_context_for_control_test();
     let ledger_root = storage.path().join("ledger");
     assert!(install_timeout_broadcasts_before_current_control_for_test(
@@ -1410,7 +1410,7 @@ fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
         "the atomic cancellation-plus-missing-Sign successor retains one exact join witness"
     );
     drop(owner);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     assert_eq!(
         control_timeout_supersession_summary_for_test(&ledger_root, lifecycle_context),
         Some((3, 1, 1)),
@@ -1425,13 +1425,13 @@ fn obsolete_timeout_broadcast_and_missing_current_sign_publish_one_successor() {
 #[cfg(feature = "bls")]
 #[test]
 fn same_view_timeout_broadcast_is_not_superseded_or_rewritten() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary same-view control WAL");
     let storage = TempDir::new().expect("temporary same-view lifecycle stores");
     persist_proposal_intent_for_control_recovery(&safety, 0xDA);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, true));
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let wire_context = context();
     let round = wire::ConsensusRound {
         context_id: wire_context.id(),
@@ -1454,14 +1454,14 @@ fn same_view_timeout_broadcast_is_not_superseded_or_rewritten() {
 #[cfg(feature = "bls")]
 #[test]
 fn foreign_timeout_signature_is_not_superseded_or_rewritten() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary foreign timeout WAL");
     let storage = TempDir::new().expect("temporary foreign timeout lifecycle stores");
     let mut obsolete = persist_timeout_broadcasts_and_successor_timeout_intent(&safety);
     obsolete[0].1.signature[0] ^= 0x01;
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, false));
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let lifecycle_context = lifecycle_context_for_control_test();
     assert!(install_timeout_broadcasts_before_current_control_for_test(
         &storage.path().join("ledger"),
@@ -1478,13 +1478,13 @@ fn foreign_timeout_signature_is_not_superseded_or_rewritten() {
 #[cfg(feature = "bls")]
 #[test]
 fn multiple_obsolete_timeout_broadcasts_fail_before_publication() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary ambiguous timeout WAL");
     let storage = TempDir::new().expect("temporary ambiguous timeout lifecycle stores");
     let obsolete = persist_timeout_broadcast_count_and_successor_timeout_intent(&safety, 2);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, false));
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let lifecycle_context = lifecycle_context_for_control_test();
     assert!(install_timeout_broadcasts_before_current_control_for_test(
         &storage.path().join("ledger"),
@@ -1501,13 +1501,13 @@ fn multiple_obsolete_timeout_broadcasts_fail_before_publication() {
 #[cfg(feature = "bls")]
 #[test]
 fn non_timeout_broadcast_remains_owned_by_the_closed_census() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let safety = TempDir::new().expect("temporary non-timeout control WAL");
     let storage = TempDir::new().expect("temporary non-timeout lifecycle stores");
     persist_timeout_intent_for_control_recovery(&safety);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     drop(open_control_owner_for_test(&safety, &storage, false));
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let lifecycle_context = lifecycle_context_for_control_test();
     assert!(
         install_non_timeout_broadcast_before_current_control_for_test(
@@ -1794,8 +1794,8 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
     if std::thread::current().name() != Some("sumeragi-v2-decision-fetch-repair") {
         return run_decision_fetch_repair_test_on_stack();
     }
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("temporary Decision Fetch safety store");
     let storage = TempDir::new().expect("temporary Decision Fetch lifecycle stores");
     let (wire_context, keys, proofs) = authenticated_context();
@@ -1923,7 +1923,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
             .ino()
     };
     drop(first);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs.clone())
         .expect("reverify Decision Fetch context");
     let reopened = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
@@ -1973,7 +1973,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         );
     }
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "Decision Fetch owner construction must remain unpublished"
     );
     let first_dispatch_projection;
@@ -2123,7 +2123,7 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         planner_io.detach(&mut services);
     }
     drop(reopened);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let mismatched_verified = VerifiedHeightContext::genesis(wire_context.clone(), proofs.clone())
         .expect("reverify the mismatched-generation Decision Fetch context");
     let mismatched = SumeragiV2Adapter::open_recovered_startup_with_aggregator(
@@ -2252,12 +2252,12 @@ fn bls_decision_fetch_repairs_and_coalesces_without_rewrite() {
         planner_io.detach(&mut services);
     }
     assert_eq!(
-        crate::sumeragi::status::v2_status()
+        crate::sumeragi::v2_status::v2_status()
             .expect("the explicitly published executor adapter remains visible")
             .height,
         wire_context.height
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 #[cfg(feature = "bls")]
 #[test]
@@ -2528,10 +2528,10 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
     if std::thread::current().name() != Some("sumeragi-v2-unified-decision-body") {
         return run_unified_decision_body_test_on_stack();
     }
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let local_signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
         .expect("deterministic Decision body-preflight retainer");
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("temporary validated Decision WAL");
     let storage = TempDir::new().expect("temporary validated Decision stores");
     let (startup, body_store) = write_decision_startup_with_body_marker(
@@ -2582,7 +2582,7 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
     assert!(ledger_root.join("lifecycle-ledger-v1.norito").exists());
     assert!(serve_root.exists());
     assert!(
-        crate::sumeragi::status::v2_status().is_none(),
+        crate::sumeragi::v2_status::v2_status().is_none(),
         "durable owner recovery must not publish status before live launch and ingress activation"
     );
     drop(owner);
@@ -2595,7 +2595,7 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
             .expect("inspect Decision Apply ledger")
             .ino()
     };
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let mut body_store = super::super::v2_body_store::V2BodyStore::open(
         storage.path().join("body"),
         context.clone(),
@@ -2641,7 +2641,7 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
         );
     }
     drop(owner);
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("temporary rejected Decision WAL");
     let storage = TempDir::new().expect("temporary rejected Decision stores");
     let (startup, body_store) = write_decision_startup_with_body_marker(
@@ -2675,14 +2675,14 @@ fn bls_unified_decision_body_publishes_apply_or_rejects_before_storage_open() {
     );
     assert!(!ledger_root.exists());
     assert!(!serve_root.exists());
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 }
 
 #[cfg(feature = "bls")]
 #[test]
 fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
-    crate::sumeragi::status::clear_v2_status();
+    let _status_guard = crate::status::rbc_status_test_guard();
+    crate::sumeragi::v2_status::clear_v2_status();
     let safety = TempDir::new().expect("temporary durable-only pending Decision WAL");
     let storage = TempDir::new().expect("temporary durable-only pending Decision stores");
     let (startup, body_store) = write_decision_startup_with_body_marker(
@@ -2766,7 +2766,7 @@ fn bls_pending_kura_durable_body_without_validation_marker_fails_owner_open() {
         detail,
         "pending Kura replay omitted its exact deferred validation marker"
     );
-    assert!(crate::sumeragi::status::v2_status().is_none());
+    assert!(crate::sumeragi::v2_status::v2_status().is_none());
 }
 #[cfg(feature = "bls")]
 fn run_decision_fetch_same_key_drift_test_on_stack() {
@@ -2785,7 +2785,7 @@ fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
     if std::thread::current().name() != Some("sumeragi-v2-decision-fetch-same-key-drift") {
         return run_decision_fetch_same_key_drift_test_on_stack();
     }
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     let mutations: [(&str, fn(&std::path::Path, LifecycleContext) -> bool); 2] = [
         ("owner", substitute_recovered_decision_fetch_owner_for_test),
         (
@@ -2794,7 +2794,7 @@ fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
         ),
     ];
     for (index, (label, mutate)) in mutations.into_iter().enumerate() {
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let safety = TempDir::new().expect("temporary Decision drift WAL");
         let storage = TempDir::new().expect("temporary Decision drift stores");
         let marker = 0xD8_u8
@@ -2831,7 +2831,7 @@ fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
         );
         let ledger_path = ledger_root.join("lifecycle-ledger-v1.norito");
         let drifted = std::fs::read(&ledger_path).expect("read drifted Decision ledger");
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         let reopened = reopen_authenticated_decision_startup(&safety, &context, proofs, marker)
             .authenticate_final_wal_startup_authority()
             .unwrap_or_else(|(error, _)| {
@@ -2857,7 +2857,7 @@ fn bls_decision_fetch_same_key_drift_fails_without_rewrite() {
             "failed Decision {label} recovery must not rewrite the incumbent"
         );
     }
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 include!("v2_adapter_04_wal_recovery_signature_fifo_cases.rs");
 include!("v2_adapter_04_wal_recovery_decision_classifier_cases.rs");
@@ -3198,7 +3198,7 @@ fn same_round_timeout_cold_owner_cancels_exact_retained_proposal() {
 
 #[cfg(feature = "bls")]
 fn same_round_timeout_retained_proposal_recovery_fixture() {
-    let _status_guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _status_guard = crate::status::rbc_status_test_guard();
     use super::super::v2_lifecycle_coordinator::{
         LifecycleOutputServiceDispositionV1, RecoveredLifecycleOutputSettlementV1,
     };
@@ -3345,7 +3345,7 @@ fn same_round_timeout_retained_proposal_recovery_fixture() {
             wal_before,
             "output cancellation neither signs nor publishes WAL authority"
         );
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
     }
 }
 
@@ -3383,7 +3383,7 @@ fn terminal_standalone_timeout_recovery_fixture(case: u8) {
         .expect("the recovered output fixture requires a Tokio reactor");
     let _entered = runtime.enter();
     let _logger = iroha_logger::test_logger();
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _guard = crate::status::rbc_status_test_guard();
     let (context, keys, proofs) = authenticated_context();
     let local = context.leader(0);
     let signer = &keys[local as usize];
@@ -3485,7 +3485,7 @@ fn terminal_standalone_timeout_recovery_fixture(case: u8) {
         );
         assert_eq!(std::fs::read(&ledger_path).unwrap(), before);
         assert_eq!(std::fs::read(&wal_path).unwrap(), wal_before);
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
         return;
     }
     let mut owner = result.expect("reconcile the actual completed standalone timeout Broadcast");
@@ -3530,7 +3530,7 @@ fn terminal_standalone_timeout_recovery_fixture(case: u8) {
         wal_before,
         "retained signed output must not rewrite the exact TimeoutIntent WAL",
     );
-    crate::sumeragi::status::clear_v2_status();
+    crate::sumeragi::v2_status::clear_v2_status();
 }
 
 #[cfg(feature = "bls")]
@@ -3557,7 +3557,7 @@ fn same_round_timeout_cold_owner_publishes_broadcast_after_retired_validation_hi
 
 #[cfg(feature = "bls")]
 fn same_round_timeout_retired_history_fixture(publish_timeout: bool) {
-    let _guard = crate::sumeragi::status::rbc_status_test_guard();
+    let _guard = crate::status::rbc_status_test_guard();
     use super::super::v2_lifecycle_coordinator::{
         LifecycleOutputServiceDispositionV1, RecoveredLifecycleOutputSettlementV1,
     };
@@ -3786,6 +3786,6 @@ fn same_round_timeout_retired_history_fixture(publish_timeout: bool) {
             wal_before,
             "historical recovery must neither sign nor publish WAL authority"
         );
-        crate::sumeragi::status::clear_v2_status();
+        crate::sumeragi::v2_status::clear_v2_status();
     }
 }

@@ -5,7 +5,7 @@ import CryptoKit
 import Foundation
 
 #if OFFLINE_SECURE_ELEMENT_CREDENTIAL && canImport(SecureElementCredential) && canImport(Security)
-  /// Async wired-mode session admitted only by the exact ABI-23 applet capability frame.
+  /// Async wired-mode session admitted only by the exact ABI-24 applet capability frame.
   ///
   /// Targets must define `OFFLINE_SECURE_ELEMENT_CREDENTIAL` only after Apple grants the Secure
   /// Element Credential entitlement and provisions the named applet. The compile gate prevents a
@@ -77,7 +77,7 @@ import Foundation
         session: any KagemushaSecureElementCredentialSessionBackendV1
       ) async throws -> Data {
         guard (minimumCommandBytes...maximumCommandBytes).contains(command.count) else {
-          throw invalid("secure-element command is outside the ABI-23 bound")
+          throw invalid("secure-element command is outside the ABI-24 bound")
         }
         do {
           var begin = uint32LE(UInt32(command.count))
@@ -125,7 +125,7 @@ import Foundation
           }
           let responseLength = Int(try readUInt32LE(metadata))
           guard (minimumResponseBytes...maximumResponseBytes).contains(responseLength) else {
-            throw invalid("secure-element response is outside the ABI-23 bound")
+            throw invalid("secure-element response is outside the ABI-24 bound")
           }
           let expectedDigest = Data(metadata[4..<36])
           var response = Data(capacity: responseLength)

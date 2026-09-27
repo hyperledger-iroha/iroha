@@ -8,7 +8,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SESSION = ROOT / "scripts/sorafs_javascript_child_session.mjs"
-OWNER = ROOT / "scripts/check_native_sdk_abi23_artifact.py"
+OWNER = ROOT / "scripts/check_native_sdk_artifact.py"
 
 def node_policy(name: str):
     """Read only the exact Node literal of the source-owned Python policy AST."""

@@ -1053,6 +1053,51 @@ test("exact canonical ROOT/target is admitted as the generated cache", (t) => {
   }), 0);
 });
 
+test("privacy native build passes an external lock and disjoint target to Cargo", (t) => {
+  const fixture = createFixture(t);
+  const corridor = realpathSync(
+    mkdtempSync(path.join(os.tmpdir(), "iroha-js-privacy-build-")),
+  );
+  t.after(() => rmSync(corridor, { recursive: true, force: true }));
+  const lock = path.join(corridor, "lock", "Cargo.lock");
+  mkdirSync(path.dirname(lock), { recursive: true });
+  fs.copyFileSync(path.join(fixture.repoRoot, "Cargo.lock"), lock);
+  chmodSync(lock, 0o400);
+  fixture.targetRoot = path.join(corridor, "js-native", "target");
+  fixture.env.CARGO_TARGET_DIR = fixture.targetRoot;
+  fixture.env.IROHA_JS_CARGO_LOCKFILE_PATH = lock;
+  fixture.nativePath = nativeBuildOutputPath({
+    repoRoot: fixture.repoRoot,
+    cargoProfile: fixture.profile,
+    env: fixture.env,
+    platform: "linux",
+  });
+  assert.equal(buildFixture(fixture, {
+    runCargo(_cargo, args, { cargoEnv }) {
+      assert.deepEqual(
+        args.slice(args.indexOf("--lockfile-path"), args.indexOf("--lockfile-path") + 2),
+        ["--lockfile-path", lock],
+      );
+      assert.equal(cargoEnv.CARGO_TARGET_DIR, fixture.targetRoot);
+      writeNativeOutput(fixture);
+      return { status: 0, stdout: successfulCargoJson(fixture) };
+    },
+  }), 0);
+});
+
+test("privacy native build rejects an ignored source-tree lock before Cargo", (t) => {
+  const fixture = createFixture(t);
+  const lock = path.join(
+    fixture.repoRoot, "target", "privacy-sdk-cargo", "lock", "Cargo.lock",
+  );
+  mkdirSync(path.dirname(lock), { recursive: true });
+  fs.copyFileSync(path.join(fixture.repoRoot, "Cargo.lock"), lock);
+  assert.throws(() => buildFixture(fixture, {
+    env: { ...fixture.env, IROHA_JS_CARGO_LOCKFILE_PATH: lock },
+    runCargo() { assert.fail("source-tree lock must fail before Cargo"); },
+  }), /external Cargo.lock must remain outside the source tree/u);
+});
+
 for (const location of ["root", "ancestor", "source-subdirectory", "target-descendant"]) {
   test("Cargo target rejects " + location + " before creating it or running Cargo", (t) => {
     const fixture = createFixture(t);

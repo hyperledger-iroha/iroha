@@ -47,7 +47,7 @@
     "timed_ovn_casting_proof_page_result_bytes": 41
   },
   "timed_ovn_native_wallet": {
-    "bridge_abi": 23,
+    "bridge_abi": 24,
     "sole_input_schema": "ParliamentTimedOvnCastingProofResponseV1",
     "request_norito_schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.request",
     "response_norito_schema": "iroha.torii.v1.parliament.timed_ovn_casting_proof.response",

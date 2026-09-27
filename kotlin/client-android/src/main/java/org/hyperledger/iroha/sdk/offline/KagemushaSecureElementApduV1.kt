@@ -9,7 +9,7 @@ import java.security.MessageDigest
 /**
  * Short-APDU transport for one already selected, access-controlled secure-element applet.
  *
- * The transport only moves ABI-23 lifecycle frames. Authority is admitted separately by
+ * The transport only moves ABI-24 lifecycle frames. Authority is admitted separately by
  * [KagemushaDeviceLifecycleBridgeV1], which requires the exact complete IKGMJCP1 capability
  * frame before exposing an available bridge.
  */
@@ -51,7 +51,7 @@ internal class KagemushaSecureElementApduEndpointV1(
     override fun execute(command: ByteArray): ByteArray = synchronized(lock) {
         check(!closed) { "secure-element channel is closed" }
         require(command.size in MINIMUM_COMMAND_BYTES..MAXIMUM_COMMAND_BYTES) {
-            "secure-element command is outside the ABI-23 bound"
+            "secure-element command is outside the ABI-24 bound"
         }
         val commandDigest = sha256(command)
         try {
@@ -99,7 +99,7 @@ internal class KagemushaSecureElementApduEndpointV1(
                 }
                 val responseLength = readU32Le(metadata, 0)
                 require(responseLength in MINIMUM_RESPONSE_BYTES..MAXIMUM_RESPONSE_BYTES) {
-                    "secure-element response is outside the ABI-23 bound"
+                    "secure-element response is outside the ABI-24 bound"
                 }
                 val expectedDigest = metadata.copyOfRange(LENGTH_BYTES, RESPONSE_METADATA_BYTES)
                 try {
