@@ -1093,7 +1093,7 @@ Joint consensus guarantees that the outgoing <i105-account-id> set finalises the
 
 - The governed `next_mode` and `mode_activation_height` staging fields must be committed in the **same block**. `mode_activation_height` must be strictly greater than the block height that carried the update, providing at least one-block lag. An incomplete pair is rejected with `mode_activation_height requires next_mode to be set in the same block`.
 - Governed `SumeragiNposParameters.reconfig.activation_lag_blocks` (default `1`) prevents zero-lag hand-offs.
-- Governed `SumeragiNposParameters.reconfig.slashing_delay_blocks` (default `3600`) delays consensus slashing so governance can cancel penalties before they apply.
+- Governed `SumeragiNposParameters.reconfig.slashing_delay_blocks` (default `3600`) delays consensus slashing; no instruction cancels a consensus-evidence penalty.
 
 ```rust
 use iroha_config::parameters::defaults::sumeragi::npos::RECONFIG_ACTIVATION_LAG_BLOCKS;
