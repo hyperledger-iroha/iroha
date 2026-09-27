@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 323
-type rows preserve 359 populated values and 1,436 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 322
+type rows preserve 358 populated values and 1,432 complete root, vector, option
 and map frames.
 
 The fixture SHA-256 is
-`f2b1a70d690730c6015f8e7cce2d12c6b7c72240f105985edb3a199fe06cae76`.
+`66733415c7a05159759e9d7c11271f8e3c71b49ea3992e142587d77cb9a08711`.
 The inventory excludes the three unimplemented citizen-bond operations; all
 other captured frame bytes remain unchanged except for the explicitly recorded
 current-protocol recaptures below. Names and directional hashes come from actual compiler captures before adding
@@ -87,3 +87,8 @@ The initial admission material is a network-independent signed-genesis template;
 this codec fixture does not establish finalized admission or certify publication.
 The complete `generated_record_identity_tests` filter passed on 2026-09-26:
 325 tests passed, none failed and three explicit maintenance captures were ignored.
+
+On 2026-09-28 the `CancelConsensusEvidencePenalty` row was removed together with
+the instruction: consensus evidence is a local log and telemetry record, so no
+on-chain penalty exists to cancel. The other 322 rows are byte-for-byte
+unchanged.

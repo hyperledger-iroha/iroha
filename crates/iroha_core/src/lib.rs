@@ -2285,10 +2285,7 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(request_payload.as_ref());
         assert_eq!(request_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(
-            &request_message,
-            iroha_p2p::TransportAdmissionClass::Lane,
-        );
+        assert_network_admission(&request_message, iroha_p2p::TransportAdmissionClass::Lane);
         assert_eq!(raw_network_tag(&request_message), 4);
         assert_eq!(raw_network_topic(&request_message), NetworkTopic::Consensus);
         let request_hash = HashOf::new(&request_message);
@@ -2319,10 +2316,7 @@ mod tests {
             CertifiedMergeSidecarMessage::Close(close.clone()),
         ));
         assert_eq!(close_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(
-            &close_message,
-            iroha_p2p::TransportAdmissionClass::Lane,
-        );
+        assert_network_admission(&close_message, iroha_p2p::TransportAdmissionClass::Lane);
         assert_eq!(raw_network_topic(&close_message), NetworkTopic::Consensus);
         let encoded = norito::to_bytes(&close_message).expect("encode sidecar close");
         let decoded =
@@ -2349,10 +2343,7 @@ mod tests {
             CertifiedMergeSidecarMessage::CloseAck(close_ack.clone()),
         ));
         assert_eq!(close_ack_message.topic(), NetworkTopic::Consensus);
-        assert_network_admission(
-            &close_ack_message,
-            iroha_p2p::TransportAdmissionClass::Lane,
-        );
+        assert_network_admission(&close_ack_message, iroha_p2p::TransportAdmissionClass::Lane);
         assert_eq!(
             raw_network_topic(&close_ack_message),
             NetworkTopic::Consensus
@@ -2447,10 +2438,7 @@ mod tests {
         };
         assert_shared_carrier_wire_compatible(chunk_payload.as_ref());
         assert_eq!(chunk_message.topic(), NetworkTopic::ConsensusChunk);
-        assert_network_admission(
-            &chunk_message,
-            iroha_p2p::TransportAdmissionClass::Payload,
-        );
+        assert_network_admission(&chunk_message, iroha_p2p::TransportAdmissionClass::Payload);
         assert_eq!(
             raw_network_topic(&chunk_message),
             NetworkTopic::ConsensusChunk

@@ -472,19 +472,18 @@ impl StrictReplayFixture {
             options,
         );
         let parameters = {
-            let (_valid, staged) =
-                crate::block::ValidBlock::validate_signed_genesis(
-                    provisional.0,
-                    &topology,
-                    &genesis_account,
-                    &TimeSource::new_system(),
-                    &staging_state,
-                    options.mode,
-                )
-                .unpack(|_| {})
-                .unwrap_or_else(|(_block, error)| {
-                    panic!("stage complete strict-replay genesis: {error}")
-                });
+            let (_valid, staged) = crate::block::ValidBlock::validate_signed_genesis(
+                provisional.0,
+                &topology,
+                &genesis_account,
+                &TimeSource::new_system(),
+                &staging_state,
+                options.mode,
+            )
+            .unpack(|_| {})
+            .unwrap_or_else(|(_block, error)| {
+                panic!("stage complete strict-replay genesis: {error}")
+            });
             let mut parameters = template.sumeragi_v2_context_parameters();
             parameters.nexus_amx_context_hash =
                 crate::sumeragi::staged_genesis_nexus_amx_context_hash(&staged).into();
@@ -506,19 +505,16 @@ impl StrictReplayFixture {
             options,
         ));
         let bootstrap = {
-            let (_valid, staged) =
-                crate::block::ValidBlock::validate_signed_genesis(
-                    genesis.0.clone(),
-                    &topology,
-                    &genesis_account,
-                    &TimeSource::new_system(),
-                    state.as_ref(),
-                    options.mode,
-                )
-                .unpack(|_| {})
-                .unwrap_or_else(|(_block, error)| {
-                    panic!("stage final strict-replay genesis: {error}")
-                });
+            let (_valid, staged) = crate::block::ValidBlock::validate_signed_genesis(
+                genesis.0.clone(),
+                &topology,
+                &genesis_account,
+                &TimeSource::new_system(),
+                state.as_ref(),
+                options.mode,
+            )
+            .unpack(|_| {})
+            .unwrap_or_else(|(_block, error)| panic!("stage final strict-replay genesis: {error}"));
             crate::sumeragi::freeze_staged_genesis_v2(&genesis, &staged, options.mode)
                 .expect("freeze exact signed and staged strict-replay genesis authority")
         };

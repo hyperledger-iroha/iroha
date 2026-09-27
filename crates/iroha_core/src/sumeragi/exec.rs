@@ -1075,7 +1075,8 @@ mod tests {
             fixture_key(0x31, Algorithm::Ed25519),
             fixture_key(0x32, Algorithm::Ed25519),
         ];
-        let network_id = crate::unit_test_support::synthetic_network_id("native-manifest-exec-test");
+        let network_id =
+            crate::unit_test_support::synthetic_network_id("native-manifest-exec-test");
         let transaction_time =
             TimeSource::new_fixed(Duration::from_millis(MANIFEST_APPLICATION_HEIGHT));
         let transactions = transaction_keys

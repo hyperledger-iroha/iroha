@@ -1,6 +1,5 @@
 //! Public lane staking instruction handlers (NX-9).
 use super::prelude::*;
-use crate::sumeragi::v2_evidence::evidence_key;
 use crate::{
     smartcontracts::isi::asset::isi::assert_numeric_spec_with,
     state::{
@@ -13,15 +12,13 @@ use crate::{
 };
 use iroha_data_model::{
     asset::{AssetDefinitionId, AssetId},
-    block::consensus::EvidencePenaltyStatus,
     isi::{
         error::{InstructionExecutionError as Error, InvalidParameterError, MathError},
         staking::{
-            BondPublicLaneStake, CancelConsensusEvidencePenalty, ClaimPublicLaneRewards,
-            FinalizePublicLaneUnbond, PublicLaneCandidateAuthorization,
-            PublicLanePeerBindingAuthorization, RebindPublicLaneValidatorPeer,
-            RecordPublicLaneRewards, RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
-            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+            BondPublicLaneStake, ClaimPublicLaneRewards, FinalizePublicLaneUnbond,
+            PublicLaneCandidateAuthorization, PublicLanePeerBindingAuthorization,
+            RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
+            RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
     },
     nexus::{
@@ -2325,46 +2322,6 @@ impl Execute for SlashPublicLaneValidator {
         )
     }
 }
-impl Execute for CancelConsensusEvidencePenalty {
-    #[iroha_logger::log(name = "cancel_consensus_evidence_penalty", skip_all)]
-    fn execute(
-        self,
-        _authority: &AccountId,
-        state_transaction: &mut StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        let key = evidence_key(&self.evidence);
-        let mut record = state_transaction
-            .world
-            .consensus_evidence
-            .get(&key)
-            .cloned()
-            .ok_or_else(|| Error::InvariantViolation("consensus evidence not found".into()))?;
-        let current_height = state_transaction.block_height();
-        if record.recorded_at_height >= current_height {
-            return Err(Error::InvariantViolation(
-                "consensus evidence must be admitted by a prior committed block before cancellation"
-                    .into(),
-            ));
-        }
-        match record.penalty_status {
-            EvidencePenaltyStatus::Pending => {}
-            EvidencePenaltyStatus::Applied { .. } => {
-                return Err(Error::InvariantViolation(
-                    "consensus evidence penalty already applied".into(),
-                ));
-            }
-            EvidencePenaltyStatus::Cancelled { .. } => return Ok(()),
-        }
-        record.penalty_status = EvidencePenaltyStatus::Cancelled {
-            height: current_height,
-        };
-        state_transaction
-            .world
-            .consensus_evidence
-            .insert(key, record);
-        Ok(())
-    }
-}
 impl Execute for RecordPublicLaneRewards {
     #[iroha_logger::log(
         name = "record_public_lane_rewards",
@@ -3766,21 +3723,11 @@ mod tests {
         state::{State, StateTransaction, World},
     };
     use core::num::NonZeroU64;
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::query::error::FindError;
     use iroha_data_model::{
         account::{Account, MultisigMember, MultisigPolicy},
         asset::{AssetDefinition, AssetDefinitionId},
-        block::{
-            consensus::{
-                Evidence, EvidencePenaltyStatus, EvidenceRecord, SumeragiV2EquivocationEvidence,
-            },
-            consensus_v2::{
-                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-                ExecutionCommitment, GlobalPhase, HeightContext, PROTOCOL_VERSION, PayloadEncoding,
-                SumeragiV2Equivocation, ValidatorPower, Vote,
-            },
-        },
         consensus::{ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
         domain::Domain,
         isi::error::InvalidParameterError,
@@ -9737,131 +9684,5 @@ mod tests {
         }
         .execute(&_sink, &mut stx);
         assert!(res.is_err(), "expected zero-share reward to be rejected");
-    }
-    #[test]
-    fn cancel_consensus_evidence_penalty_marks_record() {
-        let state = setup_state();
-        let mut roster = (0xE0_u8..=0xE3)
-            .map(|seed| {
-                let keypair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
-                    .expect("derive deterministic staking evidence validator");
-                ValidatorPower {
-                    validator: PeerId::new(keypair.public_key().clone()),
-                    power: 1,
-                }
-            })
-            .collect::<Vec<_>>();
-        roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-        let network_id = *state.network_id_ref();
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network_id, 1, &roster,
-            );
-        let context = HeightContext {
-            network_id,
-            protocol_version: PROTOCOL_VERSION,
-            height: 1,
-            epoch: 0,
-            epoch_end_height: 1,
-            next_epoch_snapshot: None,
-            mode: ConsensusMode::Permissioned,
-            parent_commit_qc: None,
-            snapshot_bootstrap: None,
-            quorum: DualQuorum::from_roster(&roster).expect("fixture quorum"),
-            roster,
-            kagemusha_mint_finality_authorization,
-            kagemusha_mint_finality_authority,
-            nexus_amx_context_hash: Hash::new(b"staking cancellation nexus context"),
-            execution_policy_hash: Hash::new(b"staking cancellation execution policy"),
-            da_layout: DataAvailabilityLayout {
-                encoding: PayloadEncoding::ReedSolomon16,
-                chunk_size_bytes: 4,
-                data_shards: 1,
-                parity_shards: 1,
-                max_payload_size_bytes: 1024,
-                max_chunk_count: 512,
-            },
-            leader_seed: [0xA1; Hash::LENGTH],
-        };
-        let round = ConsensusRound {
-            context_id: context.id(),
-            height: context.height,
-            view: 0,
-        };
-        let execution_commitment = ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-            Hash::new(b"staking cancellation parent state"),
-            Hash::new(b"staking cancellation post state"),
-            Hash::new(b"staking cancellation ordinary writes"),
-            1,
-            Hash::new(b"staking cancellation block"),
-        );
-        let vote = |seed: u8| Vote {
-            round,
-            proposal_round: round,
-            phase: GlobalPhase::Prepare,
-            subject: BlockSubject {
-                parent_block_hash: None,
-                block_hash: HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH])),
-                payload_hash: Hash::new([seed]),
-            },
-            execution_commitment,
-            signer: 0,
-            signature: vec![seed; 96],
-        };
-        let evidence = Evidence {
-            equivocation: SumeragiV2EquivocationEvidence {
-                context,
-                proofs_of_possession: vec![vec![0xD0; 96]; 4],
-                conflict: SumeragiV2Equivocation::PhaseVote {
-                    first: vote(0xAA),
-                    second: vote(0xBB),
-                },
-            },
-        };
-        let record = EvidenceRecord {
-            evidence: evidence.clone(),
-            recorded_at_height: 1,
-            recorded_at_view: 0,
-            recorded_at_ms: 0,
-            penalty_status: EvidencePenaltyStatus::Pending,
-        };
-        let key = evidence_key(&record.evidence);
-        {
-            let same_block = new_block_with_height(1);
-            let mut same_state_block = state.block(same_block.as_ref().header());
-            let mut same_transaction = same_state_block.transaction();
-            same_transaction
-                .world
-                .consensus_evidence
-                .insert(key.clone(), record.clone());
-            let error = CancelConsensusEvidencePenalty {
-                evidence: evidence.clone(),
-            }
-            .execute(&ALICE_ID, &mut same_transaction)
-            .expect_err("same-block evidence admission must not be cancellable");
-            assert!(
-                matches!(&error, Error::InvariantViolation(message) if message.contains("prior committed block")),
-                "unexpected same-block cancellation error: {error:?}"
-            );
-        }
-        {
-            let mut block = state.world.consensus_evidence.block();
-            block.insert(key.clone(), record);
-            block.commit();
-        }
-        let block = new_block_with_height(2);
-        let mut state_block = state.block(block.as_ref().header());
-        let mut stx = state_block.transaction();
-        CancelConsensusEvidencePenalty { evidence }
-            .execute(&ALICE_ID, &mut stx)
-            .expect("cancel evidence penalty");
-        stx.apply();
-        state_block.commit_world_overlay_for_testing().unwrap();
-        let view = state.world.consensus_evidence.view();
-        let updated = view.get(&key).expect("evidence record");
-        assert_eq!(
-            updated.penalty_status,
-            EvidencePenaltyStatus::Cancelled { height: 2 }
-        );
     }
 }

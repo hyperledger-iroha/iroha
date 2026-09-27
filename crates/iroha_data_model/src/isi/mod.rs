@@ -492,7 +492,6 @@ impl_direct_instruction_box!(crate::isi::staking::BondPublicLaneStake);
 impl_direct_instruction_box!(crate::isi::staking::SchedulePublicLaneUnbond);
 impl_direct_instruction_box!(crate::isi::staking::FinalizePublicLaneUnbond);
 impl_direct_instruction_box!(crate::isi::staking::SlashPublicLaneValidator);
-impl_direct_instruction_box!(crate::isi::staking::CancelConsensusEvidencePenalty);
 impl_direct_instruction_box!(crate::isi::staking::RecordPublicLaneRewards);
 impl_direct_instruction_box!(crate::isi::staking::ClaimPublicLaneRewards);
 // Allow direct boxing of confidential parameter registry instructions
@@ -1840,7 +1839,6 @@ pub mod asset_alias;
 pub mod asset_transfer_control;
 /// Confidential registry management instructions. Bridge proof ingestion instructions.
 pub mod bridge;
-pub mod sccp;
 /// Confidential registry management instructions.
 pub mod confidential;
 /// Content lane instructions.
@@ -1882,6 +1880,7 @@ pub mod retail_daily_limit;
 pub mod runtime_upgrade;
 /// Real-world asset lot instructions.
 pub mod rwa;
+pub mod sccp;
 /// DvP/PvP settlement instructions.
 pub mod settlement;
 /// Smart contract code management instructions.
@@ -2783,12 +2782,13 @@ pub mod prelude {
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
             AdvanceSorafsReserveLifecycle, AppendSorafsPorReputationJournalEntry,
-            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest, AssertSorafsPublicationV1, BindManifestAlias,
-            CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
-            CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
-            DrawSorafsReserveCredit, ExpireReplicationOrder, ExpireSorafsModerationChallenge,
-            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
-            InitializeSorafsProviderAdmissionV1, MaintainSorafsOrderbook, MatchSorafsOrderbook,
+            AppendSorafsStreamTokenReputationJournalEntry, ApprovePinManifest,
+            AssertSorafsPublicationV1, BindManifestAlias, CancelSorafsOrderbookOrder,
+            ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch, CompleteReplicationOrder,
+            DecideSorafsReserveAppeal, DecideSorafsReserveMovement, DrawSorafsReserveCredit,
+            ExpireReplicationOrder, ExpireSorafsModerationChallenge, FinalizeSorafsModerationCase,
+            FinalizeSorafsModerationSortition, InitializeSorafsProviderAdmissionV1,
+            IssueReplicationOrder, MaintainSorafsOrderbook, MatchSorafsOrderbook,
             MutateSorafsFinalPromotionAccountCustody, MutateSorafsFinalPromotionAuthority,
             MutateSorafsReleaseManifestAuthority, MutateSorafsStreamTokenAuthority,
             MutateSorafsStreamTokenCustody, MutateSorafsTopologyAuthority,
@@ -2811,10 +2811,10 @@ pub mod prelude {
             RevokeSpaceDirectoryManifest,
         },
         staking::{
-            ActivatePublicLaneValidator, BondPublicLaneStake, CancelConsensusEvidencePenalty,
-            ClaimPublicLaneRewards, ExitPublicLaneValidator, FinalizePublicLaneUnbond,
-            RebindPublicLaneValidatorPeer, RecordPublicLaneRewards, RegisterPublicLaneCandidate,
-            RegisterPublicLaneValidator, SchedulePublicLaneUnbond, SlashPublicLaneValidator,
+            ActivatePublicLaneValidator, BondPublicLaneStake, ClaimPublicLaneRewards,
+            ExitPublicLaneValidator, FinalizePublicLaneUnbond, RebindPublicLaneValidatorPeer,
+            RecordPublicLaneRewards, RegisterPublicLaneCandidate, RegisterPublicLaneValidator,
+            SchedulePublicLaneUnbond, SlashPublicLaneValidator,
         },
         transfer::{Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox},
         transparent::{

@@ -231,10 +231,11 @@ fn assert_replayed_permission_cache(
 fn permission_cache_rebuilds_after_restart() {
     // The full replay pipeline has deep debug-mode stack use; do not depend on libtest's
     // platform-default worker stack for this integration-heavy scenario.
-    let handle =
-        crate::sumeragi::threads::sumeragi_thread_builder("permission_cache_rebuilds_after_restart")
-            .spawn(permission_cache_rebuilds_after_restart_impl)
-            .expect("spawn permission cache replay test");
+    let handle = crate::sumeragi::threads::sumeragi_thread_builder(
+        "permission_cache_rebuilds_after_restart",
+    )
+    .spawn(permission_cache_rebuilds_after_restart_impl)
+    .expect("spawn permission cache replay test");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }

@@ -21,10 +21,7 @@ use super::{
     network_topology::Topology,
     schedule,
 };
-use crate::{
-    block::ValidBlock,
-    state::State,
-};
+use crate::{block::ValidBlock, state::State};
 
 /// The genesis height: iroha's genesis block is height 1.
 pub const GENESIS_HEIGHT: u64 = 1;
@@ -235,7 +232,10 @@ mod tests {
             .expect("signed validators")
             .into_keys()
             .collect::<Vec<_>>();
-        assert_eq!(signed, expected, "signed validators in canonical PeerId order");
+        assert_eq!(
+            signed, expected,
+            "signed validators in canonical PeerId order"
+        );
         assert!(!signed.contains(&peer(&committee_only)));
 
         let committee_peers = genesis_committee_peers(&genesis).expect("genesis committee");

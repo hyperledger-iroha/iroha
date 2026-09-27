@@ -2,8 +2,8 @@
 //!
 //! Consensus state is published exclusively as the exact reducer-owned
 //! [`SumeragiV2Status`]. This module also owns the v2 liveness watchdog, the
-//! successor-activation guards, the canonical-transition gate and the archival
-//! consensus-mode labels. Non-consensus Nexus economics, settlement, lane and
+//! successor-activation guards and the archival consensus-mode labels. Kura's
+//! prune code owns the canonical-transition gate. Non-consensus Nexus economics, settlement, lane and
 //! queue diagnostics live in [`crate::status`].
 use super::{
     FairV2Ingress,

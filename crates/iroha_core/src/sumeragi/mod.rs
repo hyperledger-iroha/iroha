@@ -95,10 +95,10 @@ pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode
     let height = u64::try_from(view.height()).unwrap_or(0);
     effective_consensus_mode_for_height(view, height, frozen_mode)
 }
-/// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
-pub mod block_store;
 /// Current parent-bound threshold beacon production and authenticated partial transport.
 pub mod beacon;
+/// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
+pub mod block_store;
 /// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).
 pub mod bodies;
 /// The certified-chain reader: committed blocks as their Kura frames certify them.

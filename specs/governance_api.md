@@ -1059,8 +1059,8 @@ not a first-release archive format and fail decode.
 
 Governed `SumeragiNposParameters.reconfig.evidence_horizon_blocks` (default
 `7200` blocks) bounds accepted record age; `activation_lag_blocks` and
-`slashing_delay_blocks` in the same on-chain record delay enactment so
-governance can cancel penalties before they apply. These are governed chain
+`slashing_delay_blocks` in the same on-chain record delay enactment. No
+instruction cancels a consensus-evidence penalty. These are governed chain
 values, not local `[sumeragi]` configuration. The first-release evidence
 horizon, slashing delay, and epoch length become immutable after their initial
 signed installation; horizon plus delay cannot exceed three epochs, so the
@@ -1069,7 +1069,7 @@ bounded WSV table can always retain four complete validator rosters.
 Legacy VRF participation records and penalty effects are retired; production
 derives no VRF jail action. Automatic delayed slashing applies only to canonical
 Sumeragi-v2 equivocation evidence admitted by a prior committed block, and only
-after the `slashing_delay_blocks` window unless governance cancels the penalty.
+after the `slashing_delay_blocks` window.
 
 Operators and tooling can inspect the bounded audit projection through:
 
@@ -1083,10 +1083,9 @@ Operators and tooling can inspect the bounded audit projection through:
 Governance must treat the evidence bytes as canonical proof:
 
 1. **Collect the payload** before it ages out. Archive the raw Norito bytes alongside height/view metadata.
-2. **Cancel if needed** by submitting `CancelConsensusEvidencePenalty` with the evidence payload before `slashing_delay_blocks` elapses; the record transitions to `penalty_status = cancelled` with the canonical cancellation height, and no slashing applies.
-3. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
-4. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Commit the governed successor-mode and activation-height record with the updated roster; do not attempt to express the transition through local Sumeragi configuration.
-5. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
+2. **Stage the penalty** by embedding the payload in a referendum or sudo instruction (e.g., `Unregister::peer`). Execution re-validates the payload; malformed nor stale evidence is rejected deterministically.
+3. **Schedule the follow-up topology** so the offending <i105-account-id> cannot immediately rejoin. Commit the governed successor-mode and activation-height record with the updated roster; do not attempt to express the transition through local Sumeragi configuration.
+4. **Audit results** via `/v1/sumeragi/evidence` and `/v1/sumeragi/status` to ensure the evidence counter advanced and governance enacted the removal.
 
 ### Joint-Consensus Sequencing
 
