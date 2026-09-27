@@ -1458,6 +1458,8 @@ class _MockState:
                         "merge_carrier": None,
                         "executed_block_wire_len": 123,
                         "executed_block_wire_hash": _canonical_hash(0x53),
+                        "transaction_input_commitment": None,
+                        "transaction_output_commitment": None,
                     },
                 },
                 "validator_count": 4,
@@ -1486,6 +1488,7 @@ class _MockState:
                 "blocker": None,
                 "ignore_counts": [],
             },
+            "beacon_horizon": None,
         }
         self.sumeragi_diagnostics = {
             "pipeline_execution": {

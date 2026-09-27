@@ -4,7 +4,8 @@
     "git_commit_sha": "deadbeef",
     "dpn_validator_release_commit": "feedface",
     "cargo_features": "telemetry,zk-halo2",
-    "target_triple": "aarch64-apple-darwin"
+    "target_triple": "aarch64-apple-darwin",
+    "wire_schema_hash": "abababababababababababababababababababababababababababababababab"
   },
   "observed_at_ms": 1234999,
   "peers": 4,

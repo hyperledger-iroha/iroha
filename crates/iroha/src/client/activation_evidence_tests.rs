@@ -1273,6 +1273,7 @@ impl GenesisAttestationFixture {
                 total_power: 4,
             }),
             liveness: SumeragiV2LivenessStatus::default(),
+            beacon_horizon: None,
         };
         status.validate().expect("exact authoritative status shape");
         status

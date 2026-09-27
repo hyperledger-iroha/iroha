@@ -19,7 +19,7 @@ fn named_spool_payloads_cover_real_handles_and_record_workspace() {
     assert_eq!(aad.capacity(), layout.aad_len);
     assert!(
         layout.named_operation_workspace_bytes_v1()
-            >= chunk.len_v1() as usize
+            >= chunk.as_slice_v1().len()
                 + size_of_val(&chunk)
                 + aad.capacity()
                 + size_of_val(&aad)
@@ -61,17 +61,17 @@ fn named_spool_workspace_keeps_existing_real_file_ciphertext_roundtrip() {
     let mut writer = ConfidentialSpoolWriterV1::create_in_v1(directory.path(), layout).unwrap();
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
     assert_eq!(writer.resources.as_ref().unwrap().key.len(), KEY_BYTES_V1);
-    for slot in 0..2 {
+    for slot in 0_u8..2 {
         let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(16_384).unwrap();
-        chunk.as_mut_slice_v1().fill(41 + slot as u8);
-        writer.write_slot_v1(slot, chunk).unwrap();
+        chunk.as_mut_slice_v1().fill(41 + slot);
+        writer.write_slot_v1(u64::from(slot), chunk).unwrap();
     }
     let mut snapshot = writer.seal_v1().unwrap();
     assert!(retained >= size_of_val(&snapshot) + KEY_BYTES_V1);
-    for slot in 0..2 {
-        let chunk = snapshot.read_slot_v1(slot, [31; 32]).unwrap();
-        assert!(chunk.as_slice_v1().iter().all(|b| *b == 41 + slot as u8));
-        assert!(scratch >= size_of_val(&chunk) + chunk.len_v1() as usize);
+    for slot in 0_u8..2 {
+        let chunk = snapshot.read_slot_v1(u64::from(slot), [31; 32]).unwrap();
+        assert!(chunk.as_slice_v1().iter().all(|b| *b == 41 + slot));
+        assert!(scratch >= size_of_val(&chunk) + chunk.as_slice_v1().len());
     }
     drop(snapshot);
     assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);

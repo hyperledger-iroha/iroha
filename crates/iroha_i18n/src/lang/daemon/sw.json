@@ -5,6 +5,7 @@
   "error.logger": "Mfumo wa kumbukumbu haukuanzishwa",
   "error.start": "Imeshindikana kuanzisha Iroha",
   "error.run": "Hitilafu imetokea wakati wa kuendesha Iroha",
+  "error.check_storage": "Kura (hifadhi ya vizuizi) imeshindwa ukaguzi wa hifadhi ya kusoma pekee",
   "error.start_p2p": "Imeshindikana kuanzisha mtandao wa P2P",
   "error.init_kura": "Imeshindikana kuanzisha Kura (hifadhi ya vizuizi)",
   "error.start_dev_telemetry": "Imeshindikana kuanzisha huduma ya telemetry ya maendeleo",

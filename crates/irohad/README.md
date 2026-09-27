@@ -370,6 +370,73 @@ Refer to [generating key pairs with `kagami`](../iroha_kagami/CommandLineHelp.md
 See the current [peer configuration reference](https://docs.iroha.tech/reference/peer-config/params.html)
 for the complete parameter list and examples.
 
+`--config` accepts a flat file or a profile node file (one that sets `profile`,
+`role_overlay` and `profile_roster_size`). Both are read through
+`iroha_config::node_config`; a profile node file is layered over its compiled
+profile, may set only the per-node keys, and must not be combined with `--sora`.
+`--config-blake3` binds the exact bytes of either kind of file.
+
+### Node secrets
+
+When the configuration sets `data_dir`, the stock `iroha3d` reads its runtime
+secrets from fixed files under `<data_dir>/secrets/` (`irohad::node_secrets`):
+
+- `runtime_signer.key`: the Soracloud runtime signer, one canonical Ed25519
+  private multihash and a newline (71 bytes). It is required when
+  `soracloud_runtime.submission.signer` is configured (which `production_mode`
+  requires). That binding must carry this key, its account as `authority`, the
+  handle `software://iroha/node-secrets/runtime-signer/<public key hex>`,
+  `revision = 1` and the policy digest
+  `iroha_config::parameters::actual::node_runtime_signer::policy_digest_v1()`.
+- `mint_finality.seed`: the raw 32-byte KAGEMUSHA mint-finality seed, bound
+  against the authenticated signed genesis mint-finality roster. A peer the
+  roster names requires it; an unnamed peer that holds one keeps it as an
+  unseated candidate that signs only once a later authenticated generation seats
+  it. `sumeragi.mint_finality_seed_fd` is rejected for such a node.
+- `beacon.cred`: the global-beacon seat credential, loaded when present on a
+  validator. Its provider binding comes from the credential header; a configured
+  `sumeragi.global_beacon_partial_signer_provider_*` binding must equal it.
+- `authority/onboarding.key`: checked for custody and matched to
+  `torii.account_onboarding.authority` when onboarding reads it from that path.
+
+Every file must be a regular file with one link, owned by root or the daemon user,
+readable only by its owner, of its exact record size, and reached through
+directories that are neither symlinks nor group/world-writable. The path is walked
+as written: only root-owned system links in root-owned, non-writable directories
+(such as macOS `/var`) are followed, so a symlinked `data_dir` or `secrets`
+directory is refused. `--check-config` and `--check-storage` never open these files.
+
+The key files the configuration itself names under `<data_dir>/secrets/`
+(`validator.key`, `transport.key`, `streaming.key` and `authority/*.key`) pass the
+same custody checks whenever the node file is loaded, before the configuration
+parser reads them; `--check-config` and `--check-storage` do read those.
+
+Deployment launchers that supply their own runtime-provider registry
+(`iroha3d_taira` until the cutover) do not use `node_secrets`.
+
+### Compatibility probes
+
+Run these with a new binary before it replaces an old one:
+
+- `iroha3d --config <file> --check-config --json` prints the handshake- and
+  genesis-bound values of this build and configuration as one Norito JSON object
+  (`config_fingerprint`, `protocol_version`, `wire_schema_hash`,
+  `nexus_policy_digest`, `gas_schedule_hash`, `execution_policy_hash`,
+  `nexus_amx_context_hash`, plus `status`). Genesis-bound values are `null`
+  while the signed genesis is not available locally.
+- `iroha3d --config <file> --check-storage` inspects a stopped node's store:
+  it opens Kura in emergency-Fast mode (taking the store-root lock, so a store
+  owned by a running node is refused), decodes every retained block body with
+  this build, restores the newest snapshot into a scratch Kura, compares every
+  block hash the snapshot retains with Kura's as a Strict startup does, and prints
+  `{tip_height, tip_hash, snapshot_height, prefix_hash_at_snapshot_height,
+  snapshot_restore_dry_run, snapshot_restore_error}`. It exits nonzero when the
+  store cannot be read or the restore dry run fails, and never writes to the store.
+
+`lifecycle.exit_on_stdin_close = true` makes the daemon shut down cleanly when
+its standard input reaches end-of-file; a local supervisor sets it and holds the
+other end of the pipe.
+
 ## Deployment
 
 You may deploy Iroha as a [native binary](#native-binary) or by using [Docker](#docker).

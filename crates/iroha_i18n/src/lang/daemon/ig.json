@@ -5,6 +5,7 @@
   "error.logger": "Enweghị ike ịmalite sistemụ ndekọ",
   "error.start": "Iroha anaghị amalite",
   "error.run": "Mperi mere mgbe Iroha na-arụ ọrụ",
+  "error.check_storage": "Kura (ebe nchekwa blọkụ) adaghị nlele nchekwa naanị ịgụ",
   "error.start_p2p": "Enweghị ike ịmalite netwọk P2P",
   "error.init_kura": "Enweghị ike ịmalite Kura (ebe nchekwa blọkụ)",
   "error.start_dev_telemetry": "Enweghị ike ịmalite ọrụ telemetry maka mmepe",

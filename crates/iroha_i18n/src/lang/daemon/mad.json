@@ -5,6 +5,7 @@
   "error.logger": "Sistem log boten saged dipunwiwiti",
   "error.start": "Iroha boten saged dipunwiwiti",
   "error.run": "Kasalahan kedados nalika Iroha mlampah",
+  "error.check_storage": "Kura (panyimpen blok) ta' lulus pamarèksa'an panyimpen sè coma èbâca",
   "error.start_p2p": "Jaringan P2P boten saged dipunwiwiti",
   "error.init_kura": "Kura (panyimpen blok) boten saged dipunwiwiti",
   "error.start_dev_telemetry": "Layanan telemetri pangembang boten saged dipunwiwiti",

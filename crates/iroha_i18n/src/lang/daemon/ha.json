@@ -5,6 +5,7 @@
   "error.logger": "Ba a iya kunna tsarin rikodin ba",
   "error.start": "Ba a iya kunna Iroha ba",
   "error.run": "An sami kuskure yayin gudanar da Iroha",
+  "error.check_storage": "Kura (ajiya ta toshe) ta kasa cin gwajin ajiya na karantawa kawai",
   "error.start_p2p": "Ba a iya kunna hanyar sadarwa ta P2P ba",
   "error.init_kura": "Ba a iya kunna Kura (ajiya ta toshe) ba",
   "error.start_dev_telemetry": "Ba a iya kunna sabis na telemetry na masu haɓakawa ba",

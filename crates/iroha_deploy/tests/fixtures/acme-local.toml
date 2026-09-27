@@ -1,0 +1,20 @@
+# Local rehearsal of acme.toml (spec §3.7): owner nodes run under the dev network's supervisor.
+[dataspace]
+name = "acme"
+network = "../../../../networks/dev.toml"
+visibility = "restricted"
+owner_key = "~/.iroha/keys/acme-owner.key"
+account_alias = "treasury"
+max_fee = "50"
+
+[committee]
+source = "owner"
+
+[[committee.node]]
+name = "acme-1"
+[[committee.node]]
+name = "acme-2"
+[[committee.node]]
+name = "acme-3"
+[[committee.node]]
+name = "acme-4"

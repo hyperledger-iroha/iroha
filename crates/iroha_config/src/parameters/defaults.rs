@@ -110,6 +110,83 @@ pub mod runtime_provider_broker {
         PathBuf::from(ENDPOINT_PATH)
     }
 }
+/// Fixed layout under a node's `data_dir`.
+///
+/// When `data_dir` is set, every state path listed in [`data_dir::STATE_PATHS`] that the
+/// configuration does not set explicitly defaults to `<data_dir>/state/<relative>`, and every
+/// secret file defaults to `<data_dir>/secrets/<name>`. Explicit per-path values still win.
+pub mod data_dir {
+    /// Path of the loader-owned configuration source that carries the resolved absolute
+    /// `data_dir` and the paths completed from it (`iroha_config::node_config`). The parser
+    /// accepts `data_dir` only from this source, so a configuration that sets `data_dir` but was
+    /// read without the loader is rejected instead of silently keeping default paths.
+    pub const LAYOUT_SOURCE: &str = "<data_dir layout>";
+    /// Subdirectory of `data_dir` holding every derived state path.
+    pub const STATE_DIR: &str = "state";
+    /// Subdirectory of `data_dir` holding owner-only secret files.
+    pub const SECRETS_DIR: &str = "secrets";
+    /// Derived state paths: configuration key and path relative to [`STATE_DIR`].
+    ///
+    /// TODO: the SoraFS provider sub-states (`sorafs.storage.pop_credentials.*`,
+    /// moderation, reputation, reserve-transparency, hedging-billing and evidence-viewer
+    /// checkpoints) and `torii.privacy_bootle_lantern_issuer.state_dir` still default to
+    /// `./storage/...`; they are only used when the embedded SoraFS provider or the
+    /// Bootle/Lantern issuer is enabled, which no compiled profile does.
+    pub const STATE_PATHS: &[(&[&str], &str)] = &[
+        (&["kura", "store_dir"], "kura"),
+        (&["snapshot", "store_dir"], "snapshot"),
+        (&["tiered_state", "cold_store_root"], "tiered_state"),
+        (&["tiered_state", "da_store_root"], "da_wsv_snapshots"),
+        (&["streaming", "session_store_dir"], "streaming"),
+        (&["soracloud_runtime", "state_dir"], "soracloud_runtime"),
+        (
+            &[
+                "network",
+                "soranet_handshake",
+                "pow",
+                "revocation_store_path",
+            ],
+            "soranet/ticket_revocations.norito",
+        ),
+        (&["torii", "data_dir"], "torii"),
+        (
+            &["torii", "da_ingest", "replay_cache_store_dir"],
+            "torii/da_replay",
+        ),
+        (
+            &["torii", "da_ingest", "manifest_store_dir"],
+            "torii/da_manifests",
+        ),
+        (&["sorafs", "storage", "data_dir"], "sorafs"),
+        (&["sorafs", "por", "state_dir"], "sorafs/por"),
+    ];
+    /// Validator BLS private key (`private_key_file`).
+    pub const VALIDATOR_KEY: &str = "validator.key";
+    /// SoraNet transport Ed25519 private key (`soranet_transport_private_key_file`).
+    pub const TRANSPORT_KEY: &str = "transport.key";
+    /// Streaming identity Ed25519 private key (`streaming.identity_private_key_file`).
+    pub const STREAMING_KEY: &str = "streaming.key";
+    /// Soracloud runtime mutation-signer private key.
+    pub const RUNTIME_SIGNER_KEY: &str = "runtime_signer.key";
+    /// KAGEMUSHA mint-finality seed.
+    pub const MINT_FINALITY_SEED: &str = "mint_finality.seed";
+    /// Global beacon partial-signer credential.
+    pub const BEACON_CREDENTIAL: &str = "beacon.cred";
+    /// Faucet authority private key (`torii.faucet.private_key_file`).
+    pub const FAUCET_AUTHORITY_KEY: &str = "authority/faucet.key";
+    /// Onboarding authority private key (`torii.account_onboarding.private_key_file`).
+    pub const ONBOARDING_AUTHORITY_KEY: &str = "authority/onboarding.key";
+    /// SoraFS council authority private key.
+    pub const SORAFS_COUNCIL_AUTHORITY_KEY: &str = "authority/sorafs_council.key";
+    /// KAGEMUSHA redemption authority private key
+    /// (`torii.kagemusha_v1_commands.redemption_private_key_file`).
+    pub const KAGEMUSHA_REDEMPTION_AUTHORITY_KEY: &str = "authority/kagemusha_redemption.key";
+}
+/// Node process lifecycle defaults.
+pub mod lifecycle {
+    /// The daemon keeps running when its standard input closes.
+    pub const EXIT_ON_STDIN_CLOSE: bool = false;
+}
 /// Canonical first-release Taira deployment policy shared by generators and launchers.
 pub mod taira {
     /// Canonical first-release Inrou canary guest CPU allocation.

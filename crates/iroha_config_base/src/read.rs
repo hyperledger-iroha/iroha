@@ -329,6 +329,18 @@ impl ConfigReader {
             .iter()
             .any(|source| source.fetch(&id).is_some())
     }
+    /// TOML sources in precedence order: a later source overrides an earlier one.
+    #[must_use]
+    pub fn toml_sources(&self) -> &[TomlSource] {
+        &self.sources
+    }
+    /// Exclusive access to the loaded TOML sources, in precedence order.
+    ///
+    /// Layered loaders use this to complete values that the file layout derives (for example
+    /// paths under a node data directory) before any parameter is read.
+    pub fn toml_sources_mut(&mut self) -> &mut [TomlSource] {
+        &mut self.sources
+    }
     /// Reads a TOML file and handles its `extends` field, implementing mixins mechanism.
     ///
     /// The traversal is depth-first in declared order. Canonically identical files reached through
@@ -836,6 +848,34 @@ mod tests {
                 "value conversion rejected".to_owned(),
             ))
         }
+    }
+    #[test]
+    fn toml_sources_expose_precedence_order_and_allow_completion() {
+        let mut reader = ConfigReader::new()
+            .without_env()
+            .with_toml_source(TomlSource::inline(::toml::toml! { first = 1 }))
+            .with_toml_source(TomlSource::inline(::toml::toml! { second = 2 }));
+        assert_eq!(reader.toml_sources().len(), 2);
+        assert!(reader.toml_sources()[0].table().contains_key("first"));
+        assert!(reader.toml_sources()[1].table().contains_key("second"));
+        reader.toml_sources_mut()[0]
+            .table_mut()
+            .insert("completed".to_owned(), ::toml::Value::Integer(3));
+        assert!(reader.contains_toml_parameter(["completed"]));
+        let completed = reader
+            .read_parameter::<u64>(["completed"])
+            .value_required()
+            .finish();
+        let _first = reader
+            .read_parameter::<u64>(["first"])
+            .value_required()
+            .finish();
+        let _second = reader
+            .read_parameter::<u64>(["second"])
+            .value_required()
+            .finish();
+        reader.into_result().expect("completed sources read");
+        assert_eq!(completed.unwrap(), 3);
     }
     #[test]
     fn environment_overlays_can_be_disabled() {

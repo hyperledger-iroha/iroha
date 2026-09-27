@@ -489,42 +489,23 @@ const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: u32 = 268_435_456; // 2
 /// Default critical consensus ingress bytes burst cap for localnet.
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512 MiB
 fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
-    if validator_count > MAX_VALIDATORS_PER_HEIGHT {
-        return Err(eyre!(
-            "localnet validator count {validator_count} exceeds the Sumeragi v2 protocol maximum of {MAX_VALIDATORS_PER_HEIGHT}"
-        ));
-    }
-    if !is_valid_committee_size(validator_count) {
-        return Err(eyre!(
-            "localnet validator count {validator_count} is not an exact Sumeragi v2 3f+1 committee in the supported range 4..={MAX_VALIDATORS_PER_HEIGHT}"
-        ));
-    }
-    let effect_work_capacity = (LOCALNET_SUMERAGI_QUEUE_COMMANDS
-        / iroha_config::parameters::defaults::sumeragi::V2_RUNTIME_COMPLETION_RESERVE_DIVISOR)
-        .max(1);
-    actual::sumeragi_v2_lifecycle_capacity_geometry(
-        validator_count,
-        effect_work_capacity,
-        LOCALNET_SUMERAGI_QUEUE_BODIES,
-        LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+    // The shared geometry rejects rosters above the protocol maximum and rosters that are not an
+    // exact 3f+1 committee before any capacity arithmetic. Localnets have no committee ingress
+    // class, so every validator and authenticated source owns exactly one partition.
+    let geometry = iroha_config::profile::sumeragi_v2_ingress_geometry(
+        iroha_config::profile::SumeragiV2IngressInputs {
+            validators: validator_count,
+            queue_commands: LOCALNET_SUMERAGI_QUEUE_COMMANDS,
+            queue_bodies: LOCALNET_SUMERAGI_QUEUE_BODIES,
+            authenticated_non_validator_sources:
+                LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
+            committee_sources: 0,
+            max_total_connections: LOCALNET_MAX_TOTAL_CONNECTIONS,
+            body_source_bytes: LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
+        },
     )
-    .wrap_err("localnet Sumeragi lifecycle capacity geometry is inadmissible")?;
-    let shared_ownership_capacity = actual::sumeragi_v2_exact_output_shared_ownership_capacity(
-        effect_work_capacity,
-        LOCALNET_SUMERAGI_QUEUE_BODIES,
-    )
-    .wrap_err("localnet Sumeragi exact-output shared capacity overflowed")?;
-    actual::validate_sumeragi_v2_exact_output_geometry(
-        shared_ownership_capacity,
-        LOCALNET_MAX_TOTAL_CONNECTIONS,
-    )
-    .wrap_err("localnet Sumeragi exact-output geometry is inadmissible")?;
-    actual::sumeragi_v2_body_ingress_required_byte_capacity(
-        validator_count,
-        LOCALNET_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-        LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES,
-    )
-    .ok_or_else(|| eyre!("localnet Sumeragi outer-ingress wire-byte capacity overflow"))
+    .wrap_err("localnet Sumeragi ingress geometry is inadmissible")?;
+    Ok(geometry.body_bytes)
 }
 /// Transaction gossip cadence for 1s localnet pipelines (ms).
 const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
@@ -6519,6 +6500,9 @@ fn write_localnet_gitignore(out_dir: &Path) -> Result<()> {
 #[path = "localnet/client_identity_test_support.rs"]
 mod localnet_test_helpers;
 #[cfg(test)]
+#[path = "localnet/profile_golden_parity_tests.rs"]
+mod profile_golden_parity_tests;
+#[cfg(test)]
 use localnet_test_helpers::localnet_client_identity;
 fn localnet_client_account_id() -> AccountId {
     let public_key = CLIENT_ACCOUNT_PUBLIC
@@ -9650,17 +9634,17 @@ mod tests {
             .expect_err("a non-3f+1 roster must fail before capacity arithmetic");
         assert!(
             geometry_error
-                .to_string()
-                .contains("exact Sumeragi v2 3f+1"),
-            "unexpected error: {geometry_error}"
+                .chain()
+                .any(|cause| cause.to_string().contains("exact Sumeragi v2 3f+1")),
+            "unexpected error: {geometry_error:?}"
         );
         let error = localnet_sumeragi_body_bytes(MAX_VALIDATORS_PER_HEIGHT + 1)
             .expect_err("an oversized roster must fail before capacity arithmetic");
         assert!(
-            error
+            error.chain().any(|cause| cause
                 .to_string()
-                .contains("exceeds the Sumeragi v2 protocol maximum"),
-            "unexpected error: {error}"
+                .contains("exceeds the Sumeragi v2 protocol maximum")),
+            "unexpected error: {error:?}"
         );
     }
     include!("localnet/profile_policy_tests.rs");

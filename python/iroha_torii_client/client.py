@@ -843,6 +843,7 @@ __all__ = [
     "SumeragiV2ProgressTransitionStatus",
     "SumeragiV2IgnoreCount",
     "SumeragiV2LivenessStatus",
+    "SumeragiV2BeaconHorizonStatus",
     "SumeragiV2Status",
     "SumeragiPipelineExecutionStatus",
     "SumeragiNposDiagnostics",
@@ -4112,6 +4113,17 @@ class SumeragiV2LivenessStatus:
 
 
 @dataclass(frozen=True)
+class SumeragiV2BeaconHorizonStatus:
+    """Local global-beacon horizon signed inside the authoritative status."""
+
+    epoch_length_blocks: int
+    next_required_pulse_height: Optional[int]
+    active_session_id: Optional[str]
+    session_covers_next_pulse: bool
+    local_provider_ready: bool
+
+
+@dataclass(frozen=True)
 class SumeragiV2Status:
     """Authoritative reducer response from ``GET /v1/sumeragi/status``."""
 
@@ -4135,6 +4147,7 @@ class SumeragiV2Status:
     height_context: SumeragiV2HeightContextStatus
     last_commit_qc: Optional[SumeragiV2CommitQcStatus]
     liveness: SumeragiV2LivenessStatus
+    beacon_horizon: Optional[SumeragiV2BeaconHorizonStatus]
 
     @classmethod
     def from_payload(cls, payload: Any) -> "SumeragiV2Status":
@@ -4430,6 +4443,7 @@ class _SumeragiV2StatusParser:
             "height_context",
             "last_commit_qc",
             "liveness",
+            "beacon_horizon",
         }
         unknown_fields = set(record) - allowed_fields
         if unknown_fields:
@@ -4583,6 +4597,93 @@ class _SumeragiV2StatusParser:
             height_context=height_context,
             last_commit_qc=last_commit,
             liveness=liveness,
+            beacon_horizon=(
+                None
+                if record.get("beacon_horizon") is None
+                else cls._beacon_horizon(
+                    record.get("beacon_horizon"),
+                    context="sumeragi.beacon_horizon",
+                    height=height,
+                    mode=height_context.mode,
+                )
+            ),
+        )
+
+    @classmethod
+    def _beacon_horizon(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        height: int,
+        mode: str,
+    ) -> SumeragiV2BeaconHorizonStatus:
+        record = cls._mapping(value, context)
+        fields = {
+            "epoch_length_blocks",
+            "next_required_pulse_height",
+            "active_session_id",
+            "session_covers_next_pulse",
+            "local_provider_ready",
+        }
+        unknown = sorted(set(record) - fields)
+        if unknown:
+            raise RuntimeError(f"{context} contains unknown field {unknown[0]}")
+        missing = sorted(fields - set(record))
+        if missing:
+            raise RuntimeError(f"{context} is missing field {missing[0]}")
+        epoch_length_blocks = cls._unsigned(
+            record.get("epoch_length_blocks"), f"{context}.epoch_length_blocks"
+        )
+        next_pulse_value = record.get("next_required_pulse_height")
+        next_required_pulse_height = (
+            None
+            if next_pulse_value is None
+            else cls._unsigned(
+                next_pulse_value,
+                f"{context}.next_required_pulse_height",
+                positive=True,
+            )
+        )
+        session_value = record.get("active_session_id")
+        active_session_id = (
+            None
+            if session_value is None
+            else cls._byte32(session_value, f"{context}.active_session_id")
+        )
+        covers = cls._boolean(
+            record.get("session_covers_next_pulse"),
+            f"{context}.session_covers_next_pulse",
+        )
+        provider_ready = cls._boolean(
+            record.get("local_provider_ready"), f"{context}.local_provider_ready"
+        )
+        if mode == "permissioned" and epoch_length_blocks != 0:
+            raise RuntimeError(
+                f"{context}.epoch_length_blocks must be zero in permissioned mode"
+            )
+        if mode != "permissioned" and epoch_length_blocks == 0:
+            raise RuntimeError(
+                f"{context}.epoch_length_blocks must be positive in NPoS mode"
+            )
+        if next_required_pulse_height is not None and next_required_pulse_height < height:
+            raise RuntimeError(
+                f"{context}.next_required_pulse_height must not precede the active height"
+            )
+        if covers and (active_session_id is None or next_required_pulse_height is None):
+            raise RuntimeError(
+                f"{context} coverage requires an active session and a scheduled pulse"
+            )
+        if provider_ready and active_session_id is None:
+            raise RuntimeError(
+                f"{context} provider readiness requires an active session"
+            )
+        return SumeragiV2BeaconHorizonStatus(
+            epoch_length_blocks=epoch_length_blocks,
+            next_required_pulse_height=next_required_pulse_height,
+            active_session_id=active_session_id,
+            session_covers_next_pulse=covers,
+            local_provider_ready=provider_ready,
         )
 
     @classmethod

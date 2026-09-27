@@ -31158,6 +31158,7 @@ mod tests {
             },
             last_commit_qc: None,
             liveness: SumeragiV2LivenessStatus::default(),
+            beacon_horizon: None,
         }
     }
     fn sample_sumeragi_status_with_relay() -> (SumeragiDiagnosticsStatus, LaneRelayEnvelope) {

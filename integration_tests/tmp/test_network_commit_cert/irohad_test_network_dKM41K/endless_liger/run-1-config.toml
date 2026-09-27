@@ -1,0 +1,4 @@
+extends = ["config.base.toml", "run-1-config.layer-0.toml", "run-1-config.layer-1.toml", "run-1-config.layer-2.toml"]
+
+[genesis]
+file = "/Users/takemiyamakoto/dev/iroha/integration_tests/tmp/test_network_commit_cert/irohad_test_network_dKM41K/endless_liger/run-1-genesis.nrt"

@@ -52,16 +52,44 @@ fn canonical_test_base_table() -> Table {
 }
 #[test]
 fn soranet_transport_identity_is_required_even_with_streaming_identity() {
-    let mut missing_public = canonical_test_base_table();
-    missing_public.remove("soranet_transport_public_key");
-    missing_public.remove("soranet_transport_private_key");
+    let mut missing_identity = canonical_test_base_table();
+    missing_identity.remove("soranet_transport_public_key");
+    missing_identity.remove("soranet_transport_private_key");
     let error = ConfigReader::new()
         .with_env(MockEnv::new())
-        .with_toml_source(TomlSource::inline(missing_public))
+        .with_toml_source(TomlSource::inline(missing_identity))
         .read_and_complete::<UserConfig>()
-        .expect_err("dedicated SoraNet transport public identity must be required");
+        .expect("the public transport identity is derived from the private key")
+        .parse()
+        .expect_err("dedicated SoraNet transport identity must be required");
     let message = strip_ansi_codes(&format!("{error:?}"));
-    assert_contains!(message, "missing parameter: `soranet_transport_public_key`");
+    assert_contains!(
+        message,
+        "missing private-key source; configure exactly one of soranet_transport_private_key or soranet_transport_private_key_file"
+    );
+
+    let expected_public = canonical_test_base_table()
+        .get("soranet_transport_public_key")
+        .and_then(TomlValue::as_str)
+        .expect("base transport public key")
+        .to_owned();
+    let mut derived_public = canonical_test_base_table();
+    derived_public.remove("soranet_transport_public_key");
+    let config = ConfigReader::new()
+        .with_env(MockEnv::new())
+        .with_toml_source(TomlSource::inline(derived_public))
+        .read_and_complete::<UserConfig>()
+        .expect("the private transport key completes the user schema")
+        .parse()
+        .expect("the public transport identity is derived from the private key");
+    assert_eq!(
+        config
+            .common
+            .soranet_transport_key_pair
+            .public_key()
+            .to_string(),
+        expected_public
+    );
 
     let mut missing_private = canonical_test_base_table();
     missing_private.remove("soranet_transport_private_key");

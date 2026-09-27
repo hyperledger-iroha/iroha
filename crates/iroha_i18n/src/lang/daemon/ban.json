@@ -5,6 +5,7 @@
   "error.logger": "Botên dados nginisialisasi sistem log",
   "error.start": "Iroha botên dados kawiwitan",
   "error.run": "Kasalahan kadadosan ritatkala Iroha mlampah",
+  "error.check_storage": "Kura (panyimpen blok) nénten lulus pamariksan panyimpen sané wantah kawaca",
   "error.start_p2p": "Jaringan P2P botên dados katandatang",
   "error.init_kura": "Kura (panyimpen blok) botên dados nginisialisasi",
   "error.start_dev_telemetry": "Layanan telemetri pangembang botên dados katandatang",

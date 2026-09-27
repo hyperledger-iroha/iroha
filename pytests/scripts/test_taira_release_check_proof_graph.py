@@ -67,8 +67,9 @@ class ProofGraphTests(unittest.TestCase):
         self.network_calls += 1
         # The four-peer fixture runs before the deferred proof census, so a
         # shipping failure can surface without running the long proof checks.
+        # The completed CLI copy is released before shipping codegen needs disk.
         for row in self.copies[-1]:
-            self.assertTrue(Path(row["path"]).exists())
+            self.assertEqual(Path(row["path"]).exists(), row["selection"] != "cli")
         self.assertEqual(stages, gate.NETWORK_STAGES)
         gate.run_stages(harness, fixture_root, env, stages, lock_fds)
         if self.network_failure:

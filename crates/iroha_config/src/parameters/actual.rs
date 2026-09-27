@@ -202,6 +202,10 @@ pub struct Root {
     pub streaming: Streaming,
     /// Node-local SCCP attestor and light-client keeper.
     pub sccp: SccpNode,
+    /// Node data directory, when the configuration uses the fixed `data_dir` layout.
+    pub data_dir: Option<DataDir>,
+    /// Node process lifecycle settings.
+    pub lifecycle: Lifecycle,
 }
 /// Public endpoint of the authenticated local runtime-provider broker.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,6 +268,234 @@ impl FromStr for RuntimeProviderBrokerEndpointPath {
 
     fn from_str(path: &str) -> core::result::Result<Self, Self::Err> {
         Self::try_new(PathBuf::from(path))
+    }
+}
+/// Node process lifecycle settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Lifecycle {
+    /// Exit when standard input reaches end-of-file (set by a supervising parent).
+    pub exit_on_stdin_close: bool,
+}
+impl_default!(Lifecycle => {
+        Self {
+            exit_on_stdin_close: defaults::lifecycle::EXIT_ON_STDIN_CLOSE,
+        }
+});
+/// Owner-only secret file with a fixed name under `<data_dir>/secrets/`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum NodeSecretFile {
+    /// Validator BLS private key.
+    Validator,
+    /// SoraNet transport Ed25519 private key.
+    Transport,
+    /// Streaming identity Ed25519 private key.
+    Streaming,
+    /// Soracloud runtime mutation-signer private key.
+    RuntimeSigner,
+    /// KAGEMUSHA mint-finality seed.
+    MintFinalitySeed,
+    /// Global beacon partial-signer credential.
+    BeaconCredential,
+    /// Faucet authority private key.
+    FaucetAuthority,
+    /// Onboarding authority private key.
+    OnboardingAuthority,
+    /// SoraFS council authority private key.
+    ///
+    /// TODO(P2): reserved for the deploy engine's network-authority keys (spec §7.2); no
+    /// configuration key reads it yet, so the node never opens it.
+    SorafsCouncilAuthority,
+    /// KAGEMUSHA redemption authority private key.
+    KagemushaRedemptionAuthority,
+}
+impl NodeSecretFile {
+    /// Every fixed secret file, in a stable order.
+    pub const ALL: [Self; 10] = [
+        Self::Validator,
+        Self::Transport,
+        Self::Streaming,
+        Self::RuntimeSigner,
+        Self::MintFinalitySeed,
+        Self::BeaconCredential,
+        Self::FaucetAuthority,
+        Self::OnboardingAuthority,
+        Self::SorafsCouncilAuthority,
+        Self::KagemushaRedemptionAuthority,
+    ];
+    /// Path of this file relative to `<data_dir>/secrets/`.
+    #[must_use]
+    pub const fn relative_path(self) -> &'static str {
+        use defaults::data_dir as names;
+        match self {
+            Self::Validator => names::VALIDATOR_KEY,
+            Self::Transport => names::TRANSPORT_KEY,
+            Self::Streaming => names::STREAMING_KEY,
+            Self::RuntimeSigner => names::RUNTIME_SIGNER_KEY,
+            Self::MintFinalitySeed => names::MINT_FINALITY_SEED,
+            Self::BeaconCredential => names::BEACON_CREDENTIAL,
+            Self::FaucetAuthority => names::FAUCET_AUTHORITY_KEY,
+            Self::OnboardingAuthority => names::ONBOARDING_AUTHORITY_KEY,
+            Self::SorafsCouncilAuthority => names::SORAFS_COUNCIL_AUTHORITY_KEY,
+            Self::KagemushaRedemptionAuthority => names::KAGEMUSHA_REDEMPTION_AUTHORITY_KEY,
+        }
+    }
+}
+/// Fixed node directory layout rooted at `data_dir`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataDir {
+    root: PathBuf,
+}
+impl DataDir {
+    /// Wrap an already resolved data directory.
+    #[must_use]
+    pub fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+    /// The data directory itself.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    /// `<data_dir>/state`, the parent of every derived state path.
+    #[must_use]
+    pub fn state_dir(&self) -> PathBuf {
+        self.root.join(defaults::data_dir::STATE_DIR)
+    }
+    /// `<data_dir>/secrets`, the parent of every fixed secret file.
+    #[must_use]
+    pub fn secrets_dir(&self) -> PathBuf {
+        self.root.join(defaults::data_dir::SECRETS_DIR)
+    }
+    /// Path of one fixed secret file.
+    #[must_use]
+    pub fn secret(&self, file: NodeSecretFile) -> PathBuf {
+        self.secrets_dir().join(file.relative_path())
+    }
+}
+/// Public binding of the file-backed Soracloud runtime signer.
+///
+/// `iroha3d` loads this signer from [`NodeSecretFile::RuntimeSigner`] (`irohad::node_secrets`)
+/// and admits a configured `soracloud_runtime.submission.signer` only when it carries exactly
+/// [`handle_v1`], [`REVISION_V1`] and [`policy_digest_v1`]. Deployment renderers emit the same
+/// values, so they live here rather than in the daemon.
+pub mod node_runtime_signer {
+    use iroha_crypto::{Algorithm, Hash, PublicKey};
+
+    /// Exact adapter and public-policy revision of the file-backed runtime signer.
+    pub const REVISION_V1: u64 = 1;
+    /// Handle prefix; the lowercase hex of the raw Ed25519 public key follows.
+    pub const HANDLE_PREFIX_V1: &str = "software://iroha/node-secrets/runtime-signer/";
+    /// Exact size of `runtime_signer.key`: one canonical Ed25519 private multihash and a newline.
+    pub const KEY_FILE_BYTES_V1: usize = 71;
+    /// Domain of [`policy_digest_v1`].
+    const POLICY_DIGEST_DOMAIN_V1: &[u8] =
+        b"iroha.node-secrets.runtime-signer.compiled-policy.digest.v1\0";
+    /// Compiled public policy the digest commits to.
+    pub const COMPILED_POLICY_V1: &[u8] = b"algorithm=ed25519;credential=data-dir-secrets/runtime_signer.key;custody=nofollow-regular-nlink-1-owner-root-or-euid-owner-only-mode-size-71-trusted-ancestors;key=canonical-private-multihash-plus-newline;handle=software://iroha/node-secrets/runtime-signer/<lowercase-raw-public-key-hex>;authority=account-id(public-key);transactions=exact-authority-payload;provenance=canonical-soracloud-v1-domain-version-purpose-preimage;qualification=active-nontest;";
+
+    /// Public-policy digest the configured binding must carry (`policy_digest_hex`):
+    /// `Hash(domain ‖ revision ‖ len(policy) ‖ policy)` with big-endian integers.
+    #[must_use]
+    pub fn policy_digest_v1() -> [u8; 32] {
+        let mut preimage =
+            Vec::with_capacity(POLICY_DIGEST_DOMAIN_V1.len() + 16 + COMPILED_POLICY_V1.len());
+        preimage.extend_from_slice(POLICY_DIGEST_DOMAIN_V1);
+        preimage.extend_from_slice(&REVISION_V1.to_be_bytes());
+        preimage.extend_from_slice(
+            &u64::try_from(COMPILED_POLICY_V1.len())
+                .expect("compiled signer policy length fits u64")
+                .to_be_bytes(),
+        );
+        preimage.extend_from_slice(COMPILED_POLICY_V1);
+        Hash::new(preimage).into()
+    }
+
+    /// Handle the configured binding must carry for `public_key`, or `None` for a key that is
+    /// not Ed25519.
+    #[must_use]
+    pub fn handle_v1(public_key: &PublicKey) -> Option<String> {
+        match public_key.try_to_bytes() {
+            Ok((Algorithm::Ed25519, payload)) if payload.len() == 32 => {
+                Some(format!("{HANDLE_PREFIX_V1}{}", hex::encode(payload)))
+            }
+            _ => None,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use iroha_crypto::KeyPair;
+
+        #[test]
+        fn policy_digest_is_stable_and_bound_to_the_policy() {
+            let digest = policy_digest_v1();
+            assert_eq!(digest, policy_digest_v1());
+            assert_ne!(digest, [0; 32]);
+            assert!(
+                core::str::from_utf8(COMPILED_POLICY_V1)
+                    .expect("ASCII policy")
+                    .contains(HANDLE_PREFIX_V1.trim_end_matches('/'))
+            );
+        }
+
+        #[test]
+        fn handle_names_the_raw_ed25519_key_only() {
+            let key_pair = KeyPair::from_seed(b"node-runtime-signer".to_vec(), Algorithm::Ed25519);
+            let (_, raw) = key_pair.public_key().to_bytes();
+            assert_eq!(
+                handle_v1(key_pair.public_key()),
+                Some(format!("{HANDLE_PREFIX_V1}{}", hex::encode(raw)))
+            );
+            let secp = KeyPair::from_seed(b"node-runtime-signer".to_vec(), Algorithm::Secp256k1);
+            assert_eq!(handle_v1(secp.public_key()), None);
+        }
+    }
+}
+#[cfg(test)]
+mod data_dir_tests {
+    use super::*;
+
+    #[test]
+    fn data_dir_layout_uses_fixed_names() {
+        let data_dir = DataDir::new(PathBuf::from("/var/lib/iroha/taira/v1"));
+        assert_eq!(data_dir.root(), Path::new("/var/lib/iroha/taira/v1"));
+        assert_eq!(
+            data_dir.state_dir(),
+            PathBuf::from("/var/lib/iroha/taira/v1/state")
+        );
+        assert_eq!(
+            data_dir.secrets_dir(),
+            PathBuf::from("/var/lib/iroha/taira/v1/secrets")
+        );
+        let names: Vec<&str> = NodeSecretFile::ALL
+            .iter()
+            .map(|file| file.relative_path())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "validator.key",
+                "transport.key",
+                "streaming.key",
+                "runtime_signer.key",
+                "mint_finality.seed",
+                "beacon.cred",
+                "authority/faucet.key",
+                "authority/onboarding.key",
+                "authority/sorafs_council.key",
+                "authority/kagemusha_redemption.key",
+            ]
+        );
+        assert_eq!(
+            data_dir.secret(NodeSecretFile::OnboardingAuthority),
+            PathBuf::from("/var/lib/iroha/taira/v1/secrets/authority/onboarding.key")
+        );
+    }
+
+    #[test]
+    fn lifecycle_defaults_keep_running_on_stdin_close() {
+        assert!(!Lifecycle::default().exit_on_stdin_close);
     }
 }
 /// Embedded Soracloud runtime-manager configuration.

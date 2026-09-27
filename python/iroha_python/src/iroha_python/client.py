@@ -122,6 +122,9 @@ from iroha_torii_client.client import (
     SumeragiPipelineExecutionStatus as _CanonicalSumeragiPipelineExecutionStatus,
 )
 from iroha_torii_client.client import (
+    SumeragiV2BeaconHorizonStatus as _CanonicalSumeragiV2BeaconHorizonStatus,
+)
+from iroha_torii_client.client import (
     SumeragiV2CommitQcStatus as _CanonicalSumeragiV2CommitQcStatus,
 )
 from iroha_torii_client.client import (
@@ -11634,6 +11637,7 @@ class SumeragiStatusSnapshot:
     height_context: _CanonicalSumeragiV2HeightContextStatus
     last_commit_qc: Optional[_CanonicalSumeragiV2CommitQcStatus]
     liveness: SumeragiV2LivenessStatus
+    beacon_horizon: Optional[_CanonicalSumeragiV2BeaconHorizonStatus]
 
     @staticmethod
     def _subject_from_canonical(subject: Any) -> SumeragiV2BlockSubject:
@@ -11765,6 +11769,7 @@ class SumeragiStatusSnapshot:
             height_context=canonical.height_context,
             last_commit_qc=canonical.last_commit_qc,
             liveness=canonical.liveness,
+            beacon_horizon=canonical.beacon_horizon,
         )
 
 

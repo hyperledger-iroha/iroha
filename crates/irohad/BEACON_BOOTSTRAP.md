@@ -12,8 +12,14 @@ height-one `BridgeFinalityProof`, independently pinned `--network-id` and
 `--chain-discriminant`, and that voter's native BLS identity on `--key-fd 198`
 or `--config-fd 198`. The daemon verifies the exact signed roster, possession
 proofs, network, chain, context and fixed h1–h4 DKG schedule. Both session and
-attempt IDs derive deterministically from the signed network ID. Generation is
-zero. A new reset nonce cannot authorize another DKG for the same genesis.
+attempt IDs derive deterministically from the signed network ID, through the
+same Core functions the in-process ceremony uses
+(`iroha_core::beacon::ceremony::global_beacon_genesis_{session,attempt}_id_v1`).
+Generation is zero. A new reset nonce cannot authorize another DKG for the same genesis.
+Seat credentials are encoded and imported by Core's credential codec
+(`iroha_core::beacon::credential`). The network deployment cutover deletes this
+subcommand; `iroha network apply` drives the Core ceremony
+(`iroha_core::beacon::ceremony`) instead.
 
 Each process exclusively claims `attempt-<attempt-id>-seat-N` under an existing
 owner-private `--attempt-root` before drawing its one dealer polynomial and
@@ -67,4 +73,7 @@ signed generation-zero Pasta keys and startup rejects a seated validator with
 no exact held seed. A future candidate retains its seed without
 genesis voting power and can sign only when an authenticated later authority
 seats that same peer with matching keys. The supervisor must retain its private
-source across restart and stage a fresh consumable launch copy each time.
+source across restart and stage a fresh consumable launch copy each time. A
+`data_dir` node started by the stock launcher instead reads the same raw seed
+from the owner-only `<data_dir>/secrets/mint_finality.seed`, with the same
+seated and candidate rules, and rejects `mint_finality_seed_fd`.

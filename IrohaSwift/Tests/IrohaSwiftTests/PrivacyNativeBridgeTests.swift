@@ -87,13 +87,23 @@ final class PrivacyNativeBridgeTests: XCTestCase {
             "pq-masp-stark-v1"
         )
         XCTAssertEqual(
-            PrivacyProtocolIdV1.zkAcePqAuthorizationV1.expectedProofSystem,
-            .starkFriPoseidonX7Goldilocks6x64V1
+            PrivacyProofSystemIdV1(rawValue: 0),
+            .starkFriSha3_384Goldilocks
         )
         XCTAssertEqual(
-            PrivacyProtocolIdV1.zkAcePqAuthorizationV1.expectedEngine,
-            .nativeGoldilocksPoseidonX7StarkFri6x64V1
+            PrivacyEngineIdV1(rawValue: 0),
+            .nativeGoldilocksSha3_384StarkFri
         )
+        let starkProtocols: [PrivacyProtocolIdV1] = [
+            .zkAcePqAuthorizationV1,
+            .irohaZkX509StarkP256V1,
+            .irohaIvmPrivateNoteStarkV1,
+            .pqMaspStarkV1,
+        ]
+        for protocolId in starkProtocols {
+            XCTAssertEqual(protocolId.expectedProofSystem, .starkFriSha3_384Goldilocks)
+            XCTAssertEqual(protocolId.expectedEngine, .nativeGoldilocksSha3_384StarkFri)
+        }
     }
 
     func testSharedExact12MatrixBindsRoutesAndTypedEnvelopeDigests() {

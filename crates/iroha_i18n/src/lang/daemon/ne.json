@@ -5,6 +5,7 @@
   "error.logger": "लगिङ प्रणाली सुरु गर्न सकिएन",
   "error.start": "Iroha सुरु गर्न सकिएन",
   "error.run": "Iroha चलाउँदा त्रुटि भयो",
+  "error.check_storage": "Kura (ब्लक भण्डारण) पढ्ने-मात्र भण्डारण जाँचमा असफल भयो",
   "error.start_p2p": "P2P सञ्जाल सुरु गर्न सकिएन",
   "error.init_kura": "Kura (ब्लक भण्डारण) सुरु गर्न सकिएन",
   "error.start_dev_telemetry": "विकास टेलिमेट्री सेवा सुरु गर्न सकिएन",

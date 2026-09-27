@@ -10,12 +10,13 @@ use iroha_data_model::{
             LaneSettlementReceipt, NposGenesisParams, SumeragiV2EquivocationEvidence,
         },
         consensus_v2::{
-            BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
-            ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId,
-            PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding, QuorumCertificateRef,
-            SumeragiV2BodyState, SumeragiV2Equivocation, SumeragiV2GenesisContextParameters,
-            SumeragiV2HeightContextStatus, SumeragiV2QcResponse, SumeragiV2Status,
-            SumeragiV2StatusPhase, TimeoutVote, ValidationError, ValidatorPower,
+            BeaconHorizonStatusV1, BlockSubject, ConsensusMode, ConsensusRound,
+            DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase, HeightContext,
+            HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION, PayloadEncoding,
+            QuorumCertificateRef, SumeragiV2BodyState, SumeragiV2Equivocation,
+            SumeragiV2GenesisContextParameters, SumeragiV2HeightContextStatus,
+            SumeragiV2QcResponse, SumeragiV2Status, SumeragiV2StatusPhase, TimeoutVote,
+            ValidationError, ValidatorPower,
         },
     },
     isi::kagemusha_v1::{
@@ -415,6 +416,13 @@ fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
         },
         last_commit_qc: None,
         liveness: Default::default(),
+        beacon_horizon: rng.next_bool().then(|| BeaconHorizonStatusV1 {
+            epoch_length_blocks: rng.next_u64(),
+            next_required_pulse_height: rng.next_bool().then(|| rng.next_u64()),
+            active_session_id: rng.next_bool().then(|| rng_hash(rng).into()),
+            session_covers_next_pulse: rng.next_bool(),
+            local_provider_ready: rng.next_bool(),
+        }),
     }
 }
 fn rng_sumeragi_v2_qc_response(rng: &mut DeterministicRng) -> SumeragiV2QcResponse {

@@ -1,0 +1,354 @@
+# Compiled network profile `sora-nexus-v1`: the public Taira shape.
+#
+# Compiled into `iroha_config::profile` with `include_str!`. Values are taken from what
+# deploys Taira today (Kagami's Taira localnet branch, the public-reset validator projection,
+# `iroha_config::parameters::defaults::taira` and the `iroha3d_taira` launcher guards), with
+# these intentional differences:
+# - the Nexus catalog is the core system lanes plus the public `nexus` lane only; customer
+#   dataspaces are registered at runtime, never baked into genesis;
+# - four authenticated non-validator ingress sources and twelve external committee peers;
+# - the protocol custody account is fixed by the profile instead of derived from each genesis
+#   key (see `[static.pipeline.gas]`);
+# - the governance accounts and the VPN operator are keyless role accounts instead of the
+#   published sample key (see `[static.gov]`).
+#
+# `[static]`, `[policy]` and `[role.*]` are node-configuration fragments in the ordinary
+# config key layout. Keys in `[static]` and the `derive(n)` fragment are consensus-bound and
+# can be overridden by no later layer.
+
+[profile]
+id = "sora-nexus-v1"
+version = 1
+chain_discriminant = 369
+node_tunable = ["logger.level", "logger.filter"]
+
+# Genesis inputs the profile fixes (consensus digest).
+# TODO(P6): `nexus.dataspace_registration = "permissioned"` and the registration budget join
+# the recipe when the dataspace protocol lands; the budget is `derive.max_external_committee_peers`.
+[genesis_recipe]
+consensus_mode = "npos"
+block_cadence_ms = 5000
+epoch_length_blocks = 3600
+block_max_transactions = 10000
+ivm_gas_limit_per_block = 50000000
+npos_seat_band_pct = 100
+npos_min_self_bond = 1
+
+# Consensus-bound, roster-independent node configuration.
+[static]
+
+[static.sumeragi.block]
+max_payload_bytes = 16777216
+proposal_queue_scan_multiplier = 4
+
+[static.sumeragi.queues]
+body_source_bytes = 35651584
+chunks = 4096
+ready_bodies = 256
+
+[static.sumeragi.keys]
+allowed_algorithms = ["bls_normal"]
+
+# Frame caps that differ from the code defaults; the consensus, control and block-sync caps
+# keep their protocol defaults.
+[static.network]
+max_frame_bytes_tx_gossip = 1048576
+max_frame_bytes_peer_gossip = 65536
+max_frame_bytes_health = 32768
+max_frame_bytes_other = 131072
+
+[static.pipeline]
+signature_batch_max_bls = 4
+
+# Protocol custody account: the gas technical account, fee sink, sponsor-vault custody, stake
+# escrow and slash sink. It is keyless: `iroha_config::profile::protocol_custody_account`
+# (`derive_non_signing_ed25519_public_key("iroha:config:profile:protocol-custody:v1",
+# ["sora-nexus-v1"])`). Kagami's Taira derived its keyless equivalent from each genesis key.
+[static.pipeline.gas]
+tech_account_id = "testuﾛ1PgwﾋWｦﾆﾏﾎ4ﾏjｹ2ghﾇKVｾﾓﾐﾍｵﾑVﾔｦEｼGﾐｶﾌSｽﾋﾕｸBS35S9"
+
+[static.crypto]
+allowed_signing = ["ed25519", "secp256k1", "bls_normal"]
+
+# Empty: parsing derives the curve ids from `allowed_signing` (ed25519 1, bls_normal 3,
+# secp256k1 4), as Kagami's Taira configs list them. The code default omits bls_normal, and the
+# bls_normal id only exists in builds with the data model's `bls` feature, so it is not written.
+[static.crypto.curves]
+allowed_curve_ids = []
+
+[static.confidential]
+enabled = true
+assume_valid = false
+
+[static.zk.halo2]
+enabled = true
+
+[static.nexus]
+lane_count = 4
+
+[static.nexus.fusion]
+exit_teu = 50000000
+
+[static.nexus.staking]
+stake_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+stake_escrow_account_id = "testuﾛ1PgwﾋWｦﾆﾏﾎ4ﾏjｹ2ghﾇKVｾﾓﾐﾍｵﾑVﾔｦEｼGﾐｶﾌSｽﾋﾕｸBS35S9"
+slash_sink_account_id = "testuﾛ1PgwﾋWｦﾆﾏﾎ4ﾏjｹ2ghﾇKVｾﾓﾐﾍｵﾑVﾔｦEｼGﾐｶﾌSｽﾋﾕｸBS35S9"
+
+[static.nexus.fees]
+fee_asset_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+base_fee = "0"
+per_byte_fee = "0"
+per_instruction_fee = "0.001"
+per_gas_unit_fee = "0.00005"
+settlement_mode = "direct"
+fee_sink_account_id = "testuﾛ1PgwﾋWｦﾆﾏﾎ4ﾏjｹ2ghﾇKVｾﾓﾐﾍｵﾑVﾔｦEｼGﾐｶﾌSｽﾋﾕｸBS35S9"
+sponsor_vault_custody_account_id = "testuﾛ1PgwﾋWｦﾆﾏﾎ4ﾏjｹ2ghﾇKVｾﾓﾐﾍｵﾑVﾔｦEｼGﾐｶﾌSｽﾋﾕｸBS35S9"
+
+# Baseline catalog: core system lanes plus the public `nexus` lane.
+[[static.nexus.lane_catalog]]
+index = 0
+alias = "core"
+description = "Primary execution lane"
+dataspace = "universal"
+visibility = "public"
+metadata = {}
+
+[[static.nexus.lane_catalog]]
+index = 1
+alias = "governance"
+description = "Governance & parliament traffic"
+dataspace = "universal"
+visibility = "public"
+metadata = {}
+
+[[static.nexus.lane_catalog]]
+index = 2
+alias = "zk"
+description = "Zero-knowledge attachments"
+dataspace = "universal"
+visibility = "public"
+metadata = {}
+
+[[static.nexus.lane_catalog]]
+index = 3
+alias = "nexus"
+description = "Nexus service alias lane"
+dataspace = "nexus"
+visibility = "public"
+metadata = {}
+
+[static.nexus.routing_policy]
+default_lane = 0
+default_dataspace = "universal"
+
+[[static.nexus.routing_policy.rules]]
+lane = 1
+dataspace = "universal"
+matcher = { instruction = "governance", description = "Route governance instructions to the governance lane" }
+
+[[static.nexus.routing_policy.rules]]
+lane = 2
+dataspace = "universal"
+matcher = { instruction = "smartcontract::deploy", description = "Route contract deployments to the zk lane for proof tracking" }
+
+# Governance accounts. Each role is its own keyless account,
+# `iroha_config::profile::keyless_role_account` (`derive_non_signing_ed25519_public_key(
+# "iroha:config:profile:keyless-role:v1", ["sora-nexus-v1", "<configuration key>"])`), so no key
+# can sign for the escrows, the viral pools or the SoraFS pin-fee treasury. The code defaults (and
+# Kagami's Taira) name the published sample key instead.
+# TODO(P2): the genesis builder registers these accounts.
+[static.gov]
+citizenship_escrow_account = "testuﾛ1NﾆoｷｱRｷヰufｲ8Sヰﾙmﾛ3ｦyKg3wﾓekQUDrmﾒﾆTｱｵmｹ551654"
+bond_escrow_account = "testuﾛ1P3ｹghDXﾉqヰgﾊ1ﾌBXcNXヰd5ﾗPcXｺﾆY9ﾅﾚVｽﾈﾎﾁUa6BXFER"
+slash_receiver_account = "testuﾛ1PuUHKFﾔEqpKﾇcｲﾍﾈsﾂﾍﾄｱﾕﾍvpY7c1GLAｽﾏﾗ3ｾﾃﾆV6HMWD"
+viral_incentive_pool_account = "testuﾛ1PknｦﾚzoｱDNMtﾐUyDｻｷﾁrﾚﾜｾvMnEﾇｿGﾅaｶﾊｷcJｸQ17UUCP"
+viral_escrow_account = "testuﾛ1QFﾌ2LGﾒMｽﾜEﾑ2mﾚｽｦ1zfgWﾔﾊu4WｿﾚcHｻbcﾈyｴﾅﾋUXB6RE"
+sorafs_pin_fee_treasury_account = "testuﾛ1Pﾋ7ﾋd3ﾎｦdﾛﾈｦﾆPFJﾆKﾉL2FXhﾉｵhﾘzﾑヰﾚ9ﾋﾕGﾑEﾂDNYQ2X"
+
+[static.gov.sorafs_telemetry]
+submitters = []
+
+# Inputs of `iroha_config::profile::Profile::derive(n)` (consensus digest).
+[derive]
+authenticated_non_validator_sources = 4
+max_external_committee_peers = 12
+queue_commands = 4096
+queue_bodies = 1024
+
+# `derive(n)` adds `fault_tolerance = f` to every entry and emits `nexus.dataspace_catalog`.
+[[derive.dataspace_catalog]]
+alias = "universal"
+id = 0
+description = "Shared public data space for core, governance, and zero-knowledge lanes"
+
+[[derive.dataspace_catalog]]
+alias = "nexus"
+id = 12
+manifest_hash = "0c00000000000000000000000000000000000000000000000000000000000000"
+description = "Nexus service alias dataspace"
+
+# Deployment policy that is not consensus-bound (policy digest). Changes roll, never reset.
+[policy]
+telemetry_profile = "extended"
+
+[policy.kura]
+fsync_mode = "batched"
+
+[policy.logger]
+format = "compact"
+level = "info"
+
+[policy.queue]
+capacity = 20000
+capacity_per_user = 20000
+transaction_time_to_live_ms = 600000
+
+[policy.snapshot]
+mode = "read_write"
+create_every_ms = 600000
+
+[policy.network]
+p2p_subscriber_queue_cap = 16384
+connect_startup_delay_ms = 2000
+consensus_ingress_rate_per_sec = 600
+consensus_ingress_burst = 600
+consensus_ingress_bytes_per_sec = 134217728
+consensus_ingress_bytes_burst = 268435456
+consensus_ingress_critical_rate_per_sec = 600
+consensus_ingress_critical_burst = 600
+consensus_ingress_critical_bytes_per_sec = 268435456
+consensus_ingress_critical_bytes_burst = 536870912
+
+# The disabled VPN profile still parses its operator account: a keyless role account
+# (`keyless_role_account`), never the published sample key.
+[policy.network.soranet_vpn]
+operator_account_id = "testuﾛ1Nﾊｳ2p6ﾉｺﾋﾐNﾛzwB2CﾓﾉeﾚYﾆﾚ4AHﾏpDﾛﾄ3vEｷyﾊAM8GP1H"
+
+# Public ingress: finite per-IP, per-authority and per-origin budgets, no loopback bypass.
+[policy.torii]
+preauth_allow_cidrs = []
+preauth_rate_per_ip_per_sec = 100
+preauth_burst_per_ip = 256
+tx_rate_per_authority_per_sec = 10000
+tx_burst_per_authority = 20000
+query_rate_per_authority_per_sec = 160
+query_burst_per_authority = 8192
+deploy_rate_per_origin_per_sec = 16
+deploy_burst_per_origin = 128
+api_rate_limit_bypass_cidrs = []
+internal_api_trusted_cidrs = ["127.0.0.1/32", "::1/128"]
+api_high_load_tx_threshold = 20000
+# TODO(P2): enable once the release layout ships the immutable prover-key directory.
+zk_prover_enabled = false
+
+[policy.torii.operator_signatures]
+enabled = true
+
+[policy.torii.mcp]
+enabled = true
+profile = "writer"
+expose_operator_routes = false
+allow_tool_prefixes = ["iroha."]
+
+# The node reaches the public edge through its local gateway only.
+[policy.torii.transport]
+trusted_proxy_cidrs = ["127.0.0.1/32", "::1/128"]
+
+[policy.torii.transport.norito_rpc]
+enabled = true
+require_mtls = false
+stage = "ga"
+allowed_clients = ["*"]
+
+# Applied only when the node file binds `torii.account_onboarding.authority`.
+# TODO(P2): bind the genesis fee-sponsor program (`fee_sponsor_program_id`) from the recipe.
+[policy.torii.account_onboarding]
+lease_term_years = 1
+additional_permissions = []
+
+# Applied only when the node file binds `torii.faucet.authority`.
+[policy.torii.faucet]
+enabled = true
+asset_definition_id = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+amount = "25000"
+pow_difficulty_bits = 8
+pow_scrypt_log_n = 13
+pow_scrypt_r = 8
+pow_scrypt_p = 1
+pow_max_anchor_age_blocks = 6
+pow_adaptive_lookback_blocks = 64
+pow_adaptive_claims_per_extra_bit = 4
+pow_adaptive_max_extra_bits = 2
+# Fresh generations have no finalized beacon pulse yet.
+pow_beacon_seed_enabled = false
+
+# KAGEMUSHA V1 commands, as Taira runs them. Applied only when the node file binds
+# `torii.kagemusha_v1_commands.redemption_authority`; the redemption key is then
+# `<data_dir>/secrets/authority/kagemusha_redemption.key`.
+[policy.torii.kagemusha_v1_commands]
+redemption_minimum_xor_balance = "1"
+operation_registry_max_entries = 4096
+operation_registry_max_bytes = 593920
+
+[policy.soracloud_runtime]
+hydration_concurrency = 1
+prepared_runtime_cache_capacity = 1
+
+[policy.soracloud_runtime.submission]
+fee_payer = "authority"
+
+# Fail-closed egress.
+[policy.soracloud_runtime.egress]
+default_allow = false
+allowed_hosts = []
+rate_per_minute = 600
+max_bytes_per_minute = 104857600
+
+# Inrou ceilings (`defaults::taira`); the node file decides whether Inrou is enabled.
+[policy.soracloud_runtime.inrou]
+guest_image_max_bytes = 1677721600
+max_cpu_millis = 1000
+max_memory_bytes = 805306368
+max_storage_bytes = 1694498816
+start_grace_ms = 30000
+stop_grace_ms = 10000
+
+# One exact 4 GiB aggregate disk budget: 1 GiB Kura, 512 MiB snapshots, 2.5 GiB SoraFS.
+[policy.nexus.storage]
+local_budget_bytes = 4294967296
+max_wsv_memory_bytes = 268435456
+
+[policy.nexus.storage.disk_budget_weights]
+kura_blocks_bps = 2500
+wsv_snapshots_bps = 1250
+sorafs_bps = 6250
+
+# The embedded SoraFS provider stays disabled; its capacity is still budgeted.
+[policy.sorafs.storage]
+enabled = false
+max_capacity_bytes = 2684354560
+
+# Host policy that is not node configuration (policy digest).
+[host]
+systemd_memory_max = "4G"
+systemd_cpu_quota = "200%"
+p2p_port = 1337
+torii_port = 8080
+
+[role.validator.sumeragi]
+role = "validator"
+
+[role.validator.soracloud_runtime]
+production_mode = true
+
+[role.lane_validator.sumeragi]
+role = "validator"
+
+[role.lane_validator.soracloud_runtime]
+production_mode = false
+
+[role.observer.sumeragi]
+role = "observer"
+
+[role.observer.soracloud_runtime]
+production_mode = false

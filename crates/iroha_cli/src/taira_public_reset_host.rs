@@ -12052,11 +12052,16 @@ fn shared_drained_mesh_height(statuses: &[ValidatorMeshStatus]) -> Option<u64> {
     .then_some(first.blocks)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    variant_size_differences,
+    reason = "four transient per-validator probe slots; even a boxed status exceeds 3x the \
+              u16 HTTP variant, so indirection would only add an allocation per poll"
+)]
 enum ValidatorMeshObservation {
     NotObserved,
-    Status(Box<ValidatorMeshStatus>),
-    Http(Box<u16>),
+    Status(ValidatorMeshStatus),
+    Http(u16),
     ConnectionFailed,
     TimedOut,
 }
@@ -12129,15 +12134,15 @@ fn wait_for_validator_mesh(
                         body.len() <= 64 * 1024,
                         "validator[{index}] /status exceeds mesh response bound"
                     );
-                    ValidatorMeshObservation::Status(Box::new(
+                    ValidatorMeshObservation::Status(
                         parse_validator_mesh_status(&body)
                             .wrap_err_with(|| format!("validator[{index}] /status is invalid"))?,
-                    ))
+                    )
                 }
                 Ok(response)
                     if matches!(response.status().as_u16(), 408 | 429 | 502 | 503 | 504) =>
                 {
-                    ValidatorMeshObservation::Http(Box::new(response.status().as_u16()))
+                    ValidatorMeshObservation::Http(response.status().as_u16())
                 }
                 Ok(response) => {
                     return Err(eyre!(
@@ -12153,7 +12158,7 @@ fn wait_for_validator_mesh(
         let statuses = last
             .iter()
             .filter_map(|entry| match entry {
-                ValidatorMeshObservation::Status(status) => Some(**status),
+                ValidatorMeshObservation::Status(status) => Some(*status),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -20905,6 +20910,7 @@ mod tests {
                 }],
                 ..SumeragiV2LivenessStatus::default()
             },
+            beacon_horizon: None,
         };
         status.validate().expect("canonical convergence status");
         (

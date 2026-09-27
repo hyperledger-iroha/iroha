@@ -5,6 +5,7 @@
   "error.logger": "لاگنگ نظام شروع نہ کرۄن یۄ",
   "error.start": "\u2066Iroha\u2069 شروع نہ ہۄا",
   "error.run": "\u2066Iroha\u2069 چلوان دوران غلطی آو",
+  "error.check_storage": "\u2066Kura\u2069 (بلاک ذخیرہ) صرف پرنہٕ واجہ ذخیرہٕ جانچہٕ منٛز ناکام گوو",
   "error.start_p2p": "\u2066P2P\u2069 نیٹوَرک شروع نہ ہۄا",
   "error.init_kura": "\u2066Kura\u2069 (بلاک ذخیرہ) شروع نہ ہۄا",
   "error.start_dev_telemetry": "ڈویلوپمینٹ ٹیلےمیٹری خدمت شروع نہ ہۄا",

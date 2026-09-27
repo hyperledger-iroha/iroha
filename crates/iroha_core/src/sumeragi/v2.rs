@@ -15410,6 +15410,9 @@ impl SumeragiV2Adapter {
             height_context,
             last_commit_qc,
             liveness,
+            // Status reads overlay the horizon registered by serialized
+            // height activation for this exact height owner.
+            beacon_horizon: None,
         })
     }
     /// Record and snapshot the runner-owned live-successor boundary.

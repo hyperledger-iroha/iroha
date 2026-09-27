@@ -67,7 +67,7 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
              .irohaZkX509StarkP256V1,
              .irohaIvmPrivateNoteStarkV1,
              .pqMaspStarkV1:
-            return .starkFriPoseidonX7Goldilocks6x64V1
+            return .starkFriSha3_384Goldilocks
         case .irohaZkAmsV1:
             return .zkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
         case .anonymousPgcKOutOfNV1: return .anonymousPgcP256
@@ -87,7 +87,7 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
              .irohaZkX509StarkP256V1,
              .irohaIvmPrivateNoteStarkV1,
              .pqMaspStarkV1:
-            return .nativeGoldilocksPoseidonX7StarkFri6x64V1
+            return .nativeGoldilocksSha3_384StarkFri
         case .irohaZkAmsV1:
             return .nativeZkAmsMaskedRelaxedSpartanT256Ristretto255
         case .anonymousPgcKOutOfNV1: return .nativeAnonymousPgcP256
@@ -143,7 +143,8 @@ public enum PrivacyProtocolIdV1: String, CaseIterable, Sendable {
 
 /// Canonical first-release proof-system identity in Norito discriminant order.
 public enum PrivacyProofSystemIdV1: UInt32, CaseIterable, Sendable {
-    case starkFriPoseidonX7Goldilocks6x64V1 = 0
+    /// SHA3-384 outer commitments and transcript with STARK/FRI over Goldilocks.
+    case starkFriSha3_384Goldilocks = 0
     case zkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512 = 1
     case anonymousPgcP256 = 2
     case irohaVeRangeP256 = 3
@@ -156,7 +157,8 @@ public enum PrivacyProofSystemIdV1: UInt32, CaseIterable, Sendable {
 
 /// Canonical first-release native verifier-engine identity in Norito discriminant order.
 public enum PrivacyEngineIdV1: UInt32, CaseIterable, Sendable {
-    case nativeGoldilocksPoseidonX7StarkFri6x64V1 = 0
+    /// Native Goldilocks STARK/FRI verifier with the SHA3-384 outer byte suite.
+    case nativeGoldilocksSha3_384StarkFri = 0
     case nativeZkAmsMaskedRelaxedSpartanT256Ristretto255 = 1
     case nativeAnonymousPgcP256 = 2
     case nativeVeRangeP256 = 3

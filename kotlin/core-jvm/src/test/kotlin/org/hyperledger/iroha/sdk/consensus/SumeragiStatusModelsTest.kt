@@ -86,6 +86,12 @@ class SumeragiStatusModelsTest {
         assertEquals(hash(0x3a), commitment?.transactionOutputCommitment?.root)
         assertEquals(BigInteger.valueOf(3), commitment?.transactionOutputCommitment?.leafCount)
 
+        // An output-only tree is valid: internal invocations have outputs but no network-input leaf.
+        assertEquals(
+            BigInteger.valueOf(3),
+            SumeragiV2Status.parseJson(withTrees.replace(inputTree, inputField))
+                .lastCommitQc?.certificate?.executionCommitment?.transactionOutputCommitment?.leafCount,
+        )
         assertFails { SumeragiV2Status.parseJson(payload.replace("$inputField,", "")) }
         assertFails { SumeragiV2Status.parseJson(withTrees.replace(outputTree, outputField)) }
         assertFails {
@@ -93,6 +99,46 @@ class SumeragiStatusModelsTest {
         }
         assertFails {
             SumeragiV2Status.parseJson(withTrees.replace("\"leaf_count\": 2", "\"leaf_count\": 0"))
+        }
+    }
+
+    @Test
+    fun `authoritative parser decodes and validates the signed beacon horizon`() {
+        val horizon = """
+            {"epoch_length_blocks": 0, "next_required_pulse_height": 15,
+             "active_session_id": "${"AB".repeat(32)}",
+             "session_covers_next_pulse": true, "local_provider_ready": true}
+        """.trimIndent()
+        fun withHorizon(value: String): String =
+            statusJson().replaceFirst("{", "{\"beacon_horizon\": $value,")
+
+        assertNull(SumeragiV2Status.parseJson(statusJson()).beaconHorizon)
+        assertNull(SumeragiV2Status.parseJson(withHorizon("null")).beaconHorizon)
+        fun npos(value: String): String = withHorizon(value).replace(
+            "\"mode\": {\"mode\": \"permissioned\", \"details\": null}",
+            "\"mode\": {\"mode\": \"npos\", \"details\": null}",
+        )
+        val nposHorizon = horizon.replace("\"epoch_length_blocks\": 0", "\"epoch_length_blocks\": 64")
+        assertEquals(
+            BigInteger.valueOf(64),
+            requireNotNull(SumeragiV2Status.parseJson(npos(nposHorizon)).beaconHorizon).epochLengthBlocks,
+        )
+        assertFails { SumeragiV2Status.parseJson(npos(horizon)) }
+        val parsed = requireNotNull(SumeragiV2Status.parseJson(withHorizon(horizon)).beaconHorizon)
+        assertEquals(BigInteger.ZERO, parsed.epochLengthBlocks)
+        assertEquals(BigInteger.valueOf(15), parsed.nextRequiredPulseHeight)
+        assertEquals("AB".repeat(32), parsed.activeSessionId)
+        assertTrue(parsed.sessionCoversNextPulse)
+        assertTrue(parsed.localProviderReady)
+        for (broken in listOf(
+            horizon.replace("\"epoch_length_blocks\": 0", "\"epoch_length_blocks\": 64"),
+            horizon.replace("\"next_required_pulse_height\": 15", "\"next_required_pulse_height\": 9"),
+            horizon.replace("\"${"AB".repeat(32)}\"", "null"),
+            horizon.replace("AB".repeat(32), "ab".repeat(32)),
+            horizon.replace("{", "{\"extra\": true, "),
+            horizon.replace(", \"local_provider_ready\": true", ""),
+        )) {
+            assertFails { SumeragiV2Status.parseJson(withHorizon(broken)) }
         }
     }
 

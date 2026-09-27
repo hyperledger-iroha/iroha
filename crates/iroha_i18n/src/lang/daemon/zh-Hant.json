@@ -5,6 +5,7 @@
   "error.logger": "無法初始化日誌記錄器",
   "error.start": "無法啟動 Iroha",
   "error.run": "執行 Iroha 時發生錯誤",
+  "error.check_storage": "Kura（區塊儲存）未通過唯讀儲存檢查",
   "error.start_p2p": "無法啟動點對點 (P2P) 網路",
   "error.init_kura": "無法初始化 Kura（區塊儲存）",
   "error.start_dev_telemetry": "無法啟動開發遙測服務",

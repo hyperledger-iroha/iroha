@@ -5,6 +5,7 @@
   "error.logger": "𒇻𒂵𒊒 𒆷 𒄿𒁍𒅖",
   "error.start": "𒄿𒊑𒄩 𒆷 𒅁𒋾𒂊",
   "error.run": "𒄷𒋾𒌋 𒄿𒈾 𒂊𒉺𒅆 𒄿𒊑𒄩",
+  "error.check_storage": "𒆪𒊏 𒂍𒍑𒁍 𒄷𒋾𒌋",
   "error.start_p2p": "𒉈𒋾𒉺𒅗 𒉺𒄿𒊒 𒆷 𒅁𒋾𒂊",
   "error.init_kura": "𒆪𒊏 𒂍𒍑𒁍 𒆷 𒅖𒋳𒀝𒈾",
   "error.start_dev_telemetry": "𒉺𒆷𒄩 𒋼𒇻𒅕𒁕 𒆷 𒅁𒋾𒂊",

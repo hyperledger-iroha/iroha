@@ -5,6 +5,7 @@
   "error.logger": "Gat ekki frumstillt skráningarkerfið",
   "error.start": "Ekki tókst að ræsa Iroha",
   "error.run": "Villa kom upp við keyrslu Iroha",
+  "error.check_storage": "Kura (blokkar geymslu) stóðst ekki lesgeymsluprófið",
   "error.start_p2p": "Ekki var hægt að ræsa jafningjanetið",
   "error.init_kura": "Ekki var hægt að frumstilla Kura (blokkar geymslu)",
   "error.start_dev_telemetry": "Ekki var hægt að ræsa þróunar-telemetrí þjónustuna",

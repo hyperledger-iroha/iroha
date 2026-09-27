@@ -22,7 +22,8 @@ use norito::codec::{Decode, Encode};
 mod external;
 pub use external::{
     MerkleMapEdit, MerkleMapNode, MerkleMapNodeRef, MerkleMapNodeStore, MerkleMapReadError,
-    MerkleMapRoot, MerkleMapUpdateError, MerkleMapUpdateWorkspace, MerkleMapValueRef,
+    MerkleMapRoot, MerkleMapStoreNode, MerkleMapUpdateError, MerkleMapUpdateWorkspace,
+    MerkleMapValueRef,
 };
 
 const EMPTY: &[u8] = b"iroha:merkle-map:empty:v1\0";

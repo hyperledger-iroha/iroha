@@ -158,33 +158,33 @@ pub(super) fn check(
         archive_body: binary_split_placeholder_archive_body.as_slice(),
         691
     );
-    let_row! { short_body_report_package = signed_package_with_audit_artifacts( artifact_digests.short_body_audit_report_bytes, signed.review_fixture.audit_evidence_archive_bytes.clone(), ) };
+    let_row! { short_body_report_package = signed_package_with_audit_artifacts( artifact_digests.short_body_audit_report, signed.review_fixture.audit_evidence_archive_bytes.clone(), ) };
     assert_error_matrix_row! { signed.artifact_fixture.diagnostics; 693; (validate_release_package_v1(&short_body_report_package)), (release_package_digest_v1(&short_body_report_package)) };
     expect_package_artifact_rejected!(
         audit_evidence_archive_bytes,
-        artifact_digests.blank_body_audit_archive_bytes,
+        artifact_digests.blank_body_audit_archive,
         695
     );
-    let_row! { whitespace_nested_report_package = signed_package_with_audit_artifacts( artifact_digests.whitespace_nested_audit_report_bytes, signed.review_fixture.audit_evidence_archive_bytes.clone(), ) };
+    let_row! { whitespace_nested_report_package = signed_package_with_audit_artifacts( artifact_digests.whitespace_nested_audit_report, signed.review_fixture.audit_evidence_archive_bytes.clone(), ) };
     assert_error_matrix_row! { signed.artifact_fixture.diagnostics; 697; (validate_release_package_v1(&whitespace_nested_report_package)), (release_package_digest_v1(&whitespace_nested_report_package)) };
     expect_package_artifact_rejected!(
         audit_report_bytes,
-        artifact_digests.header_only_audit_report_bytes,
+        artifact_digests.header_only_audit_report,
         699
     );
     expect_package_artifact_rejected!(
         audit_evidence_archive_bytes,
-        artifact_digests.header_only_audit_archive_bytes,
+        artifact_digests.header_only_audit_archive,
         701
     );
     expect_package_artifact_rejected!(
         audit_report_bytes,
-        artifact_digests.zero_body_audit_report_bytes,
+        artifact_digests.zero_body_audit_report,
         703
     );
     expect_package_artifact_rejected!(
         audit_evidence_archive_bytes,
-        artifact_digests.zero_body_audit_archive_bytes,
+        artifact_digests.zero_body_audit_archive,
         705
     );
     let_row! { copied_body_package = signed_package_with_audit_artifacts( copied_body_audit_report_bytes, copied_body_audit_archive_bytes, ) };

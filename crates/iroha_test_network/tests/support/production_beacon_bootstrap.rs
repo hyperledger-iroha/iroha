@@ -2,6 +2,7 @@
 //! Every running daemon uses its stock runtime-provider broker and held authority seed.
 use super::*;
 use iroha_config::base::read::ConfigReader;
+use iroha_core::beacon::credential::global_beacon_partial_signer_public_inventory_digest_v1;
 use iroha_core::{
     beacon,
     kura::{BlockIndex, BlockStore, Kura},
@@ -26,10 +27,7 @@ use iroha_test_network::{
 };
 use irohad::{
     IrohaRuntimeProviderBindingsV1,
-    external_software_signer::{
-        encode_consensus_threshold_credential_bundle_v1,
-        global_beacon_partial_signer_public_inventory_digest_v1,
-    },
+    external_software_signer::encode_consensus_threshold_credential_bundle_v1,
 };
 use std::{
     collections::BTreeSet,

@@ -5439,7 +5439,7 @@ impl Executor {
     ///
     /// Sealed reveals use an inner execution call hash, while their output proof names the
     /// distinct outer entry. Contract-emitted instructions have no direct signed ordinal.
-    fn direct_stream_token_instruction_index(
+    pub(crate) fn direct_stream_token_instruction_index(
         state_transaction: &StateTransaction<'_, '_>,
         transaction: &SignedTransaction,
         instruction: &InstructionBox,

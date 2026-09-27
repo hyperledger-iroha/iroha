@@ -387,10 +387,11 @@ mod tests {
             )
             .unwrap()
         );
+        // `Buffer` has no `Debug`, so the rejections are taken with `err()`.
         for error in [
             derive_confidential_owner_tag_v2(Uint8Array::from(key.to_vec()), None)
                 .err()
-                .expect("invalid input is rejected"),
+                .expect("an owner tag without a diversifier is rejected"),
             derive_confidential_note_v2(
                 asset.clone(),
                 "17".into(),
@@ -398,7 +399,7 @@ mod tests {
                 "private-invalid-owner".into(),
             )
             .err()
-            .expect("invalid input is rejected"),
+            .expect("an invalid owner is rejected"),
             derive_confidential_nullifier_v2(
                 Uint8Array::from(vec![1; 32]),
                 asset,
@@ -406,7 +407,7 @@ mod tests {
                 "private-invalid-rho".into(),
             )
             .err()
-            .expect("invalid input is rejected"),
+            .expect("an invalid rho is rejected"),
         ] {
             assert_eq!(error.status, napi::Status::InvalidArg);
             assert!(!error.reason.contains("private-invalid"));

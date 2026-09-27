@@ -2834,6 +2834,10 @@
       {
         "name": "target_triple",
         "type": "String"
+      },
+      {
+        "name": "wire_schema_hash",
+        "type": "String"
       }
     ]
   },

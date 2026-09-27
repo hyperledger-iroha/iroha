@@ -74,8 +74,9 @@ or network execution; it reuses the same compiled harness and runs each case onc
 
 After startup checks, the gate runs the exact reset-scope CLI control and Torii
 canonical outcome, transaction-visibility and prepared-account admission tests
-before the production binary metadata check. It then runs the real four-peer
-beacon fixture before the long independent regression census. This order
+before shipping codegen. Preparation records this passed prefix in its
+pre-network checkpoint. The gate then runs the real four-peer beacon fixture
+before the long independent regression census. This order
 exposes a fresh-network liveness or prepared-account failure early without
 dropping any selected check or changing
 the immutable evidence graph. A failed four-peer fixture stops qualification;
@@ -85,9 +86,9 @@ Both scopes run their selected MV ownership checks after configuration and
 before PendingKura: finite allocation credits, exact release/poison wakes, charged
 Cell generations, original map/undo retention, actual epoch reclamation and
 strict allocation-free map handoff/publication. These run once from the same
-immutable copied artifacts and enter the exact independent-pass census. A failure
-stops later Core runtime checks, shipping builds and network qualification; a
-changed MV artifact or selector cannot reuse an earlier checkpoint. The runner
+immutable copied artifacts and enter the exact pre-network and complete checkpoint
+census. A failure stops later Core runtime checks, shipping builds and network
+qualification; a changed MV artifact or selector cannot reuse an earlier checkpoint. The runner
 still compiles its complete native feature graph first. For a cheaper development
 check before that full compilation, `--focus-regression` runs selected `mv`,
 `mv-ebr`, `mv-map`, `mv-admitted-map` and `concread` tests in an earlier build
@@ -269,13 +270,15 @@ and `irohad --lib` test harnesses. The daemon cases execute signed genesis
 and check the deployment account in its final staged state, including role and
 revocation semantics; the deployment flag is restricted to offline `--check-config`. The genesis fixtures share the canonical daemon configuration and production staging setup; all affected unconditional manifest/crypto consumers are selected with them. A single Cargo invocation unifies the selected packages and their
 default/dev-dependency features; it does not add feature overrides. The CLI test
-copy executes under the original immutable artifact owner with all independent
-library and daemon checks, before the separate production `iroha3d`/`iroha`
-build and four-validator test. It needs no second Cargo test build. Its manifest,
-bin target kind and test profile distinguish it from the Rust SDK's `iroha`
-library harness and the production CLI. Each completed test copy is released
-through its existing owner. Any collected test failure stops before production
-codegen or network execution; production snapshots remain retained. Configuration
+copy executes under the original immutable artifact owner: its priority control
+runs before the separate production `iroha3d`/`iroha` build and four-validator
+test, and its remaining batch runs after that test. It needs no second Cargo test
+build. Its manifest, bin target kind and test profile distinguish it from the Rust
+SDK's `iroha` library harness and the production CLI. Each test copy is released
+through its existing owner after its last selected stage; copies with no stage
+after the four-validator test are released before production codegen. A startup
+or priority failure stops before production codegen or network execution;
+production snapshots remain retained. Configuration
 and proof-bound checks retain their selected cases in both scopes. Adding the CLI changes the combined test feature union,
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
@@ -294,19 +297,23 @@ reconciliation completion, even when it contains no reservation owners. Full-sco
 partial publication, recover independently pruned pairs using an authenticated
 retention frontier, and reject corrupt or missing retained history. Discarded local
 certificate history cannot be resurrected after replica application advances. The remaining startup
-groups collect their failures before stopping expensive work. On success, a separate
-`cargo check` selects only the authoritative shipping binaries with default features,
-without test targets, a test profile or fixture-feature overrides. It preserves the
-warm target, tool environment and locks, and must observe every production binary.
-Core and Torii library artifact events must exclude their `iroha-core-tests` and
-`test-fixtures` features, so a dependency/default-feature leak also fails this gate.
-This metadata check runs before CLI and long independent tests, including when their
-checkpoint is reused. It supplies no qualification evidence and does not replace
-later shipping codegen or network execution. The remaining groups execute each
-selected test once. The checkpoint
-binds the explicit scope, exact selected census and artifact identity. Core and daemon
-copies stay retained until their final selected stage. A failed startup preflight
-never publishes independent-check success. Strict storage construction and both
+groups collect their failures before stopping expensive work. On success, the
+four-peer fixture's shipping codegen builds the authoritative shipping binaries with
+default features, without test targets, a test profile or fixture-feature overrides.
+It preserves the warm target, tool environment and locks, and must observe every
+production binary. Core and Torii library artifact events must exclude their
+`iroha-core-tests` and `test-fixtures` features, so a dependency/default-feature
+leak fails before any peer starts. This audit reruns on every attempt, including
+checkpoint reuse. The remaining groups execute each selected test once.
+Preparation keeps two checkpoints that bind the explicit scope, exact selected
+census and copied artifact identity. The pre-network checkpoint covers MV
+ownership, pending-Kura, startup and priority groups and is published before
+shipping codegen; a retry after a shipping, capacity or network failure reuses
+only that exact prefix. The complete checkpoint covers every selected independent
+test and is published only after the four-peer fixture and the deferred groups
+pass. Either is retired before its tests rerun. Core and daemon copies stay
+retained until their final selected stage. A failed startup preflight never
+publishes either checkpoint. Strict storage construction and both
 snapshot geometry restoration paths share one recovery sequence: rebuild budgets,
 finish publication recovery, then compact terminal history and rebuild route indexes.
 The source contract rejects bypassing this sequence or moving compaction before
@@ -475,9 +482,10 @@ release compilation retains its original sanitized environment and release
 profile. Each feature graph keeps its own Cargo cache; no test features are
 added or removed to force reuse. The first incremental run populates those
 caches, so a speed improvement must be measured on subsequent focused changes.
-The FSM, source checks and independent native regressions precede the
-four-validator runtime check. Unit test failures stop before production binary
-compilation; the contract test harnesses share the earlier combined graph. Its log
+The FSM, source checks, startup and priority native regressions precede the
+four-validator runtime check; their failures stop before production binary
+compilation. The remaining independent regressions run after that check from the
+earlier combined graph shared by the contract test harnesses. Its log
 records the actual Cargo-selected native binary paths and profiles separately
 from the later Linux release artifacts.
 
@@ -562,7 +570,8 @@ configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every test selected by the explicit scope must exist and execute exactly once.
 Missing, ignored or failed selected tests fail the command; deferred cases are
 omitted from the success census and independent-check evidence. After the mandatory startup
-preflight passes, remaining independent cases report their combined failures.
+preflight passes, the priority CLI/Torii groups report their combined failures
+before the four-peer fixture; the remaining independent cases report theirs after it.
 The pending-Kura group stops before other startup groups on failure; the remaining
 startup groups stop expensive work after collecting their failures. Missing selected tests, artifact custody
 failures and infrastructure errors still stop immediately. Fix the named failures and
@@ -582,17 +591,7 @@ release qualification, exact signed-source and artifact checks, or the offline
 probes against actual Linux release binaries. Public readiness still requires
 the end-to-end live checks.
 
-The `build` job in `.github/workflows/workspace_release.yml` runs this check
-before its full workspace build. CI provisions the stable `target/taira-native-checks`
-subdirectory and passes it explicitly; the existing root target cache includes that
-independent diagnostic target. CI runs `cargo fetch --locked` first to initialize
-the same isolated registry cache, using the selected toolchain, explicit source
-configuration and mode lock. Only this fetch sets `CARGO_NET_OFFLINE=false`; the
-gate itself remains offline. The subsequent
-full workspace build acquires the same development lane lock and uses the same
-target, isolated Cargo home and explicit configuration. It explicitly preserves
-CI's `CARGO_INCREMENTAL=0` after sanitizing the environment, as does the native gate. Matching dependencies can
-therefore reuse the gate's artifacts instead of being rebuilt into a second tree. The existing local Taira release caller should run
+CI no longer runs this census. The `build` job in `.github/workflows/workspace_release.yml` runs the nextest `release-gate` profile (`.config/nextest.toml`), which selects tests by package and module path instead of hand-listed names, then builds the full workspace. This script is retired with the rest of the Taira toolchain (see `specs/network_deployment.md`). The existing local Taira release caller should run
 it before cross-compilation. The canonical
 release artifact producer remains `scripts/run_release_pipeline.py`; it does
 not gain a hidden build step or additional runtime authority.

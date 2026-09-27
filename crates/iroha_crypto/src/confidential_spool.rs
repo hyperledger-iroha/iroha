@@ -198,6 +198,8 @@ pub enum ConfidentialSpoolErrorV1 {
 pub struct ConfidentialSpoolLayoutV1 {
     slot_count: u64,
     plaintext_len: u64,
+    /// `plaintext_len` as validated process-addressable bytes.
+    plaintext_bytes: usize,
     ciphertext_record_len: u64,
     file_len: u64,
     aad_len: usize,
@@ -250,7 +252,7 @@ impl ConfidentialSpoolLayoutV1 {
             return Err(ConfidentialSpoolErrorV1::LimitExceeded("file length"));
         }
         usize::try_from(slot_count).map_err(|_| ConfidentialSpoolErrorV1::AddressSpaceExceeded)?;
-        usize::try_from(plaintext_len)
+        let plaintext_bytes = usize::try_from(plaintext_len)
             .map_err(|_| ConfidentialSpoolErrorV1::AddressSpaceExceeded)?;
         usize::try_from(ciphertext_record_len)
             .map_err(|_| ConfidentialSpoolErrorV1::AddressSpaceExceeded)?;
@@ -268,6 +270,7 @@ impl ConfidentialSpoolLayoutV1 {
         Ok(Self {
             slot_count,
             plaintext_len,
+            plaintext_bytes,
             ciphertext_record_len,
             file_len,
             aad_len,
@@ -338,7 +341,7 @@ impl ConfidentialSpoolLayoutV1 {
     /// outside this named-payload accounting. A complete admission owner must
     /// qualify those separately; this method is not an allocation permit.
     pub fn named_operation_workspace_bytes_v1(&self) -> usize {
-        usize::try_from(self.plaintext_len).expect("validated spool plaintext length fits usize")
+        self.plaintext_bytes
             + size_of::<ConfidentialSpoolChunkV1>()
             + self.aad_len
             + size_of::<Zeroizing<Vec<u8>>>()

@@ -1439,6 +1439,33 @@ async fn incompatible_sccp_caps_reject_snapshot_without_mutating_kura() {
     );
 }
 #[tokio::test]
+async fn sccp_snapshot_revert_refuses_busy_world_without_mutation() {
+    let state = state_factory();
+    let original_registry = state.world.view().sccp_registry.get().clone();
+    let held_world = state.world.try_block().expect("fixture owns the World writer");
+
+    let error = crate::state::validate_sccp_snapshot_revert_candidate(&state)
+        .expect_err("rollback preview must refuse an already-owned World writer");
+    assert!(
+        error.starts_with("SCCP rollback preview storage admission refused:")
+            && error.contains("Busy"),
+        "unexpected rollback storage refusal: {error}"
+    );
+    drop(held_world);
+    assert_eq!(
+        state.world.view().sccp_registry.get(),
+        &original_registry,
+        "a refused preview must not change the committed registry"
+    );
+    drop(
+        state
+            .world
+            .try_block_and_revert()
+            .expect("the refused preview must not poison or retain the writer"),
+    );
+}
+
+#[tokio::test]
 async fn sccp_snapshot_revert_enforces_actual_pending_cap_after_terminal_compaction() {
     let kura = Kura::blank_kura_for_testing();
     let (mut state, key, pending) =

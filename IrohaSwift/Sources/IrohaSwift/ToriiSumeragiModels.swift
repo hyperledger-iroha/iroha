@@ -1274,6 +1274,86 @@ public struct ToriiSumeragiV2LivenessStatus: Decodable, Sendable, Equatable {
     }
 }
 
+/// Local global-beacon horizon signed inside the authoritative status.
+/// It is an observation only and never authorizes signing.
+public struct ToriiSumeragiV2BeaconHorizonStatus: Decodable, Sendable, Equatable {
+    public let epochLengthBlocks: UInt64
+    public let nextRequiredPulseHeight: UInt64?
+    /// Canonical uppercase 32-byte hex of the committed active key session.
+    public let activeSessionID: String?
+    public let sessionCoversNextPulse: Bool
+    public let localProviderReady: Bool
+
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case epochLengthBlocks = "epoch_length_blocks"
+        case nextRequiredPulseHeight = "next_required_pulse_height"
+        case activeSessionID = "active_session_id"
+        case sessionCoversNextPulse = "session_covers_next_pulse"
+        case localProviderReady = "local_provider_ready"
+    }
+
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownNativeAmxFields(
+            from: decoder,
+            allowed: Set(CodingKeys.allCases.map(\.rawValue)),
+            context: "Sumeragi v2 beacon horizon"
+        )
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        for key in CodingKeys.allCases where !container.contains(key) {
+            throw DecodingError.keyNotFound(
+                key,
+                DecodingError.Context(
+                    codingPath: container.codingPath,
+                    debugDescription: "Sumeragi v2 beacon horizon is missing \(key.rawValue)"
+                )
+            )
+        }
+        epochLengthBlocks = try container.decode(UInt64.self, forKey: .epochLengthBlocks)
+        nextRequiredPulseHeight = try container.decodeIfPresent(
+            UInt64.self,
+            forKey: .nextRequiredPulseHeight
+        )
+        activeSessionID = try container.decodeIfPresent(String.self, forKey: .activeSessionID)
+        sessionCoversNextPulse = try container.decode(Bool.self, forKey: .sessionCoversNextPulse)
+        localProviderReady = try container.decode(Bool.self, forKey: .localProviderReady)
+        if let activeSessionID {
+            let isUpperHex = activeSessionID.utf8.count == 64 && activeSessionID.utf8.allSatisfy {
+                ($0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9"))
+                    || ($0 >= UInt8(ascii: "A") && $0 <= UInt8(ascii: "F"))
+            }
+            guard isUpperHex else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .activeSessionID,
+                    in: container,
+                    debugDescription: "Sumeragi v2 beacon session must be canonical uppercase 32-byte hex"
+                )
+            }
+        }
+        guard nextRequiredPulseHeight != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .nextRequiredPulseHeight,
+                in: container,
+                debugDescription: "Sumeragi v2 beacon pulse height must be positive"
+            )
+        }
+        guard !sessionCoversNextPulse
+            || (activeSessionID != nil && nextRequiredPulseHeight != nil) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .sessionCoversNextPulse,
+                in: container,
+                debugDescription: "Sumeragi v2 beacon coverage requires an active session and a scheduled pulse"
+            )
+        }
+        guard !localProviderReady || activeSessionID != nil else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .localProviderReady,
+                in: container,
+                debugDescription: "Sumeragi v2 beacon provider readiness requires an active session"
+            )
+        }
+    }
+}
+
 /// Structurally validated protocol-v2 snapshot returned by `/v1/sumeragi/status`.
 /// Decoding does not verify validator signatures or establish a monetary finality anchor.
 public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
@@ -1298,6 +1378,8 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
     public let heightContext: ToriiSumeragiV2HeightContextStatus
     public let lastCommitQC: ToriiSumeragiV2CommitQcStatus?
     public let liveness: ToriiSumeragiV2LivenessStatus
+    /// Beacon horizon observed when this height was activated, if published.
+    public let beaconHorizon: ToriiSumeragiV2BeaconHorizonStatus?
 
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case protocolVersion = "protocol_version"
@@ -1320,6 +1402,7 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
         case heightContext = "height_context"
         case lastCommitQC = "last_commit_qc"
         case liveness
+        case beaconHorizon = "beacon_horizon"
     }
 
     public init(from decoder: Decoder) throws {
@@ -1403,6 +1486,21 @@ public struct ToriiSumeragiStatusSnapshot: Decodable, Sendable, Equatable {
             ToriiSumeragiV2LivenessStatus.self,
             forKey: .liveness
         )
+        self.beaconHorizon = try container.decodeIfPresent(
+            ToriiSumeragiV2BeaconHorizonStatus.self,
+            forKey: .beaconHorizon
+        )
+        if let beaconHorizon {
+            guard self.heightContext.mode != "permissioned" || beaconHorizon.epochLengthBlocks == 0,
+                  self.heightContext.mode == "permissioned" || beaconHorizon.epochLengthBlocks > 0,
+                  beaconHorizon.nextRequiredPulseHeight.map({ $0 >= self.height }) ?? true else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .beaconHorizon,
+                    in: container,
+                    debugDescription: "Sumeragi status beacon horizon is inconsistent with the active height"
+                )
+            }
+        }
 
         guard self.height > 0 else {
             throw DecodingError.dataCorruptedError(

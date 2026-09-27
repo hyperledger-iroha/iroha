@@ -203,8 +203,19 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
         "pending_persistence_id",
         "last_committed_subject",
         "last_commit_qc",
+        "beacon_horizon",
     ] {
         assert_required_nullable_field!(SumeragiV2Status, status.clone(), field);
+    }
+    let horizon = BeaconHorizonStatusV1 {
+        epoch_length_blocks: 0,
+        next_required_pulse_height: None,
+        active_session_id: None,
+        session_covers_next_pulse: false,
+        local_provider_ready: false,
+    };
+    for field in ["next_required_pulse_height", "active_session_id"] {
+        assert_required_nullable_field!(BeaconHorizonStatusV1, horizon, field);
     }
     for field in ["last_progress", "blocker"] {
         assert_required_nullable_field!(
@@ -288,6 +299,23 @@ fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
             "height_context",
             "last_commit_qc",
             "liveness",
+            "beacon_horizon",
+        ],
+    );
+    assert_required_status_fields::<BeaconHorizonStatusV1>(
+        &BeaconHorizonStatusV1 {
+            epoch_length_blocks: 64,
+            next_required_pulse_height: Some(63),
+            active_session_id: Some([0x11; 32]),
+            session_covers_next_pulse: true,
+            local_provider_ready: true,
+        },
+        &[
+            "epoch_length_blocks",
+            "next_required_pulse_height",
+            "active_session_id",
+            "session_covers_next_pulse",
+            "local_provider_ready",
         ],
     );
     assert_required_status_fields::<SumeragiV2LivenessStatus>(

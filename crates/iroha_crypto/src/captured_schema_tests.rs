@@ -34,7 +34,7 @@ fn expected_hash(row: &Value, direction: &str) -> [u8; 16] {
 }
 
 /// Check an existing serializer against its fixed nominal, root and hash.
-pub(crate) fn assert_serialize<T: NoritoSchema + NoritoSerialize>(nominal: &str) {
+pub fn assert_serialize<T: NoritoSchema + NoritoSerialize>(nominal: &str) {
     let row = captured(nominal);
     assert_eq!(T::nominal_name(), nominal);
     assert_eq!(
@@ -49,7 +49,7 @@ pub(crate) fn assert_serialize<T: NoritoSchema + NoritoSerialize>(nominal: &str)
 }
 
 /// Also check the independently generated decoder without constructing a value.
-pub(crate) fn assert_bidirectional<T>(nominal: &str)
+pub fn assert_bidirectional<T>(nominal: &str)
 where
     T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>,
 {

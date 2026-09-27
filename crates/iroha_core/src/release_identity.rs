@@ -119,8 +119,26 @@ impl BuildIdentity {
                 .to_owned(),
             cargo_features: self.cargo_features.unwrap_or("unknown").to_owned(),
             target_triple: self.target_triple.unwrap_or("unknown").to_owned(),
+            wire_schema_hash: hex::encode(wire_schema_hash()),
         }
     }
+}
+
+/// Wire-schema identity compiled into this binary.
+///
+/// Combines the compiled consensus-message and block wire schema with the IVM
+/// ABI hash of the sole first-release syscall policy. The value is independent
+/// of the compilation target but not of the enabled features (the crypto
+/// `Algorithm` schema lists feature-gated variants), so release tooling reads it
+/// from a native build of the same commit with the release feature set.
+#[must_use]
+pub fn wire_schema_hash() -> [u8; 32] {
+    static HASH: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+    *HASH.get_or_init(|| {
+        iroha_data_model::wire_schema_hash(ivm::syscalls::compute_abi_hash(
+            ivm::SyscallPolicy::AbiV1,
+        ))
+    })
 }
 
 /// Capture the canonical build metadata in the executable invoking this macro.
@@ -297,5 +315,24 @@ mod tests {
         assert_eq!(status.dpn_validator_release_commit, OTHER);
         assert_eq!(status.cargo_features, "telemetry");
         assert_eq!(status.target_triple, "aarch64-apple-darwin");
+        assert_eq!(status.wire_schema_hash, hex::encode(wire_schema_hash()));
+    }
+
+    #[test]
+    fn wire_schema_hash_binds_compiled_wire_and_ivm_abi_v1() {
+        let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
+        assert_eq!(wire_schema_hash(), iroha_data_model::wire_schema_hash(abi));
+        assert_eq!(
+            wire_schema_hash(),
+            wire_schema_hash(),
+            "cached value is stable"
+        );
+        let mut other_abi = abi;
+        other_abi[0] ^= 1;
+        assert_ne!(
+            wire_schema_hash(),
+            iroha_data_model::wire_schema_hash(other_abi)
+        );
+        assert_eq!(hex::encode(wire_schema_hash()).len(), 64);
     }
 }
