@@ -172,9 +172,9 @@ validating local MCP`, confirm:
 Mochi uses Torii's existing `POST /v1/mcp` route as the only MCP server,
 process, and listener. This probe does not start or depend on a gateway,
 sidecar, proxy server, second listener, or separate deployment unit. Dispatch
-stays inside Torii's authoritative router. Native MCP does not use an
-`initialize`/`notifications/initialized` session lifecycle, and the local probe
-does not infer a legacy downgrade from a failed modern request.
+stays inside Torii's authoritative router. MCP uses only the stateless
+`2026-07-28` protocol; the retired `initialize`/`notifications/initialized`
+session lifecycle is rejected.
 
 The helper script will not mark the sandbox ready until both `ready` and
 `mcp_ready` are `true` in `session.json`.

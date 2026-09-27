@@ -4,7 +4,6 @@
 //! synthesis has established the virtual-to-physical cell map, five Table8
 //! lanes realize those relations. Source bytes and digest words are
 //! copy-constrained across the two layouts.
-#[cfg(test)]
 use super::pasta_sha256_table8::IV;
 use super::pasta_sha256_table8::{
     AssignedBlockWord, AssignedByte, BLOCK_BYTE_SIZE, DIGEST_SIZE, PaddedByte, Sha256Instructions,
@@ -22,7 +21,6 @@ use halo2_base::{
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
 };
 use sha2::{Digest as _, Sha256};
-#[cfg(test)]
 use sha2::{compress256, digest::generic_array::GenericArray};
 /// Independent Table8 lanes fixed by the V1 circuit identity.
 pub(crate) const PASTA_SHA256_LANES_V1: usize = 5;
@@ -181,9 +179,9 @@ struct PastaSha256JobV1<F: ScalarField> {
 }
 #[derive(Clone, Debug)]
 struct PastaSha256BoundedJobV1<F: ScalarField> {
+    message_len: AssignedValue<F>,
     padded: Vec<PastaSha256ByteV1<F>>,
     block_outputs: Vec<[AssignedValue<F>; DIGEST_SIZE]>,
-    #[cfg(test)]
     final_block_selectors: Vec<AssignedValue<F>>,
 }
 
@@ -198,6 +196,45 @@ pub(super) struct PastaSha256ClaimJobV1<'a, F: ScalarField> {
     pub(super) message: &'a [PastaSha256ByteV1<F>],
     /// Exact eight terminal digest-word cells produced for this message.
     pub(super) output_words: &'a [AssignedValue<F>; DIGEST_SIZE],
+}
+
+/// Exact Base cells used by the conditional recursive-claim root bridge.
+///
+/// A bounded job uses the Table8-constrained padded capacity and one-hot selected final block.
+/// The claim must fold only blocks up to that selection and use `output_words` as its terminal.
+pub(super) enum PastaSha256TypedClaimJobV1<'a, F: ScalarField> {
+    Ordinary {
+        message: &'a [PastaSha256ByteV1<F>],
+        output_words: &'a [AssignedValue<F>; DIGEST_SIZE],
+    },
+    Bounded {
+        message_len: AssignedValue<F>,
+        padded: &'a [PastaSha256ByteV1<F>],
+        final_block_selectors: &'a [AssignedValue<F>],
+        output_words: &'a [AssignedValue<F>; DIGEST_SIZE],
+    },
+}
+
+/// Private planning input derived from the exact assigned SHA queue.
+///
+/// A bounded job keeps its active logical message separate from its fixed Table8 capacity.  The
+/// ordinary recursive claim cannot yet prove the selected intermediate block, so a caller must
+/// handle this variant explicitly instead of silently hashing the zero-filled capacity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PastaSha256PlanMessageV1 {
+    /// The entire message is active and receives ordinary canonical SHA padding.
+    Ordinary(Vec<u8>),
+    /// Only `logical_message` is active; Table8 also proves later capacity blocks.
+    Bounded {
+        /// Exact active prefix of the assigned message bytes.
+        logical_message: Vec<u8>,
+        /// Fixed number of assigned message-byte cells.
+        capacity: usize,
+        /// Zero-based block whose output is the selected digest.
+        selected_block: usize,
+        /// Fixed number of compression blocks proved by Table8.
+        max_blocks: usize,
+    },
 }
 /// Explicit, circuit-owned SHA jobs. There is deliberately no global or
 /// thread-local queue: witness stripping clones this exact job shape.
@@ -314,7 +351,6 @@ where
     /// The return value uses the same eight big-endian u32 words as `digest_constrained`.
     /// Domain separators and any application length framing belong in `message`; this method
     /// neither changes an application hash nor introduces an application-specific length cap.
-    #[cfg(test)]
     pub(super) fn digest_bounded_constrained(
         &mut self,
         ctx: &mut Context<F>,
@@ -457,9 +493,9 @@ where
             message: message.to_vec(),
             output_words,
             bounded: Some(PastaSha256BoundedJobV1 {
+                message_len,
                 padded,
                 block_outputs,
-                #[cfg(test)]
                 final_block_selectors,
             }),
         });
@@ -491,18 +527,15 @@ where
                 .ok_or_else(|| "Paired Pasta SHA-256 block count overflow".to_owned())
         })
     }
-    /// Copy the exact queued message bytes for private proof-stage planning.
-    ///
-    /// This does not serialize or publish the preimages.  It lets a bounded helper plan derive
-    /// its canonical padding and ordered compression leaves from the same typed cells that built
-    /// the monolithic relation, preventing a second host encoder from drifting from circuit
-    /// semantics.
-    pub(crate) fn canonical_messages(&self) -> Result<Vec<Vec<u8>>, String> {
+    /// Export the exact assigned logical messages and bounded Table8 geometry for private plan
+    /// construction. No byte preimage is serialized into a public proof statement.
+    pub(crate) fn canonical_plan_messages(&self) -> Result<Vec<PastaSha256PlanMessageV1>, String> {
         self.jobs
             .iter()
             .enumerate()
             .map(|(job_index, job)| {
-                job.message
+                let message = job
+                    .message
                     .iter()
                     .copied()
                     .enumerate()
@@ -511,7 +544,129 @@ where
                             format!("Paired Pasta SHA-256 job {job_index}: {error}")
                         })
                     })
-                    .collect()
+                    .collect::<Result<Vec<_>, _>>()?;
+                let Some(bounded) = &job.bounded else {
+                    return Ok(PastaSha256PlanMessageV1::Ordinary(message));
+                };
+                if bounded.message_len.cell.is_none() {
+                    return Err(format!(
+                        "Paired Pasta SHA-256 bounded job {job_index} lost its assigned length"
+                    ));
+                }
+                let actual_len = usize::try_from(fe_to_biguint(bounded.message_len.value()))
+                    .map_err(|_| {
+                        format!("Paired Pasta SHA-256 bounded job {job_index} length exceeds usize")
+                    })?;
+                if actual_len > message.len() || message[actual_len..].iter().any(|byte| *byte != 0)
+                {
+                    return Err(format!(
+                        "Paired Pasta SHA-256 bounded job {job_index} has an invalid active prefix"
+                    ));
+                }
+                let selected_block = actual_len
+                    .checked_add(9)
+                    .ok_or_else(|| {
+                        format!("Paired Pasta SHA-256 bounded job {job_index} length overflow")
+                    })?
+                    .div_ceil(BLOCK_BYTE_SIZE)
+                    .checked_sub(1)
+                    .ok_or_else(|| {
+                        format!(
+                            "Paired Pasta SHA-256 bounded job {job_index} has no selected block"
+                        )
+                    })?;
+                let max_blocks = bounded.block_outputs.len();
+                if selected_block >= max_blocks
+                    || max_blocks.checked_mul(BLOCK_BYTE_SIZE) != Some(bounded.padded.len())
+                {
+                    return Err(format!(
+                        "Paired Pasta SHA-256 bounded job {job_index} block geometry changed"
+                    ));
+                }
+                Ok(PastaSha256PlanMessageV1::Bounded {
+                    logical_message: message[..actual_len].to_vec(),
+                    capacity: message.len(),
+                    selected_block,
+                    max_blocks,
+                })
+            })
+            .collect()
+    }
+
+    /// Copy only ordinary queued messages for the current recursive claim planner.
+    ///
+    /// Bounded Table8 jobs select an intermediate digest. Its ordinary claim format instead
+    /// authenticates the last leaf as the terminal digest, so claiming capacity bytes or merely
+    /// truncating the message would authorize a different relation. Reject that case until the
+    /// typed claim proves the active length and selected block in both Pasta parities.
+    pub(crate) fn canonical_messages(&self) -> Result<Vec<Vec<u8>>, String> {
+        self.canonical_plan_messages()?
+            .into_iter()
+            .enumerate()
+            .map(|(job_index, message)| match message {
+                PastaSha256PlanMessageV1::Ordinary(message) => Ok(message),
+                PastaSha256PlanMessageV1::Bounded {
+                    logical_message,
+                    capacity,
+                    selected_block,
+                    max_blocks,
+                } => Err(format!(
+                    "Paired Pasta SHA-256 job {job_index} is bounded (active bytes {}, capacity {capacity}, selected block {selected_block}/{max_blocks}) and cannot enter the ordinary recursive claim",
+                    logical_message.len()
+                )),
+            })
+            .collect()
+    }
+
+    /// Export active logical messages for a claim planner that separately constrains bounded
+    /// padding, selection, and terminal output against the exact Base cells.
+    ///
+    /// This does not change `canonical_messages`, which remains limited to ordinary consumers.
+    pub(crate) fn bounded_claim_messages(&self) -> Result<Vec<Vec<u8>>, String> {
+        Ok(self
+            .canonical_plan_messages()?
+            .into_iter()
+            .map(|message| match message {
+                PastaSha256PlanMessageV1::Ordinary(message) => message,
+                PastaSha256PlanMessageV1::Bounded {
+                    logical_message, ..
+                } => logical_message,
+            })
+            .collect())
+    }
+
+    /// Borrow the assigned fixed-capacity inputs without converting them to host-only bytes.
+    pub(super) fn typed_claim_jobs(
+        &self,
+    ) -> Result<Vec<PastaSha256TypedClaimJobV1<'_, F>>, String> {
+        self.jobs
+            .iter()
+            .enumerate()
+            .map(|(index, job)| {
+                if let Some(bounded) = &job.bounded {
+                    if bounded.message_len.cell.is_none()
+                        || bounded.block_outputs.is_empty()
+                        || bounded.block_outputs.len() != bounded.final_block_selectors.len()
+                        || bounded.block_outputs.len().checked_mul(BLOCK_BYTE_SIZE)
+                            != Some(bounded.padded.len())
+                        || bounded.final_block_selectors.iter().any(|cell| cell.cell.is_none())
+                    {
+                        return Err(format!(
+                            "Paired Pasta SHA-256 bounded claim job {index} has incomplete Base geometry"
+                        ));
+                    }
+                    Ok(PastaSha256TypedClaimJobV1::Bounded {
+                        message_len: bounded.message_len,
+                        padded: &bounded.padded,
+                        final_block_selectors: &bounded.final_block_selectors,
+                        output_words: &job.output_words,
+                    })
+                } else {
+                    Ok(PastaSha256TypedClaimJobV1::Ordinary {
+                        message: &job.message,
+                        output_words: &job.output_words,
+                    })
+                }
             })
             .collect()
     }
@@ -519,9 +674,8 @@ where
     /// Borrow the exact ordinary SHA jobs for recursive claim consumption.
     ///
     /// Bounded jobs expose intermediate selected states and therefore need a distinct typed-plan
-    /// relation.  Reject them here instead of silently treating their capacity padding as an
-    /// ordinary message.  The current mint-authority certificate queue contains ordinary jobs
-    /// only, so this is a fail-closed protocol invariant rather than a history or count limit.
+    /// relation. Reject them here instead of silently treating their capacity padding as an
+    /// ordinary message. The typed claim bridge uses `typed_claim_jobs` instead.
     pub(super) fn claim_jobs(&self) -> Result<Vec<PastaSha256ClaimJobV1<'_, F>>, String> {
         self.jobs
             .iter()

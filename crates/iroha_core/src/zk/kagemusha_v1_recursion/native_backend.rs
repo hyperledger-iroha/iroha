@@ -68,7 +68,7 @@ use super::{
         KagemushaMintAuthorizationTransportEpCircuitV1,
         KagemushaMintAuthorizationTransportEqCircuitV1,
     },
-    state_relation::PUBLIC_INSTANCE_COUNT,
+    state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT,
     terminal_authorization::{
         KagemushaCommitWrapperEpCircuitV1, KagemushaCommitWrapperEqCircuitV1,
         KagemushaTerminalAuthorizationEpCircuitV1, KagemushaTerminalAuthorizationEqCircuitV1,
@@ -86,7 +86,8 @@ use iroha_data_model::kagemusha::{
 };
 
 const RECURSIVE_PROFILE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:paired-recursive-circuit-profile";
-const RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize = PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
+const RECURSIVE_PUBLIC_INSTANCE_COUNT_V1: usize =
+    RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT + accumulator_limb_count();
 
 /// Check the fixed KAGEMUSHA layout and the actual `BaseConfig` allocation order.
 ///
@@ -1355,6 +1356,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                     request,
                     self.commit_wrapper_eq_protocol_digest,
                     self.commit_wrapper_ep_protocol_digest,
+                    self.artifact_manifest_digest,
                 )?;
                 let current = verify_eq_succinct_protocol(
                     &self.eq_parameters,
@@ -1376,6 +1378,7 @@ impl KagemushaAuthenticatedRecursiveVerifierV1 {
                     request,
                     self.commit_wrapper_eq_protocol_digest,
                     self.commit_wrapper_ep_protocol_digest,
+                    self.artifact_manifest_digest,
                 )?;
                 let current = verify_ep_succinct_protocol(
                     &self.ep_parameters,
@@ -1415,9 +1418,13 @@ impl KagemushaRecursiveVerifierV1 for KagemushaAuthenticatedRecursiveVerifierV1 
             .map_err(|error| error.to_string())?;
         let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&request.proof.ep_history)
             .map_err(|error| error.to_string())?;
-        let mut eq_instances = request.public_inputs.public_instances::<Fp>()?;
+        let mut eq_instances = request
+            .public_inputs
+            .recursive_semantic_public_instances::<Fp>()?;
         eq_instances.extend(history_public_instances::<Fp>(eq_history.as_bytes()));
-        let mut ep_instances = request.public_inputs.public_instances::<Fq>()?;
+        let mut ep_instances = request
+            .public_inputs
+            .recursive_semantic_public_instances::<Fq>()?;
         ep_instances.extend(history_public_instances::<Fq>(ep_history.as_bytes()));
         if eq_instances.len() != RECURSIVE_PUBLIC_INSTANCE_COUNT_V1
             || ep_instances.len() != RECURSIVE_PUBLIC_INSTANCE_COUNT_V1
@@ -2786,6 +2793,7 @@ pub(super) fn payment_terminal_public_inputs_v1(
             super::kagemusha_incoming_proof_binding_digest_v1(request, payment)
                 .map_err(|error| error.to_string())?,
         ),
+        artifact_manifest_digest: [0; 32],
         eq_deferred_audit: proof.eq_deferred_audit,
         ep_deferred_audit: proof.ep_deferred_audit,
         eq_protocol_digest: proof.eq_protocol_digest,
@@ -2799,7 +2807,12 @@ fn terminal_authorization_public_instances<F: KagemushaPoseidonFieldV1>(
     request: &KagemushaParityVerificationRequestV1<'_>,
     eq_protocol_digest: [u8; 32],
     ep_protocol_digest: [u8; 32],
+    release_artifact_manifest_digest: [u8; 32],
 ) -> Result<Vec<F>, String> {
+    let artifact_manifest_digest = terminal_manifest_from_authenticated_release_v1(
+        request.public_output.operation(),
+        release_artifact_manifest_digest,
+    )?;
     let terminal_authorization = KagemushaTerminalAuthorizationPublicInputsV1::from_lifecycle(
         &request.public_output.lifecycle,
         request.public_output.semantic_digest,
@@ -2811,12 +2824,66 @@ fn terminal_authorization_public_instances<F: KagemushaPoseidonFieldV1>(
         request.public_output.ciphertext_commitment,
         request.public_output.amount,
         request.public_output.terminal_output_binding,
+        artifact_manifest_digest,
         request.eq_deferred_audit,
         request.ep_deferred_audit,
         eq_protocol_digest,
         ep_protocol_digest,
     )?;
     terminal_relation_public_instances(&terminal_authorization, request.history_accumulator)
+}
+
+fn terminal_manifest_from_authenticated_release_v1(
+    operation: super::KagemushaOperationV1,
+    release_artifact_manifest_digest: [u8; 32],
+) -> Result<[u8; 32], String> {
+    if release_artifact_manifest_digest == [0; 32] {
+        return Err("Kagemusha authenticated release has no artifact manifest".to_owned());
+    }
+    match operation {
+        super::KagemushaOperationV1::SendSplit => Ok([0; 32]),
+        super::KagemushaOperationV1::RedeemSplit => Ok(release_artifact_manifest_digest),
+        _ => Err("Kagemusha terminal manifest requires send or redemption".to_owned()),
+    }
+}
+
+#[cfg(test)]
+mod terminal_manifest_tests {
+    use super::*;
+
+    #[test]
+    fn terminal_manifest_selects_only_the_authenticated_release_value() {
+        let manifest = [0x5A; 32];
+        assert_eq!(
+            terminal_manifest_from_authenticated_release_v1(
+                super::super::KagemushaOperationV1::SendSplit,
+                manifest,
+            )
+            .expect("send uses its canonical zero slot"),
+            [0; 32]
+        );
+        assert_eq!(
+            terminal_manifest_from_authenticated_release_v1(
+                super::super::KagemushaOperationV1::RedeemSplit,
+                manifest,
+            )
+            .expect("redemption uses the pinned manifest"),
+            manifest
+        );
+        for operation in [
+            super::super::KagemushaOperationV1::SendSplit,
+            super::super::KagemushaOperationV1::RedeemSplit,
+        ] {
+            assert!(terminal_manifest_from_authenticated_release_v1(operation, [0; 32]).is_err());
+        }
+        assert!(
+            terminal_manifest_from_authenticated_release_v1(
+                super::super::KagemushaOperationV1::MintFold,
+                manifest,
+            )
+            .is_err()
+        );
+    }
 }
 
 fn terminal_relation_public_instances<F: KagemushaPoseidonFieldV1>(
@@ -2826,7 +2893,7 @@ fn terminal_relation_public_instances<F: KagemushaPoseidonFieldV1>(
     let mut public = public_inputs.public_prefix::<F>()?;
     public.extend(history_public_instances::<F>(history));
     if public.len() != TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1
-        || terminal_authorization_public_instance::HISTORY_START != 47
+        || terminal_authorization_public_instance::HISTORY_START != 49
     {
         return Err("Kagemusha terminal-relation public instance ABI mismatch".to_owned());
     }

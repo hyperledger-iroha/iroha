@@ -59,7 +59,6 @@ test("all expensive application query callers sign the exact one-shot target", a
   await torii.queryDomains(options);
   await torii.queryAccounts(options);
   await torii.queryTransactions(options);
-  await torii.queryVisibleTransactions(options);
   await torii.queryRepoAgreements(options);
   await torii.queryAssetHolders("rose#wonderland", options);
   await torii.queryAssetDefinitions(options);
@@ -72,7 +71,6 @@ test("all expensive application query callers sign the exact one-shot target", a
     "/v1/domains/query",
     "/v1/accounts/query",
     "/v1/transactions/query",
-    "/v1/transactions/visible/query",
     "/v1/repo/agreements/query",
     "/v1/assets/rose%23wonderland/holders/query",
     "/v1/assets/definitions/query",

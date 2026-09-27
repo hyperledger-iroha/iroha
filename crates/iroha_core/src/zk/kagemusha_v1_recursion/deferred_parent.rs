@@ -1184,7 +1184,7 @@ where
         }
     }
     let parent_history_limbs = parent_column
-        .get(super::state_relation::PUBLIC_INSTANCE_COUNT..)
+        .get(super::state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..)
         .ok_or(Error::InvalidInstances)?
         .iter()
         .map(|value| *value.assigned())

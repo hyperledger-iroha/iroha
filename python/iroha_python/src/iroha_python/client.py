@@ -8393,6 +8393,7 @@ class AccountTransaction:
 class VerifiedCommittedTransaction:
     """A selected full output authenticated by a rooted consensus finality chain."""
 
+    proof_kind: str
     transaction_hash: str
     block_hash: str
     block_height: int
@@ -8422,6 +8423,7 @@ class VerifiedCommittedTransaction:
         if not isinstance(payload, Mapping):
             raise TypeError("verified committed transaction payload must be an object")
         required_fields = {
+            "proof_kind",
             "transaction_hash",
             "block_hash",
             "block_height",
@@ -8471,6 +8473,8 @@ class VerifiedCommittedTransaction:
         height_context_id = _require_exact_non_empty_string(
             payload["height_context_id"], "verified height context id"
         )
+        if payload["proof_kind"] != "selective-v1":
+            raise ValueError("current selective proof_kind required")
         execution_commitment = payload["execution_commitment"]
         if not isinstance(execution_commitment, Mapping):
             raise TypeError("verified execution_commitment must be an object")
@@ -8601,6 +8605,7 @@ class VerifiedCommittedTransaction:
             if not isinstance(raw_outcome, Mapping):
                 raise TypeError(f"verified batch outcome {index} must be an object")
             required_fields = {
+            "proof_kind",
                 "leg_index",
                 "leg_id",
                 "asset",
@@ -8673,6 +8678,7 @@ class VerifiedCommittedTransaction:
         if not isinstance(committed, Mapping):
             raise TypeError("verified committed transaction record must be an object")
         return cls(
+            proof_kind="selective-v1",
             transaction_hash=transaction_hash,
             block_hash=block_hash,
             block_height=block_height,
@@ -11350,6 +11356,20 @@ class SumeragiV2MergeCarrierCommitment:
 
 
 @dataclass(frozen=True)
+class SumeragiV2TransactionTreeCommitment:
+    """QC-authenticated selective root and exact leaf count; no omission defaults."""
+    root: str
+    leaf_count: int
+
+    @classmethod
+    def from_payload(cls, payload: Any, context: str) -> "SumeragiV2TransactionTreeCommitment":
+        if not isinstance(payload, Mapping) or set(payload) != {"root", "leaf_count"}:
+            raise ValueError(f"{context} requires exact root and leaf_count")
+        return cls(root=_strict_hash_literal(payload, "root", context),
+                   leaf_count=_sumeragi_v2_uint(payload["leaf_count"], f"{context}.leaf_count", positive=True))
+
+
+@dataclass(frozen=True)
 class SumeragiV2ExecutionCommitment:
     """Exact deterministic execution result authenticated by a v2 QC."""
 
@@ -11365,6 +11385,8 @@ class SumeragiV2ExecutionCommitment:
     merge_carrier: Optional[SumeragiV2MergeCarrierCommitment]
     executed_block_wire_len: int
     executed_block_wire_hash: str
+    transaction_input_commitment: Optional[SumeragiV2TransactionTreeCommitment]
+    transaction_output_commitment: Optional[SumeragiV2TransactionTreeCommitment]
 
     @classmethod
     def from_payload(cls, payload: Any, context: str) -> "SumeragiV2ExecutionCommitment":
@@ -11385,10 +11407,12 @@ class SumeragiV2ExecutionCommitment:
                 "merge_carrier",
                 "executed_block_wire_len",
                 "executed_block_wire_hash",
+                "transaction_input_commitment",
+                "transaction_output_commitment",
             ),
             context,
         )
-        for field_name in ("lane_finality_manifest", "merge_carrier"):
+        for field_name in ("lane_finality_manifest", "merge_carrier", "transaction_input_commitment", "transaction_output_commitment"):
             if field_name not in payload:
                 raise TypeError(f"{context}.{field_name} is required")
         kagemusha_top_up_count = _sumeragi_v2_uint(
@@ -11463,7 +11487,15 @@ class SumeragiV2ExecutionCommitment:
                 merge_carrier_payload, f"{context}.merge_carrier"
             )
         )
+        def tree(field):
+            value = payload[field]
+            return None if value is None else SumeragiV2TransactionTreeCommitment.from_payload(value, f"{context}.{field}")
+        inputs, outputs = tree("transaction_input_commitment"), tree("transaction_output_commitment")
+        if inputs is not None and (outputs is None or outputs.leaf_count < inputs.leaf_count):
+            raise ValueError(f"{context} selective input/output counts disagree")
         return cls(
+            transaction_input_commitment=inputs,
+            transaction_output_commitment=outputs,
             parent_state_root=_sumeragi_v2_string(
                 payload.get("parent_state_root"), f"{context}.parent_state_root"
             ),
@@ -14679,20 +14711,19 @@ class ToriiClient(
         transaction_hash: str,
         authority: str,
         network_id: "NetworkId",
-        executed_block_wire: bytes,
         finality_bundle_chain_json: str,
         trusted_height_context_id: str,
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
     ) -> VerifiedCommittedTransaction:
-        """Fetch a committed row and authenticate it against exact executed bytes.
+        """Fetch a committed row and authenticate it using selective input/output inclusion.
 
         The required bundle JSON array must link the independently trusted
         network/context through immediate successors to this carrier. Obtain
         ``network_id`` and ``trusted_height_context_id`` from trusted network
         configuration or a previously verified checkpoint, never this response.
         The native verifier binds the selected full output to the final Commit
-        QC's exact executed wire commitment. Check ``result_ok`` before treating
+        QC's exact input/output root-and-count commitments. Check ``result_ok`` before treating
         the authenticated transaction as successful.
         """
 
@@ -14735,7 +14766,6 @@ class ToriiClient(
         verified = verify_committed_transaction_inclusion(
             normalized_hash,
             transaction_response_bytes,
-            executed_block_wire,
             finality_bundle_chain_json=finality_bundle_chain_json,
             expected_network_id=network_id,
             trusted_height_context_id=trusted_height_context_id,
@@ -17921,7 +17951,7 @@ class ToriiClient(
         asset_id: Optional[str] = None,
         count_mode: Optional[str] = None,
     ) -> Optional[Any]:
-        """List account assets via `GET /v1/accounts/{account_id}/assets` (optional `asset_id`)."""
+        """List exact account assets; ``asset_id`` selects native ``asset``."""
 
         canonical_account_id = self._normalize_canonical_account_id(account_id, "account_id")
         params = self._pagination_params(limit=limit, offset=offset)
@@ -17929,7 +17959,7 @@ class ToriiClient(
             params["count_mode"] = _normalize_count_mode_arg(count_mode)
         asset_id_value = _normalize_optional_string(asset_id, "list_account_assets.asset_id")
         if asset_id_value is not None:
-            params["asset_id"] = asset_id_value
+            params["asset"] = asset_id_value
         response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(canonical_account_id, safe='')}/assets",
             params=params or None,
@@ -18187,18 +18217,10 @@ class ToriiClient(
         count_mode: Optional[str] = None,
         query_name: Optional[str] = None,
         aggregate: Optional[Union[AggregateSpec, Mapping[str, Any]]] = None,
-        visible: bool = False,
         envelope: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Query committed transactions globally or within the authenticated viewer scope.
+        """Query committed transactions within the selected dataspace visibility scope."""
 
-        ``visible=True`` selects ``/v1/transactions/visible/query``. That endpoint
-        uses this client's exact-network canonical account authentication to
-        derive the viewer's server-side transaction visibility.
-        """
-
-        if not isinstance(visible, bool):
-            raise TypeError("visible must be a bool")
         if envelope is not None:
             self._ensure_no_query_args(
                 envelope=envelope,
@@ -18225,7 +18247,7 @@ class ToriiClient(
                 query_name=query_name,
                 aggregate=aggregate,
             )
-        path = "/v1/transactions/visible/query" if visible else "/v1/transactions/query"
+        path = "/v1/transactions/query"
         payload = self._expensive_query_json(
             path,
             body,
@@ -20111,7 +20133,7 @@ class ToriiClient(
         params: Dict[str, Any] = {}
         asset_id_value = _normalize_optional_string(asset_id, "find_account_assets.asset_id")
         if asset_id_value is not None:
-            params["asset_id"] = asset_id_value
+            params["asset"] = asset_id_value
         response = self._get_dataspace_visible_response(
             f"/v1/accounts/{quote(literal, safe='')}/assets",
             params=params or None,
@@ -20134,7 +20156,7 @@ class ToriiClient(
             asset_definition_id,
             "asset_definition_id",
         )
-        result = self._find_account_assets(account_id)
+        result = self._find_account_assets(account_id, asset_id=definition)
         if result is None:
             return []
         resolved_account_id, items = result

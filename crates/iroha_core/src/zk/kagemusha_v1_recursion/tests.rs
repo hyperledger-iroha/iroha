@@ -911,6 +911,7 @@ pub(super) fn state_verification_fixture()
         },
         balance: 0,
         logical_sequence: 0,
+        secure_index: 0,
         hardware_epoch: HardwareEpochV1 {
             generation: 1,
             epoch_id: digest(0x95),
@@ -945,6 +946,7 @@ pub(super) fn state_verification_fixture()
         receive_credit_binding_digest: [0; 32],
         lifecycle_binding_digest: digest(0xA0),
         prepared_transition_binding_digest: [0; 32],
+        prepared_intent: None,
         transport_semantic_digest,
         guard_statement_digest: digest(0xA1),
         eq_protocol_digest: artifacts.eq_protocol_digest,
@@ -1153,9 +1155,11 @@ fn one_thousand_twenty_four_handoffs_keep_fixed_public_and_wire_shapes() {
     const STATE_PUBLIC_INSTANCE_COUNT: usize =
         kagemusha_state_public_instance_v1::COMMIT_WRAPPER_EP_PROTOCOL_HI + 1;
     const RECURSIVE_PUBLIC_INSTANCE_COUNT: usize =
-        STATE_PUBLIC_INSTANCE_COUNT + KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
+        kagemusha_state_public_instance_v1::TRANSITION_STATEMENT_HI
+            + 1
+            + KAGEMUSHA_HISTORY_ACCUMULATOR_BYTES_V1 / 16;
     assert_eq!(STATE_PUBLIC_INSTANCE_COUNT, 85);
-    assert_eq!(RECURSIVE_PUBLIC_INSTANCE_COUNT, 119);
+    assert_eq!(RECURSIVE_PUBLIC_INSTANCE_COUNT, 127);
 
     let output = send_output();
     let reference = terminal_authorization_proof(&output, 256, 256);
@@ -1303,9 +1307,9 @@ fn recursive_key_dependency_dag_and_ancestry_binding_are_explicit() {
     assert!(!key_dependencies.contains(&(Stage::FinalM2, Stage::State)));
     assert_eq!(
         kagemusha_terminal_authorization_public_instance_v1::HISTORY_START,
-        47
+        49
     );
-    assert_eq!(TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, 81);
+    assert_eq!(TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1, 83);
     assert_eq!(state_relation::PUBLIC_INSTANCE_COUNT, 85);
     assert_eq!(
         kagemusha_state_public_instance_v1::COMMIT_WRAPPER_EQ_PROTOCOL_LO,

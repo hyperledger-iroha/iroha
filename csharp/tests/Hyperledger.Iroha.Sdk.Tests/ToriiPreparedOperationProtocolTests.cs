@@ -96,6 +96,39 @@ public sealed partial class ToriiClientTests
     [Theory]
     [InlineData("onboarding_prepared")]
     [InlineData("faucet_prepared")]
+    public void PreparedProtocolRejectsSignedOrdinaryAdmission(string name)
+    {
+        var vector = PreparedTransactionSignatureVector(name);
+        var original = vector.GetProperty("response");
+        var node = ResignPreparedFixture(name, admissionIntent: TransactionAdmissionIntent.Ordinary);
+        AssertPreparedFixtureEnvelopeSignature(name, node);
+        var network = PreparedTransactionSignatureNetworkId(vector);
+        if (name == "onboarding_prepared")
+        {
+            var prepared = node.Deserialize<ToriiAccountOnboardingPreparedTransactionV1>()!;
+            var receipt = PreparedOnboardingReceipt();
+            var error = Assert.Throws<JsonException>(() =>
+                ToriiClient.VerifyAccountOnboardingPreparedTransactionV1(
+                    prepared, receipt.Body.Request, receipt, prepared.Binding,
+                    prepared.FeePayment, vector.GetProperty("signer_account_id").GetString()!,
+                    network, PreparedOnboardingBodyEncoder));
+            Assert.Contains("QueuePlanSynced admission", error.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            var prepared = node.Deserialize<ToriiAccountFaucetPreparedTransactionV1>()!;
+            var originalFaucet = DeserializePreparedFixture<ToriiAccountFaucetPreparedTransactionV1>(original);
+            var error = Assert.Throws<JsonException>(() =>
+                ToriiClient.VerifyAccountFaucetPreparedTransactionV1(
+                    prepared, originalFaucet.Claim, prepared.Binding, prepared.FeePayment,
+                    FaucetPolicy(vector, originalFaucet), network));
+            Assert.Contains("QueuePlanSynced admission", error.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Theory]
+    [InlineData("onboarding_prepared")]
+    [InlineData("faucet_prepared")]
     public void PreparedProtocolMetadataMatchesSharedCanonicalBinding(string name)
     {
         var original = PreparedTransactionSignatureVector(name).GetProperty("response");
@@ -270,7 +303,8 @@ public sealed partial class ToriiClientTests
     private static JsonObject ResignPreparedFixture(string name,
         ToriiPreparedOperationBindingV1? binding = null,
         Action<Dictionary<string, JsonNode?>>? mutateMetadata = null,
-        ulong? creation = null, byte[]? ttl = null)
+        ulong? creation = null, byte[]? ttl = null,
+        TransactionAdmissionIntent? admissionIntent = null)
     {
         var vector = PreparedTransactionSignatureVector(name);
         var original = vector.GetProperty("response");
@@ -286,6 +320,11 @@ public sealed partial class ToriiClientTests
         fields[8] = EncodePreparedFixtureMetadata(metadata);
         if (creation is { } time) fields[2] = PreparedU64(time);
         if (ttl is not null) fields[4] = ttl;
+        if (admissionIntent is { } intent)
+        {
+            fields[7] = new byte[sizeof(uint)];
+            BinaryPrimitives.WriteUInt32LittleEndian(fields[7], (uint)intent);
+        }
         var payloadWriter = new CanonicalNoritoWriter();
         foreach (var field in fields) payloadWriter.WriteField(field);
         var payload = payloadWriter.ToArray();

@@ -1,5 +1,109 @@
 // Certified publication receiver checks share State's bounded authentication owner.
 #[test]
+fn pending_queue_plan_replay_requires_exact_live_durable_binding() {
+    let (state, validators, _, parent) = configured_single_lane_queue_plan_state();
+    let route = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let entrypoint = queue_plan_entrypoint_for_state_test(&state, 0x70);
+    let (binding, certificate) = queue_plan_admission_certificate_for_entrypoint_state_test(
+        &state,
+        route.clone(),
+        &validators,
+        parent.header().height().get(),
+        0x70,
+        &entrypoint,
+    );
+    let signed_hash = binding
+        .signed_transaction_hash
+        .expect("complete signed admission has a signed identity");
+    let lookup =
+        || state.pending_queue_plan_admission_for_transaction(binding.entrypoint_hash, signed_hash);
+    assert!(!lookup().expect("a fresh transaction has no durable custody"));
+    assert!(matches!(
+        state
+            .persist_classified_queue_plan_admission(
+                &certificate,
+                QueuePlanAdmissionPersistenceScope::Admission,
+            )
+            .expect("persist exact certified pending input"),
+        PendingQueuePlanAdmissionPersistenceOutcome::Durable { inserted: true, .. }
+    ));
+    assert!(lookup().expect("exact pending certificate authenticates"));
+    assert!(
+        !state
+            .pending_queue_plan_admission_for_transaction(
+                HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+                    b"other entrypoint"
+                )),
+                signed_hash,
+            )
+            .expect("another entrypoint has no pending custody")
+    );
+    assert!(
+        state
+            .pending_queue_plan_admission_for_transaction(
+                binding.entrypoint_hash,
+                HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+                    b"other signed transaction"
+                )),
+            )
+            .is_err(),
+        "a different signed identity cannot claim this entrypoint"
+    );
+
+    let alternate = queue_plan_admission_certificate_bytes_for_signer_indices_state_test(
+        &entrypoint,
+        &binding,
+        &validators,
+        &[2, 3],
+    );
+    state
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&alternate)
+        .expect("seed another valid quorum over the same binding");
+    assert!(lookup().expect("alternate signer subsets retain one logical admission"));
+
+    let (conflicting_binding, conflicting) =
+        queue_plan_admission_certificate_for_entrypoint_state_test(
+            &state,
+            route,
+            &validators,
+            parent.header().height().get(),
+            0x71,
+            &entrypoint,
+        );
+    assert_eq!(conflicting_binding.entrypoint_hash, binding.entrypoint_hash);
+    assert_eq!(
+        conflicting_binding.signed_transaction_hash,
+        binding.signed_transaction_hash
+    );
+    assert_ne!(conflicting_binding, binding);
+    let conflicting_hash = state
+        .kura
+        .persist_pending_queue_plan_admission_certificate(&conflicting)
+        .expect("seed a conflicting authenticated binding");
+    assert!(
+        lookup().is_err(),
+        "a conflicting pending binding fails closed"
+    );
+    state
+        .remove_pending_queue_plan_admission_certificate(conflicting_hash)
+        .expect("remove conflicting test fixture");
+
+    let malformed_hash = state
+        .kura
+        .persist_pending_queue_plan_admission_certificate(b"malformed")
+        .expect("seed corrupt durable evidence");
+    assert!(lookup().is_err(), "corrupt pending inventory fails closed");
+    state
+        .remove_pending_queue_plan_admission_certificate(malformed_hash)
+        .expect("remove corrupt test fixture");
+    assert!(lookup().expect("exact custody remains live after fixture cleanup"));
+}
+
+#[test]
 fn coordinator_publication_authenticates_once_inside_admission_owner() {
     let (state, validators, _, parent) = configured_single_lane_queue_plan_state();
     let (binding, certificate) = queue_plan_admission_certificate_for_state_test(

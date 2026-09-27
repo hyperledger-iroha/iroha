@@ -65,13 +65,8 @@ impl SumeragiV2Adapter {
             .transpose()?
             .ok_or(AdapterError::RecoveredLifecycleSignCompletionMismatch)?;
         if signer != local_signer
-            || verify_individual_signature(
-                &self.wire_context,
-                signer,
-                &signature,
-                &request.signature_preimage(),
-            )
-            .is_err()
+            || verify_completed_consensus_signature(&self.wire_context, &request, &signature)
+                .is_err()
             || match (&request, &outbound_payload) {
                 (SignRequest::Proposal(proposal), Some(payload)) => {
                     payload.manifest() != &proposal.manifest

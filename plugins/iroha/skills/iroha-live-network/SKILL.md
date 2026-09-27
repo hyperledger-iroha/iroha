@@ -48,19 +48,13 @@ network through native MCP.
    `tools/list` directly with the same per-request metadata. Use
    `resources/list` and `resources/read` only when the server advertises the
    resources capability, and honor their private TTLs.
-9. Treat initialization-based MCP `2025-06-18` as compatibility fallback only:
-   use it only when the connection is explicitly configured for a known legacy
-   Torii endpoint. Never infer a downgrade from a transport, authentication, or
-   protocol failure. The compatibility sequence uses `initialize`, then
-   `notifications/initialized`, and the `MCP-Protocol-Version: 2025-06-18`
-   header on later requests.
-10. Do not send `initialize`, `notifications/initialized`, `ping`, or
-    `Mcp-Session-Id` on the native path. POST exactly one JSON-RPC request per
+9. Do not send `initialize`, `notifications/initialized`, `ping`, or
+   `Mcp-Session-Id`. POST exactly one JSON-RPC request per
    HTTP request. Do not send client JSON-RPC responses or outer arrays. Use the
    advertised `tools/call_batch` extension when batching is needed, declare
    `clientCapabilities.extensions["org.hyperledger.iroha/tools"] = {}` on that
    request, and remember that every inner call consumes rate-limit capacity.
-11. Inspect all four standard annotations plus versioned
+10. Inspect all four standard annotations plus versioned
     `_meta["iroha/semantics"]`. Keep operation, authority, mutation, retry,
     world boundary, sensitivity, and external-signature requirements separate.
     These remain hints. For route-backed tools, `_meta["iroha/routeAuth"]` and

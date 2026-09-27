@@ -24,8 +24,13 @@ use crate::{
     },
 };
 use iroha_data_model::block::{SignedBlock, consensus_v2 as wire};
+use iroha_data_model::{
+    isi::consensus_keys::ApplyThresholdKeyLifecycleCertificateV1,
+    transaction::{Executable, TransactionAdmissionIntent, TransactionEntrypoint},
+};
+use iroha_model_base::topology::DataSpaceId;
 use mv::allocation::{AllocationCharge, AllocationRefusal};
-use std::{alloc::Layout, convert::Infallible, sync::Arc};
+use std::{alloc::Layout, collections::BTreeSet, convert::Infallible, sync::Arc};
 
 #[cfg(test)]
 std::thread_local! {
@@ -74,8 +79,9 @@ struct AwaitingNativeSource {
     pending: Option<PendingNativeSource>,
     source_admission: Option<NativeExecutionResourceAdmission>,
     source_pending: Option<PendingNativeLaneSource>,
+    retry_refusal: Option<LocalValidationRefusal>,
     // Payloads retire before the original shell reservation is refunded.
-    shell_admission: CarrierShellAdmission,
+    shell_admission: Option<CarrierShellAdmission>,
 }
 
 enum NativeValidationPhase {
@@ -420,6 +426,115 @@ impl V2ApplyService {
 }
 
 impl OwnedNativeCarrierValidator {
+    /// A lifecycle certificate is the sole external control allowed to execute
+    /// directly at its quorum-certified next global height. Reauthenticate it
+    /// here: a Torii admission decision is never voting authority for peers.
+    fn authenticate_lifecycle_control(&self, body: &SignedBlock) -> Result<(), V2ApplyError> {
+        let invalid = |reason: &str| V2ApplyError::Validation(reason.to_owned());
+        let [entrypoint] = body.external_entrypoints_slice() else {
+            return Err(invalid(
+                "lifecycle control must be the sole external entrypoint",
+            ));
+        };
+        let TransactionEntrypoint::External(transaction) = entrypoint else {
+            return Err(invalid(
+                "lifecycle control must be a signed external transaction",
+            ));
+        };
+        if transaction.admission_intent() != TransactionAdmissionIntent::Ordinary
+            || transaction.attachments().is_some()
+            || transaction.multisig_signatures().is_some()
+            || !transaction.metadata().is_empty()
+        {
+            return Err(invalid(
+                "lifecycle control has noncanonical transaction attachments",
+            ));
+        }
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err(invalid(
+                "lifecycle control must contain one certificate instruction",
+            ));
+        };
+        if instructions.len() != 1 {
+            return Err(invalid(
+                "lifecycle control must contain one certificate instruction",
+            ));
+        }
+        let certificate = &instructions[0]
+            .as_any()
+            .downcast_ref::<ApplyThresholdKeyLifecycleCertificateV1>()
+            .ok_or_else(|| invalid("lifecycle control has a non-certificate instruction"))?
+            .certificate;
+        let context = self.context.context();
+        if certificate.effective_height != context.height
+            || certificate.network_id != context.network_id
+            || body.header().height().get() != context.height
+        {
+            return Err(invalid(
+                "lifecycle certificate differs from the authenticated height",
+            ));
+        }
+        let bundle = body
+            .execution_context()
+            .ok_or_else(|| invalid("lifecycle control lacks its global route context"))?;
+        let [external] = bundle.external.as_slice() else {
+            return Err(invalid(
+                "lifecycle control requires one global route context",
+            ));
+        };
+        if external.entrypoint_hash != entrypoint.hash() {
+            return Err(invalid(
+                "lifecycle route context differs from its entrypoint",
+            ));
+        }
+        let plan = crate::queue::routing_plan_from_execution_context(external)
+            .map_err(|reason| invalid(&reason))?;
+        let crate::queue::RoutingPlan::Single(leg) = &plan else {
+            return Err(invalid("lifecycle control requires one global route"));
+        };
+        if leg.role != crate::queue::RouteLegRole::Coordinator
+            || leg.route.dataspace_id != DataSpaceId::UNIVERSAL
+        {
+            return Err(invalid("lifecycle control has a non-global route"));
+        }
+        let (parent_hash, roster) = self
+            .service
+            .state
+            .verify_next_height_threshold_key_lifecycle_certificate_v1(certificate)
+            .map_err(|reason| invalid(&reason))?;
+        if body.header().prev_block_hash() != Some(parent_hash)
+            || context
+                .roster
+                .iter()
+                .map(|validator| &validator.validator)
+                .ne(roster.iter())
+        {
+            return Err(invalid(
+                "lifecycle control differs from its authenticated parent or roster",
+            ));
+        }
+        let route = self
+            .service
+            .queue
+            .plan_admission_context_with_state(&self.service.state, &plan)
+            .map_err(|error| invalid(&error.to_string()))?;
+        if route.proposal_height != context.height
+            || route.predecessor_block_hash != Some(parent_hash)
+            || route.route_incarnations.len() != 1
+            || route.route_incarnations[0].leg != *leg
+            || route.route_incarnations[0]
+                .validator_set
+                .iter()
+                .collect::<BTreeSet<_>>()
+                != roster.iter().collect::<BTreeSet<_>>()
+        {
+            return Err(invalid(
+                "lifecycle control route lacks authenticated global authority",
+            ));
+        }
+        Ok(())
+    }
+
     // These are disjoint first-release producers. Failed Native authentication
     // never enters the genesis/control producer or a second execution attempt.
     fn classify_source(
@@ -453,9 +568,14 @@ impl OwnedNativeCarrierValidator {
             return Ok(CurrentCarrierSourceClass::Genesis);
         }
         if !body.external_entrypoints_slice().is_empty() {
-            return Err(V2ApplyError::Validation(
-                "current economic inputs require their authenticated Native Decision batch".into(),
-            ));
+            if native {
+                return Err(V2ApplyError::Validation(
+                    "Native Decisions cannot share a carrier with direct external entrypoints"
+                        .into(),
+                ));
+            }
+            self.authenticate_lifecycle_control(body)?;
+            return Ok(CurrentCarrierSourceClass::Control);
         }
         Ok(if native {
             CurrentCarrierSourceClass::Native
@@ -476,6 +596,7 @@ impl OwnedNativeCarrierValidator {
                 || !waiting.recovered.is_empty()
                 || waiting.source_admission.is_some()
                 || waiting.source_pending.is_some()
+                || waiting.retry_refusal.is_some()
             {
                 return Err(LocalValidationRefusal::RecoveryRequired(
                     "control carrier acquired a foreign Native source recovery owner".into(),
@@ -485,10 +606,42 @@ impl OwnedNativeCarrierValidator {
             let prepared = self.service.prepare_current_control_source_admitted(
                 &waiting.proposal,
                 &waiting.context,
-                waiting.shell_admission,
+                waiting
+                    .shell_admission
+                    .take()
+                    .expect("control source retains its original shell admission"),
             )?;
             return Self::detach_prepared(prepared);
         }
+        // A stable source may become stale while the service acquires archives or
+        // executes its scratch candidate. That consumed source releases its charge;
+        // retry the same retained proposal with a fresh finite admission.
+        if waiting.source_pending.is_none() && waiting.source_admission.is_none() {
+            let group_count = waiting
+                .proposal
+                .execution_context()
+                .and_then(|context| context.native_lane_decisions.as_deref())
+                .expect("Native source retains its decision batch")
+                .groups
+                .len();
+            match NativeExecutionResourceAdmission::try_reserve_source(
+                &self.service.carrier_shell_budget,
+                group_count,
+            ) {
+                Ok(admission) => waiting.source_admission = Some(admission),
+                Err(error) => {
+                    let refusal = self.service.carrier_allocation_refusal(error);
+                    if let Some(retry @ LocalValidationRefusal::PhysicalBusy(_)) =
+                        refusal.local_refusal()
+                    {
+                        waiting.retry_refusal = Some(retry);
+                        return Ok(NativeValidationPhase::AwaitingSource(waiting));
+                    }
+                    return Err(refusal);
+                }
+            }
+        }
+        waiting.retry_refusal = None;
         let prepared = if let Some(pending) = waiting.source_pending.take() {
             self.service
                 .state
@@ -531,6 +684,9 @@ impl OwnedNativeCarrierValidator {
             }
             NativeLaneBatchSourcePreparationV1::ObservationChanged { pending } => {
                 waiting.source_pending = Some(pending);
+                waiting.retry_refusal = Some(LocalValidationRefusal::ObservationChanged {
+                    wake: self.service.queue.sumeragi_waker(),
+                });
                 return Ok(NativeValidationPhase::AwaitingSource(waiting));
             }
             NativeLaneBatchSourcePreparationV1::AdmissionMismatch { .. } => {
@@ -539,20 +695,36 @@ impl OwnedNativeCarrierValidator {
                 )
                 .into());
             }
+            NativeLaneBatchSourcePreparationV1::Superseded => {
+                return Err(LocalValidationRefusal::Superseded.into());
+            }
         };
-        let prepared = self
-            .service
-            .prepare_native_source_admitted(
-                &waiting.proposal,
-                source,
-                waiting.context,
-                waiting.shell_admission,
-            )?
-            .ok_or_else(|| {
-                LocalValidationRefusal::RecoveryRequired(
-                    "Native source observation changed before execution".into(),
-                )
-            })?;
+        let prepared = self.service.prepare_native_source_admitted(
+            &waiting.proposal,
+            source,
+            waiting.context.clone(),
+            &mut waiting.shell_admission,
+        );
+        let prepared = match prepared {
+            Ok(Some(prepared)) => prepared,
+            Ok(None) => {
+                waiting.retry_refusal = Some(LocalValidationRefusal::ObservationChanged {
+                    wake: self.service.queue.sumeragi_waker(),
+                });
+                return Ok(NativeValidationPhase::AwaitingSource(waiting));
+            }
+            Err(error) => {
+                if let Some(
+                    retry @ (LocalValidationRefusal::PhysicalBusy(_)
+                    | LocalValidationRefusal::QueueRelease { .. }),
+                ) = error.local_refusal()
+                {
+                    waiting.retry_refusal = Some(retry);
+                    return Ok(NativeValidationPhase::AwaitingSource(waiting));
+                }
+                return Err(error);
+            }
+        };
         Self::detach_prepared(prepared)
     }
 
@@ -622,6 +794,19 @@ impl OwnedNativeCarrierValidator {
     }
 }
 
+/// Exercise the production source classifier without allocating a retained
+/// candidate or promoting a BodyStore validation marker.
+#[cfg(test)]
+pub(super) fn classify_current_carrier_for_test(
+    service: Arc<V2ApplyService>,
+    context: VerifiedHeightContext,
+    body: &SignedBlock,
+) -> Result<(), V2ApplyError> {
+    OwnedNativeCarrierValidator { service, context }
+        .classify_source(body)
+        .map(|_| ())
+}
+
 impl CarrierValidator for OwnedNativeCarrierValidator {
     type Owner = NativeValidationCandidate;
     type Error = V2ApplyError;
@@ -672,7 +857,8 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
             pending: None,
             source_admission,
             source_pending: None,
-            shell_admission,
+            retry_refusal: None,
+            shell_admission: Some(shell_admission),
         });
         let phase = match result {
             Ok(phase) => phase,
@@ -689,6 +875,14 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 return Err(error);
             }
             Err(error) if error.rejection_identity().is_some() => return Err(error),
+            Err(error)
+                if matches!(
+                    error.local_refusal(),
+                    Some(LocalValidationRefusal::Superseded)
+                ) =>
+            {
+                return Err(error);
+            }
             // Fatal journal/capture failure after execution must occupy the same slot:
             // a later marker attempt must never manufacture a second execution.
             Err(error) => NativeValidationPhase::Stopped {
@@ -736,16 +930,29 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                     Ok(NativeValidationPhase::AwaitingSource(waiting))
                         if waiting.pending.is_none() =>
                     {
+                        let refusal = waiting.retry_refusal.clone().unwrap_or_else(|| {
+                                LocalValidationRefusal::RecoveryRequired(
+                                    "original Native source is awaiting a stable observation or resource"
+                                        .into(),
+                                )
+                            });
                         *owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));
-                        return Err((
-                            owner,
-                            LocalValidationRefusal::RecoveryRequired(
-                                "original Native source is awaiting a stable observation or resource"
-                                    .into(),
-                            ),
-                        ));
+                        return Err((owner, refusal));
                     }
                     Ok(phase) => phase,
+                    Err(error)
+                        if matches!(
+                            error.local_refusal(),
+                            Some(LocalValidationRefusal::Superseded)
+                        ) =>
+                    {
+                        *owner.phase = Some(NativeValidationPhase::Stopped {
+                            context_id,
+                            proposal_hash,
+                            reason: "superseded before Native execution".into(),
+                        });
+                        return Err((owner, LocalValidationRefusal::Superseded));
+                    }
                     Err(error) => {
                         // Execution failure is fail-stop once the descriptor is retained;
                         // it cannot release that descriptor for a second execution.
@@ -780,14 +987,18 @@ impl CarrierValidator for OwnedNativeCarrierValidator {
                 Err((owner, refusal))
             }
             NativeValidationPhase::AwaitingSource(waiting) => {
-                let pending = waiting
-                    .pending
-                    .as_ref()
-                    .expect("source recovery has exact request");
-                let refusal = LocalValidationRefusal::NativeSourceRecovery {
-                    execution_index: pending.execution_index,
-                    authenticated_source: Arc::clone(&pending.source),
-                    wake: self.service.queue.sumeragi_waker(),
+                let refusal = if let Some(retry) = waiting.retry_refusal.as_ref() {
+                    retry.clone()
+                } else if let Some(pending) = waiting.pending.as_ref() {
+                    LocalValidationRefusal::NativeSourceRecovery {
+                        execution_index: pending.execution_index,
+                        authenticated_source: Arc::clone(&pending.source),
+                        wake: self.service.queue.sumeragi_waker(),
+                    }
+                } else {
+                    LocalValidationRefusal::ObservationChanged {
+                        wake: self.service.queue.sumeragi_waker(),
+                    }
                 };
                 *owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));
                 Err((owner, refusal))

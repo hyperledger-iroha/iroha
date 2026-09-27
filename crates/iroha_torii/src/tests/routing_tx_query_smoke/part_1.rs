@@ -228,49 +228,6 @@ async fn transactions_query_aggregate_uses_sparse_index_for_an_exact_miss() {
     assert_eq!(value["query_source"].as_str(), Some("live"));
 }
 #[tokio::test]
-async fn handle_v1_transactions_visible_query_returns_empty_on_blank_state() {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = iroha_core::state::State::new_for_testing(World::default(), kura, query);
-    let viewer = checked_smoke_account_id(0x41, "derive visible-query viewer fixture key");
-    let env = crate::filter::QueryEnvelope {
-        query: Some("VisibleTransactions".to_owned()),
-        filter: None,
-        select: None,
-        aggregate: None,
-        sort: vec![crate::filter::SortKey {
-            key: crate::filter::FieldPath("timestamp_ms".into()),
-            order: crate::filter::Order::Desc,
-        }],
-        pagination: crate::filter::Pagination {
-            limit: Some(50),
-            offset: 0,
-        },
-        fetch_size: None,
-        count_mode: Some("exact".to_owned()),
-    };
-    let resp = handle_v1_transactions_visible_query_with_policy(
-        Arc::new(state),
-        crate::utils::extractors::NoritoJson(env),
-        crate::routing::MaybeTelemetry::for_tests(),
-        TxHistoryVisibilityScope {
-            viewer_account_ids: vec![viewer],
-            viewer_dataspace_id: "wonderland".to_owned(),
-            allow_dataspace_wide: false,
-            asset_definition_domains: std::collections::BTreeMap::new(),
-        },
-        None,
-    )
-    .await
-    .expect("handler ok")
-    .into_response();
-    assert_eq!(resp.status(), StatusCode::OK);
-    let body = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-    assert_eq!(v["items"].as_array().unwrap().len(), 0);
-    assert_eq!(v["total"].as_u64(), Some(0));
-}
-#[tokio::test]
 async fn account_transactions_query_rejects_limit_above_cap() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -346,6 +303,7 @@ async fn account_transactions_get_rejects_limit_above_cap() {
         limit: Some(cap + 1),
         offset: 0,
         asset_id: None,
+        dataspace_id: None,
         count_mode: None,
     };
     let err = handle_v1_account_transactions_get(
@@ -461,6 +419,7 @@ async fn account_transactions_get_filters_by_asset_id() {
         limit: Some(10),
         offset: 0,
         asset_id: Some(asset_id.to_string()),
+        dataspace_id: None,
         count_mode: Some("exact".to_owned()),
     };
     let actor_literal = actor_id
@@ -620,6 +579,7 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
             limit: Some(10),
             offset: 0,
             asset_id: Some(def_id.to_string()),
+            dataspace_id: None,
             count_mode: Some("exact".to_owned()),
         }),
         crate::routing::MaybeTelemetry::for_tests(),
@@ -644,6 +604,7 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
             limit: Some(10),
             offset: 0,
             asset_id: Some(recipient_asset_id.to_string()),
+            dataspace_id: None,
             count_mode: Some("exact".to_owned()),
         }),
         crate::routing::MaybeTelemetry::for_tests(),
@@ -668,6 +629,7 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
             limit: Some(10),
             offset: 0,
             asset_id: Some(unrelated_asset_id.to_string()),
+            dataspace_id: None,
             count_mode: Some("exact".to_owned()),
         }),
         crate::routing::MaybeTelemetry::for_tests(),
@@ -687,6 +649,7 @@ async fn account_transactions_get_includes_recipient_transfer_asset_filters() {
             limit: Some(10),
             offset: 0,
             asset_id: Some(def_id.to_string()),
+            dataspace_id: None,
             count_mode: Some("exact".to_owned()),
         }),
         crate::routing::MaybeTelemetry::for_tests(),

@@ -117,6 +117,25 @@ mod tests {
     use rand::seq::SliceRandom;
 
     #[tokio::test]
+    async fn cloned_reader_retains_previous_generation_after_write() {
+        let bptree = BptreeMap::<usize, usize>::new();
+        let mut writer = bptree.write().await;
+        writer.insert(1, 10);
+        writer.commit();
+
+        let original = bptree.read();
+        let cloned = original.clone();
+        drop(original);
+
+        let mut writer = bptree.write().await;
+        writer.insert(1, 20);
+        writer.commit();
+
+        assert_eq!(cloned.get(&1), Some(&10));
+        assert_eq!(bptree.read().get(&1), Some(&20));
+    }
+
+    #[tokio::test]
     async fn test_bptree2_map_basic_write() {
         let bptree: BptreeMap<usize, usize> = BptreeMap::new();
         {

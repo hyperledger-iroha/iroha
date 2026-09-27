@@ -184,4 +184,65 @@ impl NativeRunnerProcess {
                 })
             })
     }
+
+    /// Candidate results retain historical waits, but only currently open
+    /// lanes may occupy the process's one network recovery slot. The caller
+    /// must first confirm this complete observation is still current.
+    pub(super) fn prune_closed_candidate_source_waits(
+        &mut self,
+        observed: &crate::state::VerifiedLaneContexts,
+    ) {
+        let retain_current = |wait: &crate::state::LaneDecisionGroupPreparationV1| {
+            !matches!(wait, crate::state::LaneDecisionGroupPreparationV1::CanonicalBodyRecoveryRequired(source)
+                if !source.is_current_in(observed))
+        };
+        if let Some(source) = self.candidate_source.as_mut() {
+            source.waits.retain(retain_current);
+        }
+        if let Some(Ok(assembly)) = self
+            .candidate_result
+            .as_mut()
+            .map(|completed| &mut completed.result)
+        {
+            assembly.source.waits.retain(retain_current);
+        }
+    }
+
+    #[cfg(all(test, feature = "bls"))]
+    pub(crate) fn assert_candidate_source_pruning_for_test(
+        state: Arc<State>,
+        source: Arc<crate::state::AuthenticatedLaneAdmittedInputSourceV1>,
+        current: &crate::state::VerifiedLaneContexts,
+        closed: &crate::state::VerifiedLaneContexts,
+        key: &KeyPair,
+    ) {
+        let mut process = Self::new(
+            state,
+            ConsensusOutputGuard::isolated(),
+            PeerId::new(key.public_key().clone()),
+            key.clone(),
+            true,
+            &crate::sumeragi::v2::SumeragiV2Adapter::native_source_lifecycle_config_for_test(),
+            32 * 1024 * 1024,
+            Duration::from_secs(10),
+            Duration::from_secs(1),
+        )
+        .expect("actual Native candidate source owner");
+        process.candidate_source = Some(
+            super::super::v2_lane_driver::NativeLaneCandidatePreparation {
+                work: None,
+                waits: vec![
+                    crate::state::LaneDecisionGroupPreparationV1::CanonicalBodyRecoveryRequired(
+                        source.as_ref().clone(),
+                    ),
+                ],
+            },
+        );
+        assert!(process.candidate_source_requirement().is_some());
+        process.prune_closed_candidate_source_waits(current);
+        assert!(process.candidate_source_requirement().is_some());
+        process.prune_closed_candidate_source_waits(closed);
+        assert!(process.candidate_source_requirement().is_none());
+        process.shutdown().join().unwrap();
+    }
 }

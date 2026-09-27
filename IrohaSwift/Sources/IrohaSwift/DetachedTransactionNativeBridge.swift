@@ -84,6 +84,7 @@ public struct DetachedAssetTransferInspection: Sendable, Equatable {
 public enum DetachedTransactionExecutableInspection: Sendable, Equatable {
     case contractCall(DetachedContractCallInspection)
     case assetTransfer(DetachedAssetTransferInspection)
+    case assetTransferBatch([DetachedAssetTransferInspection])
 }
 
 public struct DetachedTransactionScaffoldInspection: Sendable, Equatable {
@@ -144,9 +145,10 @@ private struct ScaffoldDTO: Decodable {
 private enum ExecutableDTO: Decodable {
     case contractCall(ContractCallDTO)
     case assetTransfer(AssetTransferDTO)
+    case assetTransferBatch([AssetTransferDTO])
 
     private enum CodingKeys: String, CodingKey {
-        case kind
+        case kind, transfers
     }
 
     init(from decoder: Decoder) throws {
@@ -156,6 +158,8 @@ private enum ExecutableDTO: Decodable {
             self = .contractCall(try ContractCallDTO(from: decoder))
         case "asset_transfer":
             self = .assetTransfer(try AssetTransferDTO(from: decoder))
+        case "asset_transfer_batch":
+            self = .assetTransferBatch(try container.decode([AssetTransferDTO].self, forKey: .transfers))
         case let kind:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -225,6 +229,33 @@ private struct FinalizationDTO: Decodable {
 enum DetachedTransactionBridgeJSONCodec {
     private static let decoder = JSONDecoder()
 
+    private static func transferInspection(_ transfer: AssetTransferDTO) throws -> DetachedAssetTransferInspection {
+            let scope: DetachedAssetScopeInspection
+            switch (transfer.assetScope.kind, transfer.assetScope.dataspaceId) {
+            case ("global", nil):
+                scope = .global
+            case let ("dataspace", .some(dataspaceId)):
+                scope = .dataspace(dataspaceId)
+            default:
+                throw NativeBridgeError.invalidDetachedTransactionOutput
+            }
+            guard !transfer.assetDefinitionId.isEmpty,
+                  !transfer.sourceAssetId.isEmpty,
+                  !transfer.sourceAccountId.isEmpty,
+                  !transfer.destinationAccountId.isEmpty,
+                  !transfer.amount.isEmpty else {
+                throw NativeBridgeError.invalidDetachedTransactionOutput
+            }
+            return DetachedAssetTransferInspection(
+                    assetDefinitionId: transfer.assetDefinitionId,
+                    assetScope: scope,
+                    sourceAssetId: transfer.sourceAssetId,
+                    sourceAccountId: transfer.sourceAccountId,
+                    destinationAccountId: transfer.destinationAccountId,
+                    amount: transfer.amount
+            )
+    }
+
     static func decodeInspection(_ data: Data) throws -> DetachedTransactionScaffoldInspection {
         try validateInspectionShape(data)
         let dto = try decoder.decode(ScaffoldDTO.self, from: data)
@@ -261,32 +292,10 @@ enum DetachedTransactionBridgeJSONCodec {
                 )
             )
         case let .assetTransfer(transfer):
-            let scope: DetachedAssetScopeInspection
-            switch (transfer.assetScope.kind, transfer.assetScope.dataspaceId) {
-            case ("global", nil):
-                scope = .global
-            case let ("dataspace", .some(dataspaceId)):
-                scope = .dataspace(dataspaceId)
-            default:
-                throw NativeBridgeError.invalidDetachedTransactionOutput
-            }
-            guard !transfer.assetDefinitionId.isEmpty,
-                  !transfer.sourceAssetId.isEmpty,
-                  !transfer.sourceAccountId.isEmpty,
-                  !transfer.destinationAccountId.isEmpty,
-                  !transfer.amount.isEmpty else {
-                throw NativeBridgeError.invalidDetachedTransactionOutput
-            }
-            executable = .assetTransfer(
-                DetachedAssetTransferInspection(
-                    assetDefinitionId: transfer.assetDefinitionId,
-                    assetScope: scope,
-                    sourceAssetId: transfer.sourceAssetId,
-                    sourceAccountId: transfer.sourceAccountId,
-                    destinationAccountId: transfer.destinationAccountId,
-                    amount: transfer.amount
-                )
-            )
+            executable = .assetTransfer(try transferInspection(transfer))
+        case let .assetTransferBatch(transfers):
+            guard transfers.count == 2 else { throw NativeBridgeError.invalidDetachedTransactionOutput }
+            executable = .assetTransferBatch(try transfers.map(transferInspection))
         }
         return DetachedTransactionScaffoldInspection(
             payloadSigningHash: try decodeHash(dto.payloadSigningHashHex),
@@ -352,6 +361,21 @@ enum DetachedTransactionBridgeJSONCodec {
                 throw NativeBridgeError.invalidDetachedTransactionOutput
             }
         case "asset_transfer":
+            try validateTransferShape(executable)
+        case "asset_transfer_batch":
+            guard Set(executable.keys) == ["kind", "transfers"],
+                  let transfers = executable["transfers"] as? [[String: Any]],
+                  transfers.count == 2 else { throw NativeBridgeError.invalidDetachedTransactionOutput }
+            for transfer in transfers {
+                guard transfer["kind"] as? String == "asset_transfer" else { throw NativeBridgeError.invalidDetachedTransactionOutput }
+                try validateTransferShape(transfer)
+            }
+        default:
+            throw NativeBridgeError.invalidDetachedTransactionOutput
+        }
+    }
+
+    private static func validateTransferShape(_ executable: [String: Any]) throws {
             guard Set(executable.keys) == [
                 "kind", "asset_definition_id", "asset_scope", "source_asset_id",
                 "source_account_id", "destination_account_id", "amount",
@@ -367,9 +391,6 @@ enum DetachedTransactionBridgeJSONCodec {
             default:
                 throw NativeBridgeError.invalidDetachedTransactionOutput
             }
-        default:
-            throw NativeBridgeError.invalidDetachedTransactionOutput
-        }
     }
 
     private static func validateFinalizationShape(_ data: Data) throws {

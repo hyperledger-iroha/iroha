@@ -109,7 +109,8 @@ def test_inflight_inventory_regression_source_is_committed_by_manifest(tmp_path,
     module = checker()
     relative = Path("pytests/scripts/sumeragi_v2_inflight_binding_inventory_test.py")
 
-    def focused_inventory(paths):
+    def focused_inventory(paths, *, root):
+        assert root == tmp_path
         assert relative in paths, "the manifest must include its in-flight regression source"
         return {relative}
 

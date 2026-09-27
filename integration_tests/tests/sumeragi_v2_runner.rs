@@ -5,7 +5,7 @@ use futures_util::future::try_join_all;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    crypto::{Algorithm, Hash, HashOf, KeyPair},
+    crypto::{Algorithm, Hash, HashOf, KeyPair, Signature},
     data_model::{
         Identifiable, Level, NetworkId,
         account::{Account, AccountId},
@@ -20,13 +20,14 @@ use iroha::{
                 TimeoutCertificateRef, ValidatorIndex,
             },
             decode_framed_signed_block,
+            lane_admission::LaneAdmittedInputV1,
             proofs::AUTHENTICATED_BLOCK_PROOFS_MAX_BLOCK_WIRE_BYTES_V1,
         },
         bridge::{BridgeFinalityProof, verify_bridge_finality_proof},
         isi::{InstructionBox, Log, Register, register::RegisterBox},
         parameter::system::SumeragiNposParameters,
         prelude::FindAccountIds,
-        transaction::Executable,
+        transaction::{Executable, TransactionEntrypoint},
     },
 };
 use iroha_model_base::peer::PeerId;
@@ -38,7 +39,8 @@ use iroha_test_network::{
 use norito::json::Value;
 use std::{
     collections::{BTreeMap, BTreeSet},
-    time::{Duration, Instant},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{task, time::sleep};
 const VALIDATOR_COUNT: usize = 4;
@@ -466,6 +468,51 @@ fn held_no_high_timeout_vote_selection(
     }
     None
 }
+fn held_authenticated_timeout_vote_selection(
+    ack: &ConsensusMessageControlAck,
+    height: u64,
+    view: u64,
+    allowed_signers: &BTreeMap<PeerId, ValidatorIndex>,
+    required: usize,
+) -> Option<HeldVoteSelection> {
+    let mut senders = BTreeSet::new();
+    let mut signers = BTreeSet::new();
+    let mut envelope_digests = Vec::with_capacity(required);
+    let mut sequences = Vec::with_capacity(required);
+    for message in &ack.held {
+        if message.height != Some(height)
+            || message.view != Some(view)
+            || message.kind != ConsensusMessageControlKind::TimeoutVote
+            || message.sender != message.authenticated_via
+            || !message.certificate_signers.is_empty()
+            || senders.contains(&message.sender)
+        {
+            continue;
+        }
+        let signer = message.signer?;
+        if allowed_signers.get(&message.sender) != Some(&signer)
+            || signers.contains(&signer)
+            || envelope_digests.contains(&message.envelope_digest)
+        {
+            continue;
+        }
+        senders.insert(message.sender.clone());
+        signers.insert(signer);
+        envelope_digests.push(message.envelope_digest);
+        sequences.push(message.sequence);
+        if sequences.len() == required {
+            return Some(HeldVoteSelection {
+                subject: None,
+                execution_commitment: None,
+                senders,
+                signers,
+                envelope_digests,
+                sequences,
+            });
+        }
+    }
+    None
+}
 fn held_prepare_vote_subject(
     ack: &ConsensusMessageControlAck,
     height: u64,
@@ -740,27 +787,40 @@ fn observer_pressure_view_change_rules(
     receiver_index: usize,
     peer_ids: &[PeerId],
 ) -> Vec<ConsensusMessageControlRule> {
-    peer_ids
-        .iter()
-        .enumerate()
-        .filter(|(sender_index, _)| *sender_index != receiver_index)
-        .flat_map(|(_, sender)| {
-            [
-                ConsensusMessageControlKind::CommitVote,
-                ConsensusMessageControlKind::CommitCertificate,
-                ConsensusMessageControlKind::CommitCertificateResponse,
-            ]
-            .map(|kind| {
-                ConsensusMessageControlRule::exact(
-                    sender.clone(),
-                    kind,
-                    LOCKED_REPROPOSAL_HEIGHT,
-                    LOCKED_REPROPOSAL_FIRST_VIEW,
-                    ConsensusMessageControlAction::Drop,
-                )
-            })
-        })
-        .collect()
+    let mut rules = Vec::new();
+    for (sender_index, sender) in peer_ids.iter().enumerate() {
+        if sender_index == receiver_index {
+            continue;
+        }
+        for kind in [
+            ConsensusMessageControlKind::CommitVote,
+            ConsensusMessageControlKind::CommitCertificate,
+            ConsensusMessageControlKind::CommitCertificateResponse,
+        ] {
+            rules.push(ConsensusMessageControlRule::exact(
+                sender.clone(),
+                kind,
+                LOCKED_REPROPOSAL_HEIGHT,
+                LOCKED_REPROPOSAL_FIRST_VIEW,
+                ConsensusMessageControlAction::Drop,
+            ));
+        }
+        // Slow signed observers must finish genesis before the controlled
+        // view-zero snapshot. Hold only the remote timeout quorum until then.
+        for kind in [
+            ConsensusMessageControlKind::TimeoutVote,
+            ConsensusMessageControlKind::TimeoutCertificate,
+        ] {
+            rules.push(ConsensusMessageControlRule::exact(
+                sender.clone(),
+                kind,
+                LOCKED_REPROPOSAL_HEIGHT,
+                LOCKED_REPROPOSAL_FIRST_VIEW,
+                ConsensusMessageControlAction::Hold,
+            ));
+        }
+    }
+    rules
 }
 fn distinct_prepare_qc_receiver_rules(
     receiver_index: usize,
@@ -869,6 +929,7 @@ async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "runs nine real peers with transparent slow-reader relays"]
 async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Result<()> {
+    const CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
     init_instruction_registry();
     let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
@@ -886,6 +947,12 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             LOCKED_REPROPOSAL_QUEUE_CAPACITY,
             observer_pressure_view_change_rules,
         )
+        .with_config_layer(|layer| {
+            layer.write(
+                ["logger", "filter"],
+                "iroha_p2p::network=debug,iroha_p2p::peer=debug,iroha_core::sumeragi::v2_runner=debug,iroha_core::sumeragi::v2_block_sync=debug",
+            );
+        })
         .with_sync_timeout(Duration::from_secs(240))
         .with_peer_startup_timeout(Duration::from_secs(180));
     let context = stringify!(signed_observer_slow_reader_pressure_recovers_exact_successor);
@@ -953,35 +1020,34 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
         .await?;
         let initial = wait_for_v2_status_condition(
             &validators,
-            "one common open observer-pressure height-two view-zero round",
+            "one common observer-pressure height-two view-zero round without a timeout certificate",
             STATUS_TIMEOUT,
             |snapshots| {
                 snapshots.iter().all(|snapshot| {
                     snapshot.height == LOCKED_REPROPOSAL_HEIGHT
                         && snapshot.view == LOCKED_REPROPOSAL_FIRST_VIEW
-                        && snapshot.last_committed_height < LOCKED_REPROPOSAL_HEIGHT
+                        && snapshot.last_committed_height == LOCKED_REPROPOSAL_HEIGHT - 1
                         && snapshot.leader == snapshots[0].leader
-                        && status_round_is_open(
-                            snapshot,
-                            LOCKED_REPROPOSAL_HEIGHT,
-                            LOCKED_REPROPOSAL_FIRST_VIEW,
-                        )
+                        && snapshot.last_timeout_certificate.as_ref().is_none_or(|certificate| {
+                            certificate.round.height != LOCKED_REPROPOSAL_HEIGHT
+                                || certificate.round.view != LOCKED_REPROPOSAL_FIRST_VIEW
+                        })
+                        && !snapshot.liveness.timeout_quorums.iter().any(|quorum| {
+                            quorum.round.height == LOCKED_REPROPOSAL_HEIGHT
+                                && quorum.round.view == LOCKED_REPROPOSAL_FIRST_VIEW
+                                && quorum.certificate_formed
+                        })
                 })
             },
         )
         .await?;
         validate_v2_status_set(&initial, VALIDATOR_COUNT)?;
-        validate_open_round(
-            &initial,
-            LOCKED_REPROPOSAL_HEIGHT,
-            LOCKED_REPROPOSAL_FIRST_VIEW,
-        )?;
-        ensure!(
-            network.set_observer_slow_reader_relays_paused(true),
-            "observer slow-reader relays were unavailable at the exact open-round boundary"
-        );
         let recovered_account = fixture_account(0xD5)?;
         assert_accounts_absent(&all_participants, &[recovered_account.clone()]).await?;
+        ensure!(
+            network.set_observer_slow_reader_relays_paused(true),
+            "observer slow-reader relays were unavailable at the exact pre-certificate boundary"
+        );
         let relay_stats_before = observers
             .iter()
             .map(|observer| {
@@ -1001,6 +1067,61 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             OBSERVER_PRESSURE_PAYLOAD_BYTES,
         )
         .await?;
+        let validator_by_peer = validator_indices_by_peer(&validators)?;
+        let timeout_releases = try_join_all(validators.iter().map(|peer| {
+            let allowed = validator_by_peer
+                .iter()
+                .filter(|(sender, _)| *sender != &peer.id())
+                .map(|(sender, signer)| (sender.clone(), *signer))
+                .collect::<BTreeMap<_, _>>();
+            async move {
+                wait_for_control_selection(
+                    peer,
+                    "two authenticated view-zero Timeout votes after observer readiness",
+                    DISTINCT_PREPARE_QC_VIEW_ZERO_TIMEOUT,
+                    |ack| {
+                        held_authenticated_timeout_vote_selection(
+                            ack,
+                            LOCKED_REPROPOSAL_HEIGHT,
+                            LOCKED_REPROPOSAL_FIRST_VIEW,
+                            &allowed,
+                            LOCKED_REPROPOSAL_REMOTE_QUORUM_VOTES,
+                        )
+                    },
+                )
+                .await
+            }
+        }))
+        .await?;
+        try_join_all(
+            validators
+                .iter()
+                .zip(&expected_rules)
+                .zip(&timeout_releases)
+                .map(|((peer, rules), release)| async move {
+                    let ack = peer
+                        .consensus_message_control()
+                        .ok_or_else(|| eyre!("{} lacks receiver-local control", peer.mnemonic()))?
+                        .apply(
+                            rules,
+                            &release.sequences,
+                            LOCKED_REPROPOSAL_QUEUE_CAPACITY,
+                            CONTROL_TIMEOUT,
+                        )
+                        .await?;
+                    ensure!(
+                        ack.revision == 2
+                            && ack.rules.as_slice() == rules.as_slice()
+                            && ack.delivered == release.sequences
+                            && !ack.fatal
+                            && ack.overflowed == 0,
+                        "{} did not release exactly two authenticated timeout votes while retaining the view-zero control schedule: {ack:?}",
+                        peer.mnemonic(),
+                    );
+                    Ok::<(), eyre::Report>(())
+                }),
+        )
+        .await?;
         wait_for_validator_commit_before_observer_catchup(
             &validators,
             &observers,
@@ -1015,7 +1136,22 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
         network
             .ensure_blocks_with(|height| height.total >= LOCKED_REPROPOSAL_HEIGHT)
             .await
-            .wrap_err("observers did not recover the later-view body")?;
+            .wrap_err_with(|| {
+                let relay_stats = observers
+                    .iter()
+                    .zip(&relay_stats_before)
+                    .map(|(observer, before)| {
+                        (
+                            observer.mnemonic().to_owned(),
+                            *before,
+                            network.observer_slow_reader_relay_stats_for(&observer.id()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                format!(
+                    "observers did not recover the later-view body after relays reopened: relay_stats={relay_stats:?}"
+                )
+            })?;
         wait_for_normal_statuses(
             &all_participants,
             LOCKED_REPROPOSAL_HEIGHT,
@@ -1037,27 +1173,27 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             committed_views.iter().all(|view| *view > LOCKED_REPROPOSAL_FIRST_VIEW),
             "receiver-local control did not force a view change: {committed_views:?}"
         );
-        let dropped = try_join_all(validators.iter().zip(&expected_rules).map(
-            |(peer, expected)| async move {
+        try_join_all(
+            validators
+                .iter()
+                .zip(&expected_rules)
+                .zip(&timeout_releases)
+                .map(|((peer, expected), release)| async move {
                 wait_for_control_selection(
                     peer,
-                    "an exact rule-matched view-zero commit-evidence drop",
+                    "the exact released view-zero timeout quorum without controller loss",
                     STATUS_TIMEOUT,
                     |ack| {
-                        (ack.revision == 1
+                        (ack.revision == 2
                             && ack.rules.as_slice() == expected.as_slice()
-                            && ack.dropped > 0)
-                            .then_some(ack.dropped)
+                            && ack.delivered == release.sequences)
+                            .then_some(())
                     },
                 )
                 .await
-            },
-        ))
+            }),
+        )
         .await?;
-        ensure!(
-            dropped.iter().all(|count| *count > 0),
-            "a validator changed view without proving its exact receiver-local drop rule fired: {dropped:?}"
-        );
         let recovered = wait_for_common_awaiting_v2_round(
             &validators,
             LOCKED_REPROPOSAL_HEIGHT,
@@ -1151,7 +1287,7 @@ async fn signed_observer_slow_reader_pressure_recovers_exact_successor() -> Resu
             }),
             "an observer converged without retaining the validator-only CommitQC"
         );
-        assert_account_registration_in_exact_block(
+        assert_account_input_in_exact_block(
             &all_participants,
             LOCKED_REPROPOSAL_HEIGHT,
             &recovered_account,
@@ -3028,13 +3164,21 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                     .wrap_err_with(|| format!("read pre-heal ACK from {}", peer.mnemonic()))
             })
             .collect::<Result<Vec<_>>>()?;
-        let healed = try_join_all(peers.iter().map(|peer| async move {
-            peer.consensus_message_control()
-                .expect("controlled peer")
-                .heal_and_release_all(CONTROL_TIMEOUT)
-                .await
-                .wrap_err_with(|| format!("heal and drain {} traffic", peer.mnemonic()))
-        }))
+        let healed = try_join_all(peers.iter().zip(&controller_baselines).map(
+            |(peer, before)| async move {
+                let control = peer.consensus_message_control().expect("controlled peer");
+                control
+                    .heal_and_release_all(CONTROL_TIMEOUT)
+                    .await
+                    .wrap_err_with(|| {
+                        format!(
+                            "heal and drain {} traffic: before={before:?}, current={:?}",
+                            peer.mnemonic(),
+                            control.read_ack()
+                        )
+                    })
+            },
+        ))
         .await?;
         for ((peer, before), ack) in peers.iter().zip(&controller_baselines).zip(&healed) {
             ensure!(
@@ -3118,7 +3262,7 @@ async fn real_network_distinct_subject_prepare_qcs_converge_after_causal_release
                 frozen_context,
             )?;
         }
-        assert_account_registration_in_exact_block(&peers, height, &second_account).await?;
+        assert_account_input_in_exact_block(&peers, height, &second_account).await?;
         wait_for_accounts_visible(
             &peers,
             &[first_account, second_account],
@@ -3192,10 +3336,26 @@ async fn submit_pressure_account(
             InstructionBox::from(Register::account(Account::new(account_id))),
             InstructionBox::from(Log::new(Level::INFO, "X".repeat(payload_bytes))),
         ];
-        client.submit_all(
-            instructions,
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
+        let account = client.account_client();
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                instructions,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                iroha_model_base::metadata::Metadata::default(),
+            ))?;
+        let quote = client
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+        ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        let transaction = account.sign_transaction(payload)?;
+        // Commit evidence is blocked until the observer-pressure partition is
+        // staged. Admission must not wait for the transaction to be applied.
+        client.submit_transaction(&transaction)
     })
     .await
     .wrap_err("observer-pressure transaction task panicked")??;
@@ -3203,10 +3363,28 @@ async fn submit_pressure_account(
 }
 async fn enqueue_account(client: Client, account_id: AccountId) -> Result<()> {
     run_blocking_sdk(move || {
-        client.submit(
-            Register::account(Account::new(account_id)),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
+        let account = client.account_client();
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(Register::account(Account::new(
+                    account_id,
+                )))],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                iroha_model_base::metadata::Metadata::default(),
+            ))?;
+        let quote = client
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+        ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        let transaction = account.sign_transaction(payload)?;
+        // These tests intentionally hold Commit traffic after admission. Wait
+        // for Applied only after the controller releases that evidence.
+        client.submit_transaction(&transaction)
     })
     .await
     .wrap_err("account-registration enqueue task panicked")??;
@@ -3240,8 +3418,24 @@ async fn wait_for_validator_commit_before_observer_catchup(
     );
     let deadline = Instant::now() + timeout;
     loop {
-        let validator_statuses = normal_statuses(validators).await?;
-        let observer_statuses = normal_statuses(observers).await?;
+        let statuses = async {
+            let validators = normal_statuses(validators).await?;
+            let observers = normal_statuses(observers).await?;
+            Ok::<_, eyre::Report>((validators, observers))
+        }
+        .await;
+        let (validator_statuses, observer_statuses) = match statuses {
+            Ok(statuses) => statuses,
+            Err(error) => {
+                if Instant::now() >= deadline {
+                    return Err(eyre!(
+                        "validator-before-observer recovery witness at height {height} did not become readable within {timeout:?}: last status error: {error:#}"
+                    ));
+                }
+                sleep(FAST_STATUS_POLL_INTERVAL).await;
+                continue;
+            }
+        };
         let validators_committed = validator_statuses
             .iter()
             .all(|status| status.blocks >= height);
@@ -3629,13 +3823,33 @@ fn committed_block_wire_requires_exact_canonical_executed_height() -> Result<()>
 }
 
 async fn committed_block_at_height(peer: &NetworkPeer, height: u64) -> Result<SignedBlock> {
+    static REQUEST_NONCE: AtomicU64 = AtomicU64::new(0);
     ensure!(height > 0, "committed block height must be nonzero");
     let client = peer.client();
+    let context = client.client();
     let url = client
         .client()
         .endpoint()
         .join(&format!("v1/ledger/block/{height}"))
         .wrap_err("construct committed-block URL")?;
+    let timestamp: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "sumeragi-block-{}-{timestamp}-{}",
+        std::process::id(),
+        REQUEST_NONCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let message = iroha::client::canonical_network_request_signature_message(
+        context.network_id(),
+        &iroha::http::Method::GET,
+        &url,
+        &[],
+        timestamp,
+        &nonce,
+    )?;
+    let signature = Signature::try_new(context.key_pair().private_key(), &message)?;
     let mut response = reqwest::Client::builder()
         .timeout(
             client
@@ -3647,6 +3861,19 @@ async fn committed_block_at_height(peer: &NetworkPeer, height: u64) -> Result<Si
         .wrap_err("build committed-block HTTP client")?
         .get(url)
         .header(reqwest::header::ACCEPT, "application/x-norito")
+        .header(
+            "x-iroha-account",
+            iroha::client::canonical_request_account_header_value(context.account())?,
+        )
+        .header(
+            "x-iroha-signature",
+            iroha::client::canonical_request_signature_header_value(&signature)?,
+        )
+        .header(
+            "x-iroha-timestamp-ms",
+            iroha::client::canonical_request_timestamp_header_value(timestamp)?,
+        )
+        .header("x-iroha-nonce", nonce)
         .send()
         .await
         .wrap_err_with(|| format!("fetch committed block {height} from {}", peer.mnemonic()))?;
@@ -3704,7 +3931,7 @@ async fn wait_for_committed_block_metadata(
         sleep(FAST_STATUS_POLL_INTERVAL).await;
     }
 }
-async fn assert_account_registration_in_exact_block(
+async fn assert_account_input_in_exact_block(
     peers: &[NetworkPeer],
     height: u64,
     account_id: &AccountId,
@@ -3714,21 +3941,43 @@ async fn assert_account_registration_in_exact_block(
         let account_id = account_id.clone();
         async move {
             let block = committed_block_at_height(peer, height).await?;
-            let registered = block.external_transactions().any(|transaction| {
-                let Executable::Instructions(instructions) = transaction.instructions() else {
-                    return false;
+            let registers_account = |entrypoint: &TransactionEntrypoint| {
+                let transaction = match entrypoint {
+                    TransactionEntrypoint::External(transaction) => Some(transaction),
+                    TransactionEntrypoint::SealedReveal(reveal) => Some(reveal.signed_transaction()),
+                    TransactionEntrypoint::SealedCommitment(_) => None,
                 };
-                instructions.iter().any(|instruction| {
-                    matches!(
-                        instruction.as_any().downcast_ref::<RegisterBox>(),
-                        Some(RegisterBox::Account(register))
-                            if register.object().id() == &account_id
-                    )
+                transaction.is_some_and(|transaction| {
+                    let Executable::Instructions(instructions) = transaction.instructions() else {
+                        return false;
+                    };
+                    instructions.iter().any(|instruction| {
+                        matches!(
+                            instruction.as_any().downcast_ref::<RegisterBox>(),
+                            Some(RegisterBox::Account(register))
+                                if register.object().id() == &account_id
+                        )
+                    })
                 })
-            });
+            };
+            let executed = block
+                .network_entrypoints()
+                .any(|entrypoint| registers_account(entrypoint));
+            let admissions = block
+                .execution_context()
+                .map_or(&[][..], |context| context.queue_plan_admissions());
+            let mut admitted = false;
+            for (index, bytes) in admissions.iter().enumerate() {
+                let input = LaneAdmittedInputV1::decode_canonical(bytes).wrap_err_with(|| {
+                    format!("{peer_name} height-{height} admission {index} is not complete")
+                })?;
+                admitted |= registers_account(&input.entrypoint);
+            }
             ensure!(
-                registered,
-                "{peer_name} height-{height} block does not contain the unique subject-B account registration {account_id}"
+                executed || admitted,
+                "{peer_name} height-{height} block does not contain the complete subject account input {account_id}; network_inputs={}, admissions={}",
+                block.network_entrypoint_count(),
+                admissions.len(),
             );
             Ok::<(), eyre::Report>(())
         }

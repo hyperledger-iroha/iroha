@@ -512,10 +512,12 @@ class HttpClientTransportTest {
                   "items": [
                     {
                       "policy_id": "phone#retail",
+                      "program_id": "identifier_lookup_retail",
                       "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                       "active": true,
                       "normalization": "phone_e164",
                       "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+                      "output_opening_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                       "backend": "bfv-affine-sha3-256-v1",
                       "input_encryption": "bfv-v1",
                       "input_encryption_public_parameters": "ABCD",
@@ -546,6 +548,7 @@ class HttpClientTransportTest {
             """.trimIndent()
 
         val response = IdentifierJsonParser.parsePolicyList(canonical.toByteArray(StandardCharsets.UTF_8))
+        assertEquals("identifier_lookup_retail", response.items.first().programId)
         assertEquals(response.items.first().resolverPublicKey, response.items.first().outputOpeningPublicKey)
         val proofVerifier = assertNotNull(response.items.first().proofVerifier)
         assertEquals("u64-v1", response.items.first().inputEncryptionPublicParametersDecoded?.noritoLengthEncoding)
@@ -553,6 +556,14 @@ class HttpClientTransportTest {
         assertEquals("66".repeat(32), proofVerifier.publicInputsSchemaHash)
 
         val cases = listOf(
+            "identifier policy list.items[0].program_id" to canonical.replace(
+                "\"program_id\": \"identifier_lookup_retail\",",
+                "",
+            ),
+            "identifier policy list.items[0].output_opening_public_key" to canonical.replace(
+                "\"output_opening_public_key\": \"ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29\",",
+                "",
+            ),
             "identifier policy list.items[0].owner" to canonical.replace(
                 "\"owner\": \"sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
                 "\"owner\": \" sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV\"",
@@ -777,6 +788,7 @@ class HttpClientTransportTest {
         assertEquals("soracloud-bfv-operation-v1", operationVectors["vector_set"])
         val policy = IdentifierPolicySummary(
             policyId = "soracloud-operation#fixture",
+            programId = "soracloud-operation-fixture",
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.EXACT,
@@ -788,6 +800,7 @@ class HttpClientTransportTest {
                 obj(operationVectors, "public_parameters_decoded"),
             ),
             note = null,
+            outputOpeningPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
         )
         val observedDigests = mutableSetOf<String>()
         var checkedInputs = 0
@@ -2408,6 +2421,7 @@ class HttpClientTransportTest {
                   "owner": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "active": true,
                   "resolver_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+                  "output_opening_public_key": "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
                   "backend": "bfv-programmed-sha3-256-v1",
                   "verification_mode": "signed",
                   "input_encryption": "bfv-v1",
@@ -2460,6 +2474,8 @@ class HttpClientTransportTest {
         val execute = response.get()
         assertEquals("identifier_lookup_retail", execute.programId)
         assertEquals("44".repeat(32), execute.outputHash)
+        assertEquals("abcd", execute.outputCiphertext)
+        assertEquals("identifier_lookup_retail", execute.outputOpening.payload.programId)
         assertEquals("signed", execute.verificationMode)
         assertTrue(execute.receipt.containsKey("payload"))
 
@@ -2541,6 +2557,14 @@ class HttpClientTransportTest {
     fun ramLfeResponseParsersRejectNonExactFields() {
         val canonicalExecute = ramLfeExecuteResponseJson()
         val executeCases = listOf(
+            "output_ciphertext" to canonicalExecute.replace(
+                "\"output_ciphertext\": \"abcd\",",
+                "",
+            ),
+            "output_opening" to canonicalExecute.replace(
+                "\"output_opening\": {",
+                "\"removed_output_opening\": {",
+            ),
             "program_id" to canonicalExecute.replace(
                 "\"program_id\": \"identifier_lookup_retail\"",
                 "\"program_id\": \" identifier_lookup_retail\"",
@@ -2579,6 +2603,14 @@ class HttpClientTransportTest {
                 "expected ram-lfe execute response.$field failure, got $error",
             )
         }
+        val wrongOpeningHash = canonicalExecute.replace(
+            "\"opened_output_hash\": \"${"44".repeat(32)}\"",
+            "\"opened_output_hash\": \"${"66".repeat(32)}\"",
+        )
+        val openingError = assertFailsWith<IllegalArgumentException> {
+            RamLfeJsonParser.parseExecuteResponse(wrongOpeningHash.toByteArray(StandardCharsets.UTF_8))
+        }
+        assertTrue(openingError.message.orEmpty().contains("opening hash does not match execution"))
 
         val canonicalVerify = ramLfeReceiptVerifyResponseJson()
         val verifyCases = listOf(
@@ -5433,6 +5465,7 @@ class HttpClientTransportTest {
     ): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = policyId,
+            programId = policyId,
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.PHONE_E164,
@@ -5442,6 +5475,7 @@ class HttpClientTransportTest {
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = null,
             note = null,
+            outputOpeningPublicKey = resolverPublicKey,
         )
 
     private fun hex(bytes: ByteArray): String =
@@ -5891,6 +5925,7 @@ class HttpClientTransportTest {
     ): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = policyIdOverride ?: string(policy, "policy_id"),
+            programId = "identifier_lookup_retail",
             owner = string(policy, "owner"),
             active = policy["active"] == true,
             normalization = IdentifierNormalization.PHONE_E164,
@@ -5900,6 +5935,7 @@ class HttpClientTransportTest {
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = null,
             note = null,
+            outputOpeningPublicKey = resolverPublicKeyOverride ?: string(policy, "resolver_public_key"),
         )
 
     private fun identifierReceiptFromFixture(
@@ -6003,6 +6039,7 @@ class HttpClientTransportTest {
     private fun bfvPolicyFromFixture(policy: Map<String, Any?>): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = string(policy, "policy_id"),
+            programId = "identifier_lookup_retail",
             owner = string(policy, "owner"),
             active = policy["active"] == true,
             normalization = IdentifierNormalization.EXACT,
@@ -6014,6 +6051,7 @@ class HttpClientTransportTest {
                 obj(policy, "input_encryption_public_parameters_decoded"),
             ),
             note = null,
+            outputOpeningPublicKey = string(policy, "resolver_public_key"),
         )
 
     private fun bfvParametersFromFixture(params: Map<String, Any?>): IdentifierBfvPublicParameters {
@@ -6079,6 +6117,7 @@ class HttpClientTransportTest {
     private fun sampleBfvPolicy(parameters: IdentifierBfvPublicParameters?): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = "string#retail",
+            programId = "string-retail-fixture",
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.EXACT,
@@ -6088,10 +6127,12 @@ class HttpClientTransportTest {
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = parameters,
             note = null,
+            outputOpeningPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
         )
     private fun samplePlaintextOnlyPolicy(): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = "string#retail",
+            programId = "string-retail-fixture",
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.EXACT,
@@ -6101,6 +6142,7 @@ class HttpClientTransportTest {
             inputEncryptionPublicParameters = null,
             inputEncryptionPublicParametersDecoded = null,
             note = null,
+            outputOpeningPublicKey = "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
         )
     private fun sampleBfvParameters(): IdentifierBfvPublicParameters =
         IdentifierBfvPublicParameters(

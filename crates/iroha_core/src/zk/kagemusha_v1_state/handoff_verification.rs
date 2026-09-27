@@ -544,6 +544,7 @@ mod tests {
             },
             balance,
             sequence,
+            sequence,
             HardwareEpochV1 {
                 generation: 1,
                 epoch_id: digest(lane_id[0].wrapping_add(0x40)),
@@ -641,6 +642,17 @@ mod tests {
             receive_credit_binding_digest,
             lifecycle_binding_digest,
             prepared_transition_binding_digest,
+            prepared_intent: matches!(
+                operation,
+                KagemushaOperationV1::SendSplit | KagemushaOperationV1::RedeemSplit
+            )
+            .then_some(
+                crate::zk::kagemusha_v1_recursion::KagemushaPreparedIntentCommitmentsV1 {
+                    preparation_id: digest(tag.wrapping_add(8)),
+                    sealed_transition_inputs_digest: digest(tag.wrapping_add(9)),
+                    sealed_recovery_seeds_digest: digest(tag.wrapping_add(10)),
+                },
+            ),
             transport_semantic_digest: digest(tag.wrapping_add(2)),
             guard_statement_digest: digest(tag.wrapping_add(3)),
             eq_protocol_digest: artifacts.eq_protocol_digest,

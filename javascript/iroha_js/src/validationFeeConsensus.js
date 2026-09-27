@@ -12,7 +12,7 @@ import { normalizeParliamentGovernanceCertificateV1 } from "./parliamentApiV1.js
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
 export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA =
-  "cbsi.mobile-validation-fee-ledger-binding.v1";
+  "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA =
   "iroha.validation_fee.verified_policy_projection.v1";
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH =
@@ -405,7 +405,7 @@ function validateCurrentPolicy(value, label) {
   }
 }
 
-/** Validate the exact immutable CBSI deployment binding. */
+/** Validate the exact immutable Iroha deployment binding. */
 export function normalizeValidationFeeLedgerBindingV1(value) {
   const binding = record(value, "validation-fee ledger binding");
   exactKeys(binding, BINDING_KEYS, "validation-fee ledger binding");

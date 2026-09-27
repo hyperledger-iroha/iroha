@@ -101,7 +101,7 @@ def _client(
 
 
 def test_all_existing_query_callers_sign_the_exact_one_shot_target() -> None:
-    session = _Session([200] * 10)
+    session = _Session([200] * 9)
     captured: list[bytes] = []
     client = _client(session, captured=captured)
 
@@ -110,7 +110,6 @@ def test_all_existing_query_callers_sign_the_exact_one_shot_target() -> None:
     client.query_domains(limit=1)
     client.query_accounts(limit=1)
     client.query_transactions(limit=1)
-    client.query_transactions(limit=1, visible=True)
     client.query_repo_agreements({"pagination": {"limit": 1}})
     client.query_asset_holders("rose#wonderland", limit=1)
     client.query_asset_definitions(limit=1)
@@ -122,7 +121,6 @@ def test_all_existing_query_callers_sign_the_exact_one_shot_target() -> None:
         "/v1/domains/query",
         "/v1/accounts/query",
         "/v1/transactions/query",
-        "/v1/transactions/visible/query",
         "/v1/repo/agreements/query",
         "/v1/assets/rose%23wonderland/holders/query",
         "/v1/assets/definitions/query",

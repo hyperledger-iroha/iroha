@@ -301,29 +301,52 @@ fn native_wire_wrong_revision_cannot_enter_cached_or_nested_frames() {
 }
 
 #[test]
-fn native_wire_ingress_stays_closed_without_a_connected_native_consumer() {
+fn native_wire_ingress_requires_open_queue_and_preserves_original_custody() {
     let sender = validator_peers(1).pop().unwrap();
     let ingress = super::FairV2Ingress::new(8, 65_536, 65_536, 16_384, 16_384);
     ingress.configure_roster([sender.clone()]).unwrap();
-    ingress.open().unwrap();
     for message in native_wire_classification_fixtures() {
+        ingress.close();
         let original = message.encode();
         let original_ordinal = ingress.state.lock().last_admission_ordinal;
-        let Err(super::FairV2IngressPushError::Rejected(rejected)) = ingress.try_push(
+        let Err(super::FairV2IngressPushError::Closed(inbound)) = ingress.try_push(
             InboundBlockMessage::from_authenticated_peer(message, sender.clone()),
         ) else {
-            panic!("native ingress must remain closed until the sole runner cutover");
+            panic!("closed admission must return the original Native carrier");
         };
-        assert_eq!(
-            rejected.reason,
-            super::FairV2IngressRejectReason::UnsupportedEnvelope
-        );
-        assert_eq!(rejected.inbound.message().encode(), original);
-        assert_eq!(rejected.inbound.sender(), &sender);
+        assert_eq!(inbound.message().encode(), original);
+        assert_eq!(inbound.sender(), &sender);
         assert_eq!(
             ingress.state.lock().last_admission_ordinal,
             original_ordinal
         );
+        assert_eq!(ingress.len(), 0);
+        assert!(!ingress.state.lock().open);
+
+        ingress.open().unwrap();
+        assert!(matches!(
+            ingress.try_push(inbound),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            ingress.state.lock().last_admission_ordinal,
+            original_ordinal + 1
+        );
+        assert_eq!(ingress.len(), 1);
+        let selected = ingress
+            .try_recv_if_checked(|inbound| inbound.message().is_native_lane())
+            .unwrap()
+            .expect("the process-owned Native consumer can take the admitted carrier");
+        assert_eq!(selected.message().encode(), original);
+        assert_eq!(selected.sender(), &sender);
+        let ownership = selected.ingress_ownership().unwrap();
+        assert!(ownership.validate_exact());
+        assert_eq!(
+            ownership.physical_admission_ordinal(),
+            Some(original_ordinal + 1)
+        );
+        assert!(ownership.runtime_lifecycle_ordinal().is_none());
+        assert!(ownership.leader_wire_token().is_none());
         assert_eq!(ingress.len(), 0);
         assert!(ingress.state.lock().open);
     }

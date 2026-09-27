@@ -333,7 +333,7 @@ fn runtime_catalog_final_overlay_rechecks_late_validator_invalidation() {
                 2,
             )
             .unwrap();
-            let id = derive_validator_key_id(keys[0].public_key());
+            let id = derive_committee_key_id(keys[0].public_key());
             match case {
                 0 => {
                     transaction
@@ -670,7 +670,7 @@ fn runtime_catalog_owned_overlay_ignores_later_policy_cache_mutation() {
         block
             .validate_owned_runtime_catalog_overlay()
             .expect("the captured AdminManaged policy owns this accepted overlay");
-        let key_id = derive_validator_key_id(keys[0].public_key());
+        let key_id = derive_committee_key_id(keys[0].public_key());
         block.world.consensus_keys.remove(key_id);
         assert!(
             block.validate_owned_runtime_catalog_overlay().is_err(),

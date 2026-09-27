@@ -23,9 +23,11 @@ impl Client {
             path.push_str(&format!("?target_epoch={epoch}"));
         }
         self.ensure_activation_evidence_deadline()?;
-        let response = self.send_builder(
-            self.canonical_norito_get_request(&path, COMMITTEE_STATUS_RESPONSE_MAX_BYTES),
-        )?;
+        let response = self.send_builder(self.canonical_norito_get_request(
+            &path,
+            COMMITTEE_STATUS_RESPONSE_MAX_BYTES,
+            ActivationEvidenceReadAuth::Public,
+        )?)?;
         let status: ValidatorCommitteeStatusV1 = Self::decode_canonical_norito_response(
             &response,
             COMMITTEE_STATUS_RESPONSE_MAX_BYTES,

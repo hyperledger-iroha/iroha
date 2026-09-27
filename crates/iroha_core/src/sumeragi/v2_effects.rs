@@ -156,7 +156,7 @@ use super::{
     v2_worker::RecoveredDecisionFetchRequestOwnerV1,
 };
 use crate::kura::KuraV2CommitReceipt;
-use iroha_crypto::{Hash, HashOf, Signature};
+use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
     merge::MergeLedgerEntry,
@@ -15735,16 +15735,7 @@ fn verify_signer_completion(
     if local_validator != Some(signer) {
         return Err("signing request does not belong to the configured local validator".to_owned());
     }
-    let index = usize::try_from(signer)
-        .ok()
-        .filter(|index| *index < context.roster.len())
-        .ok_or_else(|| "signing request index is outside the frozen roster".to_owned())?;
-    let signature = Signature::try_from_bytes(signature).map_err(|error| error.to_string())?;
-    signature
-        .verify(
-            context.roster[index].validator.public_key(),
-            &request.signature_preimage(),
-        )
+    super::v2::verify_completed_consensus_signature(context, request, signature)
         .map_err(|error| error.to_string())
 }
 fn runtime_enqueue_error(error: EnqueueError) -> EffectExecutorError {

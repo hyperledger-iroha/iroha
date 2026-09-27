@@ -1361,10 +1361,6 @@ PREPAID_HISTORY_ACQUISITION_BINDINGS = (
         "Self::Capacity(mv::allocation::AllocationRefusal::Capacity { release, .. }) => {\n                Some(release)\n            }",
         "_ => None",
     )),
-    (HASH_ADMISSION, "method", "StateAdmissionError::release_wait", (
-        "Self::Storage(e) => e.release_wait()", "Self::History(e) => e.release_wait()",
-        "Self::Membership(e) => e.release_wait()",
-    )),
     (HASH_ADMISSION, "method", "StateBlockStartError::release_wait", (
         "Self::Storage(error) => error.release_wait()",
         "Self::History(error) => error.release_wait()",
@@ -1424,7 +1420,9 @@ PREPAID_HISTORY_ACQUISITION_BINDINGS += (
 PREPAID_HISTORY_ACQUISITION_BINDINGS += (
     (RUNNER_HISTORY, "fn", "candidate_attachments", (
         ".derive_npos_consensus_effects(round_header)",
-        "if let Some(refusal) = error.downcast_ref::<crate::state::StateStorageAdmissionError>()",
+        "if let Some(refusal) = error.downcast_ref::<crate::state::StateAdmissionError>()",
+        "crate::state::StateBlockStartError::from(refusal.clone())",
+        "else if let Some(refusal) =\n                error.downcast_ref::<crate::state::StateStorageAdmissionError>()",
         "V2RunnerError::CandidateBuild(\n                    super::v2_candidate::CandidateError::LocalStateAdmission(\n                        crate::state::StateBlockStartError::Storage(refusal.clone()),\n                    ),\n                )",
         "V2RunnerError::Candidate(error.to_string())",
     )),
@@ -1740,7 +1738,7 @@ CORE_CAPTURE_BINDINGS = (
     ('crates/iroha_core/src/state/world_journals.rs', 'method', 'SetBlockCapture::retain', ("    fn retain(self, name: &'static str, target: fn(&World) -> &Self::Target) -> Self::Retained {\n        let (journal, cleanup) = self.into_detached();\n        let retained = RetainedTriggers {\n            name,\n            journal: Some(journal),\n            target,\n        };\n        drop(cleanup);\n        retained\n    }",)),
     ('crates/iroha_core/src/state/world_journals.rs', 'macro', 'declare_world_capture', ('macro_rules! declare_world_capture {\n    (; [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {\n        #[allow(non_camel_case_types)]\n        struct WorldCapture<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*> {\n            $($prefix: Option<($prefix, fn(&World) -> &<$prefix as WorldCaptureSlot>::Target)>,)* $($privacy: Option<($privacy, fn(&World) -> &<$privacy as WorldCaptureSlot>::Target)>,)* $($suffix: Option<($suffix, fn(&World) -> &<$suffix as WorldCaptureSlot>::Target)>,)*\n            extras: Option<(DataSpaceCatalog, Vec<EventBox>)>,\n            shells: Option<WorldJournalShellReservation>,\n            mode: BlockMode,\n            refusal: Option<CaptureError<Infallible>>,\n            started: bool,\n            complete: bool,\n            // Last: every original field retires before deferred pool refunds.\n            operation_index_scope: Option<OwnedAllocationScope>,\n        }\n        #[allow(non_camel_case_types)]\n        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>\n            WorldJournalCapture for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>\n        {\n            fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {\n                assert!(!self.started, "original World capture is one-shot");\n                self.started = true;\n                if let Some(error) = self.refusal.take() {\n                    return Err(error);\n                }\n                $(self.$prefix.as_mut().expect("original World capture slot").0.capture()?;)*\n                $(self.$privacy.as_mut().expect("original World capture slot").0.capture()?;)*\n                $(self.$suffix.as_mut().expect("original World capture slot").0.capture()?;)*\n                self.complete = true;\n                Ok(())\n            }\n            fn release(&mut self) {\n                self.started = true;\n                self.complete = false;\n                $(if let Some((field, _)) = self.$prefix.as_mut() { field.release(); })*\n                $(if let Some((field, _)) = self.$privacy.as_mut() { field.release(); })*\n                $(if let Some((field, _)) = self.$suffix.as_mut() { field.release(); })*\n            }\n            fn into_journals<Admission>(self, admission: Admission) -> DetachedWorld<Admission> {\n                // Original payloads/notifications retire before this reservation,\n                // including a wake panic during wrapper materialization.\n                let admission = admission;\n                let mut pending = self;\n                assert!(pending.complete, "original World capture did not complete");\n                const FIELD_COUNT: usize = [\n                    $(stringify!($prefix),)* $(stringify!($privacy),)* $(stringify!($suffix),)*\n                ].len();\n                let fields = finish_world_capture(|| {\n                    let mut fields: Vec<Box<dyn RetainedWorldField>> = Vec::with_capacity(FIELD_COUNT);\n                    $(retain_field!(fields, pending, $prefix);)*\n                    $(retain_field!(fields, pending, $privacy);)*\n                    $(retain_field!(fields, pending, $suffix);)*\n                    fields\n                });\n                let (dataspace_catalog, external_event_buf) = pending.extras.take().expect("original World extras");\n                let scope = pending.operation_index_scope.take().expect("original operation index scope");\n                let operation_index_budget = scope.allocation_budget().clone();\n                // No writer remains in the detached carrier. Unlink this\n                // thread\'s scope before the journals can cross threads.\n                drop(scope);\n                DetachedWorld { mode: pending.mode, fields, dataspace_catalog, external_event_buf, shells: pending.shells.take().expect("original shell reservation"), admission,\n                    operation_index_budget }\n            }\n        }\n        #[allow(non_camel_case_types)]\n        impl<$($prefix: WorldCaptureSlot,)* $($privacy: WorldCaptureSlot,)* $($suffix: WorldCaptureSlot,)*>\n            Drop for WorldCapture<$($prefix,)* $($privacy,)* $($suffix,)*>\n        {\n            fn drop(&mut self) {\n                self.release();\n            }\n        }\n    };\n}',)),
     ('crates/iroha_core/src/state/world_journals.rs', 'macro', 'capture_world_fields', ('macro_rules! capture_world_fields {\n    ($original:ident, $shells:ident;\n        [$($prefix:ident,)*] [$($privacy:ident,)*] [$($suffix:ident,)*]) => {{\n        // These concrete metadata reads neither allocate nor run payload code.\n        // Keep any inconsistent-mode verdict in the returned caller-owned slot.\n        let mode = $original.parameters.mode();\n        let refusal = $original.capture_mode().err();\n        let mut pending = WorldCapture {\n            $($prefix: None,)* $($privacy: None,)* $($suffix: None,)*\n            extras: None, shells: Some($shells), mode, refusal, started: false, complete: false,\n            operation_index_scope: Some($original.operation_index_scope.clone()),\n        };\n        fill_world_capture(|| {\n            let WorldBlockFields {\n                dataspace_catalog,\n                $($prefix,)* $($privacy,)* $($suffix,)*\n                external_event_buf,\n                operation_index_scope: _scope,\n            } = *$original.fields.take().expect("original World block fields");\n            $(pending.$prefix = Some(($prefix.into_capture(), |target: &World| &target.$prefix));)*\n            $(pending.$privacy = Some(($privacy.into_capture(), |target: &World| &target.$privacy));)*\n            $(pending.$suffix = Some(($suffix.into_capture(), |target: &World| &target.$suffix));)*\n            pending.extras = Some((dataspace_catalog, external_event_buf));\n        });\n        pending\n    }};\n}',)),
-    ('crates/iroha_core/src/state/world_journals.rs', 'macro', 'retain_field', ('macro_rules! retain_field {\n    ($fields:ident, $pending:ident, $field:ident) => {{\n        let (slot, target) = $pending.$field.take().expect("original World capture slot");\n        $fields.push(Box::new(slot.retain(stringify!($field), target)));\n    }};\n}',)),
+    ('crates/iroha_core/src/state/world_journals.rs', 'macro', 'retain_field', ('macro_rules! retain_field {\n    ($fields:ident, $pending:ident, $field:ident) => {{\n        retain_world_capture_field(&mut $fields, &mut $pending.$field, stringify!($field));\n    }};\n}',)),
     ('crates/iroha_core/src/state/world_journals.rs', 'fn', 'fill_world_capture', ('fn fill_world_capture(fill: impl FnOnce()) {\n    fill()\n}',)),
     ('crates/iroha_core/src/state/world_journals.rs', 'fn', 'finish_world_capture', ('fn finish_world_capture<R>(finish: impl FnOnce() -> R) -> R {\n    finish()\n}',)),
     ('crates/iroha_core/src/state/world_journals.rs', 'method', 'WorldBlock::try_detach_journals', ('    pub(in crate::state) fn try_detach_journals<Admission, E>(\n        self,\n        shells: WorldJournalShellReservation,\n        admit: impl FnOnce(&Self) -> Result<Admission, E>,\n    ) -> Result<DetachedWorld<Admission>, CaptureError<E>> {\n        // Local order releases the original World before any capacity refund,\n        // including a normal admission refusal or an unwinding callback.\n        let shells = shells;\n        let original = self;\n        original.capture_mode().map_err(widen_error)?;\n        let admission = admit(&original).map_err(CaptureError::Admission)?;\n        let mut pending = original.capture_slot(shells);\n        pending.capture().map_err(widen_error)?;\n        Ok(pending.into_journals(admission))\n    }',)),
@@ -2557,7 +2555,8 @@ NATIVE_VALIDATION_OWNER_BODIES = {
         recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>, pending: Option<PendingNativeSource>,
         source_admission: Option<NativeExecutionResourceAdmission>,
         source_pending: Option<PendingNativeLaneSource>,
-        shell_admission: CarrierShellAdmission,
+        retry_refusal: Option<LocalValidationRefusal>,
+        shell_admission: Option<CarrierShellAdmission>,
     }""",
     "NativeValidationCandidate::matches_candidate": """{
         match self.phase.as_ref().as_ref().expect("original Native validation phase") {
@@ -2602,7 +2601,33 @@ NATIVE_CURRENT_OWNER_BINDINGS = (
     (NATIVE_VALIDATION, "struct", "AwaitingNativeSource", (
         "context: VerifiedHeightContext", "proposal: SignedBlock",
         "recovered: Vec<(usize, VerifiedFirstLaneAdmittedInputV1)>",
-        "pending: Option<PendingNativeSource>", "shell_admission: CarrierShellAdmission",
+        "pending: Option<PendingNativeSource>",
+        "source_admission: Option<NativeExecutionResourceAdmission>",
+        "source_pending: Option<PendingNativeLaneSource>",
+        "retry_refusal: Option<LocalValidationRefusal>",
+        "shell_admission: Option<CarrierShellAdmission>",
+    )),
+    (NATIVE_VALIDATION, "method", "OwnedNativeCarrierValidator::execute_source", (
+        "NativeLaneBatchSourcePreparationV1::ObservationChanged { pending } =>",
+        "waiting.source_pending = Some(pending);",
+        "return Ok(NativeValidationPhase::AwaitingSource(waiting));",
+        "NativeLaneBatchSourcePreparationV1::Superseded =>",
+        "return Err(LocalValidationRefusal::Superseded.into());",
+        "&mut waiting.shell_admission",
+        "Ok(None) =>",
+    )),
+    ("crates/iroha_core/src/sumeragi/v2_apply/native_preparation.rs", "method",
+     "V2ApplyService::prepare_native_source_admitted", (
+         "shell_admission: &mut Option<super::native_validation::CarrierShellAdmission>",
+         "let carrier = match source.prepare_candidate(",
+         "Ok(None)",
+         "shell_admission: shell_admission",
+         ".take()",
+     )),
+    (NATIVE_VALIDATION, "method", "OwnedNativeCarrierValidator::resume", (
+        "LocalValidationRefusal::ObservationChanged",
+        "*owner.phase = Some(NativeValidationPhase::AwaitingSource(waiting));",
+        "return Err((owner, refusal));",
     )),
     (NATIVE_VALIDATION, "method", "NativeValidationCandidate::matches_candidate", (
         "fn matches_candidate(&self, context: &wire::HeightContext, body: &SignedBlock) -> bool",
@@ -2655,32 +2680,7 @@ NATIVE_CURRENT_RUNNER_BINDINGS = (
         'let owner = &mut self.owner;',
         'let executor = &mut self.executor;',
     )),
-    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs', 'fn', 'run_lifecycle_active_height', (
-        'let lane_only_completion_barrier = producer_claim.blocks_runtime();',
-        'if lane_only_completion_barrier {',
-        'drain_lane_relay_ingress(',
-        'let discovery_was_outstanding = if terminal_finalization_fenced {',
-        '.terminal_settlement_stops_runtime()',
-        'AdvanceExecutorSliceOutcomeV1::Idle',
-        'let terminal_planning_fenced =',
-        'producer_claim.apply_terminal_settled();',
-        'if terminal_planning_fenced && !ready_to_finish {',
-        'let producer_turn = if terminal_planning_fenced {',
-        'if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some()) {',
-        'if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {',
-        'if ready_to_finish && !finalization_ready {',
-        'if finalization_ready && !rollover_ready {',
-        'deadline_after(now, retransmit_interval)',
-        'native.take_service_publication(services);',
-        'native.service_sources(services, now)?;',
-        'native.poll(native_global, native_network, now, receiver)?;',
-        'let ingress_snapshot = receiver.snapshot_at(now);',
-        'producer_claim.native_source_pacemaker_escape_permit()',
-        'producer_claim.decided_native_source_recovery_permit(',
-        'native.next_deadline().map_or(IDLE_POLL, |deadline| {',
-        'wake_rx.recv_timeout(native_wait)',
-        'native.take_service_publication(services);\n                native.service_sources(services, now)?;\n                Ok::<_, V2RunnerError>(())\n            },\n        )?;\n        native.poll(native_global, native_network, now, receiver)?;',
-    )),
+    ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_run_inner.rs', 'fn', 'run_lifecycle_active_height', ('let lane_only_completion_barrier = producer_claim.blocks_runtime();', 'if lane_only_completion_barrier {', 'drain_lane_relay_ingress(', 'let discovery_was_outstanding = if terminal_finalization_fenced {', '.terminal_settlement_stops_runtime()', 'AdvanceExecutorSliceOutcomeV1::Idle', 'let terminal_planning_fenced =', 'producer_claim.apply_terminal_settled();', 'if terminal_planning_fenced && !ready_to_finish {', 'let producer_turn = if terminal_planning_fenced {', 'if !terminal_planning_fenced && (!ready_to_finish || producer_turn.is_some()) {', 'if ready_to_finish && !block_sync_server.has_pending_historical_body_serve() {', 'if ready_to_finish && !finalization_ready {', 'if finalization_ready && !rollover_ready {', 'deadline_after(now, retransmit_interval)', 'native.take_service_publication(services);', 'native.service_sources(services, now).inspect_err(|error| {\n                    iroha_logger::error!(\n                        ?error,\n                        height = context.height,\n                        "Sumeragi v2 Native source service failed closed"\n                    );\n                })?;', 'native\n            .poll(native_global, native_network, now, receiver)\n            .inspect_err(|error| {\n                iroha_logger::error!(\n                    ?error,\n                    height = context.height,\n                    "Sumeragi v2 Native process turn failed closed"\n                );\n            })?;', 'let ingress_snapshot = receiver.snapshot_at(now);', 'producer_claim.native_source_pacemaker_escape_permit()', 'producer_claim.decided_native_source_recovery_permit(', 'native.next_deadline().map_or(IDLE_POLL, |deadline| {', 'wake_rx.recv_timeout(native_wait)', 'native.take_service_publication(services);\n                native.service_sources(services, now).inspect_err(|error| {\n                    iroha_logger::error!(\n                        ?error,\n                        height = context.height,\n                        "Sumeragi v2 Native source service failed closed"\n                    );\n                })?;\n                Ok::<_, V2RunnerError>(())\n            },\n        )?;\n        native\n            .poll(native_global, native_network, now, receiver)\n            .inspect_err(|error| {\n                iroha_logger::error!(\n                    ?error,\n                    height = context.height,\n                    "Sumeragi v2 Native process turn failed closed"\n                );\n            })?;')),
     ('crates/iroha_core/src/sumeragi/v2_runner/lifecycle_pending_kura.rs', 'fn', 'run_pending_active_height', (
         'native.take_service_publication(services);',
         'native.service_sources(services, Instant::now())',
@@ -3153,10 +3153,50 @@ def _validate_native_replay(items: dict[str, str], errors: list[str]) -> None:
         errors.append("Native replay must authenticate State custody before witness and before commit")
 
 
+# Original membership admission and retained-reader delegates are part of the
+# same physical owner contract. Bind their defining kernels, not only callers.
+MEMBERSHIP_CURRENT_OWNER_BINDINGS = (
+    ('vendor/concread/src/release.rs', 'method', 'PoisonPolicy::observe', ('    fn observe(self) -> bool {\n        match self {\n            Self::Never => false,\n            Self::Unwind => std::thread::panicking(),\n            Self::Observed(flag) => flag.load(Ordering::Acquire),\n            Self::Fixed(value) => value,\n        }\n    }',)),
+    ('vendor/concread/src/internals/lincowcell/mod.rs', 'method', 'LinCowCell::acquire_owned', ("    fn acquire_owned(\n        &self,\n        owned: LinCowCellOwned<T, R, U, Charge>,\n        retained: bool,\n    ) -> Result<\n        LinCowCellOwnedAcquisition<'_, T, R, U, Charge>,\n        (LinCowCellOwned<T, R, U, Charge>, OwnedWriteError),\n    > {\n        if !Shared::ptr_eq(&self.write, &owned.root) {\n            return Err((owned, OwnedWriteError::Changed));\n        }\n        let acquired = if retained {\n            self.write.try_lock_retained()\n        } else {\n            self.write.try_lock()\n        };\n        let (guard, poisoned) = match acquired {\n            Ok(guard) => (guard, false),\n            Err(TryLockError::WouldBlock) => return Err((owned, OwnedWriteError::Busy)),\n            Err(TryLockError::Poisoned(error)) => (error.into_inner(), true),\n        };\n        Ok(LinCowCellOwnedAcquisition {\n            guard,\n            owned,\n            caller: self,\n            poisoned,\n        })\n    }",)),
+    ('vendor/concread/src/bptree/admission.rs', 'method', 'BptreeMapWriterAcquisition::write_with_source', ('    fn write_with_source<E>(\n        self,\n        admit: impl FnOnce(\n            &SuperBlock<K, V, Prepaid<P>>,\n            AllocationDemand,\n        ) -> Result<P, MapAdmissionError<E>>,\n    ) -> Result<BptreeMapWriteTxn<\'a, K, V, Prepaid<P>>, (Self, MapAdmissionError<E>)> {\n        let acquired = self.inner.try_write_charged(|source, shells| {\n            let plan = plan_writer_start::<K, V, P>(source, shells)\n                .map_err(MapAdmissionError::Planning)?;\n            let mut provider = Prepaid(Some(admit(source, plan.demand)?));\n            let first_charge = provider.take_node_charge(plan.tracking_layout);\n            let first = FixedTrackingBuffer::try_new(0, first_charge)\n                .unwrap_or_else(|_| unreachable!("planned empty first buffer layout"));\n            let last_charge = provider.take_node_charge(plan.tracking_layout);\n            let last = FixedTrackingBuffer::try_new(0, last_charge)\n                .unwrap_or_else(|_| unreachable!("planned empty retirement buffer layout"));\n            let charges = WriterCharges {\n                cursor: provider.take_node_charge(shells.cursor),\n                reader: provider.take_node_charge(shells.reader),\n            };\n            Ok(WriterAdmission {\n                charges,\n                input: (provider, first, last),\n            })\n        });\n        let mut writer = match acquired {\n            Ok(writer) => writer,\n            Err((inner, error)) => {\n                let error = match error {\n                    WriterAdmissionError::Poisoned => MapAdmissionError::Poisoned,\n                    WriterAdmissionError::Refused(error) => error,\n                };\n                return Err((Self { inner }, error));\n            }\n        };\n        // Seal this no-edit operation under the same panic discipline as an\n        // insertion: cleanup must succeed before the cursor becomes operable.\n        writer.as_mut().begin_admitted_edit();\n        writer.as_mut().finish_admitted_funding();\n        Ok(BptreeMapWriteTxn { inner: writer })\n    }',)),
+    ('crates/iroha_core/src/state/canonical_runtime/acquisition.rs', 'method', 'RuntimeBlockAcquisition::retain_refused_membership', ('    pub(super) fn retain_refused_membership(&mut self) {\n        self.release();\n        if let Some(original) = self.membership.take() {\n            self.target.transactions.retain_preparation(original);\n        }\n    }',)),
+    ('crates/iroha_core/src/state/history_reader_releases.rs', 'struct', 'StateViewReleases', ("pub(crate) struct StateViewReleases<'state> {\n    state: &'state State,\n    pub(super) lifecycle: LaneLifecycleReleases<'state>,\n}",)),
+    ('crates/iroha_core/src/state/history_reader_releases.rs', 'method', 'StateViewReleases::new', ("    pub(crate) fn new(state: &'state State) -> Self {\n        Self {\n            state,\n            lifecycle: LaneLifecycleReleases::new(state),\n        }\n    }",)),
+    ('crates/iroha_core/src/state/history_reader_releases.rs', 'method', 'StateViewReleases::try_view_once', ("    pub(crate) fn try_view_once(\n        &mut self,\n    ) -> Result<Option<StateView<'state>>, LaneLifecycleError> {\n        self.state.try_view_once_with_index_releases(\n            &mut self.lifecycle.header,\n            &mut self.lifecycle.manifests,\n            &mut self.lifecycle.sccp,\n            &mut self.lifecycle.hashes,\n            &mut self.lifecycle.membership,\n        )\n    }",)),
+    ('crates/iroha_core/src/state/history_reader_releases.rs', 'method', 'BlockHashes::view_retaining', ('    pub(super) fn view_retaining(\n        &self,\n        releases: &mut Option<DeferredReleaseBatch>,\n    ) -> BlockHashesView<\'_> {\n        let inner = match (&self.inner, releases.as_mut()) {\n            (BlockHashStorage::Owned(map), Some(releases)) => BlockHashesViewInner::Owned(\n                map.read_retaining(releases)\n                    .expect("original hash reader source must be healthy"),\n            ),\n            (BlockHashStorage::EmergencyFastMapped(mapping), None) => {\n                BlockHashesViewInner::Mapped(mapped_block_hashes(mapping))\n            }\n            (BlockHashStorage::EmergencyFastEmpty, None) => BlockHashesViewInner::Mapped(&[]),\n            _ => panic!("history reader custody differs from its original storage mode"),\n        };\n        BlockHashesView { inner }\n    }',)),
+    ('crates/iroha_core/src/state/storage_transactions/history.rs', 'method', 'MembershipAdmissionError::release_wait', ('    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {\n        match self {\n            Self::Busy(wait) | Self::Changed(wait) => Some(wait),\n            Self::Capacity(AllocationRefusal::Capacity { release, .. }) => Some(release),\n            _ => None,\n        }\n    }',)),
+    ('crates/iroha_core/src/state/block_hashes_admission.rs', 'method', 'StateAdmissionError::release_wait', ('    pub fn release_wait(&self) -> Option<&concread::release::ReleaseWait> {\n        match self {\n            Self::Storage(e) => e.release_wait(),\n            Self::History(e) => e.release_wait(),\n            Self::Membership(e) => e.release_wait(),\n        }\n    }',)),
+    ('crates/iroha_core/src/state/storage_transactions/history.rs', 'method', 'TransactionsStorage::prepare_next_block', ('    pub(crate) fn prepare_next_block(\n        &self,\n        replacement: bool,\n    ) -> Result<Pending, MembershipAdmissionError> {\n        self.budget.with_deferred_refund_notifications(|_| {\n            // This custody is declared before either lock so actual retained\n            // notices also retire after both locks on unwind, not only success.\n            let mut retired = None;\n            let wait = self.released.observe();\n            let guard = self\n                .write_lock\n                .try_lock()\n                .ok_or_else(|| MembershipAdmissionError::Busy(wait.clone()))?;\n            let guard = self.released.guard(guard);\n            if guard.loaned.load(Ordering::Acquire) {\n                let identity = guard.clone();\n                drop(guard);\n                // Observe after this read-only acquisition releases; its own\n                // release must not turn an outstanding loan into a busy loop.\n                let after_release = self.released.observe();\n                return Err(MembershipAdmissionError::Busy(\n                    if identity.loaned.load(Ordering::Acquire) {\n                        after_release\n                    } else {\n                        wait\n                    },\n                ));\n            }\n            let next_sequence = self\n                .publication_sequence\n                .load(Ordering::Relaxed)\n                .checked_add(2)\n                .ok_or(MembershipAdmissionError::Planning(PlanningError::Overflow))?;\n            let mut pending = self.pending.lock();\n            if pending.as_ref().is_some_and(|p| {\n                !Identity::ptr_eq(&p.predecessor, &guard) || p.replacement != replacement\n            }) {\n                retired = pending.take();\n            }\n            let original = pending.get_or_insert_with(|| {\n                Pending::new(\n                    guard.clone(),\n                    self.latest_block.load_full(),\n                    replacement,\n                    next_sequence,\n                    self.released.deferred_batch(),\n                )\n            });\n            #[cfg(test)]\n            tests::panic_before_advance();\n            let result = original.advance(self);\n            let mut ready = result\n                .is_ok()\n                .then(|| pending.take().expect("completed original preparation"));\n            if let Some(ready) = ready.as_mut() {\n                ready.predecessor.loaned.store(true, Ordering::Release);\n                ready.leased = true;\n            }\n            drop(pending);\n            if let Some(ready) = ready.as_mut() {\n                ready.lease_release = Some(guard.release_deferred(drop).1);\n            } else {\n                drop(guard);\n            }\n            drop(retired);\n            result?;\n            Ok(ready.expect("successful original preparation"))\n        })\n    }',)),
+    ('crates/iroha_core/src/state/storage_transactions/history.rs', 'method', 'TransactionsStorage::retain_preparation', ('    pub(crate) fn retain_preparation(&self, mut original: Pending) {\n        self.budget.with_deferred_refund_notifications(|_| {\n            // This method is called only after the enclosing aggregate releases\n            // all physical fences. No other accepted preparation may be displaced.\n            let guard = self.released.guard(self.write_lock.lock());\n            let mut pending = self.pending.lock();\n            let current = Identity::ptr_eq(&original.predecessor, &guard);\n            if current {\n                assert!(\n                    original.leased && pending.is_none(),\n                    "exclusive original preparation loan"\n                );\n            }\n            let notice = original.release_loan();\n            let attachments = std::mem::replace(\n                &mut original.attachment_releases,\n                self.released.deferred_batch(),\n            );\n            let stale = if current {\n                *pending = Some(original);\n                None\n            } else {\n                Some(original)\n            };\n            drop(pending);\n            drop(guard);\n            drop(stale);\n            drop(attachments);\n            drop(notice);\n        });\n    }',)),
+    ('crates/iroha_core/src/state/storage_transactions.rs', 'method', 'TransactionsStorage::attach_prepared', ('    pub(crate) fn attach_prepared<\'a>(\n        &\'a self,\n        pending: &mut Option<history::Pending>,\n    ) -> Result<TransactionsBlock<\'a>, MembershipAdmissionError> {\n        let original = pending\n            .as_mut()\n            .expect("original pre-World membership preparation");\n        let wait = self.released.observe();\n        // A foreign family cannot acquire this target\'s notification authority.\n        let baseline = self\n            .blocks\n            .read_predecessor(original.baseline.as_ref().expect("original history cut"))\n            .ok_or_else(|| MembershipAdmissionError::Changed(wait.clone()))?;\n        let guard = self\n            .write_lock\n            .try_lock()\n            .ok_or_else(|| MembershipAdmissionError::Busy(wait.clone()))?;\n        if !Identity::ptr_eq(&guard, &original.predecessor) {\n            let released = self\n                .released\n                .guard(guard)\n                .try_release_into(&mut original.attachment_releases, drop);\n            assert!(released.is_ok(), "original preparation release family");\n            return Err(MembershipAdmissionError::Changed(wait));\n        }\n        let original = pending.take().expect("checked original preparation");\n        let revert = original.replacement;\n        Ok(TransactionsBlock {\n            latest_block_ref: &self.latest_block,\n            budget_ref: &self.budget,\n            blocks_ref: &self.blocks,\n            baseline,\n            publication_sequence: &self.publication_sequence,\n            _guard: block::MembershipWriter::new(\n                self.released.guard(guard),\n                Some(history_slot::Slot::new(self, original)),\n            ),\n            revert,\n            current_block: None,\n        })\n    }',)),
+    ('crates/iroha_core/src/state/storage_transactions.rs', 'method', 'TransactionsStorage::view_retaining', ("    pub(crate) fn view_retaining(\n        &self,\n        releases: &mut concread::release::DeferredReleaseBatch,\n    ) -> Result<TransactionsView<'_>, concread::bptree::OwnedWriteError> {\n        loop {\n            let before = self.publication_sequence.load(Ordering::Acquire);\n            if before & 1 != 0 {\n                std::thread::yield_now();\n                continue;\n            }\n            let latest_block = self.latest_block.load_full();\n            let blocks = self.blocks.read_retaining(releases)?;\n            if before == self.publication_sequence.load(Ordering::Acquire) {\n                return Ok(TransactionsView {\n                    latest_block,\n                    blocks,\n                });\n            }\n        }\n    }",)),
+)
+PREPARATION_OWNER_BINDINGS += MEMBERSHIP_CURRENT_OWNER_BINDINGS
+
+# Every field uses one concrete stack frame and its existing admitted wrapper.
+PREPARATION_OWNER_BINDINGS += (('crates/iroha_core/src/state/world_journals.rs', 'fn', 'retain_world_capture_field', ('fn retain_world_capture_field<Slot: WorldCaptureSlot>(\n    fields: &mut Vec<Box<dyn RetainedWorldField>>,\n    pending: &mut Option<(Slot, fn(&World) -> &Slot::Target)>,\n    name: &\'static str,\n) {\n    let (slot, target) = pending.take().expect("original World capture slot");\n    fields.push(Box::new(slot.retain(name, target)));\n}',)),)
+
+WORLD_MATERIALIZATION_STACK_TEST = (
+    'crates/iroha_core/src/state/carrier_preparation/native_publication_tests.rs',
+    '''fn assert_native_publication_on_bounded_stack(atomic: bool) {
+    std::thread::Builder::new()
+        .name(format!("native-publication-atomic-{atomic}"))
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let fixture = native_publication_fixture(atomic);
+            assert_native_publication(atomic, fixture);
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}''',
+)
+
 # Binding owners are authoritative inputs; mutation fixtures must copy every
 # referenced owner without a second manually synchronized Rust path inventory.
 NATIVE_PREPARATION_SOURCE_RELATIVES = tuple(dict.fromkeys((
     *_NATIVE_EXPLICIT_SOURCE_RELATIVES,
+    Path(WORLD_MATERIALIZATION_STACK_TEST[0]),
     *(Path(path) for path, _, _, _ in PREPARATION_OWNER_BINDINGS),
 )))
 
@@ -3192,6 +3232,24 @@ def validate_native_preparation_contract(
             for token in tokens:
                 if _code(token) not in items[symbol]:
                     errors.append(f"Native preparation {symbol} missing executable relation {token!r}")
+
+    # The stack boundary is executable policy: the inventory-sized macro may
+    # not inline all concrete field construction temporaries into one frame.
+    _, world_capture_source = _read_reviewed_rust_source(
+        root, "crates/iroha_core/src/state/world_journals.rs",
+        "Native World field materialization", errors,
+    )
+    if world_capture_source is not None and _code(world_capture_source).count(
+        _code("#[inline(never)] fn retain_world_capture_field<Slot: WorldCaptureSlot>(")
+    ) != 1:
+        errors.append("Native World field materialization must retain its isolated stack frame")
+
+    test_path, test_body = WORLD_MATERIALIZATION_STACK_TEST
+    _, stack_test_source = _read_reviewed_rust_source(
+        root, test_path, "Native ordinary-stack materialization regression", errors,
+    )
+    if stack_test_source is not None and _code(stack_test_source).count(_code(test_body)) != 1:
+        errors.append("Native World materialization requires the exact ordinary-stack regression")
 
     items.update(_validate_single_lease_publication_contract(
         root, rows, errors, rust_binding_item,
@@ -4016,6 +4074,10 @@ def validate_native_preparation_contract(
             "acquired.rewind_da_indexes_to_height(target_height)", "self.construct_acquired_block(acquired, curr_block, core::convert::identity)")
     ordered("AcquiredRuntimeBlock::rewind_da_indexes_to_height", "let fields = self", ".da_rewind_releases", "get_or_insert_with(|| da_hydration::DaRewindReleases::new(self.target))", "self.target", ".rewind_da_indexes_to_height_with_releases(target_height, releases)")
     ordered("State::rewind_da_indexes_to_height_with_releases", "let DaRewindReleases {", "} = releases;", "let _hydration_guard =", "*releases.hydrated.write() = None;", "let _state_write_guard = write_fence.lock();", ".build_da_indexes_from_kura(Some(target_height))", "self.publish_hydrated_da_indexes(hydrated, releases);", "self.persist_hydrated_da_shard_cursor_journal(releases);", "*releases.hydrated.write() = Some(result);")
+    ordered("PreparedCarrier::prepare_journals", "let read_releases;", "let mut original = self;",
+            "read_releases: original_read_releases", "read_releases = original_read_releases;",
+            "let mut pending = StateJournalCapture::new(", "pending.try_capture()",
+            "let components = pending.into_components()", "drop(read_releases)")
     ordered("PreparedCarrier::prepare_journals", "let da_rewind_releases;", "let mut original = self;", "da_rewind_releases = original_da_rewind_releases;", "let mut pending = StateJournalCapture::new(", "pending.try_capture()", "let components = pending.into_components();", "drop(da_rewind_releases);")
     # The macro definition binds the phase engine; its one concrete invocation
     # binds the actual runtime siblings and their acquisition order as well.

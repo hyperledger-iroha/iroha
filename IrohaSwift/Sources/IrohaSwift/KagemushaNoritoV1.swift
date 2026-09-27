@@ -215,6 +215,41 @@ public enum KagemushaNoritoV1 {
       decodeHardwareProfile, encodeHardwareProfileShape)
   }
 
+  /// Exact 413-byte unsigned identity preimage used by Rust governance.
+  public static func hardwareProfileIDPreimageShape(
+    _ profile: KagemushaHardwareProfileV1
+  ) throws -> Data {
+    let canonical = frameExact("iroha.kagemusha.v1.hardware-profile-id-preimage", fields([
+      u16(profile.version), u16(profile.protocolVersion), profile.providerID,
+      enumUnit(profile.platformClass.rawValue), profile.productClassDigest,
+      profile.firmwarePolicyDigest, profile.enrollmentAttestationVerifierDigest,
+      profile.attestationTrustRootsDigest, profile.allowedSuiteCommitment,
+      u64(profile.policyEpoch), profile.governanceCredentialPublicKey.sec1Bytes,
+      u32(profile.capabilityMask), profile.qualificationReportDigest,
+      u64(profile.validFromMS), u64(profile.expiresAtMS),
+      profile.appAttestationAuthorityPolicyDigest,
+    ]), 8)
+    guard canonical.count == 413 else { throw kagemushaInvalid("hardwareProfile.idPreimage") }
+    return canonical
+  }
+
+  /// Derive the governed identity without trusting the caller-supplied ID.
+  public static func expectedHardwareProfileIDShape(
+    _ profile: KagemushaHardwareProfileV1
+  ) throws -> Data {
+    digestEncoded(Data("iroha:kagemusha:v1:hardware-profile".utf8),
+      try hardwareProfileIDPreimageShape(profile))
+  }
+
+  /// Reject a profile whose externally supplied ID differs from its unsigned body.
+  public static func validateHardwareProfileIDShape(
+    _ profile: KagemushaHardwareProfileV1
+  ) throws {
+    guard profile.hardwareProfileID == (try expectedHardwareProfileIDShape(profile)) else {
+      throw kagemushaInvalid("hardwareProfile.hardwareProfileID")
+    }
+  }
+
   /// Encode a bounded credential without verifying its governance signature.
   public static func encodeHardwareCredentialShape(_ value: KagemushaHardwareCredentialV1) throws
     -> Data

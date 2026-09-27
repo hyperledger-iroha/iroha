@@ -729,9 +729,49 @@ def test_sccache_uses_its_default_without_restarting_the_daemon(tmp_path: Path) 
 
     assert result.returncode == 0, result.stderr
     assert environment["RUSTC_WRAPPER"] == str(tmp_path / "bin" / "sccache")
+    assert environment["CARGO_INCREMENTAL"] == "0"
+    assert "CARGO_INCREMENTAL=0 (sccache selected)" in result.stdout
     assert "SCCACHE_DIR" not in environment
     assert not sccache_log.exists()
     assert "--stop-server" not in SCRIPT.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("no_incremental", (False, True))
+def test_sccache_handles_implicit_dev_incremental(
+    tmp_path: Path, no_incremental: bool
+) -> None:
+    # The real checkout enables incremental compilation in its dev profile.
+    # Simulate the compiler probe refusing sccache unless Cargo receives the
+    # nonincremental override before invoking its configured rustc wrapper.
+    (REPO_ROOT / "Cargo.toml").write_text(
+        "[workspace]\nmembers = []\n[profile.dev]\nincremental = true\n",
+        encoding="utf-8",
+    )
+    config = tmp_path / "home/.cargo/config.toml"
+    config.parent.mkdir(parents=True)
+    config.write_text(
+        "[build]\nrustc-wrapper = " + json.dumps(str(tmp_path / "bin/sccache")) + "\n"
+    )
+    result, environment, arguments = _run_wrapper(
+        tmp_path,
+        *(("--no-incremental",) if no_incremental else ()),
+        "--",
+        "check",
+        extra_env={"CARGO_FAST_TEST_CONFIG_WRAPPER": "1"},
+        binaries={
+            "sccache": """
+                #!/bin/sh
+                [ "${CARGO_INCREMENTAL:-}" = 0 ] || {
+                    echo 'sccache: incremental compilation is prohibited' >&2
+                    exit 86
+                }
+            """,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert environment["CARGO_INCREMENTAL"] == "0"
+    assert arguments == ["check"]
 
 
 def test_explicit_sccache_directory_is_forwarded(tmp_path: Path) -> None:

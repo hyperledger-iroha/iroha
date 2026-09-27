@@ -66,6 +66,7 @@ pub(super) fn terminal_public(
         public.ciphertext_commitment,
         public.amount,
         public.terminal_output_binding,
+        public.artifact_manifest_digest,
         audits[0],
         audits[1],
         protocols[0],
@@ -101,6 +102,7 @@ fn generation_private(
                 output: send.output.clone(),
                 encrypted_credit_digest: send.encrypted_credit_digest,
             }),
+        send_sealed_streams: private.send_sealed_streams.clone(),
         journal_revision_before: private.journal_revision_before,
         journal_revision_after: private.journal_revision_after,
         authorization_counter_before: private.authorization_counter_before,
@@ -117,12 +119,12 @@ fn candidate_matches_core<F: KagemushaPoseidonFieldV1>(
     parity: KagemushaPastaParityV1,
 ) -> Result<(), String> {
     ensure(
-        expected_semantic.len() == state_relation::PUBLIC_INSTANCE_COUNT
+        expected_semantic.len() == state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT
             && actual.len() == RECURSIVE_PUBLIC_INSTANCE_COUNT,
         "candidate is not the exact State transport column",
     )?;
     ensure(
-        actual[..state_relation::PUBLIC_INSTANCE_COUNT] == *expected_semantic,
+        actual[..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT] == *expected_semantic,
         "candidate semantic column differs from Core persistence",
     )?;
     let offset = match parity {
@@ -159,7 +161,7 @@ fn terminal_candidate_preflight_requires_exact_role_and_semantic_cells_in_both_f
             KagemushaPastaParityV1::Eq => eq_protocol,
             KagemushaPastaParityV1::Ep => ep_protocol,
         };
-        let mut semantic = vec![F::ZERO; state_relation::PUBLIC_INSTANCE_COUNT];
+        let mut semantic = vec![F::ZERO; state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT];
         for (offset, protocol) in [
             (state_relation::public_instance::EQ_PROTOCOL_LO, eq_protocol),
             (state_relation::public_instance::EP_PROTOCOL_LO, ep_protocol),
@@ -180,7 +182,7 @@ fn terminal_candidate_preflight_requires_exact_role_and_semantic_cells_in_both_f
         assert!(
             candidate_matches_core(&semantic, &complete, digest(b"other-role", 1), parity).is_err()
         );
-        for offset in 0..state_relation::PUBLIC_INSTANCE_COUNT {
+        for offset in 0..state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT {
             let mut changed = complete.clone();
             changed[offset] += F::ONE;
             assert!(
@@ -328,11 +330,11 @@ pub(super) fn prove_sender_terminal(
     terminally_verify_state_proof(state_keys, send);
     let seed = test_only_recovery_seed();
     assert_eq!(
-        &send.eq_public_instances[state_relation::PUBLIC_INSTANCE_COUNT..],
+        &send.eq_public_instances[state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
         history_values::<Fp>(send.eq_history.as_bytes())
     );
     assert_eq!(
-        &send.ep_public_instances[state_relation::PUBLIC_INSTANCE_COUNT..],
+        &send.ep_public_instances[state_relation::RECURSIVE_SEMANTIC_PUBLIC_INSTANCE_COUNT..],
         history_values::<Fq>(send.ep_history.as_bytes())
     );
     for inner in [&send.eq_current_accumulator, &send.eq_history] {
@@ -366,8 +368,19 @@ pub(super) fn prove_sender_terminal(
     let core_public = candidate
         .candidate_public_inputs(artifacts, &send.proof)
         .unwrap();
-    let eq_expected = core_public.public_instances::<Fp>().unwrap();
-    let ep_expected = core_public.public_instances::<Fq>().unwrap();
+    let core_statement_digest = candidate.proof_statement.digest().unwrap();
+    assert_eq!(candidate.state_transition_digest, core_statement_digest);
+    assert_eq!(
+        core_public.transition_statement_digest_v1().unwrap(),
+        core_statement_digest,
+        "recursive State transition projection must equal Core's independently built statement"
+    );
+    let eq_expected = core_public
+        .recursive_semantic_public_instances::<Fp>()
+        .unwrap();
+    let ep_expected = core_public
+        .recursive_semantic_public_instances::<Fq>()
+        .unwrap();
     // StateKeys.eq_protocol/ep_protocol name INNER keys; select their explicit transport
     // counterparts here. GeneratedState's top-level instances/current/history are also INNER;
     // the transport columns and send.proof bytes/history below are the exact Core candidate.
@@ -465,6 +478,43 @@ pub(super) fn prove_sender_terminal(
     let committed =
         CommittedOutgoingCandidateV1::from_hardware_commit(persisted, certificate.clone())
             .expect("Core checks exact candidate/body/certificate correspondence");
+    let opening_messages = committed
+        .canonical_send_opening_sha_messages_v1()
+        .expect("exact retained Core sender material produces six opening preimages");
+    assert_eq!(opening_messages.len(), 6);
+    assert!(opening_messages[0].starts_with(b"iroha:kagemusha:v1:sealed-transition-inputs\0"));
+    assert!(opening_messages[1].starts_with(b"iroha:kagemusha:v1:sealed-recovery-seeds\0"));
+    assert!(opening_messages[2].starts_with(b"iroha:kagemusha:v1:outgoing-preparation\0"));
+    let opening_blocks = opening_messages
+        .iter()
+        .map(|message| {
+            (message.len()
+                + crate::zk::pasta_sha256_table8::canonical_padding_suffix(message.len())
+                    .expect("Core opening fits canonical SHA length")
+                    .len())
+                / crate::zk::pasta_sha256_table8::BLOCK_BYTE_SIZE
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(opening_blocks.as_slice(), &[2, 2, 8, 5, 5, 6]);
+    for (active, capacity) in opening_blocks.into_iter().zip([33, 9, 8, 5, 44, 6]) {
+        assert!(active <= capacity);
+    }
+    let mut changed_opening = committed.clone();
+    changed_opening.candidate.prepared.sealed_transition_inputs[0] ^= 1;
+    assert!(
+        changed_opening
+            .canonical_send_opening_sha_messages_v1()
+            .is_err()
+    );
+    let mut changed_certificate = committed.clone();
+    changed_certificate
+        .commit_certificate
+        .hardware_terminal_commitment[0] ^= 1;
+    assert!(
+        changed_certificate
+            .canonical_send_opening_sha_messages_v1()
+            .is_err()
+    );
     let output = committed
         .public_output()
         .expect("Core derives terminal public output");
@@ -479,6 +529,7 @@ pub(super) fn prove_sender_terminal(
         ciphertext_commitment: output.ciphertext_commitment,
         amount: output.amount,
         terminal_output_binding: output.terminal_output_binding,
+        artifact_manifest_digest: [0; 32],
     };
     let PreparedOutgoingRecoveryViewV1::Send {
         request,
@@ -503,6 +554,10 @@ pub(super) fn prove_sender_terminal(
             output: output.clone(),
             encrypted_credit_digest: kagemusha_ciphertext_digest_v1(encrypted_credit),
         }),
+        send_sealed_streams: Some([
+            candidate.sealed_transition_inputs.clone(),
+            candidate.sealed_recovery_seeds.clone(),
+        ]),
         journal_revision_before: openings.journal_revision_before,
         journal_revision_after: openings.journal_revision_after,
         authorization_counter_before: openings.authorization_counter_before,
@@ -767,6 +822,12 @@ pub(super) fn prove_sender_terminal(
     );
     drop(semantic_plan);
     let generation_private = generation_private(&private);
+    let sealed = generation_private
+        .send_sealed_streams
+        .as_ref()
+        .expect("retain exact prepared send streams for terminal witness");
+    assert_eq!(sealed[0], candidate.sealed_transition_inputs);
+    assert_eq!(sealed[1], candidate.sealed_recovery_seeds);
     let hash_claim = prove_kagemusha_terminal_authorization_hash_claim_v1(
         &funded.hash_eq,
         &funded.hash_ep,

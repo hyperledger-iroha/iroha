@@ -1634,6 +1634,12 @@ android {
     }
 
     packaging {
+        resources {
+            // Each Netty module ships this optional jar index; it is not runtime data.
+            excludes.add("META-INF/INDEX.LIST")
+            // Module version reports are diagnostic metadata, not protocol behavior.
+            excludes.add("META-INF/io.netty.versions.properties")
+        }
         jniLibs {
             // The mobile artifact verifier binds the published AAR to the exact
             // generated, canonically stripped bridge bytes and provenance.
@@ -1668,6 +1674,7 @@ dependencies {
     testRuntimeOnly(libs.junit.platform.launcher)
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation(libs.bcprov)
 }
 
 tasks.withType<Test>().configureEach {

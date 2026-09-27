@@ -122,3 +122,5 @@ export {
   tryNormalizeAssetDefinitionId,
   tryNormalizeI105AccountId,
 } from "./normalizers.js";
+
+export { buildCanonicalMultisigContractCall } from "./multisigContractCall.js";

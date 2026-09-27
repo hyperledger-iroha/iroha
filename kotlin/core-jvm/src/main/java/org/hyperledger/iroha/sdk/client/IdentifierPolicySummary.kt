@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.client
 /** Summary entry returned by `GET /v1/identifier-policies`. */
 class IdentifierPolicySummary @JvmOverloads constructor(
     @JvmField val policyId: String,
+    @JvmField val programId: String,
     @JvmField val owner: String,
     @JvmField val active: Boolean,
     @JvmField val normalization: IdentifierNormalization,
@@ -12,10 +13,11 @@ class IdentifierPolicySummary @JvmOverloads constructor(
     @JvmField val inputEncryptionPublicParameters: String?,
     @JvmField val inputEncryptionPublicParametersDecoded: IdentifierBfvPublicParameters?,
     @JvmField val note: String?,
+    @JvmField val outputOpeningPublicKey: String,
     @JvmField val proofVerifier: RamLfeProofVerifierMetadata? = null,
-    @JvmField val outputOpeningPublicKey: String = resolverPublicKey,
 ) {
     init {
+        require(programId.isNotBlank()) { "programId must not be blank" }
         requirePublicKeyLiteral(resolverPublicKey, "resolverPublicKey")
         requirePublicKeyLiteral(outputOpeningPublicKey, "outputOpeningPublicKey")
     }

@@ -258,7 +258,7 @@ test("browser package wiring omits the retired privacy catalog module", () => {
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   );
   assert.equal(packageJson.exports["./crypto"].browser, "./dist/public/crypto.browser.js");
-  assert.equal(packageJson.browser["./dist/crypto.js"], "./dist/crypto.browser.js");
+  assert.equal(packageJson.browser["./dist/crypto.js"], "./dist/cryptoInternal.browser.js");
 
   for (const [label, relativePath] of [
     ["src", "../src/privacyAlgorithms.js"],

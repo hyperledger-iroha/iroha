@@ -1,4 +1,4 @@
-//! Test-only one-use native issuer enrollment before an account/device wallet-open ceremony.
+//! One-use native issuer enrollment before an account/device wallet-open ceremony.
 //!
 //! The native owner starts one suspend-inclusive deadline and creates its client nonce before
 //! HTTP. Completing this object proves a recent response by the independently pinned issuer
@@ -6,33 +6,44 @@
 //! authority. Consuming challenge and proof phases retain the selected qualification and derive
 //! signing inputs locally; certificate completion cannot substitute another proof. See the
 //! adjacent `initial_enrollment/README.md` for the integration and validation boundary.
-//! TODO: connect the owned pending phase to the bounded revocable native registry
-//! and sole public lifecycle ABI; there is no C/JNI policy installer or host approval fallback.
+//! The owned pending phase retains the bounded journal's original live ticket. TODO: install a
+//! qualified native backend for the sole public lifecycle ABI; there is no host approval fallback.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use iroha_core::zk::kagemusha_v1_state::KagemushaRecoveryEnrollmentBindingV1;
 use iroha_crypto::{Algorithm, Signature, SignatureOf};
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_DEVICE_RESPONSE_MAX_BYTES_V1, KagemushaAppAttestationAuthorityPolicyV1,
-    KagemushaAppDevicePolicyBindingV1, KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1,
+    KagemushaAppDevicePolicyBindingV1, KagemushaAppEnrollmentCertificateV1,
+    KagemushaAppEnrollmentSelectionV1, KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1,
     KagemushaDeviceQualificationReplyV1, KagemushaDeviceReadCredentialCommandV1,
     KagemushaRetailEnrollmentAccountProofV1, KagemushaRetailEnrollmentCertificateV1,
     KagemushaRetailEnrollmentChallengeV1, KagemushaRetailEnrollmentIssuerPolicyV1,
     KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentPossessionProofV1,
     KagemushaRetailEnrollmentSelectionV1, KagemushaVerifiedAppEnrollmentV1,
-    KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1, kagemusha_verify_device_response_v1,
+    KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1, kagemusha_device_key_reference_v1,
+    kagemusha_verify_device_response_v1,
 };
+#[cfg(test)]
 use rand::{TryRngCore as _, rngs::OsRng};
+use sha2::{Digest as _, Sha256};
 
 use super::native_deadline::NativeDeadlineV1;
+use super::{
+    enrollment_attempt_journal::{
+        KagemushaEnrollmentJournalErrorV1, KagemushaEnrollmentLiveSelectionV1,
+    },
+    signed_app_preparation::{SignedAppPreparationPinsV1, verify_signed_app_preparation_v1},
+};
 use crate::kagemusha_device_bridge_v1::sender_payload::hardware_authorization_key_reference_v1;
 
-const LIFETIME: Duration = Duration::from_secs(120);
+#[cfg(test)]
+const LIFETIME: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Closed initial-ceremony failures; no rejected result exposes a partial admission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum InitialEnrollmentErrorV1 {
+pub enum InitialEnrollmentErrorV1 {
     Encoding,
     Binding,
     Authority,
@@ -42,9 +53,20 @@ pub(super) enum InitialEnrollmentErrorV1 {
 
 type Result<T> = std::result::Result<T, InitialEnrollmentErrorV1>;
 
+fn map_journal_error(error: KagemushaEnrollmentJournalErrorV1) -> InitialEnrollmentErrorV1 {
+    match error {
+        KagemushaEnrollmentJournalErrorV1::Expired => InitialEnrollmentErrorV1::Expired,
+        KagemushaEnrollmentJournalErrorV1::Unavailable => {
+            InitialEnrollmentErrorV1::RandomUnavailable
+        }
+        KagemushaEnrollmentJournalErrorV1::Store => InitialEnrollmentErrorV1::Authority,
+        _ => InitialEnrollmentErrorV1::Binding,
+    }
+}
+
 /// Rust-owned pending attempt with independent immutable issuer/catalog/Core-key pins.
 /// It cannot be decoded, cloned or restored from a host cache after process restart.
-pub(super) struct PendingIssuerEnrollmentV1 {
+pub struct PendingIssuerEnrollmentV1 {
     policy: Arc<KagemushaRetailEnrollmentIssuerPolicyV1>,
     app_policy: Arc<KagemushaAppAttestationAuthorityPolicyV1>,
     release: Arc<KagemushaAuthenticatedReleaseV1>,
@@ -53,14 +75,136 @@ pub(super) struct PendingIssuerEnrollmentV1 {
     qualification: KagemushaDeviceQualificationReplyV1,
     canonical_qualification: Vec<u8>,
     client_nonce: [u8; 32],
-    deadline: NativeDeadlineV1,
+    expected_app_digest: Option<[u8; 32]>,
+    live_selection: Option<KagemushaEnrollmentLiveSelectionV1>,
+    #[cfg(test)]
+    deadline: Option<NativeDeadlineV1>,
 }
 
 impl PendingIssuerEnrollmentV1 {
-    /// Only the qualified Rust backend supplies policy, release and native Core key pins.
-    /// `owner` is initially an untrusted selector; creating this attempt grants it no authority.
-    /// The backend/registry must separately reject an initial attempt for an existing Core owner.
-    pub(super) fn begin(
+    /// Consume the original phase-1 native selection after app attestation and qualification.
+    ///
+    /// The qualified backend must obtain `live_selection` from its process-local journal,
+    /// authenticate `release` and both policies independently, and supply trusted service time.
+    /// The signed preparation is checked against the provisional selected key ID before the
+    /// verifier certificate binds that ID to the attested device point. This constructor never
+    /// creates or renews a nonce, ticket, lane, or deadline.
+    pub fn begin_selected(
+        live_selection: KagemushaEnrollmentLiveSelectionV1,
+        policy: Arc<KagemushaRetailEnrollmentIssuerPolicyV1>,
+        app_policy: Arc<KagemushaAppAttestationAuthorityPolicyV1>,
+        release: Arc<KagemushaAuthenticatedReleaseV1>,
+        owner: KagemushaRetailEnrollmentOwnerV1,
+        native_authorization_public_key: KagemushaDevicePublicKeyV1,
+        selected_attested_key_id: [u8; 32],
+        signed_preparation: &[u8],
+        raw_platform_evidence: &[u8],
+        canonical_app_certificate: &[u8],
+        canonical_qualification: &[u8],
+        trusted_now_ms: u64,
+    ) -> Result<Self> {
+        let selection = live_selection.require_live().map_err(map_journal_error)?;
+        let (enrollment, qualification) = Self::validate_context(
+            &policy,
+            &app_policy,
+            &release,
+            &owner,
+            &native_authorization_public_key,
+            canonical_qualification,
+        )?;
+        let app_policy_digest = app_policy
+            .canonical_digest()
+            .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
+        if selection.account_i105
+            != owner
+                .account_id
+                .canonical_i105()
+                .map_err(|_| InitialEnrollmentErrorV1::Binding)?
+            || selection.client_nonce == [0; 32]
+            || selection.release_id != release.release_id()
+            || selection.hardware_profile_id != qualification.credential.hardware_profile_id
+            || selection.lane_id != owner.lane_id
+            || live_selection.pins().issuer_policy_id != policy.issuer_policy_id
+            || live_selection.pins().app_policy_digest != app_policy_digest
+        {
+            return Err(InitialEnrollmentErrorV1::Binding);
+        }
+        let prep = verify_signed_app_preparation_v1(
+            signed_preparation,
+            SignedAppPreparationPinsV1 {
+                policy: &policy,
+                account_id: &owner.account_id,
+                platform_class: app_policy.platform_class,
+                selected_attested_key_id,
+                client_nonce: selection.client_nonce,
+                release_id: selection.release_id,
+                profile_id: selection.hardware_profile_id,
+                lane_id: selection.lane_id,
+                trusted_now_ms,
+            },
+        )
+        .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
+        if raw_platform_evidence.is_empty()
+            || raw_platform_evidence.len() > 96 * 1024
+            || canonical_app_certificate.is_empty()
+            || canonical_app_certificate.len() > 96 * 1024
+        {
+            return Err(InitialEnrollmentErrorV1::Encoding);
+        }
+        let certificate: KagemushaAppEnrollmentCertificateV1 =
+            norito::decode_canonical(canonical_app_certificate)
+                .map_err(|_| InitialEnrollmentErrorV1::Encoding)?;
+        let credential = &qualification.credential;
+        let point_key_id: [u8; 32] =
+            Sha256::digest(credential.device_public_key.as_sec1_bytes()).into();
+        let evidence_digest: [u8; 32] = Sha256::digest(raw_platform_evidence).into();
+        if point_key_id == [0; 32]
+            || credential.device_key_reference
+                != kagemusha_device_key_reference_v1(&credential.device_public_key)
+            || certificate.assertion.platform_evidence_digest != evidence_digest
+            || certificate.assertion.device_key_reference != credential.device_key_reference
+            || certificate.assertion.attested_key_id != point_key_id
+            || (app_policy.platform_class
+                == iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AppleAppAttest
+                && prep.attested_key_id != point_key_id)
+            || (app_policy.platform_class
+                == iroha_data_model::kagemusha::KagemushaHardwarePlatformClassV1::AndroidKeyMint
+                && prep.attested_key_id != [0; 32])
+        {
+            return Err(InitialEnrollmentErrorV1::Binding);
+        }
+        let expected = KagemushaAppEnrollmentSelectionV1::for_credential(
+            selection.client_nonce,
+            prep.server_nonce,
+            selection.release_id,
+            credential,
+        );
+        let verified_app = certificate
+            .authenticate(&app_policy, expected, trusted_now_ms)
+            .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
+        let client_nonce = selection.client_nonce;
+        let pending = Self {
+            policy,
+            app_policy,
+            release,
+            enrollment,
+            native_authorization_public_key,
+            qualification,
+            canonical_qualification: canonical_qualification.to_vec(),
+            client_nonce,
+            expected_app_digest: Some(verified_app.digest()),
+            live_selection: Some(live_selection),
+            #[cfg(test)]
+            deadline: None,
+        };
+        pending.require_unexpired()?;
+        Ok(pending)
+    }
+
+    /// Test-only construction for fixed-signature kernel vectors. Production callers
+    /// must use `begin_selected`, which consumes the journal's original nonce and deadline.
+    #[cfg(test)]
+    pub fn begin(
         policy: Arc<KagemushaRetailEnrollmentIssuerPolicyV1>,
         app_policy: Arc<KagemushaAppAttestationAuthorityPolicyV1>,
         release: Arc<KagemushaAuthenticatedReleaseV1>,
@@ -70,6 +214,50 @@ impl PendingIssuerEnrollmentV1 {
     ) -> Result<Self> {
         let deadline =
             NativeDeadlineV1::start(LIFETIME).map_err(|_| InitialEnrollmentErrorV1::Expired)?;
+        let (enrollment, qualification) = Self::validate_context(
+            &policy,
+            &app_policy,
+            &release,
+            &owner,
+            &native_authorization_public_key,
+            canonical_qualification,
+        )?;
+        let mut client_nonce = [0; 32];
+        OsRng
+            .try_fill_bytes(&mut client_nonce)
+            .map_err(|_| InitialEnrollmentErrorV1::RandomUnavailable)?;
+        if client_nonce == [0; 32] {
+            return Err(InitialEnrollmentErrorV1::RandomUnavailable);
+        }
+        deadline
+            .check()
+            .map_err(|_| InitialEnrollmentErrorV1::Expired)?;
+        Ok(Self {
+            policy,
+            app_policy,
+            release,
+            enrollment,
+            native_authorization_public_key,
+            qualification,
+            canonical_qualification: canonical_qualification.to_vec(),
+            client_nonce,
+            expected_app_digest: None,
+            live_selection: None,
+            deadline: Some(deadline),
+        })
+    }
+
+    fn validate_context(
+        policy: &KagemushaRetailEnrollmentIssuerPolicyV1,
+        app_policy: &KagemushaAppAttestationAuthorityPolicyV1,
+        release: &KagemushaAuthenticatedReleaseV1,
+        owner: &KagemushaRetailEnrollmentOwnerV1,
+        native_authorization_public_key: &KagemushaDevicePublicKeyV1,
+        canonical_qualification: &[u8],
+    ) -> Result<(
+        KagemushaRecoveryEnrollmentBindingV1,
+        KagemushaDeviceQualificationReplyV1,
+    )> {
         policy
             .validate()
             .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
@@ -95,8 +283,6 @@ impl PendingIssuerEnrollmentV1 {
         let enrollment_id = owner
             .enrollment_id()
             .map_err(|_| InitialEnrollmentErrorV1::Binding)?;
-        // This governed projection selects the expected device; it is not evidence of
-        // current device possession. The exact command-bound response is checked later.
         let qualification =
             KagemushaDeviceQualificationReplyV1::decode_canonical_exact(canonical_qualification)
                 .map_err(|_| InitialEnrollmentErrorV1::Encoding)?;
@@ -106,7 +292,7 @@ impl PendingIssuerEnrollmentV1 {
         if qualification.release_id != release.release_id()
             || qualification.hardware_policy_digest != release.hardware_policy_digest()
             || qualification.core_authorization_key_reference
-                != hardware_authorization_key_reference_v1(&native_authorization_public_key)
+                != hardware_authorization_key_reference_v1(native_authorization_public_key)
             || qualification.profile != enabled.hardware_profile
             || qualification.credential.suite_id != enabled.suite_id
             || qualification.credential.network_id != owner.runtime.network_id
@@ -119,63 +305,67 @@ impl PendingIssuerEnrollmentV1 {
             .validate_app_policy_binding_for_release(
                 &enabled.hardware_profile,
                 release.release_id(),
-                &app_policy,
+                app_policy,
             )
             .map_err(|_| InitialEnrollmentErrorV1::Binding)?;
-        let mut client_nonce = [0; 32];
-        OsRng
-            .try_fill_bytes(&mut client_nonce)
-            .map_err(|_| InitialEnrollmentErrorV1::RandomUnavailable)?;
-        if client_nonce == [0; 32] {
-            return Err(InitialEnrollmentErrorV1::RandomUnavailable);
-        }
-        deadline
-            .check()
-            .map_err(|_| InitialEnrollmentErrorV1::Expired)?;
-        Ok(Self {
-            policy,
-            app_policy,
-            release,
-            enrollment: KagemushaRecoveryEnrollmentBindingV1 {
+        Ok((
+            KagemushaRecoveryEnrollmentBindingV1 {
                 enrollment_id,
-                owner,
+                owner: owner.clone(),
             },
-            native_authorization_public_key,
             qualification,
-            canonical_qualification: canonical_qualification.to_vec(),
-            client_nonce,
-            deadline,
-        })
+        ))
     }
 
     /// Read only the original native nonce; reading it never starts a new lifetime.
-    pub(super) fn client_nonce(&self) -> Result<[u8; 32]> {
+    pub fn client_nonce(&self) -> Result<[u8; 32]> {
         self.require_unexpired()?;
         Ok(self.client_nonce)
     }
 
     /// Exact selected qualification body for the start request; reading never renews time.
-    pub(super) fn canonical_qualification(&self) -> Result<&[u8]> {
+    pub fn canonical_qualification(&self) -> Result<&[u8]> {
         self.require_unexpired()?;
         Ok(&self.canonical_qualification)
     }
 
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
         self.require_unexpired()?;
-        Ok(self.deadline.clone())
+        if let Some(live) = &self.live_selection {
+            return live.deadline().map_err(map_journal_error);
+        }
+        #[cfg(test)]
+        {
+            return self
+                .deadline
+                .clone()
+                .ok_or(InitialEnrollmentErrorV1::Binding);
+        }
+        #[cfg(not(test))]
+        {
+            Err(InitialEnrollmentErrorV1::Binding)
+        }
     }
 
     fn require_unexpired(&self) -> Result<()> {
-        self.deadline
-            .check()
-            .map(|_| ())
-            .map_err(|_| InitialEnrollmentErrorV1::Expired)
+        if let Some(live) = &self.live_selection {
+            live.require_live().map_err(map_journal_error)?;
+            return Ok(());
+        }
+        #[cfg(test)]
+        if let Some(deadline) = &self.deadline {
+            return deadline
+                .check()
+                .map(|_| ())
+                .map_err(|_| InitialEnrollmentErrorV1::Expired);
+        }
+        Err(InitialEnrollmentErrorV1::Binding)
     }
 
     /// Consume the start attempt before inspecting the issuer response. Projections supplied
     /// by HTTP are checked against locally derived bytes and never authorize signing.
     /// Native C/JNI must copy bounded inputs and consume its exact registry ticket first.
-    pub(super) fn accept_challenge(
+    pub fn accept_challenge(
         self,
         canonical_challenge: &[u8],
         projection: IssuerChallengeProjectionV1<'_>,
@@ -248,6 +438,8 @@ impl PendingIssuerEnrollmentV1 {
     ) -> Result<()> {
         let selected_app = verified_app.selection();
         let credential = &self.qualification.credential;
+        let point_key_id: [u8; 32] =
+            Sha256::digest(credential.device_public_key.as_sec1_bytes()).into();
         let pinned_binding = KagemushaAppDevicePolicyBindingV1 {
             app_signing_identity_digest: self.app_policy.app_signing_identity_digest,
             app_release_digest: self.app_policy.app_release_digest,
@@ -259,6 +451,9 @@ impl PendingIssuerEnrollmentV1 {
         .canonical_digest()
         .map_err(|_| InitialEnrollmentErrorV1::Authority)?;
         if verified_app.authority_policy() != self.app_policy.as_ref()
+            || self
+                .expected_app_digest
+                .is_some_and(|digest| digest != verified_app.digest())
             || verified_app.static_binding_digest() != pinned_binding
             || credential.app_policy_binding_digest != pinned_binding
             || challenge.app_attestation_digest != verified_app.digest()
@@ -267,6 +462,7 @@ impl PendingIssuerEnrollmentV1 {
             || selected_app.release_id != self.qualification.release_id
             || selected_app.hardware_profile_id != credential.hardware_profile_id
             || selected_app.device_key_reference != credential.device_key_reference
+            || selected_app.attested_key_id != point_key_id
             || selected_app.lane_id != self.enrollment.owner.lane_id
         {
             return Err(InitialEnrollmentErrorV1::Binding);
@@ -325,17 +521,22 @@ impl PendingIssuerEnrollmentV1 {
 
 /// Untrusted response projections, decoded from the strict HTTP response without authority.
 /// The native phase compares both independently supplied identifiers with its own derivation.
-pub(super) struct IssuerChallengeProjectionV1<'a> {
-    pub(super) challenge_id: [u8; 32],
-    pub(super) account_signing_message: [u8; 32],
-    pub(super) device_request_id: [u8; 32],
-    pub(super) canonical_device_command: &'a [u8],
-    pub(super) expires_at_ms: u64,
+pub struct IssuerChallengeProjectionV1<'a> {
+    /// Digest identifying the issuer challenge.
+    pub challenge_id: [u8; 32],
+    /// Exact account-signing message, independently rederived by Core.
+    pub account_signing_message: [u8; 32],
+    /// Exact secure-device request identity.
+    pub device_request_id: [u8; 32],
+    /// Canonical command expected by the secure device.
+    pub canonical_device_command: &'a [u8],
+    /// Claimed issuer challenge expiry; Core checks it against the challenge.
+    pub expires_at_ms: u64,
 }
 
 /// One retained signing request, not an authenticated issuer decision or device admission.
 /// This state cannot be cloned, deserialized, or supplied a replacement challenge.
-pub(super) struct AcceptedIssuerChallengeV1 {
+pub struct AcceptedIssuerChallengeV1 {
     pending: PendingIssuerEnrollmentV1,
     challenge: KagemushaRetailEnrollmentChallengeV1,
     account_signing_message: [u8; 32],
@@ -345,24 +546,24 @@ pub(super) struct AcceptedIssuerChallengeV1 {
 }
 
 impl AcceptedIssuerChallengeV1 {
-    pub(super) fn account_signing_message(&self) -> Result<[u8; 32]> {
+    pub fn account_signing_message(&self) -> Result<[u8; 32]> {
         self.pending.require_unexpired()?;
         Ok(self.account_signing_message)
     }
 
-    pub(super) fn device_request_id(&self) -> Result<[u8; 32]> {
+    pub fn device_request_id(&self) -> Result<[u8; 32]> {
         self.pending.require_unexpired()?;
         Ok(self.device_request_id)
     }
 
-    pub(super) fn canonical_device_command(&self) -> Result<&[u8]> {
+    pub fn canonical_device_command(&self) -> Result<&[u8]> {
         self.pending.require_unexpired()?;
         Ok(&self.canonical_device_command)
     }
 
     /// Verify the account signature and complete command-bound device frame, then retain
     /// the sole canonical proof for exact HTTP retries. No host time is used or returned.
-    pub(super) fn prepare_proof(
+    pub fn prepare_proof(
         self,
         raw_account_signature: &[u8],
         device_response: &[u8],
@@ -433,7 +634,7 @@ impl AcceptedIssuerChallengeV1 {
 
 /// Exact verified possession signatures awaiting the issuer decision. It confers no issuer
 /// approval, trusted UTC or monetary authority. Retrying reads these same immutable bytes.
-pub(super) struct PreparedIssuerProofV1 {
+pub struct PreparedIssuerProofV1 {
     pending: PendingIssuerEnrollmentV1,
     challenge_id: [u8; 32],
     canonical_proof: Vec<u8>,
@@ -441,18 +642,18 @@ pub(super) struct PreparedIssuerProofV1 {
 }
 
 impl PreparedIssuerProofV1 {
-    pub(super) fn challenge_id(&self) -> Result<[u8; 32]> {
+    pub fn challenge_id(&self) -> Result<[u8; 32]> {
         self.pending.require_unexpired()?;
         Ok(self.challenge_id)
     }
 
-    pub(super) fn canonical_proof(&self) -> Result<&[u8]> {
+    pub fn canonical_proof(&self) -> Result<&[u8]> {
         self.pending.require_unexpired()?;
         Ok(&self.canonical_proof)
     }
 
     /// Consume this exact proof and the original native deadline before issuer admission.
-    pub(super) fn complete(self, canonical_certificate: &[u8]) -> Result<FreshIssuerAdmissionV1> {
+    pub fn complete(self, canonical_certificate: &[u8]) -> Result<FreshIssuerAdmissionV1> {
         self.pending.complete(
             &self.canonical_proof,
             canonical_certificate,
@@ -465,7 +666,7 @@ impl PreparedIssuerProofV1 {
 /// Construction consumes a native pending attempt and checks its original clock before and
 /// after all three signatures. Registry selection/current-owner checks remain mandatory.
 /// No constructor, deserializer or Clone permits a host to manufacture or duplicate this value.
-pub(super) struct FreshIssuerAdmissionV1 {
+pub struct FreshIssuerAdmissionV1 {
     pending: PendingIssuerEnrollmentV1,
     evidence: KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1,
     canonical_proof: Vec<u8>,
@@ -473,25 +674,30 @@ pub(super) struct FreshIssuerAdmissionV1 {
 }
 
 impl FreshIssuerAdmissionV1 {
-    pub(super) fn evidence(&self) -> &KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1 {
+    /// Recheck the original live ticket and deadline before this admission is used.
+    pub(super) fn require_live(&self) -> Result<()> {
+        self.pending.require_unexpired()
+    }
+
+    pub fn evidence(&self) -> &KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1 {
         &self.evidence
     }
-    pub(super) fn release(&self) -> &KagemushaAuthenticatedReleaseV1 {
+    pub fn release(&self) -> &KagemushaAuthenticatedReleaseV1 {
         &self.pending.release
     }
-    pub(super) fn issuer_policy(&self) -> &KagemushaRetailEnrollmentIssuerPolicyV1 {
+    pub fn issuer_policy(&self) -> &KagemushaRetailEnrollmentIssuerPolicyV1 {
         &self.pending.policy
     }
-    pub(super) fn native_authorization_public_key(&self) -> &KagemushaDevicePublicKeyV1 {
+    pub fn native_authorization_public_key(&self) -> &KagemushaDevicePublicKeyV1 {
         &self.pending.native_authorization_public_key
     }
-    pub(super) fn canonical_proof(&self) -> &[u8] {
+    pub fn canonical_proof(&self) -> &[u8] {
         &self.canonical_proof
     }
-    pub(super) fn canonical_certificate(&self) -> &[u8] {
+    pub fn canonical_certificate(&self) -> &[u8] {
         &self.canonical_certificate
     }
-    pub(super) fn enrollment_binding(&self) -> &KagemushaRecoveryEnrollmentBindingV1 {
+    pub fn enrollment_binding(&self) -> &KagemushaRecoveryEnrollmentBindingV1 {
         &self.pending.enrollment
     }
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {

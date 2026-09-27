@@ -359,7 +359,7 @@ test("package dist exposes strict CancelAssetLock V1 construction", () => {
 
 test("package dist requires a typed NetworkId in validation-fee ledger bindings", () => {
   const binding = {
-    schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
+    schema: "iroha.validation-fee-ledger-binding.v1",
     networkId: Buffer.from("13".repeat(32), "hex"),
     policyChainGenesisHash: "35".repeat(32),
     checkpoint: {

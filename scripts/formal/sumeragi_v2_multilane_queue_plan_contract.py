@@ -315,8 +315,14 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_BINDINGS = (
     ('crates/iroha_core/src/sumeragi/v2_candidate.rs',
      'method',
      'V2CandidateAssembler::snapshot_routable_candidates',
-     ('let queue_plan_synced =',
+     ('let mut queue_plan_barrier = false;',
+      'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
+      'let queue_plan_synced =',
       'TransactionAdmissionIntent::QueuePlanSynced',
+      'Ok(None) => {',
+      'queue_plan_barrier = true;',
+      'if queue_plan_barrier',
+      'exact_height_lifecycle_candidate(',
       'crate::torii_proxy::validate_queue_plan_binding_for_request(',
       'report.routable = report.routable.saturating_add(1)',
       'if queue_plan_synced',
@@ -405,12 +411,20 @@ QUEUE_PLAN_AUTONOMOUS_ONLY_ORDERED_SOURCE_CHECKS = (
     ('crates/iroha_core/src/sumeragi/v2_candidate.rs',
      'method',
      'V2CandidateAssembler::snapshot_routable_candidates',
-     ('let queue_plan_synced =',
+     ('let mut queue_plan_barrier = false;',
+      'if queue_plan_barrier && !exact_height_lifecycle_transaction(context, &transaction)',
+      'let queue_plan_synced =',
+      'Ok(None) => {',
+      'queue_plan_barrier = true;',
+      'continue;',
+      'if queue_plan_barrier',
+      'exact_height_lifecycle_candidate(',
       'crate::torii_proxy::validate_queue_plan_binding_for_request(',
       'report.routable = report.routable.saturating_add(1)',
       'if queue_plan_synced',
       'report.work_deferred = report.work_deferred.saturating_add(1)',
-      'break;',
+      'queue_plan_barrier = true;',
+      'continue;',
       'records.push(CandidateRecord {')),
     (
         "crates/iroha_core/src/queue.rs",
@@ -749,7 +763,7 @@ QUEUE_PLAN_STARTUP_REPLAY_BINDINGS = (
         "crates/iroha_core/src/queue.rs",
         "method",
         "Queue::reject_exact_queue_plan_admission_claim",
-        ("reject_exact_queue_plan_admission_claim_inner(binding, false)",),
+        ("reject_exact_queue_plan_admission_claim_inner(binding, true)",),
     ),
     (
         "crates/iroha_core/src/queue.rs",
@@ -1124,7 +1138,7 @@ QUEUE_PLAN_STARTUP_REPLAY_ORDERED_SOURCE_CHECKS = (
         "crates/iroha_core/src/queue.rs",
         "method",
         "Queue::reject_exact_queue_plan_admission_claim",
-        ("self.reject_exact_queue_plan_admission_claim_inner(binding, false)",),
+        ("self.reject_exact_queue_plan_admission_claim_inner(binding, true)",),
     ),
     (
         "crates/iroha_core/src/queue.rs",
@@ -2927,7 +2941,8 @@ QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS = (('crates/iroha_core/src/queue.rs',
    '    Available,\n'
    '    /// Autonomous ownership requires its checked direct release or Kura terminal proof.\n'
    '    Autonomous,\n'
-   '    /// Canonical State authenticated cleanup; an ordinary selection still owns the claim.\n'
+   '    /// Canonical replay or closed-route evidence authorized cleanup, but a\n'
+   '    /// selection or popped guard still owns the exact claim.\n'
    '    ReplayTerminalPending,\n'
    '}',)),
  ('crates/iroha_core/src/queue.rs',
@@ -2945,15 +2960,12 @@ QUEUE_PLAN_REPLAY_TERMINAL_BINDINGS = (('crates/iroha_core/src/queue.rs',
    '        if self.transaction_selection_durability_faulted() {\n'
    '            return;\n'
    '        }\n'
-   '        let binding = self.durable_plan_claims.get(&hash).and_then(|claim| {\n'
+   '        let claim = self.durable_plan_claims.get(&hash).and_then(|claim| {\n'
    '            (claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending)\n'
-   '                .then(|| claim.global_admission_binding())\n'
+   '                .then(|| claim.value().clone())\n'
    '        });\n'
-   '        let result = match binding {\n'
-   '            Some(Ok(binding)) => {\n'
-   '                self.reject_unreserved_replay_terminal_queue_plan_admission_claim(&binding)\n'
-   '            }\n'
-   '            Some(Err(reason)) => Err(LaneQueueReservationError::InvalidIdentity(reason)),\n'
+   '        let result = match claim {\n'
+   '            Some(claim) => self.reject_unreserved_terminal_plan_claim(&claim),\n'
    '            None => return,\n'
    '        };\n'
    '        match result {\n'
@@ -3290,6 +3302,11 @@ def validate_queue_plan_replay_terminal_custody(items: dict, errors: list[str]) 
             "let authorized_projection = checked.into_projection();",
             "journal.release_batch(release_keys)",
             ".local_custody = QueuePlanLocalCustody::Available;")
+    ordered("Queue::resume_replay_terminal_cleanup",
+            "claim.local_custody == QueuePlanLocalCustody::ReplayTerminalPending",
+            ".then(|| claim.value().clone())",
+            "Some(claim) => self.reject_unreserved_terminal_plan_claim(&claim)",
+            "Ok(true) => self.publish_backpressure_state(self.active_len(), None)")
     for symbol in ("Queue::resume_replay_terminal_cleanup", "Queue::resume_unowned_replay_terminal_cleanup",
                    "GlobalQueueSelectionLease::drop", "QueueSelectionAttempt<'_>::drop", "TransactionGuard::drop"):
         for forbidden in ("state.view(", "State::", "Kura::", "tokio::spawn(", "std::thread::spawn("):

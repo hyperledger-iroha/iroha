@@ -316,6 +316,9 @@ hash source or artifacts while reporting progress and does not impose an arbitra
 cold-build deadline. Captured source, tools and artifacts are checked at actual consumption
 and reuse boundaries. Runtime secrets remain excluded from the child environment.
 
+On a failed Linux build, the error includes the first bounded compiler or linker
+diagnostic found in that completed log; the full output remains private.
+
 Before initial source capture, local admission counts the signed Git blobs' exact
 byte sizes without reading unrelated worktree files.
 Before compilation, it groups requirements by filesystem and checks an 8 GiB
@@ -540,6 +543,9 @@ and rechecks their native digests, sizes, source and root-owned mode0755
 custody. It never creates missing binaries or invokes Cargo. Configuration,
 validator credentials and ledger state remain under their native owners. The
 updater submits no transactions and accepts no retired worker plan fields.
+During guest apply, it reports the phase, elapsed time and owner-private attempt
+path to stderr at start and every 30 seconds. A failed or timed-out child reports
+that path without printing captured stderr; submission has one bounded timeout.
 
 Artifact transfer, admission and apply share the existing root-owned, mode0600,
 empty, single-link `/var/lib/taira-deployment/.deployment.lock` with reset and

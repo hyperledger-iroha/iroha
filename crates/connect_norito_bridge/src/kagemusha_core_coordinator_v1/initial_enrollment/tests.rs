@@ -202,6 +202,7 @@ impl Fixture {
             release_id: selection.release_id,
             hardware_profile_id: selection.hardware_profile_id,
             device_key_reference: selection.device_key_reference,
+            attested_key_id: selection.attested_key_id,
             lane_id: selection.lane_id,
             issued_at_ms: 1_000,
             expires_at_ms: 2_000,

@@ -11,7 +11,7 @@ pub(super) fn observed<T: NoritoSerialize>(nominal: &str) {
         "/../../fixtures/core/kagemusha_state_frame_identity_observations.v1.json"
     )))
     .expect("original compiler observations");
-    assert_eq!(rows.len(), 64);
+    assert_eq!(rows.len(), 63);
     let mut directions = std::collections::BTreeSet::new();
     for row in rows
         .iter()

@@ -59,6 +59,23 @@ final class DetachedTransactionNativeBridgeTests: XCTestCase {
         }
     }
 
+    func testAtomicTransferBatchInspectionRetainsOrderAndRejectsExtraOrMissingLegs() throws {
+        let principal = """
+        {"kind":"asset_transfer","asset_definition_id":"asset","asset_scope":{"kind":"dataspace","dataspace_id":18446744073709551615},"source_asset_id":"principal","source_account_id":"source","destination_account_id":"recipient","amount":"10"}
+        """
+        let fee = principal.replacingOccurrences(of: "principal", with: "fee").replacingOccurrences(of: "recipient", with: "treasury").replacingOccurrences(of: "\"amount\":\"10\"", with: "\"amount\":\"1\"")
+        func json(_ legs: String) -> Data { Data("""
+        {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"source","network_id":"\(networkId.literal)","creation_time_ms":1,"time_to_live_ms":60000,"metadata":{"fee_instruction_index":1},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"asset_transfer_batch","transfers":[\(legs)]}}
+        """.utf8) }
+        let result = try DetachedTransactionBridgeJSONCodec.decodeInspection(json(principal + "," + fee))
+        guard case let .assetTransferBatch(transfers) = result.executable else { return XCTFail("batch") }
+        XCTAssertEqual(transfers.map(\.destinationAccountId), ["recipient", "treasury"])
+        XCTAssertEqual(transfers[0].assetScope, .dataspace(UInt64.max))
+        for legs in ["", principal, principal + "," + fee + "," + fee, principal + "," + fee.replacingOccurrences(of: "asset_transfer", with: "asset_transfer_batch"), principal + "," + fee.replacingOccurrences(of: "\"amount\":", with: "\"extra\":true,\"amount\":")] {
+            XCTAssertThrowsError(try DetachedTransactionBridgeJSONCodec.decodeInspection(json(legs)))
+        }
+    }
+
     func testInspectionRejectsSchemaHashBase64AndScopeSubstitution() {
         let valid = """
         {"schema":"iroha.detached_transaction_scaffold.v1","payload_signing_hash_hex":"\(hashA)","authority":"a","network_id":"\(networkId.literal)","creation_time_ms":1,"time_to_live_ms":60000,"metadata":{},"entrypoint_hash_hex":"\(hashB)","executable":{"kind":"contract_call","contract_address":"x","expected_code_hash":"hash:contract","entrypoint":"y","arguments_b64":null}}

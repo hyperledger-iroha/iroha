@@ -109,10 +109,10 @@ use iroha_data_model::{
         proof_box_max_proof_bytes_v1, verifying_key_id_field_is_portable,
     },
     query::{
-        CommittedTransaction, QueryItemKind, QueryOutputBatchBox, QueryRequest, QueryResponse,
-        QueryWithParams, SingularQueryBox,
+        CommittedTransaction, CommittedTxFilters, QueryItemKind, QueryOutputBatchBox, QueryRequest,
+        QueryResponse, QueryWithParams, SingularQueryBox,
         block::prelude::FindBlocks,
-        dsl::{CommittedTxPredicate, CompoundPredicate, SelectorTuple},
+        dsl::{CompoundPredicate, SelectorTuple},
         escrow::prelude::{FindAssetEscrowById, FindAssetEscrowsByBuyer, FindAssetEscrowsBySeller},
         parameters::QueryParams,
         transaction::prelude::FindTransactions,
@@ -11981,9 +11981,13 @@ fn build_find_committed_transaction_query_py(
 ) -> PyResult<Py<PyBytes>> {
     let transaction_hash =
         parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
-    let predicate = CompoundPredicate::<CommittedTransaction>::from_committed_tx_predicate(
-        CommittedTxPredicate::EntryEq(transaction_hash),
-    );
+    // First-release Torii permits the narrow wallet-self recovery scope only
+    // when the exact transaction authority and entrypoint hash are both bound.
+    let predicate = CompoundPredicate::<CommittedTransaction>::from_filters(CommittedTxFilters {
+        authority_eq: Some(parse_account_id(authority)?),
+        entry_eq: Some(transaction_hash),
+        ..CommittedTxFilters::default()
+    });
     let request = QueryRequest::Start(QueryWithParams {
         query: (),
         query_payload: norito::codec::Encode::encode(&FindTransactions),
@@ -12204,17 +12208,15 @@ fn batch_outcome_json(outcome: &AssetBatchTransferOutcome) -> PyResult<json::Val
 fn verify_committed_transaction_inclusion_json_py(
     transaction_hash: &str,
     transaction_response_bytes: &[u8],
-    executed_block_wire: &[u8],
     finality_bundle_chain_json: &str,
     expected_network_id: &PyNetworkId,
     trusted_height_context_id: &str,
 ) -> PyResult<String> {
     let expected = parse_typed_hash::<TransactionEntrypoint>(transaction_hash, "transaction hash")?;
-    let (committed, carrier, bundle) =
+    let (committed, bundle) =
         committed_transaction_verification::authenticate_committed_transaction(
             expected,
             transaction_response_bytes,
-            executed_block_wire,
             finality_bundle_chain_json,
             *expected_network_id.as_inner(),
             trusted_height_context_id,
@@ -12298,6 +12300,10 @@ fn verify_committed_transaction_inclusion_json_py(
     })?;
     let mut result = norito::json::Map::new();
     result.insert(
+        "proof_kind".into(),
+        json::Value::String("selective-v1".into()),
+    );
+    result.insert(
         "network_id".into(),
         json::to_value(&bundle.commitment.network_id)
             .map_err(|error| PyValueError::new_err(error.to_string()))?,
@@ -12332,7 +12338,7 @@ fn verify_committed_transaction_inclusion_json_py(
     );
     result.insert(
         "block_height".into(),
-        norito::json::Value::from(carrier.header().height().get()),
+        norito::json::Value::from(bundle.commitment.block_height),
     );
     result.insert(
         "output_hash".into(),
@@ -13287,6 +13293,11 @@ fn verify_prepared_transaction_context_v1_py(
     signed.verify_signature().map_err(|_| {
         PyValueError::new_err("prepared transaction has an invalid authority signature")
     })?;
+    if signed.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+        return Err(PyValueError::new_err(
+            "prepared transaction requires QueuePlanSynced admission",
+        ));
+    }
     if signed.network_id() != Some(network_id.as_inner())
         || signed.authority() != &expected_authority
         || signed.payload().fee_payment != expected_fee_payment

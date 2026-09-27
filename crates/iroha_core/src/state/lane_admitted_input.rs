@@ -1,7 +1,5 @@
 //! Immutable first-admission source authority, distinct from live lane eligibility.
 //!
-//! TODO: connect the recovery-required outcome to the existing bounded body
-//! request/completion owner and retain custody through native RS16 materialization.
 
 use std::num::NonZeroUsize;
 
@@ -39,6 +37,22 @@ pub(crate) struct AuthenticatedLaneAdmittedInputSourceV1 {
 }
 
 impl AuthenticatedLaneAdmittedInputSourceV1 {
+    /// Whether the same pinned first admission belongs to a lane in this set.
+    /// The caller must separately prove the observation is still current before
+    /// using absence to retire a request; historical source authority alone
+    /// cannot justify a new candidate request.
+    pub(crate) fn is_current_in(&self, observed: &VerifiedLaneContexts) -> bool {
+        observed.contexts().iter().any(|lane| {
+            let frozen = lane.frozen();
+            frozen.network_id == self.network_id
+                && frozen.admission_priority == self.priority
+                && frozen.admitted_binding_hash == self.binding_hash
+                && frozen.lane_id == self.lane_id
+                && frozen.dataspace_id == self.dataspace_id
+                && frozen.lane_incarnation == self.incarnation
+        })
+    }
+
     /// Exact historical context, CommitQC and PoPs for existing body recovery.
     pub(crate) fn finality(&self) -> &wire::finality::V2FinalityArtifact {
         &self.finality

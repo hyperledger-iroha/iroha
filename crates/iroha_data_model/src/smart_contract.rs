@@ -2509,3 +2509,6 @@ mod additional_frame_owner_identity_tests {
         >("iroha_data_model::smart_contract::model::ContractLifecycleControlV1");
     }
 }
+
+/// Canonical current contract-multisig construction shared by clients and Torii.
+pub mod multisig_call;

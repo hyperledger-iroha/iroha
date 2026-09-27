@@ -582,7 +582,7 @@ height-context state are not migrated in place.
   durable full-candidate authorization, ordered two-phase release, ABA-safe
   recreation, exact pristine/post-block-pre-vote/finalized carrier metadata,
   at-most-once canonical application, exact global QueuePlan CAS,
-  certificate-before-acceptance durability, Exact-gated queue eligibility,
+  exact canonical membership before public acceptance, Exact-gated queue eligibility,
   autonomous-only QueuePlan execution, immutable admission tombstones, and
   cancellation. The closure-ledger
   predicates additionally cover atomic route publication, quorum-bound drain

@@ -5,6 +5,9 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.nio.file.Files
 import java.nio.file.Paths
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -12,10 +15,10 @@ import kotlin.test.assertFailsWith
 
 class KagemushaCoreCoordinatorFrameV1Test {
     @Test
-    fun `all native methods agree with the shared current schema vectors`() {
+    fun `coordinator methods agree with the shared current schema vectors`() {
         val cases = fixtures()
-        assertEquals((1..11).toSet(), cases.map { it.method.code }.toSet())
-        assertEquals(18, cases.size)
+        assertEquals((1..13).toSet(), cases.map { it.method.code }.toSet())
+        assertEquals(20, cases.size)
         cases.forEach { case ->
             val request = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
             val response = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
@@ -84,7 +87,7 @@ class KagemushaCoreCoordinatorFrameV1Test {
     fun `response identity or envelope substitution fails for every correlated method`() {
         val indexes = mapOf("reserve" to 0, "begin-send" to 0, "begin-redeem" to 0,
             "installed-terminal" to 0, "recover-sender" to 0, "recover-terminal" to 1,
-            "release-send" to 3, "release-redeem" to 3)
+            "release-send" to 3, "release-redeem" to 3, "app-attest-ack" to 0)
         fixtures().filter { it.name in indexes }.forEach { case ->
             val fields = KagemushaCoreCoordinatorFrameV1.decodeResponse(case.method, case.request, case.response)
             fields[indexes.getValue(case.name)][0] = 0x7f
@@ -103,7 +106,8 @@ class KagemushaCoreCoordinatorFrameV1Test {
         assertContentEquals(case.request, encoded)
         val valid = KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, case.request)
         assertFailsWith<IllegalArgumentException> {
-            KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method, valid.take(2) + listOf(ByteArray(65537)))
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(case.method,
+                valid.take(2) + listOf(ByteArray(KagemushaCoreCoordinatorFrameV1.MAXIMUM_FIELD_BYTES + 1)))
         }
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.decodeRequest(case.method, ByteArray(262145))
@@ -115,6 +119,82 @@ class KagemushaCoreCoordinatorFrameV1Test {
         val prove = fixtures().single { it.name == "prove" }
         assertFailsWith<IllegalArgumentException> {
             KagemushaCoreCoordinatorFrameV1.decodeResponse(prove.method, prove.request, ByteArray(131073))
+        }
+    }
+
+    @Test
+    fun `initial enrollment bounds full device response and correlates native ticket`() {
+        val method = KagemushaCoreCoordinatorMethodV1.INITIAL_ENROLLMENT
+        val ticket = KagemushaCoreCoordinatorFrameV1.u32(7) + KagemushaCoreCoordinatorFrameV1.u32(0)
+        val begin = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(1), "i105example".toByteArray(Charsets.UTF_8)))
+        val response = listOf(ticket, ByteArray(32) { 0x44 }, ByteArray(32) { 0x45 },
+            ByteArray(32) { 0x46 }, ByteArray(32) { 0x47 })
+        val responseFrame = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin, response)
+        val decoded = KagemushaCoreCoordinatorFrameV1.decodeResponse(method, begin, responseFrame)
+        decoded.zip(response).forEach { (left, right) -> assertContentEquals(right, left) }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, begin,
+                listOf(ticket, response[1], response[2], response[3], byteArrayOf(0x45)))
+        }
+        val challenge = listOf(KagemushaCoreCoordinatorFrameV1.u32(2), ticket,
+            ByteArray(273) { 0x51 }, byteArrayOf(0x52), byteArrayOf(0x53), byteArrayOf(0x54),
+            ByteArray(32) { 0x55 }, ByteArray(32) { 0x56 }, ByteArray(32) { 0x57 },
+            byteArrayOf(0x58), ticket)
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, challenge)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+                challenge.take(2) + listOf(ByteArray(272) { 0x51 }) + challenge.drop(3))
+        }
+        val prepare = listOf(KagemushaCoreCoordinatorFrameV1.u32(3), ticket,
+            ByteArray(64) { 0x46 }, ByteArray(65_716) { 0x47 })
+        KagemushaCoreCoordinatorFrameV1.encodeRequest(method, prepare)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+                prepare.dropLast(1) + listOf(ByteArray(65_717) { 0x47 }))
+        }
+        val read = KagemushaCoreCoordinatorFrameV1.encodeRequest(method,
+            listOf(KagemushaCoreCoordinatorFrameV1.u32(4), ticket))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeResponse(method, read,
+                listOf(ByteArray(8), ByteArray(32) { 1 }, byteArrayOf(1)))
+        }
+    }
+
+    @Test
+    fun `App Attest commit acknowledgment binds every original byte and exact next counter`() {
+        val method = KagemushaCoreCoordinatorMethodV1.ACKNOWLEDGE_COMMITTED_APP_ATTEST
+        val domain = "iroha:kagemusha:v1:hardware-transition-selection\u0000".toByteArray(Charsets.US_ASCII)
+        val selection = domain + ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(403).array() +
+            ByteArray(403) { 0x42 }
+        val request = listOf(ByteArray(32) { 0x11 }, "app-attest-key".toByteArray(Charsets.UTF_8),
+            selection, byteArrayOf(0xa2.toByte(), 1, 2), KagemushaCoreCoordinatorFrameV1.u32(4),
+            ByteArray(32) { 0x33 }, ByteArray(32) { 0x44 })
+        val encoded = KagemushaCoreCoordinatorFrameV1.encodeRequest(method, request)
+        val response = listOf(request[0], MessageDigest.getInstance("SHA-256").digest(request[1]),
+            MessageDigest.getInstance("SHA-256").digest(request[2]),
+            MessageDigest.getInstance("SHA-256").digest(request[3]),
+            KagemushaCoreCoordinatorFrameV1.u32(5), request[5], request[6])
+        val reply = KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, response)
+        KagemushaCoreCoordinatorFrameV1.decodeResponse(method, encoded, reply)
+        response.indices.forEach { index ->
+            val changed = response.map { it.copyOf() }
+            changed[index][0] = (changed[index][0].toInt() xor 1).toByte()
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeResponse(method, encoded, changed)
+            }
+        }
+        request.indices.forEach { index ->
+            val changed = request.map { it.copyOf() }.toMutableList()
+            changed[index] = ByteArray(0)
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaCoreCoordinatorFrameV1.encodeRequest(method, changed)
+            }
+        }
+        val exhausted = request.map { it.copyOf() }.toMutableList()
+        exhausted[4] = KagemushaCoreCoordinatorFrameV1.u32(-1)
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaCoreCoordinatorFrameV1.encodeRequest(method, exhausted)
         }
     }
 

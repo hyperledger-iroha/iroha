@@ -83,9 +83,10 @@ public final class KagemushaToriiClientV1 {
         .thenApply(UnverifiedOperationStatus::new);
   }
 
+  /** Returns null only for Torii's exact unknown-operation 404; other 404 responses fail. */
   public CompletableFuture<UnverifiedOperationStatus> getOperation(final byte[] operationId) {
     return delegate.getOperation(Objects.requireNonNull(operationId, "operationId").clone())
-        .thenApply(UnverifiedOperationStatus::new);
+        .thenApply(status -> status == null ? null : new UnverifiedOperationStatus(status));
   }
 
   private static byte[] requireNonzero32(final byte[] value, final String fieldName) {

@@ -153,6 +153,9 @@ CURRENT_REVIEWED_INCLUDE_COMPONENTS = (
         ("runtime_catalog_commit_tests.rs", "runtime_catalog_final_overlay_rechecks_late_validator_invalidation"),
     )),
     ("crates/iroha_core/src/kura.rs", (
+        ("kura/tests/19_transaction_history_budget.rs", "transaction_history_budget_rejects_zero_before_storage_creation"),
+        ("kura/tests/19_transaction_history_budget.rs", "transaction_history_budget_retains_the_configured_pool_and_refunds_once"),
+        ("kura/tests/19_transaction_history_budget.rs", "transaction_history_budget_test_stores_have_finite_independent_pools"),
         ("kura/native_amx_publication_capacity.rs", "rebuild_native_amx_publication_capacity_on_startup"),
         ("kura/native_amx_publication_index.rs", "read_native_amx_publication_index_for_store"),
         ("kura/native_amx_publication_startup_pins.rs", "native_amx_publication_pins_before_storage_recovery"),
@@ -373,10 +376,11 @@ def canonical_models() -> list[dict]:
     [
         (None, None, None),
         ("build_merge_execution_candidate_for_consensus", "deterministic_start_work_pending(&application_block_header)?", "deterministic_start_work_pending(&application_block_header).ok().flatten()"),
-        ("build_merge_execution_candidate_for_consensus", ".map_err(StateBlockStartError::History)", ".or_else(|_| Ok(None))"),
+        ("build_merge_execution_candidate_for_consensus", ".map_err(StateBlockStartError::from)", ".or_else(|_| Ok(None))"),
         ("select_merge_execution_candidate_for_consensus", "        )?;", "        ).unwrap_or(None);"),
         ("select_merge_execution_candidate_prefix", "build_batch(midpoint)?", "build_batch(midpoint).unwrap_or(None)"),
-        ("build_merge_execution_batch_from_source_prefix", "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error),", "Err(MergeLedgerCommitError::BlockHashAdmission(_)) => return Ok(None),"),
+        ("build_merge_execution_batch_from_source_prefix", "Err(MergeLedgerCommitError::BlockHashAdmission(error)) => return Err(error.into()),", "Err(MergeLedgerCommitError::BlockHashAdmission(_)) => return Ok(None),"),
+        ('build_merge_execution_batch_from_source_prefix', 'Err(MergeLedgerCommitError::MembershipAdmission(error)) => return Err(error.into()),', 'Err(MergeLedgerCommitError::MembershipAdmission(_)) => return Ok(None),'),
 
         (
             "select_merge_execution_candidate_for_consensus",
@@ -394,7 +398,7 @@ def canonical_models() -> list[dict]:
             "true",
         ),
     ],
-    ids=("current", "probe-refusal", "selector-refusal", "prefix-refusal", "trial-refusal", "scratch-refusal", "historical-committee", "final-generation", "whole-candidate-budget"),
+    ids=("current", "probe-refusal", "selector-refusal", "prefix-refusal", "trial-refusal", "scratch-refusal", "membership-refusal", "historical-committee", "final-generation", "whole-candidate-budget"),
 )
 def test_merge_candidate_builder_source_contract(
     tmp_path: Path, symbol: str | None, old: str | None, new: str | None
@@ -2313,56 +2317,24 @@ def test_inflight_layout_contract_rejects_execution_provider_releasing_pending_a
 @pytest.mark.parametrize(
     ("old", "new", "symbol", "required"),
     (
-        (
-            "super::v2_npos::validate_candidate_context(",
-            "super::v2_npos::validate_candidate_context_unchecked(",
-            "candidate_attachments",
-            "validate_candidate_context(",
-        ),
-        (
-            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
-            "!effects.penalty_actions.is_empty()",
-            "candidate_attachments",
-            "certified_merge_selection_for_npos",
-        ),
-        (
-            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
-            "!effects.v2_evidence_admissions.is_empty()",
-            "candidate_attachments",
-            "certified_merge_selection_for_npos",
-        ),
-        (
-            "!effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()",
-            "!effects.v2_evidence_admissions.is_empty() && !effects.penalty_actions.is_empty()",
-            "candidate_attachments",
-            "certified_merge_selection_for_npos",
-        ),
-        (
-            "certified_merge_selection_for_npos(\n        npos_consensus_effects.as_ref().is_some_and(|effects| {\n            !effects.v2_evidence_admissions.is_empty() || !effects.penalty_actions.is_empty()\n        }),\n    )",
-            "certified_merge_selection_for_npos(npos_consensus_effects.is_some())",
-            "candidate_attachments",
-            "certified_merge_selection_for_npos",
-        ),
-        (
-            "!selection.allows_execution() && entry.execution_batch.is_some()",
-            "false && entry.execution_batch.is_some()",
-            "State::select_pending_certified_merge_entry_for_round",
-            "!selection.allows_execution() && entry.execution_batch.is_some()",
-        ),
-        (
-            "matches!(self, Self::Any)",
-            "true",
-            "PendingCertifiedMergeSelection::allows_execution",
-            "matches!(self, Self::Any)",
-        ),
-        (
-            "work_provider: &mut *lane_work",
-            "work_provider: &mut *unchecked_lane_work",
-            "schedule_local_proposal",
-            "work_provider: &mut *lane_work",
-        ),
+        ("super::v2_npos::validate_candidate_context(", "super::v2_npos::validate_candidate_context_unchecked(",
+         "candidate_attachments", "validate_candidate_context("),
+        ("let Some(assembly) = native.assemble_candidate(", "let Some(assembly) = unchecked.assemble_candidate(",
+         "schedule_local_proposal", "native.assemble_candidate("),
+        ("native.retain_candidate_source(source);", "drop(source);",
+         "schedule_local_proposal", "native.retain_candidate_source(source)"),
+        ("let assembly = outcome?;", "let assembly = manufactured_outcome?;",
+         "schedule_local_proposal", "let assembly = outcome?;"),
+        ("proposal_state.global_selection = Some(PendingGlobalSelection {", "proposal_state.foreign_selection = Some(PendingGlobalSelection {",
+         "schedule_local_proposal", "proposal_state.global_selection"),
+        ("_lease: selection_lease", "_lease: foreign_lease",
+         "schedule_local_proposal", "_lease: selection_lease"),
+        ("!selection.allows_execution() && entry.execution_batch.is_some()", "false && entry.execution_batch.is_some()",
+         "State::select_pending_certified_merge_entry_for_round", "!selection.allows_execution() && entry.execution_batch.is_some()"),
+        ("matches!(self, Self::Any)", "true", "PendingCertifiedMergeSelection::allows_execution", "matches!(self, Self::Any)"),
     ),
 )
+
 def test_inflight_layout_contract_rejects_weakened_execution_carrier_priority(
     tmp_path: Path,
     old: str,

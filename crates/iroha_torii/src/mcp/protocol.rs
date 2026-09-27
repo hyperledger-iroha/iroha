@@ -1,9 +1,7 @@
 //! MCP protocol-version and Streamable HTTP request validation.
 //!
-//! Torii serves both the native stateless 2026 protocol and the existing
-//! initialization-based 2025 compatibility path from the same `/v1/mcp`
-//! endpoint. This module keeps era selection and header/body agreement out of
-//! the semantic tool dispatcher.
+//! Torii serves only the stateless 2026 protocol at `/v1/mcp`.
+//! This module validates header/body agreement before semantic tool dispatch.
 
 use axum::http::HeaderMap;
 use iroha_torii_shared::mcp as wire;
@@ -11,9 +9,6 @@ use norito::json::{Map, Value};
 
 /// Native stateless MCP protocol revision served by Torii.
 pub(crate) const MODERN_PROTOCOL_VERSION: &str = wire::MODERN_PROTOCOL_VERSION;
-/// Existing initialization-based MCP protocol revision retained for clients
-/// which have not yet migrated to per-request metadata.
-pub(crate) const LEGACY_PROTOCOL_VERSION: &str = wire::LEGACY_PROTOCOL_VERSION;
 
 pub(crate) const HEADER_PROTOCOL_VERSION: &str = wire::HEADER_PROTOCOL_VERSION;
 pub(crate) const HEADER_METHOD: &str = wire::HEADER_METHOD;
@@ -35,28 +30,10 @@ const MCP_HEADER_MISMATCH: i64 = -32020;
 const MCP_MISSING_REQUIRED_CLIENT_CAPABILITY: i64 = -32021;
 const MCP_UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
 
-/// Protocol behavior selected independently for each accepted HTTP request.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProtocolEra {
-    /// Initialization-based `2025-06-18` compatibility behavior.
-    Legacy,
-    /// Stateless, self-describing `2026-07-28` behavior.
-    Modern,
-}
-
-impl ProtocolEra {
-    /// Whether this request uses the stateless 2026 protocol.
-    pub(crate) const fn is_modern(self) -> bool {
-        matches!(self, Self::Modern)
-    }
-}
-
 /// Header and body metadata validated before semantic MCP dispatch.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ValidatedRequest {
-    /// Selected protocol era.
-    pub(crate) era: ProtocolEra,
-    /// Exact JSON-RPC method mirrored by `Mcp-Method` for modern requests.
+    /// Exact JSON-RPC method mirrored by `Mcp-Method`.
     pub(crate) method: String,
 }
 
@@ -84,64 +61,13 @@ pub(crate) struct ValidationError {
     pub(crate) payload: Value,
 }
 
-/// Select and validate the MCP era for one Streamable HTTP request.
+/// Validate one stateless MCP Streamable HTTP request.
 pub(crate) fn validate_request(
     headers: &HeaderMap,
     request: &Value,
 ) -> Result<ValidatedRequest, ValidationError> {
     let request_id = response_id(request);
-    let method = request
-        .as_object()
-        .and_then(|object| object.get("method"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let body_protocol = request_protocol_version(request);
-    let header_protocol = unique_header(headers, HEADER_PROTOCOL_VERSION);
-
-    if matches!(header_protocol, UniqueHeader::One(LEGACY_PROTOCOL_VERSION))
-        && body_protocol.is_none()
-    {
-        return method
-            .map(|method| ValidatedRequest {
-                era: ProtocolEra::Legacy,
-                method,
-            })
-            .ok_or_else(|| invalid_request(request_id, "method must be a string"));
-    }
-
-    if matches!(header_protocol, UniqueHeader::Missing)
-        && body_protocol.is_none()
-        && method.as_deref() == Some("initialize")
-    {
-        return Ok(ValidatedRequest {
-            era: ProtocolEra::Legacy,
-            method: "initialize".to_owned(),
-        });
-    }
-
-    if body_protocol.is_some()
-        || matches!(header_protocol, UniqueHeader::One(MODERN_PROTOCOL_VERSION))
-    {
-        return validate_modern_request(headers, request, request_id);
-    }
-
-    match header_protocol {
-        UniqueHeader::One(requested) => {
-            Err(unsupported_protocol_version(request_id, Some(requested)))
-        }
-        UniqueHeader::Missing | UniqueHeader::Ambiguous => Err(legacy_protocol_header_error(
-            request_id,
-            "unsupported or ambiguous MCP-Protocol-Version header",
-        )),
-    }
-}
-
-/// Return whether exactly one transport version header selects the modern era.
-pub(crate) fn header_declares_modern(headers: &HeaderMap) -> bool {
-    matches!(
-        unique_header(headers, HEADER_PROTOCOL_VERSION),
-        UniqueHeader::One(MODERN_PROTOCOL_VERSION)
-    )
+    validate_modern_request(headers, request, request_id)
 }
 
 fn validate_modern_request(
@@ -155,18 +81,24 @@ fn validate_modern_request(
     if request_object.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
         return Err(invalid_request(request_id, "jsonrpc must be \"2.0\""));
     }
-    if !request_object
-        .get("id")
-        .is_some_and(valid_modern_request_id)
-    {
-        return Err(invalid_request(
-            request_id,
-            "modern MCP requests require a non-null string or integer id",
-        ));
-    }
     let Some(method) = request_object.get("method").and_then(Value::as_str) else {
         return Err(invalid_request(request_id, "method must be a string"));
     };
+    if method == "notifications/initialized" {
+        return Err(invalid_request(
+            request_id,
+            "notifications/initialized is not part of the stateless MCP protocol",
+        ));
+    }
+    let valid_id = request_object
+        .get("id")
+        .is_some_and(valid_modern_request_id);
+    if !valid_id && !(request_object.get("id").is_none() && method.starts_with("notifications/")) {
+        return Err(invalid_request(
+            request_id,
+            "stateless MCP requests require a non-null string or integer id; notifications omit id",
+        ));
+    }
     let Some(params) = request_object.get("params").and_then(Value::as_object) else {
         return Err(invalid_params(
             request_id,
@@ -233,7 +165,6 @@ fn validate_modern_request(
         return Err(missing_required_client_capability(request_id));
     }
     Ok(ValidatedRequest {
-        era: ProtocolEra::Modern,
         method: method.to_owned(),
     })
 }
@@ -330,17 +261,6 @@ fn unique_header<'a>(headers: &'a HeaderMap, name: &str) -> UniqueHeader<'a> {
     value
         .to_str()
         .map_or(UniqueHeader::Ambiguous, UniqueHeader::One)
-}
-
-fn request_protocol_version(request: &Value) -> Option<&str> {
-    request
-        .as_object()
-        .and_then(|object| object.get("params"))
-        .and_then(Value::as_object)
-        .and_then(|params| params.get("_meta"))
-        .and_then(Value::as_object)
-        .and_then(|meta| meta.get(META_PROTOCOL_VERSION))
-        .and_then(Value::as_str)
 }
 
 fn validate_request_meta(meta: &Map) -> Result<(), &'static str> {
@@ -582,10 +502,7 @@ fn unsupported_protocol_version(id: Option<Value>, requested: Option<&str>) -> V
     let mut data = Map::new();
     data.insert(
         "supported".into(),
-        Value::Array(vec![
-            Value::String(MODERN_PROTOCOL_VERSION.to_owned()),
-            Value::String(LEGACY_PROTOCOL_VERSION.to_owned()),
-        ]),
+        Value::Array(vec![Value::String(MODERN_PROTOCOL_VERSION.to_owned())]),
     );
     data.insert(
         "requested".into(),
@@ -599,31 +516,6 @@ fn unsupported_protocol_version(id: Option<Value>, requested: Option<&str>) -> V
             "Unsupported protocol version",
             Some(Value::Object(data)),
         ),
-    }
-}
-
-fn legacy_protocol_header_error(id: Option<Value>, message: &str) -> ValidationError {
-    let mut data = Map::new();
-    data.insert(
-        "error_code".into(),
-        Value::String("unsupported_protocol_version".to_owned()),
-    );
-    data.insert(
-        "supported_protocol_version".into(),
-        Value::String(LEGACY_PROTOCOL_VERSION.to_owned()),
-    );
-    let mut payload = error_response(
-        id,
-        JSONRPC_INVALID_REQUEST,
-        message,
-        Some(Value::Object(data)),
-    );
-    if let Some(payload) = payload.as_object_mut() {
-        payload.entry("id".into()).or_insert(Value::Null);
-    }
-    ValidationError {
-        kind: ValidationErrorKind::UnsupportedProtocolVersion,
-        payload,
     }
 }
 
@@ -720,7 +612,6 @@ mod tests {
         assert_eq!(
             validate_request(&headers, &request).expect("valid modern request"),
             ValidatedRequest {
-                era: ProtocolEra::Modern,
                 method: "tools/list".to_owned()
             }
         );
@@ -975,39 +866,45 @@ mod tests {
     }
 
     #[test]
-    fn legacy_initialize_and_header_requests_remain_supported() {
+    fn retired_initialize_and_2025_header_requests_are_rejected() {
         let initialize = norito::json!({
             "jsonrpc": "2.0",
             "id": 1,
             "method": "initialize",
             "params": {
-                "protocolVersion": LEGACY_PROTOCOL_VERSION,
+                "protocolVersion": "2025-06-18",
                 "capabilities": {},
                 "clientInfo": { "name": "legacy", "version": "1" }
             }
         });
         assert_eq!(
             validate_request(&HeaderMap::new(), &initialize)
-                .expect("legacy initialize")
-                .era,
-            ProtocolEra::Legacy
+                .expect_err("initialize handshake is retired")
+                .kind,
+            ValidationErrorKind::InvalidParams
         );
 
         let mut headers = HeaderMap::new();
         headers.insert(
             HEADER_PROTOCOL_VERSION,
-            HeaderValue::from_static(LEGACY_PROTOCOL_VERSION),
+            HeaderValue::from_static("2025-06-18"),
         );
         let request = norito::json!({
             "jsonrpc": "2.0",
             "id": 2,
-            "method": "tools/list"
+            "method": "tools/list",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2025-06-18",
+                    "io.modelcontextprotocol/clientCapabilities": {}
+                }
+            }
         });
         assert_eq!(
             validate_request(&headers, &request)
-                .expect("legacy tool list")
-                .era,
-            ProtocolEra::Legacy
+                .expect_err("2025 protocol is retired")
+                .kind,
+            ValidationErrorKind::UnsupportedProtocolVersion
         );
     }
 

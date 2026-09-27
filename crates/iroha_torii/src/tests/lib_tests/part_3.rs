@@ -2736,3 +2736,175 @@ async fn proof_request_rate_limit_admits_max_body_cost_and_throttles_repetition(
         }
     ));
 }
+
+#[tokio::test]
+async fn signed_history_feed_requires_signer_exact_dataspace_permission_and_asset_policy() {
+    let keypair = checked_torii_test_ed25519_keypair(
+        0xd1,
+        "derive signed history feed authority fixture key",
+    );
+    let caller = AccountId::new(keypair.public_key().clone());
+    let world = World::with([], [Account::new(caller.clone()).build(&caller)], []);
+    let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests_with_world_and_nexus(
+        world,
+        crate::tests_runtime_handlers::private_ingress_nexus_for_test(),
+    );
+    configure_private_ingress_routes_for_test(&mut app);
+    let method = Method::GET;
+    let uri: axum::http::Uri =
+        "/v1/transactions/history?dataspace_id=restricted&limit=5&count_mode=bounded"
+            .parse()
+            .expect("history uri");
+    let mut headers = signed_app_headers(&caller, &keypair, &method, &uri, &[]);
+    headers.insert(
+        "x-dataspace-id",
+        "restricted".parse().expect("dataspace header"),
+    );
+
+    let denied = signed_tx_history_dataspace_from_headers(&app, &headers, &caller, "restricted")
+        .expect_err("a signature alone must not grant restricted history");
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+
+    grant_account_permissions_for_test(
+        &app,
+        &caller,
+        [Permission::from(CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        })],
+    );
+    assert_eq!(
+        signed_tx_history_dataspace_from_headers(&app, &headers, &caller, "restricted")
+            .expect("exact dataspace grant"),
+        "restricted"
+    );
+
+    let policy_unavailable = handler_transactions_history_get(
+        State(app.clone()),
+        method.clone(),
+        uri.clone(),
+        headers.clone(),
+        AxQuery(routing::AccountTransactionsGetParams {
+            limit: Some(5),
+            dataspace_id: Some("restricted".to_owned()),
+            count_mode: Some("bounded".to_owned()),
+            ..Default::default()
+        }),
+    )
+    .await
+    .expect("missing asset policy produces a bounded service response");
+    assert_eq!(policy_unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    let mut duplicate = headers.clone();
+    duplicate.append("x-dataspace-id", "restricted".parse().expect("header"));
+    assert_eq!(
+        signed_tx_history_dataspace_from_headers(&app, &duplicate, &caller, "restricted")
+            .expect_err("duplicate scope selector")
+            .status(),
+        StatusCode::BAD_REQUEST,
+    );
+    let mut wrong_scope = headers.clone();
+    wrong_scope.insert("x-dataspace-id", "unknown".parse().expect("header"));
+    assert_eq!(
+        signed_tx_history_dataspace_from_headers(&app, &wrong_scope, &caller, "restricted")
+            .expect_err("unknown scope selector")
+            .status(),
+        StatusCode::BAD_REQUEST,
+    );
+    let mut changed_scope = headers.clone();
+    changed_scope.insert("x-dataspace-id", "governance".parse().expect("header"));
+    assert_eq!(
+        signed_tx_history_dataspace_from_headers(&app, &changed_scope, &caller, "restricted")
+            .expect_err("header cannot change signed scope")
+            .status(),
+        StatusCode::BAD_REQUEST,
+    );
+
+    let mut bearer_only = HeaderMap::new();
+    bearer_only.insert("x-dataspace-id", "restricted".parse().expect("header"));
+    bearer_only.insert(
+        axum::http::header::AUTHORIZATION,
+        "Bearer old-viewer-token".parse().expect("bearer header"),
+    );
+    let unsigned = handler_transactions_history_get(
+        State(app.clone()),
+        method.clone(),
+        uri.clone(),
+        bearer_only,
+        AxQuery(routing::AccountTransactionsGetParams::default()),
+    )
+    .await
+    .expect_err("bearer claims must not establish the viewer");
+    assert!(matches!(
+        unsigned,
+        Error::AppUnauthorized {
+            code: "tx_history_signature_required",
+            ..
+        }
+    ));
+
+    let altered_uri: axum::http::Uri =
+        "/v1/transactions/history?dataspace_id=restricted&limit=6&count_mode=bounded"
+            .parse()
+            .expect("altered uri");
+    let altered = handler_transactions_history_get(
+        State(app),
+        method,
+        altered_uri,
+        headers,
+        AxQuery(routing::AccountTransactionsGetParams::default()),
+    )
+    .await
+    .expect_err("signature must bind the exact URI query");
+    assert!(matches!(
+        altered,
+        Error::AppUnauthorized {
+            code: "canonical_authentication_invalid",
+            ..
+        }
+    ));
+}
+#[test]
+fn asset_transfer_control_read_requires_self_exact_account_grant_or_global_root() {
+    let caller = checked_torii_test_account_id(0xe1, "derive control-read caller fixture key");
+    let target = checked_torii_test_account_id(0xe2, "derive control-read target fixture key");
+    let world = World::with(
+        [],
+        [
+            Account::new(caller.clone()).build(&caller),
+            Account::new(target.clone()).build(&target),
+        ],
+        [],
+    );
+    let app = mk_app_state_for_tests_with_world(world);
+    assert!(can_read_asset_transfer_control(&app, &caller, &caller));
+    assert!(!can_read_asset_transfer_control(&app, &caller, &target));
+
+    grant_account_permissions_for_test(
+        &app,
+        &caller,
+        [Permission::from(CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        })],
+    );
+    assert!(
+        !can_read_asset_transfer_control(&app, &caller, &target),
+        "dataspace-wide read must not expose account-private controls"
+    );
+
+    grant_account_permissions_for_test(
+        &app,
+        &caller,
+        [Permission::from(
+            iroha_executor_data_model::permission::query::CanReadAccountData {
+                account: target.clone(),
+            },
+        )],
+    );
+    assert!(can_read_asset_transfer_control(&app, &caller, &target));
+
+    let other =
+        checked_torii_test_account_id(0xe3, "derive unrelated control-read target fixture key");
+    assert!(!can_read_asset_transfer_control(&app, &caller, &other));
+    grant_account_permissions_for_test(&app, &caller, [Permission::from(CanReadAllLedgerData)]);
+    assert!(can_read_asset_transfer_control(&app, &caller, &other));
+}

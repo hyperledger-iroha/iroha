@@ -985,7 +985,7 @@ where
     F: KagemushaPoseidonFieldV1,
 {
     let (builder, jobs, assigned) = credential_builder::<F>(Some(witness))?;
-    let messages = jobs.canonical_messages()?;
+    let messages = jobs.bounded_claim_messages()?;
     drop(assigned);
     drop(jobs);
     drop(builder);
@@ -3603,7 +3603,7 @@ mod tests {
         witness
             .validate()
             .expect("Android class zero with matching policy path");
-        for class in [4, 255] {
+        for class in [6, 255] {
             witness.statement.platform_class = class;
             witness.statement.hardware_policy_id = witness.policy_root();
             assert!(witness.validate().is_err());

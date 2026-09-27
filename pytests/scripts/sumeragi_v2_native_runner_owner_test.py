@@ -142,7 +142,8 @@ MUTATIONS = (
     ("ordinary", "lifecycle_run_inner", "run_lifecycle_active_height", "queue_plan.refresh(active_view)?;", "queue_plan.refresh(foreign)?;"),
     ("ordinary", "lifecycle_run_inner", "run_lifecycle_active_height", "activated.close_runner_ingress_for_finalized_drain(&mut active_runner, receiver)?;", ""),
     ("ordinary", "lifecycle_run_inner", "run_lifecycle_active_height", "DecidedLaneRecoveryIngressDrainMode::FinalizedClosedPrefix", "DecidedLaneRecoveryIngressDrainMode::OpenPreflight"),
-    ("ordinary", "lifecycle_run_inner", "run_lifecycle_active_height", ".ensure_closed_drained_cut()", ".ensure_open()"),
+    ("ordinary", "lifecycle_run_inner", "run_lifecycle_active_height", ".ensure_closed_global_drained_cut()", ".ensure_open()"),
+    ("ordinary", "lifecycle_run_inner", "run_lifecycle_active_height", ".ensure_closed_global_drained_cut()", ".ensure_closed_drained_cut()"),
     ("ordinary", "lifecycle_run_inner", "finalize_lifecycle_height", "prepare_successor(receipt, artifact)?", "prepare_successor(foreign, artifact)?"),
     ("ordinary", "lifecycle_run_inner", "finalize_lifecycle_height", "rollover_outputs(active_runner, native, &next_context, control_queue_capacity)", "rollover_outputs(active_runner, replacement, &next_context, control_queue_capacity)"),
     ("ordinary", "lifecycle_run_inner", "finalize_lifecycle_height", "post_output.retire_lifecycle_stores()?;", "post_output.skip_retirement()?;"),
@@ -170,7 +171,8 @@ def test_current_native_finalization_consumers(checker, scopes, consumer):
 @pytest.mark.parametrize("consumer", ("production", "recovery"))
 @pytest.mark.parametrize(("source_name", "old", "new"), (
     ("lifecycle_run_inner", "super::preflight_finalized_native_rollover(executor, services, native)", "super::preflight_finalized_native_rollover(executor, services, foreign)"),
-    ("lifecycle_run_inner", ".ensure_closed_drained_cut()", ".ensure_open()"),
+    ("lifecycle_run_inner", ".ensure_closed_global_drained_cut()", ".ensure_open()"),
+    ("lifecycle_run_inner", ".ensure_closed_global_drained_cut()", ".ensure_closed_drained_cut()"),
     ("native_finalized_output", "handoff_native_height_output_to_durable_reconstruction(receipt, artifact, &authority)", "handoff_native_height_output_to_durable_reconstruction(receipt, artifact, &foreign)"),
     ("native_finalized_output", ".complete_output_handoff(receipt, artifact)", ".complete_output_handoff(foreign, artifact)"),
 ))

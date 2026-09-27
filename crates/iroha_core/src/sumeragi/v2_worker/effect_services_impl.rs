@@ -314,6 +314,7 @@ impl V2EffectServices for ProductionV2Services {
                     .as_ref()
                     .map(|_| task.sources().to_vec())
                     .unwrap_or_default();
+                let retry_request_hash = existing_task.certified_request().map(HashOf::new);
                 let fetch = self.fetches.get_mut(&task.id()).ok_or_else(|| {
                     "preflighted Sumeragi v2 body-fetch owner disappeared".to_owned()
                 })?;
@@ -326,6 +327,17 @@ impl V2EffectServices for ProductionV2Services {
                 if let Some(data) = certified_message {
                     let peers =
                         self.current_archive_targets_with_frozen_fallback(&certified_sources);
+                    if let Some(request_hash) = retry_request_hash {
+                        // A delivered request can be refused by a temporarily
+                        // busy archive while another topology target retains
+                        // the old fanout indefinitely. The reducer's periodic
+                        // Fetch must retire that transport attempt before
+                        // re-offering the same signed request and fetch owner.
+                        let mut pending = self.lock_pending_exact_output()?;
+                        if !self.exact_output_handoff_owner.is_sealed() {
+                            pending.cancel_certified_body_request(request_hash)?;
+                        }
+                    }
                     if self.enqueue_exact_fanout_while_guarded(
                         vec![data],
                         peers,

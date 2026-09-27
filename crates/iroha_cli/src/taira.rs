@@ -7602,12 +7602,11 @@ fn validate_mcp_discovery_response(payload: Option<&Value>) -> Result<(), String
         .ok_or_else(|| {
             "MCP server/discover response omits its supportedVersions array".to_owned()
         })?;
-    if !supported_versions
-        .iter()
-        .any(|version| version.as_str() == Some(mcp_wire::MODERN_PROTOCOL_VERSION))
+    if supported_versions.len() != 1
+        || supported_versions[0].as_str() != Some(mcp_wire::MODERN_PROTOCOL_VERSION)
     {
         return Err(format!(
-            "MCP server/discover supportedVersions does not include protocolVersion `{}`",
+            "MCP server/discover supportedVersions must contain only protocolVersion `{}`",
             mcp_wire::MODERN_PROTOCOL_VERSION
         ));
     }
@@ -10103,7 +10102,6 @@ mod tests {
                         "result": {
                             "supportedVersions": [
                                 (mcp_wire::MODERN_PROTOCOL_VERSION),
-                                (mcp_wire::LEGACY_PROTOCOL_VERSION)
                             ],
                             "capabilities": {
                                 "tools": { "listChanged": false }
@@ -13219,7 +13217,7 @@ mod tests {
     }
     #[test]
     fn doctor_rejects_noncanonical_mcp_discovery_response() {
-        for noncanonical_response in ["wrong_status", "legacy_result"] {
+        for noncanonical_response in ["wrong_status", "legacy_result", "mixed_versions"] {
             let server = spawn_mock_http(16, move |request| {
                 if request.method == "POST"
                     && path_only(&request.path) == "/v1/mcp"
@@ -13234,8 +13232,31 @@ mod tests {
                                 "jsonrpc": "2.0",
                                 "id": 1,
                                 "result": {
-                                    "protocolVersion": (mcp_wire::LEGACY_PROTOCOL_VERSION),
+                                    "protocolVersion": "2025-06-18",
                                     "capabilities": {}
+                                }
+                            }),
+                        ),
+                        "mixed_versions" => MockResponse::json(
+                            200,
+                            norito::json!({
+                                "jsonrpc": "2.0",
+                                "id": 1,
+                                "result": {
+                                    "supportedVersions": [
+                                        (mcp_wire::MODERN_PROTOCOL_VERSION),
+                                        "2025-06-18"
+                                    ],
+                                    "capabilities": { "tools": { "listChanged": false } },
+                                    "resultType": "complete",
+                                    "ttlMs": 30_000,
+                                    "cacheScope": "private",
+                                    "_meta": {
+                                        "io.modelcontextprotocol/serverInfo": {
+                                            "name": "iroha-torii-mcp",
+                                            "version": "1"
+                                        }
+                                    }
                                 }
                             }),
                         ),

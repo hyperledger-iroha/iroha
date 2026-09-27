@@ -1,7 +1,7 @@
 //! Issuer-independent, signed app-to-device enrollment evidence for KAGEMUSHA V1.
 //!
 //! The authority named by the native deployment policy must first verify the platform's raw
-//! app identity attestation and independently trustworthy build/release provenance. This assertion
+//! app identity attestation and governance-authorized app distribution policy. This assertion
 //! carries the result into the one-use account/device enrollment ceremony. It is not a device
 //! counter, an offline spend authorization, or proof that an app can access a Secure Element.
 
@@ -18,8 +18,20 @@ const APP_ASSERTION_DOMAIN: &str = "iroha:kagemusha:v1:app-device-enrollment";
 const APP_ASSERTION_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-device-enrollment-digest\0";
 const APP_STATIC_BINDING_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-device-static-binding\0";
 const APP_AUTHORITY_POLICY_DOMAIN: &[u8] = b"iroha:kagemusha:v1:app-attestation-authority-policy\0";
+/// Canonical Norito frame width of the sole V1 Ed25519 authority public key.
+/// Pinned by the `public_key_norito_golden_archive` fixture in `iroha_crypto`.
+pub const KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1: usize = 114;
+/// Exact SHA preimage width of the sole V1 app-attestation authority policy.
+pub const KAGEMUSHA_APP_AUTHORITY_POLICY_DIGEST_PREIMAGE_BYTES_V1: usize =
+    APP_AUTHORITY_POLICY_DOMAIN.len()
+        + 8
+        + KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1
+        + 1
+        + 32
+        + 32
+        + 8;
 
-/// Deployment-owned app-attestation authority and exact first-release app identity.
+/// Deployment-owned app-attestation authority and first-release app distribution policy.
 ///
 /// The wallet, issuer response, or device response must never select this policy.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,18 +42,37 @@ pub struct KagemushaAppAttestationAuthorityPolicyV1 {
     pub platform_class: KagemushaHardwarePlatformClassV1,
     /// Exact app signing identity admitted to the monetary release.
     pub app_signing_identity_digest: [u8; 32],
-    /// Exact app build/release admitted to the monetary release.
+    /// Governance-authorized distribution-policy digest; not a measured binary hash.
     pub app_release_digest: [u8; 32],
     /// Longest allowed lifetime of the authority assertion.
     pub maximum_lifetime_ms: u64,
 }
 
+/// Exact variable positions in the fixed Ed25519 authority-policy SHA transcript.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaAppAuthorityPolicyDigestPreimageV1 {
+    /// Exact bytes fed to SHA-256, including domain and canonical authority-key frame.
+    pub bytes: Vec<u8>,
+    /// Complete canonical Norito authority-key frame.
+    pub authority_key_frame: core::ops::Range<usize>,
+    /// One-byte governed platform discriminant.
+    pub platform_class: core::ops::Range<usize>,
+    /// Exact App ID/RP digest.
+    pub app_signing_identity_digest: core::ops::Range<usize>,
+    /// Governance-authorized distribution-policy digest, not a measured binary hash.
+    pub app_release_digest: core::ops::Range<usize>,
+    /// Maximum assertion lifetime, u64-LE.
+    pub maximum_lifetime_ms: core::ops::Range<usize>,
+}
+
 impl KagemushaAppAttestationAuthorityPolicyV1 {
-    /// Return the exact governance-committed verifier authority and app allowlist identity.
+    /// Return model-owned SHA bytes and field ranges for the sole Ed25519 V1 policy.
     ///
     /// # Errors
-    /// Rejects incomplete policy or an encoding failure.
-    pub fn canonical_digest(&self) -> Result<[u8; 32], String> {
+    /// Rejects incomplete policy or an invalid canonical Ed25519-key encoding.
+    pub fn canonical_digest_preimage_v1(
+        &self,
+    ) -> Result<KagemushaAppAuthorityPolicyDigestPreimageV1, String> {
         if self.authority_key.algorithm() != Algorithm::Ed25519
             || self.app_signing_identity_digest == [0; 32]
             || self.app_release_digest == [0; 32]
@@ -51,17 +82,42 @@ impl KagemushaAppAttestationAuthorityPolicyV1 {
         }
         let key = norito::encode_canonical(&self.authority_key)
             .map_err(|error| format!("Kagemusha app authority key encoding failed: {error}"))?;
-        let key_len = u64::try_from(key.len())
-            .map_err(|_| "Kagemusha app authority key is too long".to_owned())?;
-        let mut digest = Sha256::new();
-        digest.update(APP_AUTHORITY_POLICY_DOMAIN);
-        digest.update(key_len.to_le_bytes());
-        digest.update(key);
-        digest.update([self.platform_class as u8]);
-        digest.update(self.app_signing_identity_digest);
-        digest.update(self.app_release_digest);
-        digest.update(self.maximum_lifetime_ms.to_le_bytes());
-        Ok(digest.finalize().into())
+        if key.len() != KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1 {
+            return Err("Kagemusha app authority key frame width changed".to_owned());
+        }
+        let key_len = KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1 as u64;
+        let mut bytes = Vec::with_capacity(KAGEMUSHA_APP_AUTHORITY_POLICY_DIGEST_PREIMAGE_BYTES_V1);
+        bytes.extend_from_slice(APP_AUTHORITY_POLICY_DOMAIN);
+        bytes.extend_from_slice(&key_len.to_le_bytes());
+        let authority_key_frame = bytes.len()..bytes.len() + key.len();
+        bytes.extend(key);
+        let platform_class = bytes.len()..bytes.len() + 1;
+        bytes.push(self.platform_class as u8);
+        let app_signing_identity_digest = bytes.len()..bytes.len() + 32;
+        bytes.extend_from_slice(&self.app_signing_identity_digest);
+        let app_release_digest = bytes.len()..bytes.len() + 32;
+        bytes.extend_from_slice(&self.app_release_digest);
+        let maximum_lifetime_ms = bytes.len()..bytes.len() + 8;
+        bytes.extend_from_slice(&self.maximum_lifetime_ms.to_le_bytes());
+        if bytes.len() != KAGEMUSHA_APP_AUTHORITY_POLICY_DIGEST_PREIMAGE_BYTES_V1 {
+            return Err("Kagemusha app authority policy preimage width changed".to_owned());
+        }
+        Ok(KagemushaAppAuthorityPolicyDigestPreimageV1 {
+            bytes,
+            authority_key_frame,
+            platform_class,
+            app_signing_identity_digest,
+            app_release_digest,
+            maximum_lifetime_ms,
+        })
+    }
+
+    /// Return the exact governance-committed verifier authority and app allowlist identity.
+    ///
+    /// # Errors
+    /// Rejects incomplete policy or an encoding failure.
+    pub fn canonical_digest(&self) -> Result<[u8; 32], String> {
+        Ok(Sha256::digest(self.canonical_digest_preimage_v1()?.bytes).into())
     }
 }
 
@@ -117,6 +173,8 @@ pub struct KagemushaAppEnrollmentSelectionV1 {
     pub hardware_profile_id: [u8; 32],
     /// The governed device key selected before verification.
     pub device_key_reference: [u8; 32],
+    /// SHA-256 of the platform-attested uncompressed SEC1 P-256 point.
+    pub attested_key_id: [u8; 32],
     /// The hardware-controlled lane selected before verification.
     pub lane_id: [u8; 32],
 }
@@ -136,6 +194,7 @@ impl KagemushaAppEnrollmentSelectionV1 {
             release_id,
             hardware_profile_id: credential.hardware_profile_id,
             device_key_reference: credential.device_key_reference,
+            attested_key_id: Sha256::digest(credential.device_public_key.as_sec1_bytes()).into(),
             lane_id: credential.lane_commitment,
         }
     }
@@ -149,7 +208,7 @@ impl KagemushaAppEnrollmentSelectionV1 {
 pub struct KagemushaAppDevicePolicyBindingV1 {
     /// Exact app signing identity.
     pub app_signing_identity_digest: [u8; 32],
-    /// Exact app build/release.
+    /// Governance-authorized distribution-policy digest, not a measured binary hash.
     pub app_release_digest: [u8; 32],
     /// Exact monetary release.
     pub release_id: [u8; 32],
@@ -220,7 +279,7 @@ pub struct KagemushaAppEnrollmentAssertionV1 {
     pub server_nonce: [u8; 32],
     /// Exact app signing identity established from platform attestation.
     pub app_signing_identity_digest: [u8; 32],
-    /// Exact app build/release established by trustworthy distribution evidence.
+    /// Governance-authorized distribution-policy digest, not a measured binary hash.
     pub app_release_digest: [u8; 32],
     /// Full raw platform-attestation evidence commitment retained by the authority.
     pub platform_evidence_digest: [u8; 32],
@@ -230,6 +289,8 @@ pub struct KagemushaAppEnrollmentAssertionV1 {
     pub hardware_profile_id: [u8; 32],
     /// Exact device key attested with this app.
     pub device_key_reference: [u8; 32],
+    /// SHA-256 of the raw platform-attested SEC1 point, signed by the verifier.
+    pub attested_key_id: [u8; 32],
     /// Exact non-forking monetary lane attested with this app.
     pub lane_id: [u8; 32],
     /// Inclusive trusted issuance time.
@@ -306,9 +367,10 @@ impl KagemushaAppEnrollmentCertificateV1 {
     /// Authenticate the signed platform-verifier result against independent exact selection.
     ///
     /// This authenticates the verifier's assertion; the named verifier remains responsible for
-    /// validating raw Apple/Android app identity attestation and separately proving the exact
-    /// build/release through a trustworthy distribution channel. Platform app attestation alone
-    /// is not evidence of an exact binary hash.
+    /// validating raw Apple/Android app identity attestation against the pinned App ID and
+    /// environment, then applying the governance-authorized distribution policy. A signed
+    /// category/version may be checked when the platform exposes it; this is not a measured
+    /// binary hash.
     /// The caller must independently trust `policy` and supply an authoritative `trusted_time_ms`.
     ///
     /// # Errors
@@ -333,6 +395,7 @@ impl KagemushaAppEnrollmentCertificateV1 {
                 expected.release_id,
                 expected.hardware_profile_id,
                 expected.device_key_reference,
+                expected.attested_key_id,
                 expected.lane_id,
             ]
             .contains(&[0; 32])
@@ -342,6 +405,7 @@ impl KagemushaAppEnrollmentCertificateV1 {
             || assertion.release_id != expected.release_id
             || assertion.hardware_profile_id != expected.hardware_profile_id
             || assertion.device_key_reference != expected.device_key_reference
+            || assertion.attested_key_id != expected.attested_key_id
             || assertion.lane_id != expected.lane_id
             || assertion.app_signing_identity_digest != policy.app_signing_identity_digest
             || assertion.app_release_digest != policy.app_release_digest
@@ -409,6 +473,7 @@ mod tests {
             release_id: [5; 32],
             hardware_profile_id: [6; 32],
             device_key_reference: [7; 32],
+            attested_key_id: [10; 32],
             lane_id: [8; 32],
         };
         let assertion = KagemushaAppEnrollmentAssertionV1 {
@@ -422,6 +487,7 @@ mod tests {
             release_id: selection.release_id,
             hardware_profile_id: selection.hardware_profile_id,
             device_key_reference: selection.device_key_reference,
+            attested_key_id: selection.attested_key_id,
             lane_id: selection.lane_id,
             issued_at_ms: 100,
             expires_at_ms: 500,
@@ -470,6 +536,46 @@ mod tests {
         assert_ne!(changed.canonical_digest().unwrap(), original);
         changed.app_release_digest = [0; 32];
         assert!(changed.canonical_digest().is_err());
+    }
+
+    #[test]
+    fn authority_policy_preimage_exposes_exact_key_class_and_app_ranges() {
+        let (_, policy, _) = signed();
+        let opening = policy.canonical_digest_preimage_v1().unwrap();
+        let key = norito::encode_canonical(&policy.authority_key).unwrap();
+        assert_eq!(
+            key.len(),
+            KAGEMUSHA_APP_AUTHORITY_ED25519_KEY_FRAME_BYTES_V1
+        );
+        let prefix = APP_AUTHORITY_POLICY_DOMAIN.len();
+        assert_eq!(&opening.bytes[..prefix], APP_AUTHORITY_POLICY_DOMAIN);
+        assert_eq!(
+            &opening.bytes[prefix..prefix + 8],
+            &(key.len() as u64).to_le_bytes(),
+        );
+        assert_eq!(
+            &opening.bytes[opening.authority_key_frame.clone()],
+            key.as_slice()
+        );
+        assert_eq!(
+            opening.bytes.len(),
+            KAGEMUSHA_APP_AUTHORITY_POLICY_DIGEST_PREIMAGE_BYTES_V1
+        );
+        assert_eq!(&opening.bytes[opening.platform_class], &[4]);
+        assert_eq!(
+            &opening.bytes[opening.app_signing_identity_digest],
+            &policy.app_signing_identity_digest,
+        );
+        assert_eq!(
+            &opening.bytes[opening.app_release_digest],
+            &policy.app_release_digest,
+        );
+        assert_eq!(
+            &opening.bytes[opening.maximum_lifetime_ms],
+            &policy.maximum_lifetime_ms.to_le_bytes(),
+        );
+        let independent: [u8; 32] = Sha256::digest(&opening.bytes).into();
+        assert_eq!(policy.canonical_digest().unwrap(), independent);
     }
 
     #[test]
@@ -545,6 +651,13 @@ mod tests {
         assert!(
             certificate
                 .authenticate(&policy, other_device, 200)
+                .is_err()
+        );
+        let mut other_attested_key = selection;
+        other_attested_key.attested_key_id[0] ^= 1;
+        assert!(
+            certificate
+                .authenticate(&policy, other_attested_key, 200)
                 .is_err()
         );
         let mut other_lane = selection;

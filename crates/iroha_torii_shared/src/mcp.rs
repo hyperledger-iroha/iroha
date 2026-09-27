@@ -7,8 +7,6 @@ const BASE64_SENTINEL_SUFFIX: &str = "?=";
 
 /// Native stateless MCP protocol revision implemented by Torii.
 pub const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
-/// Initialization-based compatibility revision retained during migration.
-pub const LEGACY_PROTOCOL_VERSION: &str = "2025-06-18";
 
 /// HTTP header carrying the request protocol version.
 pub const HEADER_PROTOCOL_VERSION: &str = "mcp-protocol-version";

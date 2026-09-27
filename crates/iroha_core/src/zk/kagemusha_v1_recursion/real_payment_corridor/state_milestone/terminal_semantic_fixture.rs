@@ -351,8 +351,12 @@ fn assert_complete_semantic_queue_matches_original(
         native_parent_protocol_digest_v1(&eq_guard_protocol, KagemushaPastaParityV1::Eq).unwrap();
     candidate.guard_ep_protocol_digest =
         native_parent_protocol_digest_v1(&ep_guard_protocol, KagemushaPastaParityV1::Ep).unwrap();
-    let eq_semantic = candidate.public_instances::<Fp>().unwrap();
-    let ep_semantic = candidate.public_instances::<Fq>().unwrap();
+    let eq_semantic = candidate
+        .recursive_semantic_public_instances::<Fp>()
+        .unwrap();
+    let ep_semantic = candidate
+        .recursive_semantic_public_instances::<Fq>()
+        .unwrap();
     let candidate_digest =
         canonical_terminal_authorization_candidate_digest_v1(&[eq_semantic.clone()]).unwrap();
     assert_eq!(
@@ -435,6 +439,7 @@ fn assert_complete_semantic_queue_matches_original(
             .unwrap_or([0; 32]),
         400,
         terminal_output_binding,
+        [0; 32],
         encode_pasta(Fp::from(3)),
         encode_pasta(Fq::from(4)),
         encode_pasta(Fp::from(1)),
@@ -451,6 +456,7 @@ fn assert_complete_semantic_queue_matches_original(
         one_use_hardware_authorization: openings.one_use_hardware_authorization,
         terminal_payload_digest: candidate.transport_semantic_digest,
         send,
+        send_sealed_streams: None,
         journal_revision_before: 5,
         journal_revision_after: 6,
         authorization_counter_before: 0,

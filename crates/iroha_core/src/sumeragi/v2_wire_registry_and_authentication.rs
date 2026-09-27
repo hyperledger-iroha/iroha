@@ -1159,6 +1159,40 @@ fn verify_individual_signature(
         .verify(context.roster[index].validator.public_key(), preimage)
         .map_err(|error| AdapterError::Cryptography(error.to_string()))
 }
+/// Authenticate one completed local signature before it can enter the reducer.
+///
+/// Commit votes may carry a paired Kagemusha seal around the BLS share. Use
+/// the same envelope and seal rules as authenticated network ingress rather
+/// than interpreting the complete envelope as a raw BLS signature.
+pub(in crate::sumeragi) fn verify_completed_consensus_signature(
+    context: &wire::HeightContext,
+    request: &SignRequest,
+    signature: &[u8],
+) -> Result<(), AdapterError> {
+    match request {
+        SignRequest::Proposal(proposal) => verify_individual_signature(
+            context,
+            proposal.proposer,
+            signature,
+            &proposal.signature_preimage(),
+        ),
+        SignRequest::Vote(vote) => {
+            let mut signed_vote = vote.clone();
+            signed_vote.signature = signature.to_vec();
+            signed_vote.validate(context)?;
+            verify_individual_signature(
+                context,
+                signed_vote.signer,
+                signed_vote.bls_signature()?,
+                &signed_vote.signature_preimage(),
+            )?;
+            verify_kagemusha_mint_finality_vote(context, &signed_vote)
+        }
+        SignRequest::TimeoutVote(vote) => {
+            verify_individual_signature(context, vote.signer, signature, &vote.signature_preimage())
+        }
+    }
+}
 fn verify_quorum_certificate(
     context: &wire::HeightContext,
     certificate: &wire::QuorumCertificate,

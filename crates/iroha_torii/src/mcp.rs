@@ -60,8 +60,8 @@ use governance_ballot_tools::{
     iroha_gov_ballots_zk_v1_ballot_proof_tool, iroha_gov_ballots_zk_v1_tool,
 };
 pub(crate) use protocol::{
-    ProtocolEra, ValidatedRequest as ValidatedProtocolRequest, ValidationError,
-    ValidationErrorKind, decorate_modern_response, validate_request as validate_protocol_request,
+    ValidatedRequest as ValidatedProtocolRequest, ValidationError, ValidationErrorKind,
+    decorate_modern_response, validate_request as validate_protocol_request,
 };
 use registry::semantics::{
     AuthorityClass, MutationNature, OperationKind, RetrySemantics, Sensitivity, ToolSemantics,
@@ -69,15 +69,13 @@ use registry::semantics::{
     world_boundary_for_tool,
 };
 pub(crate) use response::{
-    BoundedJsonArray, bounded_jsonrpc_http_response, bounded_modern_jsonrpc_http_response,
-    jsonrpc_response_too_large,
+    BoundedJsonArray, bounded_modern_jsonrpc_http_response, jsonrpc_response_too_large,
 };
 use response::{
     bounded_json_value_len, error_envelope_value, http_status_error_code, jsonrpc_error_response,
     jsonrpc_result_response,
 };
 const JSONRPC_VERSION: &str = "2.0";
-const MCP_PROTOCOL_VERSION: &str = protocol::LEGACY_PROTOCOL_VERSION;
 const JSONRPC_PARSE_ERROR: i64 = -32700;
 const JSONRPC_INVALID_REQUEST: i64 = -32600;
 pub(crate) const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
@@ -1148,7 +1146,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_account_history_tool());
     tools.push(iroha_account_transactions_query_tool());
     tools.push(iroha_transactions_query_tool());
-    tools.push(iroha_transactions_visible_query_tool());
     tools.push(iroha_account_assets_tool());
     tools.push(iroha_account_assets_query_tool());
     tools.push(iroha_account_permissions_tool());
@@ -1377,50 +1374,6 @@ fn visible_tools_for_app(app: &SharedAppState) -> Vec<&ToolSpec> {
         .collect()
 }
 
-pub(crate) fn capabilities_payload(tools: &[&ToolSpec]) -> Value {
-    let toolset_version = compute_toolset_version(tools);
-    let server_info = server_info_payload();
-    let mut tools_cap = Map::new();
-    tools_cap.insert("listChanged".into(), Value::Bool(false));
-    let mut capabilities = Map::new();
-    capabilities.insert("tools".into(), Value::Object(tools_cap));
-    capabilities.insert(
-        "experimental".into(),
-        norito::json!({
-            "iroha": {
-                "tools": {
-                    "count": (tools.len()),
-                    "toolsetVersion": (toolset_version),
-                    "callBatch": {
-                        "method": "tools/call_batch",
-                        "maxDispatches": MAX_JSONRPC_BATCH_DISPATCHES
-                    },
-                    "cancellation": {
-                        "notification": "notifications/cancelled",
-                        "nonceMetaKey": (MCP_CANCELLATION_NONCE_META_KEY),
-                        "nonceEncoding": "base64url-no-pad-32-byte",
-                        "requiresApiToken": true
-                    }
-                }
-            }
-        }),
-    );
-    let mut out = Map::new();
-    out.insert(
-        "protocolVersion".into(),
-        Value::String(MCP_PROTOCOL_VERSION.to_owned()),
-    );
-    out.insert("serverInfo".into(), Value::Object(server_info));
-    out.insert("capabilities".into(), Value::Object(capabilities));
-    out.insert(
-        "instructions".into(),
-        Value::String(
-            "Prefer curated iroha.* tools and rediscover inputSchema before each workflow. Keep signing keys, bearer tokens, and authentication headers runtime-only. Treat mutations as opt-in, honor tool safety annotations, and keep bulk calls within the advertised rate and dispatch limits."
-                .to_owned(),
-        ),
-    );
-    Value::Object(out)
-}
 fn server_info_payload() -> Map {
     let mut server_info = Map::new();
     server_info.insert("name".into(), Value::String("iroha-torii-mcp".to_owned()));
@@ -1450,10 +1403,7 @@ fn modern_discovery_payload(tools: &[&ToolSpec]) -> Value {
         }),
     );
     norito::json!({
-        "supportedVersions": [
-            (protocol::MODERN_PROTOCOL_VERSION),
-            (protocol::LEGACY_PROTOCOL_VERSION)
-        ],
+        "supportedVersions": [(protocol::MODERN_PROTOCOL_VERSION)],
         "capabilities": (Value::Object(capabilities)),
         "instructions": "Prefer curated iroha.* capabilities and rediscover schemas before each workflow. Keep signing keys and authentication secrets outside MCP. Prepare and inspect unsigned operations, sign with an external wallet or deployment-owned signer, then submit only the signed envelope.",
         "_meta": {
@@ -1609,7 +1559,6 @@ fn is_audited_manual_read_tool_name(name: &str) -> bool {
             | "iroha.gov.ballots.zk_v1.ballot_proof"
             | "iroha.gov.ballots.plain"
             | "iroha.transactions.query"
-            | "iroha.transactions.visible.query"
             | "iroha.queries.submit"
     )
 }
@@ -1645,11 +1594,9 @@ pub(crate) fn jsonrpc_request_timeout() -> Value {
         })),
     )
 }
-pub(crate) fn jsonrpc_request_timeout_for_headers(headers: &HeaderMap) -> Value {
+pub(crate) fn jsonrpc_request_timeout_for_headers(_headers: &HeaderMap) -> Value {
     let mut response = jsonrpc_request_timeout();
-    if protocol::header_declares_modern(headers) {
-        remap_modern_application_error(&mut response);
-    }
+    remap_modern_application_error(&mut response);
     response
 }
 /// Return a typed JSON-RPC payload for a request-body transport failure.
@@ -1671,11 +1618,9 @@ pub(crate) fn jsonrpc_rate_limited() -> Value {
         })),
     )
 }
-pub(crate) fn jsonrpc_rate_limited_for_headers(headers: &HeaderMap) -> Value {
+pub(crate) fn jsonrpc_rate_limited_for_headers(_headers: &HeaderMap) -> Value {
     let mut response = jsonrpc_rate_limited();
-    if protocol::header_declares_modern(headers) {
-        remap_modern_application_error(&mut response);
-    }
+    remap_modern_application_error(&mut response);
     response
 }
 /// Return whether an optional browser Origin is trusted for MCP transport use.
@@ -1724,51 +1669,30 @@ pub(crate) fn jsonrpc_transport_error_response(
 }
 
 /// Apply the stateless protocol's early-error envelope rules before returning
-/// one handler-owned transport failure. Before a body can be parsed, an exact
-/// protocol-version header is the only available era signal.
+/// one handler-owned transport failure.
 pub(crate) fn jsonrpc_transport_error_response_for_headers(
-    headers: &HeaderMap,
+    _headers: &HeaderMap,
     kind: ReviewedMcpJsonRpcError,
     mut payload: Value,
 ) -> Response {
-    adapt_transport_error_for_headers(headers, &mut payload);
+    adapt_transport_error(&mut payload);
     jsonrpc_transport_error_response(kind, payload)
 }
 
-fn adapt_transport_error_for_headers(headers: &HeaderMap, payload: &mut Value) {
-    if protocol::header_declares_modern(headers) {
-        remap_modern_application_error(payload);
-        if payload.get("id").is_some_and(Value::is_null)
-            && let Some(payload) = payload.as_object_mut()
-        {
-            payload.remove("id");
-        }
+fn adapt_transport_error(payload: &mut Value) {
+    remap_modern_application_error(payload);
+    if payload.get("id").is_some_and(Value::is_null)
+        && let Some(payload) = payload.as_object_mut()
+    {
+        payload.remove("id");
     }
 }
-pub(crate) fn protocol_version_is_supported(headers: &HeaderMap, allow_missing: bool) -> bool {
+pub(crate) fn protocol_version_is_supported(headers: &HeaderMap) -> bool {
     let mut versions = headers.get_all(HEADER_MCP_PROTOCOL_VERSION).iter();
     let Some(version) = versions.next() else {
-        return allow_missing;
+        return false;
     };
-    versions.next().is_none() && version.as_bytes() == MCP_PROTOCOL_VERSION.as_bytes()
-}
-pub(crate) fn is_initialize_request(request: &Value) -> bool {
-    request
-        .as_object()
-        .and_then(|request| request.get("method"))
-        .and_then(Value::as_str)
-        == Some("initialize")
-}
-pub(crate) fn jsonrpc_unsupported_protocol_version() -> Value {
-    jsonrpc_error_response(
-        None,
-        JSONRPC_INVALID_REQUEST,
-        "unsupported or ambiguous MCP-Protocol-Version header",
-        Some(norito::json!({
-            "error_code": "unsupported_protocol_version",
-            "supported_protocol_version": MCP_PROTOCOL_VERSION
-        })),
-    )
+    versions.next().is_none() && version.as_bytes() == protocol::MODERN_PROTOCOL_VERSION.as_bytes()
 }
 
 fn authenticated_cancellation_client_fingerprint(
@@ -1892,8 +1816,8 @@ fn cancellation_registration_error(
     ))
 }
 
-/// Execute one MCP JSON-RPC request value.
-pub(crate) async fn handle_jsonrpc_request(
+/// Execute a validated tool call, including cancellation registration.
+pub(crate) async fn handle_tool_call_request(
     app: SharedAppState,
     inbound_headers: &HeaderMap,
     request: Value,
@@ -1941,32 +1865,6 @@ pub(crate) async fn handle_jsonrpc_request(
         }
     };
     match method.as_str() {
-        "initialize" => {
-            if let Err(message) = validate_initialize_params(&params) {
-                return JsonRpcRequestOutcome::Response(jsonrpc_error_response(
-                    id,
-                    JSONRPC_INVALID_PARAMS,
-                    message,
-                    Some(norito::json!({
-                        "supported_protocol_version": MCP_PROTOCOL_VERSION
-                    })),
-                ));
-            }
-            let visible_tools = visible_tools_for_app(&app);
-            JsonRpcRequestOutcome::Response(jsonrpc_result_response(
-                id,
-                capabilities_payload(&visible_tools),
-            ))
-        }
-        "ping" => {
-            JsonRpcRequestOutcome::Response(jsonrpc_result_response(id, Value::Object(Map::new())))
-        }
-        "tools/list" => JsonRpcRequestOutcome::Response(handle_tools_list(
-            id,
-            &app,
-            &params,
-            ProtocolEra::Legacy,
-        )),
         "tools/call_batch" | "tools/call" => {
             let registration = match register_authenticated_inflight_request(
                 &app,
@@ -2005,21 +1903,13 @@ pub(crate) async fn handle_jsonrpc_request(
         )),
     }
 }
-/// Dispatch one request after its HTTP protocol metadata has selected an MCP era.
-///
-/// The 2025 compatibility path retains the existing lifecycle. The native 2026
-/// path adds mandatory discovery, removes legacy lifecycle-only methods, and
-/// decorates successful results with stateless protocol metadata.
+/// Dispatch one validated stateless MCP request.
 pub(crate) async fn handle_validated_jsonrpc_request(
     app: SharedAppState,
     inbound_headers: &HeaderMap,
     request: Value,
     validated: &ValidatedProtocolRequest,
 ) -> JsonRpcRequestOutcome {
-    if validated.era == ProtocolEra::Legacy {
-        return handle_jsonrpc_request(app, inbound_headers, request).await;
-    }
-
     let id = request
         .as_object()
         .and_then(|request| request.get("id"))
@@ -2050,10 +1940,9 @@ pub(crate) async fn handle_validated_jsonrpc_request(
             id,
             &app,
             validated_modern_request_params(&request),
-            validated.era,
         )),
         "tools/call" | "tools/call_batch" => {
-            handle_jsonrpc_request(app, inbound_headers, request).await
+            handle_tool_call_request(app, inbound_headers, request).await
         }
         "resources/list" => {
             let params = validated_modern_request_params(&request);
@@ -2210,32 +2099,6 @@ pub(crate) fn jsonrpc_response_error_code(response: &Value) -> Option<i64> {
         .and_then(|error| error.get("code"))
         .and_then(Value::as_i64)
 }
-fn validate_initialize_params(params: &Map) -> Result<(), &'static str> {
-    if !params
-        .get("protocolVersion")
-        .is_some_and(|value| value.as_str().is_some_and(|value| !value.is_empty()))
-    {
-        return Err("initialize params.protocolVersion must be a non-empty string");
-    }
-    if !params.get("capabilities").is_some_and(Value::is_object) {
-        return Err("initialize params.capabilities must be an object");
-    }
-    let Some(client_info) = params.get("clientInfo").and_then(Value::as_object) else {
-        return Err("initialize params.clientInfo must be an object");
-    };
-    for field in ["name", "version"] {
-        if !client_info
-            .get(field)
-            .is_some_and(|value| value.as_str().is_some_and(|value| !value.is_empty()))
-        {
-            return Err(match field {
-                "name" => "initialize params.clientInfo.name must be a non-empty string",
-                _ => "initialize params.clientInfo.version must be a non-empty string",
-            });
-        }
-    }
-    Ok(())
-}
 /// Return true when a payload is a syntactically valid JSON-RPC notification.
 pub(crate) fn is_jsonrpc_notification(request: &Value) -> bool {
     let Some(req_obj) = request.as_object() else {
@@ -2298,27 +2161,6 @@ pub(crate) fn handle_cancelled_notification(
     );
 }
 
-/// Return true when a payload is a syntactically valid JSON-RPC response.
-pub(crate) fn is_jsonrpc_response(response: &Value) -> bool {
-    let Some(response_obj) = response.as_object() else {
-        return false;
-    };
-    if response_obj.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION)
-        || response_obj.get("method").is_some()
-        || !response_obj.get("id").is_some_and(is_jsonrpc_id)
-    {
-        return false;
-    }
-    match (response_obj.get("result"), response_obj.get("error")) {
-        (Some(_), None) => true,
-        (None, Some(Value::Object(error))) => {
-            error.get("code").is_some_and(is_jsonrpc_integer)
-                && error.get("message").and_then(Value::as_str).is_some()
-        }
-        _ => false,
-    }
-}
-
 fn is_jsonrpc_id(id: &Value) -> bool {
     match id {
         Value::String(_) => true,
@@ -2327,15 +2169,7 @@ fn is_jsonrpc_id(id: &Value) -> bool {
         _ => false,
     }
 }
-fn is_jsonrpc_integer(value: &Value) -> bool {
-    value.as_f64().is_some_and(|number| number.fract() == 0.0)
-}
-fn handle_tools_list(
-    id: Option<Value>,
-    app: &SharedAppState,
-    params: &Map,
-    era: ProtocolEra,
-) -> Value {
+fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
     let visible_tools = visible_tools_for_app(app);
     let toolset_version = compute_toolset_version(&visible_tools);
     let list_changed = params
@@ -2370,14 +2204,8 @@ fn handle_tools_list(
     let limit = start.saturating_add(page_size).min(visible_tools.len());
     let mut tools = Vec::new();
     let mut tools_bytes = 0_usize;
-    let mut response = tools_list_page_response(
-        id.clone(),
-        Vec::new(),
-        None,
-        &toolset_version,
-        list_changed,
-        era,
-    );
+    let mut response =
+        tools_list_page_response(id.clone(), Vec::new(), None, &toolset_version, list_changed);
     for (index, tool) in visible_tools.iter().enumerate().take(limit).skip(start) {
         let next_cursor = (index + 1 < visible_tools.len()).then_some(index + 1);
         let mut candidate = tools_list_page_response(
@@ -2386,7 +2214,6 @@ fn handle_tools_list(
             next_cursor,
             &toolset_version,
             list_changed,
-            era,
         );
         // Measure each descriptor at its actual JSON nesting depth, with the
         // exact id, cursor and protocol metadata. Previously admitted tool bytes
@@ -2448,7 +2275,6 @@ fn tools_list_page_response(
     next_cursor: Option<usize>,
     toolset_version: &str,
     list_changed: bool,
-    era: ProtocolEra,
 ) -> Value {
     let mut result = Map::new();
     result.insert("tools".into(), Value::Array(tools));
@@ -2465,9 +2291,7 @@ fn tools_list_page_response(
         }),
     );
     let mut response = jsonrpc_result_response(id, Value::Object(result));
-    if era.is_modern() {
-        decorate_modern_response("tools/list", &mut response);
-    }
+    decorate_modern_response("tools/list", &mut response);
     response
 }
 async fn handle_tools_call(
@@ -3106,13 +2930,6 @@ async fn handle_named_tool_call(
         }
         "iroha.transactions.query" => {
             match dispatch_iroha_transactions_query(&app, inbound_headers, arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.transactions.visible.query" => {
-            match dispatch_iroha_transactions_visible_query(&app, inbound_headers, arguments).await
-            {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -6885,19 +6702,6 @@ async fn dispatch_iroha_transactions_query(
     )
     .await
 }
-async fn dispatch_iroha_transactions_visible_query(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_transactions_query_path(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/transactions/visible/query",
-    )
-    .await
-}
 async fn dispatch_iroha_transactions_query_path(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -9672,11 +9476,6 @@ const INLINE_PURPOSE_BUILT_DISPATCH_ROUTES: &[(&str, &str, &str)] = &[
     ),
     ("iroha.transactions.query", "POST", "/v1/transactions/query"),
     (
-        "iroha.transactions.visible.query",
-        "POST",
-        "/v1/transactions/visible/query",
-    ),
-    (
         "iroha.subscriptions.pause",
         "POST",
         "/v1/subscriptions/{subscription_id}/pause",
@@ -11038,13 +10837,6 @@ fn iroha_transactions_query_tool() -> ToolSpec {
         "iroha.transactions.query",
         "/v1/transactions/query",
         "Query committed transactions with QueryEnvelope shortcuts. Intended for privileged operator and developer use.",
-    )
-}
-fn iroha_transactions_visible_query_tool() -> ToolSpec {
-    transactions_query_tool(
-        "iroha.transactions.visible.query",
-        "/v1/transactions/visible/query",
-        "Query committed transactions visible to the authenticated viewer with QueryEnvelope shortcuts.",
     )
 }
 fn transactions_query_tool(name: &str, path_template: &str, description: &str) -> ToolSpec {

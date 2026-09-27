@@ -1,7 +1,9 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.NetworkId
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 /** Request payload for Torii `/v1/multisig/propose`. */
@@ -21,6 +23,27 @@ data class MultisigProposeRequest @JvmOverloads constructor(
     val validationFeeTransferEntryIndex: Long? = null,
     val validationFeeHijiriFeeQuoteHash: String? = null,
 ) {
+    /** Current Torii JSON request with canonical instruction validation and exact fee intent. */
+    fun canonicalToriiJsonBytes(): ByteArray {
+        NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(this)
+        return JsonEncoder.encode(HttpClientTransport.buildMultisigProposePayload(this))
+            .toByteArray(StandardCharsets.UTF_8)
+    }
+
+    /** Verify Torii's proposal response against this exact request and trusted NetworkId. */
+    fun verifyToriiResponse(responseBytes: ByteArray, networkId: NetworkId): MultisigResponse {
+        val payload = HttpClientTransport.buildMultisigProposePayload(this)
+        val proposalInstructions = NoritoJavaCodecAdapter.canonicalMultisigProposalInstructionBoxes(this)
+        return HttpClientTransport.validateMultisigResponse(
+            ContractJsonParser.parseMultisigResponse(responseBytes),
+            this,
+            payload,
+            proposalInstructions,
+            HttpClientTransport.canonicalMultisigMetadata(payload),
+            networkId,
+        )
+    }
+
     companion object {
         /** Builds a request from typed instruction boxes by encoding each box as native Norito. */
         @JvmStatic

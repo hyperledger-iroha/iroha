@@ -472,6 +472,11 @@ fn native_iterable_query_access(
             payload;
             data_model_query::transaction::prelude::FindTransactions
         ) {
+            if let Ok(Some(authority)) = query.exact_transaction_read_authority_with_limits(
+                norito::canonical_decode_limits(query.predicate_bytes.len()),
+            ) {
+                return Ok(NativeQueryAccess::Account(authority));
+            }
             return Ok(NativeQueryAccess::AllLedger);
         }
         return Err(invalid_native_iterable_query());

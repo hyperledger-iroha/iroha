@@ -274,14 +274,17 @@ BINDINGS = tuple(
 )
 
 # Existing registry bindings retain this owner's full persistence obligations.
+NATIVE_CANDIDATE = "crates/iroha_core/src/sumeragi/v2_runner/native_candidate.rs"
 EXTRA_ITEMS = (
-    (TORII, "fn", PERSIST),
-    (TORII, "fn", AGGREGATOR),
+    (TORII, "fn", PERSIST), (TORII, "fn", AGGREGATOR),
     (RUNNER, "fn", "candidate_attachments"),
+    (RUNNER, "fn", "schedule_local_proposal"),
+    (NATIVE_CANDIDATE, "method", "NativeRunnerProcess::assemble_candidate"),
     (CANDIDATE, "method", "V2CandidateAssembler::assemble_native"),
+    (CANDIDATE, "method", "NativeCandidateWork::prepare"),
 )
 SOURCE_RELATIVES = (
-    *(Path(p) for p in sorted({p for p, _, _, _ in BINDINGS})),
+    *(Path(p) for p in sorted({p for p, _, _, _ in BINDINGS} | {p for p, _, _ in EXTRA_ITEMS})),
     Path("scripts/formal/sumeragi_v2_multilane_admission_capacity_contract.py"),
     Path("pytests/scripts/sumeragi_v2_multilane_admission_capacity_contract_test.py"),
 )
@@ -356,6 +359,52 @@ def validate_owners(root, models, errors, rust_binding_item):
     refusal = "Native candidate cannot retain a retired certified merge attachment"
     if refusal not in extra_raw.get("V2CandidateAssembler::assemble_native", ""):
         errors.append(f"Admission capacity Native candidate boundary lost {refusal!r}")
+    # The sole economic source is the authenticated Native handoff. The former
+    # runner-side certified-merge selector is retired; priority and exact fitting
+    # belong to the existing assembler, which preserves mandatory NPoS effects.
+    native_relations = {
+        "NativeRunnerProcess::assemble_candidate": (
+            "self.poll_candidate()?", "if completed.owner == owner",
+            "return Ok(Some(completed.result))", "self.retain_candidate_source(assembly.source)",
+            "if self.candidate_job.is_some() { return Ok(None); }",
+            "let Some(decisions) = self.capture_decisions()? else { return Ok(None); }",
+            "decisions.with_recovered_sources(self.recovered_sources.clone())",
+            "let (send, receive) = mpsc::sync_channel(1)",
+            "assembler.assemble_native(CandidateRequest {", "work_provider: &decisions",
+            "output_guard: &guard", "if send.send(result).is_err()",
+            "guard.close_admission_for_restart()",
+        ),
+        "V2CandidateAssembler::assemble_native": (
+            "if !request.work_provider.belongs_to(request.state)",
+            "if request.attachments.certified_merge_entry.is_some() || request.attachments.certified_merge_carrier_header.is_some()",
+            "let source = request.work_provider.prepare_candidate()",
+            "let outcome = self.assemble(CandidateRequest {",
+            "work_provider: NativeCandidateWork(&source)",
+            "Ok(NativeCandidateAssembly { source, outcome })",
+        ),
+        "NativeCandidateWork::prepare": (
+            "LaneDecisionGroupPreparationV1::ObservationChanged",
+            "CandidateWorkDeferral::NativeLaneSource",
+            "if let Some(mut ready) = self.0.work.as_ref()",
+            "return ready.prepare(context, view, candidates)",
+            "if !candidates.is_empty()",
+            "(0..candidates.len()).collect()",
+        ),
+        "schedule_local_proposal": (
+            "let Some(assembly) = native.assemble_candidate(",
+            "proposal_state.defer_candidate_snapshot(owner, Instant::now())",
+            "native.retain_candidate_source(source)", "let assembly = outcome?",
+        ),
+    }
+    for symbol, relations in native_relations.items():
+        for token in relations:
+            if _code(token) not in items.get(symbol, ""):
+                errors.append(f"Admission capacity {symbol} lost Native custody relation {token!r}")
+    attachments = items.get("candidate_attachments", "")
+    for retired in ("preferred_merge_entry", "select_pending_certified_merge_entry_for_round",
+                    "v2_evidence_admissions.clear(", "penalty_actions.clear("):
+        if retired in attachments:
+            errors.append(f"Admission capacity attachments restored retired selection or erased effects: {retired}")
 
     def ordered(symbol, *relations):
         item = items.get(symbol, "")
@@ -373,6 +422,11 @@ def validate_owners(root, models, errors, rust_binding_item):
     ordered("candidate_attachments", "let mut effects =", "attach_candidate_effects(",
             "let npos_consensus_effects =", "validate_candidate_context(context)",
             "Ok(CandidateAttachments")
+    ordered("schedule_local_proposal", "let Some(assembly) = native.assemble_candidate(",
+            "native.retain_candidate_source(source)", "let assembly = outcome?", "let candidate = match assembly")
+    ordered("NativeRunnerProcess::assemble_candidate", "self.poll_candidate()?", "if completed.owner == owner",
+            "self.retain_candidate_source(assembly.source)", "if self.candidate_job.is_some()",
+            "self.capture_decisions()?", "mpsc::sync_channel(1)", "assembler.assemble_native(CandidateRequest {")
     ordered("publish_authenticated_capacity", "capacity.check_payload_size(",
             "require_local_payload_capacity(capacity.layout, config)?", "slot.set(capacity)")
     ordered("run_inner", "terminal.verified_context(), &shared_config,)",

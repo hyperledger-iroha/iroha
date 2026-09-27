@@ -792,15 +792,14 @@ impl LocalMcpProbeResult {
             .get("supportedVersions")
             .and_then(json::Value::as_array)
             .is_some_and(|versions| {
-                versions
-                    .iter()
-                    .any(|version| version.as_str() == Some(torii_mcp::MODERN_PROTOCOL_VERSION))
+                versions.len() == 1
+                    && versions[0].as_str() == Some(torii_mcp::MODERN_PROTOCOL_VERSION)
             });
         if !supports_native_protocol {
             return Err(decode_error(
                 "mcp server/discover result",
                 format!(
-                    "missing supported native protocol version {}",
+                    "supportedVersions must contain only protocol version {}",
                     torii_mcp::MODERN_PROTOCOL_VERSION
                 ),
             ));

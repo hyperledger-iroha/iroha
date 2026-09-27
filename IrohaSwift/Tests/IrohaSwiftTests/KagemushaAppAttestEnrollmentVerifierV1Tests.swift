@@ -58,8 +58,8 @@ final class KagemushaAppAttestEnrollmentVerifierV1Tests: XCTestCase {
       keyID: sampleKeyID, clientDataHash: sampleClientDataHash())
     XCTAssertEqual(checked.rawAttestation, raw)
     XCTAssertEqual(checked.authenticatorData[32], 0x40)
-    XCTAssertEqual(checked.validationCategory, 1)
-    XCTAssertEqual(checked.bundleVersion, "1")
+    XCTAssertEqual(checked.releaseMeasurement,
+      .signed(validationCategory: 1, bundleVersion: "1"))
     XCTAssertEqual(checked.keyID, sampleKeyID)
     XCTAssertEqual(checked.publicKeyX963.count, 65)
     XCTAssertEqual(Data(SHA256.hash(data: checked.publicKeyX963)),
@@ -107,9 +107,12 @@ final class KagemushaAppAttestEnrollmentVerifierV1Tests: XCTestCase {
   func testGuideChallengeCannotReplaceKagemushaEnrollmentBinding() throws {
     let verifier = try sampleVerifier()
     let binding = try KagemushaAppAttestEnrollmentBindingV1(
-      releaseDigest: Data(repeating: 1, count: 32),
-      laneDigest: Data(repeating: 2, count: 32),
-      serverChallenge: Data(repeating: 3, count: 32))
+      clientNonce: Data(repeating: 1, count: 32),
+      serverNonce: Data(repeating: 2, count: 32),
+      releaseID: Data(repeating: 3, count: 32),
+      profileID: Data(repeating: 4, count: 32),
+      attestedKeyID: Data(repeating: 5, count: 32),
+      laneID: Data(repeating: 6, count: 32))
     XCTAssertThrowsError(try verifier.verify(rawAttestation: sampleAttestation(),
       keyID: sampleKeyID, binding: binding))
   }

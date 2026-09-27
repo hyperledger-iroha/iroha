@@ -633,7 +633,6 @@ def committed_transaction_carrier_block_hash(
 def verify_committed_transaction_inclusion(
     transaction_hash: str,
     transaction_response_bytes: bytes,
-    executed_block_wire: bytes,
     *,
     finality_bundle_chain_json: str,
     expected_network_id: NetworkId,
@@ -648,7 +647,7 @@ def verify_committed_transaction_inclusion(
     trusted network configuration or a previously authenticated checkpoint, never
     from this response. A one-element array verifies an exact checkpoint context.
 
-    The last verified Commit QC authenticates the exact canonical executed wire.
+    The last verified Commit QC authenticates the selected canonical query row.
     The result includes its typed execution commitment, network/context, carrier
     identity, wire hash/length and the selected full output hash. Rejected results
     are authenticated too; callers must check ``result_ok`` for application policy.
@@ -657,7 +656,6 @@ def verify_committed_transaction_inclusion(
     expected_network_id = _require_network_id(expected_network_id, "expected_network_id")
     for name, value in (
         ("transaction_response_bytes", transaction_response_bytes),
-        ("executed_block_wire", executed_block_wire),
     ):
         if type(value) is not bytes:
             raise TypeError(f"{name} must be exact immutable bytes")
@@ -670,7 +668,6 @@ def verify_committed_transaction_inclusion(
     payload = _crypto.verify_committed_transaction_inclusion_json(
         transaction_hash,
         transaction_response_bytes,
-        executed_block_wire,
         finality_bundle_chain_json,
         expected_network_id,
         trusted_height_context_id,

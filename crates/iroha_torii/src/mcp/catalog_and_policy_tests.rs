@@ -1079,10 +1079,9 @@ async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
     });
     let wait_app = std::sync::Arc::clone(&app);
     let wait_headers = cancellation_test_headers("client");
-    let first_wait =
-        tokio::spawn(
-            async move { handle_jsonrpc_request(wait_app, &wait_headers, wait_request).await },
-        );
+    let first_wait = tokio::spawn(async move {
+        handle_tool_call_request(wait_app, &wait_headers, wait_request).await
+    });
     tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
         .await
         .expect("first long poll reaches nested status route")
@@ -1118,7 +1117,7 @@ async fn cancelling_real_long_poll_releases_both_quotas_and_allows_reentry() {
     let second_app = std::sync::Arc::clone(&app);
     let second_headers = cancellation_test_headers("client");
     let second_wait = tokio::spawn(async move {
-        handle_jsonrpc_request(second_app, &second_headers, replacement_request).await
+        handle_tool_call_request(second_app, &second_headers, replacement_request).await
     });
     tokio::time::timeout(Duration::from_secs(2), started_rx.recv())
         .await
@@ -1412,7 +1411,8 @@ async fn malformed_authenticated_cancellation_nonce_is_rejected() {
         Value::String("invalid-nonce".to_owned()),
         "not-canonical",
     );
-    let outcome = handle_jsonrpc_request(app, &cancellation_test_headers("client"), request).await;
+    let outcome =
+        handle_tool_call_request(app, &cancellation_test_headers("client"), request).await;
     let JsonRpcRequestOutcome::Response(response) = outcome else {
         panic!("malformed cancellation nonce must return a JSON-RPC error");
     };
@@ -1489,7 +1489,7 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
     let request: Value = json::from_str(&request_json).expect("oversized-id request");
     let headers = cancellation_test_headers("client");
     let JsonRpcRequestOutcome::Response(response) =
-        handle_jsonrpc_request(std::sync::Arc::clone(&app), &headers, request).await
+        handle_tool_call_request(std::sync::Arc::clone(&app), &headers, request).await
     else {
         panic!("an oversized numeric request id cannot become cancellable")
     };
@@ -1506,7 +1506,7 @@ async fn oversized_numeric_ids_cannot_enter_or_target_cancellation_registry() {
     let call_app = std::sync::Arc::clone(&app);
     let call_headers = cancellation_test_headers("client");
     let call = tokio::spawn(async move {
-        handle_jsonrpc_request(
+        handle_tool_call_request(
             call_app,
             &call_headers,
             cancellable_health_request(Value::Number(json::native::Number::U64(u64::MAX))),
@@ -1602,12 +1602,12 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     let headers_a = cancellation_test_headers("client-a");
     let request_a = cancellable_health_request(shared_id.clone());
     let call_a =
-        tokio::spawn(async move { handle_jsonrpc_request(app_a, &headers_a, request_a).await });
+        tokio::spawn(async move { handle_tool_call_request(app_a, &headers_a, request_a).await });
     let app_b = std::sync::Arc::clone(&app);
     let headers_b = cancellation_test_headers("client-b");
     let request_b = cancellable_health_request(shared_id.clone());
     let call_b =
-        tokio::spawn(async move { handle_jsonrpc_request(app_b, &headers_b, request_b).await });
+        tokio::spawn(async move { handle_tool_call_request(app_b, &headers_b, request_b).await });
     tokio::time::timeout(Duration::from_secs(2), started_a.notified())
         .await
         .expect("client A dispatch starts");
@@ -1615,7 +1615,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
         .await
         .expect("client B dispatch starts");
 
-    let duplicate = handle_jsonrpc_request(
+    let duplicate = handle_tool_call_request(
         std::sync::Arc::clone(&app),
         &cancellation_test_headers("client-a"),
         cancellable_health_request_with_nonce(
@@ -1672,7 +1672,7 @@ async fn cancellation_is_bound_to_authenticated_client_exact_id_and_nonce() {
     let reused_request =
         cancellable_health_request_with_nonce(shared_id.clone(), replacement_nonce.as_str());
     let reused = tokio::spawn(async move {
-        handle_jsonrpc_request(reused_app, &reused_headers, reused_request).await
+        handle_tool_call_request(reused_app, &reused_headers, reused_request).await
     });
     tokio::time::timeout(Duration::from_secs(2), started_a.notified())
         .await
@@ -1754,7 +1754,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
     let first_app = std::sync::Arc::clone(&app);
     let first_headers = cancellation_test_headers("client");
     let first = tokio::spawn(async move {
-        handle_jsonrpc_request(
+        handle_tool_call_request(
             first_app,
             &first_headers,
             cancellable_health_request(Value::String("one".to_owned())),
@@ -1764,7 +1764,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
     let second_app = std::sync::Arc::clone(&app);
     let second_headers = cancellation_test_headers("client");
     let second = tokio::spawn(async move {
-        handle_jsonrpc_request(
+        handle_tool_call_request(
             second_app,
             &second_headers,
             cancellable_health_request(Value::String("two".to_owned())),
@@ -1780,7 +1780,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
     assert_eq!(global.available_permits(), 0);
 
     let overflow_id = Value::String("overflow".to_owned());
-    let overflow = handle_jsonrpc_request(
+    let overflow = handle_tool_call_request(
         std::sync::Arc::clone(&app),
         &cancellation_test_headers("client"),
         cancellable_health_request(overflow_id.clone()),
@@ -1830,7 +1830,7 @@ async fn cancellation_registry_capacity_rejects_overflow_and_recovers_after_drop
     let replacement_app = std::sync::Arc::clone(&app);
     let replacement_headers = cancellation_test_headers("client");
     let replacement = tokio::spawn(async move {
-        handle_jsonrpc_request(
+        handle_tool_call_request(
             replacement_app,
             &replacement_headers,
             cancellable_health_request(Value::String("replacement".to_owned())),
@@ -1882,15 +1882,14 @@ fn anonymous_or_invalid_tokens_have_no_cancellation_identity() {
     );
 }
 #[test]
-fn capabilities_payload_includes_toolset_version() {
+fn stateless_discovery_includes_toolset_version() {
     let tool = sample_tool("iroha.health", Method::GET, ToolEffect::Read);
     let refs = vec![&tool];
-    let payload = capabilities_payload(&refs);
+    let payload = modern_discovery_payload(&refs);
     let toolset_version = payload
         .get("capabilities")
-        .and_then(|caps| caps.get("experimental"))
-        .and_then(|experimental| experimental.get("iroha"))
-        .and_then(|iroha| iroha.get("tools"))
+        .and_then(|caps| caps.get("extensions"))
+        .and_then(|extensions| extensions.get("org.hyperledger.iroha/tools"))
         .and_then(|tools| tools.get("toolsetVersion"))
         .and_then(Value::as_str)
         .expect("toolsetVersion");
@@ -1898,19 +1897,9 @@ fn capabilities_payload_includes_toolset_version() {
         !toolset_version.is_empty(),
         "toolsetVersion must not be empty"
     );
-    let cancellation = payload
-        .pointer("/capabilities/experimental/iroha/tools/cancellation")
-        .and_then(Value::as_object)
-        .expect("cancellation extension metadata");
     assert_eq!(
-        cancellation.get("nonceMetaKey").and_then(Value::as_str),
-        Some(MCP_CANCELLATION_NONCE_META_KEY)
-    );
-    assert_eq!(
-        cancellation
-            .get("requiresApiToken")
-            .and_then(Value::as_bool),
-        Some(true)
+        payload.get("supportedVersions"),
+        Some(&norito::json!([(protocol::MODERN_PROTOCOL_VERSION)]))
     );
 }
 #[test]
@@ -1930,18 +1919,17 @@ fn origin_and_protocol_headers_reject_ambiguous_values() {
     assert!(!origin_is_allowed(&headers, &allowed));
 
     let mut headers = HeaderMap::new();
-    assert!(protocol_version_is_supported(&headers, true));
-    assert!(!protocol_version_is_supported(&headers, false));
+    assert!(!protocol_version_is_supported(&headers));
     headers.insert(
         HEADER_MCP_PROTOCOL_VERSION,
-        HeaderValue::from_static(MCP_PROTOCOL_VERSION),
+        HeaderValue::from_static(protocol::MODERN_PROTOCOL_VERSION),
     );
-    assert!(protocol_version_is_supported(&headers, false));
+    assert!(protocol_version_is_supported(&headers));
     headers.append(
         HEADER_MCP_PROTOCOL_VERSION,
-        HeaderValue::from_static(MCP_PROTOCOL_VERSION),
+        HeaderValue::from_static(protocol::MODERN_PROTOCOL_VERSION),
     );
-    assert!(!protocol_version_is_supported(&headers, false));
+    assert!(!protocol_version_is_supported(&headers));
 }
 #[test]
 fn sanitize_tool_input_schema_preserves_top_level_combinators() {
@@ -2211,87 +2199,6 @@ fn generated_iso_tool_advertises_raw_xml_as_its_default_media_type() {
             .and_then(Value::as_str),
         Some("string")
     );
-}
-#[test]
-fn initialize_requires_the_standard_client_shape() {
-    let valid = norito::json!({
-        "protocolVersion": MCP_PROTOCOL_VERSION,
-        "capabilities": {},
-        "clientInfo": { "name": "test-client", "version": "1" }
-    });
-    assert!(validate_initialize_params(valid.as_object().expect("object")).is_ok());
-    for invalid in [
-        norito::json!({}),
-        norito::json!({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": [],
-            "clientInfo": { "name": "test-client", "version": "1" }
-        }),
-        norito::json!({
-            "protocolVersion": MCP_PROTOCOL_VERSION,
-            "capabilities": {},
-            "clientInfo": { "name": "", "version": "1" }
-        }),
-    ] {
-        assert!(validate_initialize_params(invalid.as_object().expect("object")).is_err());
-    }
-}
-#[test]
-fn jsonrpc_response_recognizes_success_and_error_envelopes() {
-    for valid in [
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1.5,
-            "result": null
-        }),
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": "sampling-request",
-            "error": {
-                "code": (-32603),
-                "message": "sampling failed"
-            }
-        }),
-    ] {
-        assert!(is_jsonrpc_response(&valid), "valid response: {valid:?}");
-    }
-    for invalid in [
-        norito::json!({ "jsonrpc": "2.0", "id": null, "result": {} }),
-        norito::json!({ "jsonrpc": "2.0", "id": true, "result": {} }),
-        norito::json!({ "jsonrpc": "2.0", "result": {} }),
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {},
-            "error": { "code": (-32603), "message": "failed" }
-        }),
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": { "code": (-32603) }
-        }),
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": { "code": 1.5, "message": "fractional error code" }
-        }),
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "error": { "code": "-32603", "message": "string error code" }
-        }),
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "ping",
-            "result": {}
-        }),
-    ] {
-        assert!(
-            !is_jsonrpc_response(&invalid),
-            "invalid response: {invalid:?}"
-        );
-    }
 }
 #[test]
 fn sanitize_tool_input_schema_keeps_only_raw_body_open() {

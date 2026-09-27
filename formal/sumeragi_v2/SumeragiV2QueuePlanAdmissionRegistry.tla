@@ -5,11 +5,10 @@ EXTENDS Naturals, FiniteSets
 Bounded safety model for the global QueuePlan admission registry.
 
 One transaction-entrypoint key may be journaled and availability-certified
-under competing routing generations.  An exact f+1 certificate becomes a
-public 202 only after that certificate is durable on the ingress node.  That
-acceptance does not claim that the binding is already present in canonical
-WSV.  A later proposal-native Sumeragi carrier applies the globally ordered
-compare-and-set.  The transaction is never ordinary global-body work: the
+under competing routing generations.  An exact f+1 certificate is an internal
+availability input.  A proposal-native Sumeragi carrier applies the globally
+ordered compare-and-set, and only exact canonical membership permits public
+202.  The transaction is never ordinary global-body work: the
 exact selected binding can execute only through autonomous lane ownership and
 the certified merge corridor.
 
@@ -141,7 +140,7 @@ ApplyProposalNativeBinding(binding) ==
                  executionRole, cancelled, restarted, recreated, activeBinding>>
 
 ReturnPublicAccepted(binding) ==
-  /\ binding \in locallyDurableCertificates
+  /\ canonicalBindings = {binding}
   /\ binding = activeBinding
   /\ \/ publicAccepted = {}
      \/ publicAccepted = {binding}
@@ -358,7 +357,7 @@ MLCertificateDurable ==
   /\ canonicalBindings \subseteq certificates
 
 MLPublic202Exact ==
-  /\ publicAccepted \subseteq locallyDurableCertificates
+  /\ publicAccepted \subseteq canonicalBindings
   /\ Cardinality(publicAccepted) <= 1
 
 MLExecutionRequiresExactBinding ==

@@ -59,6 +59,8 @@ const PACKED_TAG_RADIX: u64 = 4;
 const K16_USABLE_ROWS: usize = (1 << 16) - 9;
 const ROWS_PER_JOB: usize = 3;
 const K16_MAX_SOURCES_PER_LANE: usize = (K16_USABLE_ROWS - ROWS_PER_JOB) / ROWS_PER_SOURCE;
+/// Maximum distinct sources schedulable in one four-lane k=16 dense job.
+pub(super) const K16_MAX_DENSE_SOURCES_V1: usize = K16_MAX_SOURCES_PER_LANE * DENSE_LANES;
 // A lane begins with start/count/source-x/source-y.  The first operation loads
 // the packed segment; the following non-last and final operation rows expose
 // the two offset coordinates on the otherwise-unused bus.
@@ -860,6 +862,14 @@ fn plan_dense_jobs_with_lanes(
         ));
     }
     Ok(assignments)
+}
+/// Check one k=16 reciprocal audit against the exact four-lane scheduler without assigning
+/// any Base cells. Consumers can reject an impossible source namespace before building the
+/// reciprocal circuit; successful scheduling does not authenticate the audit or its sources.
+pub(super) fn preflight_k16_dense_single_job_source_count_v1(
+    source_count: usize,
+) -> Result<(), String> {
+    plan_dense_jobs_with_lanes(&[source_count], DENSE_LANES).map(|_| ())
 }
 #[cfg(test)]
 fn plan_dense_jobs(job_source_counts: &[usize]) -> Result<Vec<Vec<usize>>, String> {
@@ -2790,6 +2800,9 @@ mod tests {
     fn k16_lane_geometry_enforces_the_authenticated_capacity() {
         assert_eq!(K16_USABLE_ROWS, 65_527);
         assert_eq!(K16_MAX_SOURCES_PER_LANE, 504);
+        assert_eq!(K16_MAX_DENSE_SOURCES_V1, 2_016);
+        assert!(preflight_k16_dense_single_job_source_count_v1(2_016).is_ok());
+        assert!(preflight_k16_dense_single_job_source_count_v1(2_017).is_err());
         assert_eq!(dense_lane_count_with_limit(1_008, 2), Ok(2));
         assert!(dense_lane_count_with_limit(1_009, 2).is_err());
         assert_eq!(dense_lane_count(1_512), Ok(3));

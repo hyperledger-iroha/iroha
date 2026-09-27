@@ -631,20 +631,28 @@ fn native_source_barrier_preserves_progress_physical_completion_and_dependency_s
         );
     }
     assert!(turn_driver.contains("retained.native_source_recovery().is_some()"));
-    let historical = turn_driver.split_once("fn selected_ingress_is_native_source_historical_request(")
-        .expect("source wait permits only historical peer service").1
-        .split_once("fn prepare_and_dispatch_current_certified_serve").unwrap().0;
+    let historical = turn_driver
+        .split_once("fn selected_ingress_is_native_source_historical_request(")
+        .expect("source wait permits only historical peer service")
+        .1
+        .split_once("fn prepare_and_dispatch_current_certified_serve")
+        .unwrap()
+        .0;
     assert!(historical.contains("CertifiedBodyRequest(request)"));
     assert!(historical.contains("request.round.height < active_height"));
     let worker = include_str!("../v2_worker.rs");
-    let transfer = worker.split_once("fn transfer_lifecycle_validate_completion_at(").unwrap().1
-        .split_once("fn transfer_lifecycle_certified_serve_completion_at(").unwrap().0;
+    let transfer = worker
+        .split_once("fn transfer_lifecycle_validate_completion_at(")
+        .unwrap()
+        .1
+        .split_once("fn transfer_lifecycle_certified_serve_completion_at(")
+        .unwrap()
+        .0;
     assert!(transfer.contains("owner.lifecycle_validate != Some(key)"));
     assert!(transfer.contains("state.owned.remove(position).map(|owner| owner.retained_at)"));
     let ordinary = include_str!("../v2_runner/ordinary_ingress_consumer.rs");
     assert!(ordinary.contains("HistoricalBodyServeTask::from_bound_ingress("));
     assert!(ordinary.contains("block_sync_server.try_enqueue_historical_body(task)"));
-
 }
 
 #[test]
@@ -699,10 +707,15 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
         .find("native.next_deadline()")
         .map(|offset| dispatch + offset)
         .expect("the real Native process bounds the next recovery poll");
-    let native_poll = run_inner[..preflight_start]
-        .find("native.poll(")
-        .expect("the original process services physical workers before finality preflight");
-    assert!(native_poll < preflight_start);
+    let before_preflight = run_inner[..preflight_start]
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        before_preflight
+            .contains("native.poll(native_global,native_network,now,receiver).inspect_err("),
+        "the original process services physical workers before finality preflight"
+    );
     let batch = open_preflight[incomplete..]
         .find("drain_open_preflight_recovery_batch(")
         .map(|offset| incomplete + offset)

@@ -6,15 +6,18 @@ use iroha_core::{
     beacon,
     kura::{BlockIndex, BlockStore},
 };
-use iroha_crypto::{ExposedPrivateKey, KeyPair};
+use iroha_crypto::{ExposedPrivateKey, HashOf, KeyPair, MerkleTree};
 use iroha_data_model::{
     block::{SignedBlock, decode_framed_signed_block},
+    bridge::{BRIDGE_FINALITY_PROOF_VERSION_V2, BridgeFinalityProof, BridgeFinalityVerifier},
     consensus::GlobalThresholdBeaconChainAnchorV1,
     isi::consensus_keys::{
         ApplyThresholdKeyLifecycleCertificateV1, ThresholdKeyLifecycleActionV1,
         ThresholdKeyLifecycleCertificateV1,
     },
+    isi::kagemusha_v1::{BeaconEpochBindingV1, KagemushaMintFinalityEpochDecisionV1},
     parameter::system::SumeragiNposParameters,
+    transaction::TransactionEntrypoint,
 };
 use iroha_test_network::{
     DisposableGenesisConfigSeat, DisposableGenesisDkgOutput, NativeGenesisProvisioningBundle,
@@ -388,6 +391,41 @@ fn exact_height_reached(
         .all(|status| status.blocks == expected && status.queue_size == 0))
 }
 
+fn exact_meshed_height_reached(
+    statuses: &[iroha_torii_shared::status::Status],
+    expected: u64,
+) -> Result<bool> {
+    Ok(
+        exact_height_reached(statuses, expected)?
+            && statuses.iter().all(|status| status.peers == 3),
+    )
+}
+
+async fn wait_for_exact_meshed_height(
+    clients: &[iroha::client::Client],
+    expected: u64,
+    deadline: Instant,
+) -> Result<()> {
+    let mut last = Vec::new();
+    timeout_at(deadline, async {
+        loop {
+            let statuses = try_join_all(
+                clients.iter().map(|client| validator_status_until(client, deadline)),
+            ).await?;
+            last = statuses
+                .iter()
+                .map(|status| (status.blocks, status.queue_size, status.peers))
+                .collect::<Vec<_>>();
+            if exact_meshed_height_reached(&statuses, expected)? {
+                return Ok::<_, eyre::Report>(());
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    }).await.wrap_err_with(|| format!(
+        "four validators did not form a drained full mesh at exact height {expected}; last (height, queue, connected peers) observations={last:?}"
+    ))?
+}
+
 async fn wait_for_exact_height(
     clients: &[iroha::client::Client],
     expected: u64,
@@ -739,6 +777,77 @@ impl Canary<'_> {
             proved_height.ok_or_else(|| eyre!("missing native canary proof receipt"))?,
         ))
     }
+
+    fn assert_committed_prepared_replay(
+        &self,
+        operation: &str,
+        client: &iroha::client::Client,
+    ) -> Result<()> {
+        let envelope_path = self.directory.join(format!("{operation}.prepared.json"));
+        let envelope: Value = json::from_slice(&fs::read(&envelope_path)?)?;
+        let prepared_operation = field(&envelope, "operation")?;
+        let prepared = field(prepared_operation, "envelope")?;
+        let (response, transaction_hash_hex) = match operation {
+            "onboarding" => {
+                ensure!(
+                    text(prepared_operation, "kind")? == "onboarding_prepared",
+                    "retained onboarding envelope has the wrong operation"
+                );
+                let prepared: iroha::client::AccountOnboardingPreparedTransactionV1 =
+                    json::from_value(prepared.clone())?;
+                let token = fs::read_to_string(self.directory.join("runtime/onboarding.token"))?;
+                let response = client.post_prepared_account_onboarding(
+                    &prepared.receipt.body.request,
+                    &prepared,
+                    &prepared.fee_payment,
+                    &token,
+                )?;
+                (response, prepared.transaction_hash_hex)
+            }
+            "faucet" => {
+                ensure!(
+                    text(prepared_operation, "kind")? == "faucet_prepared",
+                    "retained faucet envelope has the wrong operation"
+                );
+                let prepared: iroha::client::AccountFaucetPreparedTransactionV1 =
+                    json::from_value(prepared.clone())?;
+                let policy = iroha::client::AccountFaucetPolicyV1::try_new(
+                    AccountId::parse_encoded(&self.faucet[0])?,
+                    self.faucet[1].parse()?,
+                    self.faucet[2].parse()?,
+                )?;
+                let response = client.post_prepared_account_faucet(
+                    &prepared,
+                    &prepared.fee_payment,
+                    &policy,
+                )?;
+                (response, prepared.transaction_hash_hex)
+            }
+            _ => {
+                return Err(eyre!(
+                    "committed prepared replay requires onboarding or faucet"
+                ));
+            }
+        };
+        let replay_path = self
+            .directory
+            .join(format!("{operation}-committed-replay.json"));
+        private_file(&replay_path, response.body())?;
+        ensure!(
+            response.status().as_u16() == 200,
+            "committed {operation} prepared-envelope replay returned HTTP {}; retained response: {}",
+            response.status(),
+            replay_path.display()
+        );
+        let replay: Value = json::from_slice(response.body())?;
+        ensure!(
+            text(&replay, "outcome")? == "Applied"
+                && text(&replay, "transaction_hash_hex")? == transaction_hash_hex,
+            "committed {operation} replay did not return Applied for the exact retained transaction; retained response: {}",
+            replay_path.display()
+        );
+        Ok(())
+    }
 }
 
 struct ProviderBroker {
@@ -825,7 +934,7 @@ async fn stage_provider_brokers(
         let mut credential_file =
             consumed_copy(&output.credential_path, &credential_path, 16 * 1024 * 1024)?;
         let mut credential = Zeroizing::new(Vec::new());
-        credential_file.read_to_end(&mut credential)?;
+        credential_file.file.read_to_end(&mut credential)?;
         let credential_bundle = Zeroizing::new(encode_consensus_threshold_credential_bundle_v1(
             Some(&credential),
             None,
@@ -980,6 +1089,49 @@ fn read_block(store: &mut BlockStore, height: u64) -> Result<SignedBlock> {
     store.read_block_data(index[0].start, &mut bytes)?;
     Ok(decode_framed_signed_block(&bytes)?)
 }
+
+fn native_genesis_bundle(prepared: &prepare::Prepared) -> Result<NativeGenesisProvisioningBundle> {
+    let manifest = iroha_genesis::RawGenesisTransaction::from_path(
+        prepared.genesis_directory.join("genesis.json"),
+    )?;
+    let manifest_json = json::to_vec(&manifest)?;
+    let signed_wire = fs::read(prepared.genesis_directory.join("genesis.signed.nrt"))?;
+    let block_hash = prepared.network_id.into_genesis_hash();
+    let validated = iroha_genesis::validate_prepared_genesis_bundle(
+        &signed_wire,
+        &manifest,
+        &prepared.genesis_public_key,
+        block_hash,
+    )?;
+    ensure!(
+        validated.canonical_wire() == signed_wire,
+        "native DKG input differs from the exact signed genesis"
+    );
+    Ok(NativeGenesisProvisioningBundle {
+        manifest_sha256: iroha_crypto::sha256(&manifest_json),
+        manifest_json,
+        signed_wire,
+        public_key: prepared.genesis_public_key.clone(),
+        block_hash,
+        chain_discriminant: manifest.chain_discriminant(),
+    })
+}
+
+fn read_exact_finality(config_path: &Path, height: u64) -> Result<BridgeFinalityProof> {
+    let native = config(config_path)?;
+    let mut store = BlockStore::open_read_only(native.kura.store_dir.value())?;
+    let (header, artifact) = store.read_verified_v2_finality(height)?;
+    ensure!(
+        header.height().get() == height && artifact.height == height,
+        "native finality differs from the requested exact height"
+    );
+    Ok(BridgeFinalityProof {
+        version: BRIDGE_FINALITY_PROOF_VERSION_V2,
+        block_header: header,
+        finality_artifact: artifact,
+    })
+}
+
 fn verify_pulse(
     peer_configs: &[PathBuf],
     bundle: &Value,
@@ -1060,6 +1212,7 @@ fn verify_pulse(
                 && context.autonomous_lane_payloads.is_empty(),
             "mandatory pulse carrier is not the exact one-transaction native catalog merge"
         );
+        let (header, initial) = store.read_verified_v2_finality(1)?;
         let initial_authority = initial
             .height_context
             .kagemusha_mint_finality_authority
@@ -1568,6 +1721,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
     )?;
     let cli = binary("TEST_NETWORK_BIN_IROHA", ReleasePrebuiltBinary::Iroha)?;
     let kagami = binary("KAGAMI_BIN", ReleasePrebuiltBinary::Kagami)?;
+    let broker_binary = Program::IrohadDisposableBroker.resolve_skip_build()?;
     let workspace = runtime_workspace()?;
     let (api, p2p, reservations) = reserve_ports()?;
     let preparation_started = Instant::now();
@@ -1636,8 +1790,9 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         "beacon fixture starting four validators: budget={:.3}s",
         PHASE_BUDGET.as_secs_f64()
     );
-    let mut peers = spawn_peers(directory, &daemon, &prepared.roster, None, 1)?;
-    let outcome: Result<()> = async {
+    let mut peers = spawn_peers(directory, &daemon, &prepared.roster, 1)?;
+    let mut brokers = Vec::new();
+    let mut outcome: Result<()> = async {
         listeners_started(&mut peers, api, startup).await?;
         wait_for_exact_height(&clients, 1, startup).await?;
         for offset in 0..4 { ready(api + offset, 503, startup).await?; }
@@ -1666,7 +1821,13 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         let genesis_sha256 = iroha_crypto::sha256(&signed_genesis.signed_wire);
         let nonce = hex(&genesis_sha256)[..32].to_owned();
         let network_id = prepared.network_id;
-        let authorization = hex(&iroha_crypto::sha256(json::to_vec(&norito::json!({"network_id": network_id, "signed_genesis_sha256": hex(&genesis_sha256), "fixture": "fresh-production-beacon"}))?));
+        let genesis_sha256_hex = hex(&genesis_sha256);
+        let authorization_context = norito::json!({
+            "network_id": network_id,
+            "signed_genesis_sha256": genesis_sha256_hex,
+            "fixture": "fresh-production-beacon"
+        });
+        let authorization = hex(&iroha_crypto::sha256(json::to_vec(&authorization_context)?));
         let expires_ms = u64::try_from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_millis())? + 180_000;
         let canary = Canary { binary: &cli, directory, config: &fresh, root: format!("http://127.0.0.1:{api}"), nonce, authorization, expires_ms, faucet };
         let predecessor = Arc::new(StdMutex::new(None::<PathBuf>));
@@ -1703,6 +1864,20 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
                         "live canary did not reach exact h{expected} DKG phase"
                     );
                     wait_for_exact_height(clients, expected, ceremony_deadline).await?;
+                    if matches!(operation, "onboarding" | "faucet") {
+                        // The SDK's synchronous client rejects a Tokio runtime thread.
+                        // Replay the retained prepared envelope on an OS thread.
+                        std::thread::scope(|scope| {
+                            scope
+                                .spawn(|| {
+                                    let _profile = iroha_data_model::account::address::ChainDiscriminantGuard::enter(369);
+                                    canary.assert_committed_prepared_replay(operation, &clients[0])
+                                })
+                                .join()
+                                .map_err(|_| eyre!("committed prepared replay worker panicked"))?
+                        })?;
+                        wait_for_exact_height(clients, expected, ceremony_deadline).await?;
+                    }
                     *predecessor
                         .lock()
                         .map_err(|_| eyre!("beacon canary predecessor lock poisoned"))? =
@@ -1738,6 +1913,7 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
         listeners_started(&mut peers, api, restart).await?;
         wait_for_exact_height(&clients, install_height, restart).await?;
         for offset in 0..4 { ready(api + offset, 200, restart).await?; }
+        wait_for_exact_meshed_height(&clients, install_height, restart).await?;
         let mut doctor = command(&cli, directory);
         doctor.args(["--machine", "taira", "doctor", "--scope", "basic", "--public-root", &format!("http://127.0.0.1:{api}"), "--json"]);
         let doctor_deadline = (Instant::now() + Duration::from_secs(60)).min(restart);
@@ -1782,9 +1958,11 @@ async fn run_fresh_custody_bootstrap() -> Result<()> {
             stopped?;
         }
     }
-    if outcome.is_err() {
-        for broker in &mut brokers {
-            let _ = broker.stop(Instant::now() + Duration::from_secs(10)).await;
+    for broker in &mut brokers {
+        if let Err(error) = broker.stop(Instant::now() + Duration::from_secs(10)).await
+            && outcome.is_ok()
+        {
+            outcome = Err(error);
         }
     }
     // Keep failure diagnostics and generated custody owner-private outside Git.
@@ -1823,6 +2001,28 @@ fn production_beacon_exact_height_wait_preserves_retained_tip() -> Result<()> {
     assert!(exact_height_reached(&statuses, 7).is_err());
     assert!(exact_height_reached(&statuses[..3], 7).is_err());
     assert!(exact_height_reached(&statuses, 0).is_err());
+    Ok(())
+}
+
+#[test]
+fn production_beacon_paid_deployment_waits_for_full_mesh_at_exact_height() -> Result<()> {
+    use iroha_torii_shared::status::Status;
+    let mut statuses: [Status; 4] = std::array::from_fn(|_| Status {
+        blocks: 8,
+        peers: 3,
+        ..Status::default()
+    });
+    assert!(exact_meshed_height_reached(&statuses, 8)?);
+    statuses[0].peers = 0;
+    assert!(!exact_meshed_height_reached(&statuses, 8)?);
+    statuses[0].peers = 3;
+    statuses[1].queue_size = 1;
+    assert!(!exact_meshed_height_reached(&statuses, 8)?);
+    statuses[1].queue_size = 0;
+    statuses[2].blocks = 7;
+    assert!(!exact_meshed_height_reached(&statuses, 8)?);
+    statuses[2].blocks = 9;
+    assert!(exact_meshed_height_reached(&statuses, 8).is_err());
     Ok(())
 }
 

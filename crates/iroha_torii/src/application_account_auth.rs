@@ -69,11 +69,6 @@ fn mount_transactions_query(
     );
 }
 define_authenticated_application_query_mount!(
-    mount_visible_transactions_query,
-    TRANSACTIONS_VISIBLE_QUERY_POST,
-    handler_transactions_visible_query
-);
-define_authenticated_application_query_mount!(
     mount_repo_agreements_query,
     REPO_AGREEMENTS_QUERY_POST,
     handler_repo_agreements_query

@@ -1,0 +1,21 @@
+name: KagemushaAppAttestProbe
+options:
+  bundleIdPrefix: org.example
+targets:
+  KagemushaAppAttestProbe:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - Sources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: App Attest Probe
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: "$(KAGEMUSHA_APP_ATTEST_BUNDLE_ID)"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"

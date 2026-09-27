@@ -31,7 +31,7 @@ public final class NativeSignerBridgeJavaConsumerTest {
   @Test
   void exposesNominalNetworkAndContractConstants() {
     assertEquals(23, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION);
-    assertEquals(5, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION);
+    assertEquals(6, NativeSignerBridge.REQUIRED_NATIVE_SIGNER_CONTRACT_REVISION);
     final NetworkId network = TestNetworkIds.INSTANCE.canonical();
     assertEquals(NetworkId.BYTE_LENGTH, network.bytes().length);
     assertEquals(32, NetworkId.BYTE_LENGTH);

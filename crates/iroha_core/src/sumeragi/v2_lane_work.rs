@@ -18326,6 +18326,20 @@ impl V2LaneWorkAdapter {
         let Some((body, committee)) = self.refresh_lane_drain_body() else {
             return Ok(());
         };
+        if let Some(queue) = self.lane_drain_queue.as_ref()
+            && let Err(error) = queue.reconcile_closed_autoscale_route_claims(
+                self.state.as_ref(),
+                body.intent.lane_id,
+                body.intent.dataspace_id,
+                body.intent.lane_incarnation,
+            )
+        {
+            iroha_logger::warn!(
+                %error,
+                "retaining lane drain until exact closed-route Queue claims are reconciled"
+            );
+            return Ok(());
+        }
         if self.lane_drain_has_local_blockers(&body) {
             return Ok(());
         }
@@ -21947,6 +21961,45 @@ pub(super) mod tests {
                 .consensus_keys_by_pk
                 .insert(record.public_key.to_string(), vec![id]);
         }
+        if initial_lane
+            .as_ref()
+            .is_some_and(|lane| lane.id != LaneId::SINGLE)
+        {
+            for (lane_index, key) in lane_keys.iter().enumerate() {
+                let validator_id = keys
+                    .iter()
+                    .position(|global| global.public_key() == key.public_key())
+                    .map(|global_index| {
+                        ConsensusKeyId::new(
+                            ConsensusKeyRole::Validator,
+                            format!("validator{global_index}"),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        ConsensusKeyId::new(
+                            ConsensusKeyRole::Validator,
+                            format!("lane-validator{lane_index}"),
+                        )
+                    });
+                let id = crate::state::derive_committee_key_id(key.public_key());
+                let record = ConsensusKeyRecord {
+                    id: id.clone(),
+                    public_key: key.public_key().clone(),
+                    pop: Some(
+                        iroha_crypto::bls_normal_pop_prove(key.private_key())
+                            .expect("initial lane committee proof of possession"),
+                    ),
+                    activation_height: 0,
+                    expiry_height: None,
+                    replaces: None,
+                    status: ConsensusKeyStatus::Active,
+                };
+                world.consensus_keys.insert(id.clone(), record.clone());
+                world
+                    .consensus_keys_by_pk
+                    .insert(record.public_key.to_string(), vec![validator_id, id]);
+            }
+        }
         world.peers = mv::cell::Cell::new(peers);
         if matches!(mode, wire::ConsensusMode::Npos) {
             let parameters = SumeragiNposParameters::default();
@@ -22371,6 +22424,34 @@ pub(super) mod tests {
                 world_block
                     .consensus_keys_by_pk
                     .insert(record.public_key.to_string(), vec![id]);
+            }
+            let id = crate::state::derive_committee_key_id(key.public_key());
+            let record = ConsensusKeyRecord {
+                id: id.clone(),
+                public_key: key.public_key().clone(),
+                pop: Some(
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("multi-lane committee proof of possession"),
+                ),
+                activation_height: 0,
+                expiry_height: None,
+                replaces: None,
+                status: ConsensusKeyStatus::Active,
+            };
+            world_block
+                .consensus_keys
+                .insert(id.clone(), record.clone());
+            let public_key = record.public_key.to_string();
+            let mut by_public_key = world_block
+                .consensus_keys_by_pk
+                .get(&public_key)
+                .cloned()
+                .unwrap_or_default();
+            if !by_public_key.contains(&id) {
+                by_public_key.push(id);
+                world_block
+                    .consensus_keys_by_pk
+                    .insert(public_key, by_public_key);
             }
         }
         {

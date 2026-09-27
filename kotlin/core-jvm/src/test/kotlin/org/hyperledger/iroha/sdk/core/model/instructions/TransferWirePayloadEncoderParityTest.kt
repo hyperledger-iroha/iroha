@@ -67,6 +67,49 @@ class TransferWirePayloadEncoderParityTest {
         assertTransferAssetParity("transfer-asset-scoped")
     }
 
+    @Test
+    fun `dataspace scoped transfer preserves the full unsigned u64 range`() {
+        val lines = FixtureGeneratorRunner.run("transfer-asset-scoped")
+        val baseAssetId = lines[1].substringBeforeLast("#dataspace:")
+        require(baseAssetId != lines[1]) { "Rust scoped transfer fixture must include a dataspace" }
+        val amount = lines[2]
+        val destination = lines[3]
+        val boundaryBytes = mapOf(
+            "0" to byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0),
+            "9223372036854775807" to byteArrayOf(-1, -1, -1, -1, -1, -1, -1, 127),
+            "9223372036854775808" to byteArrayOf(0, 0, 0, 0, 0, 0, 0, -128),
+            "18446744073709551615" to byteArrayOf(-1, -1, -1, -1, -1, -1, -1, -1),
+        )
+        for ((dataspaceId, expectedLittleEndian) in boundaryBytes) {
+            val assetId = "$baseAssetId#dataspace:$dataspaceId"
+            val instruction = TransferWirePayloadEncoder.encodeAssetTransfer(assetId, amount, destination)
+            val wire = assertIs<WirePayload>(instruction.payload).payloadBytes
+            val decoded = TransferWirePayloadEncoder.decodeAssetTransferPayload(
+                wire,
+                SccpV1.TAIRA_I105_DISCRIMINANT_V1,
+            )
+            assertEquals(assetId, decoded.assetId)
+            if (dataspaceId != "0") {
+                val payload = NoritoHeader.decode(wire, null).payload
+                assertEquals(1, payload.countSubsequence(expectedLittleEndian), "u64 bytes: $dataspaceId")
+            }
+        }
+        for (invalid in listOf("01", "+1", "-1", "1.0", "not-decimal", "18446744073709551616")) {
+            assertFailsWith<IllegalArgumentException>("invalid dataspace: $invalid") {
+                TransferWirePayloadEncoder.encodeAssetTransfer(
+                    "$baseAssetId#dataspace:$invalid",
+                    amount,
+                    destination,
+                )
+            }
+        }
+    }
+
+    private fun ByteArray.countSubsequence(needle: ByteArray): Int =
+        (0..size - needle.size).count { start ->
+            needle.indices.all { offset -> this[start + offset] == needle[offset] }
+        }
+
     private fun assertTransferAssetParity(fixtureName: String) {
         val lines = FixtureGeneratorRunner.run(fixtureName)
         val rustHex = lines[0]

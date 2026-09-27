@@ -36312,6 +36312,63 @@ impl State {
             .ok()
         })
     }
+    /// Authenticate a committed close for one exact autoscale lane incarnation.
+    ///
+    /// The close remains terminal after its drain certificate is committed, so
+    /// Queue recovery can resolve uncarried claims without depending on another
+    /// carrier or on the transient pending-drain body.
+    pub(crate) fn has_closed_autoscale_lane_route_in_view(
+        state_view: &StateView<'_>,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Result<bool, String> {
+        let nexus = state_view.nexus();
+        if !nexus.autoscale.enabled {
+            return Ok(false);
+        }
+        let Some(lane) = nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .find(|lane| lane.id == lane_id)
+        else {
+            return Ok(false);
+        };
+        if lane.dataspace_id != dataspace_id || !lane_claims_autoscale_managed(lane) {
+            return Ok(false);
+        }
+        let Some(drain) = decode_autoscale_lane_drain_state(lane).map_err(str::to_owned)? else {
+            return Ok(false);
+        };
+        if drain.intent.lane_incarnation != lane_incarnation {
+            return Ok(false);
+        }
+        let committed_height = u64::try_from(state_view.height())
+            .map_err(|_| "committed height does not fit autoscale close observation".to_owned())?;
+        if drain.intent.close_global_height > committed_height {
+            return Ok(false);
+        }
+        if state_view.lane_incarnation_at_height(lane_id, drain.intent.close_global_height)
+            != Some(lane_incarnation)
+            || !nexus_autoscale_lane_active_for_authority(
+                lane,
+                nexus,
+                drain.intent.close_global_height,
+            )
+            || !autoscale_lane_drain_state_matches_context(
+                lane,
+                &drain,
+                state_view.network_id(),
+                lane_incarnation,
+            )
+        {
+            return Err(
+                "committed autoscale close differs from its canonical route authority".to_owned(),
+            );
+        }
+        Ok(true)
+    }
     fn pending_autoscale_lane_drain_body_with_frontier(
         &self,
         frontier: impl FnOnce(LaneId, DataSpaceId, Hash) -> Option<LaneDrainFrontierV1>,
@@ -36870,6 +36927,91 @@ impl State {
                     "pending queue-plan admission certificate is invalid: {error}"
                 ))
             })
+    }
+    /// Return whether Kura still owns a fully authenticated, live certificate for
+    /// this exact signed QueuePlan transaction before its carrier is committed.
+    ///
+    /// The bounded inventory is authenticated in full, including records for
+    /// other entrypoints. A conflicting binding for the requested entrypoint or
+    /// corrupt durable record cannot turn a retry into a success. This read never
+    /// treats an applied WSV transaction as pending.
+    ///
+    /// # Errors
+    /// Returns an error for unreadable, malformed, conflicting, or stale durable
+    /// evidence, or for an inconsistent canonical marker.
+    pub fn pending_queue_plan_admission_for_transaction(
+        &self,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        signed_transaction_hash: HashOf<SignedTransaction>,
+    ) -> Result<bool, MergeLedgerCommitError> {
+        let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();
+        let pending = self
+            .kura
+            .pending_queue_plan_admission_certificates_bounded(
+                self.kura.pending_queue_plan_admission_capacity(),
+            )?;
+        let mut exact: Vec<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1> =
+            Vec::new();
+        for (_, bytes) in pending {
+            let admission = self.authenticate_pending_queue_plan_admission(&bytes)?;
+            if admission.registry_key.entrypoint_hash != entrypoint_hash {
+                continue;
+            }
+            if admission
+                .certificate
+                .binding
+                .signed_transaction_hash
+                .as_ref()
+                != Some(&signed_transaction_hash)
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "pending QueuePlan admission binds a different signed transaction".to_owned(),
+                ));
+            }
+            if let Some(first) = exact.first() {
+                if first.certificate.binding != admission.certificate.binding {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "conflicting pending QueuePlan bindings own the same transaction"
+                            .to_owned(),
+                    ));
+                }
+            }
+            exact.push(admission);
+        }
+        if exact.is_empty() {
+            return Ok(false);
+        }
+
+        let _state_commit = self.state_commit_lock.lock();
+        let state_view = self.view();
+        let carrier_height = u64::try_from(state_view.height())
+            .ok()
+            .and_then(|height| height.checked_add(1))
+            .ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "pending QueuePlan replay carrier height overflowed".to_owned(),
+                )
+            })?;
+        for admission in &exact {
+            match Self::classify_pending_queue_plan_admission_in_view(
+                &state_view,
+                admission,
+                carrier_height,
+            )? {
+                PendingQueuePlanAdmissionDisposition::ExactPending
+                | PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                | PendingQueuePlanAdmissionDisposition::Future { .. }
+                | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
+                PendingQueuePlanAdmissionDisposition::Applied => return Ok(false),
+                PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                | PendingQueuePlanAdmissionDisposition::Stale => {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                        "pending QueuePlan admission is no longer live".to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(true)
     }
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
@@ -63280,7 +63422,7 @@ fn isolated_state_for_replay_prevalidation(state: &State, kura: &Arc<Kura>) -> R
         #[cfg(feature = "telemetry")]
         telemetry: crate::telemetry::StateTelemetry::default(),
     }
-    .into_state_from_json_str_without_durable_recovery(captured.as_json())
+    .into_state_for_replay_prevalidation(captured.as_json(), state.nexus_snapshot())
     .map_err(|error| eyre!(error))
     .wrap_err("failed to deserialize State for atomic replay prevalidation")?;
     // A replay probe must not reconfigure process-global IVM cache/prover

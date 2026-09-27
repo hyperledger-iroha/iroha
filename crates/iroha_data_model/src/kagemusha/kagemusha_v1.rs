@@ -27,8 +27,9 @@ mod hardware;
 mod hardware_selection;
 pub use hardware_selection::{
     KAGEMUSHA_APP_ATTEST_SELECTION_MAX_BYTES_V1, KagemushaAppAttestHardwareTransitionSelectionV1,
+    KagemushaAppAttestReleaseMeasurementV1, KagemushaHardwareSelectionSigningLayoutV1,
     KagemushaHardwareTransitionSelectionExpectedV1, KagemushaHardwareTransitionSelectionV1,
-    KagemushaSignedHardwareTransitionSelectionV1,
+    KagemushaSignedHardwareTransitionSelectionV1, KagemushaVerifiedAppAttestSelectionV1,
 };
 
 /// Version carried by every clean-slate KAGEMUSHA wire value.
@@ -324,8 +325,12 @@ pub const KAGEMUSHA_HARDWARE_REQUIRED_CAPABILITIES_V1: u32 =
         | KAGEMUSHA_HARDWARE_CAPABILITY_ROLLBACK_SAFE_COUNTER_ROLLOVER_V1
         | KAGEMUSHA_HARDWARE_CAPABILITY_NO_SOFTWARE_FALLBACK_V1) as u32;
 
-/// A governed verifier attested the exact app signing identity and release.
-pub const KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_RELEASE_V1: u32 = 1 << 16;
+/// A governed verifier attested the app's platform signing identity.
+///
+/// This bit does not claim a binary-version measurement: iOS 26 App Attest attestation and
+/// assertions expose the App ID but no signed bundle-version extension. Release-policy binding
+/// remains a separate governance and enrollment obligation.
+pub const KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_IDENTITY_V1: u32 = 1 << 16;
 /// The transition signature key is bound to the attested platform key service.
 pub const KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1: u32 = 1 << 17;
 /// Apple App Attest signs an increasing assertion counter. This does not claim a
@@ -336,12 +341,12 @@ pub const KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1: u32 = 1 << 18;
 pub const KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1: u32 = 1 << 19;
 /// Exact ordinary iPhone App Attest guarantee set.
 pub const KAGEMUSHA_APPLE_APP_ATTEST_GUARANTEES_V1: u32 =
-    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_RELEASE_V1
+    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_IDENTITY_V1
         | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1
         | KAGEMUSHA_APP_GUARANTEE_SIGNED_ASSERTION_COUNTER_V1;
 /// Exact ordinary Android KeyMint guarantee set.
 pub const KAGEMUSHA_ANDROID_KEYMINT_GUARANTEES_V1: u32 =
-    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_RELEASE_V1
+    KAGEMUSHA_APP_GUARANTEE_ATTESTED_APP_IDENTITY_V1
         | KAGEMUSHA_APP_GUARANTEE_ATTESTED_P256_KEY_V1
         | KAGEMUSHA_APP_GUARANTEE_HARDWARE_ONE_USE_KEY_V1;
 
@@ -377,6 +382,54 @@ const COMMIT_CERTIFICATE_ID_DOMAIN: &[u8] = b"iroha:kagemusha:v1:commit-certific
 const COMMIT_CERTIFICATE_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:commit-certificate";
 const HARDWARE_TERMINAL_BODY_COMMITMENT_DOMAIN: &[u8] =
     b"iroha:kagemusha:v1:hardware-terminal-body";
+
+/// Fixed first-release preimage layout for the self-free terminal body commitment.
+///
+/// The commitment hashes this 299-byte frame with `digest_bytes`, preserving the
+/// domain, terminal NUL, and little-endian u64 body-length framing. It does not
+/// hash the Norito wire header or checksum.
+#[derive(Clone, Copy, Debug)]
+pub struct KagemushaHardwareTerminalBodyCommitmentLayoutV1;
+
+impl KagemushaHardwareTerminalBodyCommitmentLayoutV1 {
+    /// Wire version, little-endian u16.
+    pub const VERSION: core::ops::Range<usize> = 0..2;
+    /// Digest of the persisted candidate envelope.
+    pub const CANDIDATE_ENVELOPE_DIGEST: core::ops::Range<usize> =
+        Self::VERSION.end..Self::VERSION.end + 32;
+    /// Released lifecycle binding digest.
+    pub const LIFECYCLE_BINDING_DIGEST: core::ops::Range<usize> =
+        Self::CANDIDATE_ENVELOPE_DIGEST.end..Self::CANDIDATE_ENVELOPE_DIGEST.end + 32;
+    /// Unique transition nullifier.
+    pub const TRANSITION_NULLIFIER: core::ops::Range<usize> =
+        Self::LIFECYCLE_BINDING_DIGEST.end..Self::LIFECYCLE_BINDING_DIGEST.end + 32;
+    /// Consumed outbox reservation commitment.
+    pub const OUTBOX_RESERVATION_COMMITMENT: core::ops::Range<usize> =
+        Self::TRANSITION_NULLIFIER.end..Self::TRANSITION_NULLIFIER.end + 32;
+    /// Evidence variant: trusted time 0, monotonic lease 1.
+    pub const EVIDENCE_TAG: core::ops::Range<usize> =
+        Self::OUTBOX_RESERVATION_COMMITMENT.end..Self::OUTBOX_RESERVATION_COMMITMENT.end + 1;
+    /// Commitment carried by the selected evidence variant.
+    pub const EVIDENCE_COMMITMENT: core::ops::Range<usize> =
+        Self::EVIDENCE_TAG.end..Self::EVIDENCE_TAG.end + 32;
+    /// Qualified hardware profile ID.
+    pub const HARDWARE_PROFILE_ID: core::ops::Range<usize> =
+        Self::EVIDENCE_COMMITMENT.end..Self::EVIDENCE_COMMITMENT.end + 32;
+    /// Hardware policy epoch, little-endian u64.
+    pub const POLICY_EPOCH: core::ops::Range<usize> =
+        Self::HARDWARE_PROFILE_ID.end..Self::HARDWARE_PROFILE_ID.end + 8;
+    /// Hiding commitment to the private successor state.
+    pub const PRIVATE_SUCCESSOR_COMMITMENT: core::ops::Range<usize> =
+        Self::POLICY_EPOCH.end..Self::POLICY_EPOCH.end + 32;
+    /// Hiding commitment to the journal terminal record.
+    pub const PRIVATE_JOURNAL_COMMITMENT: core::ops::Range<usize> =
+        Self::PRIVATE_SUCCESSOR_COMMITMENT.end..Self::PRIVATE_SUCCESSOR_COMMITMENT.end + 32;
+    /// Hiding commitment to deterministic recovery material.
+    pub const PRIVATE_RECOVERY_COMMITMENT: core::ops::Range<usize> =
+        Self::PRIVATE_JOURNAL_COMMITMENT.end..Self::PRIVATE_JOURNAL_COMMITMENT.end + 32;
+    /// Exact flat preimage byte count.
+    pub const BODY_BYTES: usize = Self::PRIVATE_RECOVERY_COMMITMENT.end;
+}
 const OUTBOX_RESERVATION_COMMITMENT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:outbox-reservation";
 const PAYMENT_DIGEST_DOMAIN: &[u8] = b"iroha:kagemusha:v1:payment";
 const INBOX_RECEIPT_DOMAIN: &[u8] = b"iroha:kagemusha:v1:durable-inbox-receipt";

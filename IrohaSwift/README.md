@@ -109,6 +109,10 @@ owner before returning a result or error. A resumed operation reconstructs the
 prepared value through the same native verifier and captures a fresh authenticated
 attempt without changing its original monetary intent. The client takes its body
 and operation ID only from that prepared value; Torii never signs or rebuilds it.
+`getKagemushaOperation(operationID:)` returns `nil` only for Torii's exact
+`kagemusha_operation_not_found` 404 header and JSON code. A route or proxy 404
+is an error. On exact absence, retry only the retained signed transaction and
+original operation ID; never reserve or sign a replacement top-up.
 Pending, ambiguous and unverified applied responses do not authorize intent
 cleanup, credit issuance or retirement. Native artifact qualification, retained
 hardware ownership and trusted finality checkpoints remain caller prerequisites.

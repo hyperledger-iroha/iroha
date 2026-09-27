@@ -61,6 +61,14 @@ pub use recovery_metadata::{
 };
 mod sparse_merkle;
 
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) use candidate_lifecycle::terminal_journal_canonical_layout_v1;
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+pub(crate) use candidate_lifecycle::terminal_journal_commitment_v1;
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) use candidate_lifecycle::terminal_recovery_canonical_frame_prefix_v1;
+#[cfg(all(test, feature = "zk-halo2-ipa"))]
+pub(crate) use candidate_lifecycle::terminal_recovery_commitment_v1;
 pub use candidate_lifecycle::{
     CommittedOutgoingCandidateV1, DurableOutgoingEnvelopeV1, KagemushaDurableCapacityV1,
     KagemushaOutgoingCandidateJournalV1, KagemushaOutgoingCommitCapabilityV1,
@@ -82,7 +90,10 @@ pub use mint_inbox::*;
 pub use mint_inbox_operations::{
     KagemushaPendingCreditWatermarkV1, MintCreditStageOutcomeV1, PendingCreditFoldV1,
 };
-pub use one_use_key_ratchet::{KagemushaOneUseKeyRatchetHeadV1, KagemushaOneUseKeyRatchetLinkV1};
+pub use one_use_key_ratchet::{
+    KagemushaKeyMintRawSelectionEvidenceV1, KagemushaOneUseKeyRatchetHeadV1,
+    KagemushaOneUseKeyRatchetLinkV1,
+};
 pub use outgoing_operation_index::{
     KAGEMUSHA_OUTGOING_OPERATION_PAGE_MAX_V1, KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1,
     KagemushaOutgoingOperationContextV1, KagemushaOutgoingOperationIndexErrorV1,
@@ -335,6 +346,10 @@ where
 
 /// Kagemusha V1 state-machine version.
 pub const KAGEMUSHA_STATE_VERSION_V1: u16 = 1;
+/// Fixed V1 transition-digest body. The typed asset is represented by its canonical
+/// 32-byte asset-identity SHA, which the recursive circuit recomputes from its UUID.
+pub(crate) const KAGEMUSHA_TRANSITION_STATEMENT_BODY_BYTES_V1: usize = 1089;
+
 /// Maximum opaque proof bytes accepted by a state-machine hook.
 pub const KAGEMUSHA_PROOF_BUNDLE_MAX_BYTES_V1: usize = KAGEMUSHA_PAIRED_PROOF_MAX_BYTES_V1;
 /// Maximum opaque hardware GuardBundle bytes accepted by a state-machine hook.
@@ -661,6 +676,8 @@ pub struct KagemushaStateV1 {
     /// Exact-next logical monetary transition sequence within the current hardware epoch.
     /// Authenticated rotation resets it to zero while carrying the full balance and replay root.
     pub logical_sequence: u128,
+    /// Global exact-next hardware-use index; unlike `logical_sequence`, rotation never resets it.
+    pub secure_index: u128,
     /// Current attested hardware epoch.
     pub hardware_epoch: HardwareEpochV1,
     /// Current hardware-key and policy binding.
@@ -700,6 +717,7 @@ impl KagemushaStateV1 {
         lane: KagemushaLaneIdV1,
         balance: u128,
         logical_sequence: u128,
+        secure_index: u128,
         hardware_epoch: HardwareEpochV1,
         device_policy_binding: DevicePolicyBindingV1,
         state_nonce_commitment: DigestV1,
@@ -711,6 +729,7 @@ impl KagemushaStateV1 {
             lane,
             balance,
             logical_sequence,
+            secure_index,
             hardware_epoch,
             device_policy_binding,
             [0; 32],
@@ -725,6 +744,7 @@ impl KagemushaStateV1 {
         lane: KagemushaLaneIdV1,
         balance: u128,
         logical_sequence: u128,
+        secure_index: u128,
         hardware_epoch: HardwareEpochV1,
         device_policy_binding: DevicePolicyBindingV1,
         next_one_use_key_reference: DigestV1,
@@ -741,6 +761,9 @@ impl KagemushaStateV1 {
         if state_nonce_commitment == [0; 32] {
             return Err(KagemushaStateErrorV1::InvalidStateNonceCommitment);
         }
+        if logical_sequence > secure_index {
+            return Err(KagemushaStateErrorV1::StateInvariant);
+        }
         let mut state = Self {
             version: KAGEMUSHA_STATE_VERSION_V1,
             protocol_version: context.protocol_version,
@@ -754,6 +777,7 @@ impl KagemushaStateV1 {
             lane,
             balance,
             logical_sequence,
+            secure_index,
             hardware_epoch,
             device_policy_binding,
             next_one_use_key_reference,
@@ -793,6 +817,9 @@ impl KagemushaStateV1 {
         if self.state_nonce_commitment == [0; 32] {
             return Err(KagemushaStateErrorV1::InvalidStateNonceCommitment);
         }
+        if self.logical_sequence > self.secure_index {
+            return Err(KagemushaStateErrorV1::StateInvariant);
+        }
         let (components, commitment) = self.recompute_commitment()?;
         if self.state_commitment_components != components || self.state_commitment != commitment {
             return Err(KagemushaStateErrorV1::StateCommitmentMismatch);
@@ -826,7 +853,7 @@ impl KagemushaStateV1 {
         let replay_root =
             decode_pasta::<F>(replay_root).ok_or(KagemushaStateErrorV1::StateCommitmentMismatch)?;
         let asset_id = self.lane.normalized_asset_id()?;
-        let mut inputs = Vec::with_capacity(36);
+        let mut inputs = Vec::with_capacity(37);
         inputs.push(F::from(u64::from(self.version)));
         inputs.push(F::from(u64::from(self.protocol_version)));
         inputs.extend(digest_limbs::<F>(self.suite_id));
@@ -842,6 +869,7 @@ impl KagemushaStateV1 {
         inputs.extend(digest_limbs::<F>(self.lane.device_lane_id));
         inputs.push(pasta_from_u128(self.balance));
         inputs.push(pasta_from_u128(self.logical_sequence));
+        inputs.push(pasta_from_u128(self.secure_index));
         inputs.push(pasta_from_u128(self.hardware_epoch.generation));
         inputs.extend(digest_limbs::<F>(self.hardware_epoch.epoch_id));
         inputs.extend(digest_limbs::<F>(
@@ -1853,6 +1881,9 @@ pub enum KagemushaStateErrorV1 {
     /// Logical transition sequence overflowed `u128`.
     #[error("Kagemusha logical sequence overflow")]
     SequenceOverflow,
+    /// Global hardware-use index overflowed `u128`.
+    #[error("Kagemusha secure index overflow")]
+    SecureIndexOverflow,
     /// Durable journal revision overflowed `u128`.
     #[error("Kagemusha durable journal revision overflow")]
     JournalRevisionOverflow,
@@ -2119,6 +2150,7 @@ where
             state_context,
             liability_pool_id,
             lane.clone(),
+            0,
             0,
             0,
             hardware_epoch,
@@ -4387,12 +4419,18 @@ where
         } else {
             0
         };
+        let secure_index = self
+            .state
+            .secure_index
+            .checked_add(1)
+            .ok_or(KagemushaStateErrorV1::SecureIndexOverflow)?;
         KagemushaStateV1::build(
             self.state.context(),
             self.state.liability_pool_id,
             self.state.lane.clone(),
             balance,
             logical_sequence,
+            secure_index,
             hardware_epoch,
             device_policy_binding,
             state_nonce_commitment,
@@ -4752,6 +4790,7 @@ fn bootstrap_state_public_inputs(
         receive_credit_binding_digest: [0; 32],
         lifecycle_binding_digest: guard.lifecycle_binding_digest,
         prepared_transition_binding_digest: [0; 32],
+        prepared_intent: None,
         transport_semantic_digest: preview.transport_semantic_digest,
         guard_statement_digest: guard
             .canonical_digest()
@@ -4811,6 +4850,7 @@ fn transition_state_public_inputs(
         receive_credit_binding_digest: statement.receive_credit_binding_digest,
         lifecycle_binding_digest: statement.lifecycle_binding_digest,
         prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
+        prepared_intent: None,
         transport_semantic_digest: preview.transport_semantic_digest,
         guard_statement_digest: guard_digest,
         eq_protocol_digest: artifacts.eq_protocol_digest,

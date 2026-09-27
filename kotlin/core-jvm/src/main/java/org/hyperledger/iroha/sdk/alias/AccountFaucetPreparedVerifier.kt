@@ -6,6 +6,7 @@ import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionAdmissionIntent
 import org.hyperledger.iroha.sdk.core.model.instructions.RegisterAccountWirePayloadEncoder
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
@@ -74,6 +75,9 @@ object AccountFaucetPreparedVerifier {
             "prepared faucet transaction hash differs from the envelope"
         }
         val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload())
+        require(payload.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED) {
+            "prepared faucet transaction must use QueuePlanSynced admission"
+        }
         requirePreparedOperationLifetime(payload, binding)
         require(
             AccountOnboardingReceiptVerifier.verifyAuthoritySignature(

@@ -46,6 +46,7 @@ fn native_process_three_route_source_fixture() -> Box<NativeProcessFixture> {
     let state = Arc::new(state);
     let (ids, validators) = bls_accounts_in("validators", 4);
     seed_consensus_keys_with_pops(&state, &validators);
+    seed_committee_consensus_keys_with_pops(&state, &validators);
     install_lane_manifest_registry(
         &state,
         &[

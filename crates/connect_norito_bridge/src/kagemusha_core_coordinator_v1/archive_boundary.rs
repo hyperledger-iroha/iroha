@@ -12,7 +12,12 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
 use iroha_core::zk::kagemusha_v1_state::KagemushaRedemptionTerminalReceiptV1;
 use iroha_data_model::{
     account::AccountId,
-    kagemusha::{KagemushaAcknowledgementV1, KagemushaPaymentRequestV1},
+    kagemusha::{
+        KagemushaAcknowledgementV1, KagemushaAppEnrollmentCertificateV1,
+        KagemushaDeviceQualificationReplyV1, KagemushaDeviceReadCredentialCommandV1,
+        KagemushaPaymentRequestV1, KagemushaRetailEnrollmentCertificateV1,
+        KagemushaRetailEnrollmentChallengeV1, KagemushaRetailEnrollmentPossessionProofV1,
+    },
 };
 use norito::{DecodeLimits, codec::Encode};
 
@@ -193,6 +198,56 @@ pub(crate) fn validate_request(
             let (_, terminal_start) = require_sender_input_fields(&fields, 1)?;
             terminal_receipt(&fields[terminal_start + 1])?;
         }
+        KagemushaCoreCoordinatorMethodV1::InitialEnrollment => {
+            match require_u32_field(fields.first())? {
+                INITIAL_ENROLLMENT_BEGIN_V1 => {
+                    let account_i105 = std::str::from_utf8(&fields[1]).map_err(field_error)?;
+                    let account = AccountId::parse_encoded(account_i105).map_err(field_error)?;
+                    require_binding(
+                        account.canonical_i105().map_err(field_error)? == account_i105,
+                    )?;
+                }
+                INITIAL_ENROLLMENT_ACCEPT_CHALLENGE_V1 => {
+                    let _: KagemushaAppEnrollmentCertificateV1 =
+                        norito::decode_canonical_with_limits(
+                            &fields[3],
+                            norito::canonical_decode_limits(fields[3].len()),
+                        )
+                        .map_err(field_error)?;
+                    let qualification =
+                        KagemushaDeviceQualificationReplyV1::decode_canonical_exact(&fields[4])
+                            .map_err(field_error)?;
+                    let challenge =
+                        KagemushaRetailEnrollmentChallengeV1::decode_canonical_exact(&fields[5])
+                            .map_err(field_error)?;
+                    require_binding(
+                        challenge.issuance.credential == qualification.credential
+                            && challenge.issuance.release_id == qualification.release_id
+                            && challenge.issuance.hardware_policy_digest
+                                == qualification.hardware_policy_digest
+                            && challenge.issuance.core_authorization_key_reference
+                                == qualification.core_authorization_key_reference
+                            && challenge.owner.lane_id == qualification.credential.lane_commitment
+                            && challenge.owner.runtime.network_id
+                                == qualification.credential.network_id
+                            && fields[6].as_slice()
+                                == challenge.device_request_id().map_err(field_error)?
+                            && fields[7].as_slice()
+                                == challenge.account_signing_message().map_err(field_error)?
+                            && fields[8] == fields[6]
+                            && fields[9]
+                                == KagemushaDeviceReadCredentialCommandV1::canonical_bytes()
+                                    .map_err(field_error)?
+                            && fields[10].as_slice() == challenge.expires_at_ms.to_le_bytes(),
+                    )?;
+                }
+                INITIAL_ENROLLMENT_COMPLETE_V1 => {
+                    KagemushaRetailEnrollmentCertificateV1::decode_canonical_exact(&fields[2])
+                        .map_err(field_error)?;
+                }
+                _ => {}
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -274,6 +329,27 @@ pub(crate) fn validate_response(
             let authorization = SenderHardwareAuthorizationV1::decode_canonical_exact(&response[4])
                 .map_err(field_error)?;
             require_binding(authorization.outcome_id.as_slice() == request[0])?;
+        }
+        KagemushaCoreCoordinatorMethodV1::InitialEnrollment => {
+            match require_u32_field(request.first())? {
+                INITIAL_ENROLLMENT_PREPARE_PROOF_V1 | INITIAL_ENROLLMENT_READ_PROOF_V1 => {
+                    let proof = KagemushaRetailEnrollmentPossessionProofV1::decode_canonical_exact(
+                        &response[2],
+                    )
+                    .map_err(field_error)?;
+                    require_binding(
+                        response[1].as_slice()
+                            == proof.challenge.device_request_id().map_err(field_error)?,
+                    )?;
+                }
+                INITIAL_ENROLLMENT_COMPLETE_V1 => {
+                    let certificate =
+                        KagemushaRetailEnrollmentCertificateV1::decode_canonical_exact(&request[2])
+                            .map_err(field_error)?;
+                    require_binding(response[1].as_slice() == certificate.subject.enrollment_id)?;
+                }
+                _ => {}
+            }
         }
         _ => {}
     }

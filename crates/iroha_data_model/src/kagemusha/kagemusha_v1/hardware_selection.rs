@@ -14,6 +14,7 @@ use super::{
 };
 use crate::kagemusha::kagemusha_app_enrollment_v1::KagemushaAppAttestationAuthorityPolicyV1;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize, NetworkId};
+use core::ops::Range;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use p256::ecdsa::{Signature as P256Signature, signature::Verifier as _};
@@ -22,6 +23,89 @@ use sha2::{Digest as _, Sha256};
 const SIGNING_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:hardware-transition-selection\0";
 const DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:signed-hardware-selection\0";
 const APP_ATTEST_DIGEST_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:app-attest-selection\0";
+
+/// Absolute byte ranges in the sole V1 hardware-selection signing preimage `S`.
+///
+/// `S = DOMAIN || u64-LE(BODY_BYTES) || BODY`. The body is a fixed-width sequence of
+/// fields, without a Norito frame header, padding, checksums, or variable-length tags.
+/// The model's ordinary Norito encoding remains the storage and transport format.
+/// Every range below is relative to the start of `S`, so a proof can constrain each
+/// signed byte directly to its independently assigned state or Guard value.
+#[derive(Clone, Copy, Debug)]
+pub struct KagemushaHardwareSelectionSigningLayoutV1;
+
+impl KagemushaHardwareSelectionSigningLayoutV1 {
+    /// Exact domain bytes, including the terminal NUL.
+    pub const DOMAIN_BYTES: &'static [u8] = SIGNING_DOMAIN_V1;
+    /// Domain separator in `S`.
+    pub const DOMAIN: Range<usize> = 0..SIGNING_DOMAIN_V1.len();
+    /// Fixed body length as an unsigned 64-bit little-endian integer.
+    pub const BODY_LENGTH: Range<usize> = Self::DOMAIN.end..Self::DOMAIN.end + 8;
+    /// Wire version as an unsigned 16-bit little-endian integer.
+    pub const VERSION: Range<usize> = Self::BODY_LENGTH.end..Self::BODY_LENGTH.end + 2;
+    /// Exact authenticated proof release identifier.
+    pub const RELEASE_ID: Range<usize> = Self::VERSION.end..Self::VERSION.end + 32;
+    /// Receipt-authenticated provider credential Merkle root.
+    pub const PROVIDER_POLICY_ROOT: Range<usize> = Self::RELEASE_ID.end..Self::RELEASE_ID.end + 32;
+    /// Governance-signed app policy digest.
+    pub const APP_POLICY_DIGEST: Range<usize> =
+        Self::PROVIDER_POLICY_ROOT.end..Self::PROVIDER_POLICY_ROOT.end + 32;
+    /// Governance-signed device credential identifier.
+    pub const CREDENTIAL_ID: Range<usize> =
+        Self::APP_POLICY_DIGEST.end..Self::APP_POLICY_DIGEST.end + 32;
+    /// Raw, canonical 32-byte genesis-derived `NetworkId`.
+    pub const NETWORK_ID: Range<usize> = Self::CREDENTIAL_ID.end..Self::CREDENTIAL_ID.end + 32;
+    /// Stable device-lane commitment.
+    pub const LANE_COMMITMENT: Range<usize> = Self::NETWORK_ID.end..Self::NETWORK_ID.end + 32;
+    /// Governed hardware profile identifier.
+    pub const HARDWARE_PROFILE_ID: Range<usize> =
+        Self::LANE_COMMITMENT.end..Self::LANE_COMMITMENT.end + 32;
+    /// Policy epoch as an unsigned 64-bit little-endian integer.
+    pub const POLICY_EPOCH: Range<usize> =
+        Self::HARDWARE_PROFILE_ID.end..Self::HARDWARE_PROFILE_ID.end + 8;
+    /// Consumed hardware-key epoch identifier.
+    pub const HARDWARE_EPOCH_ID: Range<usize> = Self::POLICY_EPOCH.end..Self::POLICY_EPOCH.end + 32;
+    /// Hardware-key epoch generation as an unsigned 64-bit little-endian integer.
+    pub const HARDWARE_EPOCH_GENERATION: Range<usize> =
+        Self::HARDWARE_EPOCH_ID.end..Self::HARDWARE_EPOCH_ID.end + 8;
+    /// One-byte stable operation tag: Bootstrap 0, MintFold 1, SendSplit 2,
+    /// ReceiveFold 3, RedeemSplit 4, Rotate 5.
+    pub const OPERATION_TAG: Range<usize> =
+        Self::HARDWARE_EPOCH_GENERATION.end..Self::HARDWARE_EPOCH_GENERATION.end + 1;
+    /// Digest of Core's complete exact-next transition statement.
+    pub const TRANSITION_STATEMENT_DIGEST: Range<usize> =
+        Self::OPERATION_TAG.end..Self::OPERATION_TAG.end + 32;
+    /// Verified outgoing candidate envelope digest; zero for non-outgoing operations.
+    pub const CANDIDATE_ENVELOPE_DIGEST: Range<usize> =
+        Self::TRANSITION_STATEMENT_DIGEST.end..Self::TRANSITION_STATEMENT_DIGEST.end + 32;
+    /// Outgoing terminal body commitment; zero for non-outgoing operations.
+    pub const TERMINAL_BODY_COMMITMENT: Range<usize> =
+        Self::CANDIDATE_ENVELOPE_DIGEST.end..Self::CANDIDATE_ENVELOPE_DIGEST.end + 32;
+    /// Predecessor secure index as an unsigned 128-bit little-endian integer.
+    pub const SECURE_INDEX_BEFORE: Range<usize> =
+        Self::TERMINAL_BODY_COMMITMENT.end..Self::TERMINAL_BODY_COMMITMENT.end + 16;
+    /// Exact successor secure index as an unsigned 128-bit little-endian integer.
+    pub const SECURE_INDEX_AFTER: Range<usize> =
+        Self::SECURE_INDEX_BEFORE.end..Self::SECURE_INDEX_BEFORE.end + 16;
+    /// Complete fixed-width body in `S`.
+    pub const BODY: Range<usize> = Self::VERSION.start..Self::SECURE_INDEX_AFTER.end;
+    /// Exactly 403 bytes of signed subject fields.
+    pub const BODY_BYTES: usize = Self::BODY.end - Self::BODY.start;
+    /// Exact total size of `S`, including domain and length.
+    pub const TOTAL_BYTES: usize = Self::SECURE_INDEX_AFTER.end;
+}
+
+const fn operation_tag_v1(kind: KagemushaOperationKindV1) -> u8 {
+    match kind {
+        KagemushaOperationKindV1::Bootstrap => 0,
+        KagemushaOperationKindV1::MintFold => 1,
+        KagemushaOperationKindV1::SendSplit => 2,
+        KagemushaOperationKindV1::ReceiveFold => 3,
+        KagemushaOperationKindV1::RedeemSplit => 4,
+        KagemushaOperationKindV1::Rotate => 5,
+    }
+}
+
 /// Maximum canonical bytes of one signed transition selection.
 pub const KAGEMUSHA_SIGNED_HARDWARE_TRANSITION_SELECTION_MAX_BYTES_V1: usize = 1_024;
 /// Maximum canonical bytes of one complete App Attest assertion selection.
@@ -51,9 +135,9 @@ pub struct KagemushaHardwareTransitionSelectionV1 {
     /// Exact authenticated proof release.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub release_id: [u8; 32],
-    /// Exact authenticated hardware-policy roster.
+    /// Exact receipt-authenticated provider credential Merkle root.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
-    pub hardware_policy_digest: [u8; 32],
+    pub provider_policy_root: [u8; 32],
     /// Governance-signed stable app/device/release binding digest.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub app_policy_digest: [u8; 32],
@@ -105,6 +189,7 @@ impl KagemushaHardwareTransitionSelectionV1 {
             KagemushaOperationKindV1::SendSplit | KagemushaOperationKindV1::RedeemSplit
         );
         if self.version != KAGEMUSHA_WIRE_VERSION_V1
+            || self.operation_kind == KagemushaOperationKindV1::Bootstrap
             || self.network_id.as_bytes() == &[0; 32]
             || self.policy_epoch == 0
             || self.hardware_epoch_generation == 0
@@ -113,7 +198,7 @@ impl KagemushaHardwareTransitionSelectionV1 {
             || outgoing != (self.terminal_body_commitment != [0; 32])
             || [
                 self.release_id,
-                self.hardware_policy_digest,
+                self.provider_policy_root,
                 self.app_policy_digest,
                 self.credential_id,
                 self.lane_commitment,
@@ -128,20 +213,43 @@ impl KagemushaHardwareTransitionSelectionV1 {
         Ok(())
     }
 
-    /// Return the domain-separated canonical signature message.
+    /// Return the fixed-field, domain-separated V1 signature message `S`.
+    ///
+    /// The signed body is deliberately independent of the Norito frame used to
+    /// store and transport this model. See [`KagemushaHardwareSelectionSigningLayoutV1`]
+    /// for absolute ranges that a proof must bind to independently assigned values.
     ///
     /// # Errors
     ///
-    /// Returns an error for an invalid subject or canonical encoding failure.
+    /// Returns an error for an invalid subject or unexpected fixed-field length.
     pub fn canonical_signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationErrorV1> {
         self.validate_shape()?;
-        let body = norito::encode_canonical(self)?;
-        let length = u64::try_from(body.len())
-            .map_err(|_| invalid("kagemusha.hardware_selection.length"))?;
-        let mut message = Vec::with_capacity(SIGNING_DOMAIN_V1.len() + 8 + body.len());
+        let mut message =
+            Vec::with_capacity(KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES);
         message.extend_from_slice(SIGNING_DOMAIN_V1);
-        message.extend_from_slice(&length.to_le_bytes());
-        message.extend_from_slice(&body);
+        message.extend_from_slice(
+            &(KagemushaHardwareSelectionSigningLayoutV1::BODY_BYTES as u64).to_le_bytes(),
+        );
+        message.extend_from_slice(&self.version.to_le_bytes());
+        message.extend_from_slice(&self.release_id);
+        message.extend_from_slice(&self.provider_policy_root);
+        message.extend_from_slice(&self.app_policy_digest);
+        message.extend_from_slice(&self.credential_id);
+        message.extend_from_slice(self.network_id.as_bytes());
+        message.extend_from_slice(&self.lane_commitment);
+        message.extend_from_slice(&self.hardware_profile_id);
+        message.extend_from_slice(&self.policy_epoch.to_le_bytes());
+        message.extend_from_slice(&self.hardware_epoch_id);
+        message.extend_from_slice(&self.hardware_epoch_generation.to_le_bytes());
+        message.push(operation_tag_v1(self.operation_kind));
+        message.extend_from_slice(&self.transition_statement_digest);
+        message.extend_from_slice(&self.candidate_envelope_digest);
+        message.extend_from_slice(&self.terminal_body_commitment);
+        message.extend_from_slice(&self.secure_index_before.to_le_bytes());
+        message.extend_from_slice(&self.secure_index_after.to_le_bytes());
+        if message.len() != KagemushaHardwareSelectionSigningLayoutV1::TOTAL_BYTES {
+            return Err(invalid("kagemusha.hardware_selection.length"));
+        }
         Ok(message)
     }
 }
@@ -201,6 +309,26 @@ pub struct KagemushaAppAttestHardwareTransitionSelectionV1 {
     pub raw_assertion: Vec<u8>,
 }
 
+/// Whether the signed assertion itself measured the app release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KagemushaAppAttestReleaseMeasurementV1 {
+    /// The platform returned only the RP ID, flags and counter, as observed on iOS 26.7.
+    Unavailable,
+    /// Signed validation-category and bundle-version extensions matched release policy.
+    SignedExtensions,
+}
+
+/// Result of checking one original App Attest assertion against Core's expected selection.
+///
+/// This is candidate evidence, not a monetary authorization or a complete app enrollment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KagemushaVerifiedAppAttestSelectionV1 {
+    /// Digest of the exact Norito selection carrying the original assertion bytes.
+    pub evidence_digest: [u8; 32],
+    /// Whether this particular assertion carried signed release measurements.
+    pub release_measurement: KagemushaAppAttestReleaseMeasurementV1,
+}
+
 /// Trusted comparisons independently reconstructed from release, Core and secure checkpoint.
 ///
 /// Never derive these values from the signer-supplied subject.
@@ -208,8 +336,8 @@ pub struct KagemushaAppAttestHardwareTransitionSelectionV1 {
 pub struct KagemushaHardwareTransitionSelectionExpectedV1 {
     /// Exact authenticated proof release.
     pub release_id: [u8; 32],
-    /// Exact authenticated hardware-policy roster.
-    pub hardware_policy_digest: [u8; 32],
+    /// Exact receipt-authenticated provider credential Merkle root.
+    pub provider_policy_root: [u8; 32],
     /// Independently authenticated app/device/release binding digest.
     pub app_policy_digest: [u8; 32],
     /// Core-derived operation kind.
@@ -265,15 +393,35 @@ impl KagemushaSignedHardwareTransitionSelectionV1 {
 }
 
 impl KagemushaAppAttestHardwareTransitionSelectionV1 {
+    /// Return exact signed components from the original canonical CBOR assertion.
+    ///
+    /// This checks CBOR shape and size only. Callers must still verify the signature, governed
+    /// credential, app policy, counter and Core-derived selection before using these bytes.
+    ///
+    /// # Errors
+    /// Rejects malformed, noncanonical, duplicate-key or oversized assertion CBOR.
+    pub fn original_assertion_components(
+        &self,
+    ) -> Result<(&[u8], &[u8]), KagemushaValidationErrorV1> {
+        parse_app_attest_assertion(&self.raw_assertion)
+            .map_err(|_| invalid("kagemusha.app_attest.assertion"))
+    }
+
     /// Check App Attest's P-256 assertion equation and an exact-next authenticated counter.
+    ///
+    /// The signed ECDSA-SHA256 input is Apple's nonce
+    /// `SHA256(authenticatorData || SHA256(canonical_signing_bytes))`. ECDSA-SHA256 hashes
+    /// that nonce once more. Passing the concatenation directly to ECDSA would verify the
+    /// wrong equation and rejects genuine iPhone assertions.
     ///
     /// For an Apple profile, `policy.app_signing_identity_digest` is SHA-256 of the exact App ID
     /// and therefore the expected RP ID hash. The policy must come from the authenticated release.
     /// `credential` must contain the key extracted from a trusted App Attest enrollment attestation.
-    /// The signed release extension suffix is bound to policy regardless of the ED flag;
-    /// Apple's attestation fixture appends extensions without setting ED. The caller remains responsible
-    /// for the enrollment attestation chain and physical counter
-    /// qualification before using this evidence in any monetary proof.
+    /// When present, signed assertion release extensions are bound to policy. Current physical
+    /// iPhones also return a 37-byte assertion header without extensions; that format proves the
+    /// app ID, key and counter but makes no per-assertion app-version claim. The caller remains
+    /// responsible for enrollment attestation, release qualification and physical counter
+    /// semantics before using this evidence in any monetary proof.
     ///
     /// # Errors
     /// Rejects a malformed assertion, wrong app/key/subject, invalid signature or skipped count.
@@ -283,7 +431,7 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
         profile: &KagemushaHardwareProfileV1,
         expected: KagemushaHardwareTransitionSelectionExpectedV1,
         policy: &KagemushaAppAttestationAuthorityPolicyV1,
-    ) -> Result<[u8; 32], KagemushaValidationErrorV1> {
+    ) -> Result<KagemushaVerifiedAppAttestSelectionV1, KagemushaValidationErrorV1> {
         validate_subject_against(&self.subject, credential, profile, expected)?;
         if profile.platform_class != KagemushaHardwarePlatformClassV1::AppleAppAttest {
             return Err(invalid("kagemusha.app_attest.platform"));
@@ -291,22 +439,26 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
         credential
             .validate_app_policy_binding_for_release(profile, expected.release_id, policy)
             .map_err(|_| invalid("kagemusha.app_attest.app_policy"))?;
-        let (authenticator_data, signature_der) =
-            parse_app_attest_assertion(&self.raw_assertion)
-                .map_err(|_| invalid("kagemusha.app_attest.assertion"))?;
+        let (authenticator_data, signature_der) = self.original_assertion_components()?;
         let expected_rp_id = policy.app_signing_identity_digest;
         let counter = u32::try_from(self.subject.secure_index_after)
             .map_err(|_| invalid("kagemusha.app_attest.counter"))?;
         if expected_rp_id == [0; 32]
             || authenticator_data[..32] != expected_rp_id[..]
-            || authenticator_data[32] & 0x40 != 0
+            || !matches!(authenticator_data[32], 0x40 | 0xc0)
+            || (authenticator_data.len() == 37 && authenticator_data[32] != 0x40)
             || authenticator_data[33..37] != counter.to_be_bytes()[..]
         {
             return Err(invalid("kagemusha.app_attest.assertion"));
         }
-        parse_app_attest_assertion_extensions(authenticator_data)
-            .and_then(|extensions| extensions.verify_release_digest(policy.app_release_digest))
-            .map_err(|_| invalid("kagemusha.app_attest.release_extensions"))?;
+        let release_measurement = if authenticator_data.len() > 37 {
+            parse_app_attest_assertion_extensions(authenticator_data)
+                .and_then(|extensions| extensions.verify_release_digest(policy.app_release_digest))
+                .map_err(|_| invalid("kagemusha.app_attest.release_extensions"))?;
+            KagemushaAppAttestReleaseMeasurementV1::SignedExtensions
+        } else {
+            KagemushaAppAttestReleaseMeasurementV1::Unavailable
+        };
         let signature = P256Signature::from_der(signature_der)
             .map_err(|_| invalid("kagemusha.app_attest.signature"))?;
         if signature.to_der().as_bytes() != signature_der {
@@ -316,16 +468,21 @@ impl KagemushaAppAttestHardwareTransitionSelectionV1 {
         let mut message = Vec::with_capacity(authenticator_data.len() + client_data_hash.len());
         message.extend_from_slice(authenticator_data);
         message.extend_from_slice(&client_data_hash);
+        // App Attest signs this nonce with ECDSA-SHA256, whose verifier hashes its input again.
+        let nonce = Sha256::digest(&message);
         credential
             .device_public_key
             .verifying_key()?
-            .verify(&message, &signature)
+            .verify(&nonce, &signature)
             .map_err(|_| invalid("kagemusha.app_attest.signature"))?;
         require_encoded_size(self, KAGEMUSHA_APP_ATTEST_SELECTION_MAX_BYTES_V1)?;
-        Ok(digest_bytes(
-            APP_ATTEST_DIGEST_DOMAIN_V1,
-            &norito::encode_canonical(self)?,
-        ))
+        Ok(KagemushaVerifiedAppAttestSelectionV1 {
+            evidence_digest: digest_bytes(
+                APP_ATTEST_DIGEST_DOMAIN_V1,
+                &norito::encode_canonical(self)?,
+            ),
+            release_measurement,
+        })
     }
 }
 
@@ -338,11 +495,11 @@ fn validate_subject_against(
     credential.validate_against_profile(profile)?;
     subject.validate_shape()?;
     if expected.release_id == [0; 32]
-        || expected.hardware_policy_digest == [0; 32]
+        || expected.provider_policy_root == [0; 32]
         || expected.app_policy_digest == [0; 32]
         || expected.transition_statement_digest == [0; 32]
         || subject.release_id != expected.release_id
-        || subject.hardware_policy_digest != expected.hardware_policy_digest
+        || subject.provider_policy_root != expected.provider_policy_root
         || subject.app_policy_digest != expected.app_policy_digest
         || subject.app_policy_digest != credential.app_policy_binding_digest
         || subject.operation_kind != expected.operation_kind
@@ -467,7 +624,7 @@ mod tests {
             governance.sign(&credential.canonical_signing_bytes().unwrap());
         let expected = KagemushaHardwareTransitionSelectionExpectedV1 {
             release_id: [21; 32],
-            hardware_policy_digest: [22; 32],
+            provider_policy_root: [22; 32],
             app_policy_digest: credential.app_policy_binding_digest,
             operation_kind: KagemushaOperationKindV1::SendSplit,
             transition_statement_digest: [24; 32],
@@ -478,7 +635,7 @@ mod tests {
         let subject = KagemushaHardwareTransitionSelectionV1 {
             version: 1,
             release_id: expected.release_id,
-            hardware_policy_digest: expected.hardware_policy_digest,
+            provider_policy_root: expected.provider_policy_root,
             app_policy_digest: expected.app_policy_digest,
             credential_id: credential.credential_id,
             network_id,
@@ -502,6 +659,160 @@ mod tests {
             expected,
             KagemushaSignedHardwareTransitionSelectionV1 { subject, signature },
         )
+    }
+
+    #[test]
+    fn operation_tags_are_exact_v1() {
+        assert_eq!(operation_tag_v1(KagemushaOperationKindV1::Bootstrap), 0);
+        assert_eq!(operation_tag_v1(KagemushaOperationKindV1::MintFold), 1);
+        assert_eq!(operation_tag_v1(KagemushaOperationKindV1::SendSplit), 2);
+        assert_eq!(operation_tag_v1(KagemushaOperationKindV1::ReceiveFold), 3);
+        assert_eq!(operation_tag_v1(KagemushaOperationKindV1::RedeemSplit), 4);
+        assert_eq!(operation_tag_v1(KagemushaOperationKindV1::Rotate), 5);
+    }
+
+    #[test]
+    fn bootstrap_has_no_signed_hardware_selection() {
+        let (_, _, _, _, signed) = fixture();
+        let mut subject = signed.subject;
+        subject.operation_kind = KagemushaOperationKindV1::Bootstrap;
+        subject.candidate_envelope_digest = [0; 32];
+        subject.terminal_body_commitment = [0; 32];
+        assert!(subject.validate_shape().is_err());
+        assert!(subject.canonical_signing_bytes().is_err());
+    }
+
+    #[test]
+    fn canonical_selection_has_exact_fixed_field_slices() {
+        type Layout = KagemushaHardwareSelectionSigningLayoutV1;
+        let (_, _, _, _, signed) = fixture();
+        let subject = signed.subject;
+        let bytes = subject.canonical_signing_bytes().unwrap();
+        let ranges = [
+            Layout::DOMAIN,
+            Layout::BODY_LENGTH,
+            Layout::VERSION,
+            Layout::RELEASE_ID,
+            Layout::PROVIDER_POLICY_ROOT,
+            Layout::APP_POLICY_DIGEST,
+            Layout::CREDENTIAL_ID,
+            Layout::NETWORK_ID,
+            Layout::LANE_COMMITMENT,
+            Layout::HARDWARE_PROFILE_ID,
+            Layout::POLICY_EPOCH,
+            Layout::HARDWARE_EPOCH_ID,
+            Layout::HARDWARE_EPOCH_GENERATION,
+            Layout::OPERATION_TAG,
+            Layout::TRANSITION_STATEMENT_DIGEST,
+            Layout::CANDIDATE_ENVELOPE_DIGEST,
+            Layout::TERMINAL_BODY_COMMITMENT,
+            Layout::SECURE_INDEX_BEFORE,
+            Layout::SECURE_INDEX_AFTER,
+        ];
+        assert_eq!(Layout::BODY_BYTES, 403);
+        assert_eq!(Layout::TOTAL_BYTES, 460);
+        assert_eq!(Layout::TOTAL_BYTES, SIGNING_DOMAIN_V1.len() + 8 + 403);
+        assert_eq!(bytes.len(), Layout::TOTAL_BYTES);
+        assert_eq!(ranges[0].start, 0);
+        assert_eq!(ranges.last().unwrap().end, Layout::TOTAL_BYTES);
+        for adjacent in ranges.windows(2) {
+            assert_eq!(adjacent[0].end, adjacent[1].start);
+        }
+        assert_eq!(&bytes[Layout::DOMAIN], SIGNING_DOMAIN_V1);
+        assert_eq!(&bytes[Layout::BODY_LENGTH], &(403_u64).to_le_bytes());
+        assert_eq!(&bytes[Layout::VERSION], &subject.version.to_le_bytes());
+        assert_eq!(&bytes[Layout::RELEASE_ID], &subject.release_id);
+        assert_eq!(
+            &bytes[Layout::PROVIDER_POLICY_ROOT],
+            &subject.provider_policy_root
+        );
+        assert_eq!(
+            &bytes[Layout::APP_POLICY_DIGEST],
+            &subject.app_policy_digest
+        );
+        assert_eq!(&bytes[Layout::CREDENTIAL_ID], &subject.credential_id);
+        assert_eq!(&bytes[Layout::NETWORK_ID], subject.network_id.as_bytes());
+        assert_eq!(&bytes[Layout::LANE_COMMITMENT], &subject.lane_commitment);
+        assert_eq!(
+            &bytes[Layout::HARDWARE_PROFILE_ID],
+            &subject.hardware_profile_id
+        );
+        assert_eq!(
+            &bytes[Layout::POLICY_EPOCH],
+            &subject.policy_epoch.to_le_bytes()
+        );
+        assert_eq!(
+            &bytes[Layout::HARDWARE_EPOCH_ID],
+            &subject.hardware_epoch_id
+        );
+        assert_eq!(
+            &bytes[Layout::HARDWARE_EPOCH_GENERATION],
+            &subject.hardware_epoch_generation.to_le_bytes(),
+        );
+        assert_eq!(&bytes[Layout::OPERATION_TAG], &[2]);
+        assert_eq!(
+            &bytes[Layout::TRANSITION_STATEMENT_DIGEST],
+            &subject.transition_statement_digest,
+        );
+        assert_eq!(
+            &bytes[Layout::CANDIDATE_ENVELOPE_DIGEST],
+            &subject.candidate_envelope_digest
+        );
+        assert_eq!(
+            &bytes[Layout::TERMINAL_BODY_COMMITMENT],
+            &subject.terminal_body_commitment
+        );
+        assert_eq!(
+            &bytes[Layout::SECURE_INDEX_BEFORE],
+            &subject.secure_index_before.to_le_bytes()
+        );
+        assert_eq!(
+            &bytes[Layout::SECURE_INDEX_AFTER],
+            &subject.secure_index_after.to_le_bytes()
+        );
+
+        let mut changed = subject;
+        changed.transition_statement_digest[0] ^= 0x80;
+        let altered = changed.canonical_signing_bytes().unwrap();
+        let changed_positions = bytes
+            .iter()
+            .zip(&altered)
+            .enumerate()
+            .filter_map(|(index, (left, right))| (left != right).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            changed_positions,
+            vec![Layout::TRANSITION_STATEMENT_DIGEST.start]
+        );
+
+        changed = subject;
+        changed.operation_kind = KagemushaOperationKindV1::RedeemSplit;
+        let altered = changed.canonical_signing_bytes().unwrap();
+        let changed_positions = bytes
+            .iter()
+            .zip(&altered)
+            .enumerate()
+            .filter_map(|(index, (left, right))| (left != right).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(changed_positions, vec![Layout::OPERATION_TAG.start]);
+
+        changed = subject;
+        changed.secure_index_before += 1;
+        changed.secure_index_after += 1;
+        let altered = changed.canonical_signing_bytes().unwrap();
+        let changed_positions = bytes
+            .iter()
+            .zip(&altered)
+            .enumerate()
+            .filter_map(|(index, (left, right))| (left != right).then_some(index))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            changed_positions,
+            vec![
+                Layout::SECURE_INDEX_BEFORE.start,
+                Layout::SECURE_INDEX_AFTER.start
+            ]
+        );
     }
 
     #[test]
@@ -539,7 +850,7 @@ mod tests {
             let mut changed = signed;
             match field {
                 0 => changed.subject.release_id = [31; 32],
-                1 => changed.subject.hardware_policy_digest = [32; 32],
+                1 => changed.subject.provider_policy_root = [32; 32],
                 2 => changed.subject.app_policy_digest = [33; 32],
                 3 => changed.subject.transition_statement_digest = [34; 32],
                 4 => changed.subject.candidate_envelope_digest = [35; 32],
@@ -671,7 +982,8 @@ mod tests {
     ) -> Vec<u8> {
         let mut message = authenticator_data.to_vec();
         message.extend_from_slice(&Sha256::digest(subject.canonical_signing_bytes().unwrap()));
-        let raw = signer.sign(&message);
+        let nonce = Sha256::digest(&message);
+        let raw = signer.sign(&nonce);
         let signature_der = P256Signature::from_slice(raw.as_raw_bytes())
             .unwrap()
             .to_der();
@@ -712,7 +1024,7 @@ mod tests {
         signed.subject.credential_id = credential.credential_id;
         signed.subject.app_policy_digest = credential.app_policy_binding_digest;
         let mut authenticator_data = Vec::from(policy.app_signing_identity_digest);
-        authenticator_data.push(0x81);
+        authenticator_data.push(0xc0);
         authenticator_data.extend_from_slice(&10_u32.to_be_bytes());
         authenticator_data.extend_from_slice(&synthetic_release_extensions());
         let raw_assertion = signed_assertion(&signed.subject, &authenticator_data, &device);
@@ -731,10 +1043,24 @@ mod tests {
     #[test]
     fn app_attest_assertion_binds_original_cbor_core_selection_and_strict_next_counter() {
         let (profile, credential, expected, policy, evidence) = app_attest_fixture();
+        let (original_authenticator, original_signature) =
+            evidence.original_assertion_components().unwrap();
+        assert_eq!(
+            assertion_bytes(original_authenticator, original_signature),
+            evidence.raw_assertion
+        );
+        let mut trailing = evidence.clone();
+        trailing.raw_assertion.push(0);
+        assert!(trailing.original_assertion_components().is_err());
         let verify = |selection: &KagemushaAppAttestHardwareTransitionSelectionV1| {
             selection.verify_signature_and_counter_against(&credential, &profile, expected, &policy)
         };
-        assert_ne!(verify(&evidence).unwrap(), [0; 32]);
+        let verified = verify(&evidence).unwrap();
+        assert_ne!(verified.evidence_digest, [0; 32]);
+        assert_eq!(
+            verified.release_measurement,
+            KagemushaAppAttestReleaseMeasurementV1::SignedExtensions
+        );
         let decoded: KagemushaAppAttestHardwareTransitionSelectionV1 =
             norito::decode_canonical(&norito::encode_canonical(&evidence).unwrap()).unwrap();
         assert_eq!(decoded, evidence);
@@ -757,9 +1083,24 @@ mod tests {
 
         let mut extension_free = evidence.clone();
         auth.truncate(37);
-        auth[32] = 0x01;
+        auth[32] = 0x40;
         extension_free.raw_assertion = signed_assertion(&extension_free.subject, &auth, &signer);
-        assert!(verify(&extension_free).is_err());
+        assert_eq!(
+            verify(&extension_free).unwrap().release_measurement,
+            KagemushaAppAttestReleaseMeasurementV1::Unavailable
+        );
+
+        let mut wrong_flags = extension_free.clone();
+        auth[32] = 0x00;
+        wrong_flags.raw_assertion = signed_assertion(&wrong_flags.subject, &auth, &signer);
+        assert!(verify(&wrong_flags).is_err());
+
+        let mut malformed_suffix = extension_free.clone();
+        auth[32] = 0x40;
+        auth.push(0);
+        malformed_suffix.raw_assertion =
+            signed_assertion(&malformed_suffix.subject, &auth, &signer);
+        assert!(verify(&malformed_suffix).is_err());
 
         let mut changed_release = evidence.clone();
         auth = original_auth.to_vec();
@@ -821,7 +1162,7 @@ mod tests {
         let (device, profile, credential, expected, signed) = fixture();
         let policy = app_attest_policy();
         let mut authenticator_data = Vec::from(policy.app_signing_identity_digest);
-        authenticator_data.push(0x81);
+        authenticator_data.push(0xc0);
         authenticator_data.extend_from_slice(&10_u32.to_be_bytes());
         authenticator_data.extend_from_slice(&synthetic_release_extensions());
         let direct = device.sign(&signed.subject.canonical_signing_bytes().unwrap());

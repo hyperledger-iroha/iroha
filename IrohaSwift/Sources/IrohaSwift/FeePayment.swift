@@ -269,7 +269,7 @@ extension FeePaymentIntent: Codable {
         let value = try valueDecoder.container(keyedBy: ValueKeys.self)
         let rawValue = try valueDecoder.container(keyedBy: FeePaymentDynamicCodingKey.self)
         let limits = try value.decode([FeeChargeLimit].self, forKey: .chargeLimits)
-        let gasLimit = try value.decodeIfPresent(UInt64.self, forKey: .gasLimit)
+        let gasLimit = try Self.decodeCurrentUInt64(value, forKey: .gasLimit)
         switch payer {
         case "authority":
             try requireExactStringKeys(
@@ -299,7 +299,9 @@ extension FeePaymentIntent: Codable {
                 required: [.programId, .programRevision, .chargeLimits, .gasLimit],
                 at: decoder.codingPath + [CodingKeys.value]
             )
-            let revision = try value.decode(UInt64.self, forKey: .programRevision)
+            guard let revision = try Self.decodeCurrentUInt64(value, forKey: .programRevision) else {
+                throw FeePaymentIntentError.zeroProgramRevision
+            }
             guard revision > 0 else { throw FeePaymentIntentError.zeroProgramRevision }
             try FeePaymentIntent.validate(chargeLimits: limits, gasLimit: gasLimit)
             self = .sponsor(
@@ -323,6 +325,9 @@ extension FeePaymentIntent: Codable {
         switch self {
         case let .authority(chargeLimits, gasLimit):
             try FeePaymentIntent.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
+            guard gasLimit.map({ $0 <= 9_007_199_254_740_991 }) ?? true else {
+                throw FeePaymentIntentError.unsafeJSONInteger
+            }
             try container.encode("authority", forKey: .payer)
             try value.encode(chargeLimits, forKey: .chargeLimits)
             if let gasLimit {
@@ -332,6 +337,10 @@ extension FeePaymentIntent: Codable {
             }
         case let .sponsor(programId, programRevision, chargeLimits, gasLimit):
             guard programRevision > 0 else { throw FeePaymentIntentError.zeroProgramRevision }
+            guard programRevision <= 9_007_199_254_740_991,
+                  gasLimit.map({ $0 <= 9_007_199_254_740_991 }) ?? true else {
+                throw FeePaymentIntentError.unsafeJSONInteger
+            }
             try FeePaymentIntent.validate(chargeLimits: chargeLimits, gasLimit: gasLimit)
             try container.encode("sponsor", forKey: .payer)
             try value.encode(programId, forKey: .programId)
@@ -343,6 +352,22 @@ extension FeePaymentIntent: Codable {
                 try value.encodeNil(forKey: .gasLimit)
             }
         }
+    }
+
+    /// First-release native JSON admits only safe unsigned JSON integers.
+    /// Decimal-string variants are not part of the current wire contract.
+    private static func decodeCurrentUInt64(
+        _ container: KeyedDecodingContainer<ValueKeys>, forKey key: ValueKeys
+    ) throws -> UInt64? {
+        if try container.decodeNil(forKey: key) { return nil }
+        let value = try container.decode(UInt64.self, forKey: key)
+        guard value <= 9_007_199_254_740_991 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: key, in: container,
+                debugDescription: "Fee JSON integer exceeds the safe range; use decimal text"
+            )
+        }
+        return value
     }
 }
 
@@ -369,6 +394,7 @@ public enum FeePaymentIntentError: Error, LocalizedError, Sendable, Equatable {
     case invalidProgramId(String)
     case zeroProgramRevision
     case zeroGasLimit
+    case unsafeJSONInteger
     case nonCanonicalChargeLimits
 
     public var errorDescription: String? {
@@ -387,6 +413,8 @@ public enum FeePaymentIntentError: Error, LocalizedError, Sendable, Equatable {
             return "Fee sponsor program revision must be positive."
         case .zeroGasLimit:
             return "Fee payment gas limit must be positive when present."
+        case .unsafeJSONInteger:
+            return "Fee JSON integers must be within the safe integer range."
         case .nonCanonicalChargeLimits:
             return "Fee charge limits must be unique and ordered nexus before pipeline gas."
         }

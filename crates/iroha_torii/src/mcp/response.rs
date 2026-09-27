@@ -152,7 +152,7 @@ pub(super) fn jsonrpc_result_response(id: Option<Value>, result: Value) -> Value
     Value::Object(obj)
 }
 
-/// Build the typed legacy error returned when the response budget is exceeded.
+/// Build the typed internal error returned when the response budget is exceeded.
 pub(crate) fn jsonrpc_response_too_large(id: Option<Value>, max_response_bytes: usize) -> Value {
     jsonrpc_error_response(
         id,
@@ -165,36 +165,23 @@ pub(crate) fn jsonrpc_response_too_large(id: Option<Value>, max_response_bytes: 
     )
 }
 
-/// Serialize the final JSON-RPC value behind the same byte budget used for the
-/// accepted request. This prevents both route output and batch metadata from
-/// turning a small MCP request into an unbounded response allocation.
-pub(crate) fn bounded_jsonrpc_http_response(payload: Value, max_response_bytes: usize) -> Response {
-    bounded_jsonrpc_http_response_inner(payload, max_response_bytes, false)
-}
-
-/// Serialize a native 2026 response without emitting legacy implementation
-/// codes from MCP's reserved server-error range, including bounded fallbacks.
+/// Serialize a stateless MCP response behind the request byte budget using
+/// application codes outside MCP's reserved server-error range.
 pub(crate) fn bounded_modern_jsonrpc_http_response(
     mut payload: Value,
     max_response_bytes: usize,
 ) -> Response {
     remap_modern_application_error(&mut payload);
-    bounded_jsonrpc_http_response_inner(payload, max_response_bytes, true)
+    bounded_jsonrpc_http_response_inner(payload, max_response_bytes)
 }
 
-fn bounded_jsonrpc_http_response_inner(
-    payload: Value,
-    max_response_bytes: usize,
-    modern: bool,
-) -> Response {
+fn bounded_jsonrpc_http_response_inner(payload: Value, max_response_bytes: usize) -> Response {
     let response_id = payload.get("id").cloned();
     let encoded = match json::to_json_bounded_boxed(&payload, max_response_bytes) {
         Ok(encoded) => encoded.into_vec(),
         Err(BoundedJsonError::BodyTooLarge) => {
             let mut error = compact_jsonrpc_response_too_large(response_id);
-            if modern {
-                remap_modern_application_error(&mut error);
-            }
+            remap_modern_application_error(&mut error);
             let Ok(encoded) = json::to_json_bounded_boxed(&error, max_response_bytes) else {
                 return private_no_store_response(StatusCode::INTERNAL_SERVER_ERROR);
             };

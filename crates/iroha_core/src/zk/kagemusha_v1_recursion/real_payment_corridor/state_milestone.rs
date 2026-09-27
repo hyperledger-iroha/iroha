@@ -3,7 +3,8 @@
 //! Test-provider signatures establish explicit fixture inputs only. This module neither admits a
 //! production release nor qualifies physical hardware. Its separate terminal diagnostic also
 //! proves internal TerminalAuthorization, and its separate wrapper diagnostic measures the
-//! genuine CommitWrapper protocol seed. All entry points stop before payment finalization,
+//! genuine CommitWrapper protocol seed. The sender-closure diagnostic re-proves this chain under
+//! the actual wrapper identity. All entry points stop before payment finalization,
 //! transport/decryption, receiver staging, and ReceiveFold; the 1024-handoff gate remains closed.
 
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
@@ -13,10 +14,12 @@ use crate::zk::{
     kagemusha_v1_recursion::{
         KagemushaMintFinalityHelperVerificationRequestV1, KagemushaParityVerificationRequestV1,
         KagemushaStateProofVerificationRequestV1, VerifiedKagemushaMintFinalityHelperV1,
+        deferred_parent::kagemusha_protocol_structure_digest_v1,
         mint_authorization::mint_authorization_public_instances_v1,
+        state_relation::PUBLIC_INSTANCE_COUNT,
         terminal_authorization::{
-            KagemushaCommitEvidenceOpeningV1, canonical_commit_evidence_commitment_v1,
-            canonical_predecessor_conflict_nullifier_v1,
+            KagemushaCommitEvidenceOpeningV1, TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1,
+            canonical_commit_evidence_commitment_v1, canonical_predecessor_conflict_nullifier_v1,
             canonical_prepared_one_use_authorization_digest_v1,
         },
         transport_decider::{
@@ -27,7 +30,7 @@ use crate::zk::{
     },
     kagemusha_v1_state::{
         BootstrapAuthorizationV1, BootstrapStatementV1, CreditStageStatementV1,
-        DurabilityAnchorStatementV1, HardwareTransitionCertificateV1,
+        DurabilityAnchorStatementV1, DurableOutgoingEnvelopeV1, HardwareTransitionCertificateV1,
         HardwareTransitionStatementV1, KagemushaDurableCapacityV1, KagemushaGuardBundleVerifierV1,
         KagemushaMemoryAuthenticatedHistoryStoreV1, KagemushaRecoveryCheckpointStatementV1,
         KagemushaRecoveryEnrollmentBindingV1, KagemushaRecoveryJournalsV1, KagemushaStateErrorV1,
@@ -41,7 +44,7 @@ use crate::zk::{
 use halo2_proofs::halo2curves::ff::Field as _;
 use iroha_data_model::kagemusha::{
     KagemushaCommitEvidenceV1, KagemushaMintCreditV1, KagemushaOutboxReservationV1,
-    KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentRuntimeV1,
+    KagemushaPaymentV1, KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentRuntimeV1,
     KagemushaTrustedCommitTimeV1,
 };
 use norito::SerializePayload;
@@ -58,6 +61,7 @@ enum DiagnosticMilestoneV1 {
     State,
     Terminal,
     Wrapper,
+    SenderClosure,
 }
 
 const RESERVATION_DOMAIN: &[u8] = b"iroha:kagemusha:diagnostic:mint-reservation\0";
@@ -316,8 +320,12 @@ impl KagemushaRecursiveVerifierV1 for DiagnosticVerifier<'_> {
             .map_err(|error| error.to_string())?;
         let ep_history = KagemushaEpAccumulatorV1::try_from_bytes(&proof.ep_history)
             .map_err(|error| error.to_string())?;
-        let mut eq_instances = request.public_inputs.public_instances::<Fp>()?;
-        let mut ep_instances = request.public_inputs.public_instances::<Fq>()?;
+        let mut eq_instances = request
+            .public_inputs
+            .recursive_semantic_public_instances::<Fp>()?;
+        let mut ep_instances = request
+            .public_inputs
+            .recursive_semantic_public_instances::<Fq>()?;
         eq_instances.extend(history_values::<Fp>(eq_history.as_bytes()));
         ep_instances.extend(history_values::<Fq>(ep_history.as_bytes()));
         ensure(
@@ -1410,7 +1418,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         checkpoint: checkpoint.clone(),
         proofs: Rc::new(RefCell::new(BTreeMap::new())),
     };
-    let bootstrap_frame = guard_verifier.retain(bootstrap_guard);
+    let bootstrap_frame = guard_verifier.retain(Rc::clone(&bootstrap_guard));
     let verified_bootstrap = DiagnosticMachine::stage_bootstrap_for_test(
         diagnostic_release(&funded.material, artifacts),
         preview.state.context(),
@@ -1553,6 +1561,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             MINT_TIME,
         )
         .expect("Core derives authenticated replay path and state-owned mint opening");
+    let retained_mint_preview = mint_preview.clone();
     assert_eq!(mint_preview.transition.successor.balance, 1_000);
     let mint_guard = Rc::new(prove_guard(
         &funded.eq,
@@ -1581,6 +1590,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         Some(KagemushaReplayInsertWitnessV1::from(
             &mint_preview.replay_insert_witness,
         )),
+        None,
         None,
     );
     let parent = parent_from_generated((*bootstrap).clone());
@@ -1729,6 +1739,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         ),
         None,
         None,
+        Some(candidate.prepared_intent_commitments()),
     );
     // Outgoing candidates are verified against the canonical payment body. Core's local
     // preview digest instead identifies its journal transition and is not the candidate's
@@ -1793,6 +1804,7 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
         started.elapsed()
     );
     if milestone != DiagnosticMilestoneV1::State {
+        let retained_candidate = candidate.clone();
         let terminal = terminal::prove_sender_terminal(
             &funded,
             &state_keys,
@@ -1805,11 +1817,370 @@ fn run_state_milestone(milestone: DiagnosticMilestoneV1) {
             &send_inputs,
             &sender_openings,
         );
-        if milestone == DiagnosticMilestoneV1::Wrapper {
-            let (eq_wrapper_seed, ep_wrapper_seed) =
-                wrapper::prove_sender_wrapper(&funded, artifacts, &incoming, terminal);
-            assert_eq!(eq_wrapper_seed.num_instance, [81]);
-            assert_eq!(ep_wrapper_seed.num_instance, [81]);
+        if matches!(
+            milestone,
+            DiagnosticMilestoneV1::Wrapper | DiagnosticMilestoneV1::SenderClosure
+        ) {
+            let wrapper = wrapper::prove_sender_wrapper(&funded, artifacts, &incoming, terminal);
+            assert_eq!(
+                wrapper.eq_protocol.num_instance,
+                [TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
+            );
+            assert_eq!(
+                wrapper.ep_protocol.num_instance,
+                [TERMINAL_AUTHORIZATION_PUBLIC_INSTANCE_COUNT_V1]
+            );
+            assert_eq!(wrapper.incoming.eq_instances.len(), 1);
+            assert_eq!(wrapper.incoming.ep_instances.len(), 1);
+            assert_eq!(
+                wrapper.incoming.eq_instances[0],
+                wrapper.payment.eq_public_instances
+            );
+            assert_eq!(
+                wrapper.incoming.ep_instances[0],
+                wrapper.payment.ep_public_instances
+            );
+            assert_eq!(wrapper.incoming.eq_proof, wrapper.payment.proof.eq_proof);
+            assert_eq!(wrapper.incoming.ep_proof, wrapper.payment.proof.ep_proof);
+            assert_eq!(
+                wrapper.incoming.eq_history.as_bytes().as_slice(),
+                wrapper.payment.proof.eq_history.as_slice(),
+            );
+            assert_eq!(
+                wrapper.incoming.ep_history.as_bytes().as_slice(),
+                wrapper.payment.proof.ep_history.as_slice(),
+            );
+            assert_eq!(
+                native_parent_protocol_digest_v1(
+                    &wrapper.incoming.eq_protocol,
+                    KagemushaPastaParityV1::Eq,
+                )
+                .unwrap(),
+                wrapper.payment.proof.eq_protocol_digest,
+            );
+            assert_eq!(
+                native_parent_protocol_digest_v1(
+                    &wrapper.incoming.ep_protocol,
+                    KagemushaPastaParityV1::Ep,
+                )
+                .unwrap(),
+                wrapper.payment.proof.ep_protocol_digest,
+            );
+            assert_eq!(
+                decide_eq(
+                    &funded.eq,
+                    &wrapper.incoming.eq_protocol,
+                    &wrapper.incoming.eq_proof,
+                    &wrapper.incoming.eq_instances[0],
+                    &wrapper.incoming.eq_history,
+                )
+                .unwrap(),
+                *wrapper.incoming.eq_current.as_ref().unwrap(),
+            );
+            assert_eq!(
+                decide_ep(
+                    &funded.ep,
+                    &wrapper.incoming.ep_protocol,
+                    &wrapper.incoming.ep_proof,
+                    &wrapper.incoming.ep_instances[0],
+                    &wrapper.incoming.ep_history,
+                )
+                .unwrap(),
+                *wrapper.incoming.ep_current.as_ref().unwrap(),
+            );
+            if milestone == DiagnosticMilestoneV1::SenderClosure {
+                // The State circuit takes the incoming full protocol as a constrained witness;
+                // its fixed verifier geometry should permit a new release identity without
+                // changing either State verifying key. Fail before keygen if the initial
+                // fixed-shape seed does not match the actual wrapper verifier geometry.
+                assert_eq!(
+                    kagemusha_protocol_structure_digest_v1(
+                        &incoming.eq_protocol,
+                        KagemushaPastaParityV1::Eq,
+                    )
+                    .unwrap(),
+                    kagemusha_protocol_structure_digest_v1(
+                        &wrapper.incoming.eq_protocol,
+                        KagemushaPastaParityV1::Eq,
+                    )
+                    .unwrap(),
+                    "Eq incoming seed does not have the actual wrapper verifier geometry",
+                );
+                assert_eq!(
+                    kagemusha_protocol_structure_digest_v1(
+                        &incoming.ep_protocol,
+                        KagemushaPastaParityV1::Ep,
+                    )
+                    .unwrap(),
+                    kagemusha_protocol_structure_digest_v1(
+                        &wrapper.incoming.ep_protocol,
+                        KagemushaPastaParityV1::Ep,
+                    )
+                    .unwrap(),
+                    "Ep incoming seed does not have the actual wrapper verifier geometry",
+                );
+                let rebound = generate_recursive_state_keys_for_corridor(
+                    &funded,
+                    &initial_preview.state,
+                    &bootstrap_guard,
+                    guard_keys.as_ref().expect("retained original Guard keys"),
+                    &wrapper.incoming,
+                );
+                macro_rules! require_same_state_key {
+                    ($original:expr, $rebound:expr, $parity:expr) => {{
+                        assert_eq!(
+                            kagemusha_protocol_structure_digest_v1($original, $parity).unwrap(),
+                            kagemusha_protocol_structure_digest_v1($rebound, $parity).unwrap(),
+                            "actual wrapper changed State verifier geometry",
+                        );
+                        assert_eq!(
+                            native_parent_protocol_digest_v1($original, $parity).unwrap(),
+                            native_parent_protocol_digest_v1($rebound, $parity).unwrap(),
+                            "actual wrapper changed the full State verifier identity",
+                        );
+                    }};
+                }
+                require_same_state_key!(
+                    &state_keys.eq_protocol,
+                    &rebound.eq_protocol,
+                    KagemushaPastaParityV1::Eq
+                );
+                require_same_state_key!(
+                    &state_keys.ep_protocol,
+                    &rebound.ep_protocol,
+                    KagemushaPastaParityV1::Ep
+                );
+                require_same_state_key!(
+                    &state_keys.eq_transport_protocol,
+                    &rebound.eq_transport_protocol,
+                    KagemushaPastaParityV1::Eq
+                );
+                require_same_state_key!(
+                    &state_keys.ep_transport_protocol,
+                    &rebound.ep_transport_protocol,
+                    KagemushaPastaParityV1::Ep
+                );
+                let rebound_artifacts = exact_artifacts(
+                    &funded,
+                    &rebound,
+                    guard_keys.as_ref().expect("retained original Guard keys"),
+                    &wrapper.incoming,
+                );
+                wrapper::require_release_pinned_incoming_identity(
+                    [
+                        rebound_artifacts.commit_wrapper_eq_protocol_digest,
+                        rebound_artifacts.commit_wrapper_ep_protocol_digest,
+                    ],
+                    [
+                        wrapper.payment.proof.eq_protocol_digest,
+                        wrapper.payment.proof.ep_protocol_digest,
+                    ],
+                )
+                .expect("actual seed wrapper is pinned by the rebound release");
+                assert_eq!(
+                    [
+                        rebound_artifacts.eq_protocol_digest,
+                        rebound_artifacts.ep_protocol_digest,
+                    ],
+                    [artifacts.eq_protocol_digest, artifacts.ep_protocol_digest],
+                    "rebound State keys must retain their original full identities",
+                );
+                assert_eq!(
+                    bootstrap_preview(&funded.material, rebound_artifacts),
+                    preview,
+                    "wrapper rebind changed the original Core bootstrap statement",
+                );
+                let rebound_verifier = DiagnosticVerifier {
+                    funded: &funded,
+                    keys: &rebound,
+                    artifacts: rebound_artifacts,
+                    states: Rc::new(RefCell::new(BTreeMap::new())),
+                };
+                let rebound_protocols = || {
+                    RecursiveStateProtocolBindings::new(
+                        rebound.eq_protocol_digest,
+                        rebound.ep_protocol_digest,
+                        guard_keys.as_ref().expect("retained original Guard keys"),
+                        &funded,
+                        &wrapper.incoming,
+                    )
+                };
+                let rebound_bootstrap_relation = bootstrap_relation_for_corridor(
+                    preview.state.clone(),
+                    &bootstrap_guard,
+                    preview.transport_semantic_digest,
+                    rebound_protocols(),
+                );
+                let rebound_parent = dummy_parent(
+                    &rebound.eq_protocol,
+                    &rebound.ep_protocol,
+                    initial_kagemusha_eq_accumulator_v1(&funded.eq)
+                        .expect("original zero Eq history"),
+                    initial_kagemusha_ep_accumulator_v1(&funded.ep)
+                        .expect("original zero Ep history"),
+                );
+                let rebound_bootstrap = Rc::new(prove_recursive_state_step(
+                    &funded,
+                    &rebound,
+                    &bootstrap_guard,
+                    guard_keys.as_ref().expect("retained original Guard keys"),
+                    &rebound_parent,
+                    &wrapper.incoming,
+                    rebound_bootstrap_relation,
+                    None,
+                ));
+                rebound_verifier.retain_state(rebound_bootstrap.clone());
+
+                let rebound_mint_relation = transition_relation_for_corridor(
+                    preview.state.clone(),
+                    &retained_mint_preview.transition,
+                    &mint_guard,
+                    rebound_protocols(),
+                    Some(KagemushaReplayInsertWitnessV1::from(
+                        &retained_mint_preview.replay_insert_witness,
+                    )),
+                    None,
+                    None,
+                );
+                let rebound_mint_parent = parent_from_generated((*rebound_bootstrap).clone());
+                let rebound_mint = Rc::new(prove_recursive_state_step(
+                    &funded,
+                    &rebound,
+                    &mint_guard,
+                    guard_keys.as_ref().expect("retained original Guard keys"),
+                    &rebound_mint_parent,
+                    &wrapper.incoming,
+                    rebound_mint_relation,
+                    Some(retained_mint_preview.mint_fold_opening()),
+                ));
+                rebound_verifier.retain_state(rebound_mint.clone());
+
+                let mut rebound_send_relation = transition_relation_for_corridor(
+                    expected_funded.clone(),
+                    &send_preview,
+                    &send_guard,
+                    rebound_protocols(),
+                    None,
+                    None,
+                    Some(retained_candidate.prepared_intent_commitments()),
+                );
+                rebound_send_relation.transport_semantic_digest = retained_candidate
+                    .semantic_digest()
+                    .expect("original Core candidate payment body");
+                let rebound_send_parent = parent_from_generated((*rebound_mint).clone());
+                let rebound_send = Rc::new(prove_recursive_state_step(
+                    &funded,
+                    &rebound,
+                    &send_guard,
+                    guard_keys.as_ref().expect("retained original Guard keys"),
+                    &rebound_send_parent,
+                    &wrapper.incoming,
+                    rebound_send_relation,
+                    None,
+                ));
+                rebound_verifier.retain_state(rebound_send.clone());
+                let rebound_public = retained_candidate
+                    .candidate_public_inputs(rebound_artifacts, &rebound_send.proof)
+                    .expect("original Core candidate with rebound State proof");
+                crate::zk::kagemusha_v1_recursion::verify_kagemusha_state_proof_v1(
+                    &rebound_verifier,
+                    rebound_artifacts,
+                    &rebound_public,
+                    &rebound_send.proof,
+                )
+                .expect("reproved SendSplit authenticates original Core candidate");
+                if let Ok(old_public) =
+                    retained_candidate.candidate_public_inputs(rebound_artifacts, &send.proof)
+                {
+                    assert!(
+                        crate::zk::kagemusha_v1_recursion::verify_kagemusha_state_proof_v1(
+                            &rebound_verifier,
+                            rebound_artifacts,
+                            &old_public,
+                            &send.proof,
+                        )
+                        .is_err(),
+                        "placeholder-bound SendSplit cannot enter the rebound release",
+                    );
+                }
+                assert_eq!(rebound_verifier.states.borrow().len(), 3);
+
+                let rebound_terminal = terminal::prove_sender_terminal(
+                    &funded,
+                    &rebound,
+                    &mut guard_keys,
+                    &rebound_verifier,
+                    rebound_artifacts,
+                    retained_candidate,
+                    &rebound_send,
+                    &send_guard,
+                    &send_inputs,
+                    &sender_openings,
+                );
+                let closed = wrapper::prove_sender_wrapper(
+                    &funded,
+                    rebound_artifacts,
+                    &wrapper.incoming,
+                    rebound_terminal,
+                );
+                wrapper::require_release_pinned_incoming_identity(
+                    [
+                        rebound_artifacts.commit_wrapper_eq_protocol_digest,
+                        rebound_artifacts.commit_wrapper_ep_protocol_digest,
+                    ],
+                    [
+                        closed.payment.proof.eq_protocol_digest,
+                        closed.payment.proof.ep_protocol_digest,
+                    ],
+                )
+                .expect("reproved wrapper keeps the final release identity");
+                assert_eq!(
+                    closed.committed.public_output().unwrap(),
+                    wrapper.committed.public_output().unwrap(),
+                    "sender closure changed the original Core payment output",
+                );
+                assert_eq!(
+                    closed.payment.proof.semantic_digest,
+                    wrapper.payment.proof.semantic_digest,
+                );
+                let retained = closed.committed.candidate.recovery_view().unwrap();
+                let PreparedOutgoingRecoveryViewV1::Send {
+                    request,
+                    output,
+                    encrypted_credit,
+                    ..
+                } = retained.prepared
+                else {
+                    panic!("closed sender must retain the original peer payment projection");
+                };
+                let payment = KagemushaPaymentV1 {
+                    version: output.version,
+                    output: output.clone(),
+                    encrypted_credit: encrypted_credit.to_vec(),
+                    commit_certificate: closed.committed.commit_certificate.clone(),
+                    proof: closed.payment.proof.clone(),
+                };
+                payment
+                    .validate_shape_against(request)
+                    .expect("closed sender proof has canonical payment shape");
+                // A structurally sealed fixture certificate is not an authenticated physical
+                // commit. Core's diagnostic verifier must therefore refuse finalization even
+                // after the paired wrapper and full sender proof lineage are decided.
+                assert!(matches!(
+                    DurableOutgoingEnvelopeV1::finalize_payment(
+                        closed.committed.clone(),
+                        payment,
+                        Vec::new(),
+                        rebound_artifacts,
+                        &rebound_verifier,
+                    ),
+                    Err(KagemushaStateErrorV1::ProofRejected(reason))
+                        if reason == "diagnostic milestone stops before Payment"
+                ));
+                eprintln!(
+                    "KAGEMUSHA diagnostic re-proved Bootstrap/MintFold/SendSplit and terminal/wrapper under one actual wrapper identity; Core rejects fixture payment finalization and receiver handoff remains unqualified",
+                );
+            }
         }
         assert_eq!(machine.state().balance, 1_000);
     }
@@ -1858,6 +2229,21 @@ fn real_bootstrap_mint_fold_send_split_commit_wrapper_milestone() {
         .expect("start genuine wrapper seed milestone")
         .join()
         .expect("genuine wrapper seed milestone");
+}
+
+/// Re-prove the funded sender chain and terminal pair under its actual wrapper identity.
+#[test]
+#[cfg(unix)]
+#[ignore = "expensive genuine sender graph closure; Core payment and receiver remain unqualified"]
+fn real_bootstrap_mint_fold_send_split_sender_closure_milestone() {
+    let _exclusive_proof = exclusive_real_proof_test_lock();
+    std::thread::Builder::new()
+        .name("kagemusha-real-sender-closure".to_owned())
+        .stack_size(REAL_PROOF_TEST_STACK_BYTES)
+        .spawn(|| run_state_milestone(DiagnosticMilestoneV1::SenderClosure))
+        .expect("start genuine funded sender closure milestone")
+        .join()
+        .expect("genuine funded sender closure milestone");
 }
 
 #[test]

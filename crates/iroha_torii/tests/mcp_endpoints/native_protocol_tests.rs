@@ -20,10 +20,7 @@ async fn mcp_native_2026_discovery_list_and_call_are_self_describing() {
         discover
             .get("result")
             .and_then(|result| result.get("supportedVersions")),
-        Some(&norito::json!([
-            MODERN_MCP_PROTOCOL_VERSION,
-            LEGACY_MCP_PROTOCOL_VERSION
-        ]))
+        Some(&norito::json!([MODERN_MCP_PROTOCOL_VERSION]))
     );
     assert_eq!(
         discover
@@ -411,7 +408,7 @@ async fn mcp_native_2026_rejects_invalid_routing_headers() {
         (
             "mismatched protocol version",
             vec![
-                ("MCP-Protocol-Version", LEGACY_MCP_PROTOCOL_VERSION),
+                ("MCP-Protocol-Version", "2025-06-18"),
                 ("Mcp-Method", "tools/list"),
             ],
         ),
@@ -561,10 +558,7 @@ async fn mcp_native_2026_rejects_invalid_metadata_versions_and_methods() {
         body.get("error")
             .and_then(|error| error.get("data"))
             .and_then(|data| data.get("supported")),
-        Some(&norito::json!([
-            MODERN_MCP_PROTOCOL_VERSION,
-            LEGACY_MCP_PROTOCOL_VERSION
-        ]))
+        Some(&norito::json!([MODERN_MCP_PROTOCOL_VERSION]))
     );
 
     for method in ["initialize", "ping", "experimental/unknown"] {
@@ -584,7 +578,7 @@ async fn mcp_native_2026_rejects_invalid_metadata_versions_and_methods() {
 }
 
 #[tokio::test]
-async fn mcp_legacy_2025_initialize_and_tool_call_remain_supported() {
+async fn mcp_retired_2025_initialize_and_tool_call_are_rejected() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
@@ -593,17 +587,11 @@ async fn mcp_legacy_2025_initialize_and_tool_call_remain_supported() {
     let (status, initialize) = post_mcp_with_exact_headers(
         &app,
         initialize_request(1),
-        &[("MCP-Protocol-Version", LEGACY_MCP_PROTOCOL_VERSION)],
+        &[("MCP-Protocol-Version", "2025-06-18")],
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(
-        initialize
-            .get("result")
-            .and_then(|result| result.get("protocolVersion"))
-            .and_then(Value::as_str),
-        Some(LEGACY_MCP_PROTOCOL_VERSION)
-    );
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_jsonrpc_error_code(&initialize, -32602);
 
     let (status, call) = post_mcp_with_exact_headers(
         &app,
@@ -616,10 +604,10 @@ async fn mcp_legacy_2025_initialize_and_tool_call_remain_supported() {
                 "arguments": {}
             }
         }),
-        &[("MCP-Protocol-Version", LEGACY_MCP_PROTOCOL_VERSION)],
+        &[("MCP-Protocol-Version", "2025-06-18")],
     )
     .await;
-    assert_eq!(status, StatusCode::OK);
-    assert!(!tool_is_error(&call), "legacy iroha.health must dispatch");
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_jsonrpc_error_code(&call, -32602);
     app.shutdown().await;
 }

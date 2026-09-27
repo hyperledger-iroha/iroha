@@ -1,4 +1,93 @@
 #[test]
+fn finalized_height_ingress_retires_old_wire_but_rejects_active_or_future_context_mismatch() {
+    let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+    let validator = validator_peers(1).pop().expect("validator fixture");
+    let stale = v2_auxiliary_prepare(1);
+    let BlockMessage::V2(envelope) = &stale else {
+        unreachable!("stale fixture is a v2 envelope");
+    };
+    let wire::ConsensusMessageV2Payload::Vote(vote) = &envelope.payload else {
+        unreachable!("stale fixture is a Prepare vote");
+    };
+    let active_round = wire::ConsensusRound {
+        context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"finalized-height-ingress-active-context",
+        ))),
+        height: vote
+            .round
+            .height
+            .checked_add(1)
+            .expect("fixture height advances"),
+        view: 0,
+    };
+    let _gate_directory = bind_test_leader_wire_gate(&ingress, &validator, active_round, 2);
+    let Err(super::FairV2IngressPushError::Stale(returned)) = ingress.try_push(
+        InboundBlockMessage::from_authenticated_peer(stale.clone(), validator.clone()),
+    ) else {
+        panic!("a finalized predecessor must retire without reserving an active owner");
+    };
+    assert_eq!(returned.message().encode(), stale.encode());
+    drop(returned);
+    let prior_validator = PeerId::from(KeyPair::random().public_key().clone());
+    let Err(super::FairV2IngressPushError::Stale(returned)) = ingress.try_push(
+        InboundBlockMessage::from_authenticated_peer(stale.clone(), prior_validator.clone()),
+    ) else {
+        panic!("a prior validator's finalized message must retire before current-roster policy");
+    };
+    assert_eq!(returned.message().encode(), stale.encode());
+    drop(returned);
+    handle.ingress_ready.store(true, Ordering::Release);
+    let mut routes = NetworkReplyRouteTestFixture::new(validator.clone());
+    let reply_route = routes.mint_via(validator.clone(), validator.clone());
+    let routed = InboundBlockMessage::try_from_transport_with_reply_route(
+        stale.clone(),
+        validator.clone(),
+        validator.clone(),
+        reply_route.clone(),
+    )
+    .expect("stale delivery retains its authenticated route");
+    let super::SumeragiIngressDisposition::Stale(returned) =
+        handle.try_incoming_block_message_owned(routed)
+    else {
+        panic!("a finalized predecessor must return its exact inbound owner");
+    };
+    assert_eq!(returned.message().encode(), stale.encode());
+    assert!(returned.reply_routes().is_some_and(|retained| {
+        retained
+            .iter()
+            .any(|route| route.same_delivery(&reply_route))
+    }));
+    drop(returned);
+    assert_eq!(ingress.len(), 0);
+    for message in [v2_auxiliary_prepare(2), v2_auxiliary_prepare(3)] {
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+                message,
+                validator.clone(),
+            )),
+            Err(super::FairV2IngressPushError::Rejected(
+                super::FairV2IngressRejection {
+                    reason: super::FairV2IngressRejectReason::WrongHeightContext,
+                    ..
+                }
+            ))
+        ));
+    }
+    assert!(matches!(
+        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+            v2_auxiliary_prepare(2),
+            prior_validator,
+        )),
+        Err(super::FairV2IngressPushError::Rejected(
+            super::FairV2IngressRejection {
+                reason: super::FairV2IngressRejectReason::ProductiveOriginOutsideRoster,
+                ..
+            }
+        ))
+    ));
+}
+
+#[test]
 fn ordinary_selector_preserves_certified_response_before_timeout_vote() {
     let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
     let validator = PeerId::new(KeyPair::random().public_key().clone());
@@ -1467,7 +1556,9 @@ fn certified_view_cut_admits_the_strict_same_round_timeout_upgrade() {
             panic!("the strict same-round timeout upgrade was refused for capacity")
         }
         Err(
-            super::FairV2IngressPushError::Closed(_) | super::FairV2IngressPushError::FailStop(_),
+            super::FairV2IngressPushError::Closed(_)
+            | super::FairV2IngressPushError::FailStop(_)
+            | super::FairV2IngressPushError::Stale(_),
         ) => panic!("the strict same-round timeout upgrade fail-stopped fair ingress"),
     }
     let later_view = opened_view.checked_add(1).expect("fixture view advances");
@@ -3571,4 +3662,323 @@ fn kura_replica_advert_requires_exact_signed_direct_keeper_ownership() {
         Err(super::FairV2IngressPushError::Rejected(_))
     ));
     assert_eq!(ingress.len(), 0, "rejected adverts retain no queue owner");
+}
+
+#[test]
+fn ordinary_native_selection_does_not_wait_for_a_global_leader_wire() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let global = v2_timeout_vote();
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+        ..
+    }) = &global
+    else {
+        unreachable!("global timeout fixture");
+    };
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, vote.round, 2);
+    ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            global,
+            validator.clone(),
+        ))
+        .unwrap();
+    // These fixtures test queue ownership and classification. The real signed
+    // Native driver and capacity retry are exercised in native_process tests.
+    for message in native_wire_classification_fixtures() {
+        ingress
+            .try_push(InboundBlockMessage::from_authenticated_peer(
+                message,
+                validator.clone(),
+            ))
+            .unwrap();
+        let native = ingress
+            .try_recv_if_checked(|inbound| inbound.message().is_native_lane())
+            .unwrap()
+            .expect("process-lived Native work is independent of the earlier global carrier");
+        let owner = native.ingress_ownership().unwrap();
+        assert!(owner.validate_exact());
+        assert!(owner.leader_wire_token().is_none());
+        assert!(owner.runtime_lifecycle_ordinal().is_none());
+        let state = ingress.state.lock();
+        assert_eq!(state.len, 1);
+        assert!(
+            state
+                .leader_wire_lifecycles
+                .values()
+                .all(|record| { record.status == super::FairV2IngressLeaderWireStatus::Ingress })
+        );
+    }
+}
+
+#[test]
+fn restored_global_selector_preserves_native_geometry_without_waiting_for_it() {
+    let fixture = restored_leader_wire_fixture(RestoredLeaderWireCut::Reserved);
+    let native = native_wire_classification_fixtures()
+        .into_iter()
+        .next()
+        .unwrap();
+    fixture
+        .ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            native,
+            fixture.alternate_validator.clone(),
+        ))
+        .unwrap();
+    fixture
+        .ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            fixture.message.clone(),
+            fixture.validator.clone(),
+        ))
+        .unwrap();
+    let native_source = super::FairV2IngressSource::Native(fixture.alternate_validator.clone());
+    let native_owner = {
+        let state = fixture.ingress.state.lock();
+        let entry = &state.lanes[&native_source].entries[0];
+        (
+            Arc::as_ptr(&entry.inbound),
+            entry.admission_ordinal,
+            entry.ownership_snapshot.process_local_projection_hash(),
+        )
+    };
+    {
+        let mut state = fixture.ingress.state.lock();
+        let record = state
+            .leader_wire_lifecycles
+            .get_mut(&fixture.token.slot)
+            .unwrap();
+        assert_eq!(record.ingress_predecessors.get(&native_source), Some(&1));
+        *record.ingress_predecessors.get_mut(&native_source).unwrap() = 0;
+    }
+    let mut predicate_called = false;
+    let error = fixture
+        .ingress
+        .try_recv_if_checked(|_| {
+            predicate_called = true;
+            true
+        })
+        .expect_err("Native geometry remains authenticated even when it is not a global gate");
+    assert!(error.contains("predecessor geometry"), "{error}");
+    assert!(
+        !predicate_called,
+        "corruption must fail before downstream admission"
+    );
+    {
+        let mut state = fixture.ingress.state.lock();
+        let record = state
+            .leader_wire_lifecycles
+            .get_mut(&fixture.token.slot)
+            .unwrap();
+        *record.ingress_predecessors.get_mut(&native_source).unwrap() = 1;
+    }
+    let retry = fixture
+        .ingress
+        .try_recv_if_checked(|inbound| !inbound.message().is_native_lane())
+        .unwrap()
+        .expect("restored global carrier cannot depend on process-lived Native dequeue");
+    assert_eq!(
+        retry.ingress_ownership().unwrap().leader_wire_token(),
+        Some(&fixture.token)
+    );
+    let state = fixture.ingress.state.lock();
+    let entry = &state.lanes[&native_source].entries[0];
+    assert_eq!(
+        (
+            Arc::as_ptr(&entry.inbound),
+            entry.admission_ordinal,
+            entry.ownership_snapshot.process_local_projection_hash(),
+        ),
+        native_owner,
+        "the exact Native occurrence remains queued"
+    );
+}
+
+#[test]
+fn native_predecessor_does_not_relax_global_carrier_order() {
+    let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+    let validator = PeerId::new(KeyPair::random().public_key().clone());
+    let response = v2_certified_body_response(0, validator.clone(), 1);
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::CertifiedBodyResponse(body),
+        ..
+    }) = &response
+    else {
+        unreachable!("certified response fixture");
+    };
+    let round = body.manifest.round;
+    let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+    let native = native_wire_classification_fixtures()
+        .into_iter()
+        .next()
+        .unwrap();
+    ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            native,
+            validator.clone(),
+        ))
+        .unwrap();
+    ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            response,
+            validator.clone(),
+        ))
+        .unwrap();
+    let mut timeout = v2_timeout_vote();
+    let BlockMessage::V2(wire::ConsensusMessageV2 {
+        payload: wire::ConsensusMessageV2Payload::TimeoutVote(vote),
+        ..
+    }) = &mut timeout
+    else {
+        unreachable!("global timeout fixture");
+    };
+    vote.round = round;
+    ingress
+        .try_push(InboundBlockMessage::from_authenticated_peer(
+            timeout, validator,
+        ))
+        .unwrap();
+    let is_timeout = |inbound: &InboundBlockMessage| {
+        matches!(
+            inbound.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                ..
+            })
+        )
+    };
+    assert!(ingress.try_recv_if_checked(is_timeout).unwrap().is_none());
+    let first = ingress
+        .try_recv_if_checked(|inbound| !inbound.message().is_native_lane() && !is_timeout(inbound))
+        .unwrap()
+        .expect("exact first global carrier can cross while Native is retained");
+    ingress
+        .mark_leader_wire_volatile_terminal(
+            first
+                .ingress_ownership()
+                .unwrap()
+                .leader_wire_runtime_receipt()
+                .unwrap(),
+        )
+        .unwrap();
+    let second = ingress.try_recv_if_checked(is_timeout).unwrap().unwrap();
+    ingress
+        .mark_leader_wire_volatile_terminal(
+            second
+                .ingress_ownership()
+                .unwrap()
+                .leader_wire_runtime_receipt()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(ingress.len(), 1);
+    ingress.close();
+    ingress.ensure_closed_global_drained_cut().unwrap();
+    assert!(ingress.ensure_closed_drained_cut().is_err());
+}
+
+#[test]
+fn replenished_native_ingress_cannot_starve_global_body_dependency() {
+    for lifecycle_cut in [false, true] {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(64);
+        let validator = PeerId::new(KeyPair::random().public_key().clone());
+        let vote_message = v2_vote(wire::GlobalPhase::Prepare);
+        let (round, proposal_round, subject) = match &vote_message {
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::Vote(vote),
+                ..
+            }) => (vote.round, vote.proposal_round, vote.subject),
+            _ => unreachable!("global Vote fixture"),
+        };
+        let _directory = bind_test_leader_wire_gate(&ingress, &validator, round, 2);
+        let mut proposal_message = v2_maximum_structural_proposal_wire(minimal_rs16_layout(), 1);
+        let BlockMessage::V2(wire::ConsensusMessageV2 {
+            payload: wire::ConsensusMessageV2Payload::Proposal(proposal),
+            ..
+        }) = &mut proposal_message
+        else {
+            unreachable!("global Proposal fixture");
+        };
+        proposal.round = proposal_round;
+        proposal.subject = subject;
+        proposal.manifest.round = proposal_round;
+        proposal.manifest.subject = subject;
+        let native = native_wire_classification_fixtures()
+            .into_iter()
+            .next()
+            .unwrap();
+        for message in [
+            vote_message.clone(),
+            native.clone(),
+            proposal_message.clone(),
+        ] {
+            ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    message,
+                    validator.clone(),
+                ))
+                .unwrap();
+        }
+        // The Vote cannot drain until its matching Proposal arrives downstream.
+        // A Native producer can refill its independent lane on every service turn.
+        // Both physical selectors must serve the dependency within one rotation
+        // of these two ready sources, even if Native traffic never becomes idle.
+        let admits = |inbound: &InboundBlockMessage| {
+            inbound.message().is_native_lane()
+                || matches!(
+                    inbound.message(),
+                    BlockMessage::V2(wire::ConsensusMessageV2 {
+                        payload: wire::ConsensusMessageV2Payload::Proposal(_),
+                        ..
+                    })
+                )
+        };
+        let mut dependency_served = false;
+        for _ in 0..2 {
+            let selected = if lifecycle_cut {
+                let physical_cut = u128::from(ingress.state.lock().last_admission_ordinal) + 1;
+                let cut = ingress
+                    .capture_next_ingress_turn_cut_before_with_obsolete_retirement(
+                        physical_cut,
+                        |occurrence| admits(occurrence.inbound()),
+                    )
+                    .unwrap()
+                    .expect("a Native or global dependency remains ready");
+                cut.dequeue_exact_retaining()
+                    .unwrap_or_else(|_| panic!("original frozen dequeue"))
+                    .0
+            } else {
+                ingress
+                    .try_recv_if_checked(admits)
+                    .unwrap()
+                    .expect("a Native or global dependency remains ready")
+            };
+            if !selected.message().is_native_lane() {
+                assert_eq!(selected.message().encode(), proposal_message.encode());
+                dependency_served = true;
+                break;
+            }
+            ingress
+                .try_push(InboundBlockMessage::from_authenticated_peer(
+                    native.clone(),
+                    validator.clone(),
+                ))
+                .unwrap();
+        }
+        assert!(
+            dependency_served,
+            "replenished Native ingress must not outrank the global dependency on every turn; lifecycle_cut={lifecycle_cut}"
+        );
+        assert_eq!(
+            ingress.len(),
+            2,
+            "the original Vote and Native carrier remain owned"
+        );
+        let retained = ingress
+            .try_recv_if_checked(|inbound| !inbound.message().is_native_lane())
+            .unwrap()
+            .expect("the exact global Vote remains selectable after dependency service");
+        assert_eq!(retained.message().encode(), vote_message.encode());
+        assert_eq!(ingress.len(), 1);
+    }
 }

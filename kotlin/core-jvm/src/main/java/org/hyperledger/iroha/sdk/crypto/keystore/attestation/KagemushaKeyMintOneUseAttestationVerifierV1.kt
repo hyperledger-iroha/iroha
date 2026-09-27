@@ -218,8 +218,13 @@ class KagemushaKeyMintOneUseAttestationVerifierV1(
             throw AttestationVerificationException("Attestation and key must share one hardware security level")
         }
         val description = parseDescriptionV1(verified.leafCertificate.getExtensionValue(KEYMINT_ATTESTATION_OID_V1))
-        if (description.version < 3) {
-            throw AttestationVerificationException("Attestation version cannot express rollback resistance")
+        // Hardware-enforced limited-use keys are a KeyMint feature. Keymaster-era
+        // layouts must not acquire the V1 one-use guarantee merely by carrying
+        // a syntactically valid tag 405 in a signed extension.
+        if (description.version !in KEYMINT_ATTESTATION_VERSIONS_V1 ||
+            description.keyMintVersion != description.version
+        ) {
+            throw AttestationVerificationException("Attestation does not use a supported KeyMint version")
         }
         val software = parseAuthorizationsV1(description.software, "software")
         val hardware = parseAuthorizationsV1(description.hardware, "hardware")
@@ -307,9 +312,12 @@ fun preparedChallengeV1(nonce: ByteArray, lane: ByteArray, before: ByteArray, af
 
 private data class KeyMintDescriptionV1(
     val version: Int,
+    val keyMintVersion: Int,
     val software: ASN1Sequence,
     val hardware: ASN1Sequence,
 )
+
+private val KEYMINT_ATTESTATION_VERSIONS_V1 = setOf(100, 200, 300, 400, 500)
 
 private fun parseDescriptionV1(extension: ByteArray?): KeyMintDescriptionV1 {
     if (extension == null) throw AttestationVerificationException("Android attestation extension is absent")
@@ -336,7 +344,7 @@ private fun parseDescriptionV1(extension: ByteArray?): KeyMintDescriptionV1 {
             ?: throw AttestationVerificationException("Malformed software authorizations")
         val hardware = sequence.getObjectAt(7) as? ASN1Sequence
             ?: throw AttestationVerificationException("Malformed hardware authorizations")
-        return KeyMintDescriptionV1(version, software, hardware)
+        return KeyMintDescriptionV1(version, keyMintVersion, software, hardware)
     } catch (error: AttestationVerificationException) {
         throw error
     } catch (error: RuntimeException) {
@@ -377,7 +385,7 @@ private fun parseAuthorizationsV1(sequence: ASN1Sequence, level: String): Map<In
 private fun checkVerifiedBootV1(value: ASN1Primitive) {
     val root = value as? ASN1Sequence
         ?: throw AttestationVerificationException("Hardware root of trust is malformed")
-    if (root.size() !in 3..4) throw AttestationVerificationException("Hardware root of trust is incomplete")
+    if (root.size() != 4) throw AttestationVerificationException("Hardware root of trust is incomplete")
     val bootKey = (root.getObjectAt(0) as? ASN1OctetString)?.octets
         ?: throw AttestationVerificationException("Verified boot key is malformed")
     if (bootKey.size < 32 || bootKey.all { it == 0.toByte() }) {
@@ -388,11 +396,9 @@ private fun checkVerifiedBootV1(value: ASN1Primitive) {
     if (locked?.isTrue != true || bootState != BigInteger.ZERO) {
         throw AttestationVerificationException("Device boot is not locked and verified")
     }
-    if (root.size() == 4) {
-        val hash = (root.getObjectAt(3) as? ASN1OctetString)?.octets
-        if (hash == null || hash.size < 32 || hash.all { it == 0.toByte() }) {
-            throw AttestationVerificationException("Verified boot hash is malformed")
-        }
+    val hash = (root.getObjectAt(3) as? ASN1OctetString)?.octets
+    if (hash == null || hash.size < 32 || hash.all { it == 0.toByte() }) {
+        throw AttestationVerificationException("Verified boot hash is malformed")
     }
 }
 

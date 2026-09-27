@@ -3273,7 +3273,7 @@ when in-memory promotion is sufficient.
 
 ```js
 const binding = {
-  schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
+  schema: "iroha.validation-fee-ledger-binding.v1",
   networkId: NetworkId.parse(TRUSTED_NETWORK_ID),
   policyChainGenesisHash: TRUSTED_POLICY_CHAIN_GENESIS_HASH,
   checkpoint: await loadDurableValidationFeeCheckpoint(),
@@ -4212,18 +4212,17 @@ across Torii's JSON endpoints (including query projections via
 `iterateAccountTransactionsQuery`, `iterateAssetHoldersQuery`, and
 `iterateTriggersQuery`).
 
-The eleven ledger-wide `/query` helpers require a fresh canonical account
+The ten ledger-wide `/query` helpers require a fresh canonical account
 signature and an immutable `LocalSigningContext` derived from the deployment's
 exact genesis `NetworkId`. They sign the final method, substituted path, query,
 and JSON body, dispatch once with redirects and retries disabled, and reject
 aliases, precomputed signing headers, and inline secret option shapes. This
-applies to account transaction/assets, domains, accounts, global/visible
-transactions, repo agreements, asset holders/definitions, NFTs, and RWAs;
+applies to account transaction/assets, domains, accounts, transactions, repo agreements, asset holders/definitions, NFTs, and RWAs;
 ordinary `list*` reads and trigger queries keep their existing contracts.
 
-For FI wallet-style transaction explorers, prefer the viewer-scoped query helper.
-It posts to `/v1/transactions/visible/query`, lets Torii enforce the authenticated
-viewer scope, and accepts convenience filters without hand-writing a QueryEnvelope:
+For FI wallet-style transaction explorers, use the account-scoped query helper.
+It posts to `/v1/accounts/{account_id}/transactions/query` with the exact signed
+account path and accepts convenience filters without hand-writing a QueryEnvelope:
 
 ```js
 import { NetworkId } from "@iroha/iroha-js";
@@ -4243,7 +4242,7 @@ const torii = new ToriiClient("https://torii.example", {
   },
 });
 
-const { items } = await torii.queryVisibleTransactions({
+const { items } = await torii.queryAccountTransactions(canonicalI105AccountId, {
   canonicalAuth,
   assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
   sort: "newest",

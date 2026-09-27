@@ -249,6 +249,9 @@ it. Redemption retains its direct canonical request body. Requests and
 responses use the sole canonical KAGEMUSHA V1 Norito schemas. Operation results
 are monetary authority and must remain
 unusable until verified against the authenticated release artifacts.
+The Swift operation lookup returns `nil` only when Torii's bounded JSON error
+and `X-Iroha-Reject-Code` both identify the exact unknown operation; callers
+may then replay only the retained signed request and original operation ID.
 Capability discovery takes no selector.
 
 Capability discovery is not per-asset or per-dataspace backend readiness. The

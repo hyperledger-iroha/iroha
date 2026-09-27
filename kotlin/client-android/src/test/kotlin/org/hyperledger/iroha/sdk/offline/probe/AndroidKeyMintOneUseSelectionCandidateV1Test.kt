@@ -20,6 +20,7 @@ private fun fakeSec1(byte: Byte): ByteArray = byteArrayOf(0x04) + ByteArray(64) 
 
 private class TestJournalIo(private val onSync: () -> Unit) : SelectionJournalIoV1 {
     companion object { private val processLocks = java.util.concurrent.ConcurrentHashMap<String, Any>() }
+    var tearEvidenceWrite = false
     override fun exists(file: java.io.File): Boolean {
         val path = file.toPath()
         require(!Files.isSymbolicLink(path)) { "symbolic journal entry" }
@@ -39,14 +40,16 @@ private class TestJournalIo(private val onSync: () -> Unit) : SelectionJournalIo
     }
 
     override fun writeNew(file: java.io.File, bytes: ByteArray) {
+        val torn = tearEvidenceWrite && file.name.endsWith(".evidence")
         FileChannel.open(file.toPath(), setOf(
             StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS,
         )).use { channel ->
-            val buffer = ByteBuffer.wrap(bytes)
+            val buffer = ByteBuffer.wrap(if (torn) byteArrayOf(0) else bytes)
             while (buffer.hasRemaining()) channel.write(buffer)
             channel.force(true)
         }
         onSync()
+        if (torn) throw IllegalStateException("evidence write torn after signing")
     }
 
     override fun <T> withLock(file: java.io.File, action: () -> T): T =
@@ -268,6 +271,126 @@ class AndroidKeyMintOneUseSelectionCandidateV1Test {
         assertTrue(runner.collect(frame(), lane, before, after, committedKey)
             is KeyMintOneUseSelectionResultV1.Frozen)
         assertEquals(1, device.signCalls)
+    }
+
+    @Test fun orphanAliasCreatesADurableFreezeBeforeAnyReplacementKey() {
+        val directory = Files.createTempDirectory("kagemusha-keymint-orphan-").toFile()
+        try {
+            val device = FakeDevice().apply { active = true }
+            val first = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { }))
+            val frozen = first.prepare(lane, before, after)
+                as KeyMintOneUsePreparationResultV1.Frozen
+            assertEquals("alias", frozen.stage)
+            assertEquals(0, device.generateCalls)
+            assertEquals(0, device.deleteCalls)
+            device.active = false
+            val recovered = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { })).prepare(lane, before, after)
+            assertTrue(recovered is KeyMintOneUsePreparationResultV1.Frozen)
+            assertEquals(0, device.generateCalls)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun partiallyGeneratedKeyRemainsUntouchedAndSlotFreezesAcrossRestart() {
+        val directory = Files.createTempDirectory("kagemusha-keymint-generation-").toFile()
+        try {
+            val device = FakeDevice().apply { generateFailsAfterCreation = true }
+            val first = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { })).prepare(lane, before, after)
+                as KeyMintOneUsePreparationResultV1.Frozen
+            assertEquals("generate", first.stage)
+            assertEquals(1, device.generateCalls)
+            assertTrue(device.active)
+            assertEquals(0, device.deleteCalls)
+            device.active = false
+            val recovered = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { })).prepare(lane, before, after)
+            assertTrue(recovered is KeyMintOneUsePreparationResultV1.Frozen)
+            assertEquals(1, device.generateCalls)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun consumedButLostSignatureCannotBeReissuedAfterStoreRecreation() {
+        val directory = Files.createTempDirectory("kagemusha-keymint-lost-signature-").toFile()
+        try {
+            var durableWrites = 0
+            val device = FakeDevice().apply { signFails = true }
+            val first = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { durableWrites += 1 }))
+            val key = (first.prepare(lane, before, after)
+                as KeyMintOneUsePreparationResultV1.Prepared).publicKey()
+            assertTrue(first.collect(frame(), lane, before, after, key)
+                is KeyMintOneUseSelectionResultV1.Frozen)
+            assertEquals(3, durableWrites) // Preparing, prepared, and pre-sign intent.
+            val second = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { durableWrites += 1 }))
+            assertTrue(second.collect(frame(), lane, before, after, key)
+                is KeyMintOneUseSelectionResultV1.Frozen)
+            assertTrue(second.prepare(lane, before, after)
+                is KeyMintOneUsePreparationResultV1.Frozen)
+            assertEquals(1, device.generateCalls)
+            assertEquals(1, device.signCalls)
+            assertEquals(3, durableWrites)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun tornEvidenceAfterSuccessfulSigningFreezesAcrossRestart() {
+        val directory = Files.createTempDirectory("kagemusha-keymint-torn-evidence-").toFile()
+        try {
+            val io = TestJournalIo { }.apply { tearEvidenceWrite = true }
+            val device = FakeDevice()
+            val first = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(directory, io))
+            val key = (first.prepare(lane, before, after)
+                as KeyMintOneUsePreparationResultV1.Prepared).publicKey()
+            val result = first.collect(frame(), lane, before, after, key)
+                as KeyMintOneUseSelectionResultV1.Frozen
+            assertEquals("persist", result.stage)
+            assertEquals(1, device.signCalls)
+            val recovered = SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                directory, TestJournalIo { }))
+            assertTrue(recovered.collect(frame(), lane, before, after, key)
+                is KeyMintOneUseSelectionResultV1.Frozen)
+            assertTrue(recovered.prepare(lane, before, after)
+                is KeyMintOneUsePreparationResultV1.Frozen)
+            assertEquals(1, device.generateCalls)
+            assertEquals(1, device.signCalls)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
+    @Test fun independentRunnersArbitrateOneKeyForTheSameLaneAndIndex() {
+        val directory = Files.createTempDirectory("kagemusha-keymint-concurrent-").toFile()
+        val executor = java.util.concurrent.Executors.newFixedThreadPool(2)
+        try {
+            val device = FakeDevice()
+            val start = java.util.concurrent.CountDownLatch(1)
+            val runners = List(2) {
+                SelectionCandidateRunnerV1(device, FileSelectionIntentStoreV1(
+                    directory, TestJournalIo { }))
+            }
+            val tasks = runners.map { runner -> executor.submit<KeyMintOneUsePreparationResultV1> {
+                start.await()
+                runner.prepare(lane, before, after)
+            } }
+            start.countDown()
+            val results = tasks.map { it.get(5, java.util.concurrent.TimeUnit.SECONDS) }
+            assertTrue(results.all { it is KeyMintOneUsePreparationResultV1.Prepared })
+            assertEquals(1, results.count { (it as KeyMintOneUsePreparationResultV1.Prepared).recovered })
+            assertContentEquals((results[0] as KeyMintOneUsePreparationResultV1.Prepared).publicKey(),
+                (results[1] as KeyMintOneUsePreparationResultV1.Prepared).publicKey())
+            assertEquals(1, device.generateCalls)
+        } finally {
+            executor.shutdownNow()
+            directory.deleteRecursively()
+        }
     }
 
     @Test fun recoveredEvidenceIsReturnedWithoutASecondKeyOrSignature() {

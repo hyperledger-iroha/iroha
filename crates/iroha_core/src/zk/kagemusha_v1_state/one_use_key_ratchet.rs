@@ -13,6 +13,7 @@ use iroha_data_model::kagemusha::{
     KagemushaOperationKindV1, kagemusha_device_key_reference_v1,
 };
 use norito::codec::{Decode, Encode};
+use sha2::{Digest as _, Sha256};
 
 use super::{
     DigestV1, KagemushaStateErrorV1, KagemushaStateV1, KagemushaTransitionKindV1,
@@ -72,6 +73,110 @@ pub struct KagemushaOneUseKeyRatchetLinkV1 {
     pub selection: KagemushaHardwareTransitionSelectionV1,
     /// Low-S P-256 signature by `consumed_public_key` over canonical `S`.
     pub signature: KagemushaDeviceSignatureV1,
+}
+
+const KEYMINT_PREPARED_CHALLENGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:keymint-prepared-key:v1\0";
+
+/// Original Android KeyMint one-use evidence paired with Core's ratchet link.
+///
+/// This record retains the certificate chain for release-pinned platform verification. Shape
+/// checking below does not validate that chain or grant monetary authority.
+/// TODO: Fold the release-pinned attestation path and one-use signature into both Pasta parities
+/// before any ordinary Android profile may authorize money.
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::KagemushaKeyMintRawSelectionEvidenceV1"
+)]
+pub struct KagemushaKeyMintRawSelectionEvidenceV1 {
+    /// Exact Core canonical signing frame supplied to KeyMint.
+    pub canonical_selection_frame: Vec<u8>,
+    /// Lane bound by the one-use key's attestation challenge.
+    pub lane_commitment: DigestV1,
+    /// Consumed hardware index in the Android adapter's little-endian layout.
+    pub secure_index_before_le: [u8; 16],
+    /// Successor hardware index in the Android adapter's little-endian layout.
+    pub secure_index_after_le: [u8; 16],
+    /// Fresh 32-byte preparation nonce committed before this key was generated.
+    pub attestation_nonce: DigestV1,
+    /// Original attestation challenge supplied to Android KeyMint.
+    pub attestation_challenge: DigestV1,
+    /// Exact SEC1 key committed by the predecessor proof head.
+    pub consumed_public_key: KagemushaDevicePublicKeyV1,
+    /// Original DER certificates, leaf first, for platform trust verification.
+    pub certificate_chain_der: Vec<Vec<u8>>,
+    /// Original canonical DER signature over `canonical_selection_frame`.
+    pub signature_der: Vec<u8>,
+}
+
+impl KagemushaKeyMintRawSelectionEvidenceV1 {
+    /// Check that the original Android collector bytes match one exact Core ratchet link.
+    ///
+    /// The platform verifier must separately validate the pinned certificate path, attestation
+    /// challenge, app identity, rollback resistance, hardware-enforced one-use limit and key
+    /// provenance. The paired Pasta monetary proof must then fold those verified facts. This
+    /// method only prevents mismatched host records from being combined before that fold.
+    ///
+    /// # Errors
+    ///
+    /// Rejects an altered frame, lane, index, challenge, key, signature or oversized chain.
+    pub fn validate_exact_collector_binding(
+        &self,
+        link: &KagemushaOneUseKeyRatchetLinkV1,
+    ) -> Result<(), KagemushaStateErrorV1> {
+        let mismatch = || KagemushaStateErrorV1::HardwareCertificateMismatch;
+        let frame = link
+            .selection
+            .canonical_signing_bytes()
+            .map_err(|_| mismatch())?;
+        if frame.len() > 1_024
+            || self.canonical_selection_frame != frame
+            || self.lane_commitment != link.selection.lane_commitment
+            || self.secure_index_before_le != link.selection.secure_index_before.to_le_bytes()
+            || self.secure_index_after_le != link.selection.secure_index_after.to_le_bytes()
+            || self.attestation_nonce == [0; 32]
+            || self.consumed_public_key != link.consumed_public_key
+            || self.certificate_chain_der.len() < 2
+            || self.certificate_chain_der.len() > 8
+            || self
+                .certificate_chain_der
+                .iter()
+                .any(|certificate| certificate.is_empty() || certificate.len() > 16_384)
+        {
+            return Err(mismatch());
+        }
+        let challenge = keymint_prepared_challenge_v1(
+            self.attestation_nonce,
+            self.lane_commitment,
+            self.secure_index_before_le,
+            self.secure_index_after_le,
+        );
+        if self.attestation_challenge != challenge {
+            return Err(mismatch());
+        }
+        let signature = KagemushaDeviceSignatureV1::from_der_normalizing_low_s(&self.signature_der)
+            .map_err(|_| mismatch())?;
+        if signature != link.signature {
+            return Err(mismatch());
+        }
+        link.signature
+            .verify(&self.consumed_public_key, &self.canonical_selection_frame)
+            .map_err(|_| mismatch())
+    }
+}
+
+fn keymint_prepared_challenge_v1(
+    nonce: DigestV1,
+    lane: DigestV1,
+    before_le: [u8; 16],
+    after_le: [u8; 16],
+) -> DigestV1 {
+    let mut hash = Sha256::new();
+    hash.update(KEYMINT_PREPARED_CHALLENGE_DOMAIN_V1);
+    hash.update(nonce);
+    hash.update(lane);
+    hash.update(before_le);
+    hash.update(after_le);
+    hash.finalize().into()
 }
 
 impl KagemushaOneUseKeyRatchetLinkV1 {
@@ -139,7 +244,7 @@ impl KagemushaOneUseKeyRatchetLinkV1 {
             || selected.secure_index_before != expected.secure_index_before
             || selected.release_id != statement.release_id
             || selected.release_id != expected.release_id
-            || selected.hardware_policy_digest != expected.hardware_policy_digest
+            || selected.provider_policy_root != expected.provider_policy_root
             || selected.app_policy_digest != expected.app_policy_digest
             || selected.operation_kind != operation
             || selected.operation_kind != expected.operation_kind
@@ -243,6 +348,7 @@ mod tests {
             statement.liability_pool_id,
             statement.lane.clone(),
             balance,
+            sequence,
             sequence,
             statement.predecessor_epoch,
             statement.predecessor_device_policy_binding,
@@ -351,7 +457,7 @@ mod tests {
         let selection = KagemushaHardwareTransitionSelectionV1 {
             version: KAGEMUSHA_WIRE_VERSION_V1,
             release_id: statement.release_id,
-            hardware_policy_digest: [0x35; 32],
+            provider_policy_root: [0x35; 32],
             app_policy_digest: [0x36; 32],
             credential_id: [0x37; 32],
             network_id,
@@ -369,7 +475,7 @@ mod tests {
         };
         let expected = KagemushaHardwareTransitionSelectionExpectedV1 {
             release_id: selection.release_id,
-            hardware_policy_digest: selection.hardware_policy_digest,
+            provider_policy_root: selection.provider_policy_root,
             app_policy_digest: selection.app_policy_digest,
             operation_kind: selection.operation_kind,
             transition_statement_digest: statement_digest,
@@ -410,6 +516,72 @@ mod tests {
             predecessor_state,
             successor_state,
         )
+    }
+
+    #[test]
+    fn keymint_prepared_challenge_matches_android_adapter_vector() {
+        assert_eq!(
+            keymint_prepared_challenge_v1(
+                [7; 32],
+                [8; 32],
+                9_u128.to_le_bytes(),
+                10_u128.to_le_bytes()
+            ),
+            [
+                0xb1, 0x18, 0xee, 0xef, 0xec, 0xd4, 0x76, 0x74, 0x10, 0x7c, 0x02, 0x1b, 0x50, 0x03,
+                0x53, 0x1c, 0x6e, 0x6d, 0x2f, 0xe7, 0x5e, 0x5c, 0x8f, 0x08, 0x65, 0x15, 0xda, 0x15,
+                0x10, 0x81, 0x6b, 0xf6,
+            ]
+        );
+    }
+
+    #[test]
+    fn raw_keymint_collector_evidence_must_match_exact_ratchet_link() {
+        let (link, _, _, _, _) = fixture();
+        let before = link.selection.secure_index_before.to_le_bytes();
+        let after = link.selection.secure_index_after.to_le_bytes();
+        let nonce = [0x51; 32];
+        let signature = p256::ecdsa::Signature::from_slice(link.signature.as_raw_bytes())
+            .expect("fixture P-256 signature");
+        let raw = KagemushaKeyMintRawSelectionEvidenceV1 {
+            canonical_selection_frame: link.selection.canonical_signing_bytes().unwrap(),
+            lane_commitment: link.selection.lane_commitment,
+            secure_index_before_le: before,
+            secure_index_after_le: after,
+            attestation_nonce: nonce,
+            attestation_challenge: keymint_prepared_challenge_v1(
+                nonce,
+                link.selection.lane_commitment,
+                before,
+                after,
+            ),
+            consumed_public_key: link.consumed_public_key,
+            certificate_chain_der: vec![vec![0x30; 2], vec![0x30; 2]],
+            signature_der: signature.to_der().as_bytes().to_vec(),
+        };
+        raw.validate_exact_collector_binding(&link)
+            .expect("exact Android collector record");
+        let decoded: KagemushaKeyMintRawSelectionEvidenceV1 =
+            norito::decode_canonical(&norito::encode_canonical(&raw).unwrap()).unwrap();
+        assert_eq!(decoded, raw);
+        let mut changed = raw.clone();
+        changed.canonical_selection_frame[0] ^= 1;
+        assert!(changed.validate_exact_collector_binding(&link).is_err());
+        let mut changed = raw.clone();
+        changed.secure_index_after_le[0] ^= 1;
+        assert!(changed.validate_exact_collector_binding(&link).is_err());
+        let mut changed = raw.clone();
+        changed.attestation_nonce[0] ^= 1;
+        assert!(changed.validate_exact_collector_binding(&link).is_err());
+        let mut changed = raw.clone();
+        changed.consumed_public_key = link.prepared_successor_public_key;
+        assert!(changed.validate_exact_collector_binding(&link).is_err());
+        let mut changed = raw.clone();
+        changed.signature_der[4] ^= 1;
+        assert!(changed.validate_exact_collector_binding(&link).is_err());
+        let mut changed = raw.clone();
+        changed.certificate_chain_der.pop();
+        assert!(changed.validate_exact_collector_binding(&link).is_err());
     }
 
     #[test]
@@ -574,6 +746,7 @@ mod tests {
             statement.lane.clone(),
             0,
             0,
+            0,
             statement.predecessor_epoch,
             statement.predecessor_device_policy_binding,
             [0x61; 32],
@@ -699,5 +872,128 @@ mod tests {
             ratchet.state.state_commitment_components.ep,
             counter.state.state_commitment_components.ep
         );
+    }
+
+    #[test]
+    fn flat_transition_statement_digest_binds_every_subject_field() {
+        let (_, statement, _, _, _) = fixture();
+        let preimage =
+            super::super::commitments::transition_statement_digest_preimage_v1(&statement)
+                .expect("flat transition statement");
+        let domain = b"iroha:kagemusha:v1:transition-statement\0";
+        assert_eq!(domain.len(), 40);
+        assert_eq!(&preimage[..8], &(40_u64).to_be_bytes());
+        assert_eq!(&preimage[8..48], domain);
+        assert_eq!(&preimage[48..56], &(1089_u64).to_be_bytes());
+        let body = &preimage[56..];
+        assert_eq!(body.len(), 1089);
+        let asset_id = statement
+            .lane
+            .normalized_asset_id()
+            .expect("typed asset identity");
+        let mut at = 0;
+        macro_rules! field {
+            ($value:expr) => {{
+                let value = $value;
+                let bytes: &[u8] = value.as_ref();
+                assert_eq!(&body[at..at + bytes.len()], bytes, "field at {at}");
+                at += bytes.len();
+            }};
+        }
+        field!(statement.version.to_le_bytes());
+        field!(statement.protocol_version.to_le_bytes());
+        field!(statement.predecessor_suite_id);
+        field!(statement.predecessor_vk_digest);
+        field!(statement.successor_suite_id);
+        field!(statement.successor_vk_digest);
+        field!([1_u8]);
+        field!(statement.amount.to_le_bytes());
+        field!(statement.mint_finality_semantic_digest);
+        field!(statement.mint_finality_proof_binding_digest);
+        field!(statement.peer_credit_id);
+        field!(statement.recipient_encryption_key_binding);
+        field!(statement.lifecycle_binding_digest);
+        field!(statement.prepared_transition_binding_digest);
+        field!(statement.receive_credit_binding_digest);
+        field!(statement.predecessor_release_id);
+        field!(statement.release_id);
+        field!(statement.asset_incarnation.as_bytes());
+        field!(statement.liability_pool_id);
+        field!(statement.hardware_profile_id);
+        field!(statement.policy_epoch.to_le_bytes());
+        field!(statement.lane.network_id.as_bytes());
+        field!(statement.lane.device_lane_id);
+        field!(asset_id);
+        field!(statement.lane.scale.to_le_bytes());
+        field!(statement.predecessor_commitment);
+        field!(statement.successor_commitment);
+        field!(statement.predecessor_sequence.to_le_bytes());
+        field!(statement.successor_sequence.to_le_bytes());
+        field!(statement.predecessor_epoch.generation.to_le_bytes());
+        field!(statement.predecessor_epoch.epoch_id);
+        field!(statement.successor_epoch.generation.to_le_bytes());
+        field!(statement.successor_epoch.epoch_id);
+        field!(
+            statement
+                .predecessor_device_policy_binding
+                .device_key_reference
+        );
+        field!(
+            statement
+                .predecessor_device_policy_binding
+                .hardware_policy_id
+        );
+        field!(
+            statement
+                .successor_device_policy_binding
+                .device_key_reference
+        );
+        field!(statement.successor_device_policy_binding.hardware_policy_id);
+        field!(statement.predecessor_state_nonce_commitment);
+        field!(statement.successor_state_nonce_commitment);
+        field!(statement.journal_revision_before.to_le_bytes());
+        field!(statement.journal_revision_after.to_le_bytes());
+        field!(statement.effect_digest);
+        assert_eq!(at, 1089);
+        let independently_hashed: DigestV1 =
+            <sha2::Sha256 as sha2::Digest>::digest(&preimage).into();
+        assert_eq!(
+            statement.digest().expect("flat digest"),
+            independently_hashed
+        );
+
+        let baseline = statement.digest().expect("baseline");
+        let mut changed = statement.clone();
+        changed.amount += 1;
+        assert_ne!(changed.digest().expect("amount digest"), baseline);
+        let mut changed = statement.clone();
+        changed.predecessor_commitment[0] ^= 1;
+        assert_ne!(changed.digest().expect("predecessor digest"), baseline);
+        let mut changed = statement.clone();
+        changed.successor_state_nonce_commitment[31] ^= 1;
+        assert_ne!(changed.digest().expect("nonce digest"), baseline);
+        let mut changed = statement.clone();
+        changed.successor_sequence += 1;
+        assert_ne!(changed.digest().expect("sequence digest"), baseline);
+        let mut changed = statement.clone();
+        changed.predecessor_device_policy_binding.hardware_policy_id[0] ^= 1;
+        assert_ne!(changed.digest().expect("policy digest"), baseline);
+        let mut changed = statement.clone();
+        changed.mint_finality_semantic_digest[0] ^= 1;
+        assert_ne!(changed.digest().expect("mint digest"), baseline);
+        let mut changed = statement.clone();
+        changed.effect_digest[0] ^= 1;
+        assert_ne!(changed.digest().expect("effect digest"), baseline);
+        let mut changed = statement.clone();
+        changed.lane.network_id = NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"other-genesis")),
+        );
+        assert_ne!(changed.digest().expect("network digest"), baseline);
+        let mut changed = statement;
+        changed.lane.asset = AssetDefinitionId::derive_from_components(
+            DomainId::try_new("ratchet", "universal").expect("domain"),
+            "othercash".parse().expect("asset name"),
+        );
+        assert_ne!(changed.digest().expect("asset digest"), baseline);
     }
 }

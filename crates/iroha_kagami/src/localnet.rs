@@ -4476,6 +4476,8 @@ fn append_localnet_npos_bootstrap(
         builder,
         peers,
         &public_validator_lanes,
+        &stake_asset_id,
+        gas_account_id,
         stake_amount,
         taira,
     )
@@ -4525,6 +4527,8 @@ fn append_localnet_permissioned_lane_authority_bootstrap(
         builder,
         peers,
         &[LaneId::SINGLE],
+        &stake_asset_id,
+        escrow_account_id,
         stake_amount,
         taira,
     )
@@ -4534,6 +4538,8 @@ fn append_public_lane_validator_registrations(
     mut builder: GenesisBuilder,
     peers: &[Peer],
     lanes: &[LaneId],
+    stake_asset_id: &AssetDefinitionId,
+    escrow_account_id: &AccountId,
     stake_amount: &Quantity,
     taira: bool,
 ) -> GenesisBuilder {

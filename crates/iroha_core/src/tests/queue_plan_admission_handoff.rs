@@ -14,3 +14,44 @@ fn oversized_queue_plan_admission_handoff_hits_frame_cap() {
 fn queue_plan_admission_handoff_rejects_body_over_certificate_cap() {
     qp_case! { let max_body = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES; let message = NetworkMessage::QueuePlanAdmissionCertificate(Arc::new(vec![0xA5; max_body + 1])); let encoded = norito::to_bytes(&message).expect("encode overlong admission body"); assert!(encoded.len() <= crate::MAX_QUEUE_PLAN_ADMISSION_CERTIFICATE_WIRE_BYTES); let view = ncore::from_bytes_view(&encoded).expect("inspect overlong admission body"); let limits = <NetworkMessage as ClassifyTopic>::inbound_decode_limits(view.as_bytes(), encoded.len(), view.flags()).expect("outer frame fits").expect("tag 17 installs decode limits"); assert!(ncore::decode_from_bytes_with_limits::<NetworkMessage>(&encoded, limits).is_err()); }
 }
+
+#[test]
+fn maximum_complete_admission_publication_decodes_through_signed_relay() {
+    use crate::torii_proxy::{
+        QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1, QueuePlanAdmissionPublicationV1,
+    };
+    use iroha_crypto::{Algorithm, KeyPair};
+
+    let source = KeyPair::try_from_seed(vec![0x31; 32], Algorithm::BlsNormal).unwrap();
+    let target = KeyPair::try_from_seed(vec![0x32; 32], Algorithm::BlsNormal).unwrap();
+    let target = PeerId::new(target.public_key().clone());
+    let body_len = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
+    let publication = |len| {
+        NetworkMessage::QueuePlanAdmissionPublication(Arc::new(
+            QueuePlanAdmissionPublicationV1 {
+                schema_version: QUEUE_PLAN_ADMISSION_PUBLICATION_VERSION_V1,
+                certificate: vec![0xA5; len],
+            },
+        ))
+    };
+    let decoded = iroha_p2p::network::signed_relay_decode_with_limits_for_test(
+        &source,
+        target.clone(),
+        publication(body_len),
+    )
+    .expect("maximum complete input must fit the bounded owned relay decoder");
+    assert!(matches!(
+        decoded,
+        NetworkMessage::QueuePlanAdmissionPublication(input)
+            if input.certificate.len() == body_len
+    ));
+    assert!(
+        iroha_p2p::network::signed_relay_decode_with_limits_for_test(
+            &source,
+            target,
+            publication(body_len + 1),
+        )
+        .is_err(),
+        "the extra byte must still fail the complete-input field cap"
+    );
+}

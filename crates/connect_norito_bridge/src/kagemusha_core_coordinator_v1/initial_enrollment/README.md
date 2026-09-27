@@ -1,17 +1,31 @@
 # Native retail enrollment phases
 
-This kernel remains test-only in `kagemusha_core_coordinator_v1.rs`. The generic
-bridge has no installed production enrollment backend or public enrollment ABI.
-These phases do not qualify an iPhone or Android device, an issuer configuration,
-a native release artifact, or an offline monetary operation.
+This kernel is compiled for qualified Rust backends. The generic C/JNI bridge
+exposes the bounded method-12 initial-enrollment phase frames, but no production
+backend is installed. These phases alone do not qualify an iPhone or Android
+device, an issuer configuration, a native release artifact, or an offline
+monetary operation. The method-12 backend hook defaults to `Unavailable`.
 
-`PendingIssuerEnrollmentV1::begin` starts one continuous, suspend-inclusive
-deadline and retains a native random nonce before HTTP. The qualified backend
-must supply independently authenticated issuer/release pins, the selected owner,
-the native Core authorization key, and the canonical device qualification body.
-The body is checked against the authenticated release's complete enabled profile,
-governed credential, owner network/lane and native key reference. It selects the
-expected device; actual device possession is established in a later phase.
+The phase-1 journal selection creates one continuous, suspend-inclusive deadline,
+nonzero ticket, client nonce and lane before HTTP. Its ticket is an opaque local
+selector, not issuer or monetary authority. The qualified backend must retain that
+exact live selection across App Attest/KeyMint preparation and the one-use device
+qualification. It must never issue a second key, native nonce or qualification after
+an ambiguous result. A restart or uncertain journal result freezes the attempt.
+
+`PendingIssuerEnrollmentV1::begin_selected` consumes the original live selection
+after verifying the issuer-signed 273-byte preparation, the independent verifier's
+canonical signed app certificate, the full raw evidence digest and the canonical
+qualification. The signed certificate's `attested_key_id` is SHA-256 of the raw
+platform-attested SEC1 point. For Apple it must equal the provisional App Attest
+key ID signed in preparation; for Android the preparation carries the zero sentinel
+and the later certificate signs the actual KeyMint point ID. The governed device
+reference must derive from that same point. The qualified backend supplies independently
+authenticated issuer/release pins, the selected owner, trusted service time and native
+Core authorization key. The qualification body is checked against the authenticated
+release's complete enabled profile, governed credential, owner network/lane and native
+key reference. It selects the expected device; actual device possession is
+established in a later phase.
 
 The consuming lifecycle is:
 
@@ -31,7 +45,8 @@ The consuming lifecycle is:
    cannot replace the proof at completion. Issuer evidence authenticates all
    three signatures against the original native owner, nonce and release.
 
-Every read and transition checks the original native deadline. Before certificate
+Every read and transition checks the original native deadline and live journal
+ticket. Before certificate
 authentication, timestamps are checked only for valid interval relationships;
 neither an unsigned challenge time nor a host wall clock becomes trusted UTC.
 Only the issuer's signed historical decision instant is used for historical
@@ -52,7 +67,10 @@ cargo iroha-fast -- test -p connect_norito_bridge --lib kagemusha_core_coordinat
 ```
 
 Production integration must still connect these consuming states to bounded,
-revocable native registry handles, the real durable coordinator backend, C/JNI
-and Swift/Kotlin lifecycle APIs, authenticated issuer configuration and exact
-current-source native artifacts. Device setup, funding/finality, crash recovery
-and physical hardware qualification remain separate required outcomes.
+revocable native registry handles, the authenticated enrollment attempt journal,
+the real durable coordinator backend and Swift/Kotlin lifecycle APIs. The
+backend must independently verify issuer-signed preparation and raw app
+attestation, install authenticated issuer configuration, and retain exact
+current-source native artifacts. The generic bridge supplies no C/JNI installer
+for an unqualified backend. Device setup, funding/finality, crash recovery and
+physical hardware qualification remain separate required outcomes.

@@ -31,6 +31,33 @@ pub const RELEASE_MANIFEST_OPERATION_LIMIT_V1: u64 = 65_536;
 /// Maximum exclusive reservation lifetime, further capped by governed custody.
 pub const RELEASE_MANIFEST_RESERVATION_MS_V1: u64 = 60_000;
 
+/// Governed revocation of the current release signer or independent attester generation.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestRevocationV1"
+)]
+#[norito(deny_unknown_fields)]
+pub struct ReleaseManifestRevocationV1 {
+    /// Revoke the current signer key generation.
+    pub signer: bool,
+    /// Revoke the current independent attester generation.
+    pub attester: bool,
+}
+
 /// Exact reviewed manifest request and audit predecessor to reserve before provider I/O.
 #[derive(
     Clone,
@@ -296,34 +323,7 @@ pub struct ReleaseManifestCheckV1 {
     pub phase: ReleaseManifestCheckPhaseV1,
 }
 
-/// Governed emergency revocation of the active signer and independent attester generations.
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-    DeriveJsonSerialize,
-    DeriveJsonDeserialize,
-    norito::NoritoSchema,
-)]
-#[norito_schema(
-    name = "iroha_data_model::sorafs::release_manifest_authority::ReleaseManifestRevocationV1"
-)]
-#[norito(deny_unknown_fields)]
-pub struct ReleaseManifestRevocationV1 {
-    /// Revoke the current signer key generation.
-    pub signer: bool,
-    /// Revoke the current independent attester generation.
-    pub attester: bool,
-}
-
-/// Closed action surface, not yet an InstructionBox or production authorization path.
+/// Release-manifest action claim; registered native dispatch remains closed.
 #[derive(
     Clone,
     Debug,

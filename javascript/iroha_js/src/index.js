@@ -671,3 +671,5 @@ export {
   tairaMonPrettyGatewaySuffix,
   canonicalGatewayWildcard,
 } from "./soradns.js";
+
+export { buildCanonicalMultisigContractCall } from "./multisigContractCall.js";

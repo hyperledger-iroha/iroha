@@ -16,7 +16,11 @@ import re
 
 CLOSED = {
     "soracloud": {"RecordSoracloudMailboxMessage", "ApplySoracloudOrderedMailboxResult"},
-    "sorafs": {"RegisterProviderOwner", "UnregisterProviderOwner"},
+    "sorafs": {
+        "RegisterProviderOwner",
+        "UnregisterProviderOwner",
+        "MutateSorafsReleaseManifestAuthority",
+    },
 }
 RETIRED_SORAFS_INSTRUCTIONS = {
     "RegisterSorafsCitizenBond", "RotateSorafsCitizenBondAuthorization",
@@ -95,7 +99,10 @@ def census(registry_source: str, wire_source: str) -> dict:
             raise ValueError(f"{family}: missing or unknown reviewed Initial disposition")
         actual_closed = {row[1] for row in rows if row[2] == "Closed"}
         if actual_closed != closed:
-            raise ValueError(f"{family}: explicit closed operation set changed")
+            raise ValueError(
+                f"{family}: explicit closed operation set changed: "
+                f"expected {sorted(closed)}, actual {sorted(actual_closed)}"
+            )
         for handler, name, _ in rows:
             if handler != "dispatch_instruction":
                 raise ValueError(f"{family}::{name}: unexpected typed handler")
@@ -107,6 +114,9 @@ def mutation_tests(registry: str, wire: str) -> int:
     marker = "dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudService> => CoreAuthorized,"
     if registry.count(marker) != 1:
         raise ValueError("mutation fixture anchor is not unique")
+    closed_marker = "dispatch_instruction::<iroha_data_model::isi::sorafs::MutateSorafsReleaseManifestAuthority> => Closed,"
+    if registry.count(closed_marker) != 1:
+        raise ValueError("closed SoraFS mutation fixture anchor is not unique")
     mutations = [
         (registry.replace(marker, marker.replace(" => CoreAuthorized", "")), wire),
         (registry.replace(marker, ""), wire),
@@ -115,6 +125,7 @@ def mutation_tests(registry: str, wire: str) -> int:
         (registry.replace(marker, marker + "\n" + marker), wire),
         (registry.replace(marker, marker.replace("CoreAuthorized", "Closed")), wire),
         (registry.replace(marker, marker.replace("dispatch_instruction", "unavailable_instruction")), wire),
+        (registry.replace(closed_marker, closed_marker.replace("Closed", "CoreAuthorized")), wire),
     ]
     for name in sorted(RETIRED_SORAFS_INSTRUCTIONS):
         row = f"dispatch_instruction::<iroha_data_model::isi::sorafs::{name}> => CoreAuthorized,"

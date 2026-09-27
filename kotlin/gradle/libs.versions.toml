@@ -9,7 +9,7 @@ serializationJson = "1.10.0"
 desugarJdkLibs = "2.1.5"
 playServicesNearby = "19.3.0"
 okhttp = "4.12.0"
-netty = "4.2.17.Final"
+netty = "4.1.138.Final"
 androidxTestRunner = "1.6.2"
 androidxTestJunit = "1.2.1"
 

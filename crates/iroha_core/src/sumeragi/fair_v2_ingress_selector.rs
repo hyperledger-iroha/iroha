@@ -76,7 +76,8 @@ fn fair_v2_ingress_leader_wire_selector_projection(
             .ok_or_else(|| "leader-wire selector lost its exact fair-ingress carrier".to_owned())?;
         // A restored token keeps its logical admission ordinal, so derive the
         // immutable prefix from its fresh physical carrier. Every dequeue must
-        // reduce this exact per-source prefix before the carrier may cross.
+        // reduce its exact per-source count, including process-lived Native
+        // custody even though that independent domain cannot block this turn.
         for (source, lane) in &state.lanes {
             let actual_predecessors = lane
                 .entries
@@ -210,13 +211,20 @@ fn fair_v2_ingress_queue_gate_verdict(
         .iter()
         .take(index)
         .any(|prior| fair_v2_ingress_same_control_slot(&prior.inbound, &entry.inbound));
-    let ingress_barrier_allows = leader_wire_barrier.is_none_or(|owner| {
-        // A physically selected leader turn exclusively drains its immutable
-        // ingress-prefix episode.
-        index < owner.ingress_predecessors.get(source).copied().unwrap_or(0)
-            || (owner.ingress_predecessors.values().all(|count| *count == 0)
-                && entry.leader_wire_token.as_ref() == Some(&owner.token))
-    });
+    // Native custody has process lifetime and no global lifecycle ordinal. Its
+    // admission order remains authenticated by the complete physical census,
+    // but neither domain may require the other's dequeue to make progress.
+    let ingress_barrier_allows = source.is_native()
+        || leader_wire_barrier.is_none_or(|owner| {
+            // Preserve the exact global predecessor episode and carrier. Native
+            // work may stay queued or backpressured across this height's handoff.
+            index < owner.ingress_predecessors.get(source).copied().unwrap_or(0)
+                || (owner
+                    .ingress_predecessors
+                    .iter()
+                    .all(|(predecessor, count)| predecessor.is_native() || *count == 0)
+                    && entry.leader_wire_token.as_ref() == Some(&owner.token))
+        });
     let earlier_dependency = entry.class == FairV2IngressClass::TransportCompletion
         || leader_wire_body_dependency.is_some_and(|(round, subject)| {
             leader_wire_barrier
@@ -263,7 +271,10 @@ fn fair_v2_ingress_queue_gate_verdict(
                 && (certified_fence_escape_dependency || historical_replica_release_dependency)));
     if has_live_control_predecessor || (!ingress_barrier_allows && !dependency_bypass) {
         FairV2IngressQueueGateVerdict::Blocked
-    } else if dependency_bypass {
+    } else if dependency_bypass || (source.is_native() && leader_wire_barrier.is_some()) {
+        // Independent Native work shares the rotated dependency pass while a
+        // global episode is active. Giving an unbounded Native stream strict
+        // priority would hide the very completion that releases that episode.
         FairV2IngressQueueGateVerdict::Dependency
     } else {
         FairV2IngressQueueGateVerdict::Strict

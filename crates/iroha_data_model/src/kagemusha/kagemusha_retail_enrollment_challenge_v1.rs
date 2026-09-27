@@ -754,6 +754,7 @@ mod tests {
             release_id: selection.release_id,
             hardware_profile_id: selection.hardware_profile_id,
             device_key_reference: selection.device_key_reference,
+            attested_key_id: selection.attested_key_id,
             lane_id: selection.lane_id,
             issued_at_ms: 1_000,
             expires_at_ms: 2_000,
@@ -799,13 +800,12 @@ mod tests {
     }
 
     #[test]
-    fn nonce_bound_issuer_evidence_requires_all_three_signatures_and_exact_commitment() {
+    fn nonce_bound_issuer_evidence_requires_signed_possession_and_exact_commitment() {
         let (f, app_policy) = app_bound_fixture();
         let mut c = challenge(&f);
         let verified_app = verified_app_for_challenge(&c, &app_policy);
         c.app_attestation_digest = verified_app.digest();
         let p = proof(&f, &c);
-        let app = verified_app;
         let seal = |proof: &KagemushaRetailEnrollmentPossessionProofV1, time| {
             let mut certificate = f.certificate.clone();
             certificate.subject.challenge_evidence_digest =
@@ -819,31 +819,33 @@ mod tests {
             .unwrap();
             certificate
         };
-        let verify_issuer =
-            |proof: &KagemushaRetailEnrollmentPossessionProofV1,
-             certificate: &KagemushaRetailEnrollmentCertificateV1,
-             nonce,
-             verified_app: &KagemushaVerifiedAppEnrollmentV1| {
-                proof.authenticate_issuer_evidence_bound(
-                    certificate,
-                    &f.policy,
-                    CatalogBinding {
-                        release_id: f.selection.issuance.release_id,
-                        hardware_policy_digest: f.selection.issuance.hardware_policy_digest,
-                        profile: &f.profile,
-                    },
-                    &f.selection,
-                    nonce,
-                    verified_app,
-                )
-            };
+        fn verify_issuer(
+            f: &Fixture,
+            proof: &KagemushaRetailEnrollmentPossessionProofV1,
+            certificate: &KagemushaRetailEnrollmentCertificateV1,
+            nonce: [u8; 32],
+            verified_app: &KagemushaVerifiedAppEnrollmentV1,
+        ) -> Result<KagemushaVerifiedRetailEnrollmentIssuerEvidenceV1> {
+            proof.authenticate_issuer_evidence_bound(
+                certificate,
+                &f.policy,
+                CatalogBinding {
+                    release_id: f.selection.issuance.release_id,
+                    hardware_policy_digest: f.selection.issuance.hardware_policy_digest,
+                    profile: &f.profile,
+                },
+                &f.selection,
+                nonce,
+                verified_app,
+            )
+        }
         let certificate = seal(&p, 1000);
-        let evidence = verify_issuer(&p, &certificate, c.client_nonce, &app).unwrap();
+        let evidence = verify_issuer(&f, &p, &certificate, c.client_nonce, &verified_app).unwrap();
         assert_eq!(evidence.certificate(), &certificate);
         assert_eq!(evidence.client_nonce(), c.client_nonce);
         for nonce in [[0; 32], [91; 32], c.server_nonce] {
             assert_eq!(
-                verify_issuer(&p, &certificate, nonce, &app).unwrap_err(),
+                verify_issuer(&f, &p, &certificate, nonce, &verified_app).unwrap_err(),
                 KagemushaRetailEnrollmentChallengeErrorV1::Binding
             );
         }
@@ -854,16 +856,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            verify_issuer(&p, &wrong_certificate, c.client_nonce, &app).unwrap_err(),
+            verify_issuer(&f, &p, &wrong_certificate, c.client_nonce, &verified_app).unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::IssuerEvidence
         );
         assert!(
-            verify_issuer(&p, &f.certificate, c.client_nonce, &app).is_err(),
+            verify_issuer(&f, &p, &f.certificate, c.client_nonce, &verified_app).is_err(),
             "An unrelated signed certificate cannot authenticate this proof"
         );
         for time in [999, 2000] {
+            let sealed = seal(&p, time);
             assert_eq!(
-                verify_issuer(&p, &seal(&p, time), c.client_nonce, &app).unwrap_err(),
+                verify_issuer(&f, &p, &sealed, c.client_nonce, &verified_app).unwrap_err(),
                 KagemushaRetailEnrollmentChallengeErrorV1::Validity
             );
         }
@@ -873,12 +876,14 @@ mod tests {
             &c.account_signing_payload().unwrap(),
         )
         .unwrap();
+        let wrong_account_certificate = seal(&wrong_account, 1000);
         assert_eq!(
             verify_issuer(
+                &f,
                 &wrong_account,
-                &seal(&wrong_account, 1000),
+                &wrong_account_certificate,
                 c.client_nonce,
-                &app
+                &verified_app,
             )
             .unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::AccountProof
@@ -888,29 +893,57 @@ mod tests {
         let signature_start = wrong_device.device_response.len() - 64;
         let hash = Sha256::digest(&wrong_device.device_response[signature_start..]);
         wrong_device.device_response[84..116].copy_from_slice(&hash);
+        let wrong_device_certificate = seal(&wrong_device, 1000);
         assert_eq!(
             verify_issuer(
+                &f,
                 &wrong_device,
-                &seal(&wrong_device, 1000),
+                &wrong_device_certificate,
                 c.client_nonce,
-                &app
+                &verified_app,
             )
             .unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::DeviceProof
         );
         let mut fresh_challenge = c.clone();
         fresh_challenge.client_nonce = [91; 32];
-        let fresh_app = verified_app_for_challenge(&fresh_challenge, &app_policy);
-        fresh_challenge.app_attestation_digest = fresh_app.digest();
+        let fresh_verified_app = verified_app_for_challenge(&fresh_challenge, &app_policy);
+        fresh_challenge.app_attestation_digest = fresh_verified_app.digest();
         let fresh_proof = proof(&f, &fresh_challenge);
+        // The app authority authenticated the original nonce. Its evidence cannot
+        // authenticate a fresh possession proof even if the owner is unchanged.
         assert_eq!(
             verify_issuer(
+                &f,
                 &fresh_proof,
                 &certificate,
                 fresh_challenge.client_nonce,
-                &fresh_app,
+                &verified_app,
             )
             .unwrap_err(),
+            KagemushaRetailEnrollmentChallengeErrorV1::Binding
+        );
+        assert_eq!(
+            verify_issuer(
+                &f,
+                &fresh_proof,
+                &certificate,
+                fresh_challenge.client_nonce,
+                &fresh_verified_app,
+            )
+            .unwrap_err(),
+            KagemushaRetailEnrollmentChallengeErrorV1::IssuerEvidence
+        );
+        let mut detached = certificate.clone();
+        detached.subject.challenge_evidence_digest =
+            fresh_proof.canonical_evidence_digest().unwrap();
+        detached.signature = SignatureOf::try_new(
+            f.issuer.private_key(),
+            &detached.subject.approval_payload().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            verify_issuer(&f, &p, &detached, c.client_nonce, &verified_app).unwrap_err(),
             KagemushaRetailEnrollmentChallengeErrorV1::IssuerEvidence
         );
     }

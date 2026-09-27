@@ -533,10 +533,10 @@ export interface MultisigProposePayload {
 export interface MultisigContractCallProposeRequest
   extends MultisigAccountSelector {
   signerAccountId: string;
-  contractAddress?: string;
-  contractAlias?: string;
+  contractAddress?: never;
+  contractAlias: string;
   entrypoint: string;
-  payload?: JsonValue;
+  payload: Record<string, unknown>;
   feePayment: NoritoFeePaymentIntent;
   publicKeyHex?: string | null;
   signatureB64?: string | null;
@@ -546,7 +546,7 @@ export interface MultisigContractCallProposeRequest
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
-  contract_address?: string;
+  contract_address?: never;
   contract_alias?: string;
   fee_payment?: NoritoFeePaymentIntent;
   public_key_hex?: string | null;
@@ -558,10 +558,10 @@ export interface MultisigContractCallProposePayload {
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id: string;
-  contract_address?: string;
-  contract_alias?: string;
+  contract_address?: never;
+  contract_alias: string;
   entrypoint: string;
-  payload: JsonValue;
+  payload: Record<string, unknown>;
   fee_payment: NoritoFeePaymentIntent;
   public_key_hex?: string;
   signature_b64?: string;
@@ -588,6 +588,10 @@ export interface MultisigContractCallApproveRequest
   public_key_hex?: string | null;
   signature_b64?: string | null;
   creation_time_ms?: number | string | bigint | null;
+  /** Exact current target fields are mandatory; no hash-only contract approval. */
+  contract_alias: string;
+  entrypoint: string;
+  payload: Record<string, unknown>;
 }
 
 export interface MultisigContractCallApprovePayload {
@@ -600,6 +604,10 @@ export interface MultisigContractCallApprovePayload {
   public_key_hex?: string;
   signature_b64?: string;
   creation_time_ms?: number;
+  /** Exact current target fields are mandatory; no hash-only contract approval. */
+  contract_alias: string;
+  entrypoint: string;
+  payload: Record<string, unknown>;
 }
 
 export interface MultisigContractCallResponse {
@@ -10920,9 +10928,6 @@ export declare class ToriiBrowserClient {
   queryTransactions<T = ToriiAccountTransactionItem>(
     options: TransactionQueryOptions & ToriiBrowserCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
-  queryVisibleTransactions<T = ToriiAccountTransactionItem>(
-    options: TransactionQueryOptions & ToriiBrowserCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
   listContractActivity<T = ToriiContractActivityItem>(
     options?: ToriiBrowserContractActivityListOptions,
   ): Promise<ToriiBrowserContractActivityListResponse<T>>;
@@ -11072,7 +11077,7 @@ export interface ValidationFeeCheckpointV1 {
 }
 
 export interface ValidationFeeLedgerBindingV1 {
-  readonly schema: "cbsi.mobile-validation-fee-ledger-binding.v1";
+  readonly schema: "iroha.validation-fee-ledger-binding.v1";
   readonly networkId: NetworkId;
   readonly policyChainGenesisHash: string;
   readonly checkpoint: ValidationFeeCheckpointV1;
@@ -11084,7 +11089,7 @@ export interface NormalizedValidationFeeCheckpointV1 {
 }
 
 export interface NormalizedValidationFeeLedgerBindingV1 {
-  readonly schema: "cbsi.mobile-validation-fee-ledger-binding.v1";
+  readonly schema: "iroha.validation-fee-ledger-binding.v1";
   readonly networkId: NetworkId;
   readonly policyChainGenesisHash: string;
   readonly checkpoint: NormalizedValidationFeeCheckpointV1;
@@ -11358,9 +11363,6 @@ export declare class ToriiClient {
   queryTransactions<T = ToriiAccountTransactionItem>(
     options: TransactionQueryOptions & RequiredCanonicalRequestOptions,
   ): Promise<ToriiIterableListResponse<T>>;
-  queryVisibleTransactions<T = ToriiAccountTransactionItem>(
-    options: TransactionQueryOptions & RequiredCanonicalRequestOptions,
-  ): Promise<ToriiIterableListResponse<T>>;
   iterateAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: AccountTransactionIteratorOptions,
@@ -11370,9 +11372,6 @@ export declare class ToriiClient {
     options: PaginationIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   iterateTransactionsQuery<T = ToriiAccountTransactionItem>(
-    options: TransactionIteratorOptions & RequiredCanonicalRequestOptions,
-  ): AsyncGenerator<T, void, unknown>;
-  iterateVisibleTransactionsQuery<T = ToriiAccountTransactionItem>(
     options: TransactionIteratorOptions & RequiredCanonicalRequestOptions,
   ): AsyncGenerator<T, void, unknown>;
   listAssetHolders<T = ToriiAssetHolderItem>(
@@ -12893,9 +12892,11 @@ export function noritoEncodeMultisigProposeRequest(
 ): Buffer;
 export function noritoEncodeMultisigContractCallProposeRequest(
   request: MultisigContractCallProposeRequest,
+  networkPrefix: number,
 ): Buffer;
 export function noritoEncodeMultisigContractCallApproveRequest(
   request: MultisigContractCallApproveRequest,
+  networkPrefix: number,
 ): Buffer;
 export function noritoDecodeInstruction(
   bytes: ArrayBufferView | ArrayBuffer | Buffer,
@@ -13177,7 +13178,7 @@ export function signQuotedIvmProvedTransactionPayload(
 ): SignedTransactionResult;
 
 export const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: "/v1/validation-fee/policy/current/proof";
-export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "cbsi.mobile-validation-fee-ledger-binding.v1";
+export const VALIDATION_FEE_LEDGER_BINDING_SCHEMA: "iroha.validation-fee-ledger-binding.v1";
 export const VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES: 4194304;
 export const VALIDATION_FEE_REQUIRED_BRIDGE_ABI_VERSION: 23;
 export const VALIDATION_FEE_VERIFIED_POLICY_PROJECTION_SCHEMA: "iroha.validation_fee.verified_policy_projection.v1";
@@ -14682,3 +14683,23 @@ export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
 export * from "./smart-contract-deployment.js";
 export { Kagemusha } from "./kagemusha.js";
+
+/** Exact independently reviewed target and canonical native argument record. */
+export interface CanonicalMultisigContractCallInput {
+  multisig_account_id: string;
+  contract_address: string;
+  contract_alias: string;
+  entrypoint: string;
+  payload: Record<string, unknown>;
+  arguments_hex: string | null;
+  code_hash_hex: string;
+}
+/** Construction only; never evidence of deployment, permission or finality. */
+export function buildCanonicalMultisigContractCall(
+  input: CanonicalMultisigContractCallInput,
+  networkPrefix: number,
+): {
+  instructions: Array<Record<string, unknown>>;
+  instructions_hash: string;
+  metadata: Record<string, unknown>;
+};

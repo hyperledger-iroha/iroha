@@ -35,22 +35,22 @@ final class KagemushaAppAttestFileIntentStoreV1Tests: XCTestCase {
     let selection = Data(repeating: 0x21, count: 32)
     let rawAssertion = Data([0xa2, 0x01, 0x02])
     let first = try KagemushaAppAttestFileIntentStoreV1.bootstrapNew(
-      directoryURL: directory, keyID: "enrolled-key", initialCounter: 3)
-    XCTAssertEqual(try first.load(keyID: "enrolled-key"), .ready(counter: 3))
-    try first.reserve(keyID: "enrolled-key", previousCounter: 3,
+      directoryURL: directory, keyID: "enrolled-key")
+    XCTAssertEqual(try first.load(keyID: "enrolled-key"), .ready(counter: 0))
+    try first.reserve(keyID: "enrolled-key", previousCounter: 0,
       selectionDigest: selection)
     let reopened = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directory)
     XCTAssertEqual(try reopened.load(keyID: "enrolled-key"),
-      .pending(previousCounter: 3, selectionDigest: selection))
-    try reopened.complete(keyID: "enrolled-key", counter: 4,
+      .pending(previousCounter: 0, selectionDigest: selection))
+    try reopened.complete(keyID: "enrolled-key", counter: 1,
       selectionDigest: selection, rawAssertion: rawAssertion)
     let afterCrash = try KagemushaAppAttestFileIntentStoreV1(directoryURL: directory)
     XCTAssertEqual(try afterCrash.load(keyID: "enrolled-key"),
-      .complete(counter: 4, selectionDigest: selection, rawAssertion: rawAssertion))
-    XCTAssertThrowsError(try afterCrash.reserve(keyID: "enrolled-key", previousCounter: 4,
+      .complete(counter: 1, selectionDigest: selection, rawAssertion: rawAssertion))
+    XCTAssertThrowsError(try afterCrash.reserve(keyID: "enrolled-key", previousCounter: 1,
       selectionDigest: Data(repeating: 0x22, count: 32)))
     XCTAssertEqual(try afterCrash.load(keyID: "enrolled-key"),
-      .complete(counter: 4, selectionDigest: selection, rawAssertion: rawAssertion))
+      .complete(counter: 1, selectionDigest: selection, rawAssertion: rawAssertion))
     XCTAssertThrowsError(try KagemushaAppAttestFileIntentStoreV1.bootstrapNew(
       directoryURL: directory, keyID: "another-key"))
   }

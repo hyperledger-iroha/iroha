@@ -2,8 +2,8 @@
 use std::time::{Duration, Instant};
 
 use iroha_core::state::{
-    MergeLedgerCommitError, PendingQueuePlanAdmissionPersistenceOutcome,
-    QueuePlanAdmissionPersistenceScope, State,
+    MergeLedgerCommitError, PendingQueuePlanAdmissionDisposition,
+    PendingQueuePlanAdmissionPersistenceOutcome, QueuePlanAdmissionPersistenceScope, State,
 };
 
 /// Original ingress deadline, bounded by both its wire clock and local elapsed time.
@@ -72,6 +72,45 @@ impl PersistenceDeadline {
                 })?;
             // A wakeup grants no persistence authority. Re-enter the exact State
             // classification and Kura height fence with the same original bytes.
+        }
+    }
+
+    /// Wait for the exact complete input to acquire canonical membership.
+    ///
+    /// A durable off-chain quorum certificate is an availability input, not a
+    /// public admission result. Classification is repeated after each committed
+    /// height under the original ingress deadline; an expired wait reports an
+    /// unknown outcome because the durable input may still finalize later.
+    pub(super) async fn wait_for_canonical_admission(
+        &self,
+        state: &State,
+        complete_input: &[u8],
+    ) -> Result<PendingQueuePlanAdmissionDisposition, String> {
+        loop {
+            let remaining = self.remaining().map_err(str::to_owned)?;
+            let committed_height = u64::try_from(state.committed_height())
+                .map_err(|_| "committed height does not fit QueuePlan admission wait".to_owned())?;
+            let next_height = committed_height.checked_add(1).ok_or_else(|| {
+                "QueuePlan admission wait cannot advance committed height".to_owned()
+            })?;
+            let (_, disposition) = state
+                .classify_pending_queue_plan_admission(complete_input, next_height)
+                .map_err(|error| error.to_string())?;
+            match disposition {
+                PendingQueuePlanAdmissionDisposition::ExactPending
+                | PendingQueuePlanAdmissionDisposition::Applied
+                | PendingQueuePlanAdmissionDisposition::DefinitiveConflict
+                | PendingQueuePlanAdmissionDisposition::Stale => return Ok(disposition),
+                PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                | PendingQueuePlanAdmissionDisposition::Future { .. }
+                | PendingQueuePlanAdmissionDisposition::DeferredCarrier => {}
+            }
+            tokio::time::timeout(remaining, state.wait_for_committed_height(next_height))
+                .await
+                .map_err(|_| {
+                    "original Torii proxy deadline expired before canonical QueuePlan admission"
+                        .to_owned()
+                })?;
         }
     }
 }

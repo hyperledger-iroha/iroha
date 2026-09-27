@@ -116,6 +116,8 @@ fn height_context_rejects_invalid_parent_execution_commitment() {
             executed_block_wire_len: u64::try_from(invalid_parent_executed_block_wire.len())
                 .expect("fixture wire length fits u64"),
             executed_block_wire_hash: Hash::new(invalid_parent_executed_block_wire),
+            transaction_input_commitment: None,
+            transaction_output_commitment: None,
         },
         signers: vec![0, 1, 2],
         aggregate_signature: vec![0x62; 48],

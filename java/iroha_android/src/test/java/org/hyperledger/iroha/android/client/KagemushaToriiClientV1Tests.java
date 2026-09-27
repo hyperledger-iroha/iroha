@@ -36,6 +36,7 @@ public final class KagemushaToriiClientV1Tests {
     builderProvidesTheSameDefaultTransportAsTheKotlinFacade();
     readinessUsesTheCanonicalKagemushaRouteAndPreservesUnavailableState();
     operationPollingUsesTheCanonicalKagemushaRouteAndWithholdsTheResult();
+    operationAbsenceRequiresToriiResourceCode();
     signedTopUpForwardsTheCanonicalVersionedTransactionUnchanged();
     submissionResponsesEnforceLocationStatusAndRetryContract();
     mutationRoutesAndCanonicalCodecsAreTheSolePublicV1Surface();
@@ -90,6 +91,22 @@ public final class KagemushaToriiClientV1Tests {
           return new String(canonicalJson, StandardCharsets.UTF_8);
         });
     assert released.contains("untrusted_finality");
+  }
+
+  private static void operationAbsenceRequiresToriiResourceCode() {
+    final byte[] operationId = filled(0xd2);
+    final Map<String, Object> missing = Map.of(
+        "code", "kagemusha_operation_not_found",
+        "message", "The operation is unknown.");
+    final CapturingExecutor admitted = new CapturingExecutor(jsonResponse(
+        missing, 404, Map.of("X-Iroha-Reject-Code", "kagemusha_operation_not_found")));
+    assert client(admitted).getOperation(operationId).join() == null;
+    expectCompletionFailure(() -> client(new CapturingExecutor(
+        jsonResponse(missing, 404, Collections.emptyMap()))).getOperation(operationId).join());
+    expectCompletionFailure(() -> client(new CapturingExecutor(
+        jsonResponse(Map.of("code", "route_not_found", "message", "No route."),
+            404, Map.of("X-Iroha-Reject-Code", "kagemusha_operation_not_found"))))
+        .getOperation(operationId).join());
   }
 
   private static void mutationRoutesAndCanonicalCodecsAreTheSolePublicV1Surface() {

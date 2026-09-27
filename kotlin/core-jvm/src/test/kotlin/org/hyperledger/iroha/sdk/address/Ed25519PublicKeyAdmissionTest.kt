@@ -264,6 +264,7 @@ class Ed25519PublicKeyAdmissionTest {
     ): IdentifierPolicySummary =
         IdentifierPolicySummary(
             policyId = "key-admission#fixture",
+            programId = "key-admission-fixture",
             owner = "owner",
             active = true,
             normalization = IdentifierNormalization.EXACT,
@@ -298,7 +299,7 @@ class Ed25519PublicKeyAdmissionTest {
         publicKeyLiteral: String,
         outputOpeningPublicKeyLiteral: String = publicKeyLiteral,
     ): ByteArray =
-        """{"items":[{"policy_id":"key-admission#fixture","owner":"owner","active":true,"normalization":"exact","resolver_public_key":"$publicKeyLiteral","output_opening_public_key":"$outputOpeningPublicKeyLiteral","backend":"signed"}]}"""
+        """{"items":[{"policy_id":"key-admission#fixture","program_id":"key-admission-fixture","owner":"owner","active":true,"normalization":"exact","resolver_public_key":"$publicKeyLiteral","output_opening_public_key":"$outputOpeningPublicKeyLiteral","backend":"signed"}]}"""
             .toByteArray(StandardCharsets.UTF_8)
 
     private fun ramLfePolicyJson(

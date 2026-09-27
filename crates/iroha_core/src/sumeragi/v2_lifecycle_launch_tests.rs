@@ -259,7 +259,10 @@ fn production_leader_wire_binding_retires_explicitly_on_drop_and_closes_on_failu
         Ok(_) => panic!("an open, already-bound ingress accepted a foreign launch gate"),
         Err(error) => error,
     };
-    assert_eq!(error, "leader-wire lifecycle gate requires closed ingress without global-height owners");
+    assert_eq!(
+        error,
+        "leader-wire lifecycle gate requires closed ingress without global-height owners"
+    );
     assert!(
         !ingress.state.lock().open,
         "failed binding must close ingress"
@@ -2052,24 +2055,31 @@ fn recovered_lifecycle_sign_dispatch_source_is_sealed_and_restart_closed() {
     let parked_completion = source_region(
         worker_completion_source,
         "pub(in crate::sumeragi) struct PreparedRecoveredLifecycleSignCompletionV1 {",
-        "/// Result of atomically returning one guarded missing-sidecar Apply",
+        "/// Guarded durable recovered-Fetch body parked for restart-closed Store settlement.",
     );
-    assert_forbidden_source_tokens(
-        parked_completion,
-        &[
-            "fn into_parts(",
-            "fn into_result(",
-            "fn into_task(",
-            "fn request(",
-            "fn prepared_candidate(",
-            "fn result(",
-            "fn acknowledgement(",
-            "fn acknowledge(",
-            "fn signature(",
-            "fn outbound_payload(",
-            "fn settle(",
-        ],
+    let parked_completion_impl = source_region(
+        worker_completion_source,
+        "impl PreparedRecoveredLifecycleSignCompletionV1 {",
+        "/// Result of atomically returning one guarded deferred Apply to the worker FIFO.",
     );
+    for owner in [parked_completion, parked_completion_impl] {
+        assert_forbidden_source_tokens(
+            owner,
+            &[
+                "fn into_parts(",
+                "fn into_result(",
+                "fn into_task(",
+                "fn request(",
+                "fn prepared_candidate(",
+                "fn result(",
+                "fn acknowledgement(",
+                "fn acknowledge(",
+                "fn signature(",
+                "fn outbound_payload(",
+                "fn settle(",
+            ],
+        );
+    }
     let signer = source_region(
         worker_io_execution_source,
         "fn sign_recovered_lifecycle_task(",

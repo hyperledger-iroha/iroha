@@ -1,4 +1,4 @@
-// Test fixtures for canonical persisted privacy state.
+// Shared signed and persisted-state fixtures for the current privacy regressions.
 fn nonzero(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
@@ -915,6 +915,21 @@ fn orchard_persisted_fixture() -> OrchardPersistedFixture {
         activation,
     );
     let mut commitments = Storage::new();
+    let reserve_asset = AssetId::with_scope(
+        state.asset_definition_id().clone(),
+        state.reserve_account().clone(),
+        state.public_balance_scope(),
+    );
+    let reserve_owner = PrivacyPublicReserveOwnerV1::Orchard {
+        namespace,
+        bootstrap_digest,
+    };
+    commitments.insert(
+        PrivacyCommitmentKeyV1::public_reserve_custody(reserve_owner.protocol_id(), &reserve_asset)
+            .expect("Orchard reserve key"),
+        PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset, reserve_owner)
+            .expect("Orchard reserve custody"),
+    );
     commitments.insert(
         state_key,
         PrivacyStateItemRecordV1::orchard_pool_state(state).expect("Orchard state record"),
@@ -1110,6 +1125,26 @@ fn proof_managed_note_persisted_fixture(
         )
         .expect("bootstrap config"),
     );
+    if let PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(config) = &bootstrap {
+        let reserve_asset = AssetId::with_scope(
+            config.asset_definition_id.clone(),
+            config.reserve_account.clone(),
+            config.public_balance_scope,
+        );
+        let reserve_owner = PrivacyPublicReserveOwnerV1::PrivateIvm {
+            namespace,
+            bootstrap_digest,
+        };
+        commitments.insert(
+            PrivacyCommitmentKeyV1::public_reserve_custody(
+                reserve_owner.protocol_id(),
+                &reserve_asset,
+            )
+            .expect("private-IVM reserve key"),
+            PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset, reserve_owner)
+                .expect("private-IVM reserve custody"),
+        );
+    }
     for (position, commitment) in bootstrap
         .initial_note_commitments()
         .expect("private-note bootstrap commitments")

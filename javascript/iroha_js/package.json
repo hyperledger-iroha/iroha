@@ -320,7 +320,7 @@
   ],
   "browser": {
     "./dist/authenticatedBlockProofs.js": "./dist/authenticatedBlockProofs.browser.js",
-    "./dist/crypto.js": "./dist/crypto.browser.js",
+    "./dist/crypto.js": "./dist/cryptoInternal.browser.js",
     "./dist/cryptoHash.js": "./dist/cryptoHash.browser.js",
     "./dist/native.js": "./dist/native.browser.js"
   },

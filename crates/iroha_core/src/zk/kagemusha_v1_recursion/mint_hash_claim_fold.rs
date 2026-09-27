@@ -1652,46 +1652,44 @@ const KAGEMUSHA_MINT_HASH_CLAIM_MAX_DEFERRED_SOURCES_V1: usize =
         - KAGEMUSHA_MINT_HASH_CLAIM_BOUND_VALUE_COUNT_V1)
         / 4;
 
-/// Equality-bind one terminal claim public column to the exact ordinary SHA queue built by the
-/// monetary relation.
+/// Roots computed from the same assigned Base cells that feed ordinary or bounded Table8 jobs.
 ///
-/// Recursive verification of the claim proof is deliberately a caller responsibility because the
-/// caller owns the carried-history fold.  This gadget supplies the other half of that bridge: it
-/// reconstructs the message, terminal, and plan roots from assigned SHA message/output cells and
-/// pins every release/protocol/cursor/completeness cell.  A host-computed digest can therefore
-/// never substitute for the canonical circuit bytes.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-pub(crate) fn constrain_complete_claim_against_sha_jobs_v1<F: KagemushaPoseidonFieldV1>(
+/// The bounded path folds only the selected prefix of a fixed-capacity padded message. Its
+/// one-hot selector and selected output words are the exact cells constrained by Table8; later
+/// capacity blocks cannot become claim leaves. This keeps the Base circuit shape fixed while the
+/// completed recursive claim may have a witness-dependent number of leaves.
+/// TODO: Qualify bounded lengths with generated Eq/Ep shard and claim proofs before a release
+/// includes a bounded SHA job in a monetary certificate.
+struct KagemushaAssignedTypedShaClaimRootsV1<F: KagemushaPoseidonFieldV1> {
+    stages: AssignedValue<F>,
+    total_jobs: u32,
+    message_root: AssignedValue<F>,
+    terminal_root: AssignedValue<F>,
+}
+
+#[allow(clippy::too_many_lines)]
+fn constrain_typed_sha_claim_roots_v1<F: KagemushaPoseidonFieldV1>(
     ctx: &mut halo2_base::Context<F>,
     range: &halo2_base::gates::RangeChip<F>,
     jobs: &crate::zk::pasta_sha256::PastaSha256JobsV1<F>,
-    claim: &[AssignedValue<F>],
-    parity: KagemushaPastaParityV1,
-    expected_release: [AssignedValue<F>; 2],
-    expected_eq_claim_protocol: [AssignedValue<F>; 2],
-    expected_ep_claim_protocol: [AssignedValue<F>; 2],
-    expected_eq_shard_protocol: [AssignedValue<F>; 2],
-    expected_ep_shard_protocol: [AssignedValue<F>; 2],
-) -> Result<(), String> {
+    release: [AssignedValue<F>; 2],
+) -> Result<KagemushaAssignedTypedShaClaimRootsV1<F>, String> {
     use crate::zk::{
-        pasta_sha256::PastaSha256ByteV1,
+        pasta_sha256::{PastaSha256ByteV1, PastaSha256TypedClaimJobV1},
         pasta_sha256_table8::{BLOCK_BYTE_SIZE, canonical_padding_suffix},
     };
 
-    if claim.len() != KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 {
-        return Err("terminal mint hash claim public column has wrong shape".to_owned());
-    }
-    let claimed_jobs = jobs.claim_jobs()?;
-    if claimed_jobs.is_empty() {
-        return Err("terminal mint hash claim cannot authorize an empty SHA queue".to_owned());
+    let claimed_jobs = jobs.typed_claim_jobs()?;
+    let messages = jobs.bounded_claim_messages()?;
+    if claimed_jobs.is_empty() || claimed_jobs.len() != messages.len() {
+        return Err("terminal mint hash claim has an empty or changed SHA queue".to_owned());
     }
     let total_jobs = u32::try_from(claimed_jobs.len())
         .map_err(|_| "terminal mint hash claim job count exceeds u32".to_owned())?;
-    let total_stages = claimed_jobs.iter().try_fold(0_u64, |total, job| {
-        let suffix = canonical_padding_suffix(job.message.len())
+    let native_stages = messages.iter().try_fold(0_u64, |total, message| {
+        let suffix = canonical_padding_suffix(message.len())
             .ok_or_else(|| "terminal mint hash claim message length is not encodable".to_owned())?;
-        let padded = job
-            .message
+        let padded = message
             .len()
             .checked_add(suffix.len())
             .ok_or_else(|| "terminal mint hash claim padded length overflowed".to_owned())?;
@@ -1701,43 +1699,92 @@ pub(crate) fn constrain_complete_claim_against_sha_jobs_v1<F: KagemushaPoseidonF
             .checked_add(blocks)
             .ok_or_else(|| "terminal mint hash claim stage count overflowed".to_owned())
     })?;
-    if total_stages == 0 {
+    if native_stages == 0 {
         return Err("terminal mint hash claim contains no compression blocks".to_owned());
     }
 
     let gate = range.gate();
     let poseidon = KagemushaPoseidonChipV1::new(ctx, range);
-    let stages = ctx.load_constant(F::from(total_stages));
+    let stages = ctx.load_witness(F::from(native_stages));
+    range.range_check(ctx, stages, 64);
     let job_count = ctx.load_constant(F::from(u64::from(total_jobs)));
-    let message_seed = poseidon.hash(
+    let mut message_root = poseidon.hash(
         ctx,
         range,
         MESSAGE_SEED_DOMAIN_V1,
-        &[expected_release[0], expected_release[1], stages, job_count],
+        &[release[0], release[1], stages, job_count],
     );
-    let terminal_seed = poseidon.hash(
+    let mut terminal_root = poseidon.hash(
         ctx,
         range,
         TERMINAL_SEED_DOMAIN_V1,
-        &[expected_release[0], expected_release[1], stages, job_count],
+        &[release[0], release[1], stages, job_count],
     );
-    let mut message_root = message_seed;
-    let mut terminal_root = terminal_seed;
-    let mut stage_index = 0_u64;
+    let mut stage_index = ctx.load_constant(F::ZERO);
     for (job_index, job) in claimed_jobs.iter().enumerate() {
-        let suffix = canonical_padding_suffix(job.message.len())
-            .ok_or_else(|| "terminal mint hash claim message length is not encodable".to_owned())?;
-        let padded = job
-            .message
-            .iter()
-            .copied()
-            .chain(suffix.into_iter().map(PastaSha256ByteV1::constant))
-            .collect::<Vec<_>>();
+        let (padded, selectors, message_len, output_words) = match job {
+            PastaSha256TypedClaimJobV1::Ordinary {
+                message,
+                output_words,
+            } => {
+                let suffix = canonical_padding_suffix(message.len()).ok_or_else(|| {
+                    "terminal mint hash claim message length is not encodable".to_owned()
+                })?;
+                let padded = message
+                    .iter()
+                    .copied()
+                    .chain(suffix.into_iter().map(PastaSha256ByteV1::constant))
+                    .collect::<Vec<_>>();
+                (padded, None, None, *output_words)
+            }
+            PastaSha256TypedClaimJobV1::Bounded {
+                message_len,
+                padded,
+                final_block_selectors,
+                output_words,
+            } => (
+                padded.to_vec(),
+                Some(*final_block_selectors),
+                Some(*message_len),
+                *output_words,
+            ),
+        };
         if padded.is_empty() || padded.len() % BLOCK_BYTE_SIZE != 0 {
             return Err("terminal mint hash claim padding is not block aligned".to_owned());
         }
-        let blocks = u32::try_from(padded.len() / BLOCK_BYTE_SIZE)
+        let max_blocks = padded.len() / BLOCK_BYTE_SIZE;
+        let max_blocks_u32 = u32::try_from(max_blocks)
             .map_err(|_| "terminal mint hash claim job block count exceeds u32".to_owned())?;
+        let block_count = if let Some(selectors) = selectors {
+            if selectors.len() != max_blocks {
+                return Err("terminal mint hash claim bounded selector geometry changed".to_owned());
+            }
+            let one = gate.sum(ctx, selectors.iter().copied());
+            gate.assert_is_const(ctx, &one, &F::ONE);
+            let block_count = gate.inner_product(
+                ctx,
+                selectors.iter().copied().map(Existing),
+                (1..=max_blocks).map(|index| {
+                    Constant(F::from(
+                        u64::try_from(index).expect("u32-bounded block index"),
+                    ))
+                }),
+            );
+            // The selected block must be the canonical SHA final block for the Base length.
+            let trailer = gate.add(
+                ctx,
+                message_len.expect("bounded job carries its Base length"),
+                Constant(F::from(9)),
+            );
+            let padded_length =
+                gate.mul(ctx, block_count, Constant(F::from(BLOCK_BYTE_SIZE as u64)));
+            let zero_padding = gate.sub(ctx, padded_length, trailer);
+            range.range_check(ctx, zero_padding, 6);
+            block_count
+        } else {
+            ctx.load_constant(F::from(u64::from(max_blocks_u32)))
+        };
+        let mut remaining = ctx.load_constant(F::ONE);
         for (block_index, block) in padded.chunks_exact(BLOCK_BYTE_SIZE).enumerate() {
             let words = block
                 .chunks_exact(4)
@@ -1760,20 +1807,28 @@ pub(crate) fn constrain_complete_claim_against_sha_jobs_v1<F: KagemushaPoseidonF
             let mut inputs = Vec::with_capacity(5 + BLOCK_SIZE);
             inputs.extend([
                 message_root,
-                ctx.load_constant(F::from(stage_index)),
+                stage_index,
                 ctx.load_constant(F::from(u64::try_from(job_index).map_err(|_| {
                     "terminal mint hash claim job index exceeds u64".to_owned()
                 })?)),
                 ctx.load_constant(F::from(u64::try_from(block_index).map_err(|_| {
                     "terminal mint hash claim block index exceeds u64".to_owned()
                 })?)),
-                ctx.load_constant(F::from(u64::from(blocks))),
+                block_count,
             ]);
             inputs.extend(words);
-            message_root = poseidon.hash(ctx, range, MESSAGE_STEP_DOMAIN_V1, &inputs);
-            stage_index = stage_index
-                .checked_add(1)
-                .ok_or_else(|| "terminal mint hash claim stage index overflowed".to_owned())?;
+            let next = poseidon.hash(ctx, range, MESSAGE_STEP_DOMAIN_V1, &inputs);
+            if let Some(selectors) = selectors {
+                message_root = gate.select(ctx, Existing(next), Existing(message_root), remaining);
+                stage_index = gate.add(ctx, stage_index, remaining);
+                remaining = gate.sub(ctx, remaining, selectors[block_index]);
+            } else {
+                message_root = next;
+                stage_index = gate.add(ctx, stage_index, Constant(F::ONE));
+            }
+        }
+        if selectors.is_some() {
+            gate.assert_is_const(ctx, &remaining, &F::ZERO);
         }
         let mut terminal_inputs = Vec::with_capacity(3 + DIGEST_SIZE);
         terminal_inputs.extend([
@@ -1781,17 +1836,56 @@ pub(crate) fn constrain_complete_claim_against_sha_jobs_v1<F: KagemushaPoseidonF
             ctx.load_constant(F::from(u64::try_from(job_index).map_err(|_| {
                 "terminal mint hash claim job index exceeds u64".to_owned()
             })?)),
-            ctx.load_constant(F::from(u64::from(blocks))),
+            block_count,
         ]);
-        for word in job.output_words.iter().copied() {
+        for word in output_words.iter().copied() {
             range.range_check(ctx, word, 32);
             terminal_inputs.push(word);
         }
         terminal_root = poseidon.hash(ctx, range, TERMINAL_STEP_DOMAIN_V1, &terminal_inputs);
     }
-    if stage_index != total_stages {
-        return Err("terminal mint hash claim stage inventory drifted".to_owned());
+    range.range_check(ctx, stage_index, 64);
+    ctx.constrain_equal(&stage_index, &stages);
+    Ok(KagemushaAssignedTypedShaClaimRootsV1 {
+        stages,
+        total_jobs,
+        message_root,
+        terminal_root,
+    })
+}
+
+/// Equality-bind one terminal claim public column to the exact ordinary or bounded SHA queue
+/// built by the monetary relation.
+///
+/// Recursive verification of the claim proof is deliberately a caller responsibility because the
+/// caller owns the carried-history fold.  This gadget supplies the other half of that bridge: it
+/// reconstructs the message, terminal, and plan roots from assigned SHA message/output cells and
+/// pins every release/protocol/cursor/completeness cell.  A host-computed digest can therefore
+/// never substitute for the canonical circuit bytes.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(crate) fn constrain_complete_claim_against_sha_jobs_v1<F: KagemushaPoseidonFieldV1>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    jobs: &crate::zk::pasta_sha256::PastaSha256JobsV1<F>,
+    claim: &[AssignedValue<F>],
+    parity: KagemushaPastaParityV1,
+    expected_release: [AssignedValue<F>; 2],
+    expected_eq_claim_protocol: [AssignedValue<F>; 2],
+    expected_ep_claim_protocol: [AssignedValue<F>; 2],
+    expected_eq_shard_protocol: [AssignedValue<F>; 2],
+    expected_ep_shard_protocol: [AssignedValue<F>; 2],
+) -> Result<(), String> {
+    if claim.len() != KAGEMUSHA_MINT_HASH_CLAIM_PUBLIC_INSTANCE_COUNT_V1 {
+        return Err("terminal mint hash claim public column has wrong shape".to_owned());
     }
+    let roots = constrain_typed_sha_claim_roots_v1(ctx, range, jobs, expected_release)?;
+    let gate = range.gate();
+    let poseidon = KagemushaPoseidonChipV1::new(ctx, range);
+    let stages = roots.stages;
+    let total_jobs = roots.total_jobs;
+    let message_root = roots.message_root;
+    let terminal_root = roots.terminal_root;
+    let job_count = ctx.load_constant(F::from(u64::from(total_jobs)));
     let plan = poseidon.hash(
         ctx,
         range,
@@ -1814,12 +1908,10 @@ pub(crate) fn constrain_complete_claim_against_sha_jobs_v1<F: KagemushaPoseidonF
         (claim[public_instance::VERSION], F::ONE),
         (claim[public_instance::PARITY], expected_parity),
         (claim[public_instance::COMPLETE], F::ONE),
-        (claim[public_instance::TOTAL_STAGES], F::from(total_stages)),
         (
             claim[public_instance::TOTAL_JOBS],
             F::from(u64::from(total_jobs)),
         ),
-        (claim[public_instance::NEXT_STAGE], F::from(total_stages)),
         (
             claim[public_instance::NEXT_JOB],
             F::from(u64::from(total_jobs)),
@@ -1829,6 +1921,8 @@ pub(crate) fn constrain_complete_claim_against_sha_jobs_v1<F: KagemushaPoseidonF
     ] {
         gate.assert_is_const(ctx, &actual, &expected);
     }
+    ctx.constrain_equal(&claim[public_instance::TOTAL_STAGES], &stages);
+    ctx.constrain_equal(&claim[public_instance::NEXT_STAGE], &stages);
     for (actual, expected) in claim[public_instance::RELEASE_LO..public_instance::RELEASE_LO + 2]
         .iter()
         .copied()
@@ -4881,6 +4975,10 @@ const _: () = {
 };
 
 mod rlc_streaming;
+
+#[cfg(test)]
+#[path = "mint_hash_claim_fold/bounded_claim_roots_tests.rs"]
+mod bounded_claim_roots_tests;
 
 #[cfg(test)]
 mod tests {

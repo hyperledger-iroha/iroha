@@ -736,6 +736,33 @@ public enum CanonicalNorito {
         try parseNumeric(value).canonicalNumeric
     }
 
+    /// Exact current Metadata under the transaction COMPACT_LEN layout.
+    /// Names are explicit canonical native names; sorting follows UTF-8 bytes.
+    static func encodeCompactMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {
+        var writer = CompactNoritoWriter()
+        let keys = metadata.keys.sorted { Data($0.utf8).lexicographicallyPrecedes(Data($1.utf8)) }
+        writer.writeUInt64LE(UInt64(keys.count))
+        for key in keys {
+            guard !key.isEmpty, key.utf8.count <= 255,
+                  key.precomposedStringWithCanonicalMapping == key,
+                  key.unicodeScalars.allSatisfy({ scalar in
+                      scalar.properties.generalCategory != .control
+                          && !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                          && ![0x061C, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069].contains(scalar.value)
+                          && scalar != "@" && scalar != "#" && scalar != "$"
+                  }), let value = metadata[key] else {
+                throw CanonicalNoritoError.invalidMetadata("noncanonical metadata Name")
+            }
+            var entry = CompactNoritoWriter()
+            entry.writeField(CompactNorito.encodeString(key))
+            var json = CompactNoritoWriter()
+            json.writeField(CompactNorito.encodeString(try jsonString(from: value)))
+            entry.writeField(json.data)
+            writer.writeField(entry.data)
+        }
+        return writer.data
+    }
+
     static func encodeMetadata(_ metadata: [String: ToriiJSONValue]) throws -> Data {
         var writer = CanonicalNoritoWriter()
         let keys = metadata.keys.sorted()

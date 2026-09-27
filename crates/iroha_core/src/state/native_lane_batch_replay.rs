@@ -188,6 +188,7 @@ enum SourceAuthentication {
     },
     ObservationChanged,
     AdmissionMismatch,
+    Superseded,
     HostAllocation(std::collections::TryReserveError),
 }
 
@@ -208,6 +209,9 @@ pub(crate) enum NativeLaneBatchSourcePreparationV1<'state> {
     /// The caller supplied another source count's finite reservation.
     /// This is a local scheduling refusal, never an invalid-body verdict.
     AdmissionMismatch { pending: PendingNativeLaneSource },
+    /// Finalized State has passed this proposed carrier before execution began.
+    /// The proposal lost authority without becoming a deterministic rejection.
+    Superseded,
 }
 #[cfg(any(test, feature = "iroha-core-tests"))]
 impl<'state> NativeLaneBatchSourcePreparationV1<'state> {
@@ -229,6 +233,9 @@ impl<'state> NativeLaneBatchSourcePreparationV1<'state> {
                     "Native source admission differs from the exact batch count".into(),
                 ))
             }
+            Self::Superseded => Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "native replay carrier was superseded by finalized State".into(),
+            )),
         }
     }
 }
@@ -373,6 +380,26 @@ impl<'state> PreparedNativeLaneBatchSourceV1<'state> {
 }
 
 impl State {
+    /// Observe whether finalized State has already passed a proposed Native
+    /// carrier's height. `None` means a concurrent publication must be retried.
+    pub(crate) fn native_proposal_superseded(
+        &self,
+        proposal_height: u64,
+    ) -> Result<Option<bool>, String> {
+        let generation = self.state_view_generation();
+        if generation % 2 != 0 {
+            return Ok(None);
+        }
+        let Some(view) = self.try_view_once().map_err(|error| error.to_string())? else {
+            return Ok(None);
+        };
+        let finalized_height = view.block_hashes.len() as u64;
+        if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
+            return Ok(None);
+        }
+        Ok(Some(finalized_height >= proposal_height))
+    }
+
     /// Recover one globally finalized native source and, once its carrier is
     /// applied, rejoin the exact retained World registry and replay membership.
     /// Cold recovery authenticates inclusion without publishing future effects.
@@ -628,6 +655,9 @@ impl State {
             Ok(SourceAuthentication::AdmissionMismatch) => {
                 Ok(NativeLaneBatchSourcePreparationV1::AdmissionMismatch { pending })
             }
+            Ok(SourceAuthentication::Superseded) => {
+                Ok(NativeLaneBatchSourcePreparationV1::Superseded)
+            }
             Ok(SourceAuthentication::HostAllocation(error)) => Err(
                 NativeLaneSourcePreparationError::host_allocation(error, pending),
             ),
@@ -671,6 +701,9 @@ impl State {
         };
         if !super::is_stable_state_view_generation(generation, self.state_view_generation()) {
             return Ok(SourceAuthentication::ObservationChanged);
+        }
+        if network == expected_network && height >= header.height().get() {
+            return Ok(SourceAuthentication::Superseded);
         }
         // Both wrappers bind the source bytes to this actual carrier header.
         // The active DA policy is authenticated from the exact applying pre-State.

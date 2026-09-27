@@ -425,6 +425,163 @@ fn physical_validate_retry_preserves_original_owner_fixture(
 
 #[cfg(feature = "bls")]
 #[test]
+fn superseded_local_validate_retires_guarded_completion_without_rejection() {
+    std::thread::Builder::new()
+        .name("superseded-validate-retirement".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            use crate::sumeragi::{
+                output_guard::ConsensusOutputGuard,
+                v2_apply::V2ApplyError,
+                v2_body_store::LocalValidationRefusal,
+                v2_worker::LifecycleCompletionTakeV1,
+            };
+            use std::sync::Arc;
+
+            let (mut fixture, _body_directory, body_store, _durable) =
+                durable_validate_store_fixture_at_view(0xDA, 0);
+            let runtime_directory = TempDir::new().unwrap();
+            let ledger_directory = TempDir::new().unwrap();
+            let mut coordinator = ready_durable_validate_coordinator(&[&fixture]);
+            coordinator
+                .attach_empty_test_ledger(ledger_directory.path())
+                .unwrap();
+            let (runtime_authority, coordinator_authority) =
+                authority::lifecycle_ordinal_authorities_after_high_watermark(
+                    coordinator.high_water(),
+                );
+            coordinator
+                .bind_live_lifecycle_ordinal_authority(coordinator_authority)
+                .unwrap();
+            let keys = durable_store_keys(0xDA);
+            let (runtime, _, _) = cold_ready_validate_runtime_at_durable(
+                &fixture,
+                &_durable,
+                &keys,
+                runtime_directory.path(),
+                "superseded-validate.wal",
+                std::time::Instant::now(),
+                crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+                    runtime_authority,
+                ),
+            );
+            let holder = take_dispatch_registry(&mut fixture);
+            let payload_directory = TempDir::new().unwrap();
+            let (payload_store, serve_payloads) =
+                CertifiedServePayloadStoreV1::open_lifecycle_fixture_for_test(
+                    payload_directory.path(),
+                    fixture.verified.context(),
+                )
+                .unwrap();
+            let mut owner = super::super::ProductionLifecycleOwnerV1 {
+                verified: fixture.verified.clone(),
+                coordinator,
+                registry: holder,
+                recovered_lifecycle_outputs: None,
+                payload_store,
+                serve_payloads,
+                body_store: Some(body_store),
+                body_store_identity: None,
+                kura_binding: None,
+                apply_service: None,
+                adapter_startup: None,
+                owner_open_successor: None,
+            };
+            let output_guard = ConsensusOutputGuard::isolated();
+            let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
+            let (mut executor, mut worker) = owner.bind_body_store_to_lifecycle_completion_io_for_test(
+                &mut services,
+                runtime,
+                Arc::clone(&output_guard),
+                0,
+                2,
+            );
+            let ordinal = fixture.lease.ordinal();
+            assert_eq!(
+                owner
+                    .dispatch_completion_for_test(&mut services, &mut executor, 0)
+                    .unwrap(),
+                super::super::ProductionCompletionDispatchV1::ValidateQueued { ordinal }
+            );
+            worker.activate_one_lifecycle_validate();
+            assert_eq!(
+                worker.execute_held_lifecycle_validate_result_fixture(
+                    Err::<wire::ExecutionCommitment, _>(V2ApplyError::LocalValidation(
+                        LocalValidationRefusal::Superseded,
+                    )),
+                    Arc::clone(&output_guard),
+                ),
+                1
+            );
+            let LifecycleCompletionTakeV1::Validate(completion) =
+                services.take_next_lifecycle_completion().unwrap()
+            else {
+                panic!("original superseded Validate retained its guarded completion");
+            };
+            let retained = match completion.into_local_or_publication() {
+                Err(retained) => retained,
+                Ok(_) => panic!("supersession is no body-validation verdict"),
+            };
+            let binding_directory = TempDir::new().unwrap();
+            let validator = fixture.verified.context().roster[0].validator.clone();
+            let ingress = super::super::LaunchedProductionLifecycleV1::prepare_ready_local_proposal_sign_ingress_for_test(
+                &executor,
+                &binding_directory,
+                &validator,
+            );
+            let mut launched = super::super::LaunchedProductionLifecycleV1::ready_local_proposal_sign_fixture_for_test(
+                owner, executor, services, ingress,
+            );
+            launched.park_local_validate_completion_for_test(retained);
+            let mut launched = ReadyLocalProposalSignLaunchedFixtureGuard::new(launched, worker);
+            let (selected, _) = super::super::v2_runner::with_lifecycle_current_runner_turn_for_test(
+                fixture.verified.context(),
+                super::super::v2_runner::LifecycleRunnerRankTarget::Completion,
+                |runner| match launched.drive_completion_pre_gate(runner) {
+                    super::super::ProductionLifecycleCompletionPreGateV1::Selected(selected) => {
+                        selected
+                    }
+                    _ => panic!("superseded Validate must settle before other work"),
+                },
+            );
+            assert!(matches!(
+                selected,
+                super::super::ProductionLifecycleCompletionSelectionV1::LifecycleValidateLocalSuperseded
+            ));
+            launched.with_proposal_restart_fixture_for_test(|owner, _, _| {
+                assert_eq!(
+                    owner.coordinator.records[&ordinal].state,
+                    LifecycleState::Terminal(TerminalOutcome::Cancelled)
+                );
+                assert!(!owner
+                    .registry
+                    .registry_for_test()
+                    .entries
+                    .contains_key(&fixture.address));
+                assert!(owner
+                    .registry
+                    .registry_for_test()
+                    .exactly_covers_finalization_work(&owner.coordinator));
+            });
+            assert!(!launched.has_pending_lifecycle_completion_for_test());
+            assert_eq!(
+                launched
+                    .planner
+                    .as_ref()
+                    .unwrap()
+                    .lifecycle_validate_io_snapshot()
+                    .completion_pending(),
+                0
+            );
+            assert!(!output_guard.restart_required());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[cfg(feature = "bls")]
+#[test]
 fn physical_validate_retry_waits_for_original_queue_release() {
     physical_validate_retry_preserves_original_owner(false, false);
 }

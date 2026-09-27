@@ -474,6 +474,7 @@ final class TxBuilderTests: XCTestCase {
                 .instruction(instruction),
             ],
             feePayment: .authority(chargeLimits: [], gasLimit: 100_000),
+            metadata: [:],
             ttlMs: 60,
             nonce: 7,
             keypair: keypair
@@ -548,6 +549,31 @@ final class TxBuilderTests: XCTestCase {
         XCTAssertEqual(payloadReader.remaining(), 0)
     }
 
+    func testExecutableBatchMetadataAndUnsignedRecoveryPayloadAreExact() throws {
+        let keypair = try makeFixtureKeypair()
+        let authority = AccountId.make(publicKey: keypair.publicKey)
+        let frame = try TransactionInstructionFrame(wireName: "iroha.log", framedPayload: noritoEncode(typeName: "iroha_data_model::isi::Log", payload: Data([1, 2, 3]), flags: 0))
+        let sdk = IrohaSDK(toriiClient: StubPipelineClient(), baseURL: URL(string: "https://torii.example")!, creationTimeProvider: { Self.fixtureCreationTimeMs })
+        let metadata: [String: ToriiJSONValue] = ["fee_policy_hash": .string(String(repeating: "a", count: 64)), "fee_policy_version": .integer("18446744073709551615"), "fee_instruction_index": .integer("1")]
+        let entries: [TransactionBatchEntry] = [.instruction(frame), .instruction(frame)]
+        let fee = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
+        let envelope = try sdk.buildSignedExecutableBatch(networkId: Self.fixtureNetworkId, authority: authority, entries: entries, feePayment: fee, metadata: metadata, ttlMs: 60, keypair: keypair)
+        let expected = try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId, authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries, feePayment: fee, metadata: metadata, ttlMs: 60)
+        var signed = CanonicalNoritoReader(data: envelope.signedTransaction)
+        _ = try signed.readCompactField()
+        XCTAssertEqual(try signed.readCompactField(), expected)
+        let empty = try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId, authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries, feePayment: fee, metadata: [:], ttlMs: 60)
+        XCTAssertNotEqual(expected, empty)
+        var altered = metadata; altered["fee_instruction_index"] = .integer("0")
+        XCTAssertNotEqual(expected, try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId, authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries, feePayment: fee, metadata: altered, ttlMs: 60))
+        var reversed = [String: ToriiJSONValue]()
+        for key in metadata.keys.sorted().reversed() { reversed[key] = metadata[key] }
+        XCTAssertEqual(expected, try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId, authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries, feePayment: fee, metadata: reversed, ttlMs: 60))
+        for invalid in ([["bad key": .integer("1")], ["ok": .number(.infinity)], ["ok": .integer("01")], ["e\u{301}": .string("not canonical")]] as [[String: ToriiJSONValue]]) {
+            XCTAssertThrowsError(try sdk.buildExecutableBatchPayload(networkId: Self.fixtureNetworkId, authority: authority, creationTimeMs: Self.fixtureCreationTimeMs, entries: entries, feePayment: fee, metadata: invalid, ttlMs: 60))
+        }
+    }
+
     func testExecutableBatchRejectsEmptyAndMissingContractGasLimit() throws {
         let keypair = try makeFixtureKeypair()
         let authority = AccountId.make(publicKey: keypair.publicKey)
@@ -574,6 +600,7 @@ final class TxBuilderTests: XCTestCase {
             authority: authority,
             entries: [],
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            metadata: [:],
             keypair: keypair
         )) { error in
             XCTAssertEqual(error as? ExecutableBatchInputError, .emptyBatch)
@@ -583,6 +610,7 @@ final class TxBuilderTests: XCTestCase {
             authority: authority,
             entries: [.contractCall(invocation)],
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            metadata: [:],
             keypair: keypair
         )) { error in
             XCTAssertEqual(error as? ExecutableBatchInputError, .missingGasLimit)

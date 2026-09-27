@@ -449,20 +449,6 @@
   },
   {
     "column": 39,
-    "direction": "serialize",
-    "explicit_root": false,
-    "file": "crates/iroha_core/src/zk/kagemusha_v1_state/candidate_lifecycle.rs",
-    "identifier": "PreparationIdPreimageV1",
-    "kind": "capture",
-    "line": 447,
-    "module": "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle",
-    "nominal": "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparationIdPreimageV1",
-    "root_hint": "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparationIdPreimageV1",
-    "root_matches": true,
-    "schema_hash": "b0b74a63dcff7f50d98ca5dcb207b76f"
-  },
-  {
-    "column": 39,
     "direction": "deserialize",
     "explicit_root": false,
     "file": "crates/iroha_core/src/zk/kagemusha_v1_state/candidate_lifecycle.rs",

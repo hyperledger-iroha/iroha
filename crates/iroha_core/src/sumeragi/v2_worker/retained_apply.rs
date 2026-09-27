@@ -35,6 +35,12 @@ impl RetainedApplyDependency {
             LocalValidationRefusal::RecoveryRequired(reason) => {
                 Self::RecoveryRequired(reason.clone())
             }
+            LocalValidationRefusal::ObservationChanged { .. } => Self::RecoveryRequired(
+                "validated Apply unexpectedly returned a pre-execution State refresh".into(),
+            ),
+            LocalValidationRefusal::Superseded => Self::RecoveryRequired(
+                "validated Apply unexpectedly lost its finalized State owner".into(),
+            ),
             LocalValidationRefusal::NativeSourceRecovery { .. } => Self::RecoveryRequired(
                 "validated Apply lost its original Native source custody".into(),
             ),

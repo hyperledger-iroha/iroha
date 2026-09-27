@@ -17314,7 +17314,7 @@ test("queryTransactions posts structured envelope", async () => {
   assert.equal(capturedBody.query, "Transactions");
 });
 
-test("queryVisibleTransactions builds convenience transaction filters", async () => {
+test("queryTransactions builds convenience transaction filters", async () => {
   let capturedPath;
   let capturedBody;
   const fetchImpl = async (url, init) => {
@@ -17329,15 +17329,15 @@ test("queryVisibleTransactions builds convenience transaction filters", async ()
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryVisibleTransactions({
+  await client.queryTransactions({
     assetId: "FkLLi7B7cSmSLxwi3cHjB6ZyyEWSXb",
     resultOk: true,
     sinceTimestampMs: 1700000000000,
     sort: "newest",
     fetchSize: 25,
-    queryName: "VisibleTransactions",
+    queryName: "Transactions",
   });
-  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.equal(capturedPath, "/v1/transactions/query");
   assert.deepEqual(capturedBody.filter, {
     op: "and",
     args: [
@@ -17351,10 +17351,10 @@ test("queryVisibleTransactions builds convenience transaction filters", async ()
     { key: "entrypoint_hash", order: "desc" },
   ]);
   assert.equal(capturedBody.fetch_size, 25);
-  assert.equal(capturedBody.query, "VisibleTransactions");
+  assert.equal(capturedBody.query, "Transactions");
 });
 
-test("queryVisibleTransactions posts field-path select projections", async () => {
+test("queryTransactions posts field-path select projections", async () => {
   let capturedPath;
   let capturedBody;
   const fetchImpl = async (url, init) => {
@@ -17369,20 +17369,20 @@ test("queryVisibleTransactions posts field-path select projections", async () =>
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await client.queryVisibleTransactions({
+  await client.queryTransactions({
     select: [" authority ", "metadata.amount", "metadata.from_account_id"],
-    queryName: "VisibleTransactionProjection",
+    queryName: "TransactionProjection",
   });
-  assert.equal(capturedPath, "/v1/transactions/visible/query");
+  assert.equal(capturedPath, "/v1/transactions/query");
   assert.deepEqual(capturedBody.select, [
     "authority",
     "metadata.amount",
     "metadata.from_account_id",
   ]);
-  assert.equal(capturedBody.query, "VisibleTransactionProjection");
+  assert.equal(capturedBody.query, "TransactionProjection");
 });
 
-test("queryVisibleTransactions rejects invalid select projection entries", async () => {
+test("queryTransactions rejects invalid select projection entries", async () => {
   let callCount = 0;
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
@@ -17396,14 +17396,14 @@ test("queryVisibleTransactions rejects invalid select projection entries", async
   });
   await assert.rejects(
     () =>
-      client.queryVisibleTransactions({
+      client.queryTransactions({
         select: ["authority", 42],
       }),
     /select\[1] must be a field-path string or plain object/,
   );
   await assert.rejects(
     () =>
-      client.queryVisibleTransactions({
+      client.queryTransactions({
         select: ["authority", " "],
       }),
     /select\[1] must be a non-empty field path/,
@@ -22748,7 +22748,7 @@ test("native multisig contract-call DTO flattens selector fields", () => {
     payload,
     feePayment: authorityFeePayment(10_000),
     creationTimeMs: 123456,
-  });
+  }, 753);
 
   assertFlattenedAliasSelector(
     body,
@@ -22767,7 +22767,7 @@ test("native multisig contract-call DTO encodes concrete multisig IDs canonicall
     payload: { amount: 111 },
     feePayment: authorityFeePayment(10_000),
     creationTimeMs: 123456,
-  });
+  }, 753);
 
   assertConcreteMultisigAccountUsesNativeLengths(
     body,
@@ -23186,7 +23186,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   const result = await client.proposeMultisigContractCall({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
-    contractAddress: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    contractAlias: "apps_review::universal",
     entrypoint: "execute",
     payload: { amount: "10" },
     feePayment: authorityFeePayment(5),
@@ -23197,7 +23197,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   assert.deepEqual(body, {
     multisig_account_alias: "cbdc@banka",
     signer_account_id: FIXTURE_ALICE_ID,
-    contract_address: "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+    contract_alias: "apps_review::universal",
     entrypoint: "execute",
     payload: { amount: "10" },
     fee_payment: authorityFeePayment(5),
@@ -23207,6 +23207,28 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     tx_hash_hex: null,
     executed_tx_hash_hex: null,
   });
+});
+
+test("contract-call propose client rejects an unapprovable target", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => { throw new Error("unexpected fetch"); },
+  });
+  const request = {
+    multisigAccountAlias: "treasury@west.test",
+    signerAccountId: FIXTURE_ALICE_ID,
+    contractAlias: "apps_review::universal",
+    entrypoint: "execute",
+    payload: { probe: true },
+    feePayment: authorityFeePayment(5),
+  };
+  await assert.rejects(
+    () => client.proposeMultisigContractCall({ ...request, contractAlias: null }),
+    /contract_alias/,
+  );
+  await assert.rejects(
+    () => client.proposeMultisigContractCall({ ...request, payload: null }),
+    /payload/,
+  );
 });
 
 test("multisig contract call request builders reject retired sponsor aliases", () => {
@@ -23251,6 +23273,9 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     signerAccountId: FIXTURE_BOB_ID,
     proposalId: "b".repeat(64),
     signatureB64: "AQ==",
+    contract_alias: "apps_mint_request::sbp",
+    entrypoint: "create_mint_request",
+    payload: { amount: 111 },
     feePayment: authorityFeePayment(),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/approve`);
@@ -23260,6 +23285,9 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     signer_account_id: FIXTURE_BOB_ID,
     proposal_id: "b".repeat(64),
     signature_b64: "AQ==",
+    contract_alias: "apps_mint_request::sbp",
+    entrypoint: "create_mint_request",
+    payload: { amount: 111 },
     fee_payment: authorityFeePayment(),
   });
   assert.deepEqual(result, {
@@ -23296,6 +23324,9 @@ test("approveMultisigContractCall rejects unmarked transaction hashes", async ()
         signerAccountId: FIXTURE_BOB_ID,
         proposalId: "b".repeat(64),
         signatureB64: "AQ==",
+        contract_alias: "apps_mint_request::sbp",
+        entrypoint: "create_mint_request",
+        payload: { amount: 111 },
         feePayment: authorityFeePayment(),
       }),
       /canonical Iroha hash marker/u,

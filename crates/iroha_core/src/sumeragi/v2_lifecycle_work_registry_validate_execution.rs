@@ -87,6 +87,22 @@ impl PreparedDurableValidateCompletion<'_> {
 // DURABLE_VALIDATE_WAIT_DISPATCH_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateDispatch {
+    /// Original proposal round retained through every local worker retry.
+    pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
+        self.request.round
+    }
+    /// Project the same waiting row and stored body identity for exact
+    /// cancellation after its Native source is superseded.
+    pub(super) fn waiting_authority(&self) -> Option<DurableValidateWaitingAuthority> {
+        Some(DurableValidateWaitingAuthority {
+            address: self.request.address,
+            digest: self.request.incumbent_digest,
+            wait_token: self.wake.wait_token,
+            lifecycle_key: self.request.lifecycle_key,
+            lifecycle_stage: self.request.lifecycle_stage,
+            payload: durable_validate_body_payload(&self.request.durable_receipt)?,
+        })
+    }
     /// Original durable subject retained by this exact worker dispatch.
     pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
         self.request.subject
@@ -158,9 +174,15 @@ impl DurableValidateDispatch {
 // DURABLE_VALIDATE_VOLATILE_COMPLETION_IMPLEMENTATION_BEGIN
 #[cfg_attr(not(test), allow(dead_code))]
 impl DurableValidateCompletionAuthority {
-    /// Exact immutable owner of the waiting record.
-    pub(super) const fn owner(self) -> OwnerId {
-        self.address.owner
+    pub(super) const fn waiting_authority(self) -> DurableValidateWaitingAuthority {
+        DurableValidateWaitingAuthority {
+            address: self.address,
+            digest: self.incumbent_digest,
+            wait_token: self.wait_token,
+            lifecycle_key: self.lifecycle_key,
+            lifecycle_stage: self.lifecycle_stage,
+            payload: self.payload,
+        }
     }
     /// Existing lifecycle ordinal; completion never allocates another one.
     pub(super) const fn ordinal(self) -> u128 {
@@ -170,10 +192,6 @@ impl DurableValidateCompletionAuthority {
     pub(super) const fn slot(self) -> PhysicalSlotId {
         self.address.slot
     }
-    /// Digest of the original closed Validate carrier.
-    pub(super) const fn incumbent_digest(self) -> LifecycleDigest {
-        self.incumbent_digest
-    }
     /// Outcome-bound digest installed only for executable outcomes.
     pub(super) const fn replacement_digest(self) -> Option<LifecycleDigest> {
         self.replacement_digest
@@ -181,22 +199,6 @@ impl DurableValidateCompletionAuthority {
     /// Exact wait token retained from the claimed-side dispatch cut.
     pub(super) const fn wait_token(self) -> WaitToken {
         self.wait_token
-    }
-    /// Exact immutable lifecycle key validated before async detachment.
-    pub(super) const fn lifecycle_key(self) -> LifecycleKey {
-        self.lifecycle_key
-    }
-    /// Exact immutable lifecycle stage validated before async detachment.
-    pub(super) const fn lifecycle_stage(self) -> LifecycleStage {
-        self.lifecycle_stage
-    }
-    /// Return whether the waiting row retains this completion's exact frame.
-    pub(super) fn matches_durable_payload(self, payload: DurablePayloadReference) -> bool {
-        self.payload == payload
-            && super::body_pipeline_transition::durable_validate_payload_is_exact(
-                self.lifecycle_key,
-                payload,
-            )
     }
     /// Construct the only Ready event authorized by this executable outcome.
     pub(super) fn ready_event(self) -> Option<ReadyEvent> {

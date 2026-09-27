@@ -41,8 +41,8 @@ public final class KagemushaCoreCoordinatorFrameV1Tests {
       assertThrows(IllegalArgumentException.class, () -> KagemushaCoreCoordinatorFrameV1.decodeRequest(method, retired));
       count++;
     }
-    assertEquals(18, count);
-    assertEquals(11, methods.size());
+    assertEquals(20, count);
+    assertEquals(13, methods.size());
   }
 
   @Test

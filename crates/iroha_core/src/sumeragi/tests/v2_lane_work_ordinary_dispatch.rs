@@ -174,10 +174,18 @@ impl OrdinaryLaneDispatchFixture {
             targets.iter().cloned().collect(),
             NonZeroUsize::new(actor_capacity).unwrap(),
         );
+        let source_byte_capacity = 8 * 1024 * 1024;
+        let roster_len = lane.frozen().committee.len();
         let ingress = Arc::new(crate::sumeragi::FairV2Ingress::new(
-            8,
-            8 * 1024 * 1024,
-            8 * 1024 * 1024,
+            crate::sumeragi::fair_v2_ingress_required_capacity(roster_len, None)
+                .expect("bounded fixture roster"),
+            crate::sumeragi::fair_v2_ingress_required_byte_capacity(
+                roster_len,
+                None,
+                source_byte_capacity,
+            )
+            .expect("bounded fixture bytes"),
+            source_byte_capacity,
             0,
             0,
         ));

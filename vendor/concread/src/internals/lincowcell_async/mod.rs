@@ -96,6 +96,15 @@ pub struct LinCowCellReadTxn<'a, T, R, U> {
     work: Arc<LinCowCellInner<R>>,
 }
 
+impl<T, R, U> Clone for LinCowCellReadTxn<'_, T, R, U> {
+    fn clone(&self) -> Self {
+        Self {
+            _caller: self._caller,
+            work: Arc::clone(&self.work),
+        }
+    }
+}
+
 impl<R> LinCowCellInner<R> {
     pub fn new(data: R) -> Self {
         LinCowCellInner {

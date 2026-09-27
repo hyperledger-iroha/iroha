@@ -574,6 +574,96 @@ def test_prepared_transaction_v1_shared_golden_authenticates_inner_context() -> 
                 )
 
 
+@pytest.mark.parametrize("name", ["onboarding_prepared", "faucet_prepared"])
+def test_prepared_transaction_v1_rejects_signed_ordinary_admission(name: str) -> None:
+    fixture_path = (
+        Path(__file__).resolve().parents[3]
+        / "fixtures"
+        / "prepared_transactions"
+        / "prepared_transaction_signature_v1.json"
+    )
+    vector = next(
+        vector
+        for vector in json.loads(fixture_path.read_text(encoding="utf-8"))["vectors"]
+        if vector["name"] == name
+    )
+    prepared = vector["response"]
+
+    def compact_length(value: int) -> bytes:
+        encoded = bytearray()
+        while value >= 128:
+            encoded.append((value & 127) | 128)
+            value >>= 7
+        encoded.append(value)
+        return bytes(encoded)
+
+    def field(value: bytes) -> bytes:
+        return compact_length(len(value)) + value
+
+    def read_field(wire: bytes, offset: int) -> tuple[bytes, int]:
+        length = 0
+        shift = 0
+        while True:
+            byte = wire[offset]
+            offset += 1
+            length |= (byte & 127) << shift
+            if byte < 128:
+                break
+            shift += 7
+        return wire[offset : offset + length], offset + length
+
+    original_wire = bytes.fromhex(prepared["signed_transaction_wire_hex"])
+    _, offset = read_field(original_wire, 1)  # authority signature
+    payload, _ = read_field(original_wire, offset)
+    fields = []
+    offset = 0
+    for _ in range(10):
+        value, offset = read_field(payload, offset)
+        fields.append(value)
+    assert offset == len(payload)
+    assert fields[7] == b"\x01\x00\x00\x00"
+    fields[7] = b"\x00\x00\x00\x00"
+    ordinary_payload = b"".join(field(value) for value in fields)
+    seed = bytes([0x51 if name == "onboarding_prepared" else 0x61]) * 32
+    signature = crypto_module.sign_ed25519(
+        seed, crypto_module.hash_blake2b_32(ordinary_payload)
+    )
+    signature_wire = len(signature).to_bytes(8, "little") + b"".join(
+        field(bytes([byte])) for byte in signature
+    )
+    ordinary_wire = b"\x01" + field(field(signature_wire)) + field(ordinary_payload) + field(b"\x00")
+    network_id = NetworkId.parse(vector["network_id"])
+    # The negative case must reach the prepared verifier with a valid signature.
+    crypto_module.signed_transaction_envelope_from_versioned_v1(ordinary_wire, network_id)
+    operation_context = (
+        {
+            "receipt": prepared["receipt"],
+            "account_id": prepared["account_id"],
+            "alias": prepared["alias"],
+            "disposition": prepared["disposition"],
+        }
+        if name == "onboarding_prepared"
+        else {
+            "claim": prepared["claim"],
+            "account_id": prepared["account_id"],
+            "asset_definition_id": prepared["asset_definition_id"],
+            "asset_id": prepared["asset_id"],
+            "amount": prepared["amount"],
+        }
+    )
+    with pytest.raises(ValueError, match="requires QueuePlanSynced admission"):
+        crypto_module.verify_prepared_transaction_context_v1(
+            ordinary_wire,
+            network_id,
+            vector["signer_account_id"],
+            json.dumps(prepared["binding"], sort_keys=True, separators=(",", ":")),
+            prepared["operation"],
+            prepared["semantic_hash_hex"],
+            json.dumps(prepared["fee_payment"], sort_keys=True, separators=(",", ":")),
+            json.dumps(operation_context, sort_keys=True, separators=(",", ":")),
+        )
+
+
 @pytest.mark.parametrize(
     ("field", "invalid"),
     [
@@ -3837,6 +3927,28 @@ def test_account_permission_listing_accepts_configured_chain_discriminant() -> N
             "headers": {"Accept": "application/json"},
             "allow_redirects": False,
         }
+    ]
+
+
+def test_account_assets_sdk_uses_native_asset_filter_key() -> None:
+    account = account_address(0x45)
+    asset = "ds#boi.is2"
+    session = FakeSession(
+        [
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+            response(200, {"items": [], "total": 0}),
+        ]
+    )
+    client = ToriiClient("http://torii.example", session=session, max_retries=0)
+
+    assert client.list_account_assets(account, asset_id=asset) == {"items": [], "total": 0}
+    assert client.find_account_assets(account, asset_id=asset) == []
+    assert client.find_account_asset_items(account, asset) == []
+    assert [call["params"] for call in session.calls] == [
+        {"asset": asset},
+        {"asset": asset},
+        {"asset": asset},
     ]
 
 

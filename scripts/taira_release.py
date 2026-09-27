@@ -59,6 +59,7 @@ the mutable checkout gate.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import argparse
 import contextlib
 import fcntl
@@ -73,6 +74,7 @@ import stat
 import struct
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 import uuid
@@ -134,6 +136,73 @@ def child_environment(inherited: dict[str, str], target_dir: Path) -> dict[str, 
                CARGO_TARGET_DIR=str(target_dir))
     return env
 
+
+
+def preflight_preparation_tmpdir(inherited: dict[str, str], *,
+                                 scoped_parent: Path = Path("/tmp")) -> None:
+    """Restore the disposable Taira temp directory before Git invokes GPG.
+
+    Other configured temporary directories must already exist. Never repair an
+    existing directory's ownership or permissions, or follow a final symlink.
+    """
+    raw = inherited.get("TMPDIR")
+    if raw is None:
+        return
+    path = Path(raw)
+    require(bool(raw) and path.is_absolute() and Path(os.path.abspath(raw)) == path,
+            "TMPDIR must be an absolute normalized directory path")
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        require(path.parent == scoped_parent
+                and re.fullmatch(r"iroha-taira-native-[0-9]+", path.name) is not None,
+                f"TMPDIR does not exist in this build environment: {path}; "
+                "create an owner-only directory or select the scoped Taira temp path")
+        try:
+            parent_fd = os.open(scoped_parent, os.O_RDONLY | os.O_DIRECTORY |
+                                os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as error:
+            raise PrepareError(f"TMPDIR parent is not a direct usable directory: {scoped_parent}: {error}") from error
+        try:
+            parent = os.fstat(parent_fd)
+            require(stat.S_ISDIR(parent.st_mode) and parent.st_uid in (0, os.geteuid())
+                    and stat.S_IMODE(parent.st_mode) == 0o1777,
+                    "scoped TMPDIR parent must be an owner-held 01777 directory")
+            try:
+                os.mkdir(path.name, mode=0o700, dir_fd=parent_fd)
+            except FileExistsError:
+                # A concurrent invocation can create the same scoped directory.
+                # Its identity and permissions must still pass below.
+                pass
+            except OSError as error:
+                raise PrepareError(f"cannot recreate scoped TMPDIR {path}: {error}") from error
+        finally:
+            os.close(parent_fd)
+        try:
+            info = path.lstat()
+        except OSError as error:
+            raise PrepareError(f"cannot inspect recreated TMPDIR {path}: {error}") from error
+    except OSError as error:
+        raise PrepareError(f"cannot inspect TMPDIR {path}: {error}") from error
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) == 0o700,
+            f"TMPDIR must be a direct owner-held 0700 directory: {path}")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as error:
+        raise PrepareError(f"cannot open TMPDIR {path}: {error}") from error
+    try:
+        opened = os.fstat(fd)
+        require((opened.st_dev, opened.st_ino) == (info.st_dev, info.st_ino),
+                f"TMPDIR changed during admission: {path}")
+        probe = ".taira-preparation-probe-" + uuid.uuid4().hex
+        try:
+            os.mkdir(probe, mode=0o700, dir_fd=fd)
+        except OSError as error:
+            raise PrepareError(f"TMPDIR is not writable in this build environment: {path}: {error}") from error
+        os.rmdir(probe, dir_fd=fd)
+    finally:
+        os.close(fd)
 
 
 def native_check_environment(environment: dict[str, str], inherited: dict[str, str]) -> dict[str, str]:
@@ -587,7 +656,16 @@ def unchanged_source_directories(previous_entries: bytes, entries: bytes) -> set
     return {directory for directory, digest in current.items() if previous.get(directory) == digest}
 
 
-def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes) -> Path:
+def source_capture_heartbeat(stop: threading.Event, started: float,
+                             completed: list[int], total: int) -> None:
+    """Report bounded capture progress without publishing source paths or contents."""
+    while not stop.wait(15):
+        print(f"[taira-release] signed source capture {completed[0]}/{total} entries "
+              f"in {time.monotonic() - started:.0f}s", flush=True)
+
+
+def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entries: bytes,
+                   *, on_entry: Callable[[int], None] | None = None) -> Path:
     """Publish one fixed Git-object capture; never copy the mutable worktree."""
     parent = source.parent
     state_path = parent / "source-state.json"
@@ -620,6 +698,7 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
     unchanged_directories = (unchanged_source_directories(previous_entries, entries)
                              if previous_entries is not None else set())
     # Batch mode reads exact committed blobs without archive export filters.
+    captured_entries = 0
     with subprocess.Popen(["git", "--no-replace-objects", "cat-file", "--batch"], cwd=root,
                           env=child_environment(dict(os.environ), root / "target"),
                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as child:
@@ -636,6 +715,9 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
                 ensure_private_directory(path.parent, anchor=pending)
                 if mode == b"160000":
                     path.mkdir(mode=0o700)
+                    captured_entries += 1
+                    if on_entry is not None:
+                        on_entry(captured_entries)
                     continue
                 child.stdin.write(oid + b"\n")
                 child.stdin.flush()
@@ -661,6 +743,9 @@ def capture_source(root: Path, source: Path, target_dir: Path, commit: str, entr
                         if old is not None and old.sha256 == hashlib.sha256(payload).hexdigest():
                             info = previous.stat()
                             os.utime(path, ns=(info.st_atime_ns, info.st_mtime_ns), follow_symlinks=False)
+                captured_entries += 1
+                if on_entry is not None:
+                    on_entry(captured_entries)
             child.stdin.close()
             require(child.wait() == 0, "Git source capture failed")
         finally:
@@ -808,10 +893,54 @@ def build_command(root: Path, target_dir: Path, cargo: str) -> list[str]:
     return command
 
 
+def first_build_error(log: Path) -> str | None:
+    """Project one bounded compiler error from a completed private Cargo log."""
+    try:
+        fd = os.open(log, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as source:
+        while raw := source.readline(256 * 1024):
+            # A malformed or enormous child line must not consume unbounded memory.
+            if not raw.endswith(b"\n"):
+                while tail := source.readline(256 * 1024):
+                    if tail.endswith(b"\n"):
+                        break
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", raw.decode("utf-8", "replace")).strip()
+            if line.startswith("{"):
+                try:
+                    value = json.loads(line)
+                except (ValueError, TypeError):
+                    continue
+                message = value.get("message") if isinstance(value, dict) else None
+                if (isinstance(value, dict)
+                        and value.get("reason") == "compiler-message"
+                        and isinstance(message, dict)
+                        and message.get("level") == "error"):
+                    line = message.get("message", "")
+                else:
+                    continue
+            elif not re.match(
+                r"^(?:error(?:\[[^]]+\])?:|(?:ld(?:\.lld)?|rust-lld|collect2|clang(?:-\d+)?|cc|gcc): error:)",
+                line,
+            ):
+                continue
+            if not isinstance(line, str):
+                continue
+            # Keep diagnostics useful without relaying control sequences or a full
+            # compiler transcript into the operator-facing failure message.
+            line = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", line)
+            line = " ".join("".join(char if char.isprintable() else " " for char in line).split())
+            if line:
+                return line[:240] + ("..." if len(line) > 240 else "")
+    return None
+
+
 def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
               *, lock_fd: int | None = None, lane_lock_fd: int | None = None,
               mode_lock_fd: int | None = None) -> None:
     failure = None
+    code = None
     started = time.monotonic()
     # Commit diagnostic output even on compiler failure; the result is published
     # only after a successful build and independent source/tool revalidation.
@@ -842,6 +971,14 @@ def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
         except BaseException as error:
             failure = error
     if failure is not None:
+        if code is not None and code != 0 and isinstance(failure, PrepareError):
+            try:
+                diagnostic = first_build_error(log)
+            except Exception:
+                # Diagnostics must never replace the original build failure.
+                diagnostic = None
+            if diagnostic:
+                raise PrepareError(str(failure) + "; first error: " + diagnostic) from failure
         raise failure
 
 
@@ -1316,6 +1453,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
     require(args.native_check_scope in {"basic", "full"}, "unknown native check scope")
     output = real_path(args.output_dir, exists=False)
+    preflight_preparation_tmpdir(dict(os.environ))
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
             "prepare must use the maintained script from the selected checkout")
     require(target_dir.is_dir(), "target-dir must be an existing warm Cargo lane")
@@ -1333,8 +1471,31 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
                              "fixed source capture"),
                             (target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
                             (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
-    source = capture_source(root, source, target_dir, args.expected_commit, entries)
-    before = frozen_snapshot(source, entries, target_dir)
+    capture_started = time.monotonic()
+    capture_total = entries.count(b"\0")
+    capture_completed = [0]
+
+    def count_captured_entry(count: int) -> None:
+        capture_completed[0] = count
+
+    capture_stop = threading.Event()
+    capture_thread = threading.Thread(
+        target=source_capture_heartbeat,
+        args=(capture_stop, capture_started, capture_completed, capture_total),
+        daemon=True,
+    )
+    print(f"[taira-release] signed source capture started ({capture_total} entries)", flush=True)
+    capture_thread.start()
+    try:
+        source = capture_source(root, source, target_dir, args.expected_commit, entries,
+                                on_entry=count_captured_entry)
+        capture_completed[0] = capture_total
+        before = frozen_snapshot(source, entries, target_dir)
+    finally:
+        capture_stop.set()
+        capture_thread.join()
+    print(f"[taira-release] signed source capture ready ({capture_total} entries "
+          f"in {time.monotonic() - capture_started:.1f}s)", flush=True)
     inherited = dict(os.environ)
     env, environment_record, incremental = preparation_environment(output, target_dir, inherited, fresh=fresh)
     tools = [verify_tool(args.zig, args.zig_sha256),

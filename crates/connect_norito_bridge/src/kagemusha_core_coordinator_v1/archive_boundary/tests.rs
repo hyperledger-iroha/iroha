@@ -160,6 +160,31 @@ fn installed_recovery_fields() -> (Vec<Vec<u8>>, Vec<u8>) {
 }
 
 #[test]
+fn enrollment_begin_requires_canonical_i105_account() {
+    let account = iroha_data_model::account::AccountId::new(
+        iroha_crypto::KeyPair::random().public_key().clone(),
+    );
+    let i105 = account.canonical_i105().unwrap();
+    let method = KagemushaCoreCoordinatorMethodV1::InitialEnrollment;
+    let valid = frame(&[
+        INITIAL_ENROLLMENT_BEGIN_V1.to_le_bytes().to_vec(),
+        i105.as_bytes().to_vec(),
+    ]);
+    assert!(validate_request(method, &valid).is_ok());
+    for invalid in [
+        format!("{i105} "),
+        format!("{i105}@example"),
+        "i105example".to_owned(),
+    ] {
+        let request = frame(&[
+            INITIAL_ENROLLMENT_BEGIN_V1.to_le_bytes().to_vec(),
+            invalid.into_bytes(),
+        ]);
+        assert!(validate_request(method, &request).is_err());
+    }
+}
+
+#[test]
 fn native_archive_requests_reject_opaque_wrong_schema_and_trailing_bytes() {
     for (method, name, archive) in [
         (

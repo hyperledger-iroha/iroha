@@ -30,18 +30,15 @@ object RamLfeJsonParser {
                         "ram-lfe program policy list.items[$i].input_encryption_public_parameters_decoded"
                     ),
                     optionalString(item["note"], "ram-lfe program policy list.items[$i].note"),
-                    if (item["proof_verifier"] == null) null
+                    proofVerifier = if (item["proof_verifier"] == null) null
                     else parseProofVerifier(
                         expectObject(item["proof_verifier"], "ram-lfe program policy list.items[$i].proof_verifier"),
                         "ram-lfe program policy list.items[$i].proof_verifier"
                     ),
-                    outputOpeningPublicKey = if (!item.containsKey("output_opening_public_key"))
-                        requiredPublicKeyLiteral(item["resolver_public_key"], "ram-lfe program policy list.items[$i].resolver_public_key")
-                    else
-                        requiredPublicKeyLiteral(
-                            item["output_opening_public_key"],
-                            "ram-lfe program policy list.items[$i].output_opening_public_key",
-                        ),
+                    outputOpeningPublicKey = requiredPublicKeyLiteral(
+                        item["output_opening_public_key"],
+                        "ram-lfe program policy list.items[$i].output_opening_public_key",
+                    ),
                 )
             )
         }
@@ -58,13 +55,18 @@ object RamLfeJsonParser {
             requiredExactString(root["program_id"], "ram-lfe execute response.program_id"),
             canonicalizeExactHash32(root["opaque_hash"], "ram-lfe execute response.opaque_hash"),
             canonicalizeExactHash32(root["receipt_hash"], "ram-lfe execute response.receipt_hash"),
+            canonicalizeExactHex(root["output_ciphertext"], "ram-lfe execute response.output_ciphertext"),
             canonicalizeExactHash32(root["output_hash"], "ram-lfe execute response.output_hash"),
             canonicalizeExactHash32(root["associated_data_hash"], "ram-lfe execute response.associated_data_hash"),
             asLong(root["executed_at_ms"], "ram-lfe execute response.executed_at_ms"),
             if (root.containsKey("expires_at_ms")) asOptionalLong(root["expires_at_ms"], "ram-lfe execute response.expires_at_ms") else null,
             requiredExactLowercaseString(root["backend"], "ram-lfe execute response.backend"),
             requiredExactLowercaseString(root["verification_mode"], "ram-lfe execute response.verification_mode"),
-            expectObject(root["receipt"], "ram-lfe execute response.receipt")
+            expectObject(root["receipt"], "ram-lfe execute response.receipt"),
+            IdentifierJsonParser.parseOutputOpening(
+                expectObject(root["output_opening"], "ram-lfe execute response.output_opening"),
+                "ram-lfe execute response.output_opening",
+            ),
         )
     }
 

@@ -74,16 +74,25 @@ class KagemushaToriiClientV1 private constructor(builder: Builder) : AutoCloseab
         )
     }
 
-    /** Poll one operation while withholding every unverified applied result. */
+    /** Poll one operation while withholding every unverified applied result.
+     *
+     * Only Torii's exact `kagemusha_operation_not_found` 404 is absence. A route,
+     * proxy, or intermediary 404 is a transport failure and cannot authorize retry.
+     */
     fun getOperation(
         operationId: ByteArray,
-    ): CompletableFuture<UnverifiedKagemushaOperationStatusV1> {
+    ): CompletableFuture<UnverifiedKagemushaOperationStatusV1?> {
         val expected = requireNonzero32(operationId, "operationId")
         val path = OPERATION_PATH_PREFIX + expected.toLowerHex()
-        return execute("GET", path, null, null, setOf(200), STATUS_MAX_BYTES) { response ->
-            parseStatus(response.body).also {
-                require(it.operationId().contentEquals(expected)) {
-                    "KAGEMUSHA V1 response operation ID does not match the requested resource"
+        return execute("GET", path, null, null, setOf(200, 404), STATUS_MAX_BYTES) { response ->
+            if (response.statusCode == 404) {
+                requireCanonicalOperationAbsence(response)
+                null
+            } else {
+                parseStatus(response.body).also {
+                    require(it.operationId().contentEquals(expected)) {
+                        "KAGEMUSHA V1 response operation ID does not match the requested resource"
+                    }
                 }
             }
         }
@@ -304,6 +313,24 @@ class KagemushaToriiClientV1 private constructor(builder: Builder) : AutoCloseab
                 rejection,
                 body,
             )
+        }
+
+        private fun requireCanonicalOperationAbsence(response: TransportResponse) {
+            val code = "kagemusha_operation_not_found"
+            require(response.body.size <= 2_048) {
+                "KAGEMUSHA V1 operation absence exceeds its error bound"
+            }
+            require(headerValues(response.headers, "X-Iroha-Reject-Code") == listOf(code)) {
+                "KAGEMUSHA V1 unknown operation requires Torii's exact resource code"
+            }
+            val root = response.body.parseJsonObject("operation absence")
+            require(root.keys == setOf("code", "message")) {
+                "KAGEMUSHA V1 operation absence has invalid error fields"
+            }
+            require(root["code"] == code &&
+                (root["message"] as? String)?.let { it.isNotBlank() && it.length <= 1024 } == true) {
+                "KAGEMUSHA V1 operation absence has a different error code"
+            }
         }
 
         private fun ByteArray.parseJsonObject(context: String): Map<String, Any?> {

@@ -1,12 +1,13 @@
+import CryptoKit
 import Foundation
 import XCTest
 @testable import IrohaSwift
 
 final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
-  func testAllNativeMethodsMatchSharedCurrentSchemaVectors() throws {
+  func testCoordinatorMethodsMatchSharedCurrentSchemaVectors() throws {
     let cases = try fixtures()
-    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(11)))
-    XCTAssertEqual(cases.count, 18)
+    XCTAssertEqual(Set(cases.map { $0.method.rawValue }), Set(UInt8(1)...UInt8(13)))
+    XCTAssertEqual(cases.count, 20)
     for item in cases {
       let request = try KagemushaCoreCoordinatorFrameV1.decodeRequest(item.method, frame: item.request)
       let response = try KagemushaCoreCoordinatorFrameV1.decodeResponse(item.method, requestFrame: item.request, responseFrame: item.response)
@@ -40,7 +41,8 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
 
   func testClosedFieldCountsAndAllCorrelatedOutputsRejectSubstitution() throws {
     let indexes = ["reserve": 0, "begin-send": 0, "begin-redeem": 0, "installed-terminal": 0,
-      "recover-sender": 0, "recover-terminal": 1, "release-send": 3, "release-redeem": 3]
+      "recover-sender": 0, "recover-terminal": 1, "release-send": 3, "release-redeem": 3,
+      "app-attest-ack": 0]
     for item in try fixtures() {
       let request = try KagemushaCoreCoordinatorFrameV1.decodeRequest(item.method, frame: item.request)
       XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(item.method, fields: Array(request.dropLast())))
@@ -56,9 +58,74 @@ final class KagemushaCoreCoordinatorFrameV1Tests: XCTestCase {
 
   func testOversizedFieldsAndFramesFailClosed() throws {
     let id = Data(repeating: 7, count: 32)
-    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.reserveOperationID, fields: [KagemushaCoreCoordinatorFrameV1.u32(22), id, Data(repeating: 0, count: 65537)]))
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.reserveOperationID, fields: [KagemushaCoreCoordinatorFrameV1.u32(22), id, Data(repeating: 0, count: KagemushaCoreCoordinatorFrameV1.maximumFieldBytes + 1)]))
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.acceptInstalledTerminal, fields: Array(repeating: Data(repeating: 0, count: 65536), count: 5)))
     XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.decodeRequest(.reserveOperationID, frame: Data(repeating: 0, count: 262145)))
+  }
+
+  func testInitialEnrollmentBoundsTicketAndProofRetryCorrelation() throws {
+    let ticket = KagemushaCoreCoordinatorFrameV1.u32(7) + KagemushaCoreCoordinatorFrameV1.u32(0)
+    let begin = [KagemushaCoreCoordinatorFrameV1.u32(1), Data("i105example".utf8)]
+    let beginFrame = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: begin)
+    let response = [ticket, Data(repeating: 0x44, count: 32),
+      Data(repeating: 0x45, count: 32), Data(repeating: 0x46, count: 32),
+      Data(repeating: 0x47, count: 32)]
+    let responseFrame = try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, fields: response)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, responseFrame: responseFrame), response)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: beginFrame, fields: [ticket, response[1], response[2], response[3], Data([0x45])]))
+    let challenge = [KagemushaCoreCoordinatorFrameV1.u32(2), ticket,
+      Data(repeating: 0x51, count: 273), Data([0x52]), Data([0x53]), Data([0x54]),
+      Data(repeating: 0x55, count: 32), Data(repeating: 0x56, count: 32),
+      Data(repeating: 0x57, count: 32), Data([0x58]), ticket]
+    XCTAssertNoThrow(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: challenge))
+    var shortPreparation = challenge
+    shortPreparation[2].removeLast()
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: shortPreparation))
+    let prepare = [KagemushaCoreCoordinatorFrameV1.u32(3), ticket,
+      Data(repeating: 0x46, count: 64), Data(repeating: 0x47, count: 65_716)]
+    XCTAssertNoThrow(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: prepare))
+    var oversize = prepare
+    oversize[3].append(0x48)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment, fields: oversize))
+    let read = try KagemushaCoreCoordinatorFrameV1.encodeRequest(.initialEnrollment,
+      fields: [KagemushaCoreCoordinatorFrameV1.u32(4), ticket])
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(.initialEnrollment,
+      requestFrame: read, fields: [Data(repeating: 0, count: 8), Data(repeating: 1, count: 32), Data([1])]))
+  }
+
+  func testAppAttestCommitAcknowledgmentBindsOriginalBytesAndCounter() throws {
+    let method = KagemushaCoreCoordinatorMethodV1.acknowledgeCommittedAppAttest
+    let domain = Data("iroha:kagemusha:v1:hardware-transition-selection\0".utf8)
+    let selection = domain + Data([0x93, 0x01, 0, 0, 0, 0, 0, 0])
+      + Data(repeating: 0x42, count: 403)
+    let request = [Data(repeating: 0x11, count: 32), Data("app-attest-key".utf8),
+      selection, Data([0xa2, 1, 2]), KagemushaCoreCoordinatorFrameV1.u32(4),
+      Data(repeating: 0x33, count: 32), Data(repeating: 0x44, count: 32)]
+    let encoded = try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: request)
+    let response = [request[0], Data(SHA256.hash(data: request[1])),
+      Data(SHA256.hash(data: request[2])), Data(SHA256.hash(data: request[3])),
+      KagemushaCoreCoordinatorFrameV1.u32(5), request[5], request[6]]
+    let reply = try KagemushaCoreCoordinatorFrameV1.encodeResponse(
+      method, requestFrame: encoded, fields: response)
+    XCTAssertEqual(try KagemushaCoreCoordinatorFrameV1.decodeResponse(
+      method, requestFrame: encoded, responseFrame: reply), response)
+    for index in response.indices {
+      var changed = response
+      changed[index][0] ^= 1
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeResponse(
+        method, requestFrame: encoded, fields: changed))
+    }
+    for index in request.indices {
+      var changed = request
+      changed[index] = Data()
+      XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: changed))
+    }
+    var exhausted = request
+    exhausted[4] = KagemushaCoreCoordinatorFrameV1.u32(UInt32.max)
+    XCTAssertThrowsError(try KagemushaCoreCoordinatorFrameV1.encodeRequest(method, fields: exhausted))
   }
 
   func testAuthenticatedReplyRequiresFullLowSAuthenticatorAndRetiresNineFields() throws {

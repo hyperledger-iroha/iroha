@@ -390,6 +390,58 @@ fn bounded_sha_capacity_accounts_for_all_snapshots_without_changing_fixed_jobs()
 }
 
 #[test]
+fn bounded_sha_planning_export_preserves_active_bytes_and_rejects_ordinary_claim() {
+    for length in [3, 65] {
+        let circuit = bounded_circuit::<Fp>(&[(80, length)], Mutation::None);
+        let messages = circuit
+            .jobs
+            .canonical_plan_messages()
+            .expect("typed planning export");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(
+            messages[0],
+            PastaSha256PlanMessageV1::Ordinary(b"fixed job before bounded SHA".to_vec())
+        );
+        let expected = (0..length)
+            .map(|offset| (offset as u8).wrapping_mul(37).wrapping_add(11))
+            .collect();
+        assert_eq!(
+            messages[1],
+            PastaSha256PlanMessageV1::Bounded {
+                logical_message: expected,
+                capacity: 80,
+                selected_block: if length == 3 { 0 } else { 1 },
+                max_blocks: 2,
+            }
+        );
+        assert_eq!(
+            messages[2],
+            PastaSha256PlanMessageV1::Ordinary(b"fixed job after bounded SHA".to_vec())
+        );
+        assert!(
+            circuit
+                .jobs
+                .canonical_messages()
+                .unwrap_err()
+                .contains("cannot enter the ordinary recursive claim")
+        );
+        assert!(circuit.jobs.claim_jobs().is_err());
+    }
+}
+
+#[test]
+fn bounded_sha_planning_export_rejects_nonzero_inactive_source_byte() {
+    let circuit = bounded_circuit::<Fq>(&[(80, 3)], Mutation::ZeroTail);
+    assert!(
+        circuit
+            .jobs
+            .canonical_plan_messages()
+            .unwrap_err()
+            .contains("invalid active prefix")
+    );
+}
+
+#[test]
 fn bounded_sha_rejects_native_over_capacity_and_non_byte_inputs() {
     let mut builder = BaseCircuitBuilder::<Fp>::new(false)
         .use_k(TEST_K as usize)

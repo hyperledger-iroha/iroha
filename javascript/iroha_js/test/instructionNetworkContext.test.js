@@ -118,7 +118,7 @@ test("fee verification binds every projection to the selected prefix before ente
   const policy = createValidationFeeConsensusApi(runtime);
   const quote = createValidationFeeHijiriQuoteApi(runtime);
   const binding = {
-    schema: "cbsi.mobile-validation-fee-ledger-binding.v1",
+    schema: "iroha.validation-fee-ledger-binding.v1",
     networkId: NetworkId.fromBytes(Buffer.alloc(32, 1)),
     policyChainGenesisHash: "35".repeat(32),
     checkpoint: { height: 100, contextId: "57".repeat(32) },

@@ -479,17 +479,17 @@ exactly that much or more storage and returns the same canonical bytes. This
 probe remains available even when the stock monetary provider correctly reports
 device-unavailable.
 
-The coordinator contract call returns the written word count and pins exactly
-`[2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1]`: frame version, native ABI, peer
+The coordinator contract call returns twelve words and pins exactly
+`[2, 23, 3, 6, 50, 8, 6, 22, 16, 0xffff, 1, 13]`: frame version, native ABI, peer
 messages, complete wire payloads, artifact roles, relations, helper circuits,
 device operations, hardware capabilities, the required capability mask, and
-required close/revocation lifecycle.
+required close/revocation lifecycle, and the closed coordinator method count.
 Its digest/inventory role is exact format agreement and tamper detection only.
 
 Coordinator request and response frames start with ASCII `IKGMCOR1`, followed
 by little-endian `version:u16 = 2`, `field_count:u16`, reserved zero `u32`, and
 then `field_count` repetitions of `length:u32 || bytes`. A frame has at most 16
-fields, each field at most 64 KiB, a request at most 256 KiB, and a response at
+fields, each field at most 96 KiB, a request at most 256 KiB, and a response at
 most 128 KiB. Methods 1 through 11 are, in order: reserve operation ID, accept
 qualification, accept authenticated reply, begin sender transition, prove the
 prepared sender transition, build the terminal envelope, accept the installed
@@ -500,7 +500,7 @@ with `nativeContractV1`, `nativeOpenV1`, `nativeInvokeV1`, and `nativeCloseV1`. 
 exports own the coordinator implementation; there is no application-specific JNI
 namespace. The Java Android facade uses the Kotlin transport. Swift invokes the
 corresponding C exports through the validated native loader. The SDK checks the complete
-eleven-word ABI inventory, retains unsigned handle bits, serializes calls, and
+twelve-word ABI inventory, retains unsigned handle bits, serializes calls, and
 correlates all returned identities/envelopes before exposing bounded fields.
 On logout or account switch, close revokes the process-local handle before
 delegating session teardown. A stale handle cannot invoke, and a second open
@@ -511,8 +511,9 @@ state, so recovery remains the qualified backend's responsibility.
 `KagemushaCoreCoordinatorFrameV1` and `KagemushaCoreCoordinatorBridgeV1` are
 transport layers, not implementations of `KagemushaNativeCoreCoordinatorV1`.
 The shared `fixtures/offline/kagemusha_core_coordinator_frame_v1.tsv` corpus
-covers every method, both sender kinds, both recovery selectors, and missing
-recovery; its opaque archive strings do not represent valid proofs or credentials.
+covers payment methods 1–11, both sender kinds, both recovery selectors, and
+missing recovery; method 12 enrollment and method 13 App Attest acknowledgment
+have focused tests. Its opaque archive strings do not represent valid proofs or credentials.
 `KagemushaNativeCoreCoordinatorAdapterV1` supplies the typed Swift and Kotlin
 adapter, with a mirrored Java facade. Native-owned canonical Norito archives
 are version 1 and bounded to 16 KiB each:
@@ -562,8 +563,23 @@ requires a fresh challenge after recreation. Method 3 must bind the accepted rep
 to that exact outstanding command and challenge. An already accepted observation
 cannot be republished as fresh. If a read completes durable work, its authenticated
 dependent evidence must be saved before acknowledging that work. The
-eleven-word contract probe includes the required close lifecycle; the closed
-method inventory independently contains eleven codes.
+twelve-word contract probe includes the required close lifecycle; the closed
+method inventory independently contains thirteen codes.
+
+Method 13 acknowledges one already committed App Attest transition. Its seven
+request fields are the original nonzero operation ID, exact UTF-8 key ID, 460-byte
+canonical selection signing message, original raw CBOR assertion (at most 8 KiB),
+predecessor `u32` counter, nonzero terminal-certificate digest, and nonzero
+installed-envelope digest. The seven response fields are the same operation ID,
+SHA-256 digests of the key ID, selection and raw assertion, the exact-next
+committed `u32` counter, and the same certificate and envelope digests. This
+transport correlation cannot establish a commit. Native dispatch calls a
+dedicated backend hook that is unavailable by default; a qualified implementation
+must independently resolve its authenticated durable journal, verify the enrolled
+key and original Apple assertion, and prove that the exact terminal was committed
+and installed before returning. Swift can then atomically move only the matching
+durable App Attest record from complete to ready. A generic method echo, prepared
+candidate, or local envelope cannot unlock the next assertion.
 
 Method 3 has exactly ten fields: device operation `u32`, request ID, canonical
 command, canonical reply, original 64-byte low-S P-256 response authenticator,

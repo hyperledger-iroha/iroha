@@ -134,10 +134,12 @@ class JsonParserStringTypeTest {
               "total":1,
               "items":[{
                 "policy_id":"phone#retail",
+                "program_id":"lookup",
                 "owner":"owner",
                 "active":true,
                 "normalization":"phone_e164",
                 "resolver_public_key":"$VALID_PUBLIC_KEY",
+                "output_opening_public_key":"$VALID_PUBLIC_KEY",
                 "backend":"bfv-affine-sha3-256-v1",
                 "note":"retail policy"
               }]
@@ -153,6 +155,7 @@ class JsonParserStringTypeTest {
                 "owner":"owner",
                 "active":true,
                 "resolver_public_key":"$VALID_PUBLIC_KEY",
+                "output_opening_public_key":"$VALID_PUBLIC_KEY",
                 "backend":"bfv-programmed-sha3-256-v1",
                 "verification_mode":"signed",
                 "note":"retail policy"
