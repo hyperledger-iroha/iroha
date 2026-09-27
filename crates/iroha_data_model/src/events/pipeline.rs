@@ -453,7 +453,6 @@ mod tests {
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
                 execution_context_hash: None,
-                sccp_commitment_root: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
                 confidential_features: None,

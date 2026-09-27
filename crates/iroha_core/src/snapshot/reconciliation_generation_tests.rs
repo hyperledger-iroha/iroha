@@ -408,7 +408,7 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         assert_eq!(
             passes.get(),
             0,
-            "Fast restore must defer Merkle, resource, WSV, and raw SCCP validation"
+            "Fast restore must defer Merkle, resource, and WSV validation"
         );
     });
     SNAPSHOT_BLOCK_HASH_VECTOR_CLONES.with(|clones| {
@@ -621,6 +621,44 @@ async fn emergency_fast_restores_current_snapshot_without_opening_deferred_journ
         Err(error) => error,
     };
     assert!(matches!(signature_error, TryReadError::SignatureInvalid(_)));
+
+    // A correctly re-signed manifest carrying a foreign SCCP policy input is still refused.
+    std::fs::write(&manifest_path, forged_manifest.encode()).expect("install forged Fast manifest");
+    let forged_digest = current_snapshot_bundle_auth_digest(&snapshot_store_dir);
+    let forged_signature = Signature::try_new(signing_key.private_key(), &forged_digest)
+        .expect("re-sign the forged bundle with the trusted key");
+    std::fs::write(
+        current_generation_artifact(&snapshot_store_dir, SNAPSHOT_SIGNATURE_FILE_NAME),
+        hex::encode(forged_signature.payload()),
+    )
+    .expect("install the re-signed snapshot signature");
+    let policy_error = match try_read_snapshot(
+        &snapshot_store_dir,
+        &fast_kura,
+        &lane_manifests,
+        &iroha_config::parameters::actual::Nexus::default(),
+        LiveQueryStore::start_test,
+        block_count,
+        TEST_CHUNK_SIZE,
+        signing_key.public_key(),
+        &expected_network_id,
+        &crate::state::default_zk_config(),
+        #[cfg(feature = "telemetry")]
+        StateTelemetry::new(<_>::default(), true),
+        &snapshot_read_budget_for_testing(),
+        &crate::state::kagemusha_operation_indexes::default_budget(),
+    ) {
+        Ok(_) => panic!("Fast restore must bind the fixed SCCP v1 policy input"),
+        Err(error) => error,
+    };
+    assert!(
+        matches!(
+            &policy_error,
+            TryReadError::SnapshotGenerationInvalid { reason, .. }
+                if reason.contains("foreign SCCP policy hash")
+        ),
+        "unexpected foreign-policy rejection: {policy_error:?}"
+    );
 }
 #[tokio::test]
 async fn snapshot_hash_reconcile_rejects_non_latest_mismatch() {

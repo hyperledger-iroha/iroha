@@ -2741,43 +2741,6 @@ pub enum BlockValidationError {
         /// Consensus maximum active for this block.
         max: usize,
     },
-    /// SCCP commitment root mismatch. Expected: {expected:?}, actual: {actual:?}
-    SccpCommitmentRootMismatch {
-        /// Root recomputed from committed SCCP message records.
-        expected: Option<[u8; 32]>,
-        /// Root advertised in the block header.
-        actual: Option<[u8; 32]>,
-    },
-    /// SCCP committed block has invalid execution output ownership or commitments: {reason}
-    SccpInvalidExecutionOutputs {
-        /// Structural or commitment failure from the complete execution projection.
-        reason: String,
-    },
-    /// SCCP committed block contains an invalid successful outbound record instruction. Entrypoint index: {tx_index}, instruction index: {instruction_index}, reason: {reason}
-    SccpInvalidOutboundRecord {
-        /// External entrypoint index in the block payload.
-        tx_index: usize,
-        /// Instruction index inside the executable.
-        instruction_index: usize,
-        /// Human-readable validation reason.
-        reason: &'static str,
-    },
-    /// SCCP committed block contains duplicate successful outbound message. Source profile: {source_profile:?}, target profile: {target_profile:?}, message id: {message_id:?}
-    SccpDuplicateOutboundMessage {
-        /// Exact SCCP source profile committed by the duplicate record.
-        source_profile: iroha_data_model::bridge::SccpNetworkV1,
-        /// Exact SCCP target profile committed by the duplicate record.
-        target_profile: iroha_data_model::bridge::SccpNetworkV1,
-        /// SCCP message identifier derived from the exact lane and canonical payload.
-        message_id: [u8; 32],
-    },
-    /// SCCP committed block contains too many successful outbound messages. Actual: {actual}, maximum: {max}
-    SccpTooManyOutboundMessages {
-        /// Successful outbound messages reconstructed from committed results.
-        actual: usize,
-        /// Fixed first-release per-block maximum.
-        max: usize,
-    },
     /// Mismatch between the actual and expected hashes of the previous block. Expected: {expected:?}, actual: {actual:?}
     PrevBlockHashMismatch {
         /// Expected value
@@ -3748,12 +3711,6 @@ mod chained {
             self.0.execution_context = context;
             self
         }
-        /// Attach an SCCP commitment root to the block header.
-        #[must_use]
-        pub fn with_sccp_commitment_root(mut self, root: Option<[u8; 32]>) -> Self {
-            self.0.header.set_sccp_commitment_root(root);
-            self
-        }
         /// Attach the confidential feature digest that this block commits to.
         #[must_use]
         pub fn with_confidential_features(
@@ -4243,12 +4200,6 @@ pub(crate) mod valid {
         }
     }
     type Error = (Box<SignedBlock>, Box<BlockValidationError>);
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum SccpRootValidation {
-        Enforce,
-        #[cfg(test)]
-        Defer,
-    }
     #[cfg(feature = "telemetry")]
     type MetricsRef<'a> = Option<&'a crate::telemetry::StateTelemetry>;
     #[cfg(not(feature = "telemetry"))]
@@ -6954,7 +6905,6 @@ pub(crate) mod valid {
                 &mut block,
                 state_block,
                 None,
-                SccpRootValidation::Enforce,
                 genesis.as_ref(),
             ) {
                 return WithEvents::new(Err((Box::new(block), Box::new(error))));
@@ -7028,7 +6978,6 @@ pub(crate) mod valid {
                 &mut block,
                 state_block,
                 None,
-                SccpRootValidation::Enforce,
                 genesis.as_ref(),
             ) {
                 emit_block_rejection(block.header(), &error, &send_events);
@@ -7442,66 +7391,6 @@ pub(crate) mod valid {
                 Some(&mut send_events),
             )
         }
-        fn validate_sccp_commitment_root(block: &SignedBlock) -> Result<(), BlockValidationError> {
-            crate::bridge::validate_sccp_commitment_root_for_signed_block(block).map_err(|error| {
-                match error {
-                    crate::bridge::SccpCommittedBlockValidationError::MissingTransactionResults {
-                        actual,
-                    } => BlockValidationError::SccpCommitmentRootMismatch {
-                        expected: None,
-                        actual: Some(actual),
-                    },
-                    crate::bridge::SccpCommittedBlockValidationError::InvalidExecutionOutputs(reason)
-                    => BlockValidationError::SccpInvalidExecutionOutputs {
-                        reason,
-                    },
-                    crate::bridge::SccpCommittedBlockValidationError::InvalidRecordInstruction(
-                        error,
-                    ) => BlockValidationError::SccpInvalidOutboundRecord {
-                        tx_index: error.tx_index(),
-                        instruction_index: error.instruction_index(),
-                        reason: error.reason(),
-                    },
-                    crate::bridge::SccpCommittedBlockValidationError::DuplicateOutboundMessage(
-                        key,
-                    ) => BlockValidationError::SccpDuplicateOutboundMessage {
-                        source_profile: key.lane.source,
-                        target_profile: key.lane.target,
-                        message_id: key.message_id,
-                    },
-                    crate::bridge::SccpCommittedBlockValidationError::TooManyOutboundMessages {
-                        actual,
-                        max,
-                    } => BlockValidationError::SccpTooManyOutboundMessages { actual, max },
-                    crate::bridge::SccpCommittedBlockValidationError::CommitmentRootMismatch {
-                        expected,
-                        actual,
-                    } => BlockValidationError::SccpCommitmentRootMismatch { expected, actual },
-                }
-            })
-        }
-        #[cfg(test)]
-        pub(crate) fn sccp_commitment_root_after_execution(
-            mut block: SignedBlock,
-            state_block: &mut StateBlock<'_>,
-        ) -> Result<Option<[u8; 32]>, BlockValidationError> {
-            Self::validate_staged_execution_controls(&block, state_block)?;
-            let exec_witness_guard = Self::begin_component_fixture_recording(state_block)?;
-            Self::execute_and_record_canonical_outputs(
-                &mut block,
-                state_block,
-                None,
-                SccpRootValidation::Defer,
-                None,
-            )?;
-            let _ = crate::exec_witness::drain_exec_witness();
-            drop(exec_witness_guard);
-            let messages = crate::bridge::collect_sccp_messages_from_signed_block(&block);
-            let root = crate::bridge::sccp_commitment_root_from_messages(&messages);
-            block.set_sccp_commitment_root(root);
-            Self::validate_sccp_commitment_root(&block)?;
-            Ok(root)
-        }
         fn prepare_pristine_consensus_effects<'state>(
             block: &SignedBlock,
             state: &'state State,
@@ -7652,7 +7541,6 @@ pub(crate) mod valid {
             Self::validate_staged_execution_controls(block, state)?;
             validate_axt_envelopes(block, state)?;
             state.validate_da_shard_cursors(block)?;
-            Self::validate_sccp_commitment_root(block)?;
             state
                 .finalize_lane_consensus_contexts(block, Some(context.context()))
                 .map_err(Self::execution_context_error)
@@ -8280,7 +8168,6 @@ pub(crate) mod valid {
                 &mut block,
                 &mut state_block,
                 timings.as_deref_mut(),
-                SccpRootValidation::Enforce,
                 genesis.as_ref(),
             ) {
                 drop(state_block);
@@ -8316,12 +8203,6 @@ pub(crate) mod valid {
             }
             if let Some(timings) = timings.as_deref_mut() {
                 timings.execution_da_cursor_ms = to_ms(da_cursor_start.elapsed());
-            }
-            if let Err(error) = Self::validate_sccp_commitment_root(&block) {
-                drop(state_block);
-                record_timings(&mut timings, stateless_elapsed, Some(execution_start));
-                emit_rejection(&block, &error);
-                return WithEvents::new(Err((Box::new(block), Box::new(error))));
             }
             if let Err(error) =
                 Self::validate_staged_merge_execution_authorization(&block, &mut state_block)
@@ -8553,12 +8434,8 @@ pub(crate) mod valid {
             if block.da_proof_policies() != Some(&expected_policy_bundle) {
                 return Err(BlockValidationError::DaProofPolicyBundleMismatch);
             }
-            let computed_digest = compute_confidential_feature_digest(
-                state.world(),
-                state.zk(),
-                state.sccp_registry(),
-                block_height,
-            );
+            let computed_digest =
+                compute_confidential_feature_digest(state.world(), state.zk(), block_height);
             let expected_digest = if computed_digest.is_empty() {
                 None
             } else {
@@ -12199,7 +12076,6 @@ pub(crate) mod valid {
             block: &mut SignedBlock,
             state_block: &mut StateBlock<'_>,
             timings: Option<&mut ValidationTimings>,
-            sccp_root_validation: SccpRootValidation,
             genesis: Option<&AuthenticatedGenesisOutputSource>,
         ) -> Result<(), BlockValidationError> {
             let start = Instant::now();
@@ -12302,9 +12178,6 @@ pub(crate) mod valid {
                 }
                 crate::state::ExecutionOutputSealError::Finalizer(error) => error,
             })?;
-            if sccp_root_validation == SccpRootValidation::Enforce {
-                Self::validate_sccp_commitment_root(block)?;
-            }
             state_block
                 .verify_execution_output_seal(block)
                 .map_err(Self::execution_context_error)?;
@@ -12340,14 +12213,8 @@ pub(crate) mod valid {
         ) -> WithEvents<ValidBlock> {
             Self::validate_staged_execution_controls(&block, state_block)
                 .expect("unchecked certified merge block requires its exact pre-staged sidecar");
-            Self::execute_and_record_canonical_outputs(
-                &mut block,
-                state_block,
-                None,
-                SccpRootValidation::Enforce,
-                None,
-            )
-            .expect("unchecked block should have internally consistent entrypoint hashes");
+            Self::execute_and_record_canonical_outputs(&mut block, state_block, None, None)
+                .expect("unchecked block should have internally consistent entrypoint hashes");
             if let Err(error) = validate_axt_envelopes(&block, state_block) {
                 panic!("AXT envelope validation failed on unchecked block: {error}");
             }
@@ -12769,8 +12636,7 @@ pub(crate) mod valid {
             },
             sorafs::pin_registry::ManifestDigest,
             transaction::{
-                Executable, IvmBytecode, IvmProved, SignedTransaction, TransactionBuilder,
-                error::TransactionLimitError,
+                Executable, SignedTransaction, TransactionBuilder, error::TransactionLimitError,
             },
             trigger::DataTriggerSequence,
         };
@@ -14477,12 +14343,7 @@ pub(crate) mod valid {
             height: u64,
         ) -> Option<ConfidentialFeatureDigest> {
             let view = state.query_view();
-            let digest = compute_confidential_feature_digest(
-                view.world(),
-                view.zk(),
-                view.sccp_registry(),
-                height,
-            );
+            let digest = compute_confidential_feature_digest(view.world(), view.zk(), height);
             (!digest.is_empty()).then_some(digest)
         }
         fn with_current_state_da_sidecars(
@@ -14715,7 +14576,7 @@ pub(crate) mod valid {
                 ed25519_key.public_key()
             ));
         }
-        include!("block/sccp_soracloud_validation_tests.rs");
+        include!("block/soracloud_validation_tests.rs");
         fn commit_block_at_height(
             state: &State,
             kura: &Kura,
@@ -15440,7 +15301,6 @@ pub(crate) mod valid {
                 block,
                 &mut state_block,
                 None,
-                SccpRootValidation::Enforce,
                 None,
             )
             .expect_err("an unknown default dataspace must invalidate the whole block");
@@ -18884,7 +18744,6 @@ pub(crate) mod valid {
                 &mut full_block,
                 &mut state_block,
                 None,
-                SccpRootValidation::Enforce,
                 None,
             )
             .expect("full validation should attach transaction results");
@@ -18899,7 +18758,6 @@ pub(crate) mod valid {
                 &mut skip_block,
                 &mut state_block,
                 None,
-                SccpRootValidation::Enforce,
                 None,
             )
             .expect("skip-stateless validation should attach transaction results");
@@ -25120,21 +24978,6 @@ mod event {
             | BlockValidationError::TooManyTransactions { .. } => {
                 Reason::TransactionValidationFailed
             }
-            BlockValidationError::SccpCommitmentRootMismatch { .. } => {
-                Reason::SccpCommitmentRootMismatch
-            }
-            BlockValidationError::SccpInvalidExecutionOutputs { .. } => {
-                Reason::SccpCommitmentRootMismatch
-            }
-            BlockValidationError::SccpInvalidOutboundRecord { .. } => {
-                Reason::SccpCommitmentRootMismatch
-            }
-            BlockValidationError::SccpDuplicateOutboundMessage { .. } => {
-                Reason::SccpCommitmentRootMismatch
-            }
-            BlockValidationError::SccpTooManyOutboundMessages { .. } => {
-                Reason::SccpCommitmentRootMismatch
-            }
             BlockValidationError::ExecutionContextInvalid(_)
             | BlockValidationError::MissingCertifiedMergeSidecar { .. }
             | BlockValidationError::CommittedFragmentCountMismatch { .. } => {
@@ -25600,8 +25443,8 @@ pub(crate) mod tests {
         );
         assert_eq!(
             staged_reference_calls,
-            post_effect_authorization_calls + 2,
-            "only the test-only SCCP probe and source-owned native finalizer omit the old merge voting gate"
+            post_effect_authorization_calls + 1,
+            "only the source-owned native finalizer omits the old merge voting gate"
         );
     }
     include!("block/validation_native_amx_test_support.rs");
@@ -27128,7 +26971,7 @@ pub(crate) mod tests {
         zk.max_proof_size_bytes = 1_000_000;
         state
             .set_zk(zk)
-            .expect("empty SCCP state accepts focused confidential limits");
+            .expect("empty state accepts focused confidential limits");
 
         let fixture = crate::zk::test_utils::halo2_fixture_envelope(
             crate::zk::IVM_REPLAY_BINDING_V1_CIRCUIT_ID,

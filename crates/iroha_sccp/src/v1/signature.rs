@@ -172,7 +172,10 @@ fn split_rs(signature: &[u8; 65]) -> ([u8; 32], [u8; 32]) {
 /// # Errors
 ///
 /// Returns a form error, [`SignatureError::RecoveryFailed`] or [`SignatureError::ZeroAddress`].
-pub fn recover_address(digest: &[u8; 32], signature: &[u8; 65]) -> Result<[u8; 20], SignatureError> {
+pub fn recover_address(
+    digest: &[u8; 32],
+    signature: &[u8; 65],
+) -> Result<[u8; 20], SignatureError> {
     check_signature_form(signature)?;
     let key = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(digest, signature)
         .map_err(|_| SignatureError::RecoveryFailed)?;
@@ -242,10 +245,7 @@ impl SignatureSetV1 {
     ///
     /// Returns [`SignatureError::BadSignerIndex`] for a repeated index or one `≥ n`, and
     /// [`SignatureError::RosterTooLarge`] for `n > 32`.
-    pub fn from_signers(
-        n: usize,
-        signers: &[(usize, [u8; 65])],
-    ) -> Result<Self, SignatureError> {
+    pub fn from_signers(n: usize, signers: &[(usize, [u8; 65])]) -> Result<Self, SignatureError> {
         if n > 32 {
             return Err(SignatureError::RosterTooLarge);
         }
@@ -495,9 +495,9 @@ fn sign_with_additional_data(
 ) -> Result<[u8; 65], SignatureError> {
     let signing_key = EcdsaSecp256k1Sha256::parse_private_key(secret)
         .map_err(|_| SignatureError::InvalidSecret)?;
-    let d = *signing_key.to_nonzero_scalar();
-    // z = digest mod N (at most one subtraction since digest < 2^256 < 2N).
-    let z = if *digest >= SECP256K1_N {
+    let secret_scalar = *signing_key.to_nonzero_scalar();
+    // digest mod N (at most one subtraction since digest < 2^256 < 2N).
+    let reduced_digest = if *digest >= SECP256K1_N {
         be_sub(digest, &SECP256K1_N)
     } else {
         *digest
@@ -514,41 +514,44 @@ fn sign_with_additional_data(
         // R = k·G in compressed SEC1 form: parity byte, then x.
         let point = nonce_key.public_key().to_sec1_bytes();
         let y_odd = point[0] == 0x03;
-        let mut x = [0_u8; 32];
-        x.copy_from_slice(&point[1..33]);
-        let x_reduced = x >= SECP256K1_N;
-        let r = if x_reduced { be_sub(&x, &SECP256K1_N) } else { x };
-        if is_zero(&r) {
+        let mut point_x = [0_u8; 32];
+        point_x.copy_from_slice(&point[1..33]);
+        let x_reduced = point_x >= SECP256K1_N;
+        let r_bytes = if x_reduced {
+            be_sub(&point_x, &SECP256K1_N)
+        } else {
+            point_x
+        };
+        if is_zero(&r_bytes) {
             continue;
         }
-        let r_scalar = *EcdsaSecp256k1Sha256::parse_private_key(&r)
+        let r_scalar = *EcdsaSecp256k1Sha256::parse_private_key(&r_bytes)
             .map_err(|_| SignatureError::SigningFailed)?
             .to_nonzero_scalar();
-        let mut sum = r_scalar * d;
-        if !is_zero(&z) {
-            sum = sum
-                + *EcdsaSecp256k1Sha256::parse_private_key(&z)
-                    .map_err(|_| SignatureError::SigningFailed)?
-                    .to_nonzero_scalar();
+        let mut sum = r_scalar * secret_scalar;
+        if !is_zero(&reduced_digest) {
+            sum += *EcdsaSecp256k1Sha256::parse_private_key(&reduced_digest)
+                .map_err(|_| SignatureError::SigningFailed)?
+                .to_nonzero_scalar();
         }
         let k_inverse = nonce_key.to_nonzero_scalar().invert();
         if !bool::from(k_inverse.is_some()) {
             continue;
         }
         let s_scalar = k_inverse.unwrap() * sum;
-        let mut s = [0_u8; 32];
-        s.copy_from_slice(&s_scalar.to_bytes());
-        if is_zero(&s) {
+        let mut s_bytes = [0_u8; 32];
+        s_bytes.copy_from_slice(&s_scalar.to_bytes());
+        if is_zero(&s_bytes) {
             continue;
         }
-        let s_high = s > SECP256K1_HALF_N;
+        let s_high = s_bytes > SECP256K1_HALF_N;
         if s_high {
-            s = be_sub(&SECP256K1_N, &s);
+            s_bytes = be_sub(&SECP256K1_N, &s_bytes);
         }
         let recovery_id = u8::from(y_odd ^ s_high) | (u8::from(x_reduced) << 1);
         let mut out = [0_u8; 65];
-        out[..32].copy_from_slice(&r);
-        out[32..64].copy_from_slice(&s);
+        out[..32].copy_from_slice(&r_bytes);
+        out[32..64].copy_from_slice(&s_bytes);
         out[64] = 27 + recovery_id;
         return Ok(out);
     }
@@ -704,7 +707,10 @@ mod tests {
         let mut bad_v = good;
         for v in [0_u8, 1, 26, 29, 30, 255] {
             bad_v[64] = v;
-            assert_eq!(check_signature_form(&bad_v), Err(SignatureError::BadRecoveryByte));
+            assert_eq!(
+                check_signature_form(&bad_v),
+                Err(SignatureError::BadRecoveryByte)
+            );
         }
         let mut zero_r = good;
         zero_r[..32].copy_from_slice(&[0; 32]);
@@ -734,8 +740,10 @@ mod tests {
     fn signature_sets() {
         let message = digest(7);
         let keys: Vec<[u8; 32]> = (10..14).map(secret).collect();
-        let mut members: Vec<[u8; 20]> =
-            keys.iter().map(|key| address_of_secret(key).unwrap()).collect();
+        let mut members: Vec<[u8; 20]> = keys
+            .iter()
+            .map(|key| address_of_secret(key).unwrap())
+            .collect();
         members.sort_unstable();
         members[0] = [0; 20];
         let key_of = |address: &[u8; 20]| {
@@ -746,7 +754,12 @@ mod tests {
         };
         let signers: Vec<(usize, [u8; 65])> = [3_usize, 1, 2]
             .iter()
-            .map(|index| (*index, sign_digest(&key_of(&members[*index]), &message).unwrap()))
+            .map(|index| {
+                (
+                    *index,
+                    sign_digest(&key_of(&members[*index]), &message).unwrap(),
+                )
+            })
             .collect();
         let set = SignatureSetV1::from_signers(4, &signers).unwrap();
         assert_eq!(set.signer_bitmap, 0b1110);
@@ -761,12 +774,22 @@ mod tests {
         );
         // Bit >= n.
         assert_eq!(
-            verify_signature_set(&message, &members, set.signer_bitmap | 0b1_0000, &set.signatures),
+            verify_signature_set(
+                &message,
+                &members,
+                set.signer_bitmap | 0b1_0000,
+                &set.signatures
+            ),
             Err(SignatureError::BitmapOutOfRange)
         );
         // Wrong length.
         assert_eq!(
-            verify_signature_set(&message, &members, set.signer_bitmap, &set.signatures[..130]),
+            verify_signature_set(
+                &message,
+                &members,
+                set.signer_bitmap,
+                &set.signatures[..130]
+            ),
             Err(SignatureError::BadLength)
         );
         // A bit addressing the zero member.
@@ -808,11 +831,7 @@ mod tests {
         // Known vector: secret 1 is the generator; its address is well known.
         let mut one = [0_u8; 32];
         one[31] = 1;
-        let hex: String = address_of_secret(&one)
-            .unwrap()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
+        let hex = crate::v1::hashes::to_hex(&address_of_secret(&one).unwrap());
         assert_eq!(hex, "7e5f4552091a69125d5dfcb7b8c2659029395bdf");
     }
 

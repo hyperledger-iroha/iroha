@@ -190,12 +190,7 @@ fn retained_governance_fixture(
     let chain_id = configured.view().chain_id.clone();
     let features = {
         let view = configured.view();
-        crate::state::compute_confidential_feature_digest(
-            view.world(),
-            &view.zk,
-            view.sccp_registry.as_ref(),
-            1,
-        )
+        crate::state::compute_confidential_feature_digest(view.world(), &view.zk, 1)
     };
     let nexus = configured.nexus_snapshot();
     let genesis = GenesisBuilder::new_without_executor(chain_id.clone(), ".")
@@ -378,12 +373,7 @@ fn retained_governance_successor(
     );
     let features = {
         let view = state.view();
-        crate::state::compute_confidential_feature_digest(
-            view.world(),
-            &view.zk,
-            view.sccp_registry.as_ref(),
-            context.height,
-        )
+        crate::state::compute_confidential_feature_digest(view.world(), &view.zk, context.height)
     };
     header.set_confidential_features((!features.is_empty()).then_some(features));
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(header);

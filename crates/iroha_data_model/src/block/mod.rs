@@ -790,7 +790,6 @@ impl SignedBlock {
             creation_time_ms,
             view_change_index: 0,
             confidential_features,
-            sccp_commitment_root: None,
         };
         let signature =
             BlockSignature::new(0, SignatureOf::try_from_hash(private_key, header.hash())?);
@@ -1026,8 +1025,6 @@ pub mod error {
             DaShardCursorViolation,
             /// Deterministic `NPoS` effects did not match the signed block header or local validation.
             NposEffectsMismatch,
-            /// SCCP commitment root does not match the block's recorded SCCP messages.
-            SccpCommitmentRootMismatch,
         }
     }
 
@@ -1057,7 +1054,6 @@ pub mod error {
                 Self::DaProofPolicyMismatch => "DaProofPolicyMismatch",
                 Self::DaShardCursorViolation => "DaShardCursorViolation",
                 Self::NposEffectsMismatch => "NposEffectsMismatch",
-                Self::SccpCommitmentRootMismatch => "SccpCommitmentRootMismatch",
             }
         }
     }
@@ -1111,9 +1107,6 @@ pub mod error {
                 "DaProofPolicyMismatch" => Ok(BlockRejectionReason::DaProofPolicyMismatch),
                 "DaShardCursorViolation" => Ok(BlockRejectionReason::DaShardCursorViolation),
                 "NposEffectsMismatch" => Ok(BlockRejectionReason::NposEffectsMismatch),
-                "SccpCommitmentRootMismatch" => {
-                    Ok(BlockRejectionReason::SccpCommitmentRootMismatch)
-                }
                 other => Err(norito::json::Error::unknown_field(other)),
             }
         }
@@ -1187,9 +1180,6 @@ impl fmt::Display for error::BlockRejectionReason {
             }
             error::BlockRejectionReason::NposEffectsMismatch => {
                 f.write_str("NPoS consensus effects mismatch")
-            }
-            error::BlockRejectionReason::SccpCommitmentRootMismatch => {
-                f.write_str("SCCP commitment root mismatch")
             }
         }
     }
@@ -1675,7 +1665,7 @@ mod tests {
 
     #[test]
     fn block_rejection_reason_json_has_closed_output_bound() {
-        let reason = error::BlockRejectionReason::SccpCommitmentRootMismatch;
+        let reason = error::BlockRejectionReason::ConfidentialFeatureDigestMismatch;
         let expected = norito::json::to_json(&reason).expect("serialize block rejection JSON");
         assert_eq!(
             norito::json::to_json_bounded(&reason, expected.len())
@@ -2316,31 +2306,6 @@ mod tests {
             block.encode_wire().unwrap(),
             proposal.encode_wire().unwrap()
         );
-    }
-    #[test]
-    fn sccp_commitment_root_affects_block_hash() {
-        let mut header = BlockHeader {
-            height: NonZeroU64::new(123_456).unwrap(),
-            prev_block_hash: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"prev_block_hash",
-            ))),
-            merkle_root: Some(HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
-                b"merkle_root",
-            ))),
-            da_proof_policies_hash: None,
-            da_commitments_hash: None,
-            da_pin_intents_hash: None,
-            npos_effects_hash: None,
-            execution_context_hash: None,
-            sccp_commitment_root: None,
-            creation_time_ms: 123_456_789_000,
-            view_change_index: 123,
-            confidential_features: None,
-        };
-        let hash0 = header.hash();
-        header.sccp_commitment_root = Some([0x42; 32]);
-        let hash1 = header.hash();
-        assert_ne!(hash0, hash1);
     }
     #[test]
     fn block_header_new_and_display() {

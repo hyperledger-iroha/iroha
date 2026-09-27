@@ -131,29 +131,14 @@ record!(
     "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl"
 );
 record!(
-    bridge_apply_sccp_route_governance,
-    crate::isi::bridge::ApplySccpRouteGovernance,
-    "iroha_data_model::isi::bridge::ApplySccpRouteGovernance"
-);
-record!(
     bridge_record_bridge_receipt,
     crate::isi::bridge::RecordBridgeReceipt,
     "iroha_data_model::isi::bridge::RecordBridgeReceipt"
 );
 record!(
-    bridge_record_sccp_message,
-    crate::isi::bridge::RecordSccpMessage,
-    "iroha_data_model::isi::bridge::RecordSccpMessage"
-);
-record!(
     bridge_submit_bridge_proof,
     crate::isi::bridge::SubmitBridgeProof,
     "iroha_data_model::isi::bridge::SubmitBridgeProof"
-);
-record!(
-    bridge_submit_sccp_ton_breaker_observation_v1,
-    crate::isi::bridge::SubmitSccpTonBreakerObservationV1,
-    "iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1"
 );
 record!(
     confidential_publish_pedersen_params,

@@ -192,13 +192,7 @@ impl ValidBlock {
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
         let _guard = crate::exec_witness::exec_witness_guard();
-        Self::execute_and_record_canonical_outputs(
-            block,
-            state,
-            None,
-            SccpRootValidation::Enforce,
-            genesis.as_ref(),
-        )?;
+        Self::execute_and_record_canonical_outputs(block, state, None, genesis.as_ref())?;
         state
             .finalize_lane_consensus_contexts(block, None)
             .and_then(|()| state.capture_exec_witness())
@@ -220,13 +214,7 @@ impl ValidBlock {
             .transpose()?;
         Self::validate_staged_execution_controls(block, state)?;
         let _guard = crate::exec_witness::exec_witness_guard();
-        Self::execute_and_record_canonical_outputs(
-            block,
-            state,
-            None,
-            SccpRootValidation::Enforce,
-            genesis.as_ref(),
-        )?;
+        Self::execute_and_record_canonical_outputs(block, state, None, genesis.as_ref())?;
         if genesis.is_some() {
             context.nexus_amx_context_hash =
                 crate::sumeragi::staged_genesis_nexus_amx_context_hash(state);

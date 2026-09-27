@@ -32,13 +32,11 @@ macro_rules! define_indexes {
         pub(in crate::state) struct StateEffectLocks<'state> {
             target: &'state State,
             $(pub(in crate::state) $field: Option<PublicationRwLockWriteGuard<'state, $ty>> ,)*
-            pub(in crate::state) sccp_registry_cache: Option<PublicationGuard<'state, SccpRegistryCache>>,
-            retired: [concread::release::DeferredReleaseBatch; 12],
+            retired: [concread::release::DeferredReleaseBatch; 11],
             attempted: bool,
             complete: bool,
             retired_manifests: Option<LaneManifestRegistryHandle>,
             retired_privacy: Option<LanePrivacyRegistryHandle>,
-            retired_sccp: Option<Arc<ValidatedSccpRegistryV1>>,
         }
 
         impl<'state> StateEffectLocks<'state> {
@@ -47,13 +45,11 @@ macro_rules! define_indexes {
                 Self {
                     target,
                     $($field: None,)*
-                    sccp_registry_cache: None,
-                    retired: [$(target.$field.deferred_releases(),)* target.sccp_registry_cache.deferred_releases()],
+                    retired: [$(target.$field.deferred_releases(),)*],
                     attempted: false,
                     complete: false,
                     retired_manifests: None,
                     retired_privacy: None,
-                    retired_sccp: None,
                 }
             }
 
@@ -68,8 +64,6 @@ macro_rules! define_indexes {
             fn prepare_inner(&mut self) -> Result<(), (&'static str, concread::release::ReleaseWait)> {
                 $(self.$field = Some(self.target.$field.try_write_or_wait()
                     .map_err(|wait| (stringify!($field), wait))?);)*
-                self.sccp_registry_cache = Some(self.target.sccp_registry_cache.try_lock_or_wait()
-                    .map_err(|wait| ("sccp_registry_cache", wait))?);
                 self.complete = true;
                 Ok(())
             }
@@ -84,11 +78,10 @@ macro_rules! define_indexes {
                 self.attempted = true;
                 while let Err((field, _wait)) = self.prepare_inner() {
                     self.release_writers();
-                    let names = [$(stringify!($field),)* "sccp_registry_cache"];
+                    let names = [$(stringify!($field),)*];
                     let index = names.iter().position(|name| *name == field).expect("original effect index");
                     match field {
                         $(stringify!($field) => assert!(self.target.$field.write().try_release_into(&mut self.retired[index]).is_ok(), "original effect wait source"),)*
-                        "sccp_registry_cache" => assert!(self.target.sccp_registry_cache.lock().try_release_into(&mut self.retired[index]).is_ok(), "original SCCP wait source"),
                         _ => unreachable!("only original effect locks can refuse"),
                     }
                 }
@@ -103,9 +96,6 @@ macro_rules! define_indexes {
                 if let Some(guard) = self.$field.take() {
                     assert!(guard.try_release_into(retired).is_ok(), "original effect release source");
                 })*
-                if let Some(guard) = self.sccp_registry_cache.take() {
-                    assert!(guard.try_release_into(slots.next().expect("SCCP release slot")).is_ok(), "original SCCP release source");
-                }
             }
 
             /// Retain the real short preflight read until the enclosing State
@@ -126,12 +116,6 @@ macro_rules! define_indexes {
                 assert!(self.complete && self.retired_manifests.is_none() && self.retired_privacy.is_none(), "one complete registry publication");
                 self.retired_manifests = Some(std::mem::replace(&mut **self.lane_manifests.as_mut().expect("prepared manifests"), manifests));
                 self.retired_privacy = Some(std::mem::replace(&mut **self.lane_privacy_registry.as_mut().expect("prepared privacy"), privacy));
-            }
-
-            /// Retain the displaced SCCP allocation through all physical fences.
-            pub(in crate::state) fn install_sccp(&mut self, registry: Arc<ValidatedSccpRegistryV1>) {
-                assert!(self.complete && self.retired_sccp.is_none(), "one complete SCCP publication");
-                self.retired_sccp = Some(std::mem::replace(&mut self.sccp_registry_cache.as_mut().expect("prepared SCCP").registry, registry));
             }
         }
 

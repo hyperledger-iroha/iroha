@@ -16,25 +16,12 @@ pub(crate) fn canonical_admission_read_decode_limits() -> Option<norito::DecodeL
     let body = norito::canonical_decode_limits(usize::try_from(STRICT_INIT_MAX_BLOCK_BYTES).ok()?);
     let finality = norito::canonical_decode_limits(MAX_KURA_V2_FINALITY_RECORD_BYTES);
     let retained = norito::canonical_decode_limits(MAX_RETAINED_BLOCK_RECORD_BYTES);
-    let sccp = norito::canonical_decode_limits(
-        iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1,
-    );
     let input =
         norito::canonical_decode_limits(iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES);
-    let sccp_reads =
-        usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)
-            .ok()?
-            .checked_mul(2)?;
     // The first-carrier observation and the explicit body kernel each authenticate
-    // one finality record and one retained record with its SCCP projections.
+    // one finality record and one retained record.
     // State adds its two registry/coherence observations to this account.
-    let operations = [
-        (body, 1usize),
-        (finality, 2),
-        (retained, 2),
-        (sccp, sccp_reads),
-        (input, 1),
-    ];
+    let operations = [(body, 1usize), (finality, 2), (retained, 2), (input, 1)];
     let (elements, allocated) = operations.into_iter().try_fold(
         (0usize, 0usize),
         |(elements, allocated), (limits, count)| {
@@ -103,8 +90,8 @@ impl Kura {
         let _canonical = self.canonical_chain_lock.lock();
         self.ensure_canonical_storage_not_poisoned()?;
         let height_u64 = u64::try_from(height.get())?;
-        let (_, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height_u64)?
+        let (_, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(height_u64)?
             .ok_or(Error::MissingV2FinalityArtifact { height: height_u64 })?;
         let body = self
             .read_block_body_under_prune_and_canonical_guards(height)?
@@ -174,7 +161,7 @@ impl Kura {
             .decode_v2_finality_record_at(&path, &directory)?
             .ok_or(Error::MissingV2FinalityArtifact { height: height_u64 })?;
         Self::validate_v2_finality_record_at(&path, height_u64, expected_hash, &record)?;
-        let (header, proposal_hash, wire_len, wire_hash, _, _) = self
+        let (header, proposal_hash, wire_len, wire_hash, _) = self
             .retained_block_record_at_without_live_body(&blocks_dir, height_u64, expected_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height: height_u64 })?;
         if header != record.block_header {

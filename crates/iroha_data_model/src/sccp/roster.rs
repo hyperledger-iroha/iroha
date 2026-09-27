@@ -18,7 +18,7 @@ pub const SCCP_ROSTER_MAX_MEMBERS_V1: usize = 31;
 #[must_use]
 pub const fn sccp_roster_threshold_v1(n: u8) -> u8 {
     // `⌊2n/3⌋ = n − ⌈n/3⌉`, which never overflows `u8` (at most 170).
-    let ceil_third = n / 3 + if n % 3 == 0 { 0 } else { 1 };
+    let ceil_third = n / 3 + if n.is_multiple_of(3) { 0 } else { 1 };
     n - ceil_third + 1
 }
 

@@ -450,7 +450,6 @@ impl<A> PhysicallyPreparedCarrier<'_, A> {
             .da_commitments
             .take()
             .map(|effects| effects.publish(target, &mut effect_locks, &generation, true));
-        effect_locks.install_sccp(std::sync::Arc::clone(&effects.sccp_registry));
         hash_retirement = block_hashes.publish();
         **effect_locks
             .latest_block_header

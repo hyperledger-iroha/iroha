@@ -596,19 +596,6 @@ impl BoundProgressPair {
         }
     }
 }
-/// One canonical outbound SCCP payload retained in commitment-index order.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::KuraRetainedSccpMessage")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(deny_unknown_fields)]
-struct KuraRetainedSccpMessage {
-    /// Zero-based leaf position in the block header's SCCP commitment tree.
-    commitment_index: u32,
-    /// Exact governed lane and destination/route binding context.
-    context: iroha_data_model::bridge::SccpOutboundMessageContextV1,
-    /// Exact canonical SCCP V1 payload bytes.
-    payload_bytes: Vec<u8>,
-}
 /// Immutable Kura-local block evidence retained before body eviction or finality publication.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::KuraRetainedBlockRecord")]
@@ -637,8 +624,6 @@ struct KuraRetainedBlockRecord {
     /// this field is local serving authority, not a standalone consensus
     /// inclusion proof.
     merge_reference: Option<CertifiedMergeLedgerReference>,
-    /// Successful outbound SCCP messages in exact commitment-index order.
-    sccp_archive: Vec<KuraRetainedSccpMessage>,
 }
 impl KuraRetainedBlockRecord {
     fn new(
@@ -647,7 +632,6 @@ impl KuraRetainedBlockRecord {
         executed_block_wire_len: u64,
         executed_block_wire_hash: Hash,
         merge_reference: Option<CertifiedMergeLedgerReference>,
-        sccp_archive: Vec<KuraRetainedSccpMessage>,
     ) -> Self {
         Self {
             format_version: RETAINED_BLOCK_RECORD_VERSION,
@@ -658,7 +642,6 @@ impl KuraRetainedBlockRecord {
             executed_block_wire_len,
             executed_block_wire_hash,
             merge_reference,
-            sccp_archive,
         }
     }
     fn canonical_storage_bytes(&self) -> Vec<u8> {
@@ -667,16 +650,6 @@ impl KuraRetainedBlockRecord {
     fn canonical_storage_encoded_len(&self) -> usize {
         self.encoded_len()
     }
-}
-/// Fixed-size inventory entry for one nonempty retained SCCP archive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RetainedSccpArchiveSummary {
-    /// Canonical block height containing the outbound messages.
-    pub(crate) height: u64,
-    /// Exact canonical block hash that authenticates the retained archive root.
-    pub(crate) block_hash: HashOf<BlockHeader>,
-    /// Number of dense commitment positions in the retained archive.
-    pub(crate) message_count: u32,
 }
 /// Raw and independently scanned Kura disk-usage state exposed only to crate tests.
 #[cfg(test)]

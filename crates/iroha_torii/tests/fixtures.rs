@@ -138,12 +138,8 @@ pub fn commit_genesis_fixture(
     let transaction = builder.sign(signer.private_key());
     let (proof_policies, confidential_features) = {
         let view = state.view();
-        let digest = iroha_core::state::compute_confidential_feature_digest(
-            view.world(),
-            view.zk(),
-            view.sccp_registry(),
-            1,
-        );
+        let digest =
+            iroha_core::state::compute_confidential_feature_digest(view.world(), view.zk(), 1);
         (
             iroha_core::da::active_proof_policy_bundle_at_height(view.nexus(), 1),
             (!digest.is_empty()).then_some(digest),

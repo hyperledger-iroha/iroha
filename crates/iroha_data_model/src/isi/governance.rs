@@ -9,8 +9,6 @@ pub use self::at_window_placeholder::AtWindow;
 pub use crate::governance::types::AtWindow;
 #[cfg(test)]
 use crate::governance::types::GlobalDataTriggerPermissionGovernanceActionV1;
-#[cfg(test)]
-use crate::isi::bridge::SccpRouteGovernanceActionV1;
 pub use crate::parliament_types::VotingMode;
 use crate::{
     governance::types::{
@@ -162,7 +160,7 @@ pub struct ProposeRuntimeUpgradeProposal {
     pub manifest: RuntimeUpgradeManifest,
 }
 impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
-/// Propose one closed SCCP registry action through governance.
+/// Propose one SCCP v1 governance decision to the SORA Parliament (`specs/sccp.md` §4.14.3).
 #[derive(
     Clone,
     Debug,
@@ -176,8 +174,8 @@ impl crate::seal::Instruction for ProposeRuntimeUpgradeProposal {}
 )]
 #[norito_schema(name = "iroha_data_model::isi::governance::ProposeSccpRouteGovernance")]
 pub struct ProposeSccpRouteGovernance {
-    /// Complete network- and action-bound proposal anchor.
-    pub anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
+    /// Complete network-bound SCCP v1 proposal: base revisions and 1..=16 ordered actions.
+    pub proposal: crate::sccp::governance::SccpGovernanceProposalV1,
 }
 impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
 /// Propose one closed `SoraFS` provider-owner transition through governance.
@@ -496,7 +494,7 @@ impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
     manifest: RuntimeUpgradeManifest,
 });
 impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
-    anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
+    proposal: crate::sccp::governance::SccpGovernanceProposalV1,
 });
 impl_governance_decode_from_slice!(ProposeSorafsProviderGovernance {
     action: SorafsProviderGovernanceActionV1,
@@ -595,25 +593,26 @@ mod tests {
             provenance: Vec::new(),
         }
     }
-    fn sccp_route_action() -> SccpRouteGovernanceActionV1 {
-        SccpRouteGovernanceActionV1::Remove(crate::bridge::SccpRouteKeyV1 {
-            lane_id: crate::bridge::SccpLaneIdV1 {
-                source: crate::bridge::SccpNetworkV1::EthereumMainnet,
-                target: crate::bridge::SccpNetworkV1::SoraTaira,
+    fn sccp_governance_proposal() -> crate::sccp::governance::SccpGovernanceProposalV1 {
+        use crate::sccp::{
+            governance::{
+                SccpGovernanceActionV1, SccpGovernanceProposalV1, SccpGovernanceSubjectV1,
+                SccpSetParametersActionV1,
             },
-            route_id: "taira_eth_xor".to_owned(),
-            asset_key: "xor".to_owned(),
-            revision: 1,
-        })
-    }
-    fn sccp_route_anchor() -> crate::isi::bridge::SccpRouteGovernanceAnchorV1 {
-        crate::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            params::SccpParametersV1,
+        };
+        SccpGovernanceProposalV1 {
             network_id: NetworkId::from_genesis_hash(
                 HashOf::<crate::block::BlockHeader>::from_untyped_unchecked(Hash::new(
                     b"SCCP governance instruction fixture network",
                 )),
             ),
-            action: sccp_route_action(),
+            base_revisions: vec![(SccpGovernanceSubjectV1::Parameters, 0).into()],
+            actions: vec![SccpGovernanceActionV1::SetParameters(
+                SccpSetParametersActionV1 {
+                    next: SccpParametersV1::taira_default(),
+                },
+            )],
         }
     }
     fn sorafs_provider_action() -> SorafsProviderGovernanceActionV1 {
@@ -645,12 +644,6 @@ mod tests {
     #[derive(Encode)]
     struct LegacyProposeRuntimeUpgradeProposal {
         manifest: RuntimeUpgradeManifest,
-        window: Option<AtWindow>,
-        mode: Option<VotingMode>,
-    }
-    #[derive(Encode)]
-    struct LegacyProposeSccpRouteGovernance {
-        anchor: crate::isi::bridge::SccpRouteGovernanceAnchorV1,
         window: Option<AtWindow>,
         mode: Option<VotingMode>,
     }
@@ -929,14 +922,6 @@ mod tests {
             },
         );
         assert_legacy_instruction_payload_rejected(
-            std::any::type_name::<ProposeSccpRouteGovernance>(),
-            &LegacyProposeSccpRouteGovernance {
-                anchor: sccp_route_anchor(),
-                window: Some(window()),
-                mode: Some(VotingMode::Plain),
-            },
-        );
-        assert_legacy_instruction_payload_rejected(
             std::any::type_name::<ProposeSorafsProviderGovernance>(),
             &LegacyProposeSorafsProviderGovernance {
                 action: sorafs_provider_action(),
@@ -987,7 +972,7 @@ mod tests {
     #[test]
     fn sccp_route_governance_proposal_roundtrip() {
         let ins = ProposeSccpRouteGovernance {
-            anchor: sccp_route_anchor(),
+            proposal: sccp_governance_proposal(),
         };
         let enc = norito::codec::Encode::encode(&ins);
         let mut cur = enc.as_slice();
@@ -1038,7 +1023,7 @@ mod tests {
             manifest: runtime_manifest(),
         });
         assert_slice_roundtrip(ProposeSccpRouteGovernance {
-            anchor: sccp_route_anchor(),
+            proposal: sccp_governance_proposal(),
         });
         assert_slice_roundtrip(ProposeSorafsProviderGovernance {
             action: sorafs_provider_action(),

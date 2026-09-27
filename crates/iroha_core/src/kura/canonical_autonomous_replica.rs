@@ -281,8 +281,8 @@ impl Kura {
                     "canonical autonomous replica carrier height is not representable",
                 )
             })?;
-        let (retained_header, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(carrier_height)?
+        let (retained_header, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(carrier_height)?
             .ok_or_else(|| {
                 Self::invalid_lane_artifact_error(
                     self.store_root.clone(),

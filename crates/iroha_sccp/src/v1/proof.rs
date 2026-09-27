@@ -234,12 +234,12 @@ fn check_block(
     if message_count == 0 {
         return Err(ProofError::EmptyBlock);
     }
-    verify_block_inclusion(leaf, leaf_index, message_count, path, sccp_root).map_err(
-        |error| match error {
+    verify_block_inclusion(leaf, leaf_index, message_count, path, sccp_root).map_err(|error| {
+        match error {
             MerkleError::TooManyLeaves => ProofError::BadHistoricalBlock,
             _ => ProofError::BadBlockPath,
-        },
-    )
+        }
+    })
 }
 
 /// §5.1.3 steps 4–5 in direct mode (the deadline and consumed-set checks are the caller's).
@@ -344,9 +344,7 @@ pub fn verify_control_historical(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::v1::{
-        hashes::word_address, history::HistoryAccumulatorV1, merkle::PromoteOddTree,
-    };
+    use crate::v1::{hashes::word_address, history::HistoryAccumulatorV1, merkle::PromoteOddTree};
 
     const TAIRA: [u8; 32] = [0x11; 32];
 
@@ -408,7 +406,11 @@ mod tests {
         }
     }
 
-    fn attestation(root: [u8; 32], count: u32, history: &HistoryAccumulatorV1) -> AttestationFieldsV1 {
+    fn attestation(
+        root: [u8; 32],
+        count: u32,
+        history: &HistoryAccumulatorV1,
+    ) -> AttestationFieldsV1 {
         AttestationFieldsV1 {
             height: 50,
             sccp_root: root,
@@ -496,10 +498,14 @@ mod tests {
     fn historical_mode() {
         let block = block();
         let mut history = HistoryAccumulatorV1::new();
-        history.append(&hashes::history_leaf(7, &[1; 32], 1)).unwrap();
+        history
+            .append(&hashes::history_leaf(7, &[1; 32], 1))
+            .unwrap();
         let old_leaf = hashes::history_leaf(50, &block.tree.root(), 4);
         history.append(&old_leaf).unwrap();
-        history.append(&hashes::history_leaf(80, &[2; 32], 2)).unwrap();
+        history
+            .append(&hashes::history_leaf(80, &[2; 32], 2))
+            .unwrap();
         let history_leaves = [
             hashes::history_leaf(7, &[1; 32], 1),
             old_leaf,
@@ -530,7 +536,9 @@ mod tests {
             leaf_index: 3,
             path: block.tree.path(3).unwrap(),
         };
-        assert!(verify_control_historical(&latest, &history_proof, &control, &TAIRA, &dest).is_ok());
+        assert!(
+            verify_control_historical(&latest, &history_proof, &control, &TAIRA, &dest).is_ok()
+        );
         let mut bad_height = history_proof.clone();
         bad_height.block.height = 51;
         assert_eq!(
@@ -572,7 +580,10 @@ mod tests {
             network: SccpNetworkV1::BscMainnet,
             ..dest
         };
-        assert_eq!(proof.transfer(&TAIRA, &bsc), Err(ProofError::WrongDestination));
+        assert_eq!(
+            proof.transfer(&TAIRA, &bsc),
+            Err(ProofError::WrongDestination)
+        );
         let garbage = MessageProofV1 {
             payload: vec![1, 2, 3],
             ..MessageProofV1::default()
@@ -590,9 +601,9 @@ mod tests {
             route_revision: 1,
             destination_word: word,
         };
-        let mut tron = vec![0x41];
-        tron.extend_from_slice(&[0x22; 20]);
-        assert!(dest.is_self(CODEC_TRON_ADDRESS21, &tron));
+        let mut tvm_account = vec![0x41];
+        tvm_account.extend_from_slice(&[0x22; 20]);
+        assert!(dest.is_self(CODEC_TRON_ADDRESS21, &tvm_account));
         assert!(dest.is_self(2, &[0x22; 20]));
         assert!(!dest.is_self(2, &[0x23; 20]));
         let ton_dest = DestinationV1 {
@@ -600,10 +611,10 @@ mod tests {
             route_revision: 1,
             destination_word: [0x44; 32],
         };
-        let mut ton = vec![0; 4];
-        ton.extend_from_slice(&[0x44; 32]);
-        assert!(ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton));
-        ton[35] = 0;
-        assert!(!ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton));
+        let mut ton_account = vec![0; 4];
+        ton_account.extend_from_slice(&[0x44; 32]);
+        assert!(ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton_account));
+        ton_account[35] = 0;
+        assert!(!ton_dest.is_self(CODEC_TON_ACCOUNT36, &ton_account));
     }
 }

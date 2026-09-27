@@ -530,14 +530,6 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
     {
         return BASE_CUSTOM.saturating_add(KAIGI_RECORD_READ_ESCROW);
     }
-    if let Some(record) = any.downcast_ref::<dm_isi::bridge::RecordSccpMessage>() {
-        let sz = u64::try_from(record.payload_bytes.len()).unwrap_or(u64::MAX);
-        return BASE_CUSTOM + sz;
-    }
-    if let Some(submit) = any.downcast_ref::<dm_isi::bridge::SubmitSccpTonBreakerObservationV1>() {
-        let proof_bytes = u64::try_from(submit.encoded_observation.len()).unwrap_or(u64::MAX);
-        return BASE_CUSTOM.saturating_add(proof_bytes);
-    }
     if let Some(create) = any.downcast_ref::<dm_isi::kaigi::CreateKaigi>() {
         let proof_gas = create
             .proof
@@ -1879,7 +1871,7 @@ mod tests {
         };
         state
             .set_zk(zk_cfg.clone())
-            .expect("empty SCCP outbox accepts gas test configuration");
+            .expect("empty state accepts gas test configuration");
         let fixture = halo2_fixture_envelope("halo2/ipa:transfer-gas", [0u8; 32]);
         let proof_box = fixture.proof_box("halo2/ipa");
         let attachment = iroha_data_model::proof::ProofAttachment::new_ref(

@@ -89,16 +89,6 @@ pub mod isi {
             }
             let spec = self.asset_definition(resolved_id.definition())?.spec();
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
-            if sccp_registry_references_custody_asset(
-                self.sccp_registry.get(),
-                network_id,
-                &resolved_id,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP custody can only be debited by verified native inbound settlement".into(),
-                )
-                .into());
-            }
             if fx_registry_references_escrow_asset(self.parameters.get(), network_id, &resolved_id)?
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -152,6 +142,7 @@ pub mod isi {
         /// Validate an exact-id numeric transfer and compute its complete balance transcript.
         ///
         /// This is read-only; both ids must already be canonicalized for their intended scopes.
+        #[cfg(test)]
         pub(crate) fn precheck_numeric_asset_transfer_delta_exact(
             &self,
             source_id: &AssetId,
@@ -1727,11 +1718,9 @@ pub mod isi {
         RetailMonetary(RetailMonetaryPurposeV1),
         PrivacyPoolBridge(PrivacyPublicReserveOwnerV1),
         GameSessionFunding,
-        SccpEscrowDeposit,
         FxEscrowDeposit,
         NativeEscrowCustody,
         SorafsReserveCustody,
-        SccpEscrowRelease,
         FxEscrowRelease,
         FeeSponsorCustody,
         KagemushaReserveCustody,
@@ -1841,22 +1830,6 @@ pub mod isi {
         )
         .into())
     }
-    fn sccp_registry_references_custody_asset(
-        registry: &iroha_data_model::bridge::SccpRegistryV1,
-        network_id: &iroha_data_model::NetworkId,
-        asset_id: &AssetId,
-    ) -> bool {
-        registry.lanes.iter().any(|lane| {
-            lane.routes.iter().any(|route| {
-                route.settlement.asset_definition_id == *asset_id.definition()
-                    && iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
-                        network_id,
-                        &route.key(),
-                        &route.settlement.asset_definition_id,
-                    ) == *asset_id.account()
-            })
-        })
-    }
     fn fx_registry_references_escrow_asset(
         parameters: &Parameters,
         network_id: &iroha_data_model::NetworkId,
@@ -1964,76 +1937,6 @@ pub mod isi {
                 || policy.destination_asset_definition_id == *definition_id
         }))
     }
-    /// Return whether an asset is protected backing for any retained SCCP revision.
-    pub(crate) fn is_sccp_custody_asset(
-        state_transaction: &StateTransaction<'_, '_>,
-        asset_id: &AssetId,
-    ) -> bool {
-        sccp_registry_references_custody_asset(
-            state_transaction.world.sccp_registry.get(),
-            &state_transaction.network_id,
-            asset_id,
-        )
-    }
-    /// Return whether an account is referenced as custody by any retained SCCP revision.
-    pub(crate) fn is_sccp_custody_account(
-        state_transaction: &StateTransaction<'_, '_>,
-        account_id: &AccountId,
-    ) -> bool {
-        state_transaction
-            .world
-            .sccp_registry
-            .get()
-            .lanes
-            .iter()
-            .flat_map(|lane| &lane.routes)
-            .any(|route| {
-                iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
-                    &state_transaction.network_id,
-                    &route.key(),
-                    &route.settlement.asset_definition_id,
-                ) == *account_id
-            })
-    }
-    /// Return whether a definition is referenced by any retained SCCP revision.
-    pub(crate) fn is_sccp_settlement_asset_definition(
-        state_transaction: &StateTransaction<'_, '_>,
-        definition_id: &AssetDefinitionId,
-    ) -> bool {
-        state_transaction
-            .world
-            .sccp_registry
-            .get()
-            .lanes
-            .iter()
-            .flat_map(|lane| &lane.routes)
-            .any(|route| route.settlement.asset_definition_id == *definition_id)
-    }
-    fn ensure_not_sccp_custody_source(
-        state_transaction: &StateTransaction<'_, '_>,
-        source_id: &AssetId,
-    ) -> Result<(), Error> {
-        if is_sccp_custody_asset(state_transaction, source_id) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP custody can only be debited by verified native inbound settlement".into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
-    fn ensure_not_sccp_custody_destination(
-        state_transaction: &StateTransaction<'_, '_>,
-        destination_id: &AssetId,
-    ) -> Result<(), Error> {
-        if is_sccp_custody_asset(state_transaction, destination_id) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP route escrow can only be credited by a route-bound native SCCP instruction"
-                    .into(),
-            )
-            .into());
-        }
-        Ok(())
-    }
     fn ensure_not_fx_corridor_escrow_source(
         state_transaction: &StateTransaction<'_, '_>,
         source_id: &AssetId,
@@ -2138,8 +2041,6 @@ pub mod isi {
         GameSession(Vec<u8>),
         /// Fund a VPN lease retained record.
         VpnLease(Vec<u8>),
-        /// Lock one user's outbound transfer in an exact governed SCCP route escrow.
-        SccpOutboundEscrowLock(Vec<u8>),
         /// Fund one exact owner-funded native FX reserve.
         FxCorridorEscrowDeposit(Vec<u8>),
         /// Charge one exact SNS auto-renewal quote.
@@ -2244,10 +2145,6 @@ pub mod isi {
             submitting_authority: &AccountId,
             purpose: EmbeddedNumericAssetMovementPurpose,
         ) -> Self {
-            let is_sccp_deposit = matches!(
-                &purpose,
-                EmbeddedNumericAssetMovementPurpose::SccpOutboundEscrowLock(_)
-            );
             let is_fx_deposit = matches!(
                 &purpose,
                 EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(_)
@@ -2339,11 +2236,6 @@ pub mod isi {
                     "vpn-lease-funding",
                     binding,
                 ),
-                EmbeddedNumericAssetMovementPurpose::SccpOutboundEscrowLock(binding) => (
-                    NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
-                    "sccp-outbound-route-lock",
-                    binding,
-                ),
                 EmbeddedNumericAssetMovementPurpose::FxCorridorEscrowDeposit(binding) => (
                     NumericMovementDebitAuthorization::ExactUser(submitting_authority.clone()),
                     "fx-corridor-owner-funding",
@@ -2362,9 +2254,7 @@ pub mod isi {
                     tag,
                     binding,
                 },
-                source_policy: if is_sccp_deposit {
-                    NumericAssetTransferSourcePolicy::SccpEscrowDeposit
-                } else if is_fx_deposit {
+                source_policy: if is_fx_deposit {
                     NumericAssetTransferSourcePolicy::FxEscrowDeposit
                 } else if is_game_funding {
                     NumericAssetTransferSourcePolicy::GameSessionFunding
@@ -2617,9 +2507,6 @@ pub mod isi {
                 NumericAssetTransferSourcePolicy::GameSessionFunding => {
                     ("GameSessionFunding", Vec::new())
                 }
-                NumericAssetTransferSourcePolicy::SccpEscrowDeposit => {
-                    ("SccpEscrowDeposit", Vec::new())
-                }
                 NumericAssetTransferSourcePolicy::FxEscrowDeposit => {
                     ("FxEscrowDeposit", Vec::new())
                 }
@@ -2628,9 +2515,6 @@ pub mod isi {
                 }
                 NumericAssetTransferSourcePolicy::SorafsReserveCustody => {
                     ("SorafsReserveCustody", Vec::new())
-                }
-                NumericAssetTransferSourcePolicy::SccpEscrowRelease => {
-                    ("SccpEscrowRelease", Vec::new())
                 }
                 NumericAssetTransferSourcePolicy::FxEscrowRelease => {
                     ("FxEscrowRelease", Vec::new())
@@ -3183,7 +3067,6 @@ pub mod isi {
                 )?;
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetBurnSourcePolicy::FeeSponsorCustody => {
@@ -3199,7 +3082,6 @@ pub mod isi {
                 }
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
             }
         }
@@ -6551,6 +6433,7 @@ pub mod isi {
         ]);
     }
     /// Validate policy gates for a transparent numeric asset balance movement.
+    #[cfg(test)]
     fn ensure_numeric_asset_transfer_policies(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
@@ -6600,6 +6483,7 @@ pub mod isi {
             (None, _) => Ok(()),
         }
     }
+    // TODO(ws32): re-add custody guards for SCCP v1 route escrows.
     fn ensure_numeric_asset_transfer_policies_with_scope(
         state_transaction: &mut StateTransaction<'_, '_>,
         source_id: &AssetId,
@@ -6751,9 +6635,6 @@ pub mod isi {
         if source_policy != NumericAssetTransferSourcePolicy::SorafsReserveCustody {
             ensure_not_sorafs_reserve_custody_source(state_transaction, &source_id)?;
         }
-        if source_policy != NumericAssetTransferSourcePolicy::SccpEscrowDeposit {
-            ensure_not_sccp_custody_destination(state_transaction, &destination_id)?;
-        }
         if source_policy != NumericAssetTransferSourcePolicy::FxEscrowRelease {
             ensure_not_fx_corridor_escrow_source(state_transaction, &source_id)?;
         }
@@ -6767,24 +6648,10 @@ pub mod isi {
             | NumericAssetTransferSourcePolicy::GameSessionFunding => {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
-            }
-            NumericAssetTransferSourcePolicy::SccpEscrowDeposit => {
-                ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
-                ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
-                if !is_sccp_custody_asset(state_transaction, &destination_id) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "SCCP route escrow deposit destination is not governed protocol custody"
-                            .into(),
-                    )
-                    .into());
-                }
             }
             NumericAssetTransferSourcePolicy::FxEscrowDeposit => {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 if !is_fx_corridor_escrow_asset(state_transaction, &destination_id)? {
                     return Err(InstructionExecutionError::InvariantViolation(
                         "FX corridor escrow deposit destination is not governed protocol custody"
@@ -6794,7 +6661,6 @@ pub mod isi {
                 }
             }
             NumericAssetTransferSourcePolicy::NativeEscrowCustody => {
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
                 if !crate::smartcontracts::isi::escrow::is_native_escrow_custody_asset(
                     state_transaction,
                     &source_id,
@@ -6815,16 +6681,6 @@ pub mod isi {
                 }
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
-            }
-            NumericAssetTransferSourcePolicy::SccpEscrowRelease => {
-                if !is_sccp_custody_asset(state_transaction, &source_id) {
-                    return Err(InstructionExecutionError::InvariantViolation(
-                        "SCCP route escrow release source is not governed protocol custody".into(),
-                    ));
-                }
-                ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
-                ensure_not_native_escrow_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::FxEscrowRelease => {
                 if !is_fx_corridor_escrow_asset(state_transaction, &source_id)? {
@@ -6835,7 +6691,6 @@ pub mod isi {
                 }
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::FeeSponsorCustody => {
                 if source_id.account()
@@ -6852,7 +6707,6 @@ pub mod isi {
                 }
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::OracleReward
             | NumericAssetTransferSourcePolicy::OraclePenalty
@@ -6870,7 +6724,6 @@ pub mod isi {
             | NumericAssetTransferSourcePolicy::CitizenshipRelease => {
                 ensure_not_kagemusha_reserve_source(state_transaction, &source_id)?;
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
             NumericAssetTransferSourcePolicy::KagemushaReserveCustody => {
                 if !crate::smartcontracts::isi::kagemusha::is_kagemusha_reserve_source_asset(
@@ -6882,7 +6735,6 @@ pub mod isi {
                     ));
                 }
                 ensure_not_native_escrow_source(state_transaction, &source_id)?;
-                ensure_not_sccp_custody_source(state_transaction, &source_id)?;
             }
         }
         Ok((source_id, destination_id))
@@ -7156,7 +7008,6 @@ pub mod isi {
                     "native game custody accepts only exact native entry funding".into(),
                 ));
             }
-            ensure_not_sccp_custody_destination(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_destination(state_transaction, &resolved_asset_id)?;
             let _created = ensure_receiving_account(
                 authority,
@@ -7260,7 +7111,6 @@ pub mod isi {
             )?;
             ensure_not_kagemusha_reserve_source(state_transaction, &resolved_asset_id)?;
             ensure_not_native_escrow_source(state_transaction, &resolved_asset_id)?;
-            ensure_not_sccp_custody_source(state_transaction, &resolved_asset_id)?;
             ensure_not_fx_corridor_escrow_source(state_transaction, &resolved_asset_id)?;
             ensure_not_sorafs_reserve_custody_source(state_transaction, &resolved_asset_id)?;
             let captured_quantity = quantity.clone();
@@ -7364,7 +7214,6 @@ pub mod isi {
             ));
         }
         state_transaction.world.account(asset_id.account())?;
-        ensure_not_sccp_custody_destination(state_transaction, &asset_id)?;
         ensure_not_fx_corridor_escrow_destination(state_transaction, &asset_id)?;
         let spec = state_transaction
             .numeric_spec_for(asset_id.definition())
@@ -7476,7 +7325,6 @@ pub mod isi {
         )?;
         ensure_not_kagemusha_reserve_source(state_transaction, &asset_id)?;
         ensure_not_native_escrow_source(state_transaction, &asset_id)?;
-        ensure_not_sccp_custody_source(state_transaction, &asset_id)?;
         ensure_not_fx_corridor_escrow_source(state_transaction, &asset_id)?;
         ensure_not_sorafs_reserve_custody_source(state_transaction, &asset_id)?;
         let captured_quantity = quantity.clone();
@@ -7621,180 +7469,6 @@ pub mod isi {
             ),
         )
     }
-    fn resolve_sccp_route_escrow_binding(
-        state_transaction: &StateTransaction<'_, '_>,
-        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
-        asset_definition_id: &AssetDefinitionId,
-    ) -> Result<AccountId, Error> {
-        let route = state_transaction
-            .sccp_registry
-            .route(route_key)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "SCCP escrow movement references an ungoverned route revision".into(),
-                )
-            })?;
-        if &route.settlement.asset_definition_id != asset_definition_id {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP escrow movement asset does not match the governed route".into(),
-            )
-            .into());
-        }
-        let escrow = iroha_data_model::bridge::sccp_route_escrow_account_id_v1(
-            &state_transaction.network_id,
-            route_key,
-            asset_definition_id,
-        );
-        state_transaction.world.account(&escrow)?;
-        Ok(escrow)
-    }
-    fn sccp_liability_quantity(
-        outstanding_liability: u128,
-        payload_amount_scale: u32,
-    ) -> Result<Quantity, Error> {
-        let numeric = Numeric::try_new(outstanding_liability, payload_amount_scale).map_err(
-            |error| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "SCCP liability {outstanding_liability} is not representable at governed scale {payload_amount_scale}: {error}"
-                    )
-                    .into(),
-                )
-            },
-        )?;
-        Quantity::from_canonical_numeric(numeric).map_err(|error| {
-            InstructionExecutionError::InvariantViolation(
-                format!("SCCP liability is outside the quantity domain: {error}").into(),
-            )
-            .into()
-        })
-    }
-    fn sccp_escrow_balance(
-        state_transaction: &StateTransaction<'_, '_>,
-        escrow_asset: &AssetId,
-    ) -> Quantity {
-        state_transaction
-            .world
-            .assets
-            .get(escrow_asset)
-            .map(|value| value.as_ref().clone())
-            .unwrap_or_else(Quantity::zero)
-    }
-    fn execute_sccp_route_escrow_deposit(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
-        asset_definition_id: &AssetDefinitionId,
-        payload_amount: u128,
-        amount: Quantity,
-    ) -> Result<(), Error> {
-        let escrow =
-            resolve_sccp_route_escrow_binding(state_transaction, route_key, asset_definition_id)?;
-        let route = state_transaction
-            .sccp_registry
-            .route(route_key)
-            .expect("resolved SCCP escrow route remains governed");
-        let payload_amount_scale = route.settlement.payload_amount_scale;
-        let maximum = route.settlement.max_outstanding_liability;
-        if amount != sccp_liability_quantity(payload_amount, payload_amount_scale)? {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP outbound transfer amount differs from its canonical payload units".into(),
-            )
-            .into());
-        }
-        let current = state_transaction
-            .world
-            .sccp_route_liabilities
-            .get(route_key)
-            .copied();
-        if current.is_some_and(|record| !record.is_well_formed()) {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP outbound lock observed a noncanonical zero liability row".into(),
-            )
-            .into());
-        }
-        let current_units = current.map_or(0, |record| record.outstanding_liability);
-        let next = match current {
-            Some(record) => record.checked_credit(payload_amount, maximum),
-            None if payload_amount <= maximum => {
-                iroha_data_model::bridge::SccpRouteLiabilityV1::new(payload_amount)
-            }
-            None => None,
-        }
-        .ok_or_else(|| {
-            InstructionExecutionError::InvariantViolation(
-                format!(
-                    "SCCP outbound liability overflow or immutable route cap exceeded: current={current_units}, amount={payload_amount}, maximum={maximum}"
-                )
-                .into(),
-            )
-        })?;
-        let source_id = AssetId::new(asset_definition_id.clone(), authority.clone());
-        let destination_id = AssetId::new(asset_definition_id.clone(), escrow);
-        let expected_before = sccp_liability_quantity(current_units, payload_amount_scale)?;
-        let actual_before = sccp_escrow_balance(state_transaction, &destination_id);
-        if actual_before != expected_before {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "SCCP route escrow is not fully backed before outbound lock: balance={actual_before}, liability={expected_before}"
-                )
-                .into(),
-            )
-            .into());
-        }
-        let binding = canonical_numeric_movement_binding(&(
-            route_key.clone(),
-            asset_definition_id.clone(),
-            source_id.clone(),
-            destination_id.clone(),
-            amount.clone(),
-        ))?;
-        execute_numeric_asset_movement(
-            state_transaction,
-            source_id,
-            destination_id.clone(),
-            amount,
-            NumericAssetMovementAuthorization::embedded_user(
-                authority,
-                EmbeddedNumericAssetMovementPurpose::SccpOutboundEscrowLock(binding),
-            ),
-        )?;
-        let expected_after =
-            sccp_liability_quantity(next.outstanding_liability, payload_amount_scale)?;
-        let actual_after = sccp_escrow_balance(state_transaction, &destination_id);
-        if actual_after != expected_after {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "SCCP route escrow is not fully backed after outbound lock: balance={actual_after}, liability={expected_after}"
-                )
-                .into(),
-            )
-            .into());
-        }
-        state_transaction
-            .world
-            .sccp_route_liabilities
-            .insert(route_key.clone(), next);
-        Ok(())
-    }
-    /// Lock an outbound SCCP sender's funds in the exact governed route escrow.
-    pub(crate) fn execute_sccp_outbound_route_lock(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
-        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
-        asset_definition_id: &AssetDefinitionId,
-        payload_amount: u128,
-        amount: Quantity,
-    ) -> Result<(), Error> {
-        execute_sccp_route_escrow_deposit(
-            state_transaction,
-            authority,
-            route_key,
-            asset_definition_id,
-            payload_amount,
-            amount,
-        )
-    }
     fn resolve_fx_corridor_escrow_binding(
         state_transaction: &StateTransaction<'_, '_>,
         policy: &iroha_data_model::isi::settlement::FxCorridorPolicy,
@@ -7895,259 +7569,6 @@ pub mod isi {
                 RetainedNumericAssetMovementPurpose::FxCorridorEscrowRefund(binding),
             ),
         )
-    }
-    /// A fully validated, one-shot SCCP custody release whose balance mutation cannot fail.
-    ///
-    /// This capability is intentionally neither [`Clone`] nor [`Copy`]: proof admission creates
-    /// exactly one value and settlement consumes it, so an accepted proof cannot accidentally be
-    /// applied twice by reusing a prepared plan.
-    #[derive(Debug)]
-    pub(crate) struct PreparedSccpInboundNumericAssetRelease {
-        route_key: iroha_data_model::bridge::SccpRouteKeyV1,
-        source_id: AssetId,
-        destination_id: AssetId,
-        amount: Quantity,
-        liability_before: iroha_data_model::bridge::SccpRouteLiabilityV1,
-        liability_after: Option<iroha_data_model::bridge::SccpRouteLiabilityV1>,
-        expected_escrow_balance_after: Quantity,
-        control_update: Option<AssetTransferControlRecord>,
-        delta: TransferDeltaTranscript,
-    }
-    /// Validate an SCCP custody release before reserving or executing proof work.
-    ///
-    /// Keeping this preparation separate from proof verification ensures predictable ledger
-    /// failures (including recipient overflow, custody blacklisting, and rolling-cap exhaustion)
-    /// neither debit custody nor consume the transaction's verifier-work allowance. The returned
-    /// plan carries the prepared control-usage update and is applied only after the source proof
-    /// succeeds.
-    pub(crate) fn prepare_sccp_inbound_numeric_asset_release(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        route_key: &iroha_data_model::bridge::SccpRouteKeyV1,
-        destination: AccountId,
-        payload_amount: u128,
-        amount: Quantity,
-    ) -> Result<PreparedSccpInboundNumericAssetRelease, Error> {
-        state_transaction.require_transfer_transcript_identity("SCCP native inbound settlement")?;
-        state_transaction.world.account(&destination)?;
-        let route = state_transaction
-            .sccp_registry
-            .route(route_key)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "SCCP inbound settlement references an ungoverned route revision".into(),
-                )
-            })?;
-        let asset_definition_id = route.settlement.asset_definition_id.clone();
-        let payload_amount_scale = route.settlement.payload_amount_scale;
-        if amount != sccp_liability_quantity(payload_amount, payload_amount_scale)? {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP inbound transfer amount differs from its canonical payload units".into(),
-            )
-            .into());
-        }
-        let liability_before = state_transaction
-            .world
-            .sccp_route_liabilities
-            .get(route_key)
-            .copied()
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    "SCCP inbound release has no outstanding route liability".into(),
-                )
-            })?;
-        if !liability_before.is_well_formed() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP inbound release observed a noncanonical zero liability row".into(),
-            )
-            .into());
-        }
-        let liability_after = liability_before
-            .checked_debit(payload_amount)
-            .ok_or_else(|| {
-                InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "SCCP inbound release exceeds outstanding route liability: liability={}, amount={payload_amount}",
-                        liability_before.outstanding_liability
-                    )
-                    .into(),
-                )
-            })?;
-        let escrow =
-            resolve_sccp_route_escrow_binding(state_transaction, route_key, &asset_definition_id)?;
-        let source_id = AssetId::new(asset_definition_id, escrow);
-        let resolved_source_id = state_transaction
-            .world
-            .resolve_asset_id_for_current_scope(&source_id)?;
-        reject_uncovered_retail_asset_mutation(
-            state_transaction,
-            &resolved_source_id,
-            "SCCP inbound release",
-        )?;
-        let expected_escrow_balance_before =
-            sccp_liability_quantity(liability_before.outstanding_liability, payload_amount_scale)?;
-        let expected_escrow_balance_after = sccp_liability_quantity(
-            liability_after.map_or(0, |record| record.outstanding_liability),
-            payload_amount_scale,
-        )?;
-        let actual_before = sccp_escrow_balance(state_transaction, &source_id);
-        if actual_before != expected_escrow_balance_before {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!(
-                    "SCCP route escrow is not fully backed before inbound release: balance={actual_before}, liability={expected_escrow_balance_before}"
-                )
-                .into(),
-            )
-            .into());
-        }
-        let destination_id = AssetId::new(source_id.definition().clone(), destination);
-        let (source_id, destination_id) = ensure_numeric_asset_transfer_policies(
-            state_transaction,
-            &source_id,
-            &destination_id,
-            &amount,
-            NumericAssetTransferSourcePolicy::SccpEscrowRelease,
-        )?;
-        let control_update =
-            prepare_outbound_asset_transfer_control_update(state_transaction, &source_id, &amount)?;
-        let delta = state_transaction
-            .world
-            .precheck_numeric_asset_transfer_delta_exact(&source_id, &destination_id, &amount)?;
-        if delta.from_balance_before != expected_escrow_balance_before
-            || delta.from_balance_after != expected_escrow_balance_after
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "prepared SCCP inbound balance delta differs from its liability transition".into(),
-            )
-            .into());
-        }
-        let source_balance_after = if source_id == destination_id {
-            &delta.to_balance_after
-        } else {
-            &delta.from_balance_after
-        };
-        crate::smartcontracts::isi::sorafs_moderation::ensure_moderation_bond_reserve_after_debit(
-            state_transaction.world(),
-            &source_id,
-            source_balance_after,
-        )?;
-        Ok(PreparedSccpInboundNumericAssetRelease {
-            route_key: route_key.clone(),
-            source_id,
-            destination_id,
-            amount,
-            liability_before,
-            liability_after,
-            expected_escrow_balance_after,
-            control_update,
-            delta,
-        })
-    }
-    /// Apply a prepared SCCP custody release after its exact native proof succeeds.
-    pub(in crate::smartcontracts::isi) fn apply_prepared_sccp_inbound_numeric_asset_release(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        submitting_authority: &AccountId,
-        prepared: PreparedSccpInboundNumericAssetRelease,
-        proof_binding: Option<
-            crate::smartcontracts::isi::world::isi::VerifiedSccpQuantityProofBinding,
-        >,
-    ) -> Result<(), Error> {
-        if state_transaction
-            .world
-            .sccp_route_liabilities
-            .get(&prepared.route_key)
-            != Some(&prepared.liability_before)
-        {
-            return Err(InstructionExecutionError::InvariantViolation(
-                "SCCP route liability changed between inbound preparation and apply".into(),
-            )
-            .into());
-        }
-        let transcript_identity = state_transaction
-            .require_transfer_transcript_identity("FastPQ transfer transcript recording")?;
-        // Source proof verification already succeeded before this apply entry. Capture the
-        // exact release occurrence before its balance/liability/control writes, not before
-        // that earlier proof work.
-        let (source_id, destination_id, amount) = state_transaction
-            .apply_with_prepared_transfer_transcripts(
-                submitting_authority,
-                transcript_identity,
-                vec![prepared.delta.clone()],
-                |state_transaction| {
-                    let context = proof_binding.and_then(|binding| {
-                        let (entry, proof, envelope) = binding.into_parts();
-                        if entry != Some(transcript_identity) || entry != state_transaction.tx_call_hash {
-                            return None;
-                        }
-                        let mut remaining = state_transaction.quantity_candidate_preimage_limit();
-                        bounded_quantity_frame(&(
-                            "iroha:fastpq:sccp-inbound-authorization:v1".to_owned(),
-                            submitting_authority.clone(), proof, envelope,
-                            prepared.route_key.clone(), prepared.liability_before,
-                            prepared.liability_after,
-                            (prepared.source_id.clone(), prepared.destination_id.clone(), prepared.amount.clone()),
-                        ), &mut remaining).map(Hash::new)
-                    });
-                    let legs = [(prepared.source_id.clone(), prepared.destination_id.clone(), prepared.delta.clone())];
-                    let apply = |state_transaction: &mut StateTransaction<'_, '_>| {
-                    state_transaction
-                        .world
-                        .apply_prechecked_numeric_asset_transfer_delta_exact(
-                            &prepared.source_id,
-                            &prepared.destination_id,
-                            &prepared.amount,
-                            &prepared.delta,
-                            NumericAssetTransferSourcePolicy::SccpEscrowRelease,
-                        )?;
-                    let PreparedSccpInboundNumericAssetRelease {
-                        route_key,
-                        source_id,
-                        destination_id,
-                        amount,
-                        liability_before: _,
-                        liability_after,
-                        expected_escrow_balance_after,
-                        control_update,
-                        delta: _,
-                    } = prepared;
-                    match liability_after {
-                        Some(record) => {
-                            state_transaction
-                                .world
-                                .sccp_route_liabilities
-                                .insert(route_key, record);
-                        }
-                        None => {
-                            state_transaction
-                                .world
-                                .sccp_route_liabilities
-                                .remove(route_key);
-                        }
-                    }
-                    let actual_after = sccp_escrow_balance(state_transaction, &source_id);
-                    if actual_after != expected_escrow_balance_after {
-                        return Err(InstructionExecutionError::InvariantViolation(
-                            format!(
-                                "SCCP route escrow is not fully backed after inbound release: balance={actual_after}, liability={expected_escrow_balance_after}"
-                            )
-                            .into(),
-                        )
-                        .into());
-                    }
-                    if let Some(record) = control_update {
-                        update_control_record(state_transaction, source_id.account(), record)?;
-                    }
-                    Ok((source_id, destination_id, amount))
-                    };
-                    match context {
-                        Some(context) => state_transaction.apply_with_quantity_transfer_candidate(
-                            submitting_authority, transcript_identity, context, &legs, apply,
-                        ),
-                        None => { state_transaction.poison_quantity_candidate_owner(); apply(state_transaction) }
-                    }
-                },
-            )?;
-        emit_numeric_asset_transfer_events(state_transaction, source_id, destination_id, amount);
-        Ok(())
     }
     #[cfg(test)]
     /// Exercise the reference numeric-transfer batch path in delta regression tests.

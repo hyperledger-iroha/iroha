@@ -7715,41 +7715,6 @@ fn parse_world(
             }
         }
     }
-    map.get("sccp_registry")
-        .ok_or_else(|| json::Error::missing_field("sccp_registry"))?
-        .validate_sccp_registry()?;
-    let sccp_registry: Cell<iroha_data_model::bridge::SccpRegistryV1> =
-        take_required(&mut map, "sccp_registry")?;
-    let sccp_route_liabilities: Storage<SccpRouteKeyV1, SccpRouteLiabilityV1> =
-        take_required(&mut map, "sccp_route_liabilities")?;
-    let sccp_ton_breaker_observations: Storage<SccpRouteKeyV1, SccpTonBreakerObservationRecordV1> =
-        take_required(&mut map, "sccp_ton_breaker_observations")?;
-    let sccp_replay_forests: Storage<SccpReplayAccumulatorIdV1, SccpReplayForestV1> =
-        take_required(&mut map, "sccp_replay_forests")?;
-    let sccp_outbound_pending_usage = take_required(&mut map, "sccp_outbound_pending_usage")?;
-    let sccp_outbound_pending_messages = take_required(&mut map, "sccp_outbound_pending_messages")?;
-    let sccp_outbound_message_locator = take_required(&mut map, "sccp_outbound_message_locator")?;
-    let sccp_outbound_message_index = take_required(&mut map, "sccp_outbound_message_index")?;
-    let sccp_inbound_anchor_high_water: Storage<SccpInboundAnchorHighWaterKeyV1, u64> =
-        take_required(&mut map, "sccp_inbound_anchor_high_water")?;
-    validate_sccp_outbound_pending_messages(&sccp_outbound_pending_messages)?;
-    validate_sccp_replay_forests(&sccp_replay_forests)?;
-    validate_sccp_outbound_pending_usage(
-        &sccp_outbound_pending_messages,
-        &sccp_outbound_pending_usage,
-    )?;
-    validate_sccp_outbound_indexes(
-        &sccp_outbound_pending_messages,
-        &sccp_outbound_message_locator,
-        &sccp_outbound_message_index,
-    )?;
-    let sccp_inbound_anchor_high_water_view = sccp_inbound_anchor_high_water.view();
-    validate_sccp_inbound_anchor_high_water_index(&sccp_inbound_anchor_high_water_view).map_err(
-        |message| json::Error::InvalidField {
-            field: "world.sccp_inbound_anchor_high_water".to_owned(),
-            message,
-        },
-    )?;
     let tx_sequences: Storage<AccountId, u64> = take_required(&mut map, "tx_sequences")?;
     let triggers_value = map
         .remove("triggers")
@@ -8253,15 +8218,6 @@ fn parse_world(
         axt_asset_incarnations,
         axt_replay_ledger,
         axt_handle_budget_ledger,
-        sccp_registry,
-        sccp_route_liabilities,
-        sccp_ton_breaker_observations,
-        sccp_replay_forests,
-        sccp_outbound_pending_usage,
-        sccp_outbound_pending_messages,
-        sccp_outbound_message_locator,
-        sccp_outbound_message_index,
-        sccp_inbound_anchor_high_water,
         tx_sequences,
         triggers,
         executor,
@@ -9158,7 +9114,6 @@ fn build_state(
         publication_notify: tokio::sync::Notify::new(),
         view_lock_contention_log: parking_lot::Mutex::new(ViewLockContentionLog::default()),
         sumeragi_v2_pending_evidence: parking_lot::Mutex::new(BTreeMap::new()),
-        sccp_registry_cache: PublicationMutex::new(SccpRegistryCache::default()),
     });
     if !emergency_fast {
         // Restore effective manifests from the caller's frozen startup sources before

@@ -599,7 +599,6 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
-            sccp_commitment_root: None,
             execution_context_hash: None,
             creation_time_ms: 0,
             view_change_index: 0,
@@ -620,7 +619,6 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
-                sccp_commitment_root: None,
                 execution_context_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
@@ -637,7 +635,6 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
-            sccp_commitment_root: None,
             execution_context_hash: None,
             creation_time_ms: 0,
             view_change_index: 0,
@@ -658,7 +655,6 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
-                sccp_commitment_root: None,
                 execution_context_hash: None,
                 creation_time_ms: 0,
                 view_change_index: 0,
@@ -965,8 +961,8 @@ mod tests {
         #[tokio::test]
         async fn finality_attestation_handler_binds_success_and_reports_only_actual_tip_race() {
             let _scope = StatusScope::new();
-            let (mut app, _, artifact) =
-                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(true);
+            let (mut app, artifact) =
+                crate::tests_runtime_handlers::app_with_finalized_block_for_test(true);
             let snapshot = configure_signer_and_status(&mut app, &artifact);
             v2_status::set_v2_status(snapshot.clone());
             let challenge = [0x37; 32];
@@ -1016,8 +1012,8 @@ mod tests {
         #[tokio::test]
         async fn finality_attestation_handler_distinguishes_empty_startup_and_conflicting_state() {
             let _scope = StatusScope::new();
-            let (_, _, artifact) =
-                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(false);
+            let (_, artifact) =
+                crate::tests_runtime_handlers::app_with_finalized_block_for_test(false);
             let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
             let committed = configure_signer_and_status(&mut app, &artifact);
             assert_failure(&app, 1, [0x41; 32], Reason::ConsensusUninitialized).await;
@@ -1044,8 +1040,8 @@ mod tests {
         #[tokio::test]
         async fn finality_attestation_handler_rejects_missing_and_corrupt_durable_proof() {
             let _scope = StatusScope::new();
-            let (mut app, _, artifact) =
-                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(false);
+            let (mut app, artifact) =
+                crate::tests_runtime_handlers::app_with_finalized_block_for_test(false);
             v2_status::set_v2_status(configure_signer_and_status(&mut app, &artifact));
             let sidecar = app.kura.v2_finality_artifact_path_for_testing(1);
             assert!(!sidecar.exists());

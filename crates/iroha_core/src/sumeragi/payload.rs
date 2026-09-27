@@ -94,12 +94,7 @@ fn build_at(
         .collect::<Vec<_>>();
     let nexus = state.nexus_snapshot();
     let view = state.view();
-    let confidential = compute_confidential_feature_digest(
-        view.world(),
-        view.zk(),
-        view.sccp_registry(),
-        height,
-    );
+    let confidential = compute_confidential_feature_digest(view.world(), view.zk(), height);
     drop(view);
     let contexts = transactions
         .iter()

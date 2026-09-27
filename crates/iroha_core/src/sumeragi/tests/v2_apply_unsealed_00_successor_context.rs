@@ -147,7 +147,6 @@ fn build_apply_fixture_from_current_parent_with_controls(
         let digest = crate::state::compute_confidential_feature_digest(
             state_view.world(),
             &state_view.zk,
-            state_view.sccp_registry.as_ref(),
             context.height,
         );
         (!digest.is_empty()).then_some(digest)

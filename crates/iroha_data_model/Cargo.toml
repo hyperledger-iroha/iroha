@@ -177,6 +177,10 @@ path = "tests/json_object_key_contract.rs"
 name = "sccp_v1_governance"
 path = "tests/sccp_v1_governance.rs"
 
+[[test]]
+name = "sccp_v1_roundtrip"
+path = "tests/sccp_v1_roundtrip.rs"
+
 # Public manual frame contracts compile separately from the large internal unit suite.
 [[test]]
 name = "manual_frame_identity"

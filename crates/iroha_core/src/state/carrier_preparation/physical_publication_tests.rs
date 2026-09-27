@@ -1383,12 +1383,7 @@ fn fixture_lifecycle_decision_with_retirement(
     );
     let features = {
         let view = state.view();
-        crate::state::compute_confidential_feature_digest(
-            view.world(),
-            &view.zk,
-            view.sccp_registry.as_ref(),
-            2,
-        )
+        crate::state::compute_confidential_feature_digest(view.world(), &view.zk, 2)
     };
     header.set_confidential_features((!features.is_empty()).then_some(features));
     let signer = (0_u8..4)
@@ -1682,7 +1677,6 @@ fn hold<'state>(state: &'state State, name: &str) -> Box<dyn Held + 'state> {
         "effects.lane_privacy_registry.write" => Box::new(state.lane_privacy_registry.write()),
         "effects.da_indexes_hydrated.read" => Box::new(state.da_indexes_hydrated.read()),
         "effects.da_indexes_hydrated.write" => Box::new(state.da_indexes_hydrated.write()),
-        "effects.sccp_registry_cache" => Box::new(state.sccp_registry_cache.lock()),
         _ => panic!("unknown physical fixture owner"),
     }
 }
@@ -1753,7 +1747,6 @@ fn every_busy_carrier_family_releases_earlier_writers_and_retains_exact_retry() 
         "effects.lane_privacy_registry.write",
         "effects.da_indexes_hydrated.read",
         "effects.da_indexes_hydrated.write",
-        "effects.sccp_registry_cache",
     ] {
         let held = hold(&state, name);
         let (retry, error) = match decision.try_prepare_physical(&state, None) {

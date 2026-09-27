@@ -512,35 +512,6 @@ pub mod bridge {
     use super::*;
     use iroha_model_base::topology::LaneId;
 
-    /// Ledger event carrying one authenticated SCCP replay-forest transition.
-    #[derive(
-        Debug,
-        Clone,
-        PartialEq,
-        Eq,
-        PartialOrd,
-        Ord,
-        Decode,
-        Encode,
-        IntoSchema,
-        crate :: DeriveJsonSerialize,
-        crate :: DeriveJsonDeserialize,
-    )]
-    #[norito(no_fast_from_json)]
-    #[norito(deny_unknown_fields)]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(
-        name = "iroha_data_model::events::data::events::bridge::SccpReplayDeltaEventV1"
-    )]
-    pub struct SccpReplayDeltaEventV1 {
-        /// Nexus lane that executed the SCCP state transition.
-        pub lane: LaneId,
-        /// Exact governed route boundary whose forest changed.
-        pub accumulator_id: crate::bridge::SccpReplayAccumulatorIdV1,
-        /// Authenticated old/new root and occupied-record commitment.
-        pub delta: crate::bridge::SccpReplayDeltaV1,
-    }
-
     data_event! {
         /// Bridge lane events
         #[has_origin(origin = LaneId)]
@@ -550,9 +521,6 @@ pub mod bridge {
             /// Emitted when a bridge receipt is recorded
             #[has_origin(receipt => &receipt.lane)]
             Emitted(crate::bridge::BridgeReceipt),
-            /// Emitted after one SCCP replay leaf is occupied.
-            #[has_origin(replay => &replay.lane)]
-            ReplayDelta(SccpReplayDeltaEventV1),
         }
     }
 }
@@ -2446,48 +2414,6 @@ mod config {
     #[model]
     mod model {
         use super::*;
-        /// Kind of atomic SCCP registry mutation.
-        #[derive(
-            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
-        )]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[derive(norito::NoritoSchema)]
-        #[norito_schema(
-            name = "iroha_data_model::events::data::events::config::model::SccpRegistryOperation"
-        )]
-        pub enum SccpRegistryOperation {
-            /// Register one complete staged immutable route revision.
-            RegisterRoute,
-            /// Compare-and-swap one route revision's activation state.
-            SetRouteActivation,
-            /// Atomically stop one revision and enable its staged successor.
-            SwitchRouteRevision,
-            /// Compare-and-swap an absent lane checkpoint to its first value.
-            InitializeLaneTrustAnchor,
-            /// Compare-and-swap the single native checkpoint for a lane.
-            AdvanceLaneTrustAnchor,
-            /// Remove a never-used staged non-TRON route revision.
-            RemoveStagedRoute,
-        }
-        /// Bounded lifecycle event for a journaled SCCP registry mutation.
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
-        #[derive(norito::NoritoSchema)]
-        #[norito_schema(
-            name = "iroha_data_model::events::data::events::config::model::SccpRegistryChanged"
-        )]
-        pub struct SccpRegistryChanged {
-            /// Mutation kind.
-            pub operation: SccpRegistryOperation,
-            /// Exact lane affected by the mutation.
-            pub lane_id: crate::bridge::SccpLaneIdV1,
-            /// Affected route identity for route-local operations.
-            pub route: Option<crate::bridge::SccpRouteKeyV1>,
-            /// Digest of the previous registry payload, or zero when absent.
-            pub old_digest: [u8; 32],
-            /// Digest of the newly installed registry payload.
-            pub new_digest: [u8; 32],
-        }
         /// Changed parameter event
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2526,18 +2452,11 @@ mod config {
         pub enum ConfigurationEvent {
             /// Configuration parameter value changed.
             Changed(ParameterChanged),
-            /// Journaled SCCP registry changed without embedding its potentially large payload.
-            SccpRegistryChanged(SccpRegistryChanged),
         }
     }
 }
 
-impl_json_via_norito_bytes!(
-    ParameterChanged,
-    SccpRegistryOperation,
-    SccpRegistryChanged,
-    ConfigurationEvent,
-);
+impl_json_via_norito_bytes!(ParameterChanged, ConfigurationEvent,);
 mod executor {
     pub use self::model::*;
     use iroha_data_model_derive::model;
@@ -2797,11 +2716,8 @@ pub mod prelude {
             AssetDefinitionOwnerChanged, AssetDefinitionTotalQuantityChanged, AssetEvent,
             AssetEventSet, AssetMetadataChanged, AssetTransferred,
         },
-        bridge::{BridgeEvent, BridgeEventSet, SccpReplayDeltaEventV1},
-        config::{
-            ConfigurationEvent, ConfigurationEventSet, ParameterChanged, SccpRegistryChanged,
-            SccpRegistryOperation,
-        },
+        bridge::{BridgeEvent, BridgeEventSet},
+        config::{ConfigurationEvent, ConfigurationEventSet, ParameterChanged},
         domain::{
             AccountDomainLinkChanged, DomainEvent, DomainEventSet, DomainOwnerChanged,
             KaigiRelayHealthSummary, KaigiRelayManifestSummary, KaigiRelayRegistrationSummary,

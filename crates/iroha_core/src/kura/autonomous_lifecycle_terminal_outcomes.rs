@@ -2101,8 +2101,8 @@ impl Kura {
                 .map_err(|message| {
                     Self::invalid_lane_artifact_error(self.store_root.clone(), message)
                 })?;
-        let (_, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        let (_, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                 replica.carrier_height,
             )?
             .ok_or_else(|| {
@@ -2316,8 +2316,8 @@ impl Kura {
                 ));
             }
         }
-        let (_, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        let (_, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                 replica.carrier_height,
             )?
             .ok_or_else(|| {
@@ -2442,8 +2442,8 @@ impl Kura {
                 "committee validator cannot validate archived canonical replica basis",
             ));
         }
-        let (_, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        let (_, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                 replica.carrier_height,
             )?
             .ok_or_else(|| {

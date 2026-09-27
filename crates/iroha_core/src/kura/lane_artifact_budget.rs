@@ -899,7 +899,7 @@ impl Kura {
         let carrier_height = carrier_header.height().get();
         let carrier_hash = carrier_header.hash();
         if self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(carrier_height)?
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(carrier_height)?
             .is_some()
         {
             self.authenticate_post_wsv_lane_artifact_carrier_under_prune_and_canonical_guards(
@@ -1469,7 +1469,7 @@ impl Kura {
                             return Err(strict_error);
                         };
                         if self
-                            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                                 durable_tip,
                             )?
                             .is_some()

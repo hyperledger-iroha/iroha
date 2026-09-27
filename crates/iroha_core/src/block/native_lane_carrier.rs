@@ -3,7 +3,7 @@
 //! This is a pure borrowed projection, not a source/finality/acceptance token.
 //! Network, Pipeline and Time outputs share the common actual producer.
 //! QueuePlan and consensus effects require recorded execution with verified context.
-//! TODO: compose DA/pin/SCCP controls and full State publication before removing
+//! TODO: compose DA/pin controls and full State publication before removing
 //! the production Native inactive gate.
 
 use iroha_crypto::HashOf;
@@ -40,11 +40,9 @@ pub(crate) fn native_lane_batch_for_execution(
         || carrier.da_pin_intents().is_some()
         || header.da_commitments_hash().is_some()
         || header.da_pin_intents_hash().is_some()
-        || header.sccp_commitment_root().is_some()
     {
         return Err(
-            "native execution does not support additional carrier controls (DA, pin or SCCP)"
-                .into(),
+            "native execution does not support additional carrier controls (DA or pin)".into(),
         );
     }
     if header.npos_effects_hash() != carrier.npos_consensus_effects().map(HashOf::new) {

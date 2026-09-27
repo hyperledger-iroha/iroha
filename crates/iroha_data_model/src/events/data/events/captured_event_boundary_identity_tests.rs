@@ -68,13 +68,6 @@ const CASES: &[fn()] = &[
         )
     },
     || {
-        check::<super::bridge::SccpReplayDeltaEventV1>(
-            "iroha_data_model::events::data::events::bridge::SccpReplayDeltaEventV1",
-            "84ecf82a9e2d067ebdb7ea2a866ce159",
-            "84ecf82a9e2d067ebdb7ea2a866ce159",
-        )
-    },
-    || {
         check::<super::nft::NftOwnerChanged>(
             "iroha_data_model::events::data::events::nft::model::NftOwnerChanged",
             "3a5aed346ad0e16abc6588f4fbfb6060",
@@ -394,20 +387,6 @@ const CASES: &[fn()] = &[
             "iroha_data_model::events::data::events::trigger::model::TriggerNumberOfExecutionsChanged",
             "e38b877d49203af4cd287de19867cead",
             "e38b877d49203af4cd287de19867cead",
-        )
-    },
-    || {
-        check::<super::config::SccpRegistryOperation>(
-            "iroha_data_model::events::data::events::config::model::SccpRegistryOperation",
-            "da44fe5a5e1c894b567085c0d4311dde",
-            "da44fe5a5e1c894b567085c0d4311dde",
-        )
-    },
-    || {
-        check::<super::config::SccpRegistryChanged>(
-            "iroha_data_model::events::data::events::config::model::SccpRegistryChanged",
-            "1590a4b8542039a7ddb9ae95d8498cb9",
-            "1590a4b8542039a7ddb9ae95d8498cb9",
         )
     },
     || {

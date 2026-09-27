@@ -644,7 +644,6 @@ fn native_apply_candidate_body(
         let digest = crate::state::compute_confidential_feature_digest(
             view.world(),
             &view.zk,
-            view.sccp_registry.as_ref(),
             adapter.context.height,
         );
         (!digest.is_empty()).then_some(digest)

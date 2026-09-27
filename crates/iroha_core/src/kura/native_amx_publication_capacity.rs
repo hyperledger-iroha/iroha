@@ -553,8 +553,8 @@ impl Kura {
         let Some(checkpoint) = self.wsv_checkpoint_under_sidecar_guard(height)? else {
             return Ok(false);
         };
-        let Some((_, finality, _)) =
-            self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+        let Some((_, finality)) =
+            self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(height)?
         else {
             return Ok(false);
         };
@@ -1364,8 +1364,8 @@ impl Kura {
             )
         };
         let _sidecar = self.sidecar_lock.lock();
-        let Some((_, finality, _)) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(carrier.height)?
+        let Some((_, finality)) =
+            self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(carrier.height)?
         else {
             return Err(missing_index());
         };

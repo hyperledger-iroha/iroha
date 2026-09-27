@@ -12,7 +12,7 @@ fn lifecycle_ordinary_fixture(
     ThresholdKeyLifecycleCertificateV1,
     tempfile::TempDir,
 ) {
-    let (mut app, _, _) = app_with_indexed_sccp_message_for_test(persist_finality);
+    let (mut app, _) = app_with_finalized_block_for_test(persist_finality);
     let authority_key = checked_torii_test_ed25519_keypair(0x39, "lifecycle ingress authority");
     let authority = AccountId::new(authority_key.public_key().clone());
     let mut validators = (1_u8..=4)

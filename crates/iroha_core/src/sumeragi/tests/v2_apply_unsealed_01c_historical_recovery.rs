@@ -1305,7 +1305,6 @@ fn run_autonomous_merge_frontier_fixture(frontier_case: MergeFrontierFixtureCase
                 let digest = crate::state::compute_confidential_feature_digest(
                     state_view.world(),
                     &state_view.zk,
-                    state_view.sccp_registry.as_ref(),
                     active_context.context().height,
                 );
                 (!digest.is_empty()).then_some(digest)

@@ -179,12 +179,8 @@ fn assert_retired_merge_carrier_rejected(
     let (_, time) = TimeSource::new_mock(header.creation_time());
     let confidential_features = {
         let view = fixture.state.view();
-        let digest = crate::state::compute_confidential_feature_digest(
-            view.world(),
-            &view.zk,
-            view.sccp_registry.as_ref(),
-            height,
-        );
+        let digest =
+            crate::state::compute_confidential_feature_digest(view.world(), &view.zk, height);
         (!digest.is_empty()).then_some(digest)
     };
     let view = entry.merge_qc.view;

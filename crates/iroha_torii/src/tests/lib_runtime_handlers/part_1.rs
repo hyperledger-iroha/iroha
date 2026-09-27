@@ -2251,7 +2251,6 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
         transaction_batch_max_bytes: usize::try_from(defaults::torii::MAX_CONTENT_LEN.get())
             .unwrap_or(usize::MAX),
         state: state.clone(),
-        sccp_replay_archive: None,
         #[cfg(feature = "app_api")]
         parliament_tle_release_coordinator: Arc::new(
             iroha_core::tle_release::TleReleaseCoordinatorV1::without_signer(),

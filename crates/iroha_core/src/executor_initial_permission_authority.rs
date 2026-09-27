@@ -657,11 +657,6 @@ fn initial_permission_capability_root_authority(
             token.program_id.sponsor == *authority
                 || authority_has_permission(&state_transaction.world, authority, &manager)?
         }
-        "CanProposeSccpRouteGovernance" => {
-            let _ = decode!(executor_permission::sccp::CanProposeSccpRouteGovernance);
-            let manager: Permission = executor_permission::sccp::CanManageSccpGovernance.into();
-            authority_has_permission(&state_transaction.world, authority, &manager)?
-        }
         "CanProposeContractDeployment" => {
             let _ = decode!(executor_permission::governance::CanProposeContractDeployment);
             false
@@ -1382,9 +1377,6 @@ fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBo
         iroha_data_model::isi::settlement::SettlementInstructionBox,
         iroha_data_model::isi::bridge::SubmitBridgeProof,
         iroha_data_model::isi::bridge::RecordBridgeReceipt,
-        iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
-        iroha_data_model::isi::bridge::RecordSccpMessage,
-        iroha_data_model::isi::bridge::SubmitSccpTonBreakerObservationV1,
         iroha_data_model::isi::governance::ProposeDeployContract,
         iroha_data_model::isi::governance::ProposeContractLifecycleGovernance,
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
@@ -1639,15 +1631,6 @@ fn validate_initial_native_instruction_authority(
         ) {
             return deny(
                 "validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal",
-            );
-        }
-        if matches!(
-            set_parameter.inner(),
-            iroha_data_model::parameter::Parameter::Custom(parameter)
-                if parameter.id().name().as_ref() == "sccp_registry_v1"
-        ) {
-            return deny(
-                "the reserved SCCP registry cannot be changed through SetParameter; use route governance",
             );
         }
         if is_genesis
@@ -2615,7 +2598,6 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManageRuntimeUpgrades",
     "CanManageConsensusKeys",
     "CanManageConfidentialParams",
-    "CanManageSccpGovernance",
     "CanProposeSccpRouteGovernance",
     "CanManageKagemushaReserve",
     "CanManageRoles",

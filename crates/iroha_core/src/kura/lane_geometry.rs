@@ -4094,10 +4094,8 @@ impl Kura {
                 "merge execution context height differs from its canonical carrier mapping",
             ));
         }
-        let (carrier_header, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
-                record.block_height,
-            )?
+        let (carrier_header, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(record.block_height)?
             .ok_or_else(|| {
                 self.geometry_error(
                     ErrorKind::NotFound,

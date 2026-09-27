@@ -720,16 +720,13 @@ pub mod parameter {
         pub struct CanSetHijiriParameters;
     }
 }
-/// Permission tokens for governed SCCP consensus state.
+/// Permission tokens for SCCP governance (`specs/sccp.md` §4.19).
 pub mod sccp {
     use super::*;
     permission! {
-        /// Permission to enact governed SCCP registry actions.
-        #[derive(Copy)]
-        pub struct CanManageSccpGovernance;
-    }
-    permission! {
-        /// Permission to submit typed SCCP route-governance proposals.
+        /// Permission to put SCCP governance proposals before the SORA Parliament.
+        ///
+        /// It only allows proposing; it is granted and revoked only in genesis.
         #[derive(Copy)]
         pub struct CanProposeSccpRouteGovernance;
     }

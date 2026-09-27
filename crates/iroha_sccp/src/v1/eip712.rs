@@ -30,13 +30,14 @@ unit_error! {
 
 /// The ten fields of the `SccpAttestation` struct (§3.6.1), in type-string order.
 ///
-/// TODO(ws15): convert from the data-model attestation statement once it lands in
-/// `iroha_data_model::sccp::attestation`.
+/// TODO(ws15): add conversions to and from
+/// `iroha_data_model::sccp::attestation::SccpAttestationStatementV1` once that type is final;
+/// the core and attestor waves then sign and verify the data-model statement through this type.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AttestationFieldsV1 {
     /// Taira block height `h`.
     pub height: u64,
-    /// NPoS epoch of `h`.
+    /// `NPoS` epoch of `h`.
     pub epoch: u64,
     /// `creation_time_ms` of block `h`.
     pub timestamp_ms: u64,
@@ -145,7 +146,12 @@ pub fn peer_key_hash(consensus_public_key: &[u8]) -> [u8; 32] {
 /// `DOMAIN_SEPARATOR = keccak256(DOMAIN_TYPEHASH ‖ NAME_HASH ‖ VERSION_HASH ‖ salt)`.
 #[must_use]
 pub fn domain_separator(taira_network_id: &[u8; 32]) -> [u8; 32] {
-    keccak256(&[&DOMAIN_TYPEHASH, &NAME_HASH, &VERSION_HASH, taira_network_id])
+    keccak256(&[
+        &DOMAIN_TYPEHASH,
+        &NAME_HASH,
+        &VERSION_HASH,
+        taira_network_id,
+    ])
 }
 
 /// `digest = keccak256(0x19 ‖ 0x01 ‖ DOMAIN_SEPARATOR ‖ hashStruct)`.
@@ -211,7 +217,11 @@ mod tests {
         let digest = fields.digest(&TAIRA);
         assert_eq!(
             digest,
-            keccak256(&[&[0x19, 0x01], &domain_separator(&TAIRA), &fields.struct_hash()])
+            keccak256(&[
+                &[0x19, 0x01],
+                &domain_separator(&TAIRA),
+                &fields.struct_hash()
+            ])
         );
         let mut other = fields;
         other.epoch = 3;

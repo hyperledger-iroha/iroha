@@ -8725,11 +8725,9 @@ impl Kura {
         let height = NonZeroUsize::new(usize::try_from(record.block_height)?)
             .ok_or_else(|| Error::MergeCarrierConflict("carrier height is zero".to_owned()))?;
         let block = self.get_block_without_merge_sidecar(height);
-        let finality = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
-                record.block_height,
-            )?
-            .map(|(header, finality, _)| (header, finality));
+        let finality = self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(
+            record.block_height,
+        )?;
         match (block, finality) {
             (Some(block), Some((retained_header, finality))) => {
                 let entry = self.validate_merge_carrier_record_against_block_projection(
@@ -8970,8 +8968,8 @@ impl Kura {
         let mut missing_bodies = Vec::new();
         let mut planned_entries = BTreeSet::new();
         for height in 1..=committed_height {
-            let Some((header, finality, _)) =
-                self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+            let Some((header, finality)) =
+                self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(height)?
             else {
                 continue;
             };
@@ -9013,8 +9011,8 @@ impl Kura {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let Some((header, finality, _)) =
-            self.v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+        let Some((header, finality)) =
+            self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(height)?
         else {
             return Err(Error::MissingV2FinalityArtifact { height });
         };
@@ -9063,8 +9061,8 @@ impl Kura {
             let _canonical_chain_guard = self.canonical_chain_lock.lock();
             for expected in repairs {
                 let height = expected.block.header().height().get();
-                let Some((header, finality, _)) = self
-                    .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+                let Some((header, finality)) =
+                    self.v2_finality_artifact_with_header_under_prune_and_canonical_guards(height)?
                 else {
                     return Err(Error::MissingV2FinalityArtifact { height });
                 };
@@ -9287,8 +9285,8 @@ impl Kura {
             for record in records.iter().copied() {
                 match self.validate_merge_carrier_record_under_prune_and_canonical_guards(record) {
                     Ok(_) => {
-                        let (header, _, _) = self
-                            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                        let (header, _) = self
+                            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                                 record.block_height,
                             )?
                             .ok_or_else(|| {
@@ -9301,7 +9299,7 @@ impl Kura {
                     }
                     Err(strict_error) => {
                         let finality = self
-                            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                                 record.block_height,
                             )?;
                         if record.block_height != durable_tip || finality.is_some() {
@@ -14542,7 +14540,6 @@ impl Kura {
                                 executed_block_wire_len,
                                 executed_block_wire_hash,
                                 _,
-                                _,
                             ),
                             retained_identity,
                         ) = self
@@ -15338,8 +15335,8 @@ impl Kura {
             let chain_len = self.block_data.lock().len();
             self.set_transaction_entrypoint_index_entry(block_height.get(), &block, chain_len);
         } else {
-            let (_retained_header, _, _) = self
-                .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+            let (_retained_header, _) = self
+                .v2_finality_artifact_with_header_under_prune_and_canonical_guards(height)?
                 .ok_or_else(|| {
                     Error::MergeCarrierConflict(format!(
                         "finalized bodyless carrier {height} lost its retained finality header"
@@ -15413,7 +15410,6 @@ impl Kura {
                     proposal_wire_hash,
                     executed_block_wire_len,
                     executed_block_wire_hash,
-                    _,
                     _,
                 )) => {
                     if executed_block_wire_len != indexed_wire_len {
@@ -15737,32 +15733,8 @@ impl Kura {
         &self,
         height: u64,
     ) -> Result<Option<(BlockHeader, V2FinalityArtifact)>> {
-        Ok(self
-            .v2_finality_artifact_with_archive(height)?
-            .map(|(header, artifact, _)| (header, artifact)))
-    }
-    /// Read verified finality and the root-authenticated SCCP archive in one bounded pass.
-    ///
-    /// Rootless finalized blocks return an empty archive. Combining these reads prevents
-    /// proof-serving callers from decoding and validating the retained record twice. The
-    /// finality subject must equal that record's canonical complete-block wire hash.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the finality record, retained block record, canonical header/wire
-    /// binding, SCCP archive, or finality cryptography is invalid.
-    pub(crate) fn v2_finality_artifact_with_archive(
-        &self,
-        height: u64,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            V2FinalityArtifact,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
         let _prune_guard = self.prune_lock.lock();
-        self.v2_finality_artifact_with_archive_under_prune_guard(height)
+        self.v2_finality_artifact_with_header_under_prune_guard(height)
     }
     /// Read verified finality and the immutable local merge-reference witness.
     ///
@@ -15787,28 +15759,20 @@ impl Kura {
         )>,
     > {
         let _prune_guard = self.prune_lock.lock();
-        Ok(self
-            .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
-            .map(|(header, artifact, _, reference)| (header, artifact, reference)))
+        self.v2_finality_artifact_with_retained_witness_under_prune_guard(height)
     }
     /// Inner finality reader for callers that already hold `prune_lock`.
     ///
     /// Keeping the complete canonical-header, retained-wire, and cryptographic
     /// validation here lets multi-artifact publication revalidate finality in
     /// the same prune critical section without recursively locking.
-    fn v2_finality_artifact_with_archive_under_prune_guard(
+    fn v2_finality_artifact_with_header_under_prune_guard(
         &self,
         height: u64,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            V2FinalityArtifact,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
+    ) -> Result<Option<(BlockHeader, V2FinalityArtifact)>> {
         Ok(self
             .v2_finality_artifact_with_retained_witness_under_prune_guard(height)?
-            .map(|(header, artifact, archive, _)| (header, artifact, archive)))
+            .map(|(header, artifact, _)| (header, artifact)))
     }
     fn v2_finality_artifact_with_retained_witness_under_prune_guard(
         &self,
@@ -15817,7 +15781,6 @@ impl Kura {
         Option<(
             BlockHeader,
             V2FinalityArtifact,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
             Option<CertifiedMergeLedgerReference>,
         )>,
     > {
@@ -15833,19 +15796,13 @@ impl Kura {
     /// `lane_geometry_lock` and `sidecar_lock`. Keeping this reader free of
     /// lock acquisition lets those paths authenticate retained Native AMX
     /// evidence without recursively acquiring the canonical-chain mutex.
-    fn v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+    fn v2_finality_artifact_with_header_under_prune_and_canonical_guards(
         &self,
         height: u64,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            V2FinalityArtifact,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
+    ) -> Result<Option<(BlockHeader, V2FinalityArtifact)>> {
         Ok(self
             .v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(height)?
-            .map(|(header, artifact, archive, _)| (header, artifact, archive)))
+            .map(|(header, artifact, _)| (header, artifact)))
     }
     fn v2_finality_artifact_with_retained_witness_under_prune_and_canonical_guards(
         &self,
@@ -15854,7 +15811,6 @@ impl Kura {
         Option<(
             BlockHeader,
             V2FinalityArtifact,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
             Option<CertifiedMergeLedgerReference>,
         )>,
     > {
@@ -15887,7 +15843,6 @@ impl Kura {
             proposal_wire_hash,
             executed_block_wire_len,
             executed_block_wire_hash,
-            archive,
             merge_reference,
         ) = self
             .retained_block_record_at(&blocks_dir, height, block_hash)?
@@ -15906,7 +15861,6 @@ impl Kura {
         Ok(Some((
             record.block_header,
             record.artifact,
-            archive,
             merge_reference,
         )))
     }
@@ -16013,7 +15967,7 @@ impl Kura {
         {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
-        let (retained_header, proposal_hash, wire_len, wire_hash, _, _) = self
+        let (retained_header, proposal_hash, wire_len, wire_hash, _) = self
             .retained_block_record_at_without_live_body(&blocks_dir, height, durable_hash)?
             .ok_or(Error::MissingRetainedBlockRecord { height })?;
         if retained_header != record.block_header {
@@ -16375,8 +16329,8 @@ impl Kura {
             ));
         }
         let durable = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(artifact.height)?
-            .map(|(_, artifact, _)| artifact)
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(artifact.height)?
+            .map(|(_, artifact)| artifact)
             .ok_or_else(|| {
                 Error::KagemushaFinalitySidecar(
                     "Kagemusha V1 promotion has no durable finality artifact".to_owned(),
@@ -37204,8 +37158,8 @@ impl Kura {
                 "Native AMX application block is not canonical in Kura",
             ));
         }
-        let Some((_, finality, _)) =
-            self.v2_finality_artifact_with_archive_under_prune_guard(application_block_height)?
+        let Some((_, finality)) =
+            self.v2_finality_artifact_with_header_under_prune_guard(application_block_height)?
         else {
             return Err(Self::invalid_lane_artifact_error(
                 self.store_root.clone(),
@@ -38484,8 +38438,8 @@ impl Kura {
             return false;
         }
         let leaf = &artifact.leaf;
-        let Ok(Some((_, finality, _))) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        let Ok(Some((_, finality))) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                 leaf.application_block_height,
             )
         else {
@@ -38711,8 +38665,8 @@ impl Kura {
         else {
             return false;
         };
-        let Ok(Some((_, finality, _))) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        let Ok(Some((_, finality))) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                 artifact.application_block_height,
             )
         else {
@@ -39983,8 +39937,8 @@ impl Kura {
         &self,
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
     ) -> bool {
-        let Ok(Some((_, finality, _))) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        let Ok(Some((_, finality))) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                 receipt.application_block_height,
             )
         else {
@@ -41678,10 +41632,8 @@ impl Kura {
         // Read before finality authentication: an invalid inline body poisons
         // canonical storage and must not be mistaken for a remote-only body.
         let block = self.get_block_without_merge_sidecar(height);
-        let (header, finality, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
-                carrier.block_height,
-            )
+        let (header, finality) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(carrier.block_height)
             .ok()??;
         Self::validate_merge_carrier_finality_projection(carrier, &entry, &header, &finality)
             .ok()?;
@@ -43433,7 +43385,7 @@ impl BlockStore {
             return Err(Error::MissingRetainedBlockRecord { height });
         };
         let record = Kura::decode_canonical_retained_block_record(&path, &bytes)?;
-        let _ = Kura::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+        Kura::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
         Ok((
             record.proposal_wire_hash,
             record.executed_block_wire_len,

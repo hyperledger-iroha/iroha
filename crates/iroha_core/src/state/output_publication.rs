@@ -39,7 +39,6 @@ pub(in crate::state) struct FinalizedPublicationSurface {
     lane_activation_heights: BTreeMap<LaneId, u64>,
     manifests: [u8; 32],
     privacy: LanePrivacyRegistryHandle,
-    sccp_registry: [u8; 32],
     da_commitments: Option<(u64, Hash)>,
     da_pins: Option<(u64, Hash, Hash)>,
     lifecycle: Option<LifecycleSurface>,
@@ -348,7 +347,6 @@ impl FinalizedPublicationSurface {
             lane_activation_heights: block.lane_incarnation_activation_heights.clone(),
             manifests: block.lane_manifests.consensus_policy_digest(),
             privacy: Arc::clone(&block.lane_privacy_registry),
-            sccp_registry: block.sccp_registry.policy_hash(),
             da_commitments,
             da_pins,
             lifecycle: block

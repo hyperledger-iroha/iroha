@@ -20,9 +20,9 @@ state_test! { sync confidential_digest_respects_activation_height
     let mut state = State::new(world, kura, query);
     state.zk.registry_max_delta_per_block = 10;
     let view = state.view();
-    let_row! { digest_before = compute_confidential_feature_digest(view.world(), &view.zk, view.sccp_registry.as_ref(), 4) };
+    let_row! { digest_before = compute_confidential_feature_digest(view.world(), &view.zk, 4) };
     assert_eq!(digest_before.vk_set_hash, None);
-    let_row! { digest_at_activation = compute_confidential_feature_digest(view.world(), &view.zk, view.sccp_registry.as_ref(), 5) };
+    let_row! { digest_at_activation = compute_confidential_feature_digest(view.world(), &view.zk, 5) };
     assert!(digest_at_activation.vk_set_hash.is_some());
 }
 state_test! { sync confidential_digest_excludes_active_vk_outside_height_window
@@ -50,11 +50,11 @@ state_test! { sync confidential_digest_excludes_active_vk_outside_height_window
     assert_eq!(compute_vk_set_hash_at_height(view.world(), 4), None);
     assert!(compute_vk_set_hash_at_height(view.world(), 5).is_some());
     assert_eq!(compute_vk_set_hash_at_height(view.world(), 8), None);
-    let_row! { digest_before = compute_confidential_feature_digest(view.world(), &view.zk, view.sccp_registry.as_ref(), 4) };
+    let_row! { digest_before = compute_confidential_feature_digest(view.world(), &view.zk, 4) };
     assert_eq!(digest_before.vk_set_hash, None);
-    let_row! { digest_active = compute_confidential_feature_digest(view.world(), &view.zk, view.sccp_registry.as_ref(), 5) };
+    let_row! { digest_active = compute_confidential_feature_digest(view.world(), &view.zk, 5) };
     assert!(digest_active.vk_set_hash.is_some());
-    let_row! { digest_withdrawn = compute_confidential_feature_digest(view.world(), &view.zk, view.sccp_registry.as_ref(), 8) };
+    let_row! { digest_withdrawn = compute_confidential_feature_digest(view.world(), &view.zk, 8) };
     assert_eq!(digest_withdrawn.vk_set_hash, None);
 }
 state_test! { sync confidential_registry_delta_cap_limits_transitions
@@ -121,9 +121,6 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
         .replace_signatures(BTreeSet::from([signature]))
         .expect("replace signature after completing fixture execution metadata");
     block.commit(&topology).unpack(|_| {}).unwrap()
-}
-fn new_dummy_block() -> CommittedBlock {
-    new_dummy_block_with_payload(|_| {})
 }
 fn dummy_merge_qc() -> MergeQuorumCertificate {
     let validator_set = Vec::<PeerId>::new();

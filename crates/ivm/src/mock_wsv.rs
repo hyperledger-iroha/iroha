@@ -3640,15 +3640,8 @@ impl IVMHost for WsvHost {
                         self.handle_submit_ballot(instr)?;
                         Ok(instruction_gas)
                     }
-                    syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE => {
-                        if any_ref
-                            .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
-                            .is_none()
-                        {
-                            return Err(VMError::PermissionDenied);
-                        }
-                        Err(VMError::NotImplemented { syscall: number })
-                    }
+                    // Contracts record no SCCP messages (specs/sccp.md §4.4): the retired
+                    // operation tag 2 fails like every other unknown tag.
                     _ => Err(VMError::PermissionDenied),
                 }
             }
@@ -6280,11 +6273,8 @@ mod tests_null_decode {
             .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &boxed_payload))
             .expect("alloc canonical instruction for tag checks");
         vm.set_register(10, canonical_ptr);
-        for tag in [
-            0,
-            99,
-            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
-        ] {
+        // Tag 2 was the retired contract-originated SCCP send; it is an unknown tag now.
+        for tag in [0, 2, 99] {
             vm.set_register(11, tag);
             assert_eq!(
                 call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
@@ -6335,36 +6325,6 @@ mod tests_null_decode {
                 .wsv
                 .elections
                 .contains_key("unsupported")
-        );
-        let context = iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
-            iroha_data_model::bridge::SccpLaneIdV1 {
-                source: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                target: iroha_data_model::bridge::SccpNetworkV1::BscMainnet,
-            },
-            [0x44; 32],
-            [0x45; 32],
-        )
-        .expect("valid SCCP context");
-        let record = iroha_data_model::isi::bridge::RecordSccpMessage::new(
-            context,
-            vec![0xAA, 0xBB],
-            iroha_data_model::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-        );
-        let record_payload = encode_canonical_norito(&DMInstructionBox::from(record))
-            .expect("encode RecordSccpMessage InstructionBox");
-        let ptr = vm
-            .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, &record_payload))
-            .expect("alloc RecordSccpMessage");
-        vm.set_register(10, ptr);
-        vm.set_register(
-            11,
-            syscalls::SMARTCONTRACT_INSTRUCTION_TAG_RECORD_SCCP_MESSAGE,
-        );
-        assert_eq!(
-            call_syscall(&mut vm, syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION),
-            Err(VMError::NotImplemented {
-                syscall: syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION,
-            })
         );
     }
     #[test]

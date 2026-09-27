@@ -1615,7 +1615,6 @@ fn exercise_production_marker_replay_cases(cases: &[(u8, bool, bool, bool, Optio
             let digest = crate::state::compute_confidential_feature_digest(
                 state_view.world(),
                 &state_view.zk,
-                state_view.sccp_registry.as_ref(),
                 recovered_context.height,
             );
             (!digest.is_empty()).then_some(digest)

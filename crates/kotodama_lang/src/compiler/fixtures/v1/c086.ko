@@ -1,8 +1,0 @@
-
-seiyaku CompilerFixture {
-
-fn main() {
-  ledger::sccp::record(value: 1);
-}
-
-}

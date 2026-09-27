@@ -1107,18 +1107,6 @@ pub mod isi {
                 state_transaction,
                 &account_id,
             )?;
-            if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
-                state_transaction,
-                &account_id,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot register account {account_id}: its identity is reserved for deterministic SCCP route protocol escrow"
-                    )
-                    .into(),
-                )
-                .into());
-            }
             if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
                 state_transaction,
                 &account_id,
@@ -1362,18 +1350,6 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!(
                         "cannot unregister account {account_id}: it is the immutable payout account for fee sponsor program {program_id}"
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
-                state_transaction,
-                &account_id,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister account {account_id}: it is retained SCCP protocol escrow"
                     )
                     .into(),
                 )
@@ -2527,18 +2503,6 @@ pub mod isi {
                     format!(
                         "cannot unregister asset definition {asset_definition_id}: it is retained as the enacted validation-fee {reference_kind} by proposal {}",
                         hex::encode(proposal_id)
-                    )
-                    .into(),
-                )
-                .into());
-            }
-            if crate::smartcontracts::isi::asset::isi::is_sccp_settlement_asset_definition(
-                state_transaction,
-                &asset_definition_id,
-            ) {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!(
-                        "cannot unregister asset definition {asset_definition_id}: it is governed SCCP settlement backing"
                     )
                     .into(),
                 )

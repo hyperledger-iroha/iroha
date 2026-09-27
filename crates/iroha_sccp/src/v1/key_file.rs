@@ -11,7 +11,10 @@
 
 use core::fmt;
 
-use super::signature::{self, SignatureError, wipe};
+use super::{
+    hashes::to_hex,
+    signature::{self, SignatureError, wipe},
+};
 
 unit_error! {
     /// Bridge key file errors.
@@ -140,8 +143,7 @@ impl SccpBridgeKeyFileV1 {
     /// Returns [`KeyFileError::Decode`] for a malformed frame and
     /// [`KeyFileError::InvalidSecret`] for an invalid scalar.
     pub fn from_frame(bytes: &[u8]) -> Result<Self, KeyFileError> {
-        let decoded: Self =
-            norito::decode_from_bytes(bytes).map_err(|_| KeyFileError::Decode)?;
+        let decoded: Self = norito::decode_from_bytes(bytes).map_err(|_| KeyFileError::Decode)?;
         if signature::address_of_secret(&decoded.secret).is_err() {
             return Err(KeyFileError::InvalidSecret);
         }
@@ -168,7 +170,7 @@ impl fmt::Debug for SccpBridgeKeyFileV1 {
 /// `<address-hex>.key` for a bridge address.
 #[must_use]
 pub fn key_file_name(address: &[u8; 20]) -> String {
-    let mut name: String = address.iter().map(|byte| format!("{byte:02x}")).collect();
+    let mut name = to_hex(address);
     name.push_str(KEY_FILE_SUFFIX);
     name
 }
@@ -274,7 +276,7 @@ mod tests {
         let key = SccpBridgeKeyFileV1::new(fixed_secret(), 9).unwrap();
         let debug = format!("{key:?}");
         assert!(debug.contains("<redacted>"));
-        let secret_hex: String = fixed_secret().iter().map(|byte| format!("{byte:02x}")).collect();
+        let secret_hex = to_hex(&fixed_secret());
         assert!(!debug.contains(&secret_hex));
         assert!(!debug.contains(&format!("{:?}", fixed_secret())));
         let frame_debug = format!("{:?}", key.to_frame().unwrap());
@@ -291,7 +293,7 @@ mod tests {
         );
         let name = key.file_name().unwrap();
         assert_eq!(name.len(), 44);
-        assert!(name.ends_with(".key"));
+        assert_eq!(&name[40..], KEY_FILE_SUFFIX);
         assert_eq!(parse_key_file_name(&name), Some(address));
         assert_eq!(parse_key_file_name("abc.key"), None);
         assert_eq!(parse_key_file_name(&name.to_uppercase()), None);

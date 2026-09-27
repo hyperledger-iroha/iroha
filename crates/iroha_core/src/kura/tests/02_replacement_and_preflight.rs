@@ -238,60 +238,45 @@ fn partial_multi_height_stage_discard_keeps_public_prune_coherent_and_appendable
     );
 }
 #[test]
-fn v2_finality_durably_archives_sccp_before_body_eviction_and_restart() {
+fn v2_finality_durably_retains_block_record_before_body_eviction_and_restart() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
-    let (expected, artifact, expected_header) = {
+    let (artifact, expected_header) = {
         let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
-        let (blocks, payloads) = store_retained_archive_chain(&kura);
+        let blocks = store_retained_record_chain(&kura);
         let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
         let expected_header = blocks[1].header();
         assert!(
             !kura.retained_block_record_path(2).exists(),
-            "inline non-finalized bodies need no eager archive"
+            "inline non-finalized bodies need no eager retained record"
         );
         let _receipt = kura
             .store_v2_finality_artifact(&artifact)
-            .expect("persist finality and its SCCP archive");
+            .expect("persist finality and its retained block record");
         assert!(
             kura.retained_block_record_path(2).is_file(),
-            "archive must be durable before finality publication returns"
-        );
-        let (header, archived) = kura
-            .retained_sccp_archive(2)
-            .expect("read retained SCCP archive")
-            .expect("retained SCCP archive exists");
-        assert_eq!(header, expected_header);
-        assert_eq!(archived.len(), 2);
-        for (index, (projection, payload)) in archived.iter().zip(&payloads).enumerate() {
-            assert_eq!(projection.commitment_index, index as u32);
-            assert_eq!(&projection.payload, payload);
-        }
-        assert!(
-            archived[0].commitment.message_id > archived[1].commitment.message_id,
-            "fixture commitment order deliberately differs from replay-key ordering"
+            "the retained record must be durable before finality publication returns"
         );
         let (_, payload_len) = advertise_required_replicas(&kura, nonzero!(2_usize));
         kura.evict_block_bodies(payload_len)
-            .expect("evict the already archived SCCP body");
+            .expect("evict the already retained body");
         {
             let store = kura.block_store.lock();
             store
                 .remove_da_block_file(2)
-                .expect("make archived SCCP block remote-only");
+                .expect("make the retained block remote-only");
         }
         assert!(kura.get_block(nonzero!(2_usize)).is_none());
-        (archived, artifact, expected_header)
+        (artifact, expected_header)
     };
     let (reopened, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .expect("restart bodyless Kura");
     assert!(reopened.get_block(nonzero!(2_usize)).is_none());
-    let (header, recovered_artifact, archived) = reopened
-        .v2_finality_artifact_with_archive(2)
-        .expect("read bodyless finality and retained SCCP archive")
-        .expect("bodyless finality and archive exist");
+    let (header, recovered_artifact) = reopened
+        .v2_finality_artifact_with_header(2)
+        .expect("read bodyless finality and retained header")
+        .expect("bodyless finality exists");
     assert_eq!(header, expected_header);
-    assert_eq!(archived, expected);
     assert_eq!(recovered_artifact, artifact);
 }
 #[test]
@@ -351,7 +336,7 @@ fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
         std::fs::write(&retained_path, &tampered_bytes)
             .expect("tamper retained canonical-wire hash");
         assert!(matches!(
-            kura.v2_finality_artifact_with_archive(2),
+            kura.v2_finality_artifact_with_header(2),
             Err(Error::ConflictingRetainedBlockRecord { height: 2 })
         ));
         std::fs::write(&retained_path, &canonical_bytes)
@@ -369,7 +354,7 @@ fn retained_wire_hash_tamper_rejects_live_body_bodyless_read_and_restart() {
         std::fs::write(&retained_path, tampered_bytes)
             .expect("tamper bodyless retained canonical-wire hash");
         assert!(matches!(
-            kura.v2_finality_artifact_with_archive(2),
+            kura.v2_finality_artifact_with_header(2),
             Err(Error::V2FinalityExecutedBlockWireHashMismatch { height: 2 })
         ));
     }
@@ -420,7 +405,7 @@ fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restar
         std::fs::write(&finality_path, finality.encode())
             .expect("coordinate finality payload hash tamper");
         assert!(matches!(
-            kura.v2_finality_artifact_with_archive(2),
+            kura.v2_finality_artifact_with_header(2),
             Err(Error::V2FinalityCryptography(_))
         ));
     }
@@ -430,59 +415,9 @@ fn coordinated_retained_and_finality_payload_hash_tamper_fails_crypto_and_restar
     ));
 }
 #[test]
-fn retained_sccp_inventory_is_bounded_nonempty_and_fails_closed_on_selected_tamper() {
-    let kura = Kura::blank_kura_for_testing();
-    let (blocks, _) = store_retained_archive_chain(&kura);
-    let blocks_dir = kura.active_blocks_dir.lock().clone();
-    for block in &blocks {
-        kura.persist_retained_block_record(&blocks_dir, block.hash(), block.as_ref())
-            .expect("persist canonical retained inventory fixture");
-    }
-    assert!(
-        kura.retained_nonempty_sccp_archive_inventory_at_or_below(0)
-            .expect("zero boundary inventory")
-            .is_empty()
-    );
-    assert!(
-        kura.retained_nonempty_sccp_archive_inventory_at_or_below(1)
-            .expect("rootless retained record is accepted")
-            .is_empty(),
-        "valid rootless/empty records must not manufacture inventory entries"
-    );
-    let through_two = kura
-        .retained_nonempty_sccp_archive_inventory_at_or_below(2)
-        .expect("inventory through SCCP height");
-    assert_eq!(
-        through_two,
-        vec![RetainedSccpArchiveSummary {
-            height: 2,
-            block_hash: blocks[1].hash(),
-            message_count: 2,
-        }]
-    );
-    assert_eq!(
-        kura.retained_nonempty_sccp_archive_inventory_at_or_below(3)
-            .expect("rootless suffix remains omitted"),
-        through_two
-    );
-    let suffix_path = kura.retained_block_record_path(4);
-    std::fs::write(&suffix_path, b"tampered retained suffix")
-        .expect("tamper retained record above WSV boundary");
-    assert_eq!(
-        kura.retained_nonempty_sccp_archive_inventory_at_or_below(2)
-            .expect("Kura suffix above committed boundary must not be decoded"),
-        through_two
-    );
-    assert!(
-        kura.retained_nonempty_sccp_archive_inventory_at_or_below(4)
-            .is_err(),
-        "a tampered retained record inside the selected boundary must fail closed"
-    );
-}
-#[test]
-fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
+fn failed_finality_publication_keeps_valid_retained_record_for_exact_retry() {
     let (_temp_dir, _config, kura) = kura_root_fixture(nonzero!(1_usize));
-    let (blocks, _) = store_retained_archive_chain(&kura);
+    let blocks = store_retained_record_chain(&kura);
     let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
     let enforced_before = kura
         .refresh_disk_usage_bytes()
@@ -511,11 +446,12 @@ fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
             .expect("cached total usage after archive"),
         total_before.saturating_add(retained_len)
     );
-    let (_, archive) = kura
-        .retained_sccp_archive(2)
-        .expect("validate retained archive after finality failure")
-        .expect("retained archive exists");
-    assert_eq!(archive.len(), 2);
+    let blocks_dir = kura.active_blocks_dir.lock().clone();
+    let (retained_header, ..) = kura
+        .retained_block_record_at(&blocks_dir, 2, blocks[1].hash())
+        .expect("validate retained record after finality failure")
+        .expect("retained record exists");
+    assert_eq!(retained_header, blocks[1].header());
     let _receipt = kura
         .store_v2_finality_artifact(&artifact)
         .expect("retry finality with exact retained archive");
@@ -550,153 +486,19 @@ fn failed_finality_publication_keeps_valid_archive_for_exact_retry() {
     );
 }
 #[test]
-fn retained_sccp_archive_rejects_gap_omission_swap_overflow_and_rootless_extra() {
-    let kura = Kura::blank_kura_for_testing();
-    let (blocks, _) = store_retained_archive_chain(&kura);
-    let canonical_hash = blocks[1].hash();
-    let archive = Kura::retained_sccp_archive_from_block(&blocks[1])
-        .expect("construct canonical retained archive");
-    assert_eq!(archive.len(), 2);
-    let path = kura.retained_block_record_path(2);
-    let canonical = KuraRetainedBlockRecord::new(
-        blocks[1].header(),
-        Kura::canonical_proposal_wire_hash(&blocks[1]).expect("canonical proposal wire hash"),
-        Kura::canonical_block_wire_identity(&blocks[1])
-            .expect("canonical block wire identity")
-            .0,
-        Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
-        None,
-        archive.clone(),
-    );
-    Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &canonical)
-        .expect("canonical retained archive validates");
-    let mut gap = canonical.clone();
-    gap.sccp_archive[1].commitment_index = 2;
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &gap),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("not dense")
-    ));
-    let mut context_tamper = canonical.clone();
-    context_tamper.sccp_archive[0]
-        .context
-        .destination_binding_hash = [0; 32];
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(
-            &path,
-            2,
-            canonical_hash,
-            &context_tamper,
-        ),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("message 0 is invalid")
-    ));
-    let mut noncanonical = canonical.clone();
-    noncanonical.sccp_archive[0].payload_bytes.push(0);
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(
-            &path,
-            2,
-            canonical_hash,
-            &noncanonical,
-        ),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("message 0 is invalid")
-    ));
-    let mut duplicate = canonical.clone();
-    let duplicated_context = duplicate.sccp_archive[0].context;
-    let duplicated_payload = duplicate.sccp_archive[0].payload_bytes.clone();
-    duplicate.sccp_archive[1].context = duplicated_context;
-    duplicate.sccp_archive[1].payload_bytes = duplicated_payload;
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &duplicate),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("repeats an outbound replay key")
-    ));
-    let mut omitted = canonical.clone();
-    omitted.sccp_archive.pop();
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &omitted),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
-    ));
-    let mut swapped = canonical.clone();
-    let first_payload = swapped.sccp_archive[0].payload_bytes.clone();
-    let second_payload = swapped.sccp_archive[1].payload_bytes.clone();
-    swapped.sccp_archive[0].payload_bytes = second_payload;
-    swapped.sccp_archive[1].payload_bytes = first_payload;
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &swapped),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
-    ));
-    let mut overflow = canonical.clone();
-    overflow.sccp_archive =
-        vec![
-            canonical.sccp_archive[0].clone();
-            usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1 + 1,)
-                .expect("SCCP bound fits usize")
-        ];
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(&path, 2, canonical_hash, &overflow),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("maximum")
-    ));
-    let rootless_header = blocks[0].header();
-    let rootless_extra = KuraRetainedBlockRecord::new(
-        rootless_header,
-        Kura::canonical_proposal_wire_hash(&blocks[0]).expect("rootless proposal wire hash"),
-        Kura::canonical_block_wire_identity(&blocks[0])
-            .expect("rootless block wire identity")
-            .0,
-        Kura::canonical_block_wire_hash(&blocks[0]).expect("rootless block wire hash"),
-        None,
-        archive,
-    );
-    assert!(matches!(
-        Kura::validate_retained_block_record_at(
-            &kura.retained_block_record_path(1),
-            1,
-            blocks[0].hash(),
-            &rootless_extra,
-        ),
-        Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
-    ));
-}
-#[test]
-fn retained_sccp_archive_tamper_fails_reader_and_restart_closed() {
-    let (_temp_dir, config) = kura_storage_fixture("create Kura root", nonzero!(1_usize));
-    {
-        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
-        let (blocks, _) = store_retained_archive_chain(&kura);
-        let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
-        let _receipt = kura
-            .store_v2_finality_artifact(&artifact)
-            .expect("persist archive-backed finality");
-        let path = kura.retained_block_record_path(2);
-        let bytes = std::fs::read(&path).expect("read retained SCCP record");
-        let mut input = bytes.as_slice();
-        let mut record =
-            KuraRetainedBlockRecord::decode_all(&mut input).expect("decode retained SCCP record");
-        record.sccp_archive.clear();
-        std::fs::write(&path, record.encode()).expect("omit rooted SCCP archive");
-        assert!(matches!(
-            kura.retained_sccp_archive(2),
-            Err(Error::InvalidRetainedSccpArchive { reason, .. }) if reason.contains("commitment root")
-        ));
-    }
-    assert!(matches!(
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default()),
-        Err(Error::InvalidRetainedSccpArchive { height: 2, reason })
-            if reason.contains("commitment root")
-    ));
-}
-#[test]
-fn rooted_finality_reader_rejects_deleted_archive_even_while_body_is_inline() {
+fn finality_reader_rejects_deleted_retained_record_even_while_body_is_inline() {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     {
         let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
-        let (blocks, _) = store_retained_archive_chain(&kura);
+        let blocks = store_retained_record_chain(&kura);
         let artifact = v2_finality_artifacts_for_chain(&blocks[..2])[1].clone();
         let _receipt = kura
             .store_v2_finality_artifact(&artifact)
-            .expect("persist archive-backed finality");
-        std::fs::remove_file(kura.retained_block_record_path(2)).expect("delete rooted archive");
+            .expect("persist finality with its retained record");
+        std::fs::remove_file(kura.retained_block_record_path(2))
+            .expect("delete the retained record");
         assert!(matches!(
-            kura.retained_sccp_archive(2),
+            kura.v2_finality_artifact_with_header(2),
             Err(Error::MissingRetainedBlockRecord { height: 2 })
         ));
     }
@@ -781,7 +583,6 @@ fn retained_header_tamper_fails_finality_read_and_restart_closed() {
             .0,
         Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
         None,
-        Vec::new(),
     );
     std::fs::write(&path, forged.encode()).expect("replace retained header with a conflict");
     assert!(matches!(
@@ -831,7 +632,6 @@ fn conflicting_preplanted_retained_header_aborts_eviction_before_index_mutation(
                 .0,
             Kura::canonical_block_wire_hash(&substitute).expect("substitute block wire hash"),
             None,
-            Vec::new(),
         )
         .encode(),
     )
@@ -934,7 +734,6 @@ fn startup_rejects_noncanonical_retained_header_inventory_name() {
                     .0,
                 Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
                 None,
-                Vec::new(),
             )
             .encode(),
         )
@@ -1043,7 +842,6 @@ fn retained_header_symlink_substitution_aborts_before_eviction() {
                 .0,
             Kura::canonical_block_wire_hash(&blocks[1]).expect("canonical block wire hash"),
             None,
-            Vec::new(),
         )
         .encode(),
     )
@@ -1112,21 +910,18 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
             .0,
         Kura::canonical_block_wire_hash(&block).expect("canonical block wire hash"),
         None,
-        Vec::new(),
     );
     let canonical_bytes = canonical.encode();
     let mut trailing = canonical_bytes.clone();
     trailing.push(0);
     let mut truncated = canonical_bytes.clone();
     truncated.pop().expect("canonical record is nonempty");
-    let mut absurd_archive_len = canonical_bytes.clone();
-    assert_eq!(
-        absurd_archive_len.pop(),
-        Some(0),
-        "empty trailing archive uses canonical zero varint"
-    );
-    absurd_archive_len.extend([0xff; 9]);
-    absurd_archive_len.push(1);
+    let mut absurd_trailing_len = canonical_bytes.clone();
+    absurd_trailing_len
+        .pop()
+        .expect("canonical record is nonempty");
+    absurd_trailing_len.extend([0xff; 9]);
+    absurd_trailing_len.push(1);
     let mut wrong_layout_version = canonical.clone();
     wrong_layout_version.format_version = 2;
     let mut zero_wire_len = canonical.clone();
@@ -1138,7 +933,7 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
     for hostile in [
         trailing,
         truncated,
-        absurd_archive_len,
+        absurd_trailing_len,
         wrong_layout_version.encode(),
         zero_wire_len.encode(),
         oversized_wire_len.encode(),
@@ -1169,7 +964,7 @@ struct RetiredKuraRetainedBlockRecordV2Fixture {
     block_header: BlockHeader,
     proposal_wire_hash: Hash,
     executed_block_wire_hash: Hash,
-    sccp_archive: Vec<KuraRetainedSccpMessage>,
+    archive: Vec<u8>,
 }
 fn retired_retained_block_v2_bytes(record: &KuraRetainedBlockRecord) -> Vec<u8> {
     RetiredKuraRetainedBlockRecordV2Fixture {
@@ -1179,12 +974,42 @@ fn retired_retained_block_v2_bytes(record: &KuraRetainedBlockRecord) -> Vec<u8> 
         block_header: record.block_header,
         proposal_wire_hash: record.proposal_wire_hash,
         executed_block_wire_hash: record.executed_block_wire_hash,
-        sccp_archive: record.sccp_archive.clone(),
+        archive: Vec::new(),
     }
     .encode()
 }
-#[test]
-fn retained_block_v2_layout_is_rejected_by_direct_read_and_startup() {
+/// Retired version-three layout that carried a trailing outbound message archive.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::RetiredKuraRetainedBlockRecordV3Fixture")]
+#[derive(Encode)]
+struct RetiredKuraRetainedBlockRecordV3Fixture {
+    format_version: u16,
+    height: u64,
+    block_hash: HashOf<BlockHeader>,
+    block_header: BlockHeader,
+    proposal_wire_hash: Hash,
+    executed_block_wire_len: u64,
+    executed_block_wire_hash: Hash,
+    merge_reference: Option<CertifiedMergeLedgerReference>,
+    archive: Vec<u8>,
+}
+fn retired_retained_block_v3_bytes(record: &KuraRetainedBlockRecord) -> Vec<u8> {
+    RetiredKuraRetainedBlockRecordV3Fixture {
+        format_version: 3,
+        height: record.height,
+        block_hash: record.block_hash,
+        block_header: record.block_header,
+        proposal_wire_hash: record.proposal_wire_hash,
+        executed_block_wire_len: record.executed_block_wire_len,
+        executed_block_wire_hash: record.executed_block_wire_hash,
+        merge_reference: record.merge_reference.clone(),
+        archive: Vec::new(),
+    }
+    .encode()
+}
+fn assert_retired_retained_layout_rejected_by_direct_read_and_startup(
+    retired_bytes: fn(&KuraRetainedBlockRecord) -> Vec<u8>,
+) {
     let (_temp_dir, config) = kura_storage_fixture("create Kura root", BLOCKS_IN_MEMORY);
     {
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
@@ -1201,8 +1026,7 @@ fn retained_block_v2_layout_is_rejected_by_direct_read_and_startup() {
         let directory = kura.retained_block_record_dir();
         let path = kura.retained_block_record_path(1);
         std::fs::create_dir_all(&directory).expect("create retained-record directory");
-        std::fs::write(&path, retired_retained_block_v2_bytes(&record))
-            .expect("install retired version-two retained bytes");
+        std::fs::write(&path, retired_bytes(&record)).expect("install retired retained bytes");
         assert!(matches!(
             kura.decode_retained_block_record_at(&path, &directory),
             Err(Error::IO(error, error_path))
@@ -1213,12 +1037,24 @@ fn retained_block_v2_layout_is_rejected_by_direct_read_and_startup() {
         &config,
         &RuntimeLaneConfig::default(),
     ) {
-        Ok(_) => panic!("startup accepted a retired version-two retained record"),
+        Ok(_) => panic!("startup accepted a retired retained-record layout"),
         Err(error) => error,
     };
     assert!(
         matches!(startup_error, Error::IO(ref error, _) if error.kind() == ErrorKind::InvalidData),
         "unexpected retired-layout startup error: {startup_error:?}"
+    );
+}
+#[test]
+fn retained_block_v2_layout_is_rejected_by_direct_read_and_startup() {
+    assert_retired_retained_layout_rejected_by_direct_read_and_startup(
+        retired_retained_block_v2_bytes,
+    );
+}
+#[test]
+fn retained_block_v3_archive_layout_is_rejected_by_direct_read_and_startup() {
+    assert_retired_retained_layout_rejected_by_direct_read_and_startup(
+        retired_retained_block_v3_bytes,
     );
 }
 #[test]
@@ -1230,19 +1066,15 @@ fn retained_record_bound_covers_joint_base_and_merge_reference_maxima() {
             + MAX_RETAINED_BLOCK_RECORD_FRAMING_BYTES
     );
     assert!(
-        MAX_RETAINED_BLOCK_RECORD_BYTES > 8 * 1024 * 1024,
-        "the current envelope must cover the complete base archive plus a 4 MiB QC"
+        MAX_RETAINED_BLOCK_RECORD_BYTES > 4 * 1024 * 1024 + MAX_RETAINED_BLOCK_BASE_ENVELOPE_BYTES,
+        "the current envelope must cover the complete base record plus a 4 MiB QC"
     );
 }
 #[test]
-fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
+fn retained_record_joint_envelope_fits_max_qc_geometry() {
     let genesis = retained_archive_empty_block(None);
-    let payloads =
-        (1..=u64::from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1))
-            .map(retained_archive_sccp_payload)
-            .collect::<Vec<_>>();
-    let sccp_block = retained_archive_sccp_block(&genesis, &payloads);
-    let mut entry = sample_merge_entry_for_block(1, &sccp_block);
+    let carrier_block = retained_archive_empty_block(Some(&genesis));
+    let mut entry = sample_merge_entry_for_block(1, &carrier_block);
     // This is a storage-envelope geometry fixture, not a cryptographically
     // valid QC: production BLS aggregate signatures are fixed-size. Grow
     // the variable test field until the complete QC encoding is within 64
@@ -1277,20 +1109,13 @@ fn retained_record_joint_envelope_fits_max_sccp_count_and_qc_geometry() {
         (qc_target.saturating_sub(64)..=qc_target).contains(&qc_len),
         "geometry QC encoding is {qc_len} bytes"
     );
-    let mut carrier = attach_merge_reference(&sccp_block, &entry);
+    let mut carrier = attach_merge_reference(&carrier_block, &entry);
     // Context changes invalidate completed outputs. Rebuild and sign this
     // structural storage fixture only after its final merge reference is bound.
     attach_ok_results_to_block(Arc::make_mut(&mut carrier));
-    crate::bridge::validate_sccp_commitment_root_for_signed_block(&carrier)
-        .expect("final referenced carrier retains its successful SCCP records");
     let record =
         Kura::prepare_retained_block_record(Path::new("joint-envelope"), carrier.hash(), &carrier)
-            .expect("prepare semantically valid max-count SCCP archive with bounded reference");
-    assert_eq!(
-        record.sccp_archive.len(),
-        usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)
-            .expect("SCCP count fits usize")
-    );
+            .expect("prepare a retained record with a bounded merge reference");
     let reference_len = record
         .merge_reference
         .as_ref()
@@ -1366,12 +1191,12 @@ fn concurrent_eviction_and_finality_serialize_without_losing_header() {
             .expect("read concurrent finality"),
         Some(artifact)
     );
-    let (retained, archive) = kura
-        .retained_sccp_archive(2)
-        .expect("read retained archive")
-        .expect("retained archive exists");
+    let blocks_dir = kura.active_blocks_dir.lock().clone();
+    let (retained, ..) = kura
+        .retained_block_record_at(&blocks_dir, 2, blocks[1].hash())
+        .expect("read retained record")
+        .expect("retained record exists");
     assert_eq!(retained, blocks[1].header());
-    assert!(archive.is_empty());
 }
 #[test]
 fn finalized_top_block_rejects_replacement_without_mutation() {

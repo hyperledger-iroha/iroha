@@ -23,7 +23,6 @@ fn sora_permissions() -> Vec<AnyPermission> {
         AnyPermission::CanManageSoranetVpnQuoteIssuers(CanManageSoranetVpnQuoteIssuers),
         AnyPermission::CanIssueSoranetVpnQuote(CanIssueSoranetVpnQuote),
         AnyPermission::CanIngestSoranetPrivacy(CanIngestSoranetPrivacy),
-        AnyPermission::CanManageSccpGovernance(CanManageSccpGovernance),
     ];
     permissions.extend([
         AnyPermission::CanManageSorafsFinalPromotionCustody(CanManageSorafsFinalPromotionCustody {

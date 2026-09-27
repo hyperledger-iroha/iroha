@@ -8,8 +8,6 @@
 //! Notes:
 //! - Use the `SignedBlock` v1 Norito serialization for any `call_selector(inner)` and certificate hashing contexts.
 //! - Fixed-point thresholds are represented as integers; Q-format mapping is specified in docs.
-#[cfg(test)]
-use crate::isi::bridge::SccpRouteGovernanceActionV1;
 use crate::{
     NetworkId,
     account::AccountId,
@@ -510,7 +508,7 @@ pub enum ProposalKind {
     /// Schedule a runtime upgrade manifest through governance.
     #[codec(index = 1)]
     RuntimeUpgrade(RuntimeUpgradeProposal),
-    /// Apply one closed SCCP route-registry action through governance.
+    /// Apply one SCCP v1 governance proposal (`specs/sccp.md` §4.14.3).
     #[codec(index = 2)]
     SccpRouteGovernance(SccpRouteGovernanceProposal),
     /// Enact one validation-fee policy through SORA Parliament.
@@ -744,14 +742,14 @@ pub struct RuntimeUpgradeProposal {
     /// Canonical runtime-upgrade manifest payload.
     pub manifest: RuntimeUpgradeManifest,
 }
-/// Proposal payload for applying one closed SCCP registry action.
+/// Proposal payload for one SCCP v1 governance decision (`specs/sccp.md` §4.14.3).
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
 #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::parliament_types::SccpRouteGovernanceProposal")]
 pub struct SccpRouteGovernanceProposal {
-    /// Complete network- and action-bound SCCP Parliament effect preimage.
-    pub anchor: Box<crate::isi::bridge::SccpRouteGovernanceAnchorV1>,
+    /// Complete network-bound SCCP v1 proposal: base revisions and ordered actions.
+    pub proposal: Box<crate::sccp::governance::SccpGovernanceProposalV1>,
 }
 /// Proposal payload for one closed `SoraFS` provider-owner transition.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
@@ -3467,10 +3465,7 @@ impl ProposalKind {
                     None
                 }
             }
-            Self::SccpRouteGovernance(proposal) => proposal
-                .anchor
-                .action
-                .first_release_exact_json_u64_invariant_error(maximum),
+            Self::SccpRouteGovernance(proposal) => proposal.proposal.first_json_u64_violation(),
             Self::MusubiRegistryGovernance(action) => {
                 action.first_release_exact_json_u64_invariant_error(maximum)
             }
@@ -3545,7 +3540,9 @@ impl ProposalKind {
             Self::RuntimeUpgrade(proposal) => {
                 GovernanceSubjectPreimageV1::RuntimeUpgrade(proposal.manifest.id())
             }
-            Self::SccpRouteGovernance(_) => GovernanceSubjectPreimageV1::SccpRouteRegistry,
+            Self::SccpRouteGovernance(proposal) => {
+                GovernanceSubjectPreimageV1::Sccp(proposal.proposal.subjects())
+            }
             Self::ValidationFeePolicy(_) => {
                 GovernanceSubjectPreimageV1::ValidationFeePolicyRegistry
             }
@@ -3599,7 +3596,7 @@ enum GovernanceSubjectPreimageV1 {
     #[codec(index = 1)]
     RuntimeUpgrade(crate::runtime::RuntimeUpgradeId),
     #[codec(index = 2)]
-    SccpRouteRegistry,
+    Sccp(Vec<crate::sccp::governance::SccpGovernanceSubjectV1>),
     #[codec(index = 3)]
     ValidationFeePolicyRegistry,
     #[codec(index = 4)]

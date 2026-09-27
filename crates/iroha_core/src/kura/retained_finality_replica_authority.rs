@@ -142,12 +142,6 @@ impl Kura {
             max_canonical_entries,
         )
     }
-    fn invalid_retained_sccp_archive(height: u64, reason: impl Into<String>) -> Error {
-        Error::InvalidRetainedSccpArchive {
-            height,
-            reason: reason.into(),
-        }
-    }
     fn canonical_block_wire_hash(block: &SignedBlock) -> Result<Hash> {
         Self::canonical_block_wire_identity(block).map(|(_, hash)| hash)
     }
@@ -228,7 +222,7 @@ impl Kura {
             }
             return Ok(());
         }
-        if let Some((retained_header, _, retained_wire_len, retained_wire_hash, _, _)) =
+        if let Some((retained_header, _, retained_wire_len, retained_wire_hash, _)) =
             self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
         {
             if retained_header != block.header()
@@ -251,134 +245,6 @@ impl Kura {
             return Err(Error::CanonicalBlockWireMismatch { height });
         }
         Ok(())
-    }
-    fn retained_sccp_archive_from_block(
-        block: &SignedBlock,
-    ) -> Result<Vec<KuraRetainedSccpMessage>> {
-        let height = block.header().height().get();
-        crate::bridge::validate_sccp_commitment_root_for_signed_block(block).map_err(|error| {
-            Self::invalid_retained_sccp_archive(
-                height,
-                format!("committed block SCCP validation failed: {error:?}"),
-            )
-        })?;
-        let messages = crate::bridge::collect_sccp_messages_from_signed_block(block);
-        let max =
-            usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)?;
-        if messages.len() > max {
-            return Err(Self::invalid_retained_sccp_archive(
-                height,
-                format!(
-                    "archive contains {} messages; maximum is {max}",
-                    messages.len()
-                ),
-            ));
-        }
-        let mut archive = Vec::new();
-        archive.try_reserve_exact(messages.len())?;
-        for (index, message) in messages.into_iter().enumerate() {
-            let commitment_index = u32::try_from(index)?;
-            let payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&message.payload)
-                .map_err(|_| {
-                    Self::invalid_retained_sccp_archive(
-                        height,
-                        format!("message {commitment_index} cannot be canonically encoded"),
-                    )
-                })?;
-            if payload_bytes.is_empty()
-                || payload_bytes.len()
-                    > iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1
-            {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {commitment_index} exceeds the canonical payload bound"),
-                ));
-            }
-            archive.push(KuraRetainedSccpMessage {
-                commitment_index,
-                context: message.context,
-                payload_bytes,
-            });
-        }
-        Ok(archive)
-    }
-    fn validate_retained_sccp_archive(
-        record: &KuraRetainedBlockRecord,
-    ) -> Result<Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>> {
-        let height = record.height;
-        let max =
-            usize::try_from(iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1)?;
-        if record.sccp_archive.len() > max {
-            return Err(Self::invalid_retained_sccp_archive(
-                height,
-                format!(
-                    "archive contains {} messages; maximum is {max}",
-                    record.sccp_archive.len()
-                ),
-            ));
-        }
-        let mut projections = Vec::new();
-        projections.try_reserve_exact(record.sccp_archive.len())?;
-        let mut seen = BTreeSet::new();
-        for (index, archived) in record.sccp_archive.iter().enumerate() {
-            let expected_index = u32::try_from(index)?;
-            if archived.commitment_index != expected_index {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!(
-                        "archive is not dense: expected index {expected_index}, found {}",
-                        archived.commitment_index
-                    ),
-                ));
-            }
-            let validated = crate::bridge::validate_recorded_sccp_message_payload_bytes(
-                archived.context,
-                &archived.payload_bytes,
-            )
-            .map_err(|error| {
-                Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {expected_index} is invalid: {error:?}"),
-                )
-            })?;
-            let canonical =
-                iroha_sccp::canonical_sccp_payload_bytes(&validated.payload).map_err(|_| {
-                    Self::invalid_retained_sccp_archive(
-                        height,
-                        format!("message {expected_index} cannot be canonically re-encoded"),
-                    )
-                })?;
-            if canonical != archived.payload_bytes {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {expected_index} uses noncanonical payload bytes"),
-                ));
-            }
-            if !seen.insert(validated.key) {
-                return Err(Self::invalid_retained_sccp_archive(
-                    height,
-                    format!("message {expected_index} repeats an outbound replay key"),
-                ));
-            }
-            projections.push(crate::bridge::ValidatedSccpOutboundMessageProjectionV1 {
-                commitment_index: expected_index,
-                context: validated.context,
-                payload: validated.payload,
-                commitment: validated.commitment,
-            });
-        }
-        let commitments = projections
-            .iter()
-            .map(|projection| projection.commitment.clone())
-            .collect::<Vec<_>>();
-        let reconstructed = iroha_sccp::commitment_merkle_root(&commitments);
-        if reconstructed != record.block_header.sccp_commitment_root() {
-            return Err(Self::invalid_retained_sccp_archive(
-                height,
-                "archive commitment root differs from the retained canonical header",
-            ));
-        }
-        Ok(projections)
     }
     fn decode_retained_block_record_at(
         &self,
@@ -434,7 +300,7 @@ impl Kura {
         expected_height: u64,
         canonical_hash: HashOf<BlockHeader>,
         record: &KuraRetainedBlockRecord,
-    ) -> Result<Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>> {
+    ) -> Result<()> {
         if record.format_version != RETAINED_BLOCK_RECORD_VERSION {
             return Err(Error::IO(
                 std::io::Error::new(
@@ -503,7 +369,7 @@ impl Kura {
                 max: MAX_RETAINED_BLOCK_RECORD_BYTES,
             });
         }
-        Self::validate_retained_sccp_archive(record)
+        Ok(())
     }
     fn retained_block_record_at(
         &self,
@@ -516,7 +382,6 @@ impl Kura {
             Hash,
             u64,
             Hash,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
             Option<CertifiedMergeLedgerReference>,
         )>,
     > {
@@ -533,7 +398,6 @@ impl Kura {
             Hash,
             u64,
             Hash,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
             Option<CertifiedMergeLedgerReference>,
         )>,
     > {
@@ -552,7 +416,6 @@ impl Kura {
                 Hash,
                 u64,
                 Hash,
-                Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
                 Option<CertifiedMergeLedgerReference>,
             ),
             StableSidecarRead,
@@ -577,7 +440,6 @@ impl Kura {
             Hash,
             u64,
             Hash,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
             Option<CertifiedMergeLedgerReference>,
         )>,
     > {
@@ -603,7 +465,6 @@ impl Kura {
                 Hash,
                 u64,
                 Hash,
-                Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
                 Option<CertifiedMergeLedgerReference>,
             ),
             StableSidecarRead,
@@ -619,8 +480,7 @@ impl Kura {
         else {
             return Ok(None);
         };
-        let archive =
-            Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+        Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
         // Evidence validation observes any available body without promoting it
         // into derived query membership, hash indexes, or the resident cache.
         // Callers requiring published body authority still use the fallible
@@ -646,7 +506,6 @@ impl Kura {
                 record.proposal_wire_hash,
                 record.executed_block_wire_len,
                 record.executed_block_wire_hash,
-                archive,
                 record.merge_reference,
             ),
             read_identity,
@@ -681,9 +540,8 @@ impl Kura {
             executed_block_wire_len,
             executed_block_wire_hash,
             Self::block_merge_reference(block).cloned(),
-            Self::retained_sccp_archive_from_block(block)?,
         );
-        let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+        Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
         let bytes = record.canonical_storage_bytes();
         if bytes.len() > MAX_RETAINED_BLOCK_RECORD_BYTES {
             return Err(Error::RetainedBlockRecordTooLarge {
@@ -702,7 +560,7 @@ impl Kura {
         let height = record.height;
         let directory = Self::retained_block_record_dir_for(blocks_dir);
         let path = Self::retained_block_record_path_for(blocks_dir, height);
-        let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, record)?;
+        Self::validate_retained_block_record_at(&path, height, canonical_hash, record)?;
         let indexed_wire_len = self
             .block_store
             .lock()
@@ -719,8 +577,7 @@ impl Kura {
             });
         }
         if let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? {
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
+            Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
             if existing == *record {
                 return Ok(());
             }
@@ -739,8 +596,7 @@ impl Kura {
             let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? else {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             };
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
+            Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
             if existing != *record {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             }
@@ -757,7 +613,7 @@ impl Kura {
                 path,
             ));
         };
-        let _ = Self::validate_retained_block_record_at(&path, height, canonical_hash, &persisted)?;
+        Self::validate_retained_block_record_at(&path, height, canonical_hash, &persisted)?;
         if persisted != *record {
             return Err(Error::ConflictingRetainedBlockRecord { height });
         }
@@ -772,111 +628,6 @@ impl Kura {
     ) -> Result<()> {
         let record = Self::prepare_retained_block_record(blocks_dir, canonical_hash, block)?;
         self.persist_prepared_retained_block_record(blocks_dir, canonical_hash, &record)
-    }
-    /// Read a bounded, root-authenticated SCCP archive retained independently of the block body.
-    #[cfg(test)]
-    pub(crate) fn retained_sccp_archive(
-        &self,
-        height: u64,
-    ) -> Result<
-        Option<(
-            BlockHeader,
-            Vec<crate::bridge::ValidatedSccpOutboundMessageProjectionV1>,
-        )>,
-    > {
-        self.ensure_canonical_storage_not_poisoned()?;
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let Some(block_height) = NonZeroUsize::new(usize::try_from(height)?) else {
-            return Err(Error::MissingRetainedBlockRecord { height });
-        };
-        let canonical_hash = self
-            .get_durable_block_hash(block_height)
-            .ok_or(Error::MissingRetainedBlockRecord { height })?;
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        if let Some((header, _, _, _, archive, _)) =
-            self.retained_block_record_at(&blocks_dir, height, canonical_hash)?
-        {
-            return Ok(Some((header, archive)));
-        }
-        if let Some(block) = self.get_block(block_height) {
-            if block.header().sccp_commitment_root().is_none() {
-                return Ok(None);
-            }
-        } else {
-            let finality_dir = Self::v2_finality_artifact_dir_for(&blocks_dir);
-            let finality_path = Self::v2_finality_artifact_path_for(&blocks_dir, height);
-            if let Some((record, _)) =
-                self.decode_v2_finality_record_at(&finality_path, &finality_dir)?
-            {
-                Self::validate_v2_finality_record_at(
-                    &finality_path,
-                    height,
-                    canonical_hash,
-                    &record,
-                )?;
-                if record.block_header.sccp_commitment_root().is_none() {
-                    return Ok(None);
-                }
-            }
-        }
-        Err(Error::MissingRetainedBlockRecord { height })
-    }
-    /// Inventory nonempty retained SCCP archives through an exact committed-height boundary.
-    ///
-    /// Selected records are decoded one at a time, bound to Kura's canonical hash journal, and
-    /// fully archive-validated. The result retains only fixed-size summaries, so canonical SCCP
-    /// payloads are never accumulated or duplicated across heights. Valid rootless/empty retained
-    /// records are deliberately omitted. Retained suffix records above `committed_height` are not
-    /// decoded and cannot leak a Kura-ahead-of-WSV suffix into snapshot validation.
-    pub(crate) fn retained_nonempty_sccp_archive_inventory_at_or_below(
-        &self,
-        committed_height: u64,
-    ) -> Result<Vec<RetainedSccpArchiveSummary>> {
-        self.ensure_canonical_storage_not_poisoned()?;
-        if committed_height == 0 {
-            return Ok(Vec::new());
-        }
-        let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let blocks_dir = self.active_blocks_dir.lock().clone();
-        // The directory can legitimately contain an immutable finalized suffix above the WSV
-        // boundary selected by snapshot rollback validation. Bound directory enumeration by the
-        // durable canonical chain, then decode only the selected prefix below. Using the WSV
-        // boundary as the inventory bound would reject that valid suffix before `take_while` can
-        // exclude it.
-        let durable_height = self.block_store.lock().read_durable_index_count()?;
-        let heights =
-            Self::retained_block_record_heights_for(&self.store_root, &blocks_dir, durable_height)?;
-        if let Some(retained_height) = heights.last().copied()
-            && retained_height > durable_height
-        {
-            return Err(Error::RetainedBlockBeyondDurableChain {
-                retained_height,
-                durable_height,
-            });
-        }
-        let mut summaries = Vec::new();
-        for height in heights
-            .into_iter()
-            .take_while(|height| *height <= committed_height)
-        {
-            let block_height = NonZeroUsize::new(usize::try_from(height)?)
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let canonical_hash = self
-                .get_durable_block_hash(block_height)
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            let (header, _, _, _, archive, _) = self
-                .retained_block_record_at(&blocks_dir, height, canonical_hash)?
-                .ok_or(Error::MissingRetainedBlockRecord { height })?;
-            if archive.is_empty() {
-                continue;
-            }
-            summaries.push(RetainedSccpArchiveSummary {
-                height,
-                block_hash: header.hash(),
-                message_count: u32::try_from(archive.len())?,
-            });
-        }
-        Ok(summaries)
     }
     fn validate_retained_block_inventory_on_startup(&self) -> Result<()> {
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
@@ -1056,12 +807,7 @@ impl Kura {
             ));
         }
         let record = Self::decode_canonical_retained_block_record(&path, &snapshot.bytes)?;
-        let _ = Self::validate_retained_block_record_at(
-            &path,
-            entry.height,
-            entry.block_hash,
-            &record,
-        )?;
+        Self::validate_retained_block_record_at(&path, entry.height, entry.block_hash, &record)?;
         Ok(record)
     }
     fn stage_retained_block_records_for_rewrite(
@@ -1100,8 +846,7 @@ impl Kura {
             else {
                 return Err(Error::MissingRetainedBlockRecord { height });
             };
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
+            Self::validate_retained_block_record_at(&path, height, canonical_hash, &record)?;
             let bytes_len = u64::try_from(physical.bytes.len())?;
             removed_total_bytes = removed_total_bytes.saturating_add(bytes_len);
             entries.push(StagedRetainedBlockRewriteEntry {
@@ -1205,7 +950,7 @@ impl Kura {
                 if let Some(existing) =
                     self.decode_retained_block_record_at(&destination, &retained_directory)?
                 {
-                    let _ = Self::validate_retained_block_record_at(
+                    Self::validate_retained_block_record_at(
                         &destination,
                         entry.height,
                         entry.block_hash,
@@ -1410,8 +1155,7 @@ impl Kura {
             else {
                 return Err(Error::MissingRetainedBlockRecord { height });
             };
-            let _ =
-                Self::validate_retained_block_record_at(&path, height, record.block_hash, &record)?;
+            Self::validate_retained_block_record_at(&path, height, record.block_hash, &record)?;
             let canonical_hash = NonZeroUsize::new(usize::try_from(height)?)
                 .and_then(|height| self.get_durable_block_hash(height));
             let destination = Self::retained_block_record_path_for(blocks_dir, height);
@@ -1422,7 +1166,7 @@ impl Kura {
                 if let Some(existing) =
                     self.decode_retained_block_record_at(&destination, &retained_directory)?
                 {
-                    let _ = Self::validate_retained_block_record_at(
+                    Self::validate_retained_block_record_at(
                         &destination,
                         height,
                         record.block_hash,
@@ -1633,7 +1377,6 @@ impl Kura {
             proposal_wire_hash,
             executed_block_wire_len,
             executed_block_wire_hash,
-            _,
             _,
         )) = self.retained_block_record_at_without_live_body(blocks_dir, height, canonical_hash)?
         else {

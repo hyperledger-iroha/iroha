@@ -12891,7 +12891,7 @@ pub mod tests {
         zk.max_proof_size_bytes = 64;
         state
             .set_zk(zk)
-            .expect("empty SCCP state accepts focused confidential limits");
+            .expect("empty state accepts focused confidential limits");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut rejected = block.transaction();

@@ -117,12 +117,6 @@ const ROUTE_CHECKS: &[(&str, RouteCheckMethod, &str, &[u16])] = &[
         &[200],
     ),
     (
-        "sccp_capabilities",
-        RouteCheckMethod::Get,
-        "/v1/sccp/capabilities",
-        &[200],
-    ),
-    (
         "zk_proofs_count",
         RouteCheckMethod::Get,
         "/v1/zk/proofs/count",

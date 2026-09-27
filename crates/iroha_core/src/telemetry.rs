@@ -11568,20 +11568,20 @@ mod tests {
                 .get(),
             1
         );
-        telemetry.inc_torii_api_token_hit("v1/sccp/capabilities", "present");
+        telemetry.inc_torii_api_token_hit("v1/status", "present");
         assert_eq!(
             metrics
                 .torii_api_token_hits_total
-                .with_label_values(&["v1/sccp/capabilities", "present"])
+                .with_label_values(&["v1/status", "present"])
                 .get(),
             1
         );
         let telemetry = Telemetry::new(Arc::clone(&metrics), false);
-        telemetry.inc_torii_api_token_hit("v1/sccp/capabilities", "present");
+        telemetry.inc_torii_api_token_hit("v1/status", "present");
         assert_eq!(
             metrics
                 .torii_api_token_hits_total
-                .with_label_values(&["v1/sccp/capabilities", "present"])
+                .with_label_values(&["v1/status", "present"])
                 .get(),
             1,
             "disabled telemetry must not record additional API-token hits"

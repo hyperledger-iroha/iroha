@@ -92,12 +92,7 @@ impl State {
         );
         {
             let view = self.query_view();
-            let digest = super::compute_confidential_feature_digest(
-                view.world(),
-                view.zk(),
-                view.sccp_registry(),
-                1,
-            );
+            let digest = super::compute_confidential_feature_digest(view.world(), view.zk(), 1);
             header.set_confidential_features((!digest.is_empty()).then_some(digest));
         }
         let mut builder = BlockBuilder::new(header);

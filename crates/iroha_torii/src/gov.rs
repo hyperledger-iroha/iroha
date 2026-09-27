@@ -1727,10 +1727,10 @@ fn deploy_contract_proposal_kind(
     })
 }
 fn sccp_route_governance_proposal_kind(
-    anchor: &iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1,
+    proposal: &iroha_data_model::sccp::governance::SccpGovernanceProposalV1,
 ) -> ProposalKind {
     ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
-        anchor: Box::new(anchor.clone()),
+        proposal: Box::new(proposal.clone()),
     })
 }
 fn resolve_governance_contract_target(
@@ -2455,30 +2455,31 @@ pub async fn handle_gov_propose_deploy(
 }
 /// POST /v1/gov/proposals/sccp-route-governance — build a proposal id and instruction skeleton.
 ///
-/// The request schema excludes private signing material; callers submit locally
-/// signed transactions after building the draft instructions.
+/// The request carries one complete `SccpGovernanceProposalV1` (`specs/sccp.md` §4.14.3). The
+/// draft is rejected unless the proposal passes every state-independent Propose check against
+/// the node's live `NetworkId` and every `u64` is exact in JSON. The request schema excludes
+/// private signing material; callers submit locally signed transactions after building the
+/// draft instructions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when the action fails static validation.
+/// Returns `crate::Error::Query` (HTTP 400) when the proposal fails static validation.
 pub async fn handle_gov_propose_sccp_route_governance(
     state: Arc<iroha_core::state::State>,
     NoritoJson(body): NoritoJson<SccpRouteGovernanceProposalDraftRequestV1>,
 ) -> Result<JsonBody<SccpRouteGovernanceProposalDraftResponseV1>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
-    body.action.validate_static().map_err(|error| {
-        crate::routing::conversion_error(format!("invalid SCCP route governance action: {error}"))
-    })?;
-    let instr = gov::ProposeSccpRouteGovernance {
-        anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
-            network_id: *state.network_id_ref(),
-            action: body.action,
-        },
-    };
-    let proposal_kind = sccp_route_governance_proposal_kind(&instr.anchor);
-    if let Some(reason) = proposal_kind.first_release_exact_json_u64_invariant_error() {
+    let proposal = body.proposal;
+    proposal
+        .validate_static(state.network_id_ref())
+        .map_err(|error| {
+            crate::routing::conversion_error(format!("invalid SCCP governance proposal: {error}"))
+        })?;
+    if let Some(reason) = proposal.first_json_u64_violation() {
         return Err(crate::routing::conversion_error(reason.to_owned()));
     }
-    let proposal_id = ProposalContentId::new(proposal_kind.fingerprint());
+    let proposal_id =
+        ProposalContentId::new(sccp_route_governance_proposal_kind(&proposal).fingerprint());
+    let instr = gov::ProposeSccpRouteGovernance { proposal };
     Ok(JsonBody(SccpRouteGovernanceProposalDraftResponseV1 {
         proposal_id,
         tx_instructions: instruction_skeleton_for_sccp_route_governance_propose(&instr),

@@ -5581,7 +5581,6 @@ impl Executor {
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         gas_limit_md: Option<u64>,
         require_gas_limit: bool,
-        sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<FeeSponsorProgramId>,
         skip_nexus_fee: bool,
@@ -5694,9 +5693,6 @@ impl Executor {
         }
         let instruction_count = instructions.len();
         // 3) Execute ISIs in order.
-        let prior_sccp_ivm_proved_execution_binding =
-            state_transaction.sccp_ivm_proved_execution_binding.clone();
-        state_transaction.sccp_ivm_proved_execution_binding = sccp_ivm_proved_execution_binding;
         let execution_result = (|| -> Result<(), ValidationFail> {
             if let Some(replay) = ivm_proved_replay {
                 for queued in replay.queued {
@@ -5859,8 +5855,6 @@ impl Executor {
             }
             Ok(())
         })();
-        state_transaction.sccp_ivm_proved_execution_binding =
-            prior_sccp_ivm_proved_execution_binding;
         execution_result?;
         // 4) Charge gas fees when configured and the transaction specified a gas asset.
         if should_charge_pipeline_gas_asset(
@@ -6599,7 +6593,6 @@ impl Executor {
         }
         let mut proved_contract_runtime_context = None;
         let mut proved_entrypoint_authorization = None;
-        let mut sccp_ivm_proved_execution_binding = None;
         // Full verification for proof-carrying IVM executables must run before we move the
         // transaction payload out of `SignedTransaction`.
         let ivm_proved_replay = if let Executable::IvmProved(proved) = transaction.instructions() {
@@ -6688,15 +6681,11 @@ impl Executor {
                     "verified replay lost its actual gas owner".into(),
                 ));
             }
-            sccp_ivm_proved_execution_binding = Some(
-                crate::pipeline::overlay::sccp_ivm_proved_execution_binding(
-                    state_transaction,
-                    &transaction,
-                    proved,
-                    replay.gas_used,
-                )
-                .map_err(overlay_build_error_to_validation_fail)?,
-            );
+            crate::pipeline::overlay::require_ivm_proved_gas_within_limit(
+                &transaction,
+                replay.gas_used,
+            )
+            .map_err(overlay_build_error_to_validation_fail)?;
             Some(replay)
         } else {
             None
@@ -6721,7 +6710,6 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     false,
-                    None,
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
@@ -6747,7 +6735,6 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     true,
-                    sccp_ivm_proved_execution_binding,
                     gas_asset_opt,
                     fee_sponsor,
                     false,
@@ -8488,6 +8475,7 @@ const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
     "CanReadRestrictedDataspace",
     "CanManageFxCorridors",
     "CanManageKagemushaReserve",
+    "CanProposeSccpRouteGovernance",
 ];
 include!("executor_initial_permission_authority.rs");
 fn is_builtin_initial_permission_name(permission_name: &str) -> bool {
@@ -11110,6 +11098,18 @@ mod tests {
         );
     }
     #[test]
+    fn initial_executor_treats_sccp_proposer_permission_as_genesis_only() {
+        let permission: Permission =
+            executor_permission::sccp::CanProposeSccpRouteGovernance.into();
+        assert!(is_builtin_initial_permission_name(
+            permission.name().as_ref()
+        ));
+        assert!(
+            initial_permission_is_genesis_only(&permission),
+            "SCCP route governance proposers are granted and revoked only in genesis"
+        );
+    }
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn initial_executor_enforces_capability_roots_for_every_scoped_permission() {
         use iroha_data_model::{
@@ -11204,7 +11204,6 @@ mod tests {
                 executor_permission::smart_contract::CanManageSmartContractCode.into(),
                 executor_permission::settlement::CanManageFxCorridors.into(),
                 manifest_root,
-                executor_permission::sccp::CanManageSccpGovernance.into(),
                 contract_proposal_permission.clone(),
                 runtime_proposal_permission.clone(),
                 ballot_permission.clone(),
@@ -11576,11 +11575,6 @@ mod tests {
                 true,
             ),
             (
-                "CanProposeSccpRouteGovernance",
-                executor_permission::sccp::CanProposeSccpRouteGovernance.into(),
-                true,
-            ),
-            (
                 "CanProposeContractDeployment",
                 contract_proposal_permission,
                 false,
@@ -11594,7 +11588,7 @@ mod tests {
             ("CanSlashGovernanceLock", slash_permission, false),
             ("CanRestituteGovernanceLock", restitute_permission, false),
         ];
-        assert_eq!(cases.len(), 47, "update this table for every scoped arm");
+        assert_eq!(cases.len(), 46, "update this table for every scoped arm");
         assert_eq!(
             cases
                 .iter()
@@ -12907,7 +12901,6 @@ mod tests {
                 true,
                 None,
                 None,
-                None,
                 true,
             )
             .expect("empty proved overlay should retain replay gas");
@@ -13001,7 +12994,6 @@ mod tests {
                 true,
                 None,
                 None,
-                None,
                 true,
             )
             .expect("proved replay applies its authorized durable write");
@@ -13042,7 +13034,6 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,
@@ -13101,7 +13092,6 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,
@@ -13164,7 +13154,6 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,
@@ -13264,7 +13253,6 @@ mod tests {
                 signed.hash(),
                 Some(50_000),
                 true,
-                None,
                 None,
                 None,
                 true,

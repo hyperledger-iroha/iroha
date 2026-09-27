@@ -1195,7 +1195,10 @@ fn propose_sccp_route_governance_payload(instruction: &InstructionBox) -> Option
         .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>(
     )?;
     let mut value = Map::new();
-    value.insert("anchor".to_owned(), json::to_value(&proposal.anchor).ok()?);
+    value.insert(
+        "proposal".to_owned(),
+        json::to_value(&proposal.proposal).ok()?,
+    );
     Some(instruction_variant_value(
         "ProposeSccpRouteGovernance",
         Value::Object(value),
@@ -3674,28 +3677,32 @@ mod tests {
         }
     }
     #[test]
-    fn sccp_governance_instruction_payload_exposes_exact_typed_action() {
-        let action = iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
-            iroha_data_model::bridge::SccpRouteKeyV1 {
-                lane_id: iroha_data_model::bridge::SccpLaneIdV1 {
-                    source: iroha_data_model::bridge::SccpNetworkV1::TonMainnet,
-                    target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
-                },
-                route_id: "taira_ton_xor".to_owned(),
-                asset_key: "xor".to_owned(),
-                revision: 1,
-            },
-        );
+    fn sccp_governance_instruction_payload_exposes_exact_typed_proposal() {
+        use iroha_data_model::sccp::governance::{
+            SccpFreezeLightClientActionV1, SccpGovernanceActionV1, SccpGovernanceBaseRevisionV1,
+            SccpGovernanceProposalV1, SccpGovernanceSubjectV1,
+        };
+        let network = iroha_data_model::bridge::SccpNetworkV1::TonMainnet;
         let proposal = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
-            anchor: iroha_data_model::isi::bridge::SccpRouteGovernanceAnchorV1 {
+            proposal: SccpGovernanceProposalV1 {
                 network_id: test_network_id(),
-                action,
+                base_revisions: vec![SccpGovernanceBaseRevisionV1 {
+                    subject: SccpGovernanceSubjectV1::LightClient(network),
+                    revision: 3,
+                }],
+                actions: vec![SccpGovernanceActionV1::FreezeLightClient(
+                    SccpFreezeLightClientActionV1 { network },
+                )],
             },
         };
         let mut expected = Map::new();
         expected.insert(
-            "anchor".to_owned(),
-            json::to_value(&proposal.anchor).expect("anchor should serialize"),
+            "proposal".to_owned(),
+            json::to_value(&proposal.proposal).expect("proposal should serialize"),
+        );
+        assert!(
+            !expected.contains_key("anchor"),
+            "the retired single-action anchor must not appear"
         );
         let instruction: InstructionBox = proposal.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Custom);

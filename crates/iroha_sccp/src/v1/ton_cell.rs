@@ -162,7 +162,7 @@ fn representation(data: &[u8], bit_len: usize, refs: &[CellRef]) -> Vec<u8> {
     out.push(u8::try_from(refs.len()).expect("at most 4 references"));
     out.push(u8::try_from(full_bytes + data_bytes).expect("at most 256 data bytes"));
     out.extend_from_slice(&data[..data_bytes]);
-    if bit_len % 8 != 0 {
+    if !bit_len.is_multiple_of(8) {
         let last = out.len() - 1;
         out[last] |= 0x80 >> (bit_len % 8);
     }
@@ -205,7 +205,7 @@ impl CellBuilder {
         if self.bit_len >= MAX_CELL_BITS {
             return Err(TonCellError::BitOverflow);
         }
-        if self.bit_len % 8 == 0 {
+        if self.bit_len.is_multiple_of(8) {
             self.data.push(0);
         }
         if bit {
@@ -376,13 +376,12 @@ pub fn parse_snake_bytes(cell: &Cell, max_bytes: usize) -> Result<Vec<u8>, TonCe
     let mut out = Vec::new();
     let mut current = cell;
     loop {
-        if current.bit_len % 8 != 0 || current.refs.len() > 1 {
+        if !current.bit_len.is_multiple_of(8) || current.refs.len() > 1 {
             return Err(TonCellError::BadSnake);
         }
         let len = current.bit_len / 8;
         let has_next = current.refs.len() == 1;
-        if (has_next && len != TON_SNAKE_CHUNK_BYTES)
-            || !(1..=TON_SNAKE_CHUNK_BYTES).contains(&len)
+        if (has_next && len != TON_SNAKE_CHUNK_BYTES) || !(1..=TON_SNAKE_CHUNK_BYTES).contains(&len)
         {
             return Err(TonCellError::BadSnake);
         }
@@ -613,7 +612,7 @@ mod tests {
     use super::*;
 
     fn hex(bytes: &[u8]) -> String {
-        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+        crate::v1::hashes::to_hex(bytes)
     }
 
     fn from_hex(text: &str) -> [u8; 32] {
@@ -657,10 +656,19 @@ mod tests {
         builder.store_bytes(&[0; 127]).unwrap();
         builder.store_uint(0, 7).unwrap();
         assert_eq!(builder.bit_len(), 1023);
-        assert_eq!(builder.store_bit(true).unwrap_err(), TonCellError::BitOverflow);
+        assert_eq!(
+            builder.store_bit(true).unwrap_err(),
+            TonCellError::BitOverflow
+        );
         let mut builder = CellBuilder::new();
-        assert_eq!(builder.store_uint(4, 2).unwrap_err(), TonCellError::ValueTooWide);
-        assert_eq!(builder.store_uint(0, 129).unwrap_err(), TonCellError::ValueTooWide);
+        assert_eq!(
+            builder.store_uint(4, 2).unwrap_err(),
+            TonCellError::ValueTooWide
+        );
+        assert_eq!(
+            builder.store_uint(0, 129).unwrap_err(),
+            TonCellError::ValueTooWide
+        );
         assert!(builder.store_uint(u128::MAX, 128).is_ok());
         for _ in 0..4 {
             builder.store_ref(CellRef::opaque([0; 32], 0)).unwrap();
@@ -694,7 +702,9 @@ mod tests {
     #[test]
     fn snake_bytes_shapes() {
         for len in [1_usize, 126, 127, 128, 254, 255, 1024] {
-            let bytes: Vec<u8> = (0..len).map(|index| (index % 251) as u8).collect();
+            let bytes: Vec<u8> = (0..len)
+                .map(|index| u8::try_from(index % 251).unwrap())
+                .collect();
             let cell = snake_bytes(&bytes).unwrap();
             assert_eq!(parse_snake_bytes(&cell, 4096).unwrap(), bytes, "len {len}");
             let expected_depth = u16::try_from(len.div_ceil(127) - 1).unwrap();
@@ -713,7 +723,11 @@ mod tests {
         );
         let tail = CellBuilder::new().store_bytes(&[1]).unwrap().build();
         let mut short = CellBuilder::new();
-        short.store_bytes(&[1; 126]).unwrap().store_ref(tail.clone()).unwrap();
+        short
+            .store_bytes(&[1; 126])
+            .unwrap()
+            .store_ref(tail.clone())
+            .unwrap();
         assert_eq!(
             parse_snake_bytes(&short.build(), 4096).unwrap_err(),
             TonCellError::BadSnake

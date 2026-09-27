@@ -137,8 +137,6 @@ pub(crate) struct CandidateAttachments {
     /// The exact mandatory pulse is not reconstructed yet. A complete useful
     /// snapshot returns before signing, retaining its queue and lane owners.
     pub(crate) required_beacon_pulse_pending: bool,
-    /// SCCP root derived by deterministic execution, when applicable.
-    pub(crate) sccp_commitment_root: Option<[u8; 32]>,
     /// Exact stripped application header certified by an autonomous merge
     /// batch. Ordinary and relay-only candidates leave this absent.
     pub(crate) certified_merge_carrier_header: Option<BlockHeader>,
@@ -1578,17 +1576,14 @@ impl V2CandidateAssembler {
         prepared_work: &PreparedCandidateWork,
         candidate_creation_time: Duration,
     ) -> Result<BlockBuilder<Chained>, CandidateError> {
-        // TODO: compose DA/pin/SCCP with the recorded Native consumer before
+        // TODO: compose DA/pin with the recorded Native consumer before
         // production activation. Refuse unsupported input before any signing;
         // a shape-valid bundle alone does not prove executable carrier controls.
         if prepared_work.native_lane_decisions.is_some()
-            && (attachments.da_commitments.is_some()
-                || attachments.da_pin_intents.is_some()
-                || attachments.sccp_commitment_root.is_some())
+            && (attachments.da_commitments.is_some() || attachments.da_pin_intents.is_some())
         {
             return Err(CandidateError::NativeLaneDecisionInvalid(
-                "native execution does not support additional carrier controls (DA, pin or SCCP)"
-                    .into(),
+                "native execution does not support additional carrier controls (DA or pin)".into(),
             ));
         }
         let transactions = selected
@@ -1650,13 +1645,11 @@ impl V2CandidateAssembler {
                 context.height,
             )))
             .with_da_pin_intents(attachments.da_pin_intents.clone())
-            .with_npos_consensus_effects(attachments.npos_consensus_effects.clone())
-            .with_sccp_commitment_root(attachments.sccp_commitment_root);
+            .with_npos_consensus_effects(attachments.npos_consensus_effects.clone());
         let state_view = state.view();
         let confidential = compute_confidential_feature_digest(
             state_view.world(),
             state_view.zk(),
-            state_view.sccp_registry(),
             context.height,
         );
         drop(state_view);
@@ -1818,7 +1811,6 @@ fn candidate_has_proposal_work(
             .npos_consensus_effects
             .as_ref()
             .is_some_and(npos_effects_have_independent_proposal_work)
-        || attachments.sccp_commitment_root.is_some()
         || attachments.certified_merge_carrier_header.is_some()
         || attachments.certified_merge_entry.is_some()
         || !attachments.queue_plan_admissions.is_empty()
@@ -1887,7 +1879,6 @@ fn candidate_block_has_independent_proposal_work(
         || block
             .npos_consensus_effects()
             .is_some_and(npos_effects_have_independent_proposal_work)
-        || block.header().sccp_commitment_root().is_some()
         || time_trigger_clock_progress_required
 }
 // Headers carry proposal identity only; complete outputs belong to BlockResult.
@@ -4550,7 +4541,6 @@ pub(super) mod tests {
         );
         let attachments = CandidateAttachments {
             queue_plan_admissions: vec![vec![1; 127], vec![2; 128]],
-            sccp_commitment_root: Some([0x99; 32]),
             ..CandidateAttachments::default()
         };
         let builder = assembler
@@ -4596,7 +4586,6 @@ pub(super) mod tests {
                     &attachments.queue_plan_admissions[..count]
                 );
                 assert_eq!(block.external_entrypoints_cloned().count(), 1);
-                assert_eq!(block.header().sccp_commitment_root(), Some([0x99; 32]));
                 assert!(block.da_proof_policies().is_some());
             }
         }
@@ -5645,7 +5634,13 @@ pub(super) mod tests {
             &prepared
         ));
         let control = CandidateAttachments {
-            sccp_commitment_root: Some([0x5A; 32]),
+            certified_merge_carrier_header: Some(BlockHeader::new(
+                NonZeroU64::new(1).expect("nonzero height"),
+                None,
+                None,
+                0,
+                0,
+            )),
             ..CandidateAttachments::default()
         };
         assert!(candidate_has_proposal_work(&[], &control, &prepared));

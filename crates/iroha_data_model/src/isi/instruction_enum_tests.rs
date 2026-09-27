@@ -5,7 +5,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::const_vec::ConstVec;
-const RECORD_SCCP_MESSAGE_WIRE_ID: &str = "iroha.instruction.v1::bridge::RecordSccpMessage";
+const RECORD_BRIDGE_RECEIPT_WIRE_ID: &str = "iroha.instruction.v1::bridge::RecordBridgeReceipt";
 macro_rules! check_enum {
         ($name:ident { $($variant:ident),+ $(,)? }) => {
             $(assert_eq!($name::try_from($name::$variant as u8).unwrap(), $name::$variant);)+
@@ -25,16 +25,17 @@ impl Drop for RegistryGuard {
         set_instruction_registry(crate::instruction_registry::default());
     }
 }
-fn outbound_sccp_context() -> crate::bridge::SccpOutboundMessageContextV1 {
-    crate::bridge::SccpOutboundMessageContextV1::new(
-        crate::bridge::SccpLaneIdV1 {
-            source: crate::bridge::SccpNetworkV1::SoraTaira,
-            target: crate::bridge::SccpNetworkV1::BscMainnet,
-        },
-        [0x44; 32],
-        [0x45; 32],
-    )
-    .expect("valid outbound SCCP context")
+fn bridge_receipt(recipient: &[u8]) -> crate::bridge::BridgeReceipt {
+    crate::bridge::BridgeReceipt {
+        lane: iroha_model_base::topology::LaneId::from(1),
+        direction: b"mint".to_vec(),
+        source_tx: [0x44; 32],
+        dest_tx: None,
+        proof_hash: [0x45; 32],
+        amount: 7_u32.into(),
+        asset_id: b"wrapped#bridge".to_vec(),
+        recipient: recipient.to_vec(),
+    }
 }
 fn test_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").expect("domain id")
@@ -132,28 +133,23 @@ fn decode_unregistered_instruction() {
     assert!(registry.decode("missing", &[]).is_none());
 }
 #[test]
-fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
+fn record_bridge_receipt_registry_roundtrip_preserves_payload_bytes() {
     let registry = InstructionRegistry::new()
-        .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
+        .register_with_id_slice::<RecordBridgeReceipt>(RECORD_BRIDGE_RECEIPT_WIRE_ID);
     let _guard = RegistryGuard::set(registry);
-    let instruction = RecordSccpMessage::new(
-        outbound_sccp_context(),
-        vec![0xAA, 0xBB, 0xCC],
-        crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-    );
+    let instruction = RecordBridgeReceipt::new(bridge_receipt(&[0xAA, 0xBB, 0xCC]));
     let (bytes, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
-    let framed = frame_instruction_payload(RECORD_SCCP_MESSAGE_WIRE_ID, &bytes)
-        .expect("record sccp message must frame");
+    let framed = frame_instruction_payload(RECORD_BRIDGE_RECEIPT_WIRE_ID, &bytes)
+        .expect("record bridge receipt must frame");
     let view = norito::core::from_bytes_view(&framed).expect("framed instruction payload");
     assert_eq!(view.flags(), expected_flags);
-    let decoded = decode_instruction_from_pair(RECORD_SCCP_MESSAGE_WIRE_ID, &framed)
-        .expect("record sccp message must decode");
+    let decoded = decode_instruction_from_pair(RECORD_BRIDGE_RECEIPT_WIRE_ID, &framed)
+        .expect("record bridge receipt must decode");
     let decoded = decoded
         .as_any()
-        .downcast_ref::<RecordSccpMessage>()
+        .downcast_ref::<RecordBridgeReceipt>()
         .expect("decoded instruction type");
-    assert_eq!(decoded.context, outbound_sccp_context());
-    assert_eq!(decoded.payload_bytes, vec![0xAA, 0xBB, 0xCC]);
+    assert_eq!(decoded.receipt, bridge_receipt(&[0xAA, 0xBB, 0xCC]));
 }
 #[test]
 fn registry_decode_accepts_misaligned_framed_payload() {
@@ -173,38 +169,11 @@ fn registry_decode_accepts_misaligned_framed_payload() {
     assert_eq!(Instruction::dyn_encode(&*decoded), payload);
 }
 #[test]
-fn record_sccp_registry_decode_accepts_misaligned_framed_payload() {
-    let registry = InstructionRegistry::new()
-        .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
-    let name = std::any::type_name::<RecordSccpMessage>();
-    let instruction = RecordSccpMessage::new(
-        outbound_sccp_context(),
-        vec![0xAA, 0xBB, 0xCC, 0xDD],
-        crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-    );
-    let payload = instruction.encode();
-    let framed = frame_instruction_payload(RECORD_SCCP_MESSAGE_WIRE_ID, &payload)
-        .expect("frame instruction payload");
-    let mut misaligned = Vec::with_capacity(framed.len() + 1);
-    misaligned.push(0xAA);
-    misaligned.extend_from_slice(&framed);
-    let decoded =
-        InstructionRegistry::decode(&registry, RECORD_SCCP_MESSAGE_WIRE_ID, &misaligned[1..])
-            .expect("constructor not found in decode map")
-            .expect("decode misaligned framed payload");
-    assert_eq!(Instruction::id(&*decoded), name);
-    assert_eq!(Instruction::dyn_encode(&*decoded), payload);
-}
-#[test]
 fn instruction_box_embeds_instruction_payload_with_recorded_flags() {
     let registry = InstructionRegistry::new()
-        .register_with_id_slice::<RecordSccpMessage>(RECORD_SCCP_MESSAGE_WIRE_ID);
+        .register_with_id_slice::<RecordBridgeReceipt>(RECORD_BRIDGE_RECEIPT_WIRE_ID);
     let _guard = RegistryGuard::set(registry);
-    let instruction = RecordSccpMessage::new(
-        outbound_sccp_context(),
-        vec![0xAA, 0xBB, 0xCC],
-        crate::bridge::SccpSparseMerkleWitnessV1::empty_shard(),
-    );
+    let instruction = RecordBridgeReceipt::new(bridge_receipt(&[0xAA, 0xBB, 0xCC]));
     let (_, expected_flags) = norito::codec::encode_with_header_flags(&instruction);
     let boxed = InstructionBox::from(instruction);
     let (_, framed_payload) =

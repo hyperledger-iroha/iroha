@@ -158,7 +158,7 @@ impl RosterV1 {
         threshold: u8,
         packed_members: &[u8],
     ) -> Result<Self, RosterError> {
-        if packed_members.len() % 20 != 0 {
+        if !packed_members.len().is_multiple_of(20) {
             return Err(RosterError::BadSize);
         }
         let members = packed_members
@@ -379,7 +379,8 @@ impl RosterStateV1 {
         let next_digest = next
             .digest(taira_network_id)
             .map_err(|_| RotationError::BadNextRoster)?;
-        if attestation.next_roster_digest == [0; 32] || attestation.next_roster_digest != next_digest
+        if attestation.next_roster_digest == [0; 32]
+            || attestation.next_roster_digest != next_digest
         {
             return Err(RotationError::NextDigestMismatch);
         }
@@ -478,14 +479,7 @@ mod tests {
         assert_eq!(preimage[72..92], member(1));
         assert_eq!(roster.digest(&TAIRA).unwrap(), keccak256(&[&preimage]));
         assert_eq!(
-            roster_digest_checked(
-                &TAIRA,
-                7,
-                NOW,
-                NOW + 14 * DAY,
-                3,
-                &roster.packed_members()
-            ),
+            roster_digest_checked(&TAIRA, 7, NOW, NOW + 14 * DAY, 3, &roster.packed_members()),
             roster.digest(&TAIRA)
         );
     }
@@ -500,7 +494,7 @@ mod tests {
             members: (1..=4).map(member).collect(),
         };
         let digest = roster.digest(&TAIRA).unwrap();
-        let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+        let hex = crate::v1::hashes::to_hex(&digest);
         assert_eq!(
             hex,
             "c9eed4f02ae435a8a7913451e107c5fc9085258bb4dd15e80c3f51c0f3cf5321"
@@ -535,7 +529,10 @@ mod tests {
         low[19] = 0xff;
         let mut high = [0_u8; 20];
         high[0] = 0x01;
-        assert_eq!(check_member_order(&[low, high, member(2), member(3)]), Ok(()));
+        assert_eq!(
+            check_member_order(&[low, high, member(2), member(3)]),
+            Ok(())
+        );
     }
 
     #[test]
@@ -629,7 +626,11 @@ mod tests {
         assert!(state.is_frozen(NOW + 1));
     }
 
-    fn rotation_attestation(state: &RosterStateV1, next_digest: [u8; 32], ts: u64) -> AttestationFieldsV1 {
+    fn rotation_attestation(
+        state: &RosterStateV1,
+        next_digest: [u8; 32],
+        ts: u64,
+    ) -> AttestationFieldsV1 {
         AttestationFieldsV1 {
             height: 3_600,
             epoch: 1,

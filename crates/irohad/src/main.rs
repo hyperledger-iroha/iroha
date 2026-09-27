@@ -1373,11 +1373,10 @@ mod snapshot_read_error_tests {
             }
         ));
         let incompatible_zk = TryReadSnapshotError::ZkConfigInstall(
-            iroha_core::state::ZkConfigInstallError::InvalidSccpPendingUsage {
-                usage: iroha_data_model::bridge::SccpOutboundPendingUsageV1 {
-                    message_count: 0,
-                    payload_bytes: 1,
-                },
+            iroha_core::state::ZkConfigInstallError::ConfidentialPolicyTransitionLimitExceeded {
+                effective_height: 1,
+                count: 2,
+                maximum: std::num::NonZeroU32::new(1).expect("nonzero transition cap"),
             },
         );
         assert!(!snapshot_read_error_is_recoverable_for_bootstrap(
@@ -3184,12 +3183,7 @@ impl Iroha {
         } else {
             let view = state.view();
             let height = u64::try_from(view.block_hashes().len()).expect("height fits into u64");
-            iroha_core::state::compute_confidential_feature_digest(
-                view.world(),
-                &view.zk,
-                view.sccp_registry.as_ref(),
-                height,
-            )
+            iroha_core::state::compute_confidential_feature_digest(view.world(), &view.zk, height)
         };
         iroha_logger::info!(
             mode=%consensus_caps.mode.tag(),
@@ -10320,11 +10314,6 @@ mod tests {
                 .0
                 .contains("state.sccp_policy_hash_snapshot()")
         );
-        assert!(
-            !confidential_setup
-                .0
-                .contains("state.sccp_registry_snapshot()")
-        );
         assert!(!confidential_setup.0.contains("state.view()"));
         assert!(confidential_setup.1.contains("let view = state.view()"));
         assert!(
@@ -11094,9 +11083,9 @@ mod tests {
                 .expect("sample config should be readable")
                 .parse()
                 .expect("sample config should parse");
-            config.zk.sccp.max_pending_outbound_messages =
-                std::num::NonZeroU64::new(7).expect("nonzero message cap");
-            config.zk.sccp.max_pending_outbound_payload_bytes =
+            config.zk.sccp.max_proofs_per_transaction =
+                std::num::NonZeroU32::new(7).expect("nonzero proof cap");
+            config.zk.sccp.max_proof_bytes_per_proof =
                 std::num::NonZeroU64::new(11).expect("nonzero byte cap");
             let kagemusha_asset_definition_id = AssetDefinitionId::derive_from_components(
                 iroha_model_base::domain::DomainId::try_new("boi", "is")
@@ -11117,12 +11106,12 @@ mod tests {
                 .expect("fresh state accepts actual runtime configuration");
             let installed = state.zk_snapshot();
             assert_eq!(
-                installed.sccp.max_pending_outbound_messages,
-                config.zk.sccp.max_pending_outbound_messages
+                installed.sccp.max_proofs_per_transaction,
+                config.zk.sccp.max_proofs_per_transaction
             );
             assert_eq!(
-                installed.sccp.max_pending_outbound_payload_bytes,
-                config.zk.sccp.max_pending_outbound_payload_bytes
+                installed.sccp.max_proof_bytes_per_proof,
+                config.zk.sccp.max_proof_bytes_per_proof
             );
             assert_eq!(
                 state

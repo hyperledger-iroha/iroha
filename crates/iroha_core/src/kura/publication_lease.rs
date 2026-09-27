@@ -250,8 +250,8 @@ impl Kura {
         }
         // Authenticate durable canonical/finality even for an empty manifest;
         // an empty participant list is not authority for a foreign carrier.
-        let Some((header, durable_finality, _)) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+        let Some((header, durable_finality)) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(
                 token.application_block_height,
             )?
         else {
@@ -349,8 +349,8 @@ impl Kura {
                 "Kura canonical block log differs from the durable receipt",
             ));
         }
-        let (header, artifact, _) = self
-            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(height)?
+        let (header, artifact) = self
+            .v2_finality_artifact_with_header_under_prune_and_canonical_guards(height)?
             .ok_or(Identity(
                 "Kura has no v2 finality artifact for the capture height",
             ))?;

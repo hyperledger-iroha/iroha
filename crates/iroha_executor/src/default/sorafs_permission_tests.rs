@@ -78,7 +78,6 @@ mod sorafs_permission_tests {
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain,
         parameter::{CanSetHijiriParameters, CanSetParameters},
-        sccp::CanManageSccpGovernance,
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
@@ -920,7 +919,6 @@ mod sorafs_permission_tests {
             });
         }
     }
-    include!("sccp_route_governance_permission_tests.rs");
     include!("governance_query_tail_tests.rs");
     include!("stream_token_custody_permission_tests.rs");
     include!("final_promotion_permission_tests.rs");

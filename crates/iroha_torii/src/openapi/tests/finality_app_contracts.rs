@@ -203,19 +203,18 @@ fn bridge_finality_v2_schemas_are_exact_closed_and_bounded() {
         assert!(!serialized.contains(&format!("\"{retired}\"")), "retired bridge field `{retired}`");
     }
 }
+#[cfg(feature = "app_api")]
 #[test]
 fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
-    let fixture = iroha_sccp::sccp_exact_outbound_test_fixture_v1();
-    let proof = iroha_sccp::decode_taira_bridge_finality_proof(&fixture.bundle.finality_proof).expect("decode SCCP v2 fixture");
+    let (app, _) = crate::tests_runtime_handlers::app_with_finalized_block_for_test(true);
+    let proof = iroha_core::bridge::build_finality_proof(app.state.as_ref(), 1).expect("finalized-block fixture proof");
     let value = norito::json::to_value(&proof).expect("serialize finality proof");
     let proof_object = value.as_object().expect("proof object");
     set_contracts! { object_field_set(proof_object) => asset_field_set("bridge.proof.required"); }
     let header = contract_object(proof_object.get("block_header"), "block header");
-    member_contracts! { header; Present => contract_strings("fixture.header.required"); Absent => ["result_merkle_root"]; }
-    assert!( header .get("npos_effects_hash") .and_then(Value::as_str) .is_some(), "the exact SCCP V1 fixture must carry the active NPoS effects commitment" );
-    assert!( header .get("execution_context_hash") .is_some_and(Value::is_null), "the exact SCCP V1 fixture must carry the required nullable execution-context slot" );
-    let expected_root = hex::encode_upper(fixture.bundle.commitment_root);
-    scalar_contracts! { header.get("sccp_commitment_root") => Text(expected_root.as_str()); }
+    member_contracts! { header; Present => contract_strings("fixture.header.required"); Absent => ["result_merkle_root", "sccp_commitment_root"]; }
+    assert!( header .get("npos_effects_hash") .is_some_and(|hash| hash.is_null() || hash.is_string()), "the finalized-block fixture must carry the nullable NPoS effects slot" );
+    assert!( header .get("execution_context_hash") .is_some_and(Value::is_null), "the finalized-block fixture must carry the required nullable execution-context slot" );
     let document = generate_spec();
     let schemas = component_schemas(&document);
     let bytes32 = contract_schema(schemas, "SumeragiV2Bytes32");
@@ -229,7 +228,7 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
     let context = contract_object(artifact.get("height_context"), "height context");
     scalar_contracts! { context.get("protocol_version") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::PROTOCOL_VERSION)); }
     for nullable in contract_strings("height.context.nullable") {
-        assert!( context.get(nullable).is_some_and(Value::is_null), "exact SCCP V1 fixture must carry null height-context slot `{nullable}`" );
+        assert!( context.get(nullable).is_some_and(Value::is_null), "finalized-block fixture must carry null height-context slot `{nullable}`" );
     }
     let mode = contract_object(context.get("mode"), "consensus mode");
     scalar_contracts! { mode.get("mode") => Text("npos"); }
@@ -269,7 +268,7 @@ fn bridge_finality_schema_matches_norito_json_and_decoder_rejects_v1_fields() {
         assert!(execution.get(root).and_then(Value::as_str).is_some_and(|hash| hash.starts_with("hash:") && hash.len() == 74), "canonical {root}");
     }
     for nullable in contract_strings("execution.nullable") {
-        assert_eq!( execution.get(nullable), Some(&Value::Null), "exact SCCP V1 fixture must carry null execution slot `{nullable}`" );
+        assert_eq!( execution.get(nullable), Some(&Value::Null), "finalized-block fixture must carry null execution slot `{nullable}`" );
     }
     assert!(execution.get("executed_block_wire_len").and_then(Value::as_u64).is_some_and(|length| length > 0));
     scalar_contracts! { execution.get("kagemusha_top_up_count") => Unsigned(0); execution.get("native_amx_application_manifest_version") => Unsigned(u64::from(iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION)); execution.get("native_amx_application_manifest_count") => Unsigned(0); }

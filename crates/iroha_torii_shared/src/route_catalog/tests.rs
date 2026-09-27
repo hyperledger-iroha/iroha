@@ -622,60 +622,46 @@ mod tests {
         );
     }
     #[test]
-    fn sccp_replay_routes_have_the_exact_public_read_contract() {
-        let replay_routes = sumeragi::ROUTES
-            .iter()
-            .copied()
-            .filter(|route| {
-                route.stable_route_id().starts_with("sccp.replay.")
-                    || route.path().starts_with("/v1/sccp/replay/")
-            })
-            .collect::<Vec<_>>();
-        let expected = [
-            (
-                sumeragi::SCCP_REPLAY_ROOT,
+    fn retired_sccp_routes_are_absent_and_the_parliament_draft_route_is_kept() {
+        // specs/sccp.md §6 and §10: the retired proof, replay, registry, discovery and submit
+        // routes are gone; only the Parliament draft route survives the purge.
+        for route in CATALOGED_ROUTES {
+            let path = route.path();
+            for retired_prefix in [
+                "/v1/sccp/proofs/",
+                "/v1/sccp/proof-requests/",
+                "/v1/sccp/replay/",
+                "/v1/sccp/routes/",
+                "/v1/bridge/proofs/submit",
+                "/v1/bridge/messages",
+            ] {
+                assert!(
+                    !path.starts_with(retired_prefix),
+                    "{} keeps the retired SCCP path {path}",
+                    route.stable_route_id()
+                );
+            }
+            for retired_id in [
+                "sccp.message_proof.read",
+                "sccp.proof_request.read",
                 "sccp.replay.root.read",
-                "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/root",
-            ),
-            (
-                sumeragi::SCCP_REPLAY_WITNESS,
                 "sccp.replay.witness.read",
-                "/v1/sccp/replay/{boundary}/{source_profile}/{route_id}/{asset_key}/{revision}/witness/{replay_key}",
-            ),
-        ];
-
-        assert_eq!(
-            replay_routes,
-            expected.map(|(route, _, _)| route),
-            "the public SCCP replay surface must contain exactly the root and witness routes"
-        );
-        for (route, expected_id, expected_path) in expected {
-            assert_eq!(route.stable_route_id(), expected_id);
-            assert_eq!(route.path(), expected_path);
-            assert_eq!(route.method(), HttpMethod::Get);
-            assert_eq!(route.surface(), ApiSurface::Public);
-            assert_eq!(route.listener(), Listener::Torii);
-            assert_eq!(route.effect(), RouteEffect::ReadOnly);
-            assert_eq!(route.admission(), AdmissionPolicy::Public);
-            assert_eq!(route.authentication(), AuthenticationPolicy::ToriiDefault);
-            assert_eq!(route.feature_gate(), FeatureGate::Always);
-            assert_eq!(route.projections(), RouteProjections::OPENAPI_AND_SDK);
-            assert!(route.projections().openapi());
-            assert!(route.projections().sdk());
-            assert!(!route.projections().mcp());
-            assert_eq!(route.route_match(), RouteMatch::Exact);
-            assert_eq!(route.path_normalization(), PathNormalization::Strict);
-            assert!(route.cors_options());
-            assert_eq!(
-                RouteCatalog::new(&[route]).implicit_routes(EnabledFeatures::none()),
-                vec![ImplicitRouteDescriptor {
-                    parent_route_id: expected_id,
-                    path: expected_path,
-                    kind: ImplicitRouteKind::CorsOptions,
-                }],
-                "SCCP replay routes declare only CORS OPTIONS as implicit behavior"
-            );
+                "sccp.sora_outbound_material.read",
+                "contracts.bridge_proofs_submit_post",
+                "contracts.bridge_messages_post",
+            ] {
+                assert_ne!(route.stable_route_id(), retired_id);
+            }
         }
+        assert!(CATALOGED_ROUTES.contains(&runtime_governance::GOV_PROPOSE_SCCP));
+        assert_eq!(
+            runtime_governance::GOV_PROPOSE_SCCP.stable_route_id(),
+            "governance.proposal.sccp_route_governance"
+        );
+        assert_eq!(
+            runtime_governance::GOV_PROPOSE_SCCP.method(),
+            HttpMethod::Post
+        );
     }
     #[test]
     fn parliament_cutover_excludes_legacy_governance_surfaces() {
@@ -1313,7 +1299,6 @@ mod tests {
             visible_fanout.authentication(),
             AuthenticationPolicy::OptionalCanonicalAccountSignature
         );
-
     }
     #[test]
     fn kaigi_signal_history_is_account_gated_expensive_compute() {
@@ -1466,10 +1451,7 @@ mod tests {
                 );
             }
         }
-        for route in [
-            contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
-            contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
-        ] {
+        for route in [contracts_and_verification_keys::CONTRACTS_ALIASES_POST] {
             assert_eq!(route.effect(), RouteEffect::Mutation);
             assert_eq!(route.admission(), AdmissionPolicy::AuthenticatedAccount);
             assert_eq!(
@@ -1554,18 +1536,10 @@ mod tests {
     #[test]
     fn contract_and_application_route_projections_are_explicit() {
         for route in [
-            contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
-            contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
         ] {
             assert!(route.projections().openapi(), "{}", route.stable_route_id());
-        }
-        for route in [
-            contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
-            contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
-        ] {
-            assert!(route.projections().sdk(), "{}", route.stable_route_id());
         }
         assert!(application_api::SORACLOUD_DEPLOY_POST.projections().sdk());
         assert!(
@@ -1784,7 +1758,6 @@ mod tests {
         assert!(sumeragi::STATUS_SSE.projections().openapi());
         assert!(!sumeragi::STATUS_SSE.projections().sdk());
         assert!(!sumeragi::STATUS_SSE.projections().mcp());
-        assert!(!sumeragi::SCCP_CAPABILITIES.projections().mcp());
         assert!(!telemetry::DEBUG_WITNESS.projections().openapi());
         assert_eq!(
             telemetry::DEBUG_WITNESS.authentication(),

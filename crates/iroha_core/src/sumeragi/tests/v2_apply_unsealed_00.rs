@@ -733,7 +733,6 @@ impl ApplyFixture {
             let digest = crate::state::compute_confidential_feature_digest(
                 state_view.world(),
                 &state_view.zk,
-                state_view.sccp_registry.as_ref(),
                 context.height,
             );
             (!digest.is_empty()).then_some(digest)

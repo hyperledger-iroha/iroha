@@ -33,7 +33,6 @@ fn native_preparation_carrier(
     let mut confidential = compute_confidential_feature_digest(
         view.world(),
         view.zk(),
-        view.sccp_registry(),
         fixture.applying.context().height,
     );
     drop(view);

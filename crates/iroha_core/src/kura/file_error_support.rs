@@ -500,13 +500,6 @@ pub enum Error {
         /// Height published by the durable block-store marker.
         durable_height: u64,
     },
-    /// Invalid retained SCCP archive at height `{height}`: {reason}
-    InvalidRetainedSccpArchive {
-        /// Canonical block height whose bounded archive is invalid.
-        height: u64,
-        /// Bounded structural or commitment diagnostic.
-        reason: String,
-    },
     /// Canonical block header for Sumeragi v2 finality height `{height}` is unavailable
     V2FinalityCanonicalHeaderUnavailable {
         /// Height whose complete canonical header could not be loaded.

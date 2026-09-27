@@ -359,11 +359,11 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 373;
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 375;
         #[cfg(feature = "governance")]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 373;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 375;
         #[cfg(not(feature = "governance"))]
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 355;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 357;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -413,9 +413,9 @@ mod tests {
         use sha2::{Digest, Sha256};
         #[cfg(feature = "governance")]
         const EXPECTED_WITH_GOVERNANCE_SHA256: &str =
-            "7fabfe7484927a2ca897d1d138eff9a532eff0bc9a3a3c1851611c31bee42e0f";
+            "3a3ac21219b0be3ab20d4c972cebc5110c28c74e622776973d1fc6835ef9ed2f";
         const EXPECTED_WITHOUT_GOVERNANCE_SHA256: &str =
-            "35685ff1107e09b08a474dfc36a53f0805b43572baa7e9b3169363564648d59c";
+            "d8a303f87cb609225beceae7d613ae1c92b463ae359a5216a8cbb7bfd1a0dd71";
         let assignment_digest = |entries: Vec<&wire_ids::BuiltInWireId>| {
             let mut assignments = entries
                 .into_iter()
@@ -1301,9 +1301,6 @@ mod tests {
         assert!(registry.contains(rwa::RwaInstructionBox::WIRE_ID));
         assert!(registry.contains(repo::RepoInstructionBox::WIRE_ID));
         assert!(registry.contains(settlement::SettlementInstructionBox::WIRE_ID));
-        let type_name = std::any::type_name::<bridge::ApplySccpRouteGovernance>();
-        assert!(registry.wire_id(type_name).is_some());
-        assert!(!registry.contains(type_name));
     }
     #[test]
     fn instruction_registry_registers_and_decodes_standalone_surface() {

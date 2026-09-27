@@ -766,15 +766,112 @@ fn runtime_upgrade_proposal_bounds_number_encoded_heights() {
             .is_some()
     );
 }
+fn sccp_proposal(
+    base_revision: u64,
+    actions: Vec<crate::sccp::governance::SccpGovernanceActionV1>,
+) -> ProposalKind {
+    let mut subjects = actions
+        .iter()
+        .map(crate::sccp::governance::SccpGovernanceActionV1::subject)
+        .collect::<Vec<_>>();
+    subjects.sort();
+    subjects.dedup();
+    ProposalKind::SccpRouteGovernance(SccpRouteGovernanceProposal {
+        proposal: Box::new(crate::sccp::governance::SccpGovernanceProposalV1 {
+            network_id: NetworkId::from_genesis_hash(iroha_crypto::HashOf::<
+                crate::block::BlockHeader,
+            >::from_untyped_unchecked(
+                iroha_crypto::Hash::new(b"SCCP governance proposal-kind fixture network"),
+            )),
+            base_revisions: subjects
+                .into_iter()
+                .map(|subject| (subject, base_revision).into())
+                .collect(),
+            actions,
+        }),
+    })
+}
+fn sccp_set_parameters_action() -> crate::sccp::governance::SccpGovernanceActionV1 {
+    crate::sccp::governance::SccpGovernanceActionV1::SetParameters(
+        crate::sccp::governance::SccpSetParametersActionV1 {
+            next: crate::sccp::params::SccpParametersV1::taira_default(),
+        },
+    )
+}
+fn sccp_freeze_action(
+    network: crate::bridge::SccpNetworkV1,
+) -> crate::sccp::governance::SccpGovernanceActionV1 {
+    crate::sccp::governance::SccpGovernanceActionV1::FreezeLightClient(
+        crate::sccp::governance::SccpFreezeLightClientActionV1 { network },
+    )
+}
 #[test]
 fn sccp_route_governance_proposal_is_boxed_out_of_proposal_kind() {
     assert_eq!(
         core::mem::size_of::<SccpRouteGovernanceProposal>(),
-        core::mem::size_of::<Box<crate::isi::bridge::SccpRouteGovernanceAnchorV1>>()
+        core::mem::size_of::<Box<crate::sccp::governance::SccpGovernanceProposalV1>>()
+    );
+}
+#[test]
+fn sccp_governed_subject_id_is_scoped_to_the_proposal_subject_set() {
+    use crate::{bridge::SccpNetworkV1, sccp::governance::SccpGovernanceSubjectV1};
+    let parameters = sccp_proposal(0, vec![sccp_set_parameters_action()]);
+    let parameters_later = sccp_proposal(7, vec![sccp_set_parameters_action()]);
+    assert_ne!(parameters.fingerprint(), parameters_later.fingerprint());
+    assert_eq!(
+        parameters.governed_subject_id_v1().expect("subject id"),
+        parameters_later
+            .governed_subject_id_v1()
+            .expect("subject id"),
+        "base revisions and action content never change the governed subject"
+    );
+    assert_eq!(
+        parameters.governed_subject_id_v1().expect("subject id"),
+        crate::governance_fingerprint::fingerprint(
+            crate::governance_fingerprint::GOVERNANCE_SUBJECT_ID_V1,
+            &GovernanceSubjectPreimageV1::Sccp(vec![SccpGovernanceSubjectV1::Parameters]),
+        )
+    );
+    let ethereum = sccp_proposal(0, vec![sccp_freeze_action(SccpNetworkV1::EthereumMainnet)]);
+    let ton = sccp_proposal(0, vec![sccp_freeze_action(SccpNetworkV1::TonMainnet)]);
+    let both = sccp_proposal(
+        0,
+        vec![
+            sccp_freeze_action(SccpNetworkV1::TonMainnet),
+            sccp_set_parameters_action(),
+        ],
+    );
+    let ids = [&parameters, &ethereum, &ton, &both]
+        .map(|proposal| proposal.governed_subject_id_v1().expect("subject id"));
+    for (index, id) in ids.iter().enumerate() {
+        for other in &ids[index + 1..] {
+            assert_ne!(id, other, "distinct subject sets must not share a head");
+        }
+    }
+    assert_eq!(
+        both.governed_subject_id_v1().expect("subject id"),
+        crate::governance_fingerprint::fingerprint(
+            crate::governance_fingerprint::GOVERNANCE_SUBJECT_ID_V1,
+            &GovernanceSubjectPreimageV1::Sccp(vec![
+                SccpGovernanceSubjectV1::LightClient(SccpNetworkV1::TonMainnet),
+                SccpGovernanceSubjectV1::Parameters,
+            ]),
+        ),
+        "the SCCP subject preimage is the sorted, deduplicated subject list"
+    );
+}
+#[test]
+fn sccp_exact_json_u64_arm_uses_the_proposal_check() {
+    let maximum = FIRST_RELEASE_MAX_EXACT_JSON_U64;
+    assert!(
+        sccp_proposal(maximum, vec![sccp_set_parameters_action()])
+            .first_release_exact_json_u64_invariant_error()
+            .is_none()
     );
     assert!(
-        core::mem::size_of::<ProposalKind>() < core::mem::size_of::<SccpRouteGovernanceActionV1>(),
-        "ProposalKind must not carry a complete SCCP route action inline"
+        sccp_proposal(maximum + 1, vec![sccp_set_parameters_action()])
+            .first_release_exact_json_u64_invariant_error()
+            .is_some()
     );
 }
 #[test]

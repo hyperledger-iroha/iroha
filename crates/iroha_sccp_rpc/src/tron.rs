@@ -3,7 +3,8 @@
 //! [`TronClient`] calls the java-tron HTTP routes the builders and wallet
 //! flows need: head and solidified blocks, blocks by number and by range with
 //! full transactions, solidified transaction info, contract runtime code,
-//! constant calls and `broadcasthex`.
+//! constant calls against the head or the solidified state, and
+//! `broadcasthex`.
 //!
 //! Transactions keep the exact bytes of `raw_data_hex`, their signatures and
 //! their `ret` objects as returned, because the `txTrieRoot` path is rebuilt
@@ -22,8 +23,8 @@ use norito::json::{Map, Value};
 use crate::{
     evm::HexError,
     http::{
-        HttpTransport, MEDIA_TYPE_JSON, RpcError, encode_json, expect_object, invalid_response,
-        optional, optional_array, optional_str, required, required_str, sanitize_message,
+        HttpTransport, RpcError, expect_object, invalid_response, optional, optional_array,
+        optional_str, required, required_str, sanitize_message,
     },
 };
 
@@ -44,7 +45,7 @@ pub fn parse_tron_hex(text: &str) -> Result<Vec<u8>, HexError> {
     if !text.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(HexError::InvalidDigit);
     }
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return Err(HexError::OddLength);
     }
     hex::decode(text).map_err(|_| HexError::InvalidDigit)
@@ -57,10 +58,9 @@ pub fn parse_tron_hex(text: &str) -> Result<Vec<u8>, HexError> {
 pub fn parse_tron_hex_array<const N: usize>(text: &str) -> Result<[u8; N], HexError> {
     let bytes = parse_tron_hex(text)?;
     let found = bytes.len();
-    bytes.try_into().map_err(|_| HexError::WrongLength {
-        expected: N,
-        found,
-    })
+    bytes
+        .try_into()
+        .map_err(|_| HexError::WrongLength { expected: N, found })
 }
 
 /// Parses a 21-byte TRON address in hex (`41…`).
@@ -204,9 +204,10 @@ impl TronConstantCall {
     pub fn reverted(&self) -> bool {
         !self.result
             || self.code.is_some()
-            || self.transaction_ret.iter().any(|ret| {
-                ret.get("ret").and_then(Value::as_str) == Some("FAILED")
-            })
+            || self
+                .transaction_ret
+                .iter()
+                .any(|ret| ret.get("ret").and_then(Value::as_str) == Some("FAILED"))
     }
 }
 
@@ -321,9 +322,11 @@ impl TronClient {
     /// `POST /wallet/getcontractinfo`: the runtime code of `address`; `None`
     /// for an address without a contract.
     ///
-    /// java-tron serves no `/walletsolidity/getcontractinfo` (it answers HTTP
-    /// 405), so the code is read from the head state; SCCP contracts cannot
-    /// change their code.
+    /// Spec §4.14.4 names `/walletsolidity/getcontractinfo`, but java-tron
+    /// registers no such route (its solidity HTTP service answers HTTP 405),
+    /// so the code is read from the head state. SCCP contracts cannot change
+    /// their code; their solidified views are read with
+    /// [`Self::solidity_trigger_constant_contract`].
     ///
     /// # Errors
     /// Any [`RpcError`].
@@ -355,14 +358,26 @@ impl TronClient {
         contract: &[u8; 21],
         data: &[u8],
     ) -> Result<TronConstantCall, RpcError> {
-        let mut body = Map::new();
-        body.insert("owner_address".to_owned(), address_param(owner, "the owner")?);
-        body.insert(
-            "contract_address".to_owned(),
-            address_param(contract, "the contract")?,
-        );
-        body.insert("data".to_owned(), Value::from(hex::encode(data)));
+        let body = constant_call_body(owner, contract, data)?;
         let value = self.call("/wallet/triggerconstantcontract", body)?;
+        parse_constant_call(&value)
+    }
+
+    /// `POST /walletsolidity/triggerconstantcontract`: the same call against
+    /// the newest solidified state, for reads that must not depend on
+    /// unsolidified blocks (deployment verification, §4.14.4).
+    ///
+    /// # Errors
+    /// Any [`RpcError`]; a revert is reported through
+    /// [`TronConstantCall::reverted`], not as an error.
+    pub fn solidity_trigger_constant_contract(
+        &self,
+        owner: &[u8; 21],
+        contract: &[u8; 21],
+        data: &[u8],
+    ) -> Result<TronConstantCall, RpcError> {
+        let body = constant_call_body(owner, contract, data)?;
+        let value = self.call("/walletsolidity/triggerconstantcontract", body)?;
         parse_constant_call(&value)
     }
 
@@ -401,24 +416,45 @@ impl TronClient {
         })
     }
 
+    /// `POST path` with a JSON body. The answer is parsed inside the attempt,
+    /// so an endpoint whose success body is not JSON fails over; an
+    /// `{"Error": …}` answer is an [`RpcError::Api`] and is returned at once.
     fn call(&self, path: &str, body: Map) -> Result<Value, RpcError> {
-        let body = encode_json(&Value::Object(body))?;
-        let response = self
-            .transport
-            .post(path, MEDIA_TYPE_JSON, &body, MEDIA_TYPE_JSON)?;
-        let value = response.json()?;
-        if let Some(message) = value
-            .as_object()
-            .and_then(|map| map.get("Error"))
-            .and_then(Value::as_str)
-        {
-            return Err(RpcError::Api {
-                endpoint: response.endpoint,
-                message: sanitize_message(message),
-            });
-        }
-        Ok(value)
+        self.transport
+            .post_json_then(path, &Value::Object(body), api_result)
     }
+}
+
+/// The answer `value` of `endpoint`, or [`RpcError::Api`] for a java-tron
+/// `{"Error": …}` object.
+fn api_result(endpoint: &str, value: Value) -> Result<Value, RpcError> {
+    if let Some(message) = value
+        .as_object()
+        .and_then(|map| map.get("Error"))
+        .and_then(Value::as_str)
+    {
+        return Err(RpcError::Api {
+            endpoint: endpoint.to_owned(),
+            message: sanitize_message(message),
+        });
+    }
+    Ok(value)
+}
+
+/// The body of a `triggerconstantcontract` call with full call `data`
+/// (selector and arguments) and hex addresses.
+fn constant_call_body(owner: &[u8; 21], contract: &[u8; 21], data: &[u8]) -> Result<Map, RpcError> {
+    let mut body = Map::new();
+    body.insert(
+        "owner_address".to_owned(),
+        address_param(owner, "the owner")?,
+    );
+    body.insert(
+        "contract_address".to_owned(),
+        address_param(contract, "the contract")?,
+    );
+    body.insert("data".to_owned(), Value::from(hex::encode(data)));
+    Ok(body)
 }
 
 fn is_empty_object(value: &Value) -> bool {
@@ -677,8 +713,8 @@ mod tests {
 
     #[test]
     fn blocks_keep_header_fields_and_transaction_bytes() {
-        let block = parse_block(&parse(&block_json(r#","version":37,"timestamp":1000"#)))
-            .expect("block");
+        let block =
+            parse_block(&parse(&block_json(r#","version":37,"timestamp":1000"#))).expect("block");
         assert_eq!(block.header.number, 5);
         assert_eq!(block.header.version, 37);
         assert_eq!(block.header.timestamp, 1000);
@@ -694,7 +730,8 @@ mod tests {
         );
         assert!(parse_block(&parse(&block_json(r#","version":-1"#))).is_err());
         assert!(parse_block(&parse(&block_json(r#","witness_id":1.5"#))).is_err());
-        let bad_prefix = block_json("").replace(&format!("41{}", "22".repeat(20)), &"22".repeat(21));
+        let bad_prefix =
+            block_json("").replace(&format!("41{}", "22".repeat(20)), &"22".repeat(21));
         assert!(parse_block(&parse(&bad_prefix)).is_err());
         let bad_ret = block_json("").replace(r#"[{"contractRet":"SUCCESS"}]"#, r#"["SUCCESS"]"#);
         assert!(parse_block(&parse(&bad_ret)).is_err());
@@ -744,9 +781,57 @@ mod tests {
     }
 
     #[test]
+    fn constant_call_bodies_use_hex_addresses_and_full_call_data() {
+        let mut owner = [0_u8; 21];
+        owner[0] = TRON_ADDRESS_PREFIX;
+        let mut contract = [0x22_u8; 21];
+        contract[0] = TRON_ADDRESS_PREFIX;
+        let body = constant_call_body(&owner, &contract, &[0x31, 0x3c, 0xe5, 0x67]).expect("body");
+        assert_eq!(
+            Value::Object(body),
+            parse(&format!(
+                r#"{{"owner_address":"41{}","contract_address":"41{}","data":"313ce567"}}"#,
+                "00".repeat(20),
+                "22".repeat(20)
+            ))
+        );
+        assert!(constant_call_body(&[0; 21], &contract, &[]).is_err());
+        assert!(constant_call_body(&owner, &[0; 21], &[]).is_err());
+    }
+
+    #[test]
     fn empty_objects_mean_unknown() {
         assert!(is_empty_object(&parse("{}")));
         assert!(!is_empty_object(&parse(r#"{"a":1}"#)));
         assert!(!is_empty_object(&parse("[]")));
+    }
+
+    #[test]
+    fn error_objects_are_api_errors_that_do_not_fail_over() {
+        let block = parse(r#"{"blockID":"00"}"#);
+        assert_eq!(
+            api_result("https://api.trongrid.io", block.clone()).expect("answer"),
+            block
+        );
+        assert_eq!(
+            api_result("e", parse("[]")).expect("non-object"),
+            parse("[]")
+        );
+        let error = api_result(
+            "https://api.trongrid.io",
+            parse(r#"{"Error":"class org.tron.core.exception.BadItemException :\nbad"}"#),
+        )
+        .expect_err("API error");
+        match &error {
+            RpcError::Api { endpoint, message } => {
+                assert_eq!(endpoint, "https://api.trongrid.io");
+                assert_eq!(
+                    message,
+                    "class org.tron.core.exception.BadItemException : bad"
+                );
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(!error.is_failover());
     }
 }

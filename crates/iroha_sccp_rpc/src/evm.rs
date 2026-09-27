@@ -135,7 +135,7 @@ fn left_padded_word(digits: &str) -> Result<[u8; 32], HexError> {
 /// [`HexError`] unless `text` is canonical data.
 pub fn parse_data(text: &str) -> Result<Vec<u8>, HexError> {
     let digits = hex_digits(text)?;
-    if digits.len() % 2 != 0 {
+    if !digits.len().is_multiple_of(2) {
         return Err(HexError::OddLength);
     }
     hex::decode(digits).map_err(|_| HexError::InvalidDigit)
@@ -148,10 +148,9 @@ pub fn parse_data(text: &str) -> Result<Vec<u8>, HexError> {
 pub fn parse_data_array<const N: usize>(text: &str) -> Result<[u8; N], HexError> {
     let bytes = parse_data(text)?;
     let found = bytes.len();
-    bytes.try_into().map_err(|_| HexError::WrongLength {
-        expected: N,
-        found,
-    })
+    bytes
+        .try_into()
+        .map_err(|_| HexError::WrongLength { expected: N, found })
 }
 
 /// Parses an `eth_getProof` storage key: `0x` and 1..=64 digits, as data or as
@@ -215,7 +214,7 @@ impl U256 {
     }
 
     /// The value as a `u128`, if it fits.
-    pub fn to_u128(&self) -> Option<u128> {
+    pub fn to_u128(self) -> Option<u128> {
         let (high, low) = self.0.split_at(16);
         if high.iter().any(|byte| *byte != 0) {
             return None;
@@ -226,12 +225,12 @@ impl U256 {
     }
 
     /// The value as a `u64`, if it fits.
-    pub fn to_u64(&self) -> Option<u64> {
+    pub fn to_u64(self) -> Option<u64> {
         self.to_u128().and_then(|value| u64::try_from(value).ok())
     }
 
     /// Formats the value as a quantity.
-    pub fn to_quantity(&self) -> String {
+    pub fn to_quantity(self) -> String {
         let digits = hex::encode(self.minimal_be_bytes());
         let trimmed = digits.trim_start_matches('0');
         if trimmed.is_empty() {
@@ -661,7 +660,10 @@ impl EvmClient {
     ) -> Result<Option<EvmBlock>, RpcError> {
         let value = self.transport.json_rpc(
             "eth_getBlockByNumber",
-            vec![Value::from(block.to_param()), Value::from(full_transactions)],
+            vec![
+                Value::from(block.to_param()),
+                Value::from(full_transactions),
+            ],
         )?;
         parse_block(value, full_transactions)
     }
@@ -677,7 +679,10 @@ impl EvmClient {
     ) -> Result<Option<EvmBlock>, RpcError> {
         let value = self.transport.json_rpc(
             "eth_getBlockByHash",
-            vec![Value::from(format_data(hash)), Value::from(full_transactions)],
+            vec![
+                Value::from(format_data(hash)),
+                Value::from(full_transactions),
+            ],
         )?;
         parse_block(value, full_transactions)
     }
@@ -741,7 +746,11 @@ impl EvmClient {
         let receipts = value
             .as_array()
             .ok_or_else(|| invalid_response("eth_getBlockReceipts result is not an array"))?;
-        receipts.iter().map(parse_receipt).collect::<Result<_, _>>().map(Some)
+        receipts
+            .iter()
+            .map(parse_receipt)
+            .collect::<Result<_, _>>()
+            .map(Some)
     }
 
     /// `eth_getProof` of `address` and `storage_keys` at `block`.
@@ -769,7 +778,9 @@ impl EvmClient {
         )?;
         let proof = parse_account_proof(&value)?;
         if proof.address != *address {
-            return Err(invalid_response("eth_getProof answered for another address"));
+            return Err(invalid_response(
+                "eth_getProof answered for another address",
+            ));
         }
         if proof.storage_proof.len() != storage_keys.len()
             || proof
@@ -778,7 +789,9 @@ impl EvmClient {
                 .zip(storage_keys)
                 .any(|(slot, key)| slot.key != *key)
         {
-            return Err(invalid_response("eth_getProof answered for other storage keys"));
+            return Err(invalid_response(
+                "eth_getProof answered for other storage keys",
+            ));
         }
         Ok(proof)
     }
@@ -851,9 +864,7 @@ impl EvmClient {
             || reward_percentiles
                 .iter()
                 .any(|percentile| !(0.0..=100.0).contains(percentile))
-            || reward_percentiles
-                .windows(2)
-                .any(|pair| pair[0] > pair[1])
+            || reward_percentiles.windows(2).any(|pair| pair[0] > pair[1])
         {
             return Err(RpcError::InvalidRequest(
                 "reward percentiles must ascend within 0..=100".to_owned(),
@@ -896,9 +907,10 @@ impl EvmClient {
                 "a raw transaction must not be empty".to_owned(),
             ));
         }
-        let value = self
-            .transport
-            .json_rpc("eth_sendRawTransaction", vec![Value::from(format_data(raw))])?;
+        let value = self.transport.json_rpc(
+            "eth_sendRawTransaction",
+            vec![Value::from(format_data(raw))],
+        )?;
         value_hex(&value, "eth_sendRawTransaction", parse_data_array::<32>)
     }
 }
@@ -970,11 +982,9 @@ fn ratio_list(values: &[Value], what: &str) -> Result<Vec<f64>, RpcError> {
 }
 
 fn tx_type(map: &Map, what: &str) -> Result<u8, RpcError> {
-    optional_hex_field(map, "type", what, parse_quantity_u64)?
-        .map_or(Ok(0), |value| {
-            u8::try_from(value)
-                .map_err(|_| invalid_response(format!("{what}.type exceeds one byte")))
-        })
+    optional_hex_field(map, "type", what, parse_quantity_u64)?.map_or(Ok(0), |value| {
+        u8::try_from(value).map_err(|_| invalid_response(format!("{what}.type exceeds one byte")))
+    })
 }
 
 /// Parses an `eth_getBlockBy*` result (`null` for an unknown block).
@@ -1035,12 +1045,7 @@ fn parse_header(map: &Map) -> Result<EvmHeader, RpcError> {
         mix_hash: hex_field(map, "mixHash", what, parse_data_array::<32>)?,
         nonce: hex_field(map, "nonce", what, parse_data_array::<8>)?,
         base_fee_per_gas: optional_hex_field(map, "baseFeePerGas", what, parse_quantity_u256)?,
-        withdrawals_root: optional_hex_field(
-            map,
-            "withdrawalsRoot",
-            what,
-            parse_data_array::<32>,
-        )?,
+        withdrawals_root: optional_hex_field(map, "withdrawalsRoot", what, parse_data_array::<32>)?,
         blob_gas_used: optional_hex_field(map, "blobGasUsed", what, parse_quantity_u64)?,
         excess_blob_gas: optional_hex_field(map, "excessBlobGas", what, parse_quantity_u64)?,
         parent_beacon_block_root: optional_hex_field(
@@ -1088,12 +1093,7 @@ fn parse_log(value: &Value) -> Result<EvmLog, RpcError> {
         data: hex_field(map, "data", what, parse_data)?,
         log_index: optional_hex_field(map, "logIndex", what, parse_quantity_u64)?,
         transaction_index: optional_hex_field(map, "transactionIndex", what, parse_quantity_u64)?,
-        transaction_hash: optional_hex_field(
-            map,
-            "transactionHash",
-            what,
-            parse_data_array::<32>,
-        )?,
+        transaction_hash: optional_hex_field(map, "transactionHash", what, parse_data_array::<32>)?,
         block_hash: optional_hex_field(map, "blockHash", what, parse_data_array::<32>)?,
         block_number: optional_hex_field(map, "blockNumber", what, parse_quantity_u64)?,
         removed,
@@ -1137,12 +1137,7 @@ fn parse_receipt(value: &Value) -> Result<EvmReceipt, RpcError> {
         )?,
         from: optional_hex_field(map, "from", what, parse_data_array::<20>)?,
         to: optional_hex_field(map, "to", what, parse_data_array::<20>)?,
-        contract_address: optional_hex_field(
-            map,
-            "contractAddress",
-            what,
-            parse_data_array::<20>,
-        )?,
+        contract_address: optional_hex_field(map, "contractAddress", what, parse_data_array::<20>)?,
         blob_gas_used: optional_hex_field(map, "blobGasUsed", what, parse_quantity_u64)?,
         blob_gas_price: optional_hex_field(map, "blobGasPrice", what, parse_quantity_u256)?,
     })
@@ -1189,9 +1184,9 @@ fn parse_fee_history(value: &Value) -> Result<EvmFeeHistory, RpcError> {
         .iter()
         .enumerate()
         .map(|(index, row)| {
-            let row = row
-                .as_array()
-                .ok_or_else(|| invalid_response(format!("feeHistory.reward[{index}] is not an array")))?;
+            let row = row.as_array().ok_or_else(|| {
+                invalid_response(format!("feeHistory.reward[{index}] is not an array"))
+            })?;
             hex_list(row, "feeHistory.reward", parse_quantity_u256)
         })
         .collect::<Result<_, _>>()?;
@@ -1232,7 +1227,10 @@ mod tests {
         assert_eq!(parse_quantity_u64("0x0"), Ok(0));
         assert_eq!(parse_quantity_u64("0x18daf08"), Ok(0x18d_af08));
         assert_eq!(parse_quantity_u64("0xFFFFFFFFFFFFFFFF"), Ok(u64::MAX));
-        assert_eq!(parse_quantity_u64("0x1ffffffffffffffff"), Err(HexError::Overflow));
+        assert_eq!(
+            parse_quantity_u64("0x1ffffffffffffffff"),
+            Err(HexError::Overflow)
+        );
         assert_eq!(parse_quantity_u64("0x01"), Err(HexError::LeadingZero));
         assert_eq!(parse_quantity_u64("0x"), Err(HexError::Empty));
         assert_eq!(parse_quantity_u64("1"), Err(HexError::MissingPrefix));
@@ -1249,8 +1247,10 @@ mod tests {
 
     #[test]
     fn u256_quantities_round_trip() {
-        let value = parse_quantity_u256("0x4168ab54c50c21f13c2fc36b285fc7666824d3acb7879f56945b73d07338a942")
-            .expect("256-bit");
+        let value = parse_quantity_u256(
+            "0x4168ab54c50c21f13c2fc36b285fc7666824d3acb7879f56945b73d07338a942",
+        )
+        .expect("256-bit");
         assert_eq!(
             value.to_quantity(),
             "0x4168ab54c50c21f13c2fc36b285fc7666824d3acb7879f56945b73d07338a942"
@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn block_parameters_are_spelled_as_json_rpc_expects() {
-        assert_eq!(BlockTag::Number(0x18da_f08).to_param(), "0x18daf08");
+        assert_eq!(BlockTag::Number(0x018d_af08).to_param(), "0x18daf08");
         assert_eq!(BlockTag::Finalized.to_param(), "finalized");
         assert_eq!(BlockTag::Safe.to_param(), "safe");
         assert_eq!(BlockTag::Earliest.to_param(), "earliest");
@@ -1394,19 +1394,29 @@ mod tests {
         ))
         .expect("history");
         assert_eq!(history.oldest_block, 16);
-        assert_eq!(history.base_fee_per_gas, vec![U256::from(1_u64), U256::from(2_u64)]);
+        assert_eq!(
+            history.base_fee_per_gas,
+            vec![U256::from(1_u64), U256::from(2_u64)]
+        );
         assert_eq!(history.gas_used_ratio, vec![0.5]);
-        assert_eq!(history.reward, vec![vec![U256::from(3_u64), U256::from(4_u64)]]);
+        assert_eq!(
+            history.reward,
+            vec![vec![U256::from(3_u64), U256::from(4_u64)]]
+        );
         assert!(history.base_fee_per_blob_gas.is_empty());
         assert!(history.blob_gas_used_ratio.is_empty());
-        assert!(parse_fee_history(&parse(
-            r#"{"oldestBlock":"0x10","baseFeePerGas":["0x01"],"gasUsedRatio":[]}"#
-        ))
-        .is_err());
-        assert!(parse_fee_history(&parse(
-            r#"{"oldestBlock":"0x10","baseFeePerGas":[],"gasUsedRatio":["0.5"]}"#
-        ))
-        .is_err());
+        assert!(
+            parse_fee_history(&parse(
+                r#"{"oldestBlock":"0x10","baseFeePerGas":["0x01"],"gasUsedRatio":[]}"#
+            ))
+            .is_err()
+        );
+        assert!(
+            parse_fee_history(&parse(
+                r#"{"oldestBlock":"0x10","baseFeePerGas":[],"gasUsedRatio":["0.5"]}"#
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -1417,7 +1427,10 @@ mod tests {
             a = "55".repeat(20),
             b = "00".repeat(256),
         );
-        let hashes = parse(&format!(r#"{{{header},"transactions":["0x{}"]}}"#, "66".repeat(32)));
+        let hashes = parse(&format!(
+            r#"{{{header},"transactions":["0x{}"]}}"#,
+            "66".repeat(32)
+        ));
         let block = parse_block(hashes.clone(), false)
             .expect("block")
             .expect("known block");
@@ -1427,10 +1440,10 @@ mod tests {
         assert_eq!(block.header.requests_hash, None);
         assert!(parse_block(hashes, true).is_err());
         assert_eq!(parse_block(Value::Null, false).expect("null"), None);
-        let bad_nonce = parse(&format!(r#"{{{header},"transactions":[]}}"#).replace(
-            r#""nonce":"0x0000000000000000""#,
-            r#""nonce":"0x00""#,
-        ));
+        let bad_nonce = parse(
+            &format!(r#"{{{header},"transactions":[]}}"#)
+                .replace(r#""nonce":"0x0000000000000000""#, r#""nonce":"0x00""#),
+        );
         assert!(parse_block(bad_nonce, false).is_err());
     }
 }

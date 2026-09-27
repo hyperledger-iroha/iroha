@@ -167,11 +167,8 @@ fn deterministic_metadata_preparation_cannot_resolve_output_publication_guard() 
 fn malformed_or_foreign_metadata_is_rejected_before_any_staged_write() {
     let state = state();
     let valid = carrier();
-    let mut bad_sccp = valid.clone();
-    bad_sccp.set_sccp_commitment_root(Some([0x49; 32]));
     for (source, scope_header) in [
         (proposal(), valid.header()),
-        (bad_sccp.clone(), bad_sccp.header()),
         (
             valid.clone(),
             BlockHeader::new(NonZeroU64::MIN, None, None, 9, 0),

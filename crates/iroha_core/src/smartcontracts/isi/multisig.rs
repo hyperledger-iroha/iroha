@@ -522,17 +522,6 @@ fn rekey_account_id(
             .into(),
         ));
     }
-    if crate::smartcontracts::isi::asset::isi::is_sccp_custody_account(
-        state_transaction,
-        old_account,
-    ) {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!(
-                "cannot rekey account {old_account}: it is deterministic SCCP route protocol escrow"
-            )
-            .into(),
-        ));
-    }
     if crate::smartcontracts::isi::asset::isi::is_fx_corridor_escrow_account(
         state_transaction,
         old_account,

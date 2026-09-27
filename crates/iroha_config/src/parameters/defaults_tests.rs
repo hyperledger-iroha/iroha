@@ -44,18 +44,6 @@ fn soracloud_public_runtime_defaults_are_non_zero() {
 }
 
 #[test]
-fn sccp_replay_archive_limits_bound_in_memory_decoding() {
-    use torii::sccp_replay_archive as replay;
-
-    assert_eq!(replay::MAX_RESPONSE_BYTES.get(), 64 * 1024 * 1024);
-    assert_eq!(replay::MAX_SNAPSHOT_BYTES.get(), 32 * 1024 * 1024);
-    assert_eq!(replay::MAX_SNAPSHOT_LEAVES, 256 * 1024);
-    assert_eq!(replay::MAX_RESPONSE_BYTES_HARD, 256 * 1024 * 1024);
-    assert_eq!(replay::MAX_SNAPSHOT_BYTES_HARD, 128 * 1024 * 1024);
-    assert_eq!(replay::MAX_SNAPSHOT_LEAVES_HARD, 1024 * 1024);
-    assert!(replay::MAX_SNAPSHOT_BYTES_HARD <= norito::MAX_ARCHIVE_LEN);
-}
-#[test]
 fn queue_defaults_allow_two_times_legacy_soak_capacity() {
     assert_eq!(queue::CAPACITY.get(), 262_144);
     assert_eq!(queue::CAPACITY_PER_USER.get(), 16_384);

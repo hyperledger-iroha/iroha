@@ -141,7 +141,7 @@ state_test! { sync live_native_batch_rejects_mixed_unbound_and_unsupported_actua
                 bundle.queue_plan_admissions = fixture.native.block.execution_context().unwrap().queue_plan_admissions.clone();
                 changed.set_execution_context(Some(bundle));
             },
-            6 => changed.set_sccp_commitment_root(Some(*Hash::new(b"additional global SCCP work").as_ref())),
+            6 => changed.set_da_pin_intents(Some(iroha_data_model::da::pin_intent::DaPinIntentBundle::new(Vec::new()))),
             7 => {
                 let mut header = changed.header();
                 header.set_prev_block_hash(Some(HashOf::from_untyped_unchecked(Hash::new(b"another actual parent"))));
