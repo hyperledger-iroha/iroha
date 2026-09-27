@@ -17,7 +17,6 @@ use crate::query::{
     },
     parameters::{FetchSize, Pagination, QueryParams, Sorting},
 };
-use derive_where::derive_where;
 use std::{marker::PhantomData, vec::Vec};
 /// A trait abstracting away concrete backend for executing queries against iroha.
 pub trait QueryExecutor {
@@ -76,7 +75,6 @@ impl<E> From<E> for SingleQueryError<E> {
     }
 }
 /// Struct that simplifies construction of an iterable query.
-#[derive_where(Clone; Q, CompoundPredicate<Q::Item>, SelectorTuple<Q::Item>)]
 pub struct QueryBuilder<'e, E, Q, T>
 where
     Q: Query + 'static,
@@ -91,6 +89,27 @@ where
     fetch_size: FetchSize,
     // NOTE: T is a phantom type used to denote the selected tuple in `selector`
     phantom: PhantomData<T>,
+}
+// The executor is borrowed, so cloning never requires `E: Clone`.
+impl<E, Q, T> Clone for QueryBuilder<'_, E, Q, T>
+where
+    Q: Query + Clone + 'static,
+    T: 'static,
+    CompoundPredicate<Q::Item>: Clone,
+    SelectorTuple<Q::Item>: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            query_executor: self.query_executor,
+            query: self.query.clone(),
+            filter: self.filter.clone(),
+            selector: self.selector.clone(),
+            pagination: self.pagination,
+            sorting: self.sorting.clone(),
+            fetch_size: self.fetch_size,
+            phantom: PhantomData,
+        }
+    }
 }
 impl<'a, E, Q> QueryBuilder<'a, E, Q, Q::Item>
 where
@@ -388,6 +407,23 @@ mod tests {
         }
     }
     fn assert_domain_iterator(_: QueryIterator<RecordingExecutor, Domain>) {}
+    #[test]
+    fn clone_borrows_non_clone_executor_and_copies_parameters() {
+        let executor = RecordingExecutor::default();
+        let builder = QueryBuilder::new(&executor, FindDomains)
+            .with_pagination(Pagination {
+                offset: 3,
+                limit: std::num::NonZeroU64::new(5),
+            })
+            .with_fetch_size(FetchSize {
+                fetch_size: std::num::NonZeroU64::new(2),
+            });
+        let cloned = builder.clone();
+        assert!(std::ptr::eq(cloned.query_executor, builder.query_executor));
+        assert_eq!(cloned.pagination, builder.pagination);
+        assert_eq!(cloned.fetch_size, builder.fetch_size);
+        assert_eq!(cloned.sorting, builder.sorting);
+    }
     #[test]
     fn encoded_request_is_shared_with_synchronous_execution() {
         let executor = RecordingExecutor::default();

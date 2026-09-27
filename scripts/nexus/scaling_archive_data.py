@@ -403,9 +403,11 @@ def _receipt(value, run, trial, images):
     for index, row in enumerate(ready):
         _object(row, (field.name for field in fields(ReadyReceipt)))
         _require(row['peer_id'] == f'peer{index}' and _process(row['process']) == peers[index])
-        for name in ('network_id', 'genesis_hash', 'context_id', 'anchors_sha256'):
+        for name in ('network_id', 'genesis_hash', 'anchors_sha256'):
             _require(row[name] == generation[name])
-        for name in ('challenge', 'cli_sha256', 'client_config_sha256', 'report_sha256'): _digest(row[name])
+        _require(row['consensus_instance'] == ready[0]['consensus_instance']
+                 and row['genesis_execution_hash'] == ready[0]['genesis_execution_hash'])
+        for name in ('challenge', 'cli_sha256', 'client_config_sha256', 'report_sha256', 'consensus_instance', 'genesis_execution_hash'): _digest(row[name])
         _require(type(row['node_id']) is str and _BLS.fullmatch(row['node_id']))
         _require(row['cli_sha256'] == images['cli'] and _process(row['cli_process']).executable_sha256 == images['cli'])
         _require(type(row['attestation']) is str and 0 < len(row['attestation']) <= ((MAX_ATTESTATION_BYTES + 2) // 3) * 4)

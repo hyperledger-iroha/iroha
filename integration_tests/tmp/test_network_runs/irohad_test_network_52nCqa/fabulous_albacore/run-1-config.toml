@@ -1,4 +1,0 @@
-extends = ["config.base.toml", "run-1-config.layer-0.toml", "run-1-config.layer-1.toml", "run-1-config.layer-2.toml"]
-
-[genesis]
-file = "/Users/takemiyamakoto/dev/iroha/integration_tests/tmp/test_network_runs/irohad_test_network_52nCqa/fabulous_albacore/run-1-genesis.nrt"

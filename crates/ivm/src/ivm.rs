@@ -3120,18 +3120,6 @@ impl IVM {
         out.extend_from_slice(&hash);
         Ok(out)
     }
-    /// Clone a validated INPUT TLV into an owned buffer.
-    pub fn clone_input_tlv(&self, ptr: u64) -> Result<Vec<u8>, VMError> {
-        let tlv = self.validate_input_tlv(ptr)?;
-        let mut out = Vec::with_capacity(7 + tlv.payload.len() + iroha_crypto::Hash::LENGTH);
-        out.extend_from_slice(&(tlv.type_id as u16).to_be_bytes());
-        out.push(tlv.version);
-        out.extend_from_slice(&(tlv.payload.len() as u32).to_be_bytes());
-        out.extend_from_slice(tlv.payload);
-        let hash: [u8; 32] = iroha_crypto::Hash::new(tlv.payload).into();
-        out.extend_from_slice(&hash);
-        Ok(out)
-    }
     /// Recompute the simple INPUT bump pointer based on existing TLVs.
     ///
     /// Scans the INPUT region from the start and advances `input_bump_next`
@@ -3706,11 +3694,6 @@ impl IVM {
         self.gas_remaining
             .saturating_add(self.syscall_gas_reserve)
             .min(self.gas_limit)
-    }
-    /// Gas available to nested execution while the current syscall quote is reserved.
-    #[must_use]
-    pub fn syscall_spendable_gas(&self) -> u64 {
-        self.gas_remaining
     }
     /// Gas currently reserved for a prepared syscall, or zero for direct host calls.
     #[must_use]
@@ -6704,11 +6687,6 @@ impl IVM {
     #[inline]
     pub fn get_cycle_count(&self) -> u64 {
         self.cycles
-    }
-    /// Test‑oriented helper: set a GPR directly.
-    #[inline]
-    pub fn set_reg(&mut self, idx: usize, value: u64) {
-        self.registers.set(idx, value);
     }
     /// Convenience wrapper that forwards to the memory subsystem.
     #[inline]

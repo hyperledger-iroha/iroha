@@ -94,31 +94,6 @@ type LoadedValidatorConfigs = (
     Vec<ValidatorBinding>,
 );
 
-#[cfg(unix)]
-fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-
-    left.dev() == right.dev()
-        && left.ino() == right.ino()
-        && left.mode() == right.mode()
-        && left.uid() == right.uid()
-        && left.gid() == right.gid()
-        && left.nlink() == right.nlink()
-        && left.size() == right.size()
-        && left.mtime() == right.mtime()
-        && left.mtime_nsec() == right.mtime_nsec()
-        && left.ctime() == right.ctime()
-        && left.ctime_nsec() == right.ctime_nsec()
-}
-
-#[cfg(not(unix))]
-fn same_prepared_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.is_file() == right.is_file()
-        && left.is_dir() == right.is_dir()
-        && left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PreparedFileCustody {
     Public,
@@ -175,7 +150,7 @@ fn read_prepared_file_bounded_with_custody(
         .metadata()
         .wrap_err_with(|| format!("inspect opened {label} {}", path.display()))?;
     ensure!(
-        before.is_file() && same_prepared_file_snapshot(&lexical, &before),
+        before.is_file() && crate::secure_fs::same_file_snapshot(&lexical, &before),
         "{label} changed while opening or is not a regular file: {}",
         path.display()
     );
@@ -222,7 +197,7 @@ fn read_prepared_file_bounded_with_custody(
     );
     let after = file.metadata()?;
     ensure!(
-        same_prepared_file_snapshot(&before, &after)
+        crate::secure_fs::same_file_snapshot(&before, &after)
             && u64::try_from(bytes.len()).ok() == Some(before.len()),
         "{label} changed while it was being read: {}",
         path.display()

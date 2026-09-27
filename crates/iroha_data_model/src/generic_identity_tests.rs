@@ -121,6 +121,7 @@ fn context() -> ExecutorContext {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
+            global_beacon_pulse_hash: None,
             execution_context_hash: None,
             sccp_commitment_root: None,
             creation_time_ms: 1_700_000_000_007,

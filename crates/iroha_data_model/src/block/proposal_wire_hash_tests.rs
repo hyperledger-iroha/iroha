@@ -21,6 +21,7 @@ fn plain_signed_block() -> SignedBlock {
             da_proof_policies: None,
             da_pin_intents: None,
             npos_consensus_effects: None,
+            global_beacon_pulse: None,
         },
         result: None,
         commit_certificate: None,
@@ -618,4 +619,76 @@ fn checked_resultless_comparison_binds_native_recovery_hint_beyond_consensus_ide
     );
     assert_checked_comparison_matches_wire(&original, &changed);
     assert!(!original.checked_resultless_proposal_eq(&changed).unwrap());
+}
+
+#[test]
+fn current_beacon_pulse_is_bound_by_header_payload_and_canonical_wire() {
+    use crate::consensus::{
+        FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconChainAnchorV1,
+    };
+    let mut proposal = plain_signed_block();
+    let original_header = proposal.hash();
+    let original_wire = proposal.canonical_proposal_wire_hash().unwrap();
+    let pulse = FinalizedGlobalThresholdBeaconPulseV1 {
+        version: 1,
+        network_id: crate::NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"pulse codec genesis",
+        ))),
+        session_id: [1; 32],
+        roster_hash: [2; 32],
+        transcript_hash: [3; 32],
+        height: 2,
+        round: 0,
+        finalized_chain_anchor: GlobalThresholdBeaconChainAnchorV1 {
+            height: 1,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"pulse codec parent")),
+        },
+        signature: [4; 48],
+        seed: [5; 32],
+        pulse_id: [6; 32],
+    };
+    // This test exercises representation and commitments; the Core threshold fixture verifies
+    // real DKG signatures and current predecessor/session authority.
+    proposal.set_global_beacon_pulse(Some(pulse));
+    assert_ne!(proposal.hash(), original_header);
+    assert_ne!(
+        proposal.canonical_proposal_wire_hash().unwrap(),
+        original_wire
+    );
+    assert_eq!(
+        proposal.header().global_beacon_pulse_hash(),
+        Some(HashOf::new(&pulse))
+    );
+    proposal.validate_proposal_commitments().unwrap();
+    assert_exact_borrowed_proposal_wire(&proposal);
+    let wire = proposal.encode_wire().unwrap();
+    let decoded = decode_versioned_signed_block(&wire).unwrap();
+    assert_eq!(decoded.global_beacon_pulse(), Some(&pulse));
+    assert_eq!(decoded.header(), proposal.header());
+
+    let mut substituted = proposal.clone();
+    substituted
+        .payload
+        .global_beacon_pulse
+        .as_mut()
+        .unwrap()
+        .height += 1;
+    assert!(substituted.validate_proposal_commitments().is_err());
+    let mut omitted = proposal.clone();
+    omitted.payload.global_beacon_pulse = None;
+    assert!(omitted.validate_proposal_commitments().is_err());
+    let mut missing_commitment = proposal.clone();
+    missing_commitment
+        .payload
+        .header
+        .set_global_beacon_pulse_hash(None);
+    assert!(missing_commitment.validate_proposal_commitments().is_err());
+    let mut changed = pulse;
+    changed.finalized_chain_anchor.block_hash =
+        HashOf::from_untyped_unchecked(Hash::new(b"another parent"));
+    proposal.set_global_beacon_pulse(Some(changed));
+    assert_ne!(proposal.hash(), decoded.hash());
+    proposal.result = Some(BlockResult::default());
+    proposal.set_global_beacon_pulse(None);
+    assert!(proposal.is_resultless_proposal());
 }

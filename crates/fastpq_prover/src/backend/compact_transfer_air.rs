@@ -300,6 +300,7 @@ impl CompactTransferAir {
             payload_bytes,
             work_units,
             point_work_units,
+            #[cfg(test)]
             scratch_cells: graph.nodes,
         })
     }
@@ -494,6 +495,7 @@ pub(super) struct PolynomialPreparationCost {
     pub(super) work_units: usize,
     pub(super) point_work_units: usize,
     /// One graph workspace is included above; parallel callers charge each extra copy.
+    #[cfg(test)]
     pub(super) scratch_cells: usize,
 }
 

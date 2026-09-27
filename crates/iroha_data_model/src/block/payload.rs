@@ -5,7 +5,7 @@ use super::{
     header::BlockHeader,
 };
 use crate::{
-    consensus::NposConsensusEffects,
+    consensus::{FinalizedGlobalThresholdBeaconPulseV1, NposConsensusEffects},
     da::{
         commitment::{DaCommitmentBundle, DaProofPolicyBundle},
         pin_intent::DaPinIntentBundle,
@@ -60,6 +60,9 @@ mod model {
         /// Deterministic `NPoS` effects embedded in this block.
         #[norito(required)]
         pub npos_consensus_effects: Option<NposConsensusEffects>,
+        /// Current finalized threshold pulse, independent of the transaction body.
+        #[norito(required)]
+        pub global_beacon_pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
         /// Durable execution context for external entrypoints.
         ///
         /// New committed blocks include this context so replay does not need to
@@ -117,6 +120,7 @@ impl PartialEq for BlockPayload {
             && self.da_proof_policies == other.da_proof_policies
             && self.da_pin_intents == other.da_pin_intents
             && self.npos_consensus_effects == other.npos_consensus_effects
+            && self.global_beacon_pulse == other.global_beacon_pulse
     }
 }
 impl Eq for BlockPayload {}
@@ -129,6 +133,8 @@ impl Ord for BlockPayload {
     fn cmp(&self, other: &Self) -> Ordering {
         let self_npos_effects_hash = self.npos_consensus_effects.as_ref().map(HashOf::new);
         let other_npos_effects_hash = other.npos_consensus_effects.as_ref().map(HashOf::new);
+        let self_pulse_hash = self.global_beacon_pulse.as_ref().map(HashOf::new);
+        let other_pulse_hash = other.global_beacon_pulse.as_ref().map(HashOf::new);
         let self_execution_context_hash = self.execution_context.as_ref().map(HashOf::new);
         let other_execution_context_hash = other.execution_context.as_ref().map(HashOf::new);
         (
@@ -139,6 +145,7 @@ impl Ord for BlockPayload {
             &self.da_proof_policies,
             &self.da_pin_intents,
             &self_npos_effects_hash,
+            &self_pulse_hash,
         )
             .cmp(&(
                 &other.header,
@@ -148,6 +155,7 @@ impl Ord for BlockPayload {
                 &other.da_proof_policies,
                 &other.da_pin_intents,
                 &other_npos_effects_hash,
+                &other_pulse_hash,
             ))
     }
 }
@@ -369,6 +377,23 @@ impl SignedBlock {
         }
         self.payload.npos_consensus_effects = effects;
         self.payload.header.set_npos_effects_hash(hash);
+    }
+    /// Finalized threshold pulse authenticated by the current proposal header.
+    pub fn global_beacon_pulse(&self) -> Option<&FinalizedGlobalThresholdBeaconPulseV1> {
+        self.payload.global_beacon_pulse.as_ref()
+    }
+    /// Replace the pulse, invalidating any execution result produced for another payload.
+    pub fn set_global_beacon_pulse(
+        &mut self,
+        pulse: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+    ) {
+        if self.payload.global_beacon_pulse != pulse {
+            self.result = None;
+        }
+        self.payload
+            .header
+            .set_global_beacon_pulse_hash(pulse.as_ref().map(HashOf::new));
+        self.payload.global_beacon_pulse = pulse;
     }
     /// Set or clear the SCCP commitment root finalized in this block.
     pub fn set_sccp_commitment_root(&mut self, root: Option<[u8; 32]>) {

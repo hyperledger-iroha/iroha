@@ -270,29 +270,9 @@ enum JsonConversion {
     JsonToNorito,
 }
 
-#[cfg(unix)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(windows)]
-fn same_file_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn same_file_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
-}
-
 fn same_codec_file_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
     #[cfg(any(unix, windows))]
-    let same_identity = same_file_identity(left, right);
+    let same_identity = crate::secure_fs::same_file_identity(left, right);
     #[cfg(not(any(unix, windows)))]
     let same_identity = true;
 
@@ -312,7 +292,7 @@ fn reject_codec_input_output_alias(input: Option<&Path>, output: Option<&Path>) 
         _ => false,
     };
     let same_identity = match (fs::metadata(input), fs::metadata(output)) {
-        (Ok(input), Ok(output)) => same_file_identity(&input, &output),
+        (Ok(input), Ok(output)) => crate::secure_fs::same_file_identity(&input, &output),
         _ => false,
     };
     if same_path || same_canonical_path || same_identity {

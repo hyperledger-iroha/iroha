@@ -282,7 +282,7 @@ macro_rules! test_items {
     };
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 const ML_KEM_768_PUBLIC_LEN: usize = 1184;
 #[derive(clap::ValueEnum, Clone, Copy, Debug, Default)]
 enum MlDsaSuiteArg {

@@ -3,7 +3,7 @@
 use super::*;
 use iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1;
 use iroha_data_model::{
-    sumeragi_finality::SumeragiFinalityVerifier, consensus::GlobalThresholdBeaconKeySessionV1,
+    consensus::GlobalThresholdBeaconKeySessionV1, sumeragi_finality::SumeragiFinalityVerifier,
 };
 use norito::NoritoSerialize;
 use std::{
@@ -247,8 +247,7 @@ impl GenesisRelay {
         mut verifier: SumeragiFinalityVerifier,
         deadline: Instant,
     ) -> Result<Self> {
-        if first_finality.block_header.height().get() != 1
-        {
+        if first_finality.block_header.height().get() != 1 {
             return Err(eyre!("genesis relay requires authenticated h1 finality"));
         }
 

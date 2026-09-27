@@ -42,7 +42,7 @@ async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deploymen
     );
     // The advertised batch extension charges each tool, including all calls
     // after the first one paid by the outer MCP request.
-    for _ in 0..6 {
+    for _ in 0..128 {
         assert!(
             mcp.allow_repeated(operator, crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES)
                 .await,
@@ -51,7 +51,11 @@ async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deploymen
     }
     assert!(mcp.allow_repeated(operator, 32).await);
     assert!(
-        !mcp.allow_repeated(operator, 10_000).await,
+        !mcp.allow_repeated(
+            operator,
+            defaults::torii::mcp::BURST.expect("finite MCP burst") as usize + 1,
+        )
+        .await,
         "the MCP budget must remain finite"
     );
     // An API-token overlay uses the fixed-key limiter with the same MCP
@@ -61,7 +65,7 @@ async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deploymen
         defaults::torii::mcp::BURST,
         [operator.to_owned()],
     );
-    for _ in 0..6 {
+    for _ in 0..128 {
         assert!(
             authenticated_mcp
                 .allow_repeated(operator, crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES)
@@ -100,7 +104,12 @@ async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deploymen
     }
     assert!(deploy.allow("another-operator").await);
     assert!(
-        !deploy.allow_cost(operator, 10_000).await,
+        !deploy
+            .allow_cost(
+                operator,
+                u64::from(defaults::torii::DEPLOY_BURST_PER_ORIGIN.unwrap()) + 1,
+            )
+            .await,
         "the deployment budget must remain finite"
     );
 
@@ -120,7 +129,7 @@ async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deploymen
             "the full weighted finality walk should fit"
         );
     }
-    for _ in 0..(6 * crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES + 32) {
+    for _ in 0..(128 * crate::mcp::MAX_JSONRPC_BATCH_DISPATCHES + 32) {
         assert!(
             query
                 .allow_cost_capped_to_burst(operator, super::FINALITY_HEAVY_QUERY_RATE_COST)
@@ -135,7 +144,12 @@ async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deploymen
         );
     }
     assert!(
-        !query.allow_cost(operator, 10_000).await,
+        !query
+            .allow_cost(
+                operator,
+                u64::from(defaults::torii::QUERY_BURST_PER_AUTHORITY.unwrap()) + 1,
+            )
+            .await,
         "the query budget must remain finite"
     );
 }
@@ -143,8 +157,8 @@ async fn single_operator_demo_budgets_admit_batched_tools_and_weighted_deploymen
 async fn one_external_operator_walk_passes_the_real_preauth_gate() {
     let burst = defaults::torii::PREAUTH_BURST_PER_IP.expect("finite pre-auth burst");
     assert!(
-        burst >= 229,
-        "128 proof reads, 58 mutations, 32 direct readbacks, four funding requests, and seven MCP requests must fit"
+        burst >= 100_000,
+        "a large application burst sharing one public IP must fit"
     );
     let gate = limits::PreAuthGate::new(limits::PreAuthConfig {
         max_total: None,
@@ -157,7 +171,7 @@ async fn one_external_operator_walk_passes_the_real_preauth_gate() {
         scheme_limits: Vec::new(),
     });
     let operator = "198.51.100.10".parse().expect("test client IP");
-    for request in 0..229 {
+    for request in 0..10_000 {
         drop(
             gate.acquire(Some(operator), None)
                 .await
@@ -168,13 +182,71 @@ async fn one_external_operator_walk_passes_the_real_preauth_gate() {
     }
 }
 #[tokio::test]
+async fn application_default_budgets_admit_ten_thousand_operations_before_refill() {
+    let operator = "application-operator";
+    for (name, rate, burst) in [
+        (
+            "transaction",
+            defaults::torii::TX_RATE_PER_AUTHORITY_PER_SEC,
+            defaults::torii::TX_BURST_PER_AUTHORITY,
+        ),
+        (
+            "deployment",
+            defaults::torii::DEPLOY_RATE_PER_ORIGIN_PER_SEC,
+            defaults::torii::DEPLOY_BURST_PER_ORIGIN,
+        ),
+        (
+            "Soracloud public read",
+            defaults::torii::SORACLOUD_PUBLIC_RATE_PER_IP_PER_SEC,
+            defaults::torii::SORACLOUD_PUBLIC_BURST_PER_IP,
+        ),
+        (
+            "Soracloud mutation",
+            defaults::torii::SORACLOUD_MUTATION_RATE_PER_ACCOUNT_ORIGIN_PER_SEC,
+            defaults::torii::SORACLOUD_MUTATION_BURST_PER_ACCOUNT_ORIGIN,
+        ),
+    ] {
+        assert!(rate.is_some_and(|rate| rate >= 10_000), "{name} refill");
+        let limiter = limits::RateLimiter::new(rate, burst);
+        assert!(limiter.allow_repeated(operator, 10_000).await, "{name}");
+        assert!(
+            !limiter
+                .allow_repeated(
+                    operator,
+                    burst.expect("finite application burst") as usize + 1
+                )
+                .await,
+            "{name} still enforces an explicitly bounded budget"
+        );
+    }
+    let proof = limits::RateLimiter::new_per_minute(
+        defaults::torii::PROOF_RATE_PER_MIN,
+        defaults::torii::PROOF_BURST,
+    );
+    assert!(proof.allow_repeated(operator, 10_000).await);
+    let query = limits::RateLimiter::new(
+        defaults::torii::QUERY_RATE_PER_AUTHORITY_PER_SEC,
+        defaults::torii::QUERY_BURST_PER_AUTHORITY,
+    );
+    assert!(
+        query
+            .allow_cost(operator, 10_000 * super::FINALITY_HEAVY_QUERY_RATE_COST)
+            .await,
+        "10,000 weighted finality reads must fit before any refill"
+    );
+}
+#[tokio::test]
 async fn solo_finality_walk_fits_the_proof_egress_budget() {
-    let (app, _, _) = app_with_indexed_sccp_message_for_test(true);
-    let proof = iroha_core::bridge::build_finality_proof(app.state.as_ref(), 1)
-        .expect("indexed four-validator finality fixture");
+    let mut node = ReadinessNode::start_at_tip(true);
+    let proof = iroha_core::sumeragi::finality::build_proof(&node.app.state.view(), 2)
+        .expect("current real-node embedded certificate proof");
+    proof
+        .decode_checked()
+        .expect("current proof verifies before measuring egress");
+    node.stop();
     let response_bytes = u64::try_from(
         norito::json::to_json_pretty(&proof)
-            .expect("encode the actual bridge-finality JSON response")
+            .expect("encode the actual current finality JSON response")
             .len(),
     )
     .expect("response length fits u64");

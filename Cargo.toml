@@ -60,7 +60,7 @@ iroha_sumeragi = { path = "crates/iroha_sumeragi" }
 norito = { path = "crates/norito", default-features = false }
 norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }
-iroha_version = { path = "crates/iroha_version", default-features = false, features = ["json"] }
+iroha_version = { path = "crates/iroha_version" }
 connect_norito_bridge = { path = "crates/connect_norito_bridge" }
 fastpq_prover = { path = "crates/fastpq_prover" }
 iroha_zkp_halo2 = { path = "crates/iroha_zkp_halo2" }
@@ -89,7 +89,7 @@ kotodama_lang = { path = "crates/kotodama_lang" }
 sorafs_car = { path = "crates/sorafs_car" }
 sorafs_chunker = { path = "crates/sorafs_chunker" }
 sorafs_manifest = { path = "crates/sorafs_manifest" }
-sorafs_orchestrator = { path = "crates/sorafs_orchestrator" }
+sorafs_orchestrator = { path = "crates/sorafs_orchestrator", default-features = false, features = ["cli-orchestrator"] }
 soranet_pq = { path = "crates/soranet_pq" }
 soranet_incentives = { path = "crates/soranet_incentives" }
 
@@ -99,18 +99,18 @@ soranet_incentives = { path = "crates/soranet_incentives" }
 proc-macro2 = "1.0.103"
 syn = { version = "2.0.109", default-features = false }
 quote = "1.0.42"
-manyhow = { version = "0.11.4", features = ["darling"] }
+manyhow = "0.11.4"
 darling = "0.23.0"
 drop_bomb = "0.1.5"
 
 futures = { version = "0.3.31", default-features = false }
 tokio = "1.48.0"
 tokio-stream = "0.1.17"
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = "0.29.0"
 tokio-util = "0.7.17"
 tokio-rustls = { version = "0.26.4", default-features = false }
 rustls = { version = "0.23.37", default-features = false, features = ["std"] }
-tungstenite = "0.28.0"
+tungstenite = "0.29.0"
 crossbeam-queue = "0.3.12"
 parking_lot = { version = "0.12.5" }
 blake3 = "1.8.2"
@@ -132,8 +132,6 @@ http = "1.3.1"
 httpmock = "0.8.2"
 nonzero_ext = { version = "0.3.0", default-features = false }
 rust_decimal = { version = "1.39", default-features = false }
-
-heck = "0.5.0"
 
 url = "2.5.7"
 reqwest = { version = "0.12.28", default-features = false }
@@ -157,7 +155,7 @@ error-stack = "0.8.0"
 # Removed cfg-if dependency as we now use explicit cfg attributes
 derive_more = { version = "2.0.1", default-features = false }
 async-trait = "0.1.89"
-strum = { version = "0.27.2", default-features = false }
+strum = { version = "0.28.0", default-features = false }
 getset = "0.1.6"
 hex-literal = "1.1.0"
 derive-where = "1.6.0"
@@ -166,7 +164,9 @@ rand = { version = "0.9.3", default-features = false, features = ["alloc", "os_r
 rand_core_06 = { package = "rand_core", version = "0.6.4", default-features = false, features = ["std"] }
 axum = { version = "0.8.6", default-features = false }
 
-tracing = { version = "0.1.41", features = ["log"] }
+# Libraries never force tracing->log forwarding; binaries or SDK consumers that
+# want `log` records enable `tracing/log` in their own manifest.
+tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", default-features = false }
 
 rayon = "1.11.0"
@@ -353,12 +353,13 @@ members = [
 ]
 exclude = [
     "mochi/fixtures",
-    "crates/gpuzstd_metal.ignore"
 ]
 
 [profile.dev]
 incremental = true
-split-debuginfo = "packed"
+# Match [profile.test] so dev and test units share one dependency graph; with
+# debug = 0 the value only participates in the profile hash.
+split-debuginfo = "unpacked"
 # Keep default local workspace builds from producing enormous debug-heavy Linux
 # artifacts. Use `CARGO_PROFILE_DEV_DEBUG=line-tables-only` when debugging.
 debug = 0

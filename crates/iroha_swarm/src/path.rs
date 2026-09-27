@@ -23,7 +23,7 @@ impl AbsolutePath {
                 .to_path_buf()
         }))
     }
-    #[allow(dead_code)]
+    #[cfg(test)]
     fn with_virtual_root(
         path: &std::path::Path,
         virtual_root: &std::path::Path,

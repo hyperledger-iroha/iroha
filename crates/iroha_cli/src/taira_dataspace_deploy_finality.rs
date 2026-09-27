@@ -2,11 +2,12 @@
 use super::*;
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
-    block::{
-        BlockHeader,
-    },
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityAttestation, SumeragiFinalityProof, SumeragiFinalityVerifier},
+    block::BlockHeader,
     sns::NameStatus,
+    sumeragi_finality::{
+        FinalityValidator, SumeragiFinalityAttestation, SumeragiFinalityProof,
+        SumeragiFinalityVerifier,
+    },
 };
 use iroha_model_base::peer::PeerId;
 use norito::codec::Encode as _;
@@ -148,9 +149,13 @@ impl TrustV1 {
             network,
             genesis,
             trusted_genesis: block,
-            validators: validators.into_iter().map(|(peer, proof_of_possession)| FinalityValidator {
-                public_key: peer.public_key().clone(), proof_of_possession,
-            }).collect(),
+            validators: validators
+                .into_iter()
+                .map(|(peer, proof_of_possession)| FinalityValidator {
+                    public_key: peer.public_key().clone(),
+                    proof_of_possession,
+                })
+                .collect(),
         })
     }
 }
@@ -190,19 +195,25 @@ fn validate_peer_selection(
 
 impl Authority {
     fn roster(&self, proof: &SumeragiFinalityProof) -> Result<()> {
-        require(proof.committee == self.validators,
-            "proof differs from the independently authenticated four-validator genesis roster")
+        require(
+            proof.committee == self.validators,
+            "proof differs from the independently authenticated four-validator genesis roster",
+        )
     }
 
     fn verifier(&self) -> Result<SumeragiFinalityVerifier> {
-        Ok(SumeragiFinalityVerifier::new(&self.trusted_genesis,
-            "fc56984b-2be7-431d-840e-21514d1883f0", self.validators.clone())?)
+        Ok(SumeragiFinalityVerifier::new(
+            &self.trusted_genesis,
+            "fc56984b-2be7-431d-840e-21514d1883f0",
+            self.validators.clone(),
+        )?)
     }
 
     fn anchor(&self, proof: &SumeragiFinalityProof) -> Result<SumeragiFinalityVerifier> {
-        require(proof.block_header.height().get() == 1
-                && proof.block_header.hash() == self.genesis,
-            "finality anchor differs from the selected signed genesis")?;
+        require(
+            proof.block_header.height().get() == 1 && proof.block_header.hash() == self.genesis,
+            "finality anchor differs from the selected signed genesis",
+        )?;
         self.roster(proof)?;
         let mut verifier = self.verifier()?;
         verifier.verify(proof)?;
@@ -228,12 +239,17 @@ fn validate_attestation(
             && body.genesis_block_hash == authority.genesis,
         "attested node, build, configuration, challenge or genesis differs from the target profile",
     )?;
-    authority.anchor(&body.genesis_finality_proof)?;
+    let verifier = authority.anchor(&body.genesis_finality_proof)?;
+    require(
+        body.status.instance == verifier.instance().0,
+        "attested consensus instance differs from selected genesis and chain",
+    )?;
     authority.roster(&body.finality_proof)
 }
 
 /// Prove the selected public verification routes and peer identities before any deployment write.
 pub(super) fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Result<()> {
+    let deadline = operation_deadline(DEFAULT_OPERATION_TIMEOUT_MS)?;
     let authority = manifest.finality.authority(manifest.network_id)?;
     let challenge: [u8; 32] = rand::random();
     require(challenge != [0; 32], "random finality challenge is zero")?;
@@ -250,13 +266,20 @@ pub(super) fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Re
             validate_attestation(&authority, peer, challenge, &attestation)?;
             let mut verifier = authority.anchor(&attestation.body.genesis_finality_proof)?;
             for current in 2..=height.get() {
-                client.get_next_sumeragi_finality_proof(NonZeroU64::new(current).unwrap(), &mut verifier)?;
+                require_operation_budget(deadline, "authenticating preflight finality")?;
+                client.get_next_sumeragi_finality_proof(
+                    NonZeroU64::new(current).unwrap(),
+                    &mut verifier,
+                )?;
             }
             // Also authenticate this node's potentially different valid certificate.
             // The transport's proof is never promoted to finality without the verifier.
-            verifier.verify_same_decision(&attestation.body.finality_proof, &attestation.body.finality_proof)?;
+            verifier.verify_same_decision(
+                &attestation.body.finality_proof,
+                &attestation.body.finality_proof,
+            )?;
             client.get_lane_lifecycle_status()?.validate()?;
-            Ok(())
+            require_operation_budget(deadline, "completed preflight finality")
         },
     )?;
     Ok(())
@@ -592,7 +615,10 @@ impl ProofPrefix {
         source_genesis: &SumeragiFinalityProof,
         deadline: std::time::Instant,
         new_proof_budget: usize,
-        mut fetch: impl FnMut(NonZeroU64, &mut SumeragiFinalityVerifier) -> Result<SumeragiFinalityProof>,
+        mut fetch: impl FnMut(
+            NonZeroU64,
+            &mut SumeragiFinalityVerifier,
+        ) -> Result<SumeragiFinalityProof>,
     ) -> Result<bool> {
         require(
             (1..=MAX_NEW_PROOFS).contains(&new_proof_budget),
@@ -823,7 +849,11 @@ fn complete<C: RunContext>(
         plan,
         prepared: &prepared,
         proofs: &completion.prefix.proofs,
-        verifier: completion.prefix.verifier.as_ref().ok_or_else(|| eyre!("missing verified finality prefix"))?,
+        verifier: completion
+            .prefix
+            .verifier
+            .as_ref()
+            .ok_or_else(|| eyre!("missing verified finality prefix"))?,
         challenge,
         deadline,
     };

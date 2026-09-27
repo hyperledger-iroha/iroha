@@ -634,12 +634,10 @@ pub fn f15(seed: u64) -> Scenario {
     sc
 }
 
-/// F15 variant 5: every executor takes `E ∈ [T(1), e_max)` for a non-empty block and 10 ms for
-/// `EMPTY`; the builder does not foresee it (its budget is 500 ms) and the executor aborts
-/// discarded work at once (O4). Early views time out executing and later views retry real work;
-/// commits `EMPTY` at once: only the executions discarded at those view changes show the
-/// slowness, as lower bounds (§9.2, ML27, ML28). The start level must rise until non-empty
-/// blocks commit.
+/// F15 variant 5: every executor takes `E ∈ [T(1), e_max)` for a transaction block;
+/// the builder does not foresee it (its budget is 500 ms), and the executor aborts discarded
+/// work at once (O4). Early views time out executing, then retry real work. Discarded execution
+/// durations remain lower bounds (§9.2, ML27, ML28), raising the level until work commits.
 fn f15_slow_payload(sc: &mut Scenario, rng: &mut Rng) {
     let t1 = sc.local.t_base * 3 / 2;
     let e = rng.range(t1, sc.params.e_max - 100);

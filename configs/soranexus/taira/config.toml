@@ -67,19 +67,10 @@ enforcement_mode = "reject"
 [torii]
 address = "addr:0.0.0.0:18080#2F16"
 preauth_ban_capacity = 4096
-# This gate charges each external HTTP request, not merely new TCP connections.
-# Keep one public operator's normal deployment and proof-read walk below the
-# finite per-IP rate/burst without triggering a 60-second temporary ban.
-preauth_rate_per_ip_per_sec = 100
-preauth_burst_per_ip = 256
+# Inherit the canonical finite Torii rate and burst defaults so generated
+# deployments receive throughput improvements without stale template overrides.
 preauth_allow_cidrs = ["127.0.0.1/32", "207.254.29.242/32"]
 max_content_len = 64_000_000
-# One operator can complete a burst of contract mutations and weighted proof
-# submissions without exhausting the finite per-origin deployment budget.
-deploy_rate_per_origin_per_sec = 16
-deploy_burst_per_origin = 128
-query_rate_per_authority_per_sec = 160
-query_burst_per_authority = 8192
 query_max_inflight = 256
 query_heavy_max_inflight = 64
 query_queue_timeout_ms = 30000

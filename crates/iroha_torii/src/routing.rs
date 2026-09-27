@@ -1368,9 +1368,6 @@ fn insert_page_metadata<T>(
         norito::json::Value::from(count_mode.label()),
     );
 }
-fn insert_bounded_page_metadata<T>(top: &mut norito::json::Map, page: &PageResult<T>) {
-    insert_page_metadata(top, page, AppCountMode::Bounded);
-}
 #[cfg(all(test, feature = "app_api"))]
 mod streaming_pager_tests {
     use super::{
@@ -2672,29 +2669,6 @@ fn kaigi_signal_authority_is_allowed_from_batch(
         .and_then(Clone::clone)
         .is_some_and(|active| allowed_active_lineages.contains(&active))
 }
-fn kaigi_signal_carrier_timestamp_ms(
-    state: &CoreState,
-    block_hash: &HashOf<BlockHeader>,
-    cache: &mut Option<(HashOf<BlockHeader>, u64)>,
-) -> Result<u64, iroha_data_model::query::error::QueryExecutionFail> {
-    if let Some((cached_hash, cached_timestamp_ms)) = cache.as_ref()
-        && cached_hash == block_hash
-    {
-        return Ok(*cached_timestamp_ms);
-    }
-    let block = state.block_by_hash(*block_hash).ok_or_else(|| {
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-            "Kaigi signal carrier block `{block_hash}` is unavailable"
-        ))
-    })?;
-    let timestamp_ms = u64::try_from(block.header().creation_time().as_millis()).map_err(|_| {
-        iroha_data_model::query::error::QueryExecutionFail::Conversion(
-            "Kaigi signal carrier block timestamp exceeds u64 milliseconds".to_owned(),
-        )
-    })?;
-    *cache = Some((*block_hash, timestamp_ms));
-    Ok(timestamp_ms)
-}
 fn kaigi_signal_carrier_is_within_call_lifecycle(
     record: &iroha_data_model::kaigi::KaigiRecord,
     carrier_timestamp_ms: u64,
@@ -2901,23 +2875,6 @@ pub struct RetailRecipientRouteResponseDto {
     pub fi_id: String,
 }
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
-/// Response payload returned by `/v1/retail/recipients/lookup`.
-pub struct RetailRecipientLookupResponseDto {
-    /// Whether the bank confirmed the account, alias, FI, and recipient name.
-    pub resolved: bool,
-    /// Canonical recipient account id confirmed by the lookup service.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub account_id: Option<String>,
-    /// Canonical bank alias FQN confirmed by the lookup service.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub alias_fqn: Option<String>,
-    /// Canonical FI identifier confirmed by the lookup service.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub fi_id: Option<String>,
-    /// Human-readable recipient name confirmed by the bank.
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub full_name: Option<String>,
-}
 ( crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,)
 #[norito(deny_unknown_fields)]
 pub struct AliasResolveResponseDto {
@@ -9284,22 +9241,6 @@ fn sccp_message_bundle_for_request(
     reconstruct_sccp_message_bundle_from_indexed_record(state, indexed)
         .map(|(_, bundle)| Some(bundle))
 }
-fn sccp_committed_outbound_context(
-    bundle: &TairaSccpMessageProofV1,
-) -> Result<iroha_data_model::bridge::SccpOutboundMessageContextV1> {
-    let context = bundle.commitment.context;
-    if !context.is_well_formed()
-        || sccp_message_source_domain(&bundle.payload) != context.lane.source.domain_id()
-        || sccp_message_target_domain(&bundle.payload) != context.lane.target.domain_id()
-        || iroha_sccp::hub_commitment_from_sccp_payload(context, &bundle.payload).as_ref()
-            != Some(&bundle.commitment)
-    {
-        return Err(sccp_internal_error(
-            "finalized SCCP message bundle disagrees with its exact committed outbound context",
-        ));
-    }
-    Ok(context)
-}
 fn projection_text_value(value: &SccpNormalizedCodecValueV1) -> Option<String> {
     match value {
         SccpNormalizedCodecValueV1::CanonicalText { value } => Some(value.clone()),
@@ -9844,9 +9785,6 @@ pub async fn handle_v1_sumeragi_params(
 }
 fn usize_to_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
-}
-fn duration_ms_u64(duration: Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 pub(crate) fn build_pipeline_preflight_response(
     state: &CoreState,
@@ -12946,13 +12884,6 @@ pub fn accept_decoded_signed_transaction_for_ingress_with_precheck(
             Err(Error::AcceptTransaction(err))
         }
     }
-}
-pub(crate) fn push_accepted_transaction_for_ingress(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    accepted_tx: iroha_core::tx::AcceptedTransaction<'static>,
-) -> Result<RoutingDecision> {
-    push_accepted_transaction_for_ingress_with_routing_plan(queue, state, accepted_tx, None)
 }
 pub(crate) fn reject_ingress_if_queue_capacity_saturated(
     queue: &Queue,
@@ -22242,41 +22173,6 @@ fn requested_multisig_statuses(statuses: &[String]) -> Result<BTreeSet<String>> 
             return Err(Error::AppQueryValidation {
                 code: "multisig_status_invalid",
                 message: format!("status[{index}] duplicates `{status}`"),
-            });
-        }
-    }
-    Ok(normalized)
-}
-fn requested_multisig_operation_types(operation_types: &[String]) -> Result<BTreeSet<String>> {
-    const OPERATION_TYPE_COUNT: usize = 32;
-    const OPERATION_TYPE_MAX_BYTES: usize = 128;
-    if operation_types.len() > OPERATION_TYPE_COUNT {
-        return Err(Error::AppQueryValidation {
-            code: "multisig_operation_type_invalid",
-            message: format!("operation_type must contain at most {OPERATION_TYPE_COUNT} entries"),
-        });
-    }
-    let mut normalized = BTreeSet::new();
-    for (index, operation_type) in operation_types.iter().enumerate() {
-        let mut bytes = operation_type.bytes();
-        let has_canonical_prefix = bytes.next().is_some_and(|byte| byte.is_ascii_uppercase());
-        let has_canonical_suffix =
-            bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
-        if operation_type.len() > OPERATION_TYPE_MAX_BYTES
-            || !has_canonical_prefix
-            || !has_canonical_suffix
-        {
-            return Err(Error::AppQueryValidation {
-                code: "multisig_operation_type_invalid",
-                message: format!(
-                    "operation_type[{index}] must match [A-Z][A-Z0-9_]* and be no longer than {OPERATION_TYPE_MAX_BYTES} bytes"
-                ),
-            });
-        }
-        if !normalized.insert(operation_type.clone()) {
-            return Err(Error::AppQueryValidation {
-                code: "multisig_operation_type_invalid",
-                message: format!("operation_type[{index}] is duplicated"),
             });
         }
     }
@@ -32103,13 +31999,6 @@ pub struct ContractViewErrorResponseDto {
     pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,)
-pub struct ContractViewBatchGetParams {
-    /// Optional limit for pagination.
-    pub limit: Option<u64>,
-    /// Offset for pagination (default 0).
-    #[norito(default)]
-    pub offset: u64,
-}
 ( Debug, Clone, Default, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 #[norito(decode_from_slice)]
 /// Selects a multisig authority either by its active concrete account id or by stable alias.
@@ -33388,12 +33277,6 @@ pub(crate) fn parse_hex_array<const N: usize>(value: &str, field: &str) -> Resul
         .try_into()
         .map_err(|_| conversion_error(format!("`{field}` must be {N} bytes (got {len})")))
 }
-fn parse_hash_hex(value: &str, field: &str) -> Result<Hash, Error> {
-    Hash::from_str(value).map_err(|err| conversion_error(format!("invalid {field}: {err}")))
-}
-fn missing_field_error(field: &str) -> Error {
-    conversion_error(format!("`{field}` is required"))
-}
 #[cfg(feature = "app_api")]
 fn observe_sorafs_metering(telemetry: &MaybeTelemetry, sorafs_node: &sorafs_node::NodeHandle) {
     let usage = sorafs_node.capacity_usage();
@@ -33451,9 +33334,6 @@ fn observe_sorafs_metering(telemetry: &MaybeTelemetry, sorafs_node: &sorafs_node
             );
         }
     });
-}
-fn provider_id_from_hex(value: &str) -> Result<ProviderId, Error> {
-    parse_hex_array::<32>(value, "provider_id_hex").map(ProviderId::new)
 }
 fn capacity_declaration_validation_error(err: CapacityDeclarationValidationError) -> Error {
     sorafs_pin_validation_error(
@@ -38903,8 +38783,6 @@ pub const ENDPOINT_ACCOUNTS_ONBOARDING_CURRENT_STATE: &str =
     "/v1/accounts/onboarding/current-state";
 pub const ENDPOINT_ACCOUNTS_FAUCET: &str = "/v1/accounts/faucet";
 pub const ENDPOINT_ACCOUNTS_FAUCET_PREPARE: &str = "/v1/accounts/faucet/prepare";
-pub const ENDPOINT_ACCOUNTS_FAUCET_POLICY: &str = "/v1/accounts/faucet/policy";
-pub const ENDPOINT_ACCOUNTS_FAUCET_PUZZLE: &str = "/v1/accounts/faucet/puzzle";
 pub const ENDPOINT_ACCOUNT_ALIASES: &str = "/v1/accounts/{account_id}/aliases";
 const APP_API_TRANSACTION_TTL_SECS: u64 = 300;
 pub const ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE: &str = "/v1/contracts/call/multisig/propose";
@@ -38919,7 +38797,6 @@ pub const ENDPOINT_ACCOUNT_RECOVERY_POLICY_SET: &str = "/v1/accounts/recovery/po
 pub const ENDPOINT_ACCOUNT_RECOVERY_PROPOSE: &str = "/v1/accounts/recovery/propose";
 pub const ENDPOINT_ACCOUNT_RECOVERY_APPROVE: &str = "/v1/accounts/recovery/approve";
 pub const ENDPOINT_ACCOUNT_RECOVERY_FINALIZE: &str = "/v1/accounts/recovery/finalize";
-pub const ENDPOINT_ACCOUNT_RECOVERY_STATUS: &str = "/v1/accounts/recovery/status";
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 pub const ENDPOINT_TRANSACTIONS_QUERY: &str = "/v1/transactions/query";
@@ -38927,10 +38804,7 @@ pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/tran
 pub const ENDPOINT_ACCOUNTS_HISTORY: &str = "/v1/accounts/{account_id}/history";
 pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
 pub const ENDPOINT_CONTRACTS_EVENTS: &str = "/v1/contracts/events";
-pub const ENDPOINT_CONTRACTS_EVENTS_SSE: &str = "/v1/contracts/events/sse";
-pub const ENDPOINT_CONTRACTS_VIEW_BATCH: &str = "/v1/contracts/view/batch";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_FILLS: &str = "/v1/contracts/rollups/swaps/fills";
-pub const ENDPOINT_CONTRACTS_ROLLUPS_SWAPS_CANDLES: &str = "/v1/contracts/rollups/swaps/candles";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACTIVITY: &str =
     "/v1/contracts/rollups/trader/activity";
 pub const ENDPOINT_CONTRACTS_ROLLUPS_TRADER_ACCOUNT: &str = "/v1/contracts/rollups/trader/account";
@@ -38947,7 +38821,6 @@ pub const ENDPOINT_CONTRACTS_ROLLUPS_URANAI_MARKETS_HISTORY: &str =
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 pub const ENDPOINT_ACCOUNTS_ASSETS: &str = "/v1/accounts/{account_id}/assets";
 pub const ENDPOINT_ACCOUNTS_ASSETS_QUERY: &str = "/v1/accounts/{account_id}/assets/query";
-pub const ENDPOINT_ACCOUNTS_PORTFOLIO: &str = "/v1/accounts/{uaid}/portfolio";
 const ENDPOINT_DOMAINS_LIST: &str = "/v1/domains";
 const ENDPOINT_DOMAINS_QUERY: &str = "/v1/domains/query";
 }
@@ -38959,7 +38832,6 @@ pub const ENDPOINT_SPACE_DIRECTORY_MANIFEST_PUBLISH: &str = "/v1/space-directory
 const ENDPOINT_REPO_AGREEMENTS_LIST: &str = "/v1/repo/agreements";
 const ENDPOINT_REPO_AGREEMENTS_QUERY: &str = "/v1/repo/agreements/query";
 const ENDPOINT_ASSET_DEFINITIONS_LIST: &str = "/v1/assets/definitions";
-const ENDPOINT_ASSET_DEFINITION_GET: &str = "/v1/assets/definitions/{asset}";
 const ENDPOINT_ASSET_DEFINITIONS_QUERY: &str = "/v1/assets/definitions/query";
 pub const ENDPOINT_ASSET_HOLDERS: &str = "/v1/assets/{definition_id}/holders";
 pub const ENDPOINT_ASSET_HOLDERS_QUERY: &str = "/v1/assets/{definition_id}/holders/query";
@@ -40480,25 +40352,6 @@ fn account_history_projection_matches_asset_selector(
                 || projection.asset_id.as_deref() == Some(definition.as_str())
         }
     }
-}
-/// GET `/v1/accounts/{account_id}/history` — indexed account activity history.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_account_history_get_with_policy(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(params): crate::NoritoQuery<AccountHistoryGetParams>,
-    telemetry: MaybeTelemetry,
-    allowed_asset_definition_id: Option<AssetDefinitionId>,
-) -> Result<impl IntoResponse> {
-    handle_v1_account_history_get_with_visibility_policy(
-        state,
-        axum::extract::Path(account_id),
-        crate::NoritoQuery(params),
-        telemetry,
-        allowed_asset_definition_id,
-        DataspaceReadVisibility::all(),
-    )
-    .await
 }
 pub(crate) async fn handle_v1_account_history_get_with_visibility_policy(
     state: Arc<CoreState>,
@@ -47812,182 +47665,11 @@ fn soradns_revoke_reason_label(reason: RadRevokeReason) -> &'static str {
     }
 }
 }
-fn settlement_order_label(
-    order: iroha_data_model::isi::settlement::SettlementExecutionOrder,
-) -> &'static str {
-    match order {
-        iroha_data_model::isi::settlement::SettlementExecutionOrder::DeliveryThenPayment => {
-            "delivery_then_payment"
-        }
-        iroha_data_model::isi::settlement::SettlementExecutionOrder::PaymentThenDelivery => {
-            "payment_then_delivery"
-        }
-    }
-}
-fn settlement_atomicity_label(
-    atomicity: iroha_data_model::isi::settlement::SettlementAtomicity,
-) -> &'static str {
-    match atomicity {
-        iroha_data_model::isi::settlement::SettlementAtomicity::AllOrNothing => "all_or_nothing",
-        iroha_data_model::isi::settlement::SettlementAtomicity::CommitFirstLeg => {
-            "commit_first_leg"
-        }
-        iroha_data_model::isi::settlement::SettlementAtomicity::CommitSecondLeg => {
-            "commit_second_leg"
-        }
-    }
-}
-fn settlement_counts_to_value(
-    map: &std::collections::BTreeMap<String, u64>,
-) -> norito::json::Value {
-    let mut obj = norito::json::Map::new();
-    for (key, value) in map {
-        obj.insert(key.clone(), norito::json::Value::from(*value));
-    }
-    norito::json::Value::Object(obj)
-}
-fn dvp_last_event_json(
-    event: &iroha_core::status::DvpSettlementEventSnapshot,
-) -> norito::json::Value {
-    let settlement_id = event
-        .settlement_id
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let failure_reason = event
-        .failure_reason
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let plan = json_object(vec![
-        json_entry("order", settlement_order_label(event.plan_order)),
-        json_entry(
-            "atomicity",
-            settlement_atomicity_label(event.plan_atomicity),
-        ),
-    ]);
-    let legs = json_object(vec![
-        json_entry("delivery_committed", event.delivery_committed),
-        json_entry("payment_committed", event.payment_committed),
-    ]);
-    json_object(vec![
-        json_entry("observed_at_ms", event.observed_at_ms),
-        json_entry("settlement_id", settlement_id),
-        json_entry("plan", plan),
-        json_entry("outcome", event.outcome.as_str()),
-        json_entry("failure_reason", failure_reason),
-        json_entry("final_state", event.final_state_label.clone()),
-        json_entry("legs", legs),
-    ])
-}
-fn pvp_last_event_json(
-    event: &iroha_core::status::PvpSettlementEventSnapshot,
-) -> norito::json::Value {
-    let settlement_id = event
-        .settlement_id
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let failure_reason = event
-        .failure_reason
-        .as_ref()
-        .map(|s| Value::from(s.clone()))
-        .unwrap_or(Value::Null);
-    let plan = json_object(vec![
-        json_entry("order", settlement_order_label(event.plan_order)),
-        json_entry(
-            "atomicity",
-            settlement_atomicity_label(event.plan_atomicity),
-        ),
-    ]);
-    let legs = json_object(vec![
-        json_entry("primary_committed", event.primary_committed),
-        json_entry("counter_committed", event.counter_committed),
-    ]);
-    let fx_window = event.fx_window_ms.map(Value::from).unwrap_or(Value::Null);
-    json_object(vec![
-        json_entry("observed_at_ms", event.observed_at_ms),
-        json_entry("settlement_id", settlement_id),
-        json_entry("plan", plan),
-        json_entry("outcome", event.outcome.as_str()),
-        json_entry("failure_reason", failure_reason),
-        json_entry("final_state", event.final_state_label.clone()),
-        json_entry("legs", legs),
-        json_entry("fx_window_ms", fx_window),
-    ])
-}
-fn settlement_snapshot_value(
-    settlement: &iroha_core::status::SettlementStatusSnapshot,
-) -> norito::json::Value {
-    let dvp_last = settlement
-        .dvp
-        .last_event
-        .as_ref()
-        .map(dvp_last_event_json)
-        .unwrap_or(Value::Null);
-    let pvp_last = settlement
-        .pvp
-        .last_event
-        .as_ref()
-        .map(pvp_last_event_json)
-        .unwrap_or(Value::Null);
-    let dvp = json_object(vec![
-        json_entry("success_total", settlement.dvp.success_total),
-        json_entry("failure_total", settlement.dvp.failure_total),
-        json_entry(
-            "final_state_totals",
-            settlement_counts_to_value(&settlement.dvp.final_state_totals),
-        ),
-        json_entry(
-            "failure_reasons",
-            settlement_counts_to_value(&settlement.dvp.failure_reasons),
-        ),
-        json_entry("last_event", dvp_last),
-    ]);
-    let pvp = json_object(vec![
-        json_entry("success_total", settlement.pvp.success_total),
-        json_entry("failure_total", settlement.pvp.failure_total),
-        json_entry(
-            "final_state_totals",
-            settlement_counts_to_value(&settlement.pvp.final_state_totals),
-        ),
-        json_entry(
-            "failure_reasons",
-            settlement_counts_to_value(&settlement.pvp.failure_reasons),
-        ),
-        json_entry("last_event", pvp_last),
-    ]);
-    json_object(vec![json_entry("dvp", dvp), json_entry("pvp", pvp)])
-}
-fn hash_with_prefix<H>(hash: H) -> String
-where
-    H: norito::json::JsonSerialize,
-{
-    json::to_value(&hash)
-        .expect("serialize hash for status snapshot json")
-        .as_str()
-        .expect("serialized hash should be a JSON string")
-        .to_owned()
-}
 fn lane_block_qc_signer_count(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> u32 {
     qc.signers_bitmap
         .iter()
         .map(|byte| byte.count_ones())
         .sum::<u32>()
-}
-fn lane_block_qc_summary_json(qc: &iroha_data_model::block::consensus::LaneBlockQcV1) -> Value {
-    let signer_count = lane_block_qc_signer_count(qc);
-    json_object(vec![
-        json_entry("phase", format!("{:?}", qc.body.phase).to_ascii_lowercase()),
-        json_entry("validator_set_hash_version", qc.validator_set_hash_version),
-        json_entry(
-            "validator_set_hash",
-            hash_with_prefix(qc.validator_set_hash),
-        ),
-        json_entry("validator_count", u64::from(qc.body.validator_count)),
-        json_entry("min_quorum", u64::from(qc.body.min_quorum)),
-        json_entry("signer_count", u64::from(signer_count)),
-    ])
 }
 fn committed_lane_block_wire(
     entry: &iroha_core::status::CommittedLaneBlockSnapshot,
@@ -48011,43 +47693,6 @@ fn committed_lane_block_wire(
         prepare_qc_signer_count: lane_block_qc_signer_count(&entry.prepare_qc),
         commit_qc_signer_count: lane_block_qc_signer_count(&entry.commit_qc),
     }
-}
-fn committed_lane_block_json(entry: &iroha_core::status::CommittedLaneBlockSnapshot) -> Value {
-    json_object(vec![
-        json_entry("lane_id", Value::from(u64::from(entry.lane_id.as_u32()))),
-        json_entry("dataspace_id", Value::from(entry.dataspace_id.as_u64())),
-        json_entry(
-            "lane_incarnation",
-            hash_with_prefix(entry.proposal.descriptor.lane_incarnation),
-        ),
-        json_entry("lane_block_height", entry.lane_block_height),
-        json_entry("lane_block_view", entry.lane_block_view),
-        json_entry("descriptor_hash", hash_with_prefix(entry.descriptor_hash)),
-        json_entry("proposal_hash", hash_with_prefix(entry.proposal_hash)),
-        json_entry("execution_status", entry.execution_status.as_str()),
-        json_entry(
-            "executable_payload_available",
-            entry.executable_payload_available(),
-        ),
-        json_entry(
-            "subject_hash",
-            hash_with_prefix(entry.proposal.descriptor.subject_hash),
-        ),
-        json_entry(
-            "payload_ownership_hash",
-            hash_with_prefix(entry.proposal.descriptor.payload_ownership_hash),
-        ),
-        json_entry(
-            "rbc_instance_hash",
-            hash_with_prefix(entry.proposal.descriptor.rbc_instance_hash),
-        ),
-        json_entry("qc_mode_tag", entry.proposal.descriptor.qc_mode_tag.clone()),
-        json_entry("prepare_qc", lane_block_qc_summary_json(&entry.prepare_qc)),
-        json_entry("commit_qc", lane_block_qc_summary_json(&entry.commit_qc)),
-    ])
-}
-fn lane_settlement_commitment_json(entry: &LaneBlockCommitment) -> Value {
-    json_value(entry)
 }
 /// GET /v1/sumeragi/status — latest authoritative Sumeragi v2 snapshot.
 ///
@@ -52784,11 +52429,6 @@ fn format_signed_asset_amount(value: f64, symbol: &str) -> String {
     };
     format!("{sign}{} {}", compact_number(value.abs(), 4), symbol)
 }
-fn format_percent_ratio(value: Option<f64>) -> String {
-    value
-        .map(|raw| format!("{}%", compact_number(raw * 100.0, 2)))
-        .unwrap_or_else(|| "-".to_owned())
-}
 fn asset_ticker(asset_id: &str) -> String {
     asset_id
         .split('#')
@@ -56088,88 +55728,10 @@ pub(crate) struct PrimaryAliasProjection {
     pub(crate) domain: Option<String>,
     pub(crate) has_primary_alias: bool,
 }
-fn primary_alias_projection_from_alias(
-    alias: &iroha_data_model::account::rekey::AccountAlias,
-    catalog: &DataSpaceCatalog,
-) -> PrimaryAliasProjection {
-    let dataspace = catalog
-        .by_id(alias.dataspace)
-        .map(|entry| entry.alias.to_ascii_lowercase());
-    let domain_segment = alias
-        .domain
-        .as_ref()
-        .map(|domain| domain.to_string().to_ascii_lowercase());
-    let domain = dataspace.as_ref().map(|dataspace_alias| {
-        domain_segment.as_ref().map_or_else(
-            || dataspace_alias.clone(),
-            |segment| format!("{segment}.{dataspace_alias}"),
-        )
-    });
-    PrimaryAliasProjection {
-        literal: alias.to_literal(catalog).ok(),
-        name: Some(alias.label.as_ref().to_ascii_lowercase()),
-        dataspace,
-        domain,
-        has_primary_alias: true,
-    }
-}
-fn primary_alias_projection_from_binding_record(
-    binding: &iroha_data_model::query::account::AccountAliasBindingRecord,
-) -> PrimaryAliasProjection {
-    let dataspace = binding.dataspace.to_ascii_lowercase();
-    let name = binding
-        .alias
-        .split_once('@')
-        .map(|(label, _)| label.to_ascii_lowercase());
-    let domain = binding
-        .domain
-        .as_ref()
-        .map(|segment| format!("{}.{}", segment.to_ascii_lowercase(), dataspace))
-        .unwrap_or_else(|| dataspace.clone());
-    PrimaryAliasProjection {
-        literal: Some(binding.alias.to_ascii_lowercase()),
-        name,
-        dataspace: Some(dataspace),
-        domain: Some(domain),
-        has_primary_alias: true,
-    }
-}
 pub(crate) fn primary_alias_projection_for_account_id(
     _state: &CoreState,
     _account_id: &AccountId,
 ) -> PrimaryAliasProjection {
-    PrimaryAliasProjection::default()
-}
-fn primary_alias_projection_for_account_id_in_world(
-    world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
-    account_id: &AccountId,
-    now_ms: u64,
-) -> PrimaryAliasProjection {
-    if let Some(account) = world.accounts().get(account_id) {
-        let labels = world
-            .account_aliases_by_account()
-            .get(account_id)
-            .cloned()
-            .unwrap_or_default();
-        let active_labels = labels
-            .into_iter()
-            .filter(|label| {
-                matches!(
-                    resolve_active_account_alias(world, catalog, label, now_ms),
-                    Ok(Some(ref resolved)) if resolved == account_id
-                )
-            })
-            .collect::<BTreeSet<_>>();
-        if let Some(primary) = account
-            .as_ref()
-            .label()
-            .filter(|label| active_labels.contains(label))
-            .or_else(|| active_labels.iter().next())
-        {
-            return primary_alias_projection_from_alias(primary, &catalog);
-        }
-    }
     PrimaryAliasProjection::default()
 }
 fn primary_alias_projection_batch_for_account_ids(
@@ -56454,26 +56016,6 @@ fn filter_account_asset_item(expr: &crate::filter::FilterExpr, it: &AccountAsset
 struct AccountPermissionListItem {
     name: String,
     payload: norito::json::Value,
-}
-/// List all effective permissions granted to an account with optional pagination.
-///
-/// Effective permissions include both direct account grants and grants inherited from every role
-/// assigned to the account. Security inventory consumers must not treat direct grants alone as the
-/// account's authority.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_account_permissions(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    crate::NoritoQuery(p): crate::NoritoQuery<PaginationParams>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_account_permissions_with_policy(
-        state,
-        axum::extract::Path(account_id),
-        crate::NoritoQuery(p),
-        telemetry,
-    )
-    .await
 }
 /// List permissions with configurable address enforcement.
 #[iroha_futures::telemetry_future]
@@ -58051,10 +57593,6 @@ fn filter_metadata_object(expr: &FilterExpr, id: &str, metadata: &Metadata) -> b
         }
     }
 }
-fn account_filter_object(expr: &FilterExpr, account: &iroha_data_model::account::Account) -> bool {
-    let id = account.id().to_string();
-    filter_metadata_object(expr, &id, account.metadata())
-}
 fn account_filter_projection(expr: &FilterExpr, proj: &AccountListItem) -> bool {
     use FilterExpr as F;
     let field_str = |field: &str| -> Option<&str> {
@@ -58144,17 +57682,6 @@ fn account_from_key_value(
     iroha_data_model::account::Account {
         id: id.clone(),
         metadata: details.metadata,
-        label: None,
-        uaid: details.uaid,
-        opaque_ids: details.opaque_ids,
-    }
-}
-fn account_read_response_from_world_entry(
-    entry: iroha_data_model::account::AccountEntry<'_>,
-) -> iroha_torii_shared::AccountReadResponse {
-    let details = entry.value().clone().into_inner();
-    iroha_torii_shared::AccountReadResponse {
-        account_id: entry.id().clone(),
         label: None,
         uaid: details.uaid,
         opaque_ids: details.opaque_ids,
@@ -62145,33 +61672,6 @@ pub async fn handle_v1_account_aliases(
     };
     Ok(infallible_pretty_json_response(&payload, "{}"))
 }
-pub async fn handle_v1_account_get(
-    state: Arc<CoreState>,
-    axum::extract::Path(account_id): axum::extract::Path<String>,
-    accept: Option<axum::http::HeaderValue>,
-    telemetry: MaybeTelemetry,
-) -> Result<Response, Error> {
-    let format = match crate::utils::negotiate_response_format(accept.as_ref()) {
-        Ok(format) => format,
-        Err(response) => return Ok(response),
-    };
-    let (account_id, _) = parse_account_path_segment_with_state(
-        state.as_ref(),
-        &account_id,
-        &telemetry,
-        ENDPOINT_ACCOUNTS_GET,
-    )?;
-    let world = state.world_view();
-    let response = world
-        .account(&account_id)
-        .map(account_read_response_from_world_entry)
-        .map_err(|_| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
-    Ok(crate::utils::respond_with_format(response, format))
-}
 /// GET /v1/accounts — List accounts with basic pagination.
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_accounts(
@@ -62391,23 +61891,6 @@ pub(crate) async fn handle_v1_accounts_query_with_visibility(
         insert_primary_alias_fields(&mut row, &item.primary_alias);
         row
     })
-}
-/// GET /v1/accounts/{uaid}/portfolio — aggregated holdings for a UAID.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_accounts_portfolio(
-    state: Arc<CoreState>,
-    axum::extract::Path(raw_uaid): axum::extract::Path<String>,
-    asset_id: Option<AssetId>,
-    _telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_accounts_portfolio_with_visibility(
-        state,
-        axum::extract::Path(raw_uaid),
-        asset_id,
-        _telemetry,
-        DataspaceReadVisibility::all(),
-    )
-    .await
 }
 pub(crate) async fn handle_v1_accounts_portfolio_with_visibility(
     state: Arc<CoreState>,
@@ -62736,23 +62219,6 @@ fn commitments_summary_json(
     );
     map.insert("details".into(), Value::Array(details));
     Value::Object(map)
-}
-/// GET /v1/nexus/dataspaces/accounts/{literal}/summary — joined dataspace view by account literal.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_nexus_dataspaces_account_summary(
-    state: Arc<CoreState>,
-    axum::extract::Path(raw_literal): axum::extract::Path<String>,
-    crate::NoritoQuery(_query): crate::NoritoQuery<NexusDataspacesAccountSummaryQueryParams>,
-    telemetry: MaybeTelemetry,
-) -> Result<impl IntoResponse> {
-    handle_v1_nexus_dataspaces_account_summary_with_visibility(
-        state,
-        axum::extract::Path(raw_literal),
-        crate::NoritoQuery(_query),
-        telemetry,
-        DataspaceReadVisibility::all(),
-    )
-    .await
 }
 pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
     state: Arc<CoreState>,
@@ -64696,15 +64162,6 @@ mod asset_definitions_query_tests {
         assert_eq!(items, vec!["newer", "older"]);
     }
 }
-pub async fn handle_v1_explorer_accounts(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    domain: Option<DomainId>,
-    definition: Option<AssetDefinitionId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_accounts_sync(state, visibility, pagination, domain, definition)
-}
 pub(crate) async fn handle_v1_explorer_accounts_admitted(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -64735,14 +64192,6 @@ fn handle_v1_explorer_accounts_sync(
     )
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
-}
-pub async fn handle_v1_explorer_domains(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_domains_sync(state, visibility, pagination, owned_by)
 }
 pub(crate) async fn handle_v1_explorer_domains_admitted(
     state: Arc<CoreState>,
@@ -64858,23 +64307,6 @@ fn handle_v1_explorer_asset_definitions_sync(
     }
     Ok(JsonBody(page).into_response())
 }
-pub async fn handle_v1_explorer_assets(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-    definition: Option<AssetDefinitionId>,
-    asset_id: Option<AssetId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_assets_sync(
-        state,
-        visibility,
-        pagination,
-        owned_by,
-        definition,
-        asset_id,
-    )
-}
 pub(crate) async fn handle_v1_explorer_assets_admitted(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -64916,15 +64348,6 @@ fn handle_v1_explorer_assets_sync(
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
 }
-pub async fn handle_v1_explorer_nfts(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-    domain: Option<DomainId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_nfts_sync(state, visibility, pagination, owned_by, domain)
-}
 pub(crate) async fn handle_v1_explorer_nfts_admitted(
     state: Arc<CoreState>,
     visibility: DataspaceReadVisibility,
@@ -64955,15 +64378,6 @@ fn handle_v1_explorer_nfts_sync(
     )
     .map_err(explorer_world_cursor_error)?;
     Ok(JsonBody(page).into_response())
-}
-pub async fn handle_v1_explorer_rwas(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    owned_by: Option<AccountId>,
-    domain: Option<DomainId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_rwas_sync(state, visibility, pagination, owned_by, domain)
 }
 pub(crate) async fn handle_v1_explorer_rwas_admitted(
     state: Arc<CoreState>,
@@ -65643,20 +65057,6 @@ fn handle_v1_explorer_transactions_sync(
     );
     response
 }
-pub async fn handle_v1_explorer_transactions_latest(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    authority: Option<AccountId>,
-    block: Option<u64>,
-    status: Option<ExplorerTransactionStatusFilter>,
-    asset_id: Option<iroha_data_model::asset::AssetId>,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_transactions_latest_sync(
-        state, telemetry, visibility, pagination, authority, block, status, asset_id,
-    )
-}
 pub(crate) async fn handle_v1_explorer_transactions_latest_admitted(
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
@@ -65816,15 +65216,6 @@ fn handle_v1_explorer_instructions_sync(
         &response,
     );
     response
-}
-pub async fn handle_v1_explorer_instructions_latest(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
-    query: ExplorerInstructionQuery,
-) -> Result<AxResponse, Error> {
-    handle_v1_explorer_instructions_latest_sync(state, telemetry, visibility, pagination, query)
 }
 pub(crate) async fn handle_v1_explorer_instructions_latest_admitted(
     state: Arc<CoreState>,
@@ -68796,29 +68187,6 @@ pub(crate) async fn handle_v1_assets_definitions_with_visibility(
         asset_definition_to_json_value(&item.definition, item.alias_binding.as_ref())
     })
 }
-/// GET /v1/assets/definitions/{asset} — Fetch a single asset definition by id or alias.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_asset_definition(
-    state: Arc<CoreState>,
-    axum::extract::Path(asset): axum::extract::Path<String>,
-) -> Result<impl IntoResponse> {
-    let world = state.world_view();
-    let now_ms = asset_alias_observation_time_ms(&state);
-    let definition_id = resolve_asset_definition_selector(&world, &asset, now_ms)?;
-    let definition = world.asset_definition(&definition_id).map_err(|_| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        ))
-    })?;
-    let alias_binding = world
-        .asset_definition_alias_bindings()
-        .get(&definition_id)
-        .map(|binding| asset_alias_binding_dto(binding, now_ms));
-    pretty_json_response(&asset_definition_to_json_value(
-        &definition,
-        alias_binding.as_ref(),
-    )?)
-}
 /// POST /v1/assets/definitions/query — JSON envelope with optional pagination/sort and
 /// full asset-definition objects in the response.
 #[iroha_futures::telemetry_future]
@@ -70416,19 +69784,6 @@ pub(crate) async fn handle_v1_rwas_with_visibility(
     );
     id_paginated_json_response(&page, count_mode, |item| item.id.clone())
 }
-/// POST /v1/rwas/query — JSON envelope with optional pagination/sort.
-#[iroha_futures::telemetry_future]
-pub async fn handle_v1_rwas_query(
-    state: Arc<CoreState>,
-    NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
-) -> Result<impl IntoResponse> {
-    handle_v1_rwas_query_with_visibility(
-        state,
-        NoritoJson(envelope),
-        DataspaceReadVisibility::all(),
-    )
-    .await
-}
 pub(crate) async fn handle_v1_rwas_query_with_visibility(
     state: Arc<CoreState>,
     NoritoJson(envelope): NoritoJson<crate::filter::QueryEnvelope>,
@@ -70586,21 +69941,6 @@ fn subscription_invoice_from_metadata(metadata: &Metadata) -> Result<Option<Subs
         .try_into_any_norito::<SubscriptionInvoice>()
         .map_err(|err| conversion_error(format!("invalid subscription invoice metadata: {err}")))?;
     Ok(Some(invoice))
-}
-fn subscription_status_label(status: SubscriptionStatus) -> &'static str {
-    match status {
-        SubscriptionStatus::Active => "active",
-        SubscriptionStatus::Paused => "paused",
-        SubscriptionStatus::PastDue => "past_due",
-        SubscriptionStatus::Canceled => "canceled",
-        SubscriptionStatus::Suspended => "suspended",
-    }
-}
-fn subscription_invoice_status_label(status: SubscriptionInvoiceStatus) -> &'static str {
-    match status {
-        SubscriptionInvoiceStatus::Paid => "paid",
-        SubscriptionInvoiceStatus::Failed => "failed",
-    }
 }
 fn name_status_label(status: &NameStatus) -> &'static str {
     match status {
@@ -72651,12 +71991,6 @@ fn validate_holders_filter_adapter(expr: &FilterExpr) -> Result<()> {
         },
     }
 }
-fn aggregate_validation_error(message: impl Into<String>) -> Error {
-    Error::AppQueryValidation {
-        code: "unsupported_aggregate_shape",
-        message: message.into(),
-    }
-}
 fn projection_archive_unavailable_error(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "projection_archive_unavailable",
@@ -72665,15 +71999,6 @@ fn projection_archive_unavailable_error(message: impl Into<String>) -> Error {
 }
 fn asset_holder_live_aggregate_enabled() -> bool {
     cfg!(test)
-}
-fn is_valid_aggregate_alias(alias: &str) -> bool {
-    let mut chars = alias.chars();
-    match chars.next() {
-        Some(ch) if ch.is_ascii_alphabetic() || ch == '_' => {
-            chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        }
-        _ => false,
-    }
 }
 fn json_value_to_numeric(value: &Value) -> Option<iroha_primitives::numeric::Numeric> {
     value
@@ -72742,287 +72067,6 @@ fn evaluate_filter_on_aggregate_row(
         F::Exists(field) => aggregate_field_value(row, &field.0).is_some(),
         F::IsNull(field) => aggregate_field_value(row, &field.0).is_none_or(Value::is_null),
     }
-}
-fn validate_aggregate_filter_fields(
-    expr: &crate::filter::FilterExpr,
-    allowed_fields: &BTreeSet<String>,
-) -> Result<()> {
-    use crate::filter::FilterExpr as F;
-    let validate_field = |field: &crate::filter::FieldPath| -> Result<()> {
-        if allowed_fields.contains(&field.0) {
-            Ok(())
-        } else {
-            Err(aggregate_validation_error(format!(
-                "aggregate field `{}` is not allowed",
-                field.0
-            )))
-        }
-    };
-    match expr {
-        F::And(list) | F::Or(list) => {
-            for nested in list {
-                validate_aggregate_filter_fields(nested, allowed_fields)?;
-            }
-            Ok(())
-        }
-        F::Not(inner) => validate_aggregate_filter_fields(inner, allowed_fields),
-        F::Eq(field, _)
-        | F::Ne(field, _)
-        | F::Lt(field, _)
-        | F::Lte(field, _)
-        | F::Gt(field, _)
-        | F::Gte(field, _)
-        | F::In(field, _)
-        | F::Nin(field, _)
-        | F::Exists(field)
-        | F::IsNull(field) => validate_field(field),
-    }
-}
-fn validate_aggregate_sort_fields(
-    sort: &[crate::filter::SortKey],
-    allowed_fields: &BTreeSet<String>,
-) -> Result<()> {
-    for key in sort {
-        if !allowed_fields.contains(&key.key.0) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate sort key `{}` is not allowed",
-                key.key.0
-            )));
-        }
-    }
-    Ok(())
-}
-enum AggregateMetricState {
-    Count(u64),
-    // Exact for the currently allowed distinct fields: accounts emit unique `id`
-    // rows, and asset-holder rows are reduced in `account_id` order.
-    DistinctCount {
-        last_value: Option<String>,
-        count: u64,
-    },
-    Sum(Option<iroha_primitives::numeric::Numeric>),
-    Min(Option<iroha_primitives::numeric::Numeric>),
-    Max(Option<iroha_primitives::numeric::Numeric>),
-    Avg {
-        sum: Option<iroha_primitives::numeric::Numeric>,
-        count: u64,
-    },
-}
-impl AggregateMetricState {
-    fn new(metric: &crate::filter::AggregateMetric) -> Result<Self> {
-        use crate::filter::AggregateFn as FnKind;
-        match metric.r#fn {
-            FnKind::Count => Ok(Self::Count(0)),
-            FnKind::DistinctCount => Ok(Self::DistinctCount {
-                last_value: None,
-                count: 0,
-            }),
-            FnKind::Sum => Ok(Self::Sum(None)),
-            FnKind::Min => Ok(Self::Min(None)),
-            FnKind::Max => Ok(Self::Max(None)),
-            FnKind::Avg => Ok(Self::Avg {
-                sum: None,
-                count: 0,
-            }),
-        }
-    }
-    fn update(
-        &mut self,
-        metric: &crate::filter::AggregateMetric,
-        row: &norito::json::Map,
-    ) -> Result<()> {
-        use crate::filter::AggregateFn as FnKind;
-        match (self, metric.r#fn) {
-            (Self::Count(total), FnKind::Count) => {
-                *total = total.saturating_add(1);
-                Ok(())
-            }
-            (Self::DistinctCount { last_value, count }, FnKind::DistinctCount) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("distinct_count requires a field"))?;
-                if let Some(value) = aggregate_field_value(row, &field.0) {
-                    let encoded = norito::json::to_json(value).map_err(|err| {
-                        Error::Query(iroha_data_model::ValidationFail::InternalError(
-                            err.to_string(),
-                        ))
-                    })?;
-                    if last_value.as_ref() != Some(&encoded) {
-                        *count = count.saturating_add(1);
-                        *last_value = Some(encoded);
-                    }
-                }
-                Ok(())
-            }
-            (Self::Sum(total), FnKind::Sum) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("sum requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    *total = Some(match total.take() {
-                        Some(existing) => existing.checked_add(value).ok_or_else(|| {
-                            aggregate_validation_error("aggregate sum overflowed")
-                        })?,
-                        None => value,
-                    });
-                }
-                Ok(())
-            }
-            (Self::Min(current), FnKind::Min) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("min requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    if current.as_ref().is_none_or(|existing| value < *existing) {
-                        *current = Some(value);
-                    }
-                }
-                Ok(())
-            }
-            (Self::Max(current), FnKind::Max) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("max requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    if current.as_ref().is_none_or(|existing| value > *existing) {
-                        *current = Some(value);
-                    }
-                }
-                Ok(())
-            }
-            (Self::Avg { sum, count }, FnKind::Avg) => {
-                let field = metric
-                    .field
-                    .as_ref()
-                    .ok_or_else(|| aggregate_validation_error("avg requires a field"))?;
-                if let Some(value) =
-                    aggregate_field_value(row, &field.0).and_then(json_value_to_numeric)
-                {
-                    *sum = Some(match sum.take() {
-                        Some(existing) => existing.checked_add(value).ok_or_else(|| {
-                            aggregate_validation_error("aggregate avg overflowed")
-                        })?,
-                        None => value,
-                    });
-                    *count = count.saturating_add(1);
-                }
-                Ok(())
-            }
-            _ => Err(aggregate_validation_error(
-                "aggregate metric state mismatch",
-            )),
-        }
-    }
-    fn finalize(self) -> Result<Value> {
-        match self {
-            Self::Count(total) => Ok(Value::from(total)),
-            Self::DistinctCount { count, .. } => Ok(Value::from(count)),
-            Self::Sum(total) | Self::Min(total) | Self::Max(total) => Ok(total
-                .map(|value| Value::from(value.to_string()))
-                .unwrap_or(Value::Null)),
-            Self::Avg { sum, count } => {
-                let Some(sum) = sum else {
-                    return Ok(Value::Null);
-                };
-                let divisor = iroha_primitives::numeric::Numeric::new(count, 0);
-                let scale = sum.scale().max(6);
-                let avg = sum
-                    .try_decimal_div_round(
-                        &divisor,
-                        scale,
-                        iroha_primitives::numeric::RoundingMode::TowardZero,
-                    )
-                    .map_err(|_| aggregate_validation_error("aggregate avg overflowed"))?;
-                Ok(Value::from(avg.to_string()))
-            }
-        }
-    }
-}
-struct AggregateGroupState {
-    group_values: Vec<(String, Value)>,
-    metrics: Vec<AggregateMetricState>,
-}
-fn aggregate_rows(
-    rows: impl IntoIterator<Item = norito::json::Map>,
-    aggregate: &crate::filter::AggregateSpec,
-) -> Result<Vec<norito::json::Map>> {
-    let mut grouped: BTreeMap<Vec<String>, AggregateGroupState> = BTreeMap::new();
-    for row in rows {
-        let group_values: Vec<(String, Value)> = aggregate
-            .group_by
-            .iter()
-            .map(|field| {
-                (
-                    field.0.clone(),
-                    row.get(&field.0).cloned().unwrap_or(Value::Null),
-                )
-            })
-            .collect();
-        let group_key: Vec<String> = group_values
-            .iter()
-            .map(|(_, value)| norito::json::to_json(value).unwrap_or_else(|_| "null".to_owned()))
-            .collect();
-        let entry = grouped
-            .entry(group_key)
-            .or_insert_with(|| AggregateGroupState {
-                group_values: group_values.clone(),
-                metrics: aggregate
-                    .metrics
-                    .iter()
-                    .map(AggregateMetricState::new)
-                    .collect::<Result<Vec<_>>>()
-                    .expect("metric validation should happen before execution"),
-            });
-        for (state, metric) in entry.metrics.iter_mut().zip(&aggregate.metrics) {
-            state.update(metric, &row)?;
-        }
-    }
-    grouped
-        .into_values()
-        .map(|state| {
-            let mut row = norito::json::Map::new();
-            for (field, value) in state.group_values {
-                row.insert(field, value);
-            }
-            for (metric, value) in aggregate.metrics.iter().zip(state.metrics) {
-                row.insert(metric.alias.clone(), value.finalize()?);
-            }
-            Ok(row)
-        })
-        .collect()
-}
-fn sort_aggregate_rows_in_place(rows: &mut [norito::json::Map], sort: &[crate::filter::SortKey]) {
-    rows.sort_by(|left, right| {
-        for key in sort {
-            let left_value = left.get(&key.key.0).unwrap_or(&Value::Null);
-            let right_value = right.get(&key.key.0).unwrap_or(&Value::Null);
-            let ordering = compare_json_values(left_value, right_value).unwrap_or_else(|| {
-                let left_json =
-                    norito::json::to_json(left_value).unwrap_or_else(|_| "null".to_owned());
-                let right_json =
-                    norito::json::to_json(right_value).unwrap_or_else(|_| "null".to_owned());
-                left_json.cmp(&right_json)
-            });
-            if ordering != Ordering::Equal {
-                return if matches!(key.order, crate::filter::Order::Asc) {
-                    ordering
-                } else {
-                    ordering.reverse()
-                };
-            }
-        }
-        Ordering::Equal
-    });
 }
 fn query_index_snapshot(state: &CoreState) -> (u64, Option<String>) {
     let snapshot = state.query_index_status_snapshot();
@@ -73127,339 +72171,6 @@ fn asset_holder_item_to_query_row(item: &AssetHolderListItem) -> Map {
     row.insert("quantity".into(), Value::from(item.quantity.to_string()));
     insert_primary_alias_fields(&mut row, &item.primary_alias);
     row
-}
-fn build_aggregate_response(
-    state: &CoreState,
-    mut rows: Vec<norito::json::Map>,
-    sort: &[crate::filter::SortKey],
-    pagination: EffectivePagination,
-    having: Option<&crate::filter::FilterExpr>,
-    indexed_snapshot: Option<(u64, Option<String>)>,
-    query_source: &'static str,
-) -> Result<Response, Error> {
-    if let Some(expr) = having {
-        rows.retain(|row| evaluate_filter_on_aggregate_row(expr, row));
-    }
-    if !sort.is_empty() {
-        sort_aggregate_rows_in_place(&mut rows, sort);
-    }
-    let total = rows.len();
-    let offset = usize::try_from(pagination.offset).unwrap_or(usize::MAX);
-    let limit = usize::try_from(pagination.limit.unwrap_or(pagination.cap)).unwrap_or(usize::MAX);
-    let items = rows
-        .into_iter()
-        .skip(offset)
-        .take(limit)
-        .collect::<Vec<_>>();
-    let (indexed_height, indexed_block_hash) =
-        indexed_snapshot.unwrap_or_else(|| query_index_snapshot(state));
-    let mut top = norito::json::Map::new();
-    top.insert(
-        "items".into(),
-        Value::Array(items.into_iter().map(Value::Object).collect()),
-    );
-    top.insert("total".into(), Value::from(total as u64));
-    top.insert("indexed_height".into(), Value::from(indexed_height));
-    top.insert(
-        "indexed_block_hash".into(),
-        indexed_block_hash.map_or(Value::Null, Value::from),
-    );
-    top.insert("query_source".into(), Value::from(query_source));
-    pretty_json_response(&top)
-}
-fn validate_accounts_aggregate_request(
-    aggregate: &crate::filter::AggregateSpec,
-    sort: &[crate::filter::SortKey],
-) -> Result<BTreeSet<String>> {
-    use crate::filter::AggregateFn as FnKind;
-    if aggregate.group_by.len() > 4 {
-        return Err(aggregate_validation_error(
-            "aggregate group_by supports at most four fields",
-        ));
-    }
-    if aggregate.metrics.is_empty() || aggregate.metrics.len() > 8 {
-        return Err(aggregate_validation_error(
-            "aggregate metrics requires between one and eight metrics",
-        ));
-    }
-    let allowed_group_fields = BTreeSet::from([
-        "primary_alias_domain".to_owned(),
-        "primary_alias_dataspace".to_owned(),
-        "has_primary_alias".to_owned(),
-    ]);
-    let mut allowed_result_fields = BTreeSet::new();
-    for field in &aggregate.group_by {
-        if !allowed_group_fields.contains(&field.0) {
-            return Err(aggregate_validation_error(format!(
-                "accounts aggregate group_by field `{}` is not supported",
-                field.0
-            )));
-        }
-        allowed_result_fields.insert(field.0.clone());
-    }
-    for metric in &aggregate.metrics {
-        if !is_valid_aggregate_alias(&metric.alias) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is invalid",
-                metric.alias
-            )));
-        }
-        if !allowed_result_fields.insert(metric.alias.clone()) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is duplicated",
-                metric.alias
-            )));
-        }
-        match metric.r#fn {
-            FnKind::Count => {
-                if metric.field.is_some() {
-                    return Err(aggregate_validation_error("count must not declare a field"));
-                }
-            }
-            FnKind::DistinctCount => match metric.field.as_ref().map(|field| field.0.as_str()) {
-                Some("id") => {}
-                _ => {
-                    return Err(aggregate_validation_error(
-                        "accounts aggregate distinct_count only supports field `id`",
-                    ));
-                }
-            },
-            _ => {
-                return Err(aggregate_validation_error(
-                    "accounts aggregate only supports `count` and `distinct_count(id)` metrics",
-                ));
-            }
-        }
-    }
-    validate_aggregate_sort_fields(sort, &allowed_result_fields)?;
-    if let Some(having) = aggregate.having.as_ref() {
-        validate_aggregate_filter_fields(having, &allowed_result_fields)?;
-    }
-    Ok(allowed_result_fields)
-}
-fn validate_asset_holders_aggregate_request(
-    aggregate: &crate::filter::AggregateSpec,
-    sort: &[crate::filter::SortKey],
-) -> Result<BTreeSet<String>> {
-    use crate::filter::AggregateFn as FnKind;
-    if aggregate.group_by.len() > 4 {
-        return Err(aggregate_validation_error(
-            "aggregate group_by supports at most four fields",
-        ));
-    }
-    if aggregate.metrics.is_empty() || aggregate.metrics.len() > 8 {
-        return Err(aggregate_validation_error(
-            "aggregate metrics requires between one and eight metrics",
-        ));
-    }
-    let allowed_group_fields = BTreeSet::from([
-        "scope".to_owned(),
-        "primary_alias_domain".to_owned(),
-        "primary_alias_dataspace".to_owned(),
-        "has_primary_alias".to_owned(),
-    ]);
-    let mut allowed_result_fields = BTreeSet::new();
-    for field in &aggregate.group_by {
-        if !allowed_group_fields.contains(&field.0) {
-            return Err(aggregate_validation_error(format!(
-                "asset holders aggregate group_by field `{}` is not supported",
-                field.0
-            )));
-        }
-        allowed_result_fields.insert(field.0.clone());
-    }
-    for metric in &aggregate.metrics {
-        if !is_valid_aggregate_alias(&metric.alias) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is invalid",
-                metric.alias
-            )));
-        }
-        if !allowed_result_fields.insert(metric.alias.clone()) {
-            return Err(aggregate_validation_error(format!(
-                "aggregate metric alias `{}` is duplicated",
-                metric.alias
-            )));
-        }
-        match metric.r#fn {
-            FnKind::Count => {
-                if metric.field.is_some() {
-                    return Err(aggregate_validation_error("count must not declare a field"));
-                }
-            }
-            FnKind::DistinctCount => match metric.field.as_ref().map(|field| field.0.as_str()) {
-                Some("account_id") => {}
-                _ => {
-                    return Err(aggregate_validation_error(
-                        "asset holders distinct_count only supports field `account_id`",
-                    ));
-                }
-            },
-            FnKind::Sum | FnKind::Min | FnKind::Max | FnKind::Avg => {
-                match metric.field.as_ref().map(|field| field.0.as_str()) {
-                    Some("quantity") => {}
-                    _ => {
-                        return Err(aggregate_validation_error(
-                            "numeric aggregate metrics only support field `quantity`",
-                        ));
-                    }
-                }
-            }
-        }
-    }
-    validate_aggregate_sort_fields(sort, &allowed_result_fields)?;
-    if let Some(having) = aggregate.having.as_ref() {
-        validate_aggregate_filter_fields(having, &allowed_result_fields)?;
-    }
-    Ok(allowed_result_fields)
-}
-fn handle_v1_accounts_query_aggregate(
-    state: Arc<CoreState>,
-    accounts: Vec<iroha_data_model::account::Account>,
-    envelope: crate::filter::QueryEnvelope,
-) -> Result<Response, Error> {
-    let crate::filter::QueryEnvelope {
-        filter,
-        select,
-        aggregate,
-        sort,
-        pagination,
-        ..
-    } = envelope;
-    if select.is_some() {
-        return Err(aggregate_validation_error(
-            "select is not supported when aggregate is present",
-        ));
-    }
-    let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
-    validate_accounts_aggregate_request(&aggregate, &sort)?;
-    let rows = accounts.into_iter().filter_map(|account| {
-        let projected = AccountListItem {
-            canonical_id: account.id().to_string(),
-            display_id: crate::account_literal::display_literal(account.id()),
-            primary_alias: primary_alias_projection_for_account_id(state.as_ref(), account.id()),
-        };
-        if let Some(expr) = filter.as_ref()
-            && !account_filter_projection(expr, &projected)
-        {
-            return None;
-        }
-        Some(account_list_item_to_query_row(&projected))
-    });
-    let aggregated = aggregate_rows(rows, &aggregate)?;
-    let cap = app_query_page_cap(&state);
-    let pagination = enforce_app_pagination(
-        pagination.limit,
-        pagination.offset,
-        cap,
-        ENDPOINT_ACCOUNTS_QUERY,
-    )?;
-    build_aggregate_response(
-        state.as_ref(),
-        aggregated,
-        &sort,
-        pagination,
-        aggregate.having.as_ref(),
-        None,
-        "live",
-    )
-}
-async fn handle_v1_asset_holders_query_aggregate(
-    app: Option<&crate::SharedAppState>,
-    state: Arc<CoreState>,
-    def_id: AssetDefinitionId,
-    asset_alias: Option<String>,
-    filter: Option<crate::filter::FilterExpr>,
-    aggregate: Option<crate::filter::AggregateSpec>,
-    sort: Vec<crate::filter::SortKey>,
-    pagination: EffectivePagination,
-    visibility: DataspaceReadVisibility,
-) -> Result<Response, Error> {
-    let aggregate = aggregate.ok_or_else(|| aggregate_validation_error("aggregate is required"))?;
-    validate_asset_holders_aggregate_request(&aggregate, &sort)?;
-    if let Some((rows, indexed_snapshot, query_source)) = asset_holder_projection_query_rows(
-        app,
-        state.as_ref(),
-        &def_id,
-        asset_alias.as_ref(),
-        filter.as_ref(),
-        &visibility,
-    )
-    .await?
-    {
-        let aggregated = aggregate_rows(rows, &aggregate)?;
-        return build_aggregate_response(
-            state.as_ref(),
-            aggregated,
-            &sort,
-            pagination,
-            aggregate.having.as_ref(),
-            Some(indexed_snapshot),
-            query_source,
-        );
-    }
-    if !asset_holder_live_aggregate_enabled() {
-        return Err(projection_archive_unavailable_error(
-            "asset holder aggregate requires a complete published query projection archive; live holder scans are disabled",
-        ));
-    }
-    iroha_logger::warn!(
-        asset_definition_id = %def_id,
-        "serving asset holder aggregate from live state because projection archive cache is incomplete"
-    );
-    let world = state.world_view();
-    let mut map: BTreeMap<
-        (AccountId, iroha_data_model::asset::AssetBalanceScope),
-        iroha_primitives::numeric::Quantity,
-    > = BTreeMap::new();
-    for asset in world.asset_entries_by_definition_iter(&def_id) {
-        if !visibility.allows_asset(&world, asset.id()) {
-            continue;
-        }
-        accumulate_asset_holder_quantity(&mut map, asset.id(), asset.value().as_ref(), None)?;
-    }
-    let alias_cache: BTreeMap<_, _> = map
-        .keys()
-        .map(|(account_id, _)| {
-            (
-                account_id.clone(),
-                primary_alias_projection_for_account_id(state.as_ref(), account_id),
-            )
-        })
-        .collect();
-    drop(world);
-    let asset = def_id.to_string();
-    let rows = map
-        .into_iter()
-        .filter_map(|((account_id, scope), quantity)| {
-            let canonical_id = account_id.to_string();
-            let primary_alias = alias_cache.get(&account_id).cloned().unwrap_or_default();
-            let projected = AssetHolderListItem {
-                account_id: account_id.clone(),
-                canonical_id,
-                asset: asset.clone(),
-                asset_alias: asset_alias.clone(),
-                scope: asset_balance_scope_literal(&scope),
-                quantity,
-                primary_alias,
-            };
-            if let Some(expr) = filter.as_ref()
-                && !filter_asset_holder_item(expr, &projected)
-            {
-                return None;
-            }
-            Some(asset_holder_item_to_query_row(&projected))
-        });
-    let aggregated = aggregate_rows(rows, &aggregate)?;
-    build_aggregate_response(
-        state.as_ref(),
-        aggregated,
-        &sort,
-        pagination,
-        aggregate.having.as_ref(),
-        None,
-        "live_debug",
-    )
 }
 fn asset_holder_projection_row_to_query_row(
     asset: &str,

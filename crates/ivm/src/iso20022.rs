@@ -5,10 +5,7 @@
 //! message definition through `MsgDefIdr` and `Document` XSD namespaces before schema-table
 //! validation is applied. Network transport is deliberately outside this module and outside
 //! consensus execution.
-use crate::signature::{SignatureScheme, verify_signature};
 use core::fmt;
-use ed25519_dalek::{Signer as _, SigningKey};
-use iroha_crypto::{Algorithm, EcdsaSecp256k1Sha256};
 use sha2::{Digest as _, Sha256};
 use std::{
     borrow::Cow,
@@ -971,11 +968,6 @@ fn validate_iban(value: &[u8]) -> bool {
 /// Validate a BIC. The check is deliberately lightweight: it enforces
 /// an uppercase alphanumeric string of length 8 or 11 as per ISO 9362 but
 /// does not verify country codes or institution existence.
-fn validate_bic(value: &[u8]) -> bool {
-    core::str::from_utf8(value)
-        .map(validate_bic_str)
-        .unwrap_or(false)
-}
 fn validate_bic_str(value: &str) -> bool {
     let bytes = value.as_bytes();
     let len = bytes.len();
@@ -2571,20 +2563,6 @@ fn parse_xml_into_current(message_type: &str, text: &str) -> Result<(), MsgError
     }
     Ok(())
 }
-/// Encode a numeric amount as an ASCII string.
-pub fn encode_amount(value: u64) -> Vec<u8> {
-    value.to_string().into_bytes()
-}
-/// Decode a numeric amount from an ASCII string.
-///
-/// Returns `None` if the input contains non-digit characters or does not fit into a `u64`.
-pub fn decode_amount(value: &[u8]) -> Option<u64> {
-    if value.iter().all(|b| b.is_ascii_digit()) {
-        core::str::from_utf8(value).ok()?.parse().ok()
-    } else {
-        None
-    }
-}
 /// Base64 alphabet used by [`encode_base64`] and [`decode_base64`].
 const BASE64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 /// Precomputed table mapping ASCII bytes to their 6-bit Base64 value. Invalid bytes map to `0xFF`.
@@ -2668,35 +2646,6 @@ pub fn decode_base64(data: &[u8]) -> Option<Vec<u8>> {
     decode_base64_into(data, &mut out)?;
     Some(out)
 }
-/// Encode a byte slice according to a named format.
-///
-/// Currently only `"BASE64"` is supported.
-pub fn encode_str(format: &str, value: &[u8]) -> Vec<u8> {
-    match format {
-        "BASE64" => encode_base64(value),
-        _ => value.to_vec(),
-    }
-}
-/// Decode a string according to a named format.
-///
-/// Currently only `"BASE64"` is supported.
-pub fn decode_str(format: &str, value: &[u8]) -> Option<Vec<u8>> {
-    match format {
-        "BASE64" => decode_base64(value),
-        _ => Some(value.to_vec()),
-    }
-}
-/// Validate a value against a named pattern.
-///
-/// Supported patterns are `"IBAN"`, `"BIC"`, and `"NUMERIC"`.
-pub fn validate_format(pattern: &str, value: &[u8]) -> bool {
-    match pattern {
-        "IBAN" => validate_iban(value),
-        "BIC" => validate_bic(value),
-        "NUMERIC" => value.iter().all(|b| b.is_ascii_digit()),
-        _ => false,
-    }
-}
 /// Create a new ISO 20022 message of the given type.
 ///
 /// The message is represented as a deterministic in-memory [`IsoMessage`] slot. Schema helpers and
@@ -2707,18 +2656,6 @@ pub fn msg_create(message_type: &str) {
             message_type: message_type.to_owned(),
             ..IsoMessage::default()
         });
-    });
-}
-/// Clone the current ISO 20022 message object.
-///
-/// The thread-local message stack stores deterministic in-memory structures, so
-/// cloning duplicates the active message fields without reparsing XML.
-pub fn msg_clone() {
-    MESSAGE_STACK.with(|stack| {
-        let cloned = { stack.borrow().last().cloned() };
-        if let Some(m) = cloned {
-            stack.borrow_mut().push(m);
-        }
     });
 }
 /// Set the value of an ISO 20022 field.
@@ -2870,93 +2807,12 @@ pub fn msg_validate() -> bool {
         })
     })
 }
-/// Sign the current ISO 20022 message.
-///
-/// Uses Ed25519, secp256k1, or ML-DSA (Dilithium3) depending on the key length. Secret keys may be
-/// prefixed with an `iroha_crypto::Algorithm` tag; secp256k1 signing requires the
-/// `Algorithm::Secp256k1` tag to disambiguate 32-byte secret keys. The function signs the
-/// serialized message bytes and returns the signature or an empty vector if signing fails.
-/// ML-DSA retains its typed-key decoding, empty context, and direct OS randomness;
-/// unsupported AArch64 acceleration uses the shared CLEAN signing path.
-#[allow(unused_variables)]
-pub fn msg_sign(key: &[u8]) -> Vec<u8> {
-    let msg = match msg_serialize("XML") {
-        Ok(bytes) => bytes,
-        Err(_) => return Vec::new(),
-    };
-    use pqcrypto_mldsa::mldsa65 as dilithium;
-    use pqcrypto_traits::sign::SecretKey as _;
-    if let Some((tag, rest)) = key.split_first() {
-        if *tag == Algorithm::Ed25519 as u8 && rest.len() == 32 {
-            let Ok(sk_bytes) = <[u8; 32]>::try_from(rest) else {
-                return Vec::new();
-            };
-            let sk = SigningKey::from_bytes(&sk_bytes);
-            return sk.sign(&msg).to_bytes().to_vec();
-        }
-        if *tag == Algorithm::Secp256k1 as u8 && rest.len() == 32 {
-            let Ok(sk_bytes) = <[u8; 32]>::try_from(rest) else {
-                return Vec::new();
-            };
-            let Ok(sk) = EcdsaSecp256k1Sha256::parse_private_key(&sk_bytes) else {
-                return Vec::new();
-            };
-            return EcdsaSecp256k1Sha256::sign(&msg, &sk);
-        }
-        if *tag == Algorithm::MlDsa as u8 && rest.len() == dilithium::secret_key_bytes() {
-            let Ok(sk) = dilithium::SecretKey::from_bytes(rest) else {
-                return Vec::new();
-            };
-            return iroha_crypto::sign_mldsa65_detached(&msg, &sk);
-        }
-    }
-    if let Ok(sk_bytes) = <[u8; 32]>::try_from(key) {
-        let sk = SigningKey::from_bytes(&sk_bytes);
-        return sk.sign(&msg).to_bytes().to_vec();
-    }
-    if key.len() == dilithium::secret_key_bytes()
-        && let Ok(sk) = dilithium::SecretKey::from_bytes(key)
-    {
-        return iroha_crypto::sign_mldsa65_detached(&msg, &sk);
-    }
-    Vec::new()
-}
-/// Verify the signature on an ISO 20022 message.
-///
-/// Uses the [`verify_signature`] helper with Ed25519, secp256k1, or ML-DSA
-/// depending on the key length. The serialized message bytes are used as the
-/// signing payload. Secp256k1 expects a 33-byte compressed SEC1 public key.
-#[allow(unused_variables)]
-pub fn msg_verify_sig(sig: &[u8], key: &[u8]) -> bool {
-    let msg = match msg_serialize("XML") {
-        Ok(bytes) => bytes,
-        Err(_) => return false,
-    };
-    {
-        if key.len() == 32 {
-            return verify_signature(SignatureScheme::Ed25519, &msg, sig, key);
-        }
-    }
-    {
-        use pqcrypto_mldsa::mldsa65 as dilithium;
-        if key.len() == dilithium::public_key_bytes() && sig.len() == dilithium::signature_bytes() {
-            return verify_signature(SignatureScheme::MlDsa, &msg, sig, key);
-        }
-    }
-    {
-        if key.len() == 33 && sig.len() == 64 {
-            return verify_signature(SignatureScheme::Secp256k1, &msg, sig, key);
-        }
-    }
-    false
-}
 #[cfg(test)]
 mod tests {
     use super::{
         norito_schemas::{Colr012, Linkage, Sese023, Sese025},
         *,
     };
-    use ed25519_dalek::SigningKey;
     use norito::codec::{Decode, Encode};
     // Helper to reset the thread-local between tests.
     fn reset() {
@@ -3569,14 +3425,6 @@ mod tests {
         assert!(!msg_validate());
     }
     #[test]
-    fn msg_clone_copies_fields() {
-        reset();
-        msg_create("pacs.008");
-        msg_set("field", b"value");
-        msg_clone();
-        assert_eq!(msg_get("field").as_deref(), Some(&b"value"[..]));
-    }
-    #[test]
     fn msg_set_and_get() {
         reset();
         msg_create("pacs.008");
@@ -3608,20 +3456,6 @@ mod tests {
         msg_set("field", b"value");
         msg_remove("field");
         assert!(msg_get("field").is_none());
-    }
-    #[test]
-    fn msg_clone_pushes_copy_on_stack() {
-        reset();
-        msg_create("pacs.008");
-        msg_set("MsgId", b"1");
-        msg_clone();
-        msg_set("MsgId", b"2");
-        super::MESSAGE_STACK.with(|s| {
-            let stack = s.borrow();
-            assert_eq!(stack.len(), 2);
-            assert_eq!(stack[0].fields.get("MsgId").unwrap(), b"1");
-            assert_eq!(stack[1].fields.get("MsgId").unwrap(), b"2");
-        });
     }
     #[test]
     fn msg_parse_and_serialize_roundtrip() {
@@ -4938,55 +4772,6 @@ mod tests {
         assert!(msg_validate());
     }
     #[test]
-    fn msg_sign_and_verify_roundtrip() {
-        reset();
-        msg_parse("pacs.008", b"field=value").unwrap();
-        let sk_bytes = [7u8; 32];
-        let sig = msg_sign(&sk_bytes);
-        let pk = SigningKey::from_bytes(&sk_bytes).verifying_key();
-        assert!(msg_verify_sig(&sig, pk.as_bytes()));
-    }
-    #[test]
-    fn msg_sign_and_verify_roundtrip_dilithium() {
-        use iroha_crypto::KeyPair;
-        reset();
-        msg_parse("pacs.008", b"field=value").unwrap();
-        let keypair = KeyPair::try_from_seed(vec![0x93; 32], Algorithm::MlDsa)
-            .expect("fixed portable ML-DSA keypair");
-        let (_, secret_key) = keypair.private_key().to_bytes();
-        let (_, public_key) = keypair.public_key().try_to_bytes().unwrap();
-        let mut tagged = Vec::with_capacity(1 + secret_key.len());
-        tagged.push(Algorithm::MlDsa as u8);
-        tagged.extend_from_slice(&secret_key);
-        for key in [secret_key.as_slice(), tagged.as_slice()] {
-            let signature = msg_sign(key);
-            assert_eq!(signature.len(), pqcrypto_mldsa::mldsa65::signature_bytes());
-            assert!(msg_verify_sig(&signature, public_key));
-        }
-        for key in [
-            &[][..],
-            &tagged[..tagged.len() - 2],
-            &secret_key[..secret_key.len() - 1],
-        ] {
-            assert!(msg_sign(key).is_empty());
-        }
-    }
-    #[test]
-    fn msg_sign_and_verify_roundtrip_secp256k1() {
-        use k256::ecdsa::{SigningKey, VerifyingKey};
-        reset();
-        msg_parse("pacs.008", b"field=value").unwrap();
-        let sk = SigningKey::from_bytes(&[9u8; 32].into()).expect("sk");
-        let sk_bytes = sk.to_bytes();
-        let mut tagged = Vec::with_capacity(1 + sk_bytes.len());
-        tagged.push(Algorithm::Secp256k1 as u8);
-        tagged.extend_from_slice(sk_bytes.as_slice());
-        let sig = msg_sign(&tagged);
-        let pk = VerifyingKey::from(&sk);
-        let pk_bytes = pk.to_encoded_point(true);
-        assert!(msg_verify_sig(&sig, pk_bytes.as_bytes()));
-    }
-    #[test]
     fn msg_parse_xml_roundtrip() {
         reset();
         msg_parse(
@@ -5101,20 +4886,13 @@ mod tests {
         assert!(msg_validate());
     }
     #[test]
-    fn amount_encode_decode_roundtrip() {
-        let enc = encode_amount(42);
-        assert_eq!(enc, b"42".to_vec());
-        assert_eq!(decode_amount(&enc), Some(42));
-        assert!(decode_amount(b"12a").is_none());
-    }
-    #[test]
-    fn validate_format_dispatches() {
-        assert!(validate_format("IBAN", b"GB82WEST12345698765432"));
-        assert!(!validate_format("IBAN", b"GB82WEST12345698765433"));
-        assert!(!validate_format("IBAN", b"NO938601111794"));
-        assert!(validate_format("BIC", b"DEUTDEFF"));
-        assert!(validate_format("NUMERIC", b"12345"));
-        assert!(!validate_format("NUMERIC", b"12a"));
+    fn iban_bic_and_numeric_validators() {
+        assert!(validate_iban(b"GB82WEST12345698765432"));
+        assert!(!validate_iban(b"GB82WEST12345698765433"));
+        assert!(!validate_iban(b"NO938601111794"));
+        assert!(validate_bic_str("DEUTDEFF"));
+        assert!(validate_numeric(b"12345"));
+        assert!(!validate_numeric(b"12a"));
     }
     #[test]
     fn base64_encode_decode_roundtrip() {

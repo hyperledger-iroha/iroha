@@ -6,15 +6,17 @@ use iroha::{
     client::GenesisFinalityReadiness,
     crypto::{Hash, HashOf, PublicKey},
     data_model::{
-        block::{
-            BlockHeader,
-            consensus_v2::{HeightContext, HeightContextId},
-        },
+        block::BlockHeader,
         id::NetworkId,
+        sumeragi_finality::{FinalityValidator, SumeragiFinalityVerifier},
     },
 };
 use iroha_model_base::peer::PeerId;
-use std::time::{Duration, Instant};
+use std::{
+    io::Read as _,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 const MAX_OUTPUT_BYTES: usize = 24 * 1024 * 1024;
 const MAX_ATTESTATION_BYTES: usize = 16 * 1024 * 1024;
@@ -31,9 +33,15 @@ pub struct Args {
     /// Canonical genesis hash retained from original generated inputs.
     #[arg(long)]
     genesis_hash: Hash,
-    /// Canonical original height-one context hash; never obtained from the response.
+    /// Independently retained canonical signed genesis file.
     #[arg(long)]
-    context_id: Hash,
+    signed_genesis: PathBuf,
+    /// Original genesis manifest, checked against the signed genesis semantics.
+    #[arg(long)]
+    genesis_manifest: PathBuf,
+    /// Independently retained genesis verification key.
+    #[arg(long)]
+    genesis_public_key: PublicKey,
     /// Total HTTP budget for compatibility and attestation, within the launcher's deadline.
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..=60_000))]
     request_timeout_ms: u64,
@@ -48,7 +56,8 @@ struct Report {
     node_id: PeerId,
     network_id: NetworkId,
     genesis_hash: HashOf<BlockHeader>,
-    context_id: HeightContextId,
+    consensus_instance: String,
+    genesis_execution_hash: Option<String>,
     attestation_norito_base64: Option<String>,
 }
 
@@ -69,9 +78,26 @@ fn parse_challenge(value: &str) -> Result<[u8; 32]> {
     Ok(challenge)
 }
 
-fn report(args: &Args, network_id: NetworkId, outcome: GenesisFinalityReadiness) -> Result<Report> {
-    let (state, reason, attestation_norito_base64) = match outcome {
+fn report(
+    args: &Args,
+    network_id: NetworkId,
+    instance: [u8; 32],
+    outcome: GenesisFinalityReadiness,
+) -> Result<Report> {
+    let (state, reason, attestation_norito_base64, genesis_execution_hash) = match outcome {
         GenesisFinalityReadiness::Ready(attestation) => {
+            let block = iroha::data_model::block::decode_versioned_signed_block(
+                &attestation.body.finality_proof.block_wire,
+            )?;
+            let certificate = block
+                .commit_certificate()
+                .ok_or_else(|| eyre::eyre!("verified genesis certificate missing"))?;
+            let execution_hash = hex::encode(
+                iroha::data_model::sumeragi_finality::result_of_preimage(
+                    &certificate.result_preimage,
+                )
+                .0,
+            );
             let bytes = norito::to_bytes(attestation.as_ref())?;
             ensure!(
                 bytes.len() <= MAX_ATTESTATION_BYTES,
@@ -81,10 +107,11 @@ fn report(args: &Args, network_id: NetworkId, outcome: GenesisFinalityReadiness)
                 "ready",
                 None,
                 Some(base64::engine::general_purpose::STANDARD.encode(bytes)),
+                Some(execution_hash),
             )
         }
         GenesisFinalityReadiness::NotReady(reason) => {
-            (reason.readiness_state(), Some(reason.as_str()), None)
+            (reason.readiness_state(), Some(reason.as_str()), None, None)
         }
     };
     Ok(Report {
@@ -95,9 +122,8 @@ fn report(args: &Args, network_id: NetworkId, outcome: GenesisFinalityReadiness)
         node_id: PeerId::new(args.node_public_key.clone()),
         network_id,
         genesis_hash: HashOf::from_untyped_unchecked(args.genesis_hash),
-        context_id: HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-            args.context_id,
-        )),
+        consensus_instance: hex::encode(instance),
+        genesis_execution_hash,
         attestation_norito_base64,
     })
 }
@@ -124,22 +150,64 @@ pub(super) fn run(context: &mut impl RunContext, args: Args) -> Result<()> {
     let challenge = parse_challenge(&args.challenge)?;
     let node_id = PeerId::new(args.node_public_key.clone());
     let genesis_hash = HashOf::<BlockHeader>::from_untyped_unchecked(args.genesis_hash);
-    let context_id = HeightContextId(HashOf::<HeightContext>::from_untyped_unchecked(
-        args.context_id,
-    ));
+    iroha_genesis::init_instruction_registry();
+    let bounded_read = |path: &PathBuf, maximum: usize| -> Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)?
+            .take(maximum as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        ensure!(
+            !bytes.is_empty() && bytes.len() <= maximum,
+            "genesis input exceeds its finite bound"
+        );
+        Ok(bytes)
+    };
+    let wire = bounded_read(&args.signed_genesis, 32 * 1024 * 1024)?;
+    let manifest_bytes = bounded_read(&args.genesis_manifest, 16 * 1024 * 1024)?;
+    let manifest: iroha_genesis::RawGenesisTransaction = norito::json::from_slice(&manifest_bytes)?;
+    let genesis = iroha_genesis::validate_prepared_genesis_bundle(
+        &wire,
+        &manifest,
+        &args.genesis_public_key,
+        genesis_hash,
+    )?;
+    let mut validators: Vec<_> = genesis
+        .validator_pops()
+        .iter()
+        .map(|(key, pop)| FinalityValidator {
+            public_key: key.clone(),
+            proof_of_possession: pop.clone(),
+        })
+        .collect();
+    validators.sort_by_key(|validator| {
+        validator
+            .public_key
+            .try_to_bytes()
+            .expect("validated key")
+            .1
+            .to_vec()
+    });
+    let verifier = SumeragiFinalityVerifier::new(
+        genesis.block(),
+        &manifest.chain_id().to_string(),
+        validators,
+    )?;
     let network_id = context.config().network_id;
+    ensure!(
+        network_id == NetworkId::from_genesis_hash(genesis_hash),
+        "client and original genesis network differ"
+    );
     let mut builder = context.client_from_config()?.to_builder();
     builder.torii_request_timeout = Duration::from_millis(args.request_timeout_ms);
     let client = builder.build()?;
-    let outcome = client.poll_genesis_finality_attestation(
-        challenge,
-        &node_id,
+    let outcome =
+        client.poll_sumeragi_genesis_readiness(challenge, &node_id, &verifier, deadline)?;
+    context.println(render_report(&report(
+        &args,
         network_id,
-        genesis_hash,
-        context_id,
-        deadline,
-    )?;
-    context.println(render_report(&report(&args, network_id, outcome)?)?)
+        verifier.instance().0,
+        outcome,
+    )?)?)
 }
 
 #[cfg(test)]
@@ -161,7 +229,11 @@ mod tests {
                 .public_key()
                 .clone(),
             genesis_hash: Hash::new(b"original genesis"),
-            context_id: Hash::new(b"original context"),
+            signed_genesis: PathBuf::from("genesis.signed.nrt"),
+            genesis_manifest: PathBuf::from("genesis.json"),
+            genesis_public_key: KeyPair::from_seed(vec![15; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
             request_timeout_ms: 1000,
         }
     }
@@ -190,19 +262,23 @@ mod tests {
             original.node_public_key.to_string(),
             "--genesis-hash".to_owned(),
             original.genesis_hash.to_string(),
-            "--context-id".to_owned(),
-            original.context_id.to_string(),
+            "--signed-genesis".to_owned(),
+            original.signed_genesis.display().to_string(),
+            "--genesis-manifest".to_owned(),
+            original.genesis_manifest.display().to_string(),
+            "--genesis-public-key".to_owned(),
+            original.genesis_public_key.to_string(),
             "--request-timeout-ms".to_owned(),
             "1000".to_owned(),
         ];
         let parsed = Probe::try_parse_from(argv.clone()).expect("complete probe");
-        assert_eq!(parsed.args.context_id, original.context_id);
+        assert_eq!(parsed.args.signed_genesis, original.signed_genesis);
         for value in ["0", "60001"] {
             let mut changed = argv.clone();
             *changed.last_mut().unwrap() = value.to_owned();
             assert!(Probe::try_parse_from(changed).is_err());
         }
-        for index in [1, 3, 5, 7, 9] {
+        for index in [1, 3, 5, 7, 9, 11, 13] {
             let mut changed = argv.clone();
             changed.drain(index..index + 2);
             assert!(Probe::try_parse_from(changed).is_err());
@@ -222,7 +298,13 @@ mod tests {
             (Reason::FinalityUnavailable, "unavailable"),
             (Reason::InternalFailure, "unavailable"),
         ] {
-            let value = report(&args, network, GenesisFinalityReadiness::NotReady(reason)).unwrap();
+            let value = report(
+                &args,
+                network,
+                [7; 32],
+                GenesisFinalityReadiness::NotReady(reason),
+            )
+            .unwrap();
             assert_eq!(value.state, state);
             assert!(value.attestation_norito_base64.is_none());
             assert_eq!(value.challenge, args.challenge);
@@ -240,6 +322,7 @@ mod tests {
         let mut value = report(
             &args,
             network,
+            [7; 32],
             GenesisFinalityReadiness::NotReady(Reason::GenesisUncommitted),
         )
         .unwrap();

@@ -11,11 +11,36 @@ fault or advanced product qualification.
 Use `--native-check-scope full` to execute the full native census,
 including advanced Core history, compaction and fault matrices and proof
 production. Linux additionally selects OpenSSH descriptor custody, native process
-identity, and credential custody controls. The runner's selected regression census isauthoritative for the current source and platform.
+identity, and credential custody controls. The runner's selected regression census is authoritative for the current source and platform.
 `prepare` accepts the same explicit scope and binds it into its request/result;
 changing scope cannot reuse another preparation's success. Both scopes retain
 all runtime security enforcement, CLI custody tests, crypto verification tests
 and proof-size limits. These are test selections, not runtime feature toggles.
+
+Torii defaults allow 10,000 request tokens per second with 100,000-token
+bursts for query, transaction, deployment, pre-authentication and Soracloud
+application routes. MCP and proof endpoints allow 600,000 tokens per minute
+with the same burst; proof egress allows 256 MiB/s with a 1 GiB token burst.
+Weighted proof reads consume their full cost. Regressions exercise large
+single-client bursts through the real limiters and verify minimal configuration
+inherits these defaults. Bodyless application reads wait in a bounded queue for
+fanout memory before decoding, rather than immediately rejecting overlapping
+reads. Memory ownership, cancellation, queue capacity and deadlines remain
+covered independently of request-rate budgets.
+
+Both scopes verify current embedded commit certificates and portable proofs with
+real quorum signatures. Public proof, bundle and challenge-bound attestation
+handlers run against an actual current consensus node, checking the signed tip,
+node identity, resolved configuration and build identity. Missing certificates,
+corrupt certificates, stopped drivers and foreign signers fail closed. The SDK
+backpressure cases use these same current response types and preserve their
+original bounded deadline and challenge through retries.
+
+Current consensus selections include idle work wakeup, nonempty proposals at
+late views, bounded rebuild after oversized payloads, far-behind joiners and
+poisoned payloads. The application executor separately rejects both empty bytes
+and canonically encoded zero-transaction proposals, and real node tests submit
+work before and after restart.
 
 Both scopes reject pulse-only proposal work, including received and recovered
 bodies. An idle mandatory height defers session activation and signing until

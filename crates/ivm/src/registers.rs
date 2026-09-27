@@ -221,11 +221,6 @@ impl Registers {
     pub(crate) fn has_private(&self) -> bool {
         self.tags.iter().any(|tag| *tag)
     }
-    /// Mutable access for test‑suites and advanced host tooling.
-    #[inline]
-    pub fn set_raw(&mut self, index: usize, value: u64) {
-        self.set(index, value);
-    }
     /// Return a copy of all general-purpose registers.
     #[inline]
     pub fn snapshot(&self) -> [u64; 256] {
@@ -323,29 +318,6 @@ impl Registers {
             self.dirty.store(false, Ordering::Release);
         }
         tree
-    }
-    /// Get a vector stored starting at register `idx` (uses two consecutive
-    /// registers as a 128-bit value containing four 32-bit lanes).
-    #[inline]
-    pub fn get_vector(&self, idx: usize) -> [u32; 4] {
-        debug_assert!(idx + 1 < 256);
-        let lo = self.get(idx);
-        let hi = self.get(idx + 1);
-        [
-            (lo & 0xffff_ffff) as u32,
-            (lo >> 32) as u32,
-            (hi & 0xffff_ffff) as u32,
-            (hi >> 32) as u32,
-        ]
-    }
-    /// Store a vector at register `idx` (two consecutive registers).
-    #[inline]
-    pub fn set_vector(&mut self, idx: usize, vals: [u32; 4]) {
-        debug_assert!(idx + 1 < 256);
-        let lo = (vals[0] as u64) | ((vals[1] as u64) << 32);
-        let hi = (vals[2] as u64) | ((vals[3] as u64) << 32);
-        self.set(idx, lo);
-        self.set(idx + 1, hi);
     }
 }
 impl Default for Registers {

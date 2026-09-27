@@ -76,8 +76,9 @@ Properties (per instance):
 - **Validity:** a committed block extends the committed parent, was proposed by the leader of its
   origin round, its payload bytes are the ones its header commits to, and its committed `R` equals
   `exec(S_{h−1}, B)`.
-- **Liveness:** after GST, if at least `q_h` members of `C_h` are honest and running, every honest
-  running node commits height `h` within a bound derived from the configuration (§8.2). A member
+- **Liveness:** after GST, if at least `q_h` members of `C_h` are honest and running and valid
+  transaction work is available to an eligible honest leader, every honest running node commits
+  height `h` within a bound derived from the configuration (§8.2). Idle chains do not advance. A member
   with an unanchored key (§7.4 R2) counts as faulty until it anchors, and a member whose key
   abstains at `h` (R2, R6) counts as faulty at `h`.
 
@@ -1827,6 +1828,12 @@ safety rule reads, one signed byte (the flag), and one more reason not to Commit
 
 ### 8.1 Assumptions after GST
 
+Transaction progress requires valid work available to an eligible honest leader and durable
+body storage with room to preserve each prepared proposal (§7.4). An idle chain, a permanently
+invalid workload, or exhausted durable storage has no height-progress guarantee. Sparse local
+queues may require multiple leader turns; the continuous-load per-gap bounds below do not
+apply while the current leader has no work.
+
 At least `q_h` members of `C_h` are honest and running, where a member with an unanchored key
 (§7.4 R2) counts as faulty until it anchors, a member whose key abstains at `h` (R2, R6)
 counts as faulty at `h`, and a member that cannot attest at `h` counts as faulty at `h` for a
@@ -1869,8 +1876,8 @@ simulator's post-heal delays respect this, and §9.4 validates the nominal case.
   not depend on the §9.2 adaptation (which only prices failed views at later heights; payload
   progress under executions longer than the payload views' timers does, §9.2).
 - **L4 A good view commits.** Consider a view `w` whose leader is honest, entered by all honest
-  within `σ`, with `T(level) ≥ T_req`. The leader proposes immediately (TC entry) or at `pace`
-  (view 0). A fresh honest block is valid. A re-proposed block has a PrepareQC, so ≥ 1 honest node
+  within `σ`, with `T(level) ≥ T_req` and valid work available. The leader builds at TC entry
+  or at `pace` (view 0), then proposes the nonempty result. A fresh honest block is valid. A re-proposed block has a PrepareQC, so ≥ 1 honest node
   computed `Valid(Q.result)` and, by determinism, all honest do; its body is durably held by
   ≥ `f + 1` honest members (§7.4), so the leader and the voters fetch it within `3Δ + F`. A node
   that enters `h` late (after apply, sync or a restart) gets the proposal from the leader within
@@ -2167,7 +2174,7 @@ and reports `LocalFault(ConfigTooTight)` instead of halting.
    one. For `h > g + 2`, it is what the application state `S_{h−2}` schedules for height `h`
    (lag = 2, a protocol constant). The application reports it in
    `BlockApplied{height: h−2, config_after_next}`, and it is committed in `R_{h−2}` (§4.1), so all
-   honest nodes agree on it. Chain parameters (block time, idle interval, `e_max`, `a_max`,
+   honest nodes agree on it. Chain parameters (block time, payload retry interval, `e_max`, `a_max`,
    `max_block_bytes`, epoch length) change only this way. The demotion window
    `W` is not a chain parameter: it is fixed at genesis (§2.1), because nodes that pruned headers
    under an old `W` could not compute `D_h` under a new one.
@@ -2230,6 +2237,24 @@ read from local node config. The first-release defaults are:
 - `SumeragiNposParameters.reconfig.evidence_horizon_blocks = 7200`;
 - `SumeragiNposParameters.reconfig.activation_lag_blocks = 1`;
 - `SumeragiNposParameters.reconfig.slashing_delay_blocks = 3600`.
+
+The current signed `ChainParamsRecord.epoch_length_blocks` is the epoch authority.
+The NPoS policy must carry the same length; genesis signing, parameter admission, and schedule
+publication reject a contradiction. The global application requires its threshold pulse at
+height `h` when `(h + 1) % epoch_length_blocks == 0`, or when committed Parliament state
+requests that slot. A pulse is bound to the exact network, active public DKG session, scheduled
+validator roster, height, and committed parent. It is committed by the block header's dedicated
+`global_beacon_pulse_hash` and carried in `global_beacon_pulse`; it never authorizes a block
+without transaction work.
+
+The node starts pulse production after selecting real work, or after receiving a cryptographically
+valid partial from that slot's authenticated validator. Idle polling and malformed traffic do
+not start signing. Current partial frames have a distinct fixed wire domain, a 4 KiB bound, and
+one bounded worker queue; signature verification runs off P2P ingress. Missing shares or signer
+custody keep the real work pending. Retries retransmit the same parent-bound share and wake the
+payload builder when the threshold is met. Block admission and application independently check
+the required pulse and persist its unique history; they never substitute local status or a
+retired consensus context for authority.
 
 The evidence horizon, slashing delay, and epoch length are
 immutable after the initial signed installation. The
@@ -2757,7 +2782,7 @@ and MS30.
 | ML10 | `on_proposal` step 8 — `StoreBody` omitted | `det_l10_cluster_restart_lock_no_cqc`: PQC(B) locked everywhere, no CQC, whole-cluster restart → B is re-proposed and commits | F32 | O-LIVE |
 | ML11 | `on_block_request` — ignores requests for heights ≤ `tip.height` | `det_l11_pending_apply_after_peers_moved_on`: X committed h without the body while peers moved on → X's `BlockRequest` is answered, `pending_apply` drains | F16 joiners; equivocating leader | O-LIVE |
 | ML12 | fake driver scheduler — FIFO ingress without the O5 priority lanes | `det_l12_tick_ahead_of_flood`: a flood of `Status` at the rate limit → every `Tick` handled within `ε_tick` | F29 | O-PERF P6, O-LIVE |
-| ML13 | Emit an empty proposal instead of requesting work at a later view | `det_l13_late_views_build_nonempty_work` | F19 | O-VAL, O-TXP |
+| ML13 | Suppress fresh payload building after view 0 | `det_l13_late_views_build_nonempty_work` | F19 | O-VAL, O-TXP |
 | ML14 | fake builder — ignores `PayloadRejected` | `det_l14_poison_quarantined`: poison transaction proposed once, then never again by that builder; other transactions commit | F19 | O-TXP |
 | ML15 | `on_tick`, Status — keepalive cadence only | `det_l15_unsettled_status_rate`: X at view > 0 broadcasts `Status` every `rebroadcast_interval` | F13 + F11 | O-LIVE |
 | ML16 | `initial_stage` returns 0 | `det_l16_hint_from_parent_commitqc`: n=7, parent CommitQC with a set-B signer → a set-B member sends its Prepare to `P` as soon as it is ready, before `t_ready + t_retx`; parent CommitQC of set A only → it does not | F6 at n=22, one withholding member, lossless | O-PERF P2 |
@@ -2767,12 +2792,12 @@ and MS30.
 | ML19b | `on_status` — the late-entrant re-push deleted (only the interval-gated rebroadcast re-push remains) | `det_l19_late_entrant_repush` | F34 | O-PERF P1, P4 |
 | ML19c | `on_status` — the proposal-request step runs after the rate limit (a rate-limited `Status` with `want_proposal` is dropped whole) | `det_l19_late_entrant_repush` (the pinned `Status` phase makes C's request arrive inside the rate-limit window) | F34 | O-PERF P1, P4 |
 | ML20 | `commit_height` step 1a deleted (P does not broadcast its CommitQC) | `det_l20_p_broadcasts_commitqc`: n=4, P forms CommitQC(h) → in the same `handle` call it emits `Broadcast(Qc)` to the other members and `C_{h+1} \ C_h`, before `CommitBlock`; L(h+1, 0) enters h+1 one hop later | F9 1 % at n=22 | O-PERF P1 |
-| ML21 | `anchor` — the revision-3 `t_tx` term restored (any `PayloadReady` sets `anchor = min(anchor, now + block_time + build_timeout)` in view 0) | `det_l21_idle_work_wakes_without_heartbeat`: idle chain, n=4; `PayloadReady` delivered only at the `f + 1` non-leaders B, C (with and without D crashed) → nobody times out before `t_enter + P(0) + T`; view 0 commits the heartbeat; `skipped_leaders` stays empty | F35 | O-PERF P4, O-CQ |
+| ML21 | `anchor` — the revision-3 `t_tx` term restored (any `PayloadReady` sets `anchor = min(anchor, now + block_time + build_timeout)` in view 0) | `det_r4_payload_ready_moves_no_timer` verifies queue readiness cannot pull in a view deadline; `det_l21_idle_work_wakes_without_heartbeat` verifies an idle chain never commits and later real work commits with or without one crash | F35 | O-LIVE, O-TXP |
 | ML22 | stage 1 trigger (a) — the Commit-phase clause (`t_pqc + t_retx` without CommitQC) deleted | `det_l3_setb_joins_stage1` (b): a set-A member Prepares but withholds its Commit, hint off → set B's Commits reach P by `t_pqc + t_retx + Δ`; commit before stage 2 | F6 with Commit-only withholders | O-PERF P2 |
 | ML23 | `commit_height`/`enter_height` — the committed block's pending execution is dropped (`tip.exec_req` not kept, §6.3 step 0 absent) | `det_l23_commit_before_own_execution`: X commits h while `Execute{B_h}` is pending; proposal(h+1) arrives; `Executed(Valid(R_h))` arrives before `BlockApplied(h)` → X emits `Execute{B_{h+1}}` at once | F34 | O-PERF P1 |
 | ML24 | `request_proposal` — clause (b) deleted (only late entrants ask for the proposal) | `det_l24_lost_proposal_copy`: n=4, `order_{h,0} = [A, C, B, D]` (A leads, B = P, C in set A), D crashed, hint off; A's proposal copy to C is dropped once; C's keepalive `Status` phase pinned so that none is sent during view 0 → C receives A's and B's stage-2 Prepare broadcast, sends one `Status{want_proposal}` to A, gets the proposal at once and Prepares; view 0 commits | F9 (lost proposal copies) | O-PERF P1, O-LIVE |
-| ML25 | `sign_timeout` / `on_commit` — the revision-4.1 raise restored: a timeout signed while the view's proposal is held raises the start level at the next commit | `det_l26_raise_only_on_slow_commit_or_exec`: n=4 (the join case n=7), X in set A; (a) the leader's twin reaches X after X executed and Prepared the first → early timeout, TC, view 1 commits at once → `start = 0`; (b) the valid proposal reaches X but no quorum (2f members) → X times out on its deadline holding it → `start = 0`; (c) as (b) ending by the `f + 1` join → `start = 0`; (d) CommitQC of view 0 arrives after X left it → `start = 0`; (e) view-0 commit exactly `T(0)/2` after the proposal → 0, then `T(0)/2 + 1` → 1; (f) the same at view 1 → 1; (g) heartbeat proposal `payload_retry_interval` after the entry, committed 100 ms later → 0; (h) execution `T(0)/2 + 1` in a failed view, view 1's block executed at once and committed at once → 1 | F5 | direct assertion (start level), O-LIVE |
-| ML27 | `discard_exec` / `commit_height` — a `Pending` execution that is discarded, or still pending at the commit, records nothing | `det_l27_pending_execution_counts`: n=4, X in set A; (a) views 0 and 1 time out with their executions pending, view 2 commits `EMPTY` executed in 0 ms → `start = 1`; (b) X enters view 1 through a TC carrying PQC(A) with A's execution still pending (kept), CommitQC(0, A) arrives `T(0)/2 + 1` after the request → `start = 1`; (c) control: the execution finished at once, the view failed, view 1 commits → 0 | F15 variant 5 | direct assertion (start level, non-empty blocks) |
+| ML25 | `sign_timeout` / `on_commit` — the revision-4.1 raise restored: a timeout signed while the view's proposal is held raises the start level at the next commit | `det_l26_raise_only_on_slow_commit_or_exec`: n=4 (the join case n=7), X in set A; (a) the leader's twin reaches X after X executed and Prepared the first → early timeout, TC, view 1 commits at once → `start = 0`; (b) the valid proposal reaches X but no quorum (2f members) → X times out on its deadline holding it → `start = 0`; (c) as (b) ending by the `f + 1` join → `start = 0`; (d) CommitQC of view 0 arrives after X left it → `start = 0`; (e) view-0 commit exactly `T(0)/2` after the proposal → 0, then `T(0)/2 + 1` → 1; (f) the same at view 1 → 1; (g) real-work proposal after `payload_retry_interval` of idle time, committed 100 ms later → 0; (h) execution `T(0)/2 + 1` in a failed view, view 1's block executed at once and committed at once → 1 | F5 | direct assertion (start level), O-LIVE |
+| ML27 | `discard_exec` / `commit_height` — a `Pending` execution that is discarded, or still pending at the commit, records nothing | `det_l27_pending_execution_counts`: n=4, X in set A; (a) views 0 and 1 time out with their executions pending, view 2 commits valid retry work executed in 0 ms → `start = 1`; (b) X enters view 1 through a TC carrying PQC(A) with A's execution still pending (kept), CommitQC(0, A) arrives `T(0)/2 + 1` after the request → `start = 1`; (c) control: the execution finished at once, the view failed, view 1 commits → 0 | F15 variant 5 | direct assertion (start level, non-empty blocks) |
 | ML28 | `record_exec` — keeps the last execution of the height, not the maximum | `det_l28_exec_duration_is_the_height_maximum` (3.3 s, then 10 ms → raised), `det_l26_raise_only_on_slow_commit_or_exec` (h), `det_l27_pending_execution_counts` (a) | F15 variant 5 | direct assertion (start level, non-empty blocks) |
 | ML29 | `commit_height` — `d_c` measured from the anchor `min(t_enter + P(v), t_prop)` (the E40 rule) | `det_l29_late_leader_does_not_raise`: n=4, X in set B; (a) the view-0 proposal arrives `T(0)/2 + 100` after `t_enter + P(0)`, commit 50 ms later → `start = 0`; (b) the same at view 1 → 0; (c) a payload-less proposal at once, its body `T(0)/2 + 100` later → 0; (d) X holds A from the start, CommitQC of its twin B `T(0)/2 + 100` later → 0; (e) control: body at once, commit `T(0)/2 + 1` later → 1 | F36 | direct assertion (start level), O-PERF P4 per gap |
 | ML30 | `commit_height` — `d_c` measured from `t_prop` of any held proposal (a late body or a twin counts) | `det_l29_late_leader_does_not_raise` (c), (d) | F36 (body variant) | direct assertion (start level) |
@@ -2987,7 +3012,7 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E17 | R1 consistency | A record that decodes but contradicts itself (certificates of other heights, instances or kinds; a timeout carrying a QC above its view; a `justify` not for `view − 1`) is corrupt (`Halt(SafetyRecordCorrupt)`). | `safety::SafetyRecord::check_consistency` |
 | E18 | Key conflict | "Two configured keys in `C_h` sign with neither" applies whether or not a key abstains or is unanchored (a conflict never resolves to signing). Retired keys never count. | `safety::select_signer` |
 | E19 | Abstaining members | A member whose key abstains or is unanchored keeps its routing roles (it aggregates votes sent to it as proxy tail and broadcasts the QCs it forms); only signing is suppressed. | `machine::Me` |
-| E20 | Oversize payload | A built payload above `max_block_bytes(h)` (a signed defect if proposed) is replaced by `EMPTY`. | `machine::propose::payload_ready` |
+| E20 | Oversize payload | Superseded: an oversized build now waits for bounded retry and never creates a block. | `machine::propose::payload_ready` |
 | E21 | `T_max_eff` bound | `T_max_eff` is clamped to 2^40 ms, up to which `T(L)` and `level_cap` are exact in integer arithmetic. | `pacemaker::MAX_VIEW_TIMEOUT` |
 | E22 | Config validation | Also rejected: zero `t_base`, `rebroadcast_interval`, `status_keepalive`, `fetch_retry`, `sync_retry` (they would busy-loop the timer), zero `build_timeout` (the build deadline would answer every build with `EMPTY` before the builder, O5, so the leader would never propose a transaction) and `sync_batch` above the decode bound. | `pacemaker::validate_local` |
 | E23 | `t_retx` clamp | When `φ·T/2 < 50 ms` the clamp bounds cross; the lower bound wins. | `pacemaker::Pacemaker::t_retx` |
@@ -2999,7 +3024,7 @@ references and `// SPEC:` markers resolve against (checked by `crates/iroha_sume
 | E29 | Restored own messages | The Prepare and timeout rebuilt by R4 re-enter the own pools through `pool_insert` / `timeout_insert` (they are re-signed, identical bytes), last in `restore`, followed by `try_commit()`; formation may then commit. | `machine::restart::restore_round` |
 | E30 | Probe answers | Answered at most once per peer per `rebroadcast_interval`, with a stamp separate from the §6.1 reply limit. | `machine::intake::answer_probe` |
 | E37 | `Init.configs` | Only the heights `t` to `t + 2` are accepted, each at most once (a `ConfigError::InvalidInit` otherwise). A configuration above `t + 2` let commits run more than two heights ahead of apply (§10.2), and the next in-order `BlockApplied` then halted the core as a driver anomaly. | `machine::restart::check_init` |
-| E38 | Chain parameters | `Core::new` also applies the transport-independent §9.4 chain-parameter rules to the initial configurations (`block_time ≤ payload_retry_interval`, `empty_after_views ≥ 1`), and the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh payload, at view 0 too: with `empty_after_views = 0` from a committed configuration it proposes `EMPTY` instead of a payload every voter reports as a signed defect. | `machine::restart::Core::new`, `machine::propose::propose_fresh` |
+| E38 | Chain parameters | Historical rule, superseded by the no-empty-block design: `Core::new` also applies the transport-independent §9.4 chain-parameter rules to the initial configurations (`block_time ≤ payload_retry_interval`, `empty_after_views ≥ 1`), and the leader applies the voters' fresh-block rule (§6.2 step 6) to every fresh payload, at view 0 too: with `empty_after_views = 0` from a committed configuration it proposes `EMPTY` instead of a payload every voter reports as a signed defect. | `machine::restart::Core::new`, `machine::propose::propose_fresh` |
 | E45 | `CoreStatus` | Also reports the leader and the proxy tail of `(h, view)` (`None` while awaiting: the next round's committee is not known yet) and the view of the lock (`high_pqc`), for the node's status endpoint, which replaces the v2 leader and QC endpoints. | `machine::Core::status` |
 | E49 | Driver bounds and failure handling (§12.2, §12.3, §12.5) | The `iroha_core` driver bounds every queue the core's peers or a failing device can grow. Serving: the node's own `FetchBody`s go first (one per body), then peers round-robin with at most one pending `ServeBlocks` and one `ServeBody` each (a newer one replaces it) within a per-peer token bucket of response bytes; the rest is dropped (O6). The O2 barrier holds at most 1 024 effects and 32 MiB of block payload, dropping the oldest `Send`, `Broadcast`, `ServeBlocks` or `ServeBody` beyond (the core rebroadcasts; `CommitBlock`, evidence and `Halt` are never dropped; a newer `FetchBody` of a body replaces a held one); a record still queued is superseded by a newer one of the same key, and what waited for it waits for the newer; queued bodies of applied heights are dropped. Released effects leave in batches of 64 with a due `Tick` in between (O5). A prepared commit runs alone on the executor (nothing between its prepare and its commit, also while a step backs off), and a failed commit is retried after a fresh prepare without a second append. Panics of backends on worker threads are failed writes, failed apply steps or missing entries (retried); a thread that stops anyway, or an unreachable worker, stops the instance and is reported. Frames are decoded within the transport limit (O10). | `driver::{serve::ServeSched, barrier::Barrier, persist::PersistQueue, exec::ExecSched, Kernel, Driver}` |
 | E51 | Application `R` (node integration, §4.1) — **deviation** | `R = H("iroha/sumeragi/result/v1" ‖ norito(ExecutionResultCommitment))` with `ExecutionResultCommitment{execution, next_committee_digest, next_params}`: `execution` is the v2 execution commitment without its native-AMX, lane-finality and merge-carrier fields (witnessed pre- and post-state roots, ordinary-write root, KAGEMUSHA top-up root and count, length and hash of the result-bearing block wire, network-input and typed-output Merkle commitments); `next_committee_digest = committee_digest(C_{h+2})` and `next_params = ChainParams_{h+2}` from the lag-2 schedule. The canonical preimage is stored as `CommitCertificate.result_preimage` in the block's Kura frame. Deviations from §4.1: the post-state root is a sparse Merkle root over the **witnessed write set only**, not the full state, so divergence in unwitnessed state (roles, permissions, peers, parameters, triggers, …) is detected only once it changes a witnessed value, an output or the scheduled configuration; there is no separate event root: events are bound only as far as the result-bearing block carries them (transaction results and outputs). A full state root is a follow-up goal (`specs/sumeragi_goals.md` S9). Each sparse Merkle tree is built once per block. | `iroha_core::sumeragi::commitment::{execution_result, ExecutionResultCommitment}` |

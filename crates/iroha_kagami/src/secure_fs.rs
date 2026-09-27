@@ -1282,6 +1282,87 @@ impl RetainedPrivateFiles {
 ///
 /// The CLI caller transfers unique ownership. Payload geometry and readiness
 /// remain with the consumer; the epoch derivation keeps its existing policy.
+/// Whether two metadata snapshots describe the same unchanged regular-file inode.
+///
+/// Unix compares device, inode, mode, ownership, link count, size and both
+/// timestamps with nanoseconds. Other platforms fall back to the portable
+/// type, length and modification-time subset.
+#[cfg(unix)]
+pub(crate) fn same_file_snapshot(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == right.nlink()
+        && left.size() == right.size()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+/// Whether two metadata snapshots describe the same unchanged regular-file inode.
+#[cfg(not(unix))]
+pub(crate) fn same_file_snapshot(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    left.is_file() == right.is_file()
+        && left.is_dir() == right.is_dir()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+}
+/// Whether two metadata snapshots name the same filesystem object.
+#[cfg(unix)]
+pub(crate) fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+/// Whether two metadata snapshots name the same filesystem object.
+#[cfg(windows)]
+pub(crate) fn same_file_identity(left: &std::fs::Metadata, right: &std::fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.volume_serial_number().is_some()
+        && left.file_index().is_some()
+        && left.volume_serial_number() == right.volume_serial_number()
+        && left.file_index() == right.file_index()
+}
+/// Platforms without a stable file identity never report an alias.
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn same_file_identity(_left: &std::fs::Metadata, _right: &std::fs::Metadata) -> bool {
+    false
+}
+/// Whether two snapshots describe the same unchanged single-link regular input file.
+#[cfg(unix)]
+pub(crate) fn same_single_link_input_snapshot(
+    left: &std::fs::Metadata,
+    right: &std::fs::Metadata,
+) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    left.is_file()
+        && right.is_file()
+        && left.dev() == right.dev()
+        && left.ino() == right.ino()
+        && left.mode() == right.mode()
+        && left.uid() == right.uid()
+        && left.gid() == right.gid()
+        && left.nlink() == 1
+        && right.nlink() == 1
+        && left.len() == right.len()
+        && left.mtime() == right.mtime()
+        && left.mtime_nsec() == right.mtime_nsec()
+        && left.ctime() == right.ctime()
+        && left.ctime_nsec() == right.ctime_nsec()
+}
+/// Whether two snapshots describe the same unchanged single-link regular input file.
+#[cfg(not(unix))]
+pub(crate) fn same_single_link_input_snapshot(
+    left: &std::fs::Metadata,
+    right: &std::fs::Metadata,
+) -> bool {
+    left.is_file()
+        && right.is_file()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok()
+}
 #[cfg(unix)]
 #[allow(
     unsafe_code,

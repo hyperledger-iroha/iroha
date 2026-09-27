@@ -42,7 +42,9 @@ pub mod control;
 #[cfg(unix)]
 pub mod credential_provider;
 /// Canonical final-promotion producer with immutable receipts and fresh audit predecessors.
-#[cfg(unix)]
+// TODO: Compile the final-promotion producer outside tests once a configured finalized state
+// source and the production signing command own it; until then only its unit tests reach it.
+#[cfg(all(unix, test))]
 pub mod final_promotion;
 /// Immutable bounded receipt staging shared by canonical signer operation producers.
 #[cfg(unix)]
@@ -51,7 +53,9 @@ mod recovery;
 use authority::SignerOperationAuthorityV1;
 pub use authority::SignerOperationFinalizedReadSourceV1;
 /// Exact reviewed release-manifest producer with mandatory durable private receipt staging.
-#[cfg(unix)]
+// TODO: Compile the release-manifest producer outside tests once the canonical runtime/CLI
+// contract and a configured state source own it; until then only its unit tests reach it.
+#[cfg(all(unix, test))]
 pub mod release_manifest;
 /// Provider-scoped stream-token producer with durable recovery and no raw signature output.
 #[cfg(unix)]
@@ -446,6 +450,7 @@ impl SignerOperationCoordinatorV1 {
     }
 
     /// Begin only after the trusted service has validated the canonical role/purpose request.
+    #[cfg(test)]
     fn begin(
         &self,
         intent: SignerOperationIntentV1,

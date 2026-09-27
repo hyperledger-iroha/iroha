@@ -52,7 +52,6 @@ pub mod json;
 /// VM-backed Kotodama test runner shared by developer tools.
 pub mod koto_test_driver;
 pub mod kotodama;
-pub mod kotodama_std;
 pub mod limits;
 pub mod list;
 mod memory;

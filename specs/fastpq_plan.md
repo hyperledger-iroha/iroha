@@ -498,7 +498,9 @@ not restrict ordinary canonical block hashing.
 No sorting, per-execution-hash substitution, or transcript-derived fallback is
 accepted by the finalized-anchor verifier.
 
-`verify_axt_proof_envelope_against_anchor_v1` requires the exact independently
+`verify_axt_proof_envelope_against_anchor_v1` is compiled only for
+`fastpq_prover` unit tests until an admission path resolves the authoritative
+anchor; no production caller exists yet. It requires the exact independently
 resolved `AxtFinalizedSpendAnchorV1`, ordered transaction wires and non-zero
 expiry. It checks wire-set equality, exactly one occurrence of the source
 execution identity (derived from each complete entrypoint, including sealed

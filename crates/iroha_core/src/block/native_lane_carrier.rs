@@ -73,6 +73,8 @@ pub(crate) fn native_lane_batch_for_scratch(
         .is_empty()
         || carrier.npos_consensus_effects().is_some()
         || carrier.header().npos_effects_hash().is_some()
+        || carrier.global_beacon_pulse().is_some()
+        || carrier.header().global_beacon_pulse_hash().is_some()
     {
         return Err("native scratch replay does not support additional carrier controls".into());
     }

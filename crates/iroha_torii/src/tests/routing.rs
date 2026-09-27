@@ -600,6 +600,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
+            global_beacon_pulse_hash: None,
             sccp_commitment_root: None,
             execution_context_hash: None,
             creation_time_ms: 0,
@@ -621,6 +622,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
+                global_beacon_pulse_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
                 creation_time_ms: 0,
@@ -638,6 +640,7 @@ mod tests {
             da_commitments_hash: None,
             da_pin_intents_hash: None,
             npos_effects_hash: None,
+            global_beacon_pulse_hash: None,
             sccp_commitment_root: None,
             execution_context_hash: None,
             creation_time_ms: 0,
@@ -659,6 +662,7 @@ mod tests {
                 da_commitments_hash: None,
                 da_pin_intents_hash: None,
                 npos_effects_hash: None,
+                global_beacon_pulse_hash: None,
                 sccp_commitment_root: None,
                 execution_context_hash: None,
                 creation_time_ms: 0,
@@ -790,6 +794,14 @@ mod tests {
 
         fn router(app: &SharedAppState) -> Router {
             Router::new()
+                .route(
+                    "/v1/bridge/finality/{height}",
+                    axum::routing::get(crate::handler_bridge_finality_proof),
+                )
+                .route(
+                    "/v1/bridge/finality/bundle/{height}",
+                    axum::routing::get(crate::handler_bridge_finality_bundle),
+                )
                 .route(
                     iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY_ATTESTATION.path(),
                     axum::routing::get(crate::handler_bridge_finality_attestation),
@@ -929,6 +941,40 @@ mod tests {
             body.finality_proof
                 .decode_checked()
                 .expect("actual non-genesis BLS quorum proof");
+            for endpoint in ["/v1/bridge/finality/2", "/v1/bridge/finality/bundle/2"] {
+                let mut request = Request::builder()
+                    .uri(endpoint)
+                    .header(axum::http::header::ACCEPT, "application/x-norito")
+                    .body(Body::empty())
+                    .unwrap();
+                request
+                    .extensions_mut()
+                    .insert(crate::loopback_connect_info());
+                let response = router(app).oneshot(request).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{endpoint}");
+                let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024 * 1024)
+                    .await
+                    .unwrap();
+                let proof = if endpoint.contains("bundle") {
+                    let bundle: iroha_data_model::sumeragi_finality::SumeragiFinalityBundle =
+                        norito::decode_canonical_with_limits(
+                            &bytes,
+                            norito::canonical_decode_limits(bytes.len()),
+                        )
+                        .unwrap();
+                    assert_eq!(bundle.network_id, body.network_id);
+                    bundle.finality_proof
+                } else {
+                    norito::decode_canonical_with_limits::<
+                        iroha_data_model::sumeragi_finality::SumeragiFinalityProof,
+                    >(&bytes, norito::canonical_decode_limits(bytes.len()))
+                    .unwrap()
+                };
+                assert_eq!(
+                    proof, body.finality_proof,
+                    "all current proof routes bind the same durable block"
+                );
+            }
             let failure = assert_failure(app, 3, [0x38; 32], Reason::TipChanged).await;
             let progress = failure.tip_mismatch.unwrap();
             assert_eq!(

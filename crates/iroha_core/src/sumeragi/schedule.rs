@@ -227,6 +227,9 @@ pub enum ScheduleError {
     /// The chain parameters fail §9.4 validation.
     #[error("invalid chain parameters: {0}")]
     Params(ConfigError),
+    /// The signed NPoS policy contradicts the current consensus epoch authority.
+    #[error("NPoS epoch_length_blocks must equal the signed Sumeragi epoch_length_blocks")]
+    EpochPolicyMismatch,
     /// The stored schedule is not empty or three consecutive heights.
     #[error("the stored consensus schedule is malformed")]
     Malformed,
@@ -354,6 +357,11 @@ pub fn next_config(
     world: &impl WorldReadOnly,
     height: u64,
 ) -> Result<ScheduledConfig, ScheduleError> {
+    if world.sumeragi_npos_parameters().is_some_and(|npos| {
+        npos.epoch_length_blocks() != world.parameters().sumeragi().epoch_length_blocks
+    }) {
+        return Err(ScheduleError::EpochPolicyMismatch);
+    }
     let config = ScheduledConfig {
         height,
         committee: scheduled_committee(world, height)?,
@@ -594,6 +602,26 @@ mod tests {
         query::store::LiveQueryStore,
         state::{State, World, derive_validator_key_id},
     };
+
+    #[test]
+    fn schedule_rejects_conflicting_npos_epoch_authority() {
+        let world = World::new();
+        {
+            let mut block = world.block();
+            block.parameters.get_mut().set_parameter(
+                iroha_data_model::parameter::Parameter::Custom(
+                    iroha_data_model::parameter::system::SumeragiNposParameters::default()
+                        .into_custom_parameter(),
+                ),
+            );
+            block.parameters.get_mut().sumeragi.epoch_length_blocks = NonZeroU64::new(11).unwrap();
+            block.commit();
+        }
+        assert_eq!(
+            next_config(&world.view(), 2),
+            Err(ScheduleError::EpochPolicyMismatch)
+        );
+    }
 
     fn bls() -> KeyPair {
         KeyPair::random_with_algorithm(Algorithm::BlsNormal)

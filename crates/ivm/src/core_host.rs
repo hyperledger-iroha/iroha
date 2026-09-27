@@ -694,11 +694,6 @@ impl CoreHost {
             }
         }
     }
-    /// Attach a schema registry implementation.
-    pub fn with_schema_registry(mut self, reg: Box<dyn SchemaRegistry + Send + Sync>) -> Self {
-        self.schema = Arc::from(reg);
-        self
-    }
     /// Enable or disable SM helper syscalls when constructing the host.
     pub fn with_sm_enabled(mut self, enabled: bool) -> Self {
         self.sm_enabled = enabled;

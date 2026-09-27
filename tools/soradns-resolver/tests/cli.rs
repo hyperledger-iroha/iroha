@@ -14,7 +14,7 @@ use norito::{
     to_bytes,
 };
 use soradns_resolver::{
-    canonical::{canonicalize_json_bytes, sha256_digest},
+    canonical::{canonicalize_norito_bytes, sha256_digest},
     directory::signing_payload_bytes,
     rad::compute_rad_digest,
 };
@@ -464,9 +464,8 @@ fn sample_directory_bundle() -> (ResolverAttestationDocumentV1, Vec<u8>, Vec<u8>
         );
         map
     });
-    let (directory_bytes, _) =
-        canonicalize_json_bytes(&json::to_vec(&directory_json).expect("serialize directory"))
-            .expect("canonicalize directory");
+    let directory_bytes =
+        canonicalize_norito_bytes(&directory_json).expect("canonicalize directory");
     let directory_sha = sha256_digest(&directory_bytes);
     let builder_keys = directory_builder_keys();
     let mut record = ResolverDirectoryRecordV1 {

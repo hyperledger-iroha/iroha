@@ -2437,6 +2437,7 @@ struct Digest384MetalPipelinesV1 {
     device: Device,
     queues: QueuePool,
     pipeline: ComputePipelineState,
+    #[cfg(test)]
     indexed_pipeline: ComputePipelineState,
     // Serialize this bounded primitive path. On uncertain completion, retaining
     // these exact allocations prevents wiping/recycling memory still in use.
@@ -2448,6 +2449,7 @@ fn digest384_metal_context_v1() -> MetalResult<&'static Digest384MetalPipelinesV
         let device = select_metal_device().ok_or(GpuError::Unsupported(GpuBackend::Metal))?;
         let library = load_metal_library(&device)?;
         let pipeline = load_pipeline(&device, &library, "digest384_hash_frames_v1")?;
+        #[cfg(test)]
         let indexed_pipeline =
             load_pipeline(&device, &library, "digest384_indexed_first_coordinate_v1")?;
         let queues = QueuePool::new(&device, resolve_queue_policy(&device))?;
@@ -2455,6 +2457,7 @@ fn digest384_metal_context_v1() -> MetalResult<&'static Digest384MetalPipelinesV
             device,
             queues,
             pipeline,
+            #[cfg(test)]
             indexed_pipeline,
             quarantine: Mutex::new(None),
         })
@@ -2534,6 +2537,7 @@ pub(crate) fn digest384_hash_frames_v1(
     Ok(())
 }
 
+#[cfg(test)]
 pub(crate) fn digest384_indexed_coordinates_v1(
     staged: &crate::digest384_indexed_gpu::StagedDigest384IndexedV1,
     output: &mut [u64],

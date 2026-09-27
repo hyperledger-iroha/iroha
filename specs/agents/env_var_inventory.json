@@ -2,8 +2,8 @@
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
   "generated_at": "2026-09-10T08:33:52Z",
   "root": "iroha",
-  "total_refs": 850,
-  "unique_vars": 210,
+  "total_refs": 849,
+  "unique_vars": 209,
   "variables": {
     "CARGO": {
       "counts": {
@@ -4386,19 +4386,6 @@
           "context": "if std::env::var(\"IROHA_RUN_IGNORED\").ok().as_deref() != Some(\"1\") {",
           "line": 43,
           "path": "integration_tests/tests/sorting.rs",
-          "scope": "test"
-        }
-      ]
-    },
-    "IROHA_RUN_ZK_WRAPPERS": {
-      "counts": {
-        "test": 1
-      },
-      "paths": [
-        {
-          "context": "std::env::var(\"IROHA_RUN_ZK_WRAPPERS\").ok().as_deref() == Some(\"1\")",
-          "line": 3,
-          "path": "crates/ivm/tests/kotodama_wrappers.rs",
           "scope": "test"
         }
       ]

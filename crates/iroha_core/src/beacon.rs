@@ -2854,7 +2854,8 @@ pub use fixtures::{
 };
 #[cfg(test)]
 pub(crate) use fixtures::{
-    prepared_session_and_signers_fixture_v1, signed_pulses_fixture_for_roster_and_anchors,
+    prepared_session_and_signers_fixture_for_keys_v1, prepared_session_and_signers_fixture_v1,
+    signed_pulses_fixture_for_roster_and_anchors,
 };
 
 #[cfg(test)]

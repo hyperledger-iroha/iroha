@@ -18,9 +18,9 @@ use iroha_core::beacon::{
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey};
 use iroha_data_model::{
-    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
 };
 use std::num::NonZeroU64;
 use zeroize::Zeroizing;
@@ -33,10 +33,19 @@ fn genesis_verifier(
     genesis: &iroha_genesis::ValidatedGenesisBundle,
     chain_id: &str,
 ) -> Result<SumeragiFinalityVerifier> {
-    let validators = genesis.validator_pops().iter().map(|(public_key, proof_of_possession)|
-        FinalityValidator { public_key: public_key.clone(), proof_of_possession: proof_of_possession.clone() }
-    ).collect();
-    Ok(SumeragiFinalityVerifier::new(genesis.block(), chain_id, validators)?)
+    let validators = genesis
+        .validator_pops()
+        .iter()
+        .map(|(public_key, proof_of_possession)| FinalityValidator {
+            public_key: public_key.clone(),
+            proof_of_possession: proof_of_possession.clone(),
+        })
+        .collect();
+    Ok(SumeragiFinalityVerifier::new(
+        genesis.block(),
+        chain_id,
+        validators,
+    )?)
 }
 
 const PLAN_SCHEMA: &str = "iroha.taira.public-reset.beacon-bootstrap-plan.v1";
@@ -597,7 +606,7 @@ fn read_public<T: JsonDeserialize>(path: &Path, label: &str) -> Result<(T, Vec<u
     ))
 }
 
-fn plan_genesis(
+pub(super) fn plan_genesis(
     inventory: &InventoryV1,
     wire: &[u8],
 ) -> Result<iroha_genesis::ValidatedGenesisBundle> {
@@ -632,7 +641,7 @@ fn plan_genesis(
     Ok(validated)
 }
 
-fn peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
+pub(super) fn peers(inventory: &InventoryV1) -> Result<Vec<DeploymentPeerV1>> {
     inventory
         .validators
         .iter()
@@ -720,7 +729,7 @@ fn beacon_observation_clients(
 }
 
 impl<R: ProcessRunner> OpenSshTransport<'_, R> {
-    fn beacon_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
+    pub(super) fn beacon_clients(&self, deadline: Instant) -> Result<[Client; 4]> {
         let operator_key = retained_beacon_operator_key(
             self.runtime.validator_operator_key.as_ref(),
             &self.admitted.inventory,
@@ -853,7 +862,12 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let ceremony = root.join("ceremony");
         ensure_private_directory(&ceremony)?;
         let program = self.beacon_daemon()?;
-        let mut relay = GenesisRelay::new(request.dkg_session, h1, genesis_verifier(&genesis, &inventory.chain_id)?, deadline)?;
+        let mut relay = GenesisRelay::new(
+            request.dkg_session,
+            h1,
+            genesis_verifier(&genesis, &inventory.chain_id)?,
+            deadline,
+        )?;
         for (index, peer) in request.target_roster.iter().enumerate() {
             let selected = inventory
                 .validator_clients
@@ -1548,8 +1562,15 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 }
                 let certified = height.verified_proof_at(&genesis, carrier_height)?;
                 certified.verify_committed_transaction(
-                    &self.admitted.inventory.beacon_bootstrap.request.dkg_session.network_id,
-                    &details.transaction)?;
+                    &self
+                        .admitted
+                        .inventory
+                        .beacon_bootstrap
+                        .request
+                        .dkg_session
+                        .network_id,
+                    &details.transaction,
+                )?;
                 let wire = certified.canonical_executed_wire()?;
                 if exact_wire
                     .as_ref()
@@ -1610,10 +1631,7 @@ fn validate_installation_proof(
     claims: &reset::AuthorizationClaimsV1,
     native: &VerifiedInstall,
 ) -> Result<json::Value> {
-    use iroha_data_model::{
-        sumeragi_finality::SumeragiFinalityProof,
-        query::CommittedTransaction,
-    };
+    use iroha_data_model::{query::CommittedTransaction, sumeragi_finality::SumeragiFinalityProof};
     let (envelope, _) = read_public::<InstallEnvelopeV1>(
         &root.join("install.prepared.json"),
         "beacon install envelope",
@@ -1659,7 +1677,9 @@ fn validate_installation_proof(
     if first.block_header.height().get() != 1
         || first.block_header.hash() != genesis.expected_hash()
     {
-        return Err(eyre!("beacon proof chain has no authenticated genesis anchor"));
+        return Err(eyre!(
+            "beacon proof chain has no authenticated genesis anchor"
+        ));
     }
     let network = inventory.beacon_bootstrap.request.dkg_session.network_id;
     let mut verifier = genesis_verifier(&genesis, &inventory.chain_id)?;
@@ -1670,7 +1690,8 @@ fn validate_installation_proof(
             carrier = Some(verified);
         }
     }
-    let certified = carrier.ok_or_else(|| eyre!("beacon proof chain omits the installation carrier"))?;
+    let certified =
+        carrier.ok_or_else(|| eyre!("beacon proof chain omits the installation carrier"))?;
     let committed: CommittedTransaction = json::from_value(
         object
             .get("committed_transaction")
@@ -1682,7 +1703,9 @@ fn validate_installation_proof(
         || committed.entrypoint()
             != &iroha_data_model::transaction::TransactionEntrypoint::External(transaction)
     {
-        return Err(eyre!("beacon installation differs from the authenticated carrier and exact transaction"));
+        return Err(eyre!(
+            "beacon installation differs from the authenticated carrier and exact transaction"
+        ));
     }
     certified.verify_committed_transaction(&network, &committed)?;
     Ok(receipt)

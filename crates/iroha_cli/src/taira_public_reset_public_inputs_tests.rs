@@ -84,6 +84,11 @@ impl Fixture {
             .with_sumeragi_v2_context_parameters(SumeragiV2GenesisContextParameters::recommended())
             .with_kagemusha_mint_finality_genesis_parameters(mint)
             .set_topology(topology)
+            .append_parameter(Parameter::Sumeragi(
+                iroha_data_model::parameter::system::SumeragiParameter::EpochLengthBlocks(
+                    NonZeroU64::new(epoch).unwrap(),
+                ),
+            ))
             .append_parameter(Parameter::Custom(npos.into_custom_parameter()));
         if !instructions.is_empty() {
             // Genesis serializes topology registrations after a transaction's

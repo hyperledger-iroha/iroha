@@ -54,7 +54,7 @@ iroha_primitives = { workspace = true, features = ["json"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "json"] }
 iroha_macro = { workspace = true }
 error-stack = { workspace = true }
-iroha_version = { workspace = true, features = ["derive", "json"] }
+iroha_version = { workspace = true }
 iroha_schema = { workspace = true }
 iroha_ffi = { workspace = true, optional = true }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2", default-features = false, features = ["model-primitives"] }

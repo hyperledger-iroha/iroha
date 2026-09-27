@@ -55,8 +55,6 @@ pub const MAX_STATE_RAD_ENTRIES: usize = MAX_RAD_ENTRIES;
 pub const MAX_STATE_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 /// Maximum accounted heap retained by configured static zones (16 MiB).
 pub const MAX_STATIC_ZONE_RETAINED_BYTES: usize = 16 * 1024 * 1024;
-/// Maximum decoded heap retained by one proof-bundle source batch (16 MiB).
-pub const MAX_SOURCE_BATCH_RETAINED_BYTES: usize = 16 * 1024 * 1024;
 /// Maximum length of a general configuration or protocol string (16 KiB).
 pub const MAX_FIELD_BYTES: usize = 16 * 1024;
 /// Maximum length of a DNS name, CID, hash, path, or other short identifier (4 KiB).

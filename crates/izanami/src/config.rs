@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Runtime configuration and CLI parsing for the Izanami chaos tool.
 use clap::{Args, Parser, ValueEnum};
 use color_eyre::{Result, eyre::eyre};
@@ -137,8 +136,11 @@ pub enum WorkloadProfile {
     /// Include intentionally invalid recipes for chaos coverage.
     Chaos,
 }
+#[cfg(test)]
 pub const DEFAULT_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(test)]
 pub const DEFAULT_PROGRESS_TIMEOUT: Duration = Duration::from_secs(120);
+#[cfg(test)]
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DEFAULT_SUMERAGI_BLOCK_MAX_TRANSACTIONS: u64 = 1_024;
 pub const DEFAULT_SUMERAGI_PROPOSAL_QUEUE_SCAN_MULTIPLIER: u64 = 1;

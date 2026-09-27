@@ -24,6 +24,7 @@ use iroha_sumeragi::{
 };
 use norito::{
     Decode, Encode,
+    codec::Encode as _,
     derive::{JsonDeserialize, JsonSerialize},
 };
 

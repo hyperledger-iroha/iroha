@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **850** · Unique variables: **210**
+Total references: **849** · Unique variables: **209**
 
 ## CARGO (prod: 2, test: 3)
 
@@ -885,10 +885,6 @@ Total references: **850** · Unique variables: **210**
 - test: integration_tests/tests/permissions.rs:508 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: integration_tests/tests/pipeline_block_rejected.rs:17 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
 - test: integration_tests/tests/sorting.rs:43 — `if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {`
-
-## IROHA_RUN_ZK_WRAPPERS (test: 1)
-
-- test: crates/ivm/tests/kotodama_wrappers.rs:3 — `std::env::var("IROHA_RUN_ZK_WRAPPERS").ok().as_deref() == Some("1")`
 
 ## IROHA_SCCP_BUILD_FEATURES (prod: 1)
 

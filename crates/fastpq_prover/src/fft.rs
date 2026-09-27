@@ -169,6 +169,10 @@ impl Planner {
         });
     }
     /// Attempt a GPU-accelerated FFT over the provided columns.
+    ///
+    /// Production proving stages FFTs through [`Self::fft_gpu_pending`]; this
+    /// synchronous helper exists for tests and the `bench` planner benchmark.
+    #[cfg(any(test, feature = "bench"))]
     pub fn fft_gpu(&self, columns: &mut [Vec<u64>]) {
         let (trace_len, trace_log) = self.validate_columns(columns);
         if trace_len == 0 {
@@ -271,6 +275,7 @@ impl Planner {
             }
         }
     }
+    #[cfg(any(test, feature = "bench"))]
     fn split_fft_gpu_cpu(
         &self,
         columns: &mut [Vec<u64>],
@@ -529,6 +534,7 @@ impl Planner {
             self.ifft_columns_cpu(gpu_slice, trace_len, trace_log);
         }
     }
+    #[cfg(any(test, feature = "bench"))]
     fn split_lde_gpu_cpu(
         &self,
         coeffs: &[Vec<u64>],
@@ -678,6 +684,10 @@ impl Planner {
             .collect()
     }
     /// Attempt a GPU-accelerated low-degree extension evaluation.
+    ///
+    /// Production proving stages LDEs through [`Self::lde_gpu_pending`]; this
+    /// synchronous helper exists for tests and the `bench` planner benchmark.
+    #[cfg(any(test, feature = "bench"))]
     pub fn lde_gpu(&self, coeffs: &[Vec<u64>]) -> Vec<Vec<u64>> {
         if coeffs.is_empty() {
             return Vec::new();

@@ -439,14 +439,19 @@ mod tests {
 }
 
 /// Maximum ordered indices submitted in one canonical nonce-search batch.
-pub const MAX_DIGEST384_INDEXED_BATCH_V1: usize = 4096;
+#[cfg(test)]
+pub(crate) const MAX_DIGEST384_INDEXED_BATCH_V1: usize = 4096;
 
 /// Execute exact first-coordinate values with a bounded nonwrapping index range.
 /// This is a nonce predicate primitive, never a shortened commitment hash.
 ///
+/// TODO: export this nonce-search primitive once a production grinding caller
+/// consumes it; until then the CPU and Metal paths are compiled only for tests.
+///
 /// # Errors
 /// Rejects invalid geometry and any explicitly selected device failure without substitution.
-pub fn execute_digest384_indexed_coordinates_v1(
+#[cfg(test)]
+pub(crate) fn execute_digest384_indexed_coordinates_v1(
     predicate: &fastpq_isi::poseidon_digest384::GoldilocksDigest384IndexedPredicateV1<'_>,
     start: u64,
     count: usize,

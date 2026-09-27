@@ -10,19 +10,9 @@ license.workspace = true
 [lints]
 workspace = true
 
-[features]
-default = ["derive", "json"]
-# Enable macros for versioning
-derive = ["iroha_version_derive"]
-# Support JSON (de)serialisation
-# JSON helpers route through Norito's JSON module; enable it here so
-# downstreams only need to flip this feature.
-json = ["norito/json"]
-
 [dependencies]
 # Versioned binary diagnostics require the complete foundational codec surface.
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
-iroha_version_derive = { path = "../iroha_version_derive", default-features = false, optional = true }
 
 iroha_macro = { workspace = true }
 thiserror = { workspace = true }

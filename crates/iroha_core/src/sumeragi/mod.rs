@@ -97,6 +97,8 @@ pub fn effective_consensus_mode(view: &StateView<'_>, frozen_mode: ConsensusMode
 }
 /// The driver's block store over Kura: one certified `SignedBlockWire` frame per height.
 pub mod block_store;
+/// Current parent-bound threshold beacon production and authenticated partial transport.
+pub mod beacon;
 /// File-backed body store of the Sumeragi driver (bodies of accepted, unapplied blocks).
 pub mod bodies;
 /// The certified-chain reader: committed blocks as their Kura frames certify them.
