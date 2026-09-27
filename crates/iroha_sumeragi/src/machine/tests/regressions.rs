@@ -195,7 +195,7 @@ fn payload_ready_during_an_outstanding_build_ends_the_idle_wait() {
         )),
         "the transaction is proposed"
     );
-    // Without a PayloadReady, an empty answer still waits (heartbeat).
+    // Without a PayloadReady, an empty answer still waits for real work.
     let mut h = H::new(4, pick::leader(0));
     h.run_until(h.now + 1_100);
     let out = h.built(b"");

@@ -11,7 +11,7 @@
 //! - `timeout`: timing out, joining, timeout certificates and view changes (§6.6, §6.7, §6.12);
 //! - `round`: commit, height entry, `BlockApplied`, the safety monitor (§6.8, §6.13, §7.6);
 //! - `sync`: catch-up, body wants and serving (§6.9);
-//! - `propose`: proposing and the heartbeat (§6.10);
+//! - `propose`: work-driven proposing (§6.10);
 //! - `timers`: `Tick`, retransmission, rebroadcast, `Status` cadence and the probe (§6.11);
 //! - `restart`: `Core::new` and `restore`, the restart rules R1–R6 (§7.4).
 //!

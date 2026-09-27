@@ -4,9 +4,8 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{
         BlockHeader,
-        consensus_v2::{ConsensusMode, ValidatorPower},
     },
-    bridge::{BridgeFinalityAttestationV1, BridgeFinalityProof, BridgeFinalityVerifier},
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityAttestation, SumeragiFinalityProof, SumeragiFinalityVerifier},
     sns::NameStatus,
 };
 use iroha_model_base::peer::PeerId;
@@ -106,8 +105,8 @@ pub(crate) struct PeerV1 {
 struct Authority {
     network: NetworkId,
     genesis: HashOf<BlockHeader>,
-    roster: Vec<ValidatorPower>,
-    pops: Vec<Vec<u8>>,
+    trusted_genesis: iroha_data_model::block::SignedBlock,
+    validators: Vec<FinalityValidator>,
 }
 
 impl TrustV1 {
@@ -145,23 +144,13 @@ impl TrustV1 {
             .map(|(key, pop)| (PeerId::new(key), pop))
             .collect();
         validate_peer_selection(&self.peers, &validators)?;
-        let (roster, pops) = validators
-            .into_iter()
-            .map(|(validator, pop)| {
-                (
-                    ValidatorPower {
-                        validator,
-                        power: 1,
-                    },
-                    pop,
-                )
-            })
-            .unzip();
         Ok(Authority {
             network,
             genesis,
-            roster,
-            pops,
+            trusted_genesis: block,
+            validators: validators.into_iter().map(|(peer, proof_of_possession)| FinalityValidator {
+                public_key: peer.public_key().clone(), proof_of_possession,
+            }).collect(),
         })
     }
 }
@@ -200,90 +189,22 @@ fn validate_peer_selection(
 }
 
 impl Authority {
-    fn roster(&self, proof: &BridgeFinalityProof) -> Result<()> {
-        let artifact = &proof.finality_artifact;
-        require(
-            artifact.height_context.network_id == self.network
-                && artifact.height_context.mode == ConsensusMode::Npos
-                && artifact.height_context.roster == self.roster
-                && artifact.validator_set_pops == self.pops
-                && artifact.height_context.snapshot_bootstrap.is_none()
-                && artifact.commit_qc.signers.len() == 3,
-            "proof differs from the independently authenticated four-validator genesis roster",
-        )
+    fn roster(&self, proof: &SumeragiFinalityProof) -> Result<()> {
+        require(proof.committee == self.validators,
+            "proof differs from the independently authenticated four-validator genesis roster")
     }
 
-    /// Admit another certificate for an already authenticated contiguous-chain decision.
-    /// `retained` and `predecessor` must come from the independently verified chain, never
-    /// from the candidate attestation. Certificate witnesses may vary across validators.
-    fn verify_same_decision(
-        &self,
-        retained: &BridgeFinalityProof,
-        predecessor: Option<&BridgeFinalityProof>,
-        candidate: &BridgeFinalityProof,
-    ) -> Result<()> {
-        if candidate == retained {
-            // These exact bytes already passed contiguous-chain verification.
-            return Ok(());
-        }
-        self.roster(candidate)?;
-        let mut normalized = candidate.clone();
-        let artifact = &mut normalized.finality_artifact;
-        let expected = &retained.finality_artifact;
-        require(
-            artifact
-                .commit_qc
-                .as_ref()
-                .same_commit_decision(expected.commit_qc.as_ref()),
-            "validator proof certifies a different committed decision",
-        )?;
-        artifact.commit_qc = expected.commit_qc.clone();
-        if let (Some(actual), Some(expected)) = (
-            artifact.height_context.parent_commit_qc.as_ref(),
-            expected.height_context.parent_commit_qc.as_ref(),
-        ) {
-            require(
-                actual.as_ref().same_commit_decision(expected.as_ref()),
-                "validator proof certifies a different parent decision",
-            )?;
-            artifact.height_context.parent_commit_qc = Some(expected.clone());
-        }
-        // Compare every header, artifact, context, execution, roster and PoP field.
-        // Only current/parent certificate round, signer and signature witnesses differ.
-        require(
-            &normalized == retained,
-            "validator proof differs from the authenticated decision context",
-        )?;
-        if retained.block_header.height().get() == 1 {
-            self.anchor(candidate)?;
-        } else {
-            let predecessor =
-                predecessor.ok_or_else(|| eyre!("missing authenticated finality predecessor"))?;
-            let mut verifier = BridgeFinalityVerifier::with_context(
-                self.network,
-                predecessor.finality_artifact.context_id(),
-            );
-            verifier.verify(predecessor)?;
-            // Verifying the candidate as a successor authenticates BOTH its CommitQC
-            // and its embedded parent CommitQC against the retained predecessor.
-            // Standalone artifact verification does not verify the parent signature.
-            verifier.verify(candidate)?;
-        }
-        Ok(())
+    fn verifier(&self) -> Result<SumeragiFinalityVerifier> {
+        Ok(SumeragiFinalityVerifier::new(&self.trusted_genesis,
+            "fc56984b-2be7-431d-840e-21514d1883f0", self.validators.clone())?)
     }
 
-    fn anchor(&self, proof: &BridgeFinalityProof) -> Result<BridgeFinalityVerifier> {
-        require(
-            proof.block_header.height().get() == 1
-                && proof.block_header.hash() == self.genesis
-                && proof.finality_artifact.block_hash == self.genesis,
-            "finality anchor differs from the selected signed genesis",
-        )?;
+    fn anchor(&self, proof: &SumeragiFinalityProof) -> Result<SumeragiFinalityVerifier> {
+        require(proof.block_header.height().get() == 1
+                && proof.block_header.hash() == self.genesis,
+            "finality anchor differs from the selected signed genesis")?;
         self.roster(proof)?;
-        let mut verifier = BridgeFinalityVerifier::with_context(
-            self.network,
-            proof.finality_artifact.context_id(),
-        );
+        let mut verifier = self.verifier()?;
         verifier.verify(proof)?;
         Ok(verifier)
     }
@@ -293,7 +214,7 @@ fn validate_attestation(
     authority: &Authority,
     peer: &PeerV1,
     challenge: [u8; 32],
-    attestation: &BridgeFinalityAttestationV1,
+    attestation: &SumeragiFinalityAttestation,
 ) -> Result<()> {
     attestation.verify()?;
     let body = &attestation.body;
@@ -301,8 +222,8 @@ fn validate_attestation(
         body.challenge == challenge
             && body.node_id == peer.peer_id
             && body.node_fingerprint == peer.node_fingerprint
-            && body.status.build_fingerprint == peer.build_fingerprint
-            && body.status.config_fingerprint == peer.config_fingerprint
+            && body.build_fingerprint == peer.build_fingerprint
+            && body.config_fingerprint == peer.config_fingerprint
             && body.network_id == authority.network
             && body.genesis_block_hash == authority.genesis,
         "attested node, build, configuration, challenge or genesis differs from the target profile",
@@ -325,9 +246,15 @@ pub(super) fn preflight<C: RunContext>(context: &C, manifest: &ManifestV1) -> Re
             let height = NonZeroU64::new(client.get_sumeragi_status()?.committed_height)
                 .ok_or_else(|| eyre!("validator has no durable tip"))?;
             let attestation =
-                client.get_bridge_finality_attestation(height, challenge, &peer.peer_id)?;
+                client.get_sumeragi_finality_attestation(height, challenge, &peer.peer_id)?;
             validate_attestation(&authority, peer, challenge, &attestation)?;
-            attestation.body.finality_proof.finality_artifact.verify()?;
+            let mut verifier = authority.anchor(&attestation.body.genesis_finality_proof)?;
+            for current in 2..=height.get() {
+                client.get_next_sumeragi_finality_proof(NonZeroU64::new(current).unwrap(), &mut verifier)?;
+            }
+            // Also authenticate this node's potentially different valid certificate.
+            // The transport's proof is never promoted to finality without the verifier.
+            verifier.verify_same_decision(&attestation.body.finality_proof, &attestation.body.finality_proof)?;
             client.get_lane_lifecycle_status()?.validate()?;
             Ok(())
         },
@@ -341,7 +268,7 @@ struct PeerReceipt {
     peer_id: PeerId,
     height: u64,
     block_hash: HashOf<BlockHeader>,
-    attestation: BridgeFinalityAttestationV1,
+    attestation: SumeragiFinalityAttestation,
     transactions: Vec<PhaseObservationV1>,
     carriers: Vec<CarrierReceipt>,
 }
@@ -522,7 +449,8 @@ struct PeerVerification<'a> {
     authority: &'a Authority,
     plan: &'a PlanV1,
     prepared: &'a [(PreparedV1, SignedTransaction)],
-    proofs: &'a BTreeMap<u64, BridgeFinalityProof>,
+    proofs: &'a BTreeMap<u64, SumeragiFinalityProof>,
+    verifier: &'a SumeragiFinalityVerifier,
     challenge: [u8; 32],
     deadline: std::time::Instant,
 }
@@ -530,7 +458,7 @@ struct PeerVerification<'a> {
 fn verify_peer_state(
     client: &Client,
     peer: &PeerV1,
-    before: &BridgeFinalityAttestationV1,
+    before: &SumeragiFinalityAttestation,
     verification: &PeerVerification<'_>,
 ) -> Result<PeerRead<Box<VerifiedPeer>>> {
     let &PeerVerification {
@@ -538,6 +466,7 @@ fn verify_peer_state(
         plan,
         prepared,
         proofs,
+        verifier,
         challenge,
         deadline,
     } = verification;
@@ -545,16 +474,15 @@ fn verify_peer_state(
     let genesis = proofs
         .get(&1)
         .ok_or_else(|| eyre!("missing authenticated deployment genesis proof"))?;
-    authority
-        .verify_same_decision(genesis, None, &before.body.genesis_finality_proof)
+    verifier
+        .verify_same_decision(genesis, &before.body.genesis_finality_proof)
         .wrap_err("peer genesis differs from the independently verified successor chain")?;
     let height = before.body.finality_proof.block_header.height();
     let retained = proofs
         .get(&height.get())
         .ok_or_else(|| eyre!("peer durable tip is absent from the verified successor chain"))?;
-    let predecessor = proofs.get(&(height.get() - 1));
-    authority
-        .verify_same_decision(retained, predecessor, &before.body.finality_proof)
+    verifier
+        .verify_same_decision(retained, &before.body.finality_proof)
         .wrap_err("peer durable tip differs from the independently verified successor chain")?;
     let mut transactions = Vec::new();
     let mut carriers = Vec::new();
@@ -587,11 +515,9 @@ fn verify_peer_state(
             committed.block_hash() == &proof.block_header.hash(),
             "transaction carrier differs from authenticated finality",
         )?;
-        let wire = client.get_canonical_executed_block_wire(
-            NonZeroU64::new(carrier_height).unwrap(),
-            committed,
-            &proof.finality_artifact.commit_qc.execution_commitment,
-        )?;
+        let certified = verifier.verify_same_decision(proof, proof)?;
+        certified.verify_committed_transaction(&authority.network, committed)?;
+        let wire = certified.canonical_executed_wire()?;
         carriers.push(CarrierReceipt {
             height: carrier_height,
             file: format!("carrier-{carrier_height:020}.nrt"),
@@ -614,7 +540,7 @@ fn verify_peer_state(
         "one validator omits the exact bootstrap grant",
     )?;
     namespace_matches(plan, client)?;
-    let after = match peer_attestation_progress(client.get_bridge_finality_attestation(
+    let after = match peer_attestation_progress(client.get_sumeragi_finality_attestation(
         height,
         challenge,
         &peer.peer_id,
@@ -626,11 +552,11 @@ fn verify_peer_state(
         }
     };
     validate_attestation(authority, peer, challenge, &after)?;
-    authority
-        .verify_same_decision(genesis, None, &after.body.genesis_finality_proof)
+    verifier
+        .verify_same_decision(genesis, &after.body.genesis_finality_proof)
         .wrap_err("validator genesis changed while reading deployment state")?;
-    authority
-        .verify_same_decision(retained, predecessor, &after.body.finality_proof)
+    verifier
+        .verify_same_decision(retained, &after.body.finality_proof)
         .wrap_err("validator tip changed while reading deployment state; rerun status")?;
     require_operation_budget(deadline, "verified validator state")?;
     Ok(PeerRead::Verified(Box::new(VerifiedPeer {
@@ -648,8 +574,8 @@ fn verify_peer_state(
 
 #[derive(Default)]
 struct ProofPrefix {
-    proofs: BTreeMap<u64, BridgeFinalityProof>,
-    verifier: Option<BridgeFinalityVerifier>,
+    proofs: BTreeMap<u64, SumeragiFinalityProof>,
+    verifier: Option<SumeragiFinalityVerifier>,
     #[cfg(test)]
     authenticated_rows: usize,
 }
@@ -662,11 +588,11 @@ impl ProofPrefix {
         &mut self,
         authority: &Authority,
         journal: &Journal,
-        source_tip: &BridgeFinalityProof,
-        source_genesis: &BridgeFinalityProof,
+        source_tip: &SumeragiFinalityProof,
+        source_genesis: &SumeragiFinalityProof,
         deadline: std::time::Instant,
         new_proof_budget: usize,
-        mut fetch: impl FnMut(NonZeroU64, &mut BridgeFinalityVerifier) -> Result<BridgeFinalityProof>,
+        mut fetch: impl FnMut(NonZeroU64, &mut SumeragiFinalityVerifier) -> Result<SumeragiFinalityProof>,
     ) -> Result<bool> {
         require(
             (1..=MAX_NEW_PROOFS).contains(&new_proof_budget),
@@ -676,7 +602,7 @@ impl ProofPrefix {
         for next in 1..=source_tip.block_header.height().get() {
             require_operation_budget(deadline, "synchronizing authenticated finality proofs")?;
             let name = format!("proof-{next:020}.json");
-            let cached: Option<BridgeFinalityProof> = journal.optional_json(&name)?;
+            let cached: Option<SumeragiFinalityProof> = journal.optional_json(&name)?;
             if let Some(retained) = self.proofs.get(&next) {
                 // Re-read through Journal custody and canonical-JSON checks on every attempt.
                 // Only exact immutable evidence may reuse this invocation's authentication.
@@ -737,8 +663,8 @@ impl ProofPrefix {
     fn publish_verified(
         &mut self,
         journal: &Journal,
-        proof: BridgeFinalityProof,
-        advanced: BridgeFinalityVerifier,
+        proof: SumeragiFinalityProof,
+        advanced: SumeragiFinalityVerifier,
         fresh: bool,
         deadline: std::time::Instant,
     ) -> Result<()> {
@@ -833,7 +759,7 @@ fn complete<C: RunContext>(
         let peer = &trust.peers[index];
         let height = NonZeroU64::new(client.get_sumeragi_status()?.committed_height)
             .ok_or_else(|| eyre!("validator has no durable tip"))?;
-        let before = match peer_attestation_progress(client.get_bridge_finality_attestation(
+        let before = match peer_attestation_progress(client.get_sumeragi_finality_attestation(
             height,
             challenge,
             &peer.peer_id,
@@ -875,7 +801,7 @@ fn complete<C: RunContext>(
         MAX_NEW_PROOFS,
         |height, trial| {
             source
-                .get_next_bridge_finality_proof(height, trial)
+                .get_next_sumeragi_finality_proof(height, trial)
                 .map_err(Into::into)
         },
     )? {
@@ -897,6 +823,7 @@ fn complete<C: RunContext>(
         plan,
         prepared: &prepared,
         proofs: &completion.prefix.proofs,
+        verifier: completion.prefix.verifier.as_ref().ok_or_else(|| eyre!("missing verified finality prefix"))?,
         challenge,
         deadline,
     };

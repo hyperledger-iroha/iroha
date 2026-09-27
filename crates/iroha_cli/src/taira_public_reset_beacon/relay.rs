@@ -3,7 +3,7 @@
 use super::*;
 use iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1;
 use iroha_data_model::{
-    bridge::BridgeFinalityVerifier, consensus::GlobalThresholdBeaconKeySessionV1,
+    sumeragi_finality::SumeragiFinalityVerifier, consensus::GlobalThresholdBeaconKeySessionV1,
 };
 use norito::NoritoSerialize;
 use std::{
@@ -234,8 +234,8 @@ pub(super) struct GenesisRelay {
     session: GlobalThresholdBeaconDkgSessionV1,
     state: GlobalThresholdBeaconDkgStateV1,
     children: Vec<SeatChild>,
-    verifier: BridgeFinalityVerifier,
-    proofs: Vec<BridgeFinalityProof>,
+    verifier: SumeragiFinalityVerifier,
+    proofs: Vec<SumeragiFinalityProof>,
     assembled: Option<GlobalThresholdBeaconKeySessionV1>,
     deadline: Instant,
 }
@@ -243,18 +243,15 @@ pub(super) struct GenesisRelay {
 impl GenesisRelay {
     pub(super) fn new(
         session: GlobalThresholdBeaconDkgSessionV1,
-        first_finality: &BridgeFinalityProof,
+        first_finality: &SumeragiFinalityProof,
+        mut verifier: SumeragiFinalityVerifier,
         deadline: Instant,
     ) -> Result<Self> {
-        if first_finality.finality_artifact.height != 1
-            || first_finality.block_header.height().get() != 1
+        if first_finality.block_header.height().get() != 1
         {
             return Err(eyre!("genesis relay requires authenticated h1 finality"));
         }
-        let mut verifier = BridgeFinalityVerifier::with_context(
-            session.network_id,
-            first_finality.finality_artifact.context_id(),
-        );
+
         verifier.verify(first_finality)?;
         Ok(Self {
             session,
@@ -380,9 +377,8 @@ impl GenesisRelay {
         Ok(())
     }
 
-    pub(super) fn advance(&mut self, height: u64, proof: &BridgeFinalityProof) -> Result<()> {
+    pub(super) fn advance(&mut self, height: u64, proof: &SumeragiFinalityProof) -> Result<()> {
         if height != self.session.start_height + u64::try_from(self.proofs.len() + 1)?
-            || proof.finality_artifact.height != height
             || proof.block_header.height().get() != height
             || height > self.session.acceptances_end_height
         {
@@ -475,7 +471,7 @@ impl GenesisRelay {
     ) -> Result<(
         GlobalThresholdBeaconKeySessionV1,
         Vec<PathBuf>,
-        Vec<BridgeFinalityProof>,
+        Vec<SumeragiFinalityProof>,
     )> {
         if self.proofs.len() != 3 {
             return Err(eyre!(

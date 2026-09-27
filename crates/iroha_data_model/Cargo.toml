@@ -80,6 +80,8 @@ blake3 = { workspace = true }
 bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
+# Portable current finality verifies the canonical consensus certificate directly.
+iroha_sumeragi = { path = "../iroha_sumeragi" }
 trybuild = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
 
@@ -87,9 +89,6 @@ tempfile = { workspace = true, optional = true }
 rustix = { version = "1.1.4", features = ["fs", "process"], optional = true }
 
 [dev-dependencies]
-# Tests pin the on-chain Sumeragi chain-parameter defaults to the consensus core's; the library
-# itself never depends on the core (its finality proof is carried as opaque bytes).
-iroha_sumeragi = { path = "../iroha_sumeragi" }
 # Storage round-trip integration belongs to tests, not the model dependency graph.
 mv = { workspace = true }
 criterion = { workspace = true }

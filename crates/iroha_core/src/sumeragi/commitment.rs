@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use iroha_crypto::{Hash, MerkleTreeCommitment};
+use iroha_crypto::Hash;
 use iroha_data_model::{
     block::{
         SignedBlock,
@@ -33,122 +33,23 @@ use iroha_data_model::{
         consensus_v2::{
             ExecutionCommitment as V2ExecutionCommitment, MAX_EXECUTED_BLOCK_WIRE_BYTES,
         },
-        execution_output::ExecutionOutputV1,
     },
     execution_witness::KAGEMUSHA_RESERVE_RECEIPT_WITNESS_KEY_TAG_V1,
     isi::kagemusha_v1::{
         KagemushaOperationKindV1, KagemushaReserveReceiptV1, KagemushaReserveReceiptWitnessV1,
     },
-    transaction::signed::TransactionEntrypoint,
 };
-use iroha_sumeragi::{
-    preimage::committee_digest_preimage,
-    types::{Hash32, HeightConfig},
-};
-use norito::{NoritoDeserialize, NoritoSerialize};
+use iroha_sumeragi::types::{Hash32, HeightConfig};
 use thiserror::Error;
 
-use super::schedule::ChainParamsRecord;
 use crate::exec_witness::{
     roots::{parent_state_from_witness, witness_pairs},
     smt::compute_post_state_root,
 };
 
-/// Domain tag of `R` (§4.1).
-pub const RESULT_TAG: &[u8] = b"iroha/sumeragi/result/v1";
-
-/// The chain hash `H` (§1): `iroha_crypto::Hash` as a core [`Hash32`].
-#[must_use]
-pub fn chain_hash(bytes: &[u8]) -> Hash32 {
-    Hash32(<[u8; 32]>::from(Hash::new(bytes)))
-}
-
-/// `R` of a canonical result preimage: `H(RESULT_TAG ‖ preimage)`.
-#[must_use]
-pub fn result_of_preimage(preimage: &[u8]) -> Hash32 {
-    let mut bytes = Vec::with_capacity(RESULT_TAG.len() + preimage.len());
-    bytes.extend_from_slice(RESULT_TAG);
-    bytes.extend_from_slice(preimage);
-    chain_hash(&bytes)
-}
-
-/// The deterministic outcome of executing one block: roots over the execution witness and the
-/// identity of the result-bearing block. The v2 commitment without its native-AMX, lane-finality
-/// and merge-carrier fields.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::sumeragi::commitment::ExecutionCommitment")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub struct ExecutionCommitment {
-    /// Root of the witnessed pre-state values of the keys the block changed.
-    pub parent_state_root: Hash,
-    /// Post-state root of the witnessed writes (combined with the KAGEMUSHA top-up root when
-    /// the block carries top-ups).
-    pub post_state_root: Hash,
-    /// Root of the canonical last-write-wins witnessed writes.
-    pub ordinary_writes_root: Hash,
-    /// Root of the KAGEMUSHA top-up tree, when the block carries top-ups.
-    pub kagemusha_top_up_root: Option<Hash>,
-    /// Number of KAGEMUSHA top-ups.
-    pub kagemusha_top_up_count: u32,
-    /// Byte length of the canonical result-bearing block wire.
-    pub executed_block_wire_len: u64,
-    /// Hash of the canonical result-bearing block wire (every transaction result and output).
-    pub executed_block_wire_hash: Hash,
-    /// Network-input Merkle commitment of the block.
-    pub transaction_input_commitment: Option<MerkleTreeCommitment<TransactionEntrypoint>>,
-    /// Typed-output Merkle commitment of the block, including internal invocations.
-    pub transaction_output_commitment: Option<MerkleTreeCommitment<ExecutionOutputV1>>,
-}
-
-/// The preimage of `R` (§4.1): the execution commitment and the configuration of `h + 2`.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::sumeragi::commitment::ExecutionResultCommitment")]
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub struct ExecutionResultCommitment {
-    /// What executing the block produced.
-    pub execution: ExecutionCommitment,
-    /// `committee_digest(C_{h+2})` (§2.1) under the chain hash.
-    pub next_committee_digest: [u8; 32],
-    /// `ChainParams_{h+2}`.
-    pub next_params: ChainParamsRecord,
-}
-
-impl ExecutionResultCommitment {
-    /// Bind `execution` to the configuration `next` scheduled for `h + 2`.
-    #[must_use]
-    pub fn new(execution: ExecutionCommitment, next: &HeightConfig) -> Self {
-        Self {
-            execution,
-            next_committee_digest: chain_hash(&committee_digest_preimage(&next.committee)).0,
-            next_params: ChainParamsRecord::from_core(&next.params),
-        }
-    }
-
-    /// The canonical preimage bytes (stored as `CommitCertificate.result_preimage`).
-    ///
-    /// # Errors
-    /// A Norito serialization failure.
-    pub fn preimage(&self) -> Result<Vec<u8>, CommitmentError> {
-        norito::encode_canonical(self).map_err(|error| CommitmentError::Encoding(error.to_string()))
-    }
-
-    /// Decode a canonical preimage (e.g. from a stored or received certificate).
-    ///
-    /// # Errors
-    /// The bytes are not one canonical frame of this type.
-    pub fn decode(preimage: &[u8]) -> Result<Self, CommitmentError> {
-        norito::decode_canonical(preimage)
-            .map_err(|error| CommitmentError::Encoding(error.to_string()))
-    }
-
-    /// `R` of this commitment.
-    ///
-    /// # Errors
-    /// A Norito serialization failure.
-    pub fn result(&self) -> Result<Hash32, CommitmentError> {
-        self.preimage().map(|bytes| result_of_preimage(&bytes))
-    }
-}
+pub use iroha_data_model::sumeragi_finality::{
+    ExecutionCommitment, ExecutionResultCommitment, RESULT_TAG, chain_hash, result_of_preimage,
+};
 
 /// Why `R` could not be computed. Every variant is a deterministic function of the executed
 /// block and its witness (a local bug, never the proposer's fault alone).
@@ -247,7 +148,7 @@ pub fn execution_result(
     next: &HeightConfig,
 ) -> Result<(ExecutionResultCommitment, Vec<u8>, Hash32), CommitmentError> {
     let commitment = ExecutionResultCommitment::new(execution_commitment(witness, executed)?, next);
-    let preimage = commitment.preimage()?;
+    let preimage = commitment.preimage().map_err(|error| CommitmentError::Encoding(error.to_string()))?;
     let result = result_of_preimage(&preimage);
     Ok((commitment, preimage, result))
 }

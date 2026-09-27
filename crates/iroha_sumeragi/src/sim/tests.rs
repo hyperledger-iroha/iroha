@@ -259,7 +259,7 @@ fn f31_independent_finality() {
     }
 }
 
-/// F22 over 100 000 heights (flat memory, heartbeat cadence). Heavy: run with `--release
+/// F22 over 100 000 retry intervals (flat memory, no idle blocks). Heavy: run with `--release
 /// --ignored`.
 #[test]
 #[ignore = "heavy: 10^5 heights"]

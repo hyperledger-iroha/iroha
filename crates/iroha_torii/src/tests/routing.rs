@@ -768,23 +768,14 @@ mod tests {
     }
     #[cfg(feature = "app_api")]
     mod finality_attestation_handler_tests {
-        use super::SUMERAGI_V2_STATUS_TEST_LOCK;
-        use crate::SharedAppState;
+        use crate::{SharedAppState, tests_runtime_handlers::ReadinessNode};
         use axum::{
             Router,
             body::Body,
             http::{Request, StatusCode},
         };
-        use iroha_core::sumeragi::v2_status;
         use iroha_crypto::{Algorithm, Hash, KeyPair};
-        use iroha_data_model::{
-            block::consensus_v2::{
-                PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2CommitQcStatus,
-                SumeragiV2HeightContextStatus, SumeragiV2LivenessStatus, SumeragiV2Status,
-                SumeragiV2StatusPhase, finality::V2FinalityArtifact,
-            },
-            bridge::BridgeFinalityAttestationV1,
-        };
+        use iroha_data_model::sumeragi_finality::SumeragiFinalityAttestation;
         use iroha_model_base::peer::PeerId;
         use iroha_torii_shared::{
             ErrorEnvelope,
@@ -794,93 +785,8 @@ mod tests {
             },
         };
         use norito::codec::Encode as _;
-        use std::sync::{Arc, MutexGuard};
+        use std::sync::Arc;
         use tower::ServiceExt as _;
-
-        struct StatusScope {
-            _lock: MutexGuard<'static, ()>,
-        }
-
-        impl StatusScope {
-            fn new() -> Self {
-                let lock = SUMERAGI_V2_STATUS_TEST_LOCK.lock().unwrap();
-                v2_status::clear_v2_status();
-                Self { _lock: lock }
-            }
-        }
-
-        impl Drop for StatusScope {
-            fn drop(&mut self) {
-                v2_status::clear_v2_status();
-            }
-        }
-
-        fn configure_signer_and_status(
-            app: &mut SharedAppState,
-            artifact: &V2FinalityArtifact,
-        ) -> SumeragiV2Status {
-            let signer = KeyPair::try_from_seed(vec![1; 32], Algorithm::BlsNormal)
-                .expect("derive actual finality handler node signer");
-            let node_id = PeerId::new(signer.public_key().clone());
-            Arc::get_mut(app)
-                .expect("unique handler fixture")
-                .torii_proxy_bridge_signer = signer;
-            let context = &artifact.height_context;
-            assert_eq!(context.roster.len(), 4);
-            assert_eq!(artifact.commit_qc.signers.len(), 3);
-            artifact
-                .verify()
-                .expect("four-validator signed finality fixture");
-            {
-                let mut topology = app.state.commit_topology.block();
-                topology.clear();
-                for validator in &context.roster {
-                    topology.push(validator.validator.clone());
-                }
-                topology.commit();
-            }
-            let snapshot = SumeragiV2Status {
-                protocol_version: PROTOCOL_VERSION,
-                node_fingerprint: Hash::new(node_id.encode()),
-                build_fingerprint: Hash::new(b"actual finality handler fixture build"),
-                config_fingerprint: Hash::new(b"actual finality handler fixture config"),
-                restart_required: false,
-                height_context_id: context.id(),
-                height: artifact.height,
-                view: artifact.commit_qc.round.view,
-                phase: SumeragiV2StatusPhase::PendingApply,
-                leader: context.leader(artifact.commit_qc.round.view),
-                locked_prepare_qc: None,
-                highest_prepare_qc: None,
-                last_timeout_certificate: None,
-                body_state: SumeragiV2BodyState::Applied,
-                pending_persistence_id: None,
-                last_committed_height: artifact.height,
-                last_committed_subject: Some(artifact.subject),
-                height_context: SumeragiV2HeightContextStatus {
-                    epoch: context.epoch,
-                    epoch_end_height: context.epoch_end_height,
-                    mode: context.mode,
-                    epoch_seed: context.leader_seed,
-                    validator_count: 4,
-                    quorum: context.quorum,
-                },
-                last_commit_qc: Some(SumeragiV2CommitQcStatus {
-                    certificate: artifact.commit_qc.as_ref(),
-                    validator_count: 4,
-                    signer_count: 3,
-                    min_signers: context.quorum.min_signers,
-                    signed_power: 3,
-                    total_power: 4,
-                }),
-                liveness: SumeragiV2LivenessStatus::default(),
-                beacon_horizon: None,
-            };
-            snapshot
-                .validate()
-                .expect("exact authoritative handler status");
-            snapshot
-        }
 
         fn router(app: &SharedAppState) -> Router {
             Router::new()
@@ -974,193 +880,165 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn finality_attestation_handler_binds_success_and_reports_only_actual_tip_race() {
-            let _scope = StatusScope::new();
-            let (mut app, _, artifact) =
-                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(true);
-            let snapshot = configure_signer_and_status(&mut app, &artifact);
-            v2_status::set_v2_status(snapshot.clone());
+        async fn finality_attestation_handler_binds_current_node_success_and_actual_tip_race() {
+            let fixture = ReadinessNode::start_at_tip(true);
+            let app = &fixture.app;
             let challenge = [0x37; 32];
-            let response = router(&app).oneshot(request(1, challenge)).await.unwrap();
+            let response = router(app).oneshot(request(2, challenge)).await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(
                 response.headers()[axum::http::header::CONTENT_TYPE],
                 "application/x-norito"
             );
-            let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
-                .await
-                .unwrap();
-            let attestation: BridgeFinalityAttestationV1 = norito::decode_canonical_with_limits(
-                &bytes,
-                norito::canonical_decode_limits(bytes.len()),
-            )
-            .expect("canonical attestation from the actual handler");
-            attestation
-                .verify()
-                .expect("real node signature and bound statement");
-            let body = &attestation.body;
-            assert_eq!(body.challenge, challenge);
-            assert_eq!(body.network_id, *app.state.network_id_ref());
-            assert_eq!(
-                body.node_id,
-                PeerId::new(app.torii_proxy_bridge_signer.public_key().clone())
-            );
-            assert_eq!(body.node_fingerprint, snapshot.node_fingerprint);
-            assert_eq!(body.genesis_block_hash, artifact.block_hash);
-            assert_eq!(body.status.last_committed_height, 1);
-            assert_eq!(body.status.last_committed_subject, Some(artifact.subject));
-            assert_eq!(body.status.last_commit_qc, snapshot.last_commit_qc);
-            assert_eq!(body.genesis_finality_proof.finality_artifact, artifact);
-            assert_eq!(body.finality_proof.finality_artifact, artifact);
-            body.finality_proof
-                .finality_artifact
-                .verify()
-                .expect("durable signed Commit QC");
-
-            let failure = assert_failure(&app, 2, [0x38; 32], Reason::TipChanged).await;
-            let progress = failure.tip_mismatch.unwrap();
-            assert_eq!(progress.requested_height, 2);
-            assert_eq!(progress.applied_height, 1);
-            assert_eq!(progress.status_height, 1);
-        }
-
-        #[tokio::test]
-        async fn finality_attestation_latest_selects_the_durable_tip_and_signs_the_horizon() {
-            use iroha_data_model::block::consensus_v2::{BeaconHorizonStatusV1, ConsensusMode};
-
-            let _scope = StatusScope::new();
-            let (mut app, _, artifact) =
-                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(true);
-            let mut snapshot = configure_signer_and_status(&mut app, &artifact);
-            let npos = artifact.height_context.mode == ConsensusMode::Npos;
-            snapshot.beacon_horizon = Some(BeaconHorizonStatusV1 {
-                epoch_length_blocks: if npos { 10 } else { 0 },
-                next_required_pulse_height: Some(artifact.height + 4),
-                active_session_id: Some([0x6A; 32]),
-                session_covers_next_pulse: true,
-                local_provider_ready: true,
-            });
-            snapshot
-                .validate()
-                .expect("status with a published horizon");
-            v2_status::set_v2_status(snapshot.clone());
-            let challenge = [0x39; 32];
-            let response = router(&app)
-                .oneshot(selector_request("latest", challenge))
-                .await
-                .unwrap();
-            assert_eq!(response.status(), StatusCode::OK);
             assert_eq!(
                 response.headers()[axum::http::header::CACHE_CONTROL],
                 "no-store"
             );
-            let bytes = axum::body::to_bytes(response.into_body(), 16 * 1024 * 1024)
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024 * 1024)
                 .await
                 .unwrap();
-            let attestation: BridgeFinalityAttestationV1 = norito::decode_canonical_with_limits(
+            let attestation: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
                 &bytes,
                 norito::canonical_decode_limits(bytes.len()),
             )
-            .expect("canonical latest attestation");
-            attestation.verify().expect("signed latest statement");
-            assert_eq!(attestation.body.challenge, challenge);
-            assert_eq!(attestation.body.finality_proof.finality_artifact, artifact);
+            .expect("canonical current-node HTTP attestation");
+            attestation
+                .verify()
+                .expect("real node signature and current embedded certificate");
+            let body = &attestation.body;
+            assert_eq!(body.challenge, challenge);
+            assert_eq!(body.network_id, *app.state.network_id_ref());
+            let node = app.sumeragi.as_ref().unwrap();
+            assert_eq!(body.node_id, node.identity().node_id);
             assert_eq!(
-                attestation.body.status.beacon_horizon,
-                snapshot.beacon_horizon
+                body.node_fingerprint,
+                Hash::new(node.identity().node_id.encode())
             );
+            assert_eq!(body.config_fingerprint, node.identity().config_fingerprint);
+            assert_eq!(
+                body.build_fingerprint,
+                Hash::new_from_chunks(&[
+                    app.build_status.version.as_bytes(),
+                    app.build_status.git_commit_sha.as_bytes(),
+                ])
+            );
+            assert_eq!(body.status.committed_height, 2);
+            assert_eq!(body.status.applied_height, 2);
+            assert_eq!(body.genesis_finality_proof.height(), 1);
+            assert_eq!(body.finality_proof.height(), 2);
+            body.finality_proof
+                .decode_checked()
+                .expect("actual non-genesis BLS quorum proof");
+            let failure = assert_failure(app, 3, [0x38; 32], Reason::TipChanged).await;
+            let progress = failure.tip_mismatch.unwrap();
+            assert_eq!(
+                (
+                    progress.requested_height,
+                    progress.applied_height,
+                    progress.status_height
+                ),
+                (3, 2, 2)
+            );
+        }
+
+        #[tokio::test]
+        async fn finality_attestation_latest_signs_current_status_and_rejects_stopped_driver() {
+            let mut fixture = ReadinessNode::start();
+            let challenge = [0x39; 32];
+            let response = router(&fixture.app)
+                .oneshot(selector_request("latest", challenge))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024 * 1024)
+                .await
+                .unwrap();
+            let attestation: SumeragiFinalityAttestation = norito::decode_canonical_with_limits(
+                &bytes,
+                norito::canonical_decode_limits(bytes.len()),
+            )
+            .unwrap();
+            attestation.verify().unwrap();
+            assert_eq!(attestation.body.challenge, challenge);
+            assert_eq!(attestation.body.finality_proof.height(), 1);
             let mut tampered = attestation;
-            tampered
-                .body
-                .status
-                .beacon_horizon
-                .as_mut()
-                .expect("signed horizon")
-                .local_provider_ready = false;
+            tampered.body.status.view += 1;
             assert!(
                 tampered.verify().is_err(),
-                "the signature covers the horizon"
+                "node signature covers actual status"
             );
-
-            v2_status::clear_v2_status();
-            let response = router(&app)
-                .oneshot(selector_request("latest", [0x3A; 32]))
-                .await
-                .unwrap();
-            assert_eq!(response.status().as_u16(), 503);
-            let bytes =
-                axum::body::to_bytes(response.into_body(), FINALITY_ATTESTATION_FAILURE_MAX_BYTES)
-                    .await
-                    .unwrap();
-            let envelope: ErrorEnvelope = norito::decode_canonical_with_limits(
-                &bytes,
-                norito::canonical_decode_limits(bytes.len()),
-            )
-            .expect("canonical latest failure envelope");
-            let failure = envelope
-                .details
-                .and_then(|details| details.finality_attestation_failure)
-                .expect("finality failure detail");
-            assert_eq!(failure.reason, Reason::ConsensusUninitialized);
-            assert!(
-                failure.matches(
-                    1,
-                    [0x3A; 32],
-                    &PeerId::new(app.torii_proxy_bridge_signer.public_key().clone()),
-                    *app.state.network_id_ref(),
-                ),
-                "an uninitialized latest selector echoes a valid positive height"
-            );
+            fixture.stop();
+            assert_failure(&fixture.app, 1, [0x3A; 32], Reason::RestartRequired).await;
         }
 
         #[tokio::test]
-        async fn finality_attestation_handler_distinguishes_empty_startup_and_conflicting_state() {
-            let _scope = StatusScope::new();
-            let (_, _, artifact) =
-                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(false);
-            let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
-            let committed = configure_signer_and_status(&mut app, &artifact);
+        async fn finality_attestation_handler_distinguishes_absent_driver_and_foreign_signer() {
+            let app = crate::tests_runtime_handlers::mk_app_state_for_tests();
             assert_failure(&app, 1, [0x41; 32], Reason::ConsensusUninitialized).await;
-
-            let mut startup = committed.clone();
-            startup.phase = SumeragiV2StatusPhase::AwaitingProposal;
-            startup.body_state = SumeragiV2BodyState::Missing;
-            startup.last_committed_height = 0;
-            startup.last_committed_subject = None;
-            startup.last_commit_qc = None;
-            startup
-                .validate()
-                .expect("initialized pre-genesis reducer status");
-            v2_status::set_v2_status(startup.clone());
-            assert_failure(&app, 1, [0x42; 32], Reason::GenesisUncommitted).await;
-
-            v2_status::set_v2_status(committed);
-            assert_failure(&app, 1, [0x43; 32], Reason::ConflictingState).await;
-            startup.restart_required = true;
-            v2_status::set_v2_status(startup);
-            assert_failure(&app, 1, [0x44; 32], Reason::RestartRequired).await;
+            let mut fixture = ReadinessNode::start();
+            Arc::get_mut(&mut fixture.app)
+                .unwrap()
+                .torii_proxy_bridge_signer =
+                KeyPair::from_seed(vec![0xA2; 32], Algorithm::BlsNormal);
+            assert_failure(&fixture.app, 1, [0x42; 32], Reason::InternalFailure).await;
         }
 
         #[tokio::test]
-        async fn finality_attestation_handler_rejects_missing_and_corrupt_durable_proof() {
-            let _scope = StatusScope::new();
-            let (mut app, _, artifact) =
-                crate::tests_runtime_handlers::app_with_indexed_sccp_message_for_test(false);
-            v2_status::set_v2_status(configure_signer_and_status(&mut app, &artifact));
-            let sidecar = app.kura.v2_finality_artifact_path_for_testing(1);
-            assert!(!sidecar.exists());
-            assert_failure(&app, 1, [0x51; 32], Reason::FinalityUnavailable).await;
-            std::fs::create_dir_all(sidecar.parent().unwrap()).unwrap();
-            let corrupt_bytes = b"malformed-finality-sidecar";
-            std::fs::write(&sidecar, corrupt_bytes).unwrap();
-            assert_eq!(std::fs::read(&sidecar).unwrap(), corrupt_bytes);
-            assert_failure(&app, 1, [0x52; 32], Reason::FinalityUnavailable).await;
+        async fn finality_attestation_handler_rejects_missing_and_corrupt_embedded_certificate() {
+            use iroha_core::{
+                kura::Kura,
+                query::store::LiveQueryStore,
+                state::{State, StateReadOnly, World},
+            };
+            use iroha_data_model::block::CommitCertificate;
+            for corrupt in [false, true] {
+                let mut fixture = ReadinessNode::start();
+                let view = fixture.app.state.view();
+                let block = view
+                    .latest_block()
+                    .unwrap()
+                    .as_ref()
+                    .clone()
+                    .with_commit_certificate(corrupt.then(|| {
+                        CommitCertificate::new(Vec::new(), Vec::new(), b"invalid result".to_vec())
+                    }));
+                let header = block.header();
+                let hash = block.hash();
+                drop(view);
+                let kura = Kura::blank_kura_for_testing();
+                kura.store_block(block)
+                    .expect("persist canonical deliberately damaged certificate fixture");
+                let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
+                    World::default(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                    fixture.app.state.chain_id_ref().clone(),
+                    *fixture.app.state.network_id_ref(),
+                ));
+                let mut hashes = state.block_hashes.block();
+                hashes.push_for_tests(hash);
+                hashes.commit_for_tests();
+                state.update_latest_block_header_cache_for_tests(header);
+                let app = Arc::get_mut(&mut fixture.app).unwrap();
+                app.state = state;
+                app.kura = kura;
+                assert_failure(
+                    &fixture.app,
+                    1,
+                    [0x51; 32],
+                    if corrupt {
+                        Reason::ConflictingState
+                    } else {
+                        Reason::FinalityUnavailable
+                    },
+                )
+                .await;
+            }
         }
 
         #[tokio::test]
         async fn finality_attestation_handler_rejects_auth_challenge_and_admission_before_startup()
         {
-            let _scope = StatusScope::new();
             for case in 0..3 {
                 let mut app = crate::tests_runtime_handlers::mk_app_state_for_tests();
                 let app_mut = Arc::get_mut(&mut app).unwrap();

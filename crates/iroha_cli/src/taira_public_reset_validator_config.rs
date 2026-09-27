@@ -81,9 +81,12 @@ fn checked_torii_bind_address(value: &str) -> Result<std::net::SocketAddr, Strin
 }
 
 fn checked_trusted_proxy_ip(value: &str) -> Result<std::net::IpAddr, String> {
-    let address = value.parse::<std::net::IpAddr>()
+    let address = value
+        .parse::<std::net::IpAddr>()
         .map_err(|_| "trusted proxy must be one canonical unicast IP address".to_owned())?;
-    if address.to_string() != value || address.is_unspecified() || address.is_multicast()
+    if address.to_string() != value
+        || address.is_unspecified()
+        || address.is_multicast()
         || matches!(address, std::net::IpAddr::V4(address) if address.is_broadcast())
         || matches!(address, std::net::IpAddr::V6(address) if address.to_ipv4_mapped().is_some())
     {
@@ -91,7 +94,6 @@ fn checked_trusted_proxy_ip(value: &str) -> Result<std::net::IpAddr, String> {
     }
     Ok(address)
 }
-
 /// Consume private bytes only through native descriptor custody and create a new private file.
 pub(super) fn materialize(args: &MaterializeValidatorConfig) -> Result<()> {
     validate_absolute_normal_path(&args.localnet_dir, "generated network directory")?;
@@ -237,7 +239,8 @@ fn state_paths(peer: usize) -> Vec<(Vec<&'static str>, PathBuf, &'static str)> {
 /// public callers distinct rate-limit identities. Localnet bypasses are removed
 /// entirely so malformed forwarded chains cannot inherit a loopback exemption.
 fn project_public_torii_ingress(
-    torii: &mut toml::Table, trusted_proxy_ips: &[std::net::IpAddr],
+    torii: &mut toml::Table,
+    trusted_proxy_ips: &[std::net::IpAddr],
 ) -> Result<()> {
     use iroha_config::parameters::defaults::torii;
 
@@ -284,13 +287,16 @@ fn project_public_torii_ingress(
     for address in trusted_proxy_ips {
         checked_trusted_proxy_ip(&address.to_string()).map_err(|error| eyre!(error))?;
         let host = format!("{address}/{}", if address.is_ipv4() { 32 } else { 128 });
-        if !proxies.contains(&host) { proxies.push(host); }
+        if !proxies.contains(&host) {
+            proxies.push(host);
+        }
     }
-    transport.insert("trusted_proxy_cidrs".into(),
-        toml::Value::Array(proxies.into_iter().map(toml::Value::String).collect()));
+    transport.insert(
+        "trusted_proxy_cidrs".into(),
+        toml::Value::Array(proxies.into_iter().map(toml::Value::String).collect()),
+    );
     Ok(())
 }
-
 #[allow(clippy::too_many_arguments)]
 fn project_config(
     bytes: &[u8],
@@ -751,14 +757,31 @@ mod tests {
         let ips = ["192.168.64.1", "2001:db8::1", "192.168.64.1", "127.0.0.1"]
             .map(|ip| checked_trusted_proxy_ip(ip).unwrap());
         project_public_torii_ingress(&mut torii, &ips).unwrap();
-        assert_eq!(torii["transport"]["trusted_proxy_cidrs"], toml::Value::Array(vec![
-            "127.0.0.1/32".into(), "::1/128".into(),
-            "192.168.64.1/32".into(), "2001:db8::1/128".into(),
-        ]));
+        assert_eq!(
+            torii["transport"]["trusted_proxy_cidrs"],
+            toml::Value::Array(vec![
+                "127.0.0.1/32".into(),
+                "::1/128".into(),
+                "192.168.64.1/32".into(),
+                "2001:db8::1/128".into(),
+            ])
+        );
         assert_eq!(torii["preauth_allow_cidrs"], toml::Value::Array(Vec::new()));
-        assert_eq!(torii["api_rate_limit_bypass_cidrs"], toml::Value::Array(Vec::new()));
-        for invalid in ["0.0.0.0", "::", "224.0.0.1", "ff02::1", "255.255.255.255",
-            "192.168.64.0/24", "192.168.64.1:8080", "localhost", "::ffff:192.168.64.1"] {
+        assert_eq!(
+            torii["api_rate_limit_bypass_cidrs"],
+            toml::Value::Array(Vec::new())
+        );
+        for invalid in [
+            "0.0.0.0",
+            "::",
+            "224.0.0.1",
+            "ff02::1",
+            "255.255.255.255",
+            "192.168.64.0/24",
+            "192.168.64.1:8080",
+            "localhost",
+            "::ffff:192.168.64.1",
+        ] {
             assert!(checked_trusted_proxy_ip(invalid).is_err(), "{invalid}");
         }
     }
@@ -1026,7 +1049,10 @@ mod tests {
         let mut with_proxy = arguments.clone();
         with_proxy.extend(["--trusted-proxy-ip".to_owned(), "192.168.64.1".to_owned()]);
         let proxy = <Command as clap::Parser>::try_parse_from(with_proxy).unwrap();
-        assert_eq!(proxy.args.trusted_proxy_ip, ["192.168.64.1".parse::<std::net::IpAddr>().unwrap()]);
+        assert_eq!(
+            proxy.args.trusted_proxy_ip,
+            ["192.168.64.1".parse::<std::net::IpAddr>().unwrap()]
+        );
         let full_arguments = ["iroha", "taira", "public-reset"]
             .into_iter()
             .map(str::to_owned)

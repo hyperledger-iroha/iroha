@@ -169,7 +169,10 @@ impl Core {
                 header.payload_len > params.max_block_bytes,
                 Defect::PayloadTooLarge,
             ),
-            (header.payload_len == 0, Defect::EmptyPayload),
+            (
+                header.payload_len == 0 && !cfg!(sumeragi_mutation = "MA8"),
+                Defect::EmptyPayload,
+            ),
         ];
         if let Some((_, defect)) = checks.into_iter().find(|(failed, _)| *failed) {
             return Some(defect);

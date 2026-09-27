@@ -459,40 +459,30 @@ fn det_a6_flag_is_signed() {
     assert_eq!(h.core.tip.height, 1);
 }
 
-/// MA8, SR39: a fresh block at a view `≥ empty_after_views` must be `EMPTY` and unflagged; a
-/// flagged `EMPTY` is a signed defect (evidence, early timeout), an unflagged one is accepted.
+/// Empty blocks are defects regardless of view, flag or otherwise valid authentication.
 #[test]
-fn det_a7_empty_after_views_never_flagged() {
-    let mut h = H::new(4, pick::set_b(0));
-    let e = h.params.empty_after_views;
-    for view in 1..=e {
-        h.enter_view(view);
+fn det_a7_empty_proposals_are_rejected_at_every_view() {
+    for view in [0, 1, 2, 7] {
+        for attest in [false, true] {
+            let mut h = H::new(4, pick::set_b(0));
+            for next in 1..=view {
+                h.enter_view(next);
+            }
+            let justify = h.core.high_tc.clone();
+            let mut block = h.block(view, b"");
+            block.header.attest = attest;
+            let out = prop(&mut h, view, &block, justify);
+            assert!(matches!(
+                evidence(&out)[..],
+                [Evidence::InvalidProposal {
+                    defect: Defect::EmptyPayload,
+                    ..
+                }]
+            ));
+            assert_eq!(timeouts(&out).len(), 1, "early timeout");
+            assert!(h.core.proposal.is_none());
+        }
     }
-    let justify = h.core.high_tc.clone();
-    let flagged = H::flagged(h.block(e, b""));
-    let out = prop(&mut h, e, &flagged, justify.clone());
-    let reported = evidence(&out);
-    assert!(
-        matches!(
-            reported[..],
-            [Evidence::InvalidProposal {
-                defect: Defect::FlaggedEmpty,
-                ..
-            }]
-        ),
-        "{reported:?}"
-    );
-    assert_eq!(timeouts(&out).len(), 1, "early timeout");
-
-    let mut h = H::new(4, pick::set_b(0));
-    for view in 1..=e {
-        h.enter_view(view);
-    }
-    let justify = h.core.high_tc.clone();
-    let plain = h.block(e, b"");
-    let out = prop(&mut h, e, &plain, justify);
-    assert!(evidence(&out).is_empty());
-    assert!(h.core.proposal.is_some(), "accepted");
 }
 
 /// MA9, SR39 with SR27/SR25: after a restart the node re-creates exactly its signed Prepare

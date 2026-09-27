@@ -6386,8 +6386,8 @@ pub(crate) async fn handle_v1_bridge_finality(
         admission,
         "bridge finality verification worker failed",
         move || {
-            let proof = iroha_core::bridge::build_finality_proof(state.as_ref(), height)
-                .map_err(map_bridge_finality_error)?;
+            let proof = iroha_core::sumeragi::finality::build_proof(&state.view(), height)
+                .map_err(map_current_finality_error)?;
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(proof).into_response());
             }
@@ -6406,7 +6406,9 @@ pub(crate) async fn handle_v1_bridge_finality(
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_attestation(
     state: Arc<CoreState>,
-    status: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    status: iroha_data_model::sumeragi::SumeragiStatus,
+    identity: iroha_core::sumeragi::node::NodeIdentity,
+    build_fingerprint: iroha_crypto::Hash,
     height: Option<u64>,
     challenge: [u8; 32],
     signer: KeyPair,
@@ -6420,11 +6422,17 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
             let view = state.view();
             let height =
                 height.unwrap_or_else(|| u64::try_from(view.height()).unwrap_or(u64::MAX).max(1));
-            let status_height = status.last_committed_height;
+            let status_height = status.committed_height;
             let network_id = *view.network_id();
-            let node_id = PeerId::new(signer.public_key().clone());
-            let attestation = match iroha_core::bridge::build_finality_attestation(
-                &view, status, height, challenge, &signer,
+            let node_id = identity.node_id.clone();
+            let attestation = match iroha_core::sumeragi::finality::build_attestation(
+                &view,
+                status,
+                &identity,
+                build_fingerprint,
+                height,
+                challenge,
+                &signer,
             ) {
                 Ok(attestation) => attestation,
                 Err(err) => {
@@ -6447,7 +6455,7 @@ pub(crate) async fn handle_v1_bridge_finality_attestation(
     )
     .await
 }
-/// GET /v1/bridge/finality/bundle/{height} — Compact commitment + exact v2 proof for a block.
+/// GET /v1/bridge/finality/bundle/{height} — Network-bound current certificate proof.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_bundle(
     state: Arc<CoreState>,
@@ -6459,8 +6467,8 @@ pub(crate) async fn handle_v1_bridge_finality_bundle(
         admission,
         "bridge finality bundle worker failed",
         move || {
-            let bundle = iroha_core::bridge::build_finality_bundle(state.as_ref(), height)
-                .map_err(map_bridge_finality_error)?;
+            let bundle = iroha_core::sumeragi::finality::build_bundle(&state.view(), height)
+                .map_err(map_current_finality_error)?;
             if matches!(format, crate::utils::ResponseFormat::Norito) {
                 return Ok(crate::NoritoBody(bundle).into_response());
             }
@@ -6468,6 +6476,21 @@ pub(crate) async fn handle_v1_bridge_finality_bundle(
         },
     )
     .await
+}
+fn map_current_finality_error(err: iroha_core::sumeragi::finality::ProofError) -> Error {
+    use iroha_core::sumeragi::{certified_chain::ChainReadError, finality::ProofError};
+    match err {
+        ProofError::Chain(
+            ChainReadError::NotCommitted { .. }
+            | ChainReadError::NotInView { .. }
+            | ChainReadError::MissingCertificate { .. },
+        ) => Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        )),
+        _ => Error::Query(iroha_data_model::ValidationFail::InternalError(
+            err.to_string(),
+        )),
+    }
 }
 fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
     match err {
@@ -6486,7 +6509,7 @@ fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Er
 /// Expose only exact snapshot-height races as bound progress. All proof, identity,
 /// hash, and signature failures retain their fixed error classification.
 fn bridge_finality_attestation_error_response(
-    err: iroha_core::bridge::BridgeFinalityAttestationBuildError,
+    err: iroha_core::sumeragi::finality::AttestationBuildError,
     requested_height: u64,
     status_height: u64,
     challenge: [u8; 32],
@@ -6494,8 +6517,7 @@ fn bridge_finality_attestation_error_response(
     network_id: iroha_data_model::NetworkId,
     format: crate::utils::ResponseFormat,
 ) -> Result<Response> {
-    use iroha_core::bridge::BridgeFinalityAttestationBuildError as BuildError;
-    use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
+    use iroha_core::sumeragi::finality::AttestationBuildError as BuildError;
     use iroha_torii_shared::{
         bridge_attestation::FinalityAttestationFailureReason as Reason,
         bridge_finality::BridgeFinalityAttestationTipMismatchV1,
@@ -6509,7 +6531,7 @@ fn bridge_finality_attestation_error_response(
         // Core checks requested == immutable state tip before reading either proof.
         // This exact later error follows proof, network, node and status validation;
         // it therefore identifies only the independently sampled status height race.
-        BuildError::InvalidBody(ValidationError::StatusHeightMismatch) => Some(requested_height),
+        BuildError::StatusHeightMismatch => Some(requested_height),
         _ => None,
     };
     if let Some(applied_height) = applied_height {
@@ -6550,10 +6572,11 @@ fn bridge_finality_attestation_error_response(
 #[cfg(test)]
 mod bridge_finality_attestation_progress_tests {
     use super::*;
-    use iroha_core::bridge::{
-        BridgeFinalityAttestationBuildError as BuildError, BridgeFinalityError,
+    use iroha_core::sumeragi::{
+        certified_chain::ChainReadError,
+        finality::{AttestationBuildError as BuildError, ProofError},
     };
-    use iroha_data_model::bridge::BridgeFinalityAttestationValidationError as ValidationError;
+    use iroha_data_model::sumeragi_finality::FinalityError;
     use iroha_torii_shared::{
         bridge_attestation::{
             FINALITY_ATTESTATION_FAILURE_MAX_BYTES, FinalityAttestationFailure,
@@ -6612,7 +6635,7 @@ mod bridge_finality_attestation_progress_tests {
             ] {
                 let (node_id, network_id) = identity();
                 let error = if status_race {
-                    BuildError::InvalidBody(ValidationError::StatusHeightMismatch)
+                    BuildError::StatusHeightMismatch
                 } else {
                     BuildError::HeightIsNotDurableTip {
                         requested,
@@ -6664,63 +6687,43 @@ mod bridge_finality_attestation_progress_tests {
         let mut failures = vec![
             BuildError::EmptyState,
             BuildError::HeightOverflow,
-            BuildError::InvalidSignerAlgorithm,
+            BuildError::InvalidSigner,
             BuildError::Signing("signing failed".to_owned()),
+            BuildError::RestartRequired,
+            BuildError::InvalidStatus,
+            BuildError::InvalidBody(FinalityError("changed identity or signature".into())),
         ];
         for error in [
-            BridgeFinalityError::InvalidHeight(0),
-            BridgeFinalityError::FinalityArtifactNotFound(10),
-            BridgeFinalityError::FinalityArtifactRead {
-                height: 10,
-                reason: "corrupt certificate".to_owned(),
-            },
-            BridgeFinalityError::FinalityArtifactMismatch { height: 10 },
+            ProofError::Chain(ChainReadError::NotCommitted { height: 10 }),
+            ProofError::Chain(ChainReadError::MissingCertificate { height: 10 }),
+            ProofError::Chain(ChainReadError::HeaderMismatch { height: 10 }),
+            ProofError::UnverifiedCommittee(10),
+            ProofError::Portable(FinalityError("invalid certificate".into())),
         ] {
             failures.push(BuildError::FinalityProof(error.clone()));
             failures.push(BuildError::GenesisFinalityProof(error));
         }
-        for error in [
-            ValidationError::ZeroChallenge,
-            ValidationError::NodeFingerprintMismatch,
-            ValidationError::StatusNodeMismatch,
-            ValidationError::InvalidStatus,
-            ValidationError::RestartRequired,
-            ValidationError::ProtocolVersionMismatch,
-            ValidationError::StatusSubjectMismatch,
-            ValidationError::StatusCommitMissing,
-            ValidationError::StatusCommitMismatch,
-            ValidationError::InvalidNodeSignature,
-        ] {
-            failures.push(BuildError::InvalidBody(error));
-        }
-        let left = HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"committed"));
-        let right = HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"foreign proof"));
-        failures.push(BuildError::FinalityTipMismatch {
-            committed_tip_hash: left,
-            proof_block_hash: right,
-        });
-        failures.push(BuildError::GenesisFinalityMismatch {
-            committed_genesis_hash: left,
-            proof_block_hash: right,
-        });
         for error in failures {
             let (node_id, network_id) = identity();
             let expected_reason = match &error {
-                BuildError::HeightOverflow
-                | BuildError::InvalidSignerAlgorithm
-                | BuildError::Signing(_) => Reason::InternalFailure,
-                BuildError::InvalidBody(ValidationError::RestartRequired) => {
-                    Reason::RestartRequired
+                BuildError::HeightOverflow | BuildError::InvalidSigner | BuildError::Signing(_) => {
+                    Reason::InternalFailure
                 }
-                BuildError::FinalityProof(BridgeFinalityError::FinalityArtifactMismatch {
-                    ..
-                })
+                BuildError::RestartRequired => Reason::RestartRequired,
+                BuildError::FinalityProof(
+                    ProofError::Chain(
+                        ChainReadError::NotCommitted { .. }
+                        | ChainReadError::MissingCertificate { .. },
+                    )
+                    | ProofError::UnverifiedCommittee(_),
+                )
                 | BuildError::GenesisFinalityProof(
-                    BridgeFinalityError::FinalityArtifactMismatch { .. },
-                ) => Reason::ConflictingState,
-                BuildError::FinalityProof(_) | BuildError::GenesisFinalityProof(_) => {
-                    Reason::FinalityUnavailable
-                }
+                    ProofError::Chain(
+                        ChainReadError::NotCommitted { .. }
+                        | ChainReadError::MissingCertificate { .. },
+                    )
+                    | ProofError::UnverifiedCommittee(_),
+                ) => Reason::FinalityUnavailable,
                 _ => Reason::ConflictingState,
             };
             let response = bridge_finality_attestation_error_response(
@@ -6813,7 +6816,7 @@ mod bridge_finality_attestation_progress_tests {
                 requested: 11,
                 committed: 9,
             },
-            BuildError::InvalidBody(ValidationError::StatusHeightMismatch),
+            BuildError::StatusHeightMismatch,
         ] {
             let (node_id, network_id) = identity();
             let response = bridge_finality_attestation_error_response(
@@ -48268,10 +48271,7 @@ pub fn handle_v1_sumeragi_status_sse(
                             break Some((Ok(event), (ticker, sumeragi_handle)));
                         }
                         Err(error) => {
-                            iroha_logger::error!(
-                                ?error,
-                                "failed to serialize the Sumeragi status"
-                            );
+                            iroha_logger::error!(?error, "failed to serialize the Sumeragi status");
                         }
                     }
                 }

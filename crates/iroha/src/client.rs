@@ -16446,6 +16446,7 @@ pub use context::ClientBuilder;
 include!("client/canonical_request_auth.rs");
 include!("client/operator_request_auth.rs");
 include!("client/activation_evidence.rs");
+include!("client/sumeragi_finality.rs");
 /// Representation of `Iroha` client.
 impl Client {
     /// Configure a new client before validating its immutable context.

@@ -68,7 +68,7 @@ impl Core {
 
     /// Push `BuildPayload{req}` with a fresh request id.
     fn request_build(&mut self) {
-        if self.leader_eligible().is_none() {
+        if self.leader_eligible().is_none() || (self.view > 0 && cfg!(sumeragi_mutation = "ML13")) {
             self.build = Build::Idle;
             return;
         }
@@ -131,12 +131,7 @@ impl Core {
         }
     }
 
-    fn payload_ready(
-        &mut self,
-        req: u64,
-        (payload, attest): (Vec<u8>, bool),
-        ready: bool,
-    ) {
+    fn payload_ready(&mut self, req: u64, (payload, attest): (Vec<u8>, bool), ready: bool) {
         // Invalid or absent work never substitutes a heartbeat block.
         let too_large =
             u32::try_from(payload.len()).map_or(true, |len| len > self.cfg.params.max_block_bytes);
@@ -148,7 +143,9 @@ impl Core {
             } else {
                 self.build = Build::IdleWait {
                     req,
-                    until: self.now.saturating_add(self.cfg.params.payload_retry_interval),
+                    until: self
+                        .now
+                        .saturating_add(self.cfg.params.payload_retry_interval),
                 };
             }
             return;

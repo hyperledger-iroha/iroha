@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use super::{
     crypto::{SigSlot, SimSigner, aggregate, parse_preimage},
-    driver::{block_exec, decode_txs, reference_exec},
+    driver::{block_exec, decode_txs, encode_tx, reference_exec},
     host::BacklogBound,
     scenario::Perf,
     world::{Inst, World},
@@ -160,7 +160,7 @@ pub fn covers(record: &SafetyRecord, slot: &SigSlot) -> bool {
     }
 }
 
-/// Build a committed chain of `len` empty blocks at view 0 signed by `signers` (F17).
+/// Build a committed chain of `len` transaction blocks at view 0 signed by `signers` (F17).
 pub fn build_chain(
     inst: &Inst,
     signers: &[SimSigner],
@@ -172,20 +172,21 @@ pub fn build_chain(
     for h in 1..=len {
         let committee = inst.committee(h);
         let topo = Topology::compute(crypto, &inst.id, committee, h, 0, inst.window, &[]);
+        let payload = encode_tx(u64::MAX - h, false, 0);
         let header = BlockHeader {
             instance: inst.id,
             height: h,
             origin_view: 0,
             parent_hash,
             parent_result,
-            payload_hash: preimage::payload_hash(crypto, &[]),
-            payload_len: 0,
+            payload_hash: preimage::payload_hash(crypto, &payload),
+            payload_len: u32::try_from(payload.len()).unwrap(),
             proposer: topo.leader(0),
             skipped_leaders: Vec::new(),
             attest: false,
         };
         let bh = preimage::block_hash(crypto, &header);
-        let ExecOutcome::Valid(result) = reference_exec(&parent_result, &[]) else {
+        let ExecOutcome::Valid(result) = reference_exec(&parent_result, &payload) else {
             break;
         };
         let msg = preimage::vote_preimage(VoteKind::Commit, &inst.id, h, 0, &bh, &result, false);
@@ -210,13 +211,7 @@ pub fn build_chain(
             attest: false,
             attestations: Vec::new(),
         };
-        chain.push((
-            Block {
-                header,
-                payload: Vec::new(),
-            },
-            qc,
-        ));
+        chain.push((Block { header, payload }, qc));
         parent_hash = bh;
         parent_result = result;
     }
@@ -411,10 +406,10 @@ impl World {
                 status.footprint
             ));
         }
-        // O-MEM of the body store (§8.4): per height at most `empty_after_views` blocks'
-        // worth of payload, and nothing of an applied height.
-        let params = self.instances[self.replicas[r].inst].params;
-        let limit = u64::from(params.max_block_bytes).saturating_mul(params.empty_after_views);
+        // Durable bodies remain available for delayed certificates until their height
+        // applies. Model the production store's finite 1 GiB capacity; local memory
+        // remains independently bounded above. A view count is not a custody proof.
+        let limit = 1_u64 << 30;
         let applied = self.replicas[r].applied.0;
         let mut per_height: BTreeMap<u64, u64> = BTreeMap::new();
         for block in self.replicas[r].bodies.values() {
@@ -601,7 +596,25 @@ impl World {
                         .is_some_and(|core| !core.abstaining())
             })
             .count();
-        able >= committee.q()
+        let work = self
+            .replicas
+            .iter()
+            .filter(|rep| rep.inst == inst)
+            .any(|rep| {
+                !self.machines[rep.machine].byz
+                    && rep.txs.iter().any(|(id, bytes)| {
+                        !rep.quarantine.contains(id)
+                            && decode_txs(bytes).iter().any(|(_, poison)| !poison)
+                    })
+            });
+        let lagging = self
+            .replicas
+            .iter()
+            .filter(|rep| rep.inst == inst)
+            .map(|rep| rep.applied.0)
+            .min()
+            .is_some_and(|minimum| minimum + 1 < height);
+        able >= committee.q() && (work || lagging)
     }
 
     /// O-LIVE and P5 deadlines (called at every step).

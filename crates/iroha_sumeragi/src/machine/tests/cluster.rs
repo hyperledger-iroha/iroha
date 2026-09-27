@@ -777,55 +777,42 @@ fn late_entrant_repush(local: LocalParams) {
     );
 }
 
-/// `det_l21_local_queue_moves_no_timer` (ML21; F35): an idle chain, n = 4; `PayloadReady` is
-/// delivered only at the `f + 1` non-leaders B, C (with and without D crashed) → nobody times
-/// out before `t_enter + P(0) + T`, view 0 commits the heartbeat, `skipped_leaders` stays empty.
+/// Idle replicas retain their height through view changes, then commit real work.
 #[test]
-fn det_l21_local_queue_moves_no_timer() {
-    use std::{cell::Cell, rc::Rc};
+fn det_l21_idle_work_wakes_without_heartbeat() {
     for crashed in [false, true] {
         let mut c = Cluster::with(4, LocalParams::default(), ChainParams::default(), true);
-        let live: Vec<usize> = if crashed {
+        let live = if crashed {
             vec![0, 1, 2]
         } else {
             vec![0, 1, 2, 3]
         };
         if crashed {
             c.crash(3);
-            c.until_demoted(&live, 3, 600_000);
         }
-        c.run_until(c.now + 12_000);
-        // The first moment every live node has entered a common height.
-        let target = live.iter().map(|i| c.core(*i).height).max().unwrap() + 1;
-        while !live.iter().all(|i| c.core(*i).height == target) {
-            assert!(c.now < 1_200_000, "every live node enters {target}");
-            c.run_until(c.now + 1);
-        }
-        let leader = usize::try_from(c.core(live[0]).topo.leader(0)).unwrap();
-        let queued: Vec<usize> = live
-            .iter()
-            .copied()
-            .filter(|i| *i != leader)
-            .take(2)
-            .collect();
-        let timeouts = Rc::new(Cell::new(0usize));
-        let t = Rc::clone(&timeouts);
-        c.filter = Box::new(move |_, _, msg| {
-            if matches!(msg, WireMessage::Timeout(x) if x.height == target) {
-                t.set(t.get() + 1);
+        c.run_until(30_000);
+        assert_eq!(c.min_height(&live), 0);
+        assert!(
+            c.committed.is_empty(),
+            "idle view changes never create blocks"
+        );
+        c.idle = false;
+        for i in &live {
+            let req = match c.core(*i).build {
+                super::super::Build::IdleWait { req, .. }
+                | super::super::Build::Requested { req, .. } => Some(req),
+                _ => None,
+            };
+            if let Some(req) = req {
+                c.inject(c.now + 1, *i, Event::PayloadReady { req });
             }
-            false
-        });
-        for i in &queued {
-            c.inject(c.now + 100, *i, Event::PayloadReady { req: 0 });
         }
-        c.run_until(c.now + 12_000);
-        assert_eq!(timeouts.get(), 0, "crashed {crashed}: no timer moved");
-        assert_eq!(c.commit_views.get(&target), Some(&0), "crashed {crashed}");
-        let block = c.blocks.get(&target).expect("the heartbeat committed");
-        assert_eq!(block.header.origin_view, 0);
-        assert!(block.header.skipped_leaders.is_empty());
-        assert!(block.payload.is_empty(), "the heartbeat");
+        c.run_until(c.now + 120_000);
+        assert!(
+            c.min_height(&live) >= 3,
+            "pending work progresses after idle view changes"
+        );
+        assert!(c.blocks.values().all(|block| !block.payload.is_empty()));
     }
 }
 

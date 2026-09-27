@@ -1,9 +1,10 @@
 //! Exact failure classification for the challenge-bound finality endpoint.
 use axum::response::IntoResponse as _;
-use iroha_core::bridge::{BridgeFinalityAttestationBuildError as BuildError, BridgeFinalityError};
-use iroha_data_model::{
-    block::consensus_v2::SumeragiV2Status, bridge::BridgeFinalityAttestationValidationError,
+use iroha_core::sumeragi::{
+    certified_chain::ChainReadError,
+    finality::{AttestationBuildError as BuildError, ProofError, status_is_consistent},
 };
+use iroha_data_model::sumeragi::SumeragiStatus;
 use iroha_torii_shared::bridge_attestation::{
     FinalityAttestationFailure, FinalityAttestationFailureReason as Reason,
 };
@@ -11,15 +12,15 @@ use iroha_torii_shared::bridge_attestation::{
 /// Reject restart or contradictory status before deciding whether consensus is uninitialized.
 pub(crate) fn startup_failure(
     restart_required: bool,
-    status: Option<&SumeragiV2Status>,
+    status: Option<&SumeragiStatus>,
 ) -> Option<Reason> {
-    if restart_required || status.is_some_and(|value| value.restart_required) {
+    if restart_required || status.is_some_and(|value| value.is_halted()) {
         return Some(Reason::RestartRequired);
     }
     if status.is_none() {
         return Some(Reason::ConsensusUninitialized);
     }
-    if status.is_some_and(|value| value.validate().is_err()) {
+    if status.is_some_and(|value| !status_is_consistent(value)) {
         return Some(Reason::ConflictingState);
     }
     None
@@ -30,24 +31,24 @@ pub(crate) fn build_failure(error: BuildError, status_committed_height: u64) -> 
     match error {
         BuildError::EmptyState if status_committed_height == 0 => Reason::GenesisUncommitted,
         BuildError::EmptyState => Reason::ConflictingState,
-        BuildError::HeightIsNotDurableTip { .. } => Reason::TipChanged,
-        BuildError::FinalityTipMismatch { .. } | BuildError::GenesisFinalityMismatch { .. } => {
-            Reason::ConflictingState
+        BuildError::HeightIsNotDurableTip { .. } | BuildError::StatusHeightMismatch => {
+            Reason::TipChanged
         }
-        BuildError::InvalidBody(BridgeFinalityAttestationValidationError::RestartRequired) => {
-            Reason::RestartRequired
+        BuildError::RestartRequired => Reason::RestartRequired,
+        BuildError::InvalidStatus | BuildError::InvalidBody(_) => Reason::ConflictingState,
+        BuildError::FinalityProof(error) | BuildError::GenesisFinalityProof(error) => match error {
+            ProofError::Chain(
+                ChainReadError::NotCommitted { .. }
+                | ChainReadError::NotInView { .. }
+                | ChainReadError::MissingCertificate { .. },
+            )
+            | ProofError::UnverifiedCommittee(_)
+            | ProofError::Chain(ChainReadError::Committee { .. }) => Reason::FinalityUnavailable,
+            _ => Reason::ConflictingState,
+        },
+        BuildError::HeightOverflow | BuildError::InvalidSigner | BuildError::Signing(_) => {
+            Reason::InternalFailure
         }
-        BuildError::InvalidBody(_) => Reason::ConflictingState,
-        BuildError::FinalityProof(BridgeFinalityError::FinalityArtifactMismatch { .. })
-        | BuildError::GenesisFinalityProof(BridgeFinalityError::FinalityArtifactMismatch {
-            ..
-        }) => Reason::ConflictingState,
-        BuildError::FinalityProof(_) | BuildError::GenesisFinalityProof(_) => {
-            Reason::FinalityUnavailable
-        }
-        BuildError::HeightOverflow
-        | BuildError::InvalidSignerAlgorithm
-        | BuildError::Signing(_) => Reason::InternalFailure,
     }
 }
 
@@ -416,59 +417,55 @@ mod tests {
             Some(Reason::ConsensusUninitialized)
         );
     }
-    fn initialized_status() -> SumeragiV2Status {
-        use iroha_crypto::{Hash, HashOf};
-        use iroha_data_model::block::consensus_v2::*;
-        SumeragiV2Status {
-            protocol_version: PROTOCOL_VERSION,
-            node_fingerprint: Hash::new(b"node"),
-            build_fingerprint: Hash::new(b"build"),
-            config_fingerprint: Hash::new(b"config"),
-            restart_required: false,
-            height_context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                b"context",
-            ))),
-            height: 1,
+    fn initialized_status() -> SumeragiStatus {
+        use iroha_data_model::sumeragi::SumeragiFootprint;
+        SumeragiStatus {
+            instance: [7; 32],
+            height: 2,
             view: 0,
-            phase: SumeragiV2StatusPhase::AwaitingProposal,
-            leader: 0,
-            locked_prepare_qc: None,
-            highest_prepare_qc: None,
-            last_timeout_certificate: None,
-            body_state: SumeragiV2BodyState::Missing,
-            pending_persistence_id: None,
-            last_committed_height: 0,
-            last_committed_subject: None,
-            height_context: SumeragiV2HeightContextStatus {
-                epoch: 0,
-                epoch_end_height: 100,
-                mode: ConsensusMode::Permissioned,
-                epoch_seed: [77; 32],
-                validator_count: 4,
-                quorum: DualQuorum {
-                    min_signers: 3,
-                    total_power: 4,
-                },
+            stage: 0,
+            leader: None,
+            proxy_tail: None,
+            high_qc_view: None,
+            level: 0,
+            start_level: 0,
+            t_retx_ms: 500,
+            committed_height: 1,
+            applied_height: 1,
+            awaiting: false,
+            signer: None,
+            unanchored: false,
+            abstaining: true,
+            halted: None,
+            footprint: SumeragiFootprint {
+                votes: 0,
+                timeouts: 0,
+                blocks: 0,
+                exec_entries: 0,
+                wants: 0,
+                pending_apply: 0,
+                sync_entries: 0,
+                sync_bytes: 0,
+                peers: 4,
+                recent_headers: 0,
+                configs: 2,
+                cert_cache: 0,
+                evidence_keys: 0,
+                probe: 0,
             },
-            last_commit_qc: None,
-            liveness: SumeragiV2LivenessStatus::default(),
-            beacon_horizon: None,
         }
     }
     #[test]
     fn initialized_status_requires_structural_consistency_and_no_restart() {
         let mut status = initialized_status();
-        status
-            .validate()
-            .expect("current four-validator startup status");
         assert_eq!(startup_failure(false, Some(&status)), None);
-        status.restart_required = true;
+        status.halted = Some(iroha_data_model::sumeragi::SumeragiHaltReason::DriverAnomaly);
         assert_eq!(
             startup_failure(false, Some(&status)),
             Some(Reason::RestartRequired)
         );
-        status.restart_required = false;
-        status.protocol_version = 0;
+        status.halted = None;
+        status.applied_height = 2;
         assert_eq!(
             startup_failure(false, Some(&status)),
             Some(Reason::ConflictingState)
@@ -494,58 +491,50 @@ mod tests {
             ),
             Reason::TipChanged
         );
+        assert_eq!(
+            build_failure(BuildError::StatusHeightMismatch, 2),
+            Reason::TipChanged
+        );
         for error in [
-            BuildError::FinalityProof(BridgeFinalityError::FinalityArtifactNotFound(1)),
-            BuildError::GenesisFinalityProof(BridgeFinalityError::FinalityArtifactNotFound(1)),
-            BuildError::FinalityProof(BridgeFinalityError::InvalidHeight(1)),
-            BuildError::GenesisFinalityProof(BridgeFinalityError::InvalidHeight(1)),
-            BuildError::FinalityProof(BridgeFinalityError::FinalityArtifactRead {
-                height: 1,
-                reason: "corrupt".to_owned(),
-            }),
-            BuildError::GenesisFinalityProof(BridgeFinalityError::FinalityArtifactRead {
-                height: 1,
-                reason: "absent".to_owned(),
-            }),
+            ProofError::Chain(ChainReadError::NotCommitted { height: 1 }),
+            ProofError::Chain(ChainReadError::MissingCertificate { height: 1 }),
+            ProofError::UnverifiedCommittee(1),
         ] {
-            assert_eq!(build_failure(error, 1), Reason::FinalityUnavailable);
+            assert_eq!(
+                build_failure(BuildError::FinalityProof(error.clone()), 1),
+                Reason::FinalityUnavailable
+            );
+            assert_eq!(
+                build_failure(BuildError::GenesisFinalityProof(error), 1),
+                Reason::FinalityUnavailable
+            );
+        }
+        for error in [
+            ProofError::Chain(ChainReadError::HeaderMismatch { height: 1 }),
+            ProofError::Portable(iroha_data_model::sumeragi_finality::FinalityError(
+                "invalid signature".into(),
+            )),
+        ] {
+            assert_eq!(
+                build_failure(BuildError::FinalityProof(error), 1),
+                Reason::ConflictingState
+            );
         }
         assert_eq!(
-            build_failure(
-                BuildError::InvalidBody(BridgeFinalityAttestationValidationError::RestartRequired),
-                1
-            ),
+            build_failure(BuildError::RestartRequired, 1),
             Reason::RestartRequired
         );
         assert_eq!(
-            build_failure(
-                BuildError::InvalidBody(
-                    BridgeFinalityAttestationValidationError::StatusCommitMissing
-                ),
-                1
-            ),
+            build_failure(BuildError::InvalidStatus, 1),
             Reason::ConflictingState
         );
         for error in [
-            BuildError::FinalityProof(BridgeFinalityError::FinalityArtifactMismatch { height: 1 }),
-            BuildError::GenesisFinalityProof(BridgeFinalityError::FinalityArtifactMismatch {
-                height: 1,
-            }),
+            BuildError::InvalidSigner,
+            BuildError::HeightOverflow,
+            BuildError::Signing("failed".into()),
         ] {
-            assert_eq!(build_failure(error, 1), Reason::ConflictingState);
+            assert_eq!(build_failure(error, 1), Reason::InternalFailure);
         }
-        assert_eq!(
-            build_failure(BuildError::InvalidSignerAlgorithm, 1),
-            Reason::InternalFailure
-        );
-        assert_eq!(
-            build_failure(BuildError::Signing("failed".to_owned()), 1),
-            Reason::InternalFailure
-        );
-        assert_eq!(
-            build_failure(BuildError::HeightOverflow, 1),
-            Reason::InternalFailure
-        );
     }
     #[tokio::test]
     async fn failure_response_is_bounded_canonical_and_never_cached() {

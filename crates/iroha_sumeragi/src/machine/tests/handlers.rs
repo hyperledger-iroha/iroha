@@ -461,10 +461,10 @@ fn bodies_only_when_wanted() {
     assert!(h.core.blocks.is_empty());
 }
 
-// ---- §6.10 proposing and heartbeat ----------------------------------------------------------------
+// ---- §6.10 work-driven proposing ----------------------------------------------------------------
 
 #[test]
-fn heartbeat_idle_wait_and_payload_ready() {
+fn idle_payload_wait_and_payload_ready() {
     let mut h = H::new(4, pick::leader(0));
     h.run_until(1_000);
     let first = h.last_build.expect("the view-0 build");
@@ -492,22 +492,15 @@ fn heartbeat_idle_wait_and_payload_ready() {
     let out = h.built(b"tx");
     assert_eq!(proposals(&out)[0].payload.as_deref(), Some(&b"tx"[..]));
 
-    // Nothing arrives: the heartbeat is an EMPTY block at t_enter + idle (+ build timeout).
+    // Empty answers and build deadlines never manufacture a block.
     let mut h = H::new(4, pick::leader(0));
-    let out = h.run_until(h.params.payload_retry_interval + h.local.build_timeout);
-    let sent = proposals(&out);
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].header.payload_len, 0);
-    assert_eq!(
-        out.iter()
-            .filter(|a| matches!(a, Action::BuildPayload { .. }))
-            .count(),
-        2
-    );
+    let out = h.run_until(20_000);
+    assert!(proposals(&out).is_empty());
+    assert_eq!(h.core.tip.height, 0);
 }
 
 #[test]
-fn oversized_payload_is_replaced_by_empty() {
+fn oversized_payload_waits_for_bounded_rebuild() {
     let params = ChainParams {
         max_block_bytes: 8,
         ..ChainParams::default()
@@ -520,7 +513,8 @@ fn oversized_payload_is_replaced_by_empty() {
     h.run_until(1_000);
     h.built(&[1; 9]);
     let out = h.run_until(h.params.payload_retry_interval + h.local.build_timeout);
-    assert!(proposals(&out).iter().all(|p| p.header.payload_len == 0));
+    assert!(proposals(&out).is_empty());
+    assert_eq!(h.core.tip.height, 0);
 }
 
 #[test]
@@ -571,9 +565,10 @@ fn proposals_and_commit_qcs_reach_next_committee_joiners() {
     }
     if view > 0 {
         h.enter_view(view);
+    } else {
+        h.run_until(h.now + h.params.block_time);
     }
-    h.run_until(h.now + 10_000);
-    if let Some(Action::BuildPayload { .. }) = h.out.last() {}
+    h.built(b"committee transition transaction");
     let broadcast = sent(&h.all)
         .into_iter()
         .find(|(_, m)| matches!(m, WireMessage::Proposal(_)))

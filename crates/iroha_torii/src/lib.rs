@@ -25165,13 +25165,10 @@ fn ingest_queue_plan_admission_publication(
             certificate_hash, ..
         } => certificate_hash,
     };
-    let sumeragi_notified = app
-        .sumeragi
-        .as_ref()
-        .is_some_and(|sumeragi| {
-            sumeragi.transactions_available();
-            true
-        });
+    let sumeragi_notified = app.sumeragi.as_ref().is_some_and(|sumeragi| {
+        sumeragi.transactions_available();
+        true
+    });
     Ok(QueuePlanAdmissionPublicationIngestOutcome::Durable {
         certificate_hash,
         sumeragi_notified,
@@ -25340,13 +25337,10 @@ async fn persist_queue_plan_admission_certificate(
             );
         }
     }
-    let notification_delivered = app
-        .sumeragi
-        .as_ref()
-        .map(|sumeragi| {
-            sumeragi.transactions_available();
-            true
-        });
+    let notification_delivered = app.sumeragi.as_ref().map(|sumeragi| {
+        sumeragi.transactions_available();
+        true
+    });
     match notification_delivered {
         Some(true) => {}
         Some(false) => {
@@ -32215,16 +32209,17 @@ async fn handler_bridge_finality_attestation_inner(
         .sumeragi
         .as_ref()
         .is_some_and(iroha_core::sumeragi::node::NodeHandle::restart_required);
-    // TODO(WP8b): bridge finality attestations from Sumeragi commit certificates; the v2
-    // status is never published, so the endpoint reports consensus as uninitialized.
-    let status = iroha_core::sumeragi::v2_status::v2_status_with_restart_required(restart_required);
+    let status = app
+        .sumeragi
+        .as_ref()
+        .and_then(iroha_core::sumeragi::node::NodeHandle::status_dto);
     if let Some(reason) = bridge_attestation::startup_failure(restart_required, status.as_ref()) {
         // Failure records require a positive selector; `latest` echoes the
         // status tip, or genesis before anything has committed.
         let failure_height = height.unwrap_or_else(|| {
             status
                 .as_ref()
-                .map_or(1, |status| status.last_committed_height.max(1))
+                .map_or(1, |status| status.committed_height.max(1))
         });
         return Ok(bridge_attestation::failure_response(
             reason,
@@ -32235,6 +32230,16 @@ async fn handler_bridge_finality_attestation_inner(
         ));
     }
     let status = status.expect("startup classification requires an initialized status");
+    let identity = app
+        .sumeragi
+        .as_ref()
+        .expect("initialized current driver")
+        .identity()
+        .clone();
+    let build_fingerprint = iroha_crypto::Hash::new_from_chunks(&[
+        app.build_status.version.as_bytes(),
+        app.build_status.git_commit_sha.as_bytes(),
+    ]);
     #[cfg(feature = "telemetry")]
     if _api_token_principal.is_some() {
         crate::telemetry::report_torii_api_hit(&app.telemetry, "v1/bridge/finality/attestation");
@@ -32242,6 +32247,8 @@ async fn handler_bridge_finality_attestation_inner(
     let mut response = routing::handle_v1_bridge_finality_attestation(
         app.state.clone(),
         status,
+        identity,
+        build_fingerprint,
         height,
         challenge,
         app.torii_proxy_bridge_signer.clone(),

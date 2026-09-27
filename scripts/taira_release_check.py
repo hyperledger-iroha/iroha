@@ -226,6 +226,7 @@ STAGES = (
     ("generated validator reset layout", (
         "taira_public_reset::validator_config::tests::materialization_binds_every_validator_state_path_and_preserves_other_fields",
         "taira_public_reset::validator_config::tests::materialization_projects_split_torii_bind_without_changing_p2p_or_signer_custody",
+        "taira_public_reset::validator_config::tests::materialization_trusts_only_explicit_proxy_hosts_without_rate_bypass",
         "taira_public_reset::validator_config::tests::materialization_rejects_invalid_torii_listener_and_port_drift",
         "taira_public_reset::validator_config::tests::materialization_torii_bind_argument_requires_canonical_ip_and_nonzero_port",
         "taira_public_reset::validator_config::tests::materialization_rejects_changed_missing_and_wrong_peer_state_paths",
@@ -1592,6 +1593,22 @@ KAGAMI_STAGES += (("typed public beacon history candidates and explicit proof li
     'kura::beacon_history::tests::beacon_history_never_emits_opaque_install_state_or_unrelated_parameter_payloads',
     'kura::beacon_history::tests::beacon_history_cli_exposes_explicit_bounded_scope',
 )),)
+
+
+# Exercise the shipping driver's real application boundary before network release checks.
+CORE_NONEMPTY_STAGES = (("nonempty production consensus and restart", (
+    'sumeragi::payload::tests::decode_rejects_garbage_and_empty',
+    'sumeragi::payload::tests::canonical_wire_cannot_hide_a_zero_transaction_block',
+    'sumeragi::payload::tests::assembly_refuses_empty_work_before_reading_state',
+    'sumeragi::payload::tests::canonical_nonempty_proposal_roundtrips_without_synthesized_work',
+    'sumeragi::executor::tests::empty_and_encoded_zero_transaction_payloads_are_invalid_without_state_work',
+    'sumeragi::node::tests::idle_chain_never_advances_and_real_work_survives_restart',
+    'sumeragi::node::tests::every_committed_block_contains_work_before_and_after_restart',
+    'sumeragi::node::tests::replay_rejects_a_block_whose_certified_result_differs',
+)),)
+CORE_STARTUP_STAGES = CORE_NONEMPTY_STAGES + CORE_STARTUP_STAGES
+CORE_ADMISSION_STARTUP_STAGES = CORE_NONEMPTY_STAGES + CORE_ADMISSION_STARTUP_STAGES
+CORE_STAGES = CORE_NONEMPTY_STAGES + CORE_STAGES
 
 
 # Production beacon setup must fail before unrelated tests and network fixtures.

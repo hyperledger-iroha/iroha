@@ -200,7 +200,7 @@ pub enum Event {
         attest: bool,
     },
     /// After answering `BuildPayload{req}` with `EMPTY`: an includable transaction arrived (at
-    /// most once per `req`). It only ends the view-0 leader's heartbeat wait (§6.10).
+    /// most once per `req`). It ends an eligible leader's empty-build wait at any view (§6.10).
     PayloadReady {
         /// Request id of the `BuildPayload` answered with `EMPTY`.
         req: u64,

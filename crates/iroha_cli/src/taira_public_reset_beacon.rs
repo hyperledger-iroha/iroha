@@ -18,7 +18,7 @@ use iroha_core::beacon::{
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey};
 use iroha_data_model::{
-    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
+    sumeragi_finality::{FinalityValidator, SumeragiFinalityProof, SumeragiFinalityVerifier},
     consensus::GlobalThresholdBeaconDkgSessionV1,
     isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
 };
@@ -28,6 +28,16 @@ use zeroize::Zeroizing;
 #[path = "taira_public_reset_beacon/relay.rs"]
 mod relay;
 use relay::GenesisRelay;
+
+fn genesis_verifier(
+    genesis: &iroha_genesis::ValidatedGenesisBundle,
+    chain_id: &str,
+) -> Result<SumeragiFinalityVerifier> {
+    let validators = genesis.validator_pops().iter().map(|(public_key, proof_of_possession)|
+        FinalityValidator { public_key: public_key.clone(), proof_of_possession: proof_of_possession.clone() }
+    ).collect();
+    Ok(SumeragiFinalityVerifier::new(genesis.block(), chain_id, validators)?)
+}
 
 const PLAN_SCHEMA: &str = "iroha.taira.public-reset.beacon-bootstrap-plan.v1";
 const REQUEST_SCHEMA: &str = "iroha.global-beacon.bootstrap.request.v1";
@@ -90,7 +100,7 @@ struct GenesisProofV1 {
     manifest: iroha_genesis::RawGenesisTransaction,
     signed_wire: Vec<u8>,
     public_key: PublicKey,
-    first_finality: BridgeFinalityProof,
+    first_finality: SumeragiFinalityProof,
 }
 
 #[derive(Clone, JsonSerialize, JsonDeserialize)]
@@ -99,7 +109,7 @@ struct PublicBundleV1 {
     schema: String,
     request: NativeRequestV1,
     genesis: GenesisProofV1,
-    phase_proofs: Vec<BridgeFinalityProof>,
+    phase_proofs: Vec<SumeragiFinalityProof>,
     finalized_observed_height: u64,
     record: FinalizedGlobalThresholdBeaconKeySessionRecordV1,
     finalization_draft: ThresholdKeyLifecycleCertificateV1,
@@ -843,7 +853,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         let ceremony = root.join("ceremony");
         ensure_private_directory(&ceremony)?;
         let program = self.beacon_daemon()?;
-        let mut relay = GenesisRelay::new(request.dkg_session, h1, deadline)?;
+        let mut relay = GenesisRelay::new(request.dkg_session, h1, genesis_verifier(&genesis, &inventory.chain_id)?, deadline)?;
         for (index, peer) in request.target_roster.iter().enumerate() {
             let selected = inventory
                 .validator_clients
@@ -1021,20 +1031,17 @@ fn validate_bundle_identity(inventory: &InventoryV1, bundle: &PublicBundleV1) ->
     }
     let genesis = plan_genesis(inventory, &bundle.genesis.signed_wire)?;
     if bundle.genesis.first_finality.block_header.hash() != genesis.block().hash()
-        || bundle.genesis.first_finality.finality_artifact.height != 1
+        || bundle.genesis.first_finality.block_header.height().get() != 1
     {
         return Err(eyre!(
             "native beacon bundle has another signed-genesis anchor"
         ));
     }
-    let mut verifier = BridgeFinalityVerifier::with_context(
-        plan.request.dkg_session.network_id,
-        bundle.genesis.first_finality.finality_artifact.context_id(),
-    );
+    let mut verifier = genesis_verifier(&genesis, &inventory.chain_id)?;
     verifier.verify(&bundle.genesis.first_finality)?;
     for (offset, proof) in bundle.phase_proofs.iter().enumerate() {
         let height = u64::try_from(offset + 2)?;
-        if proof.finality_artifact.height != height || proof.block_header.height().get() != height {
+        if proof.block_header.height().get() != height {
             return Err(eyre!("beacon phase proof is not an immediate successor"));
         }
         verifier.verify(proof)?;
@@ -1539,11 +1546,11 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                         "beacon committed transaction differs from the retained envelope and authenticated carrier"
                     ));
                 }
-                let wire = peer.get_canonical_executed_block_wire(
-                    carrier_height,
-                    &details.transaction,
-                    &proof.finality_artifact.commit_qc.execution_commitment,
-                )?;
+                let certified = height.verified_proof_at(&genesis, carrier_height)?;
+                certified.verify_committed_transaction(
+                    &self.admitted.inventory.beacon_bootstrap.request.dkg_session.network_id,
+                    &details.transaction)?;
+                let wire = certified.canonical_executed_wire()?;
                 if exact_wire
                     .as_ref()
                     .is_some_and(|previous| previous != &wire)
@@ -1604,8 +1611,7 @@ fn validate_installation_proof(
     native: &VerifiedInstall,
 ) -> Result<json::Value> {
     use iroha_data_model::{
-        block::consensus_v2::{ConsensusMode, ValidatorPower},
-        bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
+        sumeragi_finality::SumeragiFinalityProof,
         query::CommittedTransaction,
     };
     let (envelope, _) = read_public::<InstallEnvelopeV1>(
@@ -1640,7 +1646,7 @@ fn validate_installation_proof(
         .get("height_evidence")
         .and_then(json::Value::as_object)
         .ok_or_else(|| eyre!("beacon height evidence absent"))?;
-    let proofs: Vec<BridgeFinalityProof> = json::from_value(
+    let proofs: Vec<SumeragiFinalityProof> = json::from_value(
         evidence
             .get("proofs")
             .cloned()
@@ -1650,52 +1656,21 @@ fn validate_installation_proof(
     let first = proofs
         .first()
         .ok_or_else(|| eyre!("beacon proof chain is empty"))?;
-    let peers = genesis
-        .validator_pops()
-        .iter()
-        .map(|(key, pop)| (PeerId::new(key.clone()), pop.clone()))
-        .collect::<BTreeMap<_, _>>();
-    let (roster, pops): (Vec<_>, Vec<_>) = peers
-        .into_iter()
-        .map(|(validator, pop)| {
-            (
-                ValidatorPower {
-                    validator,
-                    power: 1,
-                },
-                pop,
-            )
-        })
-        .unzip();
     if first.block_header.height().get() != 1
         || first.block_header.hash() != genesis.expected_hash()
     {
-        return Err(eyre!(
-            "beacon proof chain has no authenticated genesis anchor"
-        ));
+        return Err(eyre!("beacon proof chain has no authenticated genesis anchor"));
     }
     let network = inventory.beacon_bootstrap.request.dkg_session.network_id;
-    let mut verifier =
-        BridgeFinalityVerifier::with_context(network, first.finality_artifact.context_id());
+    let mut verifier = genesis_verifier(&genesis, &inventory.chain_id)?;
     let mut carrier = None;
     for proof in &proofs {
-        let artifact = &proof.finality_artifact;
-        if artifact.height_context.network_id != network
-            || artifact.height_context.mode != ConsensusMode::Npos
-            || artifact.height_context.roster != roster
-            || artifact.validator_set_pops != pops
-            || artifact.height_context.snapshot_bootstrap.is_some()
-            || artifact.commit_qc.signers.len() != 3
-        {
-            return Err(eyre!("beacon proof chain changes its exact genesis roster"));
-        }
-        verifier.verify(proof)?;
+        let verified = verifier.verify(proof)?;
         if proof.block_header.height().get() == native.bundle.finalization_draft.effective_height {
-            carrier = Some(proof);
+            carrier = Some(verified);
         }
     }
-    let proof =
-        carrier.ok_or_else(|| eyre!("beacon proof chain omits the installation carrier"))?;
+    let certified = carrier.ok_or_else(|| eyre!("beacon proof chain omits the installation carrier"))?;
     let committed: CommittedTransaction = json::from_value(
         object
             .get("committed_transaction")
@@ -1703,22 +1678,13 @@ fn validate_installation_proof(
             .ok_or_else(|| eyre!("beacon committed transaction missing"))?,
     )?;
     let wire = hex::decode(string("carrier_wire_hex")?)?;
-    let block = iroha_data_model::block::decode_framed_signed_block(&wire)?;
-    if block.encode_wire()? != wire
-        || block.header() != proof.block_header
-        || committed.block_hash() != &block.hash()
+    if certified.canonical_executed_wire()? != wire
         || committed.entrypoint()
             != &iroha_data_model::transaction::TransactionEntrypoint::External(transaction)
-        || committed.result().is_err()
-        || !committed.verify_inclusion_in_authenticated_execution(
-            &block,
-            &proof.finality_artifact.commit_qc.execution_commitment,
-        )
     {
-        return Err(eyre!(
-            "beacon installation is not successful in the independently authenticated execution"
-        ));
+        return Err(eyre!("beacon installation differs from the authenticated carrier and exact transaction"));
     }
+    certified.verify_committed_transaction(&network, &committed)?;
     Ok(receipt)
 }
 

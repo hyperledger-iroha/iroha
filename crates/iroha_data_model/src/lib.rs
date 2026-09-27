@@ -193,6 +193,8 @@ pub mod state;
 pub mod subscription;
 /// Sumeragi status served by the node (projection of the consensus core's diagnostics).
 pub mod sumeragi;
+/// Portable finality proofs for the current embedded consensus certificate.
+pub mod sumeragi_finality;
 /// Taikai broadcast metadata and segment envelope types.
 pub mod taikai;
 /// Test fixtures exposed for SDK/guardrail consumers.

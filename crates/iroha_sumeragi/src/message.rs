@@ -71,7 +71,7 @@ pub struct BlockHeader {
     /// `[L(h, x) for x in 0..min(origin_view, a_h)]`.
     pub skipped_leaders: Vec<PublicKey>,
     /// Application flag (§3.7): Commit votes for this block carry attestations. Set from the
-    /// payload builder, checked by execution; never set on `EMPTY` from `empty_after_views` on.
+    /// payload builder, checked by execution; proposals always carry nonempty work.
     pub attest: bool,
 }
 

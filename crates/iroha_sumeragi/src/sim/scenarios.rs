@@ -636,7 +636,7 @@ pub fn f15(seed: u64) -> Scenario {
 
 /// F15 variant 5: every executor takes `E ∈ [T(1), e_max)` for a non-empty block and 10 ms for
 /// `EMPTY`; the builder does not foresee it (its budget is 500 ms) and the executor aborts
-/// discarded work at once (O4). Views 0 and 1 time out executing and view `empty_after_views`
+/// discarded work at once (O4). Early views time out executing and later views retry real work;
 /// commits `EMPTY` at once: only the executions discarded at those view changes show the
 /// slowness, as lower bounds (§9.2, ML27, ML28). The start level must rise until non-empty
 /// blocks commit.
@@ -744,7 +744,7 @@ pub fn f18(seed: u64) -> Scenario {
     sc
 }
 
-/// F19: poison payloads → early timeout, quarantine, `EMPTY` escape; transaction progress.
+/// F19: poison payloads cause early timeout and quarantine; real work resumes after repair.
 pub fn f19(seed: u64) -> Scenario {
     let n = pick(seed / 2, &[4, 7, 5, 22]);
     let mut sc = sized("F19", seed, n);
@@ -753,9 +753,16 @@ pub fn f19(seed: u64) -> Scenario {
         ..Workload::default()
     });
     if seed % 2 == 1 {
-        // A deterministic executor defect rejects every non-empty payload for 30 s: only the
-        // `EMPTY` escape (fresh blocks from view `empty_after_views` on) keeps the chain
-        // moving (ML13).
+        // A deterministic executor defect rejects all work for 30 s. Consensus must
+        // stop committing, then recover once execution can validate transactions again.
+        let stalled_height = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let capture_height = stalled_height.clone();
+        sc.script.push((
+            12_000,
+            Fault::Custom(Box::new(move |w| {
+                capture_height.set(w.oracle.refs[0].len());
+            })),
+        ));
         sc.script.push((
             10_000,
             Fault::Custom(Box::new(|w| {
@@ -766,14 +773,17 @@ pub fn f19(seed: u64) -> Scenario {
         ));
         sc.script.push((
             40_000,
-            Fault::Custom(Box::new(|w| {
+            Fault::Custom(Box::new(move |w| {
+                if w.oracle.refs[0].len() != stalled_height.get() {
+                    w.fail("executor outage committed a block without valid work".to_owned());
+                }
                 for m in &mut w.machines {
                     m.profile.reject_nonempty = false;
                 }
             })),
         ));
         sc.checks.may_fault = (0..n).collect();
-        sc.checks.windows = vec![(0, 12_000, 40_000, 3)];
+        sc.checks.windows = vec![(0, 40_000, 90_000, 3)];
     }
     sc.duration = 90_000;
     sc.checks.txp = true;
@@ -823,14 +833,14 @@ pub fn f21(seed: u64) -> Scenario {
     sc
 }
 
-/// F22: an idle chain (heartbeat cadence, flat memory); `heights` heartbeats.
-pub fn f22_heights(seed: u64, heights: u64) -> Scenario {
+/// F22: an idle chain remains at its tip for `intervals` payload retry intervals.
+pub fn f22_heights(seed: u64, intervals: u64) -> Scenario {
     let n = pick(seed, &[4, 7, 5]);
     let mut sc = Scenario::base("F22", seed, n);
     sc.workload = None;
-    sc.duration = heights * (sc.params.payload_retry_interval + 400);
-    sc.checks.perf = Perf::P1;
-    sc.checks.progress = heights / 2;
+    sc.duration = intervals * (sc.params.payload_retry_interval + 400);
+    sc.checks.perf = Perf::None;
+    sc.checks.progress = 0;
     sc
 }
 
@@ -1407,8 +1417,8 @@ pub fn f34(seed: u64) -> Scenario {
 }
 
 /// F35: local-queue asymmetry (§9.1; ML21): an idle chain whose transactions are submitted only
-/// to `f + 1` members, with and without one crashed member. No timer may move: without a crash
-/// every height commits in view 0.
+/// to `f + 1` members, with and without one crashed member. Queued transactions eventually
+/// commit without manufacturing idle blocks; leaders without local work may time out.
 pub fn f35(seed: u64) -> Scenario {
     let n = pick(seed / 2, &[4, 7, 5, 22]);
     let mut sc = sized("F35", seed, n);
@@ -1427,11 +1437,11 @@ pub fn f35(seed: u64) -> Scenario {
     sc.duration = 120_000;
     if seed % 2 == 1 {
         sc.script.push((0, Fault::Crash(chosen[f + 1])));
-        sc.checks.perf = Perf::P4;
-    } else {
-        sc.checks.no_view_change = true;
-        sc.checks.perf = Perf::P1;
     }
+    // Sparse local work can require several leader turns. The one-failed-view P4 bound
+    // does not apply; O-LIVE and transaction progress remain required.
+    sc.checks.perf = Perf::None;
+    sc.checks.txp = true;
     sc.checks.progress = 8;
     sc
 }

@@ -809,11 +809,7 @@ impl World {
     /// A signed twin of an own fresh proposal: same round, a different payload.
     fn twin(&mut self, r: usize, p: &Proposal) -> Option<(WireMessage, WireMessage)> {
         let fresh = p.justify.as_ref().is_none_or(|tc| tc.high_pqc.is_none());
-        let empty_ok = p.view
-            < self.instances[self.replicas[r].inst]
-                .params
-                .empty_after_views;
-        if !fresh || !empty_ok {
+        if !fresh {
             return None;
         }
         self.adv.counter += 1;
@@ -838,7 +834,6 @@ impl World {
 
     /// A signed proposal with a defect in its signed content.
     fn defective(&mut self, r: usize, p: &Proposal) -> Proposal {
-        let inst = self.replicas[r].inst;
         let mut header = p.header.clone();
         let mut payload = p.payload.clone().unwrap_or_default();
         match self.rng.below(3) {
@@ -849,13 +844,9 @@ impl World {
                 header.parent_result = Hash32([0x42; 32]);
             }
             _ => {
-                if p.view >= self.instances[inst].params.empty_after_views {
-                    payload = encode_tx(u64::MAX - 7, false, 4);
-                    header.payload_hash = preimage::payload_hash(&self.hasher, &payload);
-                    header.payload_len = u32::try_from(payload.len()).unwrap_or(0);
-                } else {
-                    header.origin_view = header.origin_view.wrapping_add(1);
-                }
+                payload.clear();
+                header.payload_hash = preimage::payload_hash(&self.hasher, &payload);
+                header.payload_len = 0;
             }
         }
         self.byz_proposal(

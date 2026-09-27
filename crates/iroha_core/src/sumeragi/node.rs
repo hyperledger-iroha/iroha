@@ -11,13 +11,14 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use iroha_config::parameters::actual::SumeragiLocalOverrides;
 
-use iroha_crypto::KeyPair;
+use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     block::SignedBlock,
     parameter::system::ConsensusMode,
     sumeragi::{SumeragiFootprint, SumeragiHaltReason, SumeragiStatus},
 };
+use iroha_model_base::peer::PeerId;
 /// The Sumeragi wire protocol version peers bind in the handshake.
 pub use iroha_sumeragi::message::PROTOCOL_VERSION;
 use iroha_sumeragi::{
@@ -140,6 +141,7 @@ pub struct RunningNode {
     pub instance: Hash32,
     /// The instance's cryptography.
     pub crypto: Arc<BlsCrypto>,
+    identity: NodeIdentity,
 }
 
 impl RunningNode {
@@ -148,6 +150,7 @@ impl RunningNode {
         NodeHandle {
             driver: self.driver.handle(),
             instance: self.instance,
+            identity: self.identity.clone(),
         }
     }
 }
@@ -157,6 +160,16 @@ impl RunningNode {
 pub struct NodeHandle {
     driver: DriverHandle,
     instance: Hash32,
+    identity: NodeIdentity,
+}
+
+/// Immutable identity and resolved configuration of the running consensus instance.
+#[derive(Clone, Debug)]
+pub struct NodeIdentity {
+    /// Consensus peer identity installed at startup.
+    pub node_id: PeerId,
+    /// Canonical fingerprint of the effective local and driver settings.
+    pub config_fingerprint: Hash,
 }
 
 impl core::fmt::Debug for NodeHandle {
@@ -168,6 +181,11 @@ impl core::fmt::Debug for NodeHandle {
 }
 
 impl NodeHandle {
+    /// Identity captured from the actual startup inputs, never from HTTP parameters.
+    pub fn identity(&self) -> &NodeIdentity {
+        &self.identity
+    }
+
     /// The instance id (`I`).
     pub fn instance(&self) -> Hash32 {
         self.instance
@@ -523,6 +541,15 @@ impl Prepared {
         let n = configs
             .first()
             .map_or(1, |(_, config)| config.committee.n());
+        let identity = NodeIdentity {
+            node_id: PeerId::new(key_pair.public_key().clone()),
+            config_fingerprint: configuration_fingerprint(
+                n,
+                &config.local,
+                &driver,
+                &config.retired_keys,
+            ),
+        };
         let init = assemble_init(
             &*blocks,
             instance,
@@ -572,6 +599,7 @@ impl Prepared {
             driver: running,
             instance,
             crypto,
+            identity,
         })
     }
 
@@ -666,6 +694,57 @@ impl Observer for LogObserver {
             "sumeragi: a committed configuration outgrows the transport frame limit"
         );
     }
+}
+
+/// Canonical fingerprint shared by release inventory and the actual running driver.
+///
+/// Binds every resolved local/driver limit, the body-store cap and retired keys. Chain
+/// parameters are authenticated by the committed execution-result preimage. File locations
+/// and the one-shot fresh-key assertion do not change the running protocol configuration.
+#[must_use]
+pub fn configuration_fingerprint(
+    committee_size: usize,
+    overrides: &SumeragiLocalOverrides,
+    driver: &DriverConfig,
+    retired_keys: &[iroha_crypto::PublicKey],
+) -> Hash {
+    use norito::codec::Encode as _;
+    let local = local_params(committee_size, overrides);
+    let mut bytes = b"iroha/sumeragi/node-configuration/v1\0".to_vec();
+    for value in [
+        u64::from(PROTOCOL_VERSION),
+        local.t_base,
+        local.t_max,
+        u64::from(local.start_cap),
+        u64::from(local.decay_after),
+        local.rebroadcast_interval,
+        local.status_keepalive,
+        local.build_timeout,
+        local.fetch_retry,
+        u64::from(local.sync_batch),
+        local.sync_retry,
+        u64::from(local.sync_max_bytes),
+        u64::from(local.max_observers),
+        driver.ingress.per_peer[0] as u64,
+        driver.ingress.per_peer[1] as u64,
+        driver.ingress.per_peer[2] as u64,
+        u64::from(driver.ingress.bulk_every),
+        driver.backoff.initial,
+        driver.backoff.max,
+        driver.held.effects as u64,
+        driver.held.payload_bytes,
+        driver.serve.bytes_per_sec,
+        driver.serve.burst_bytes,
+        driver.serve.max_peers as u64,
+        driver.frame_limit,
+        BodyLimits::default().max_bytes,
+    ] {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    let mut retired = retired_keys.to_vec();
+    retired.sort();
+    bytes.extend_from_slice(&retired.encode());
+    Hash::new(bytes)
 }
 
 /// The core's local parameters for a committee of `n`, with the node's overrides.
