@@ -130,6 +130,53 @@ def _read_pipe(fd, maximum, deadline):
     return os.read(fd, maximum)
 
 
+class _BufferedSourceReader:
+    """Retain at most one source chunk while consuming exact protocol bytes."""
+
+    def __init__(self, read_chunk):
+        self._read_chunk = read_chunk
+        self._buffer = b""
+        self._index = 0
+        self.position = 0
+
+    def peek(self, maximum):
+        _need(0 < maximum <= CHUNK, "invalid source read bound")
+        if self._index == len(self._buffer):
+            self._buffer = self._read_chunk(CHUNK, self.position)
+            self._index = 0
+            _need(len(self._buffer) <= CHUNK, "source reader exceeded its buffer bound")
+        return memoryview(self._buffer)[self._index:self._index + maximum]
+
+    def consume(self, size):
+        _need(0 <= size <= len(self._buffer) - self._index, "invalid source buffer consumption")
+        self._index += size
+        self.position += size
+
+    def read(self, size):
+        _need(0 <= size <= CHUNK, "invalid source read bound")
+        result = bytearray()
+        while len(result) < size:
+            chunk = self.peek(size - len(result))
+            if not chunk:
+                break
+            result.extend(chunk)
+            self.consume(len(chunk))
+        return bytes(result)
+
+    def readline(self, maximum):
+        result = bytearray()
+        while True:
+            chunk = bytes(self.peek(min(CHUNK, maximum + 1 - len(result))))
+            _need(chunk, "invalid Git object response")
+            newline = chunk.find(b"\n")
+            consumed = newline + 1 if newline >= 0 else len(chunk)
+            result.extend(chunk[:consumed])
+            self.consume(consumed)
+            _need(len(result) <= maximum, "invalid Git object response")
+            if newline >= 0:
+                return bytes(result)
+
+
 def _run(argv, *, cwd, payload=None, input_fd=None, output_fd=None, maximum=MAX_MANIFEST_BYTES, env=None):
     """Bound every subprocess output and stream packs without holding them in RAM."""
     with contextlib.ExitStack() as stack:
@@ -281,15 +328,14 @@ def _object_reader(root):
                                env=_environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                stderr=subprocess.DEVNULL, umask=0o077)
     deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    stream = _BufferedSourceReader(
+        lambda maximum, _position: _read_pipe(process.stdout.fileno(), maximum, deadline))
 
     def read(oid, kind, output_fd=None, payload=False):
+        _need(time.monotonic() < deadline, "source Git command exceeded its deadline")
         process.stdin.write((oid + "\n").encode())
         process.stdin.flush()
-        header = bytearray()
-        while not header.endswith(b"\n"):
-            part = _read_pipe(process.stdout.fileno(), 1, deadline)
-            _need(part and len(header) < 128, "invalid Git object response")
-            header.extend(part)
+        header = stream.readline(128)
         match = re.fullmatch(rb"([0-9a-f]{40}) (commit|tree|blob) ([0-9]+)\n", header)
         _need(match is not None and match[1].decode() == oid and match[2].decode() == kind,
               "Git object identity/type differs")
@@ -299,7 +345,8 @@ def _object_reader(root):
         sha256 = hashlib.sha256()
         remaining, result = size, bytearray()
         while remaining:
-            chunk = _read_pipe(process.stdout.fileno(), min(CHUNK, remaining), deadline)
+            _need(time.monotonic() < deadline, "source Git command exceeded its deadline")
+            chunk = stream.read(min(CHUNK, remaining))
             _need(chunk, "truncated Git object")
             remaining -= len(chunk)
             sha1.update(chunk)
@@ -312,7 +359,8 @@ def _object_reader(root):
                     count = os.write(output_fd, view)
                     _need(count > 0, "short source file write")
                     view = view[count:]
-        _need(_read_pipe(process.stdout.fileno(), 1, deadline) == b"\n" and sha1.hexdigest() == oid,
+        _need(time.monotonic() < deadline, "source Git command exceeded its deadline")
+        _need(stream.read(1) == b"\n" and sha1.hexdigest() == oid,
               "Git object bytes do not match their identity")
         return {"object": oid, "type": kind, "size": size, "sha256": sha256.hexdigest()}, bytes(result)
 
@@ -548,25 +596,25 @@ def _verify_objects(root, manifest):
 def _validate_pack(fd, manifest):
     """Bound inflation before Git sees input; the maintained producer emits no deltas."""
     size = manifest["pack"]["size"]
-    header = os.pread(fd, 12, 0)
+    stream = _BufferedSourceReader(
+        lambda maximum, position: os.pread(fd, min(maximum, max(0, size - 20 - position)), position))
+    header = stream.read(12)
     _need(len(header) == 12 and header[:4] == b"PACK"
           and struct.unpack(">II", header[4:]) == (2, len(manifest["objects"])),
           "source pack header/object census differs")
     expected = {row["object"]: row for row in manifest["objects"]}
-    offset, total = 12, 0
+    total = 0
     deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
     for _ in range(len(expected)):
-        first = os.pread(fd, 1, offset)
-        _need(first and offset < size - 20, "source pack object is truncated")
-        offset += 1
+        first = stream.read(1)
+        _need(first, "source pack object is truncated")
         first = first[0]
         kind = {1: "commit", 2: "tree", 3: "blob"}.get((first >> 4) & 7)
         _need(kind is not None, "source pack must contain only direct commit/tree/blob objects, without deltas")
         length, shift, continuation = first & 15, 4, first & 128
         while continuation:
-            part = os.pread(fd, 1, offset)
-            _need(part and offset < size - 20 and shift <= 32, "source pack object length is invalid")
-            offset += 1
+            part = stream.read(1)
+            _need(part and shift <= 32, "source pack object length is invalid")
             length |= (part[0] & 127) << shift
             shift += 7
             continuation = part[0] & 128
@@ -578,7 +626,9 @@ def _validate_pack(fd, manifest):
         inflater = zlib.decompressobj()
         while not inflater.eof:
             _need(time.monotonic() < deadline, "source pack verification exceeded its deadline")
-            compressed = os.pread(fd, min(CHUNK, max(0, size - 20 - offset)), offset)
+            # Small objects need only small inflater lookahead. Keep unread
+            # bytes for the next call/object instead of rereading them from disk.
+            compressed = stream.peek(min(CHUNK, max(64, length - produced + 64)))
             _need(compressed, "source pack compressed object is truncated")
             try:
                 decoded = inflater.decompress(compressed, min(CHUNK, length - produced + 1))
@@ -586,7 +636,7 @@ def _validate_pack(fd, manifest):
                 raise SourceCaptureError("source pack compressed object is invalid") from error
             consumed = len(compressed) - len(inflater.unused_data if inflater.eof else inflater.unconsumed_tail)
             _need(consumed or decoded, "source pack decompressor made no progress")
-            offset += consumed
+            stream.consume(consumed)
             produced += len(decoded)
             _need(produced <= length, "source pack object inflates beyond its declared size")
             sha1.update(decoded)
@@ -595,6 +645,7 @@ def _validate_pack(fd, manifest):
         oid = sha1.hexdigest()
         row = {"object": oid, "type": kind, "size": length, "sha256": sha256.hexdigest()}
         _need(expected.pop(oid, None) == row, "source pack object is duplicate, foreign, or differs from its exact inventory")
+    offset = stream.position
     _need(not expected and offset == size - 20, "source pack contains extra or missing object bytes")
     checksum = hashlib.sha1()
     position = 0

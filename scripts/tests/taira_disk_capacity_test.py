@@ -4,6 +4,7 @@ from pathlib import Path
 import importlib.util
 import json
 import os
+import re
 import tempfile
 import subprocess
 import sys
@@ -197,7 +198,7 @@ class CoreDerivationTests(unittest.TestCase):
             "artifacts": [
                 {"slug": f"taira-validator-{i}", "role": role, "bytes": 128}
                 for i in range(1, 5)
-                for role in ("iroha3d", "iroha_cli", "sorafs_node", "config", "genesis", "genesis_hash", "validator_unit")
+                for role in ("iroha3d", "iroha_cli", "kagami", "sorafs_node", "config", "genesis", "genesis_hash", "validator_unit")
             ] + [{"slug": "taira-edge", "role": role, "bytes": 128} for role in ("iroha_cli", "edge_config")],
             "stage_files": [], "stage_directories": [], "inventory_inrou_stage_bytes": None,
             "native_sf1_manifest_bindings": None,
@@ -213,15 +214,16 @@ class CoreDerivationTests(unittest.TestCase):
     def derive(self, runtime=None):
         return capacity.derive_capacity(self.inputs, runtime, self.build, **self.kwargs)
 
-    def test_core_derivation_charges_all_thirty_roles_without_stage_or_runtime(self):
+    def test_core_derivation_charges_all_native_roles_without_stage_or_runtime(self):
         result = self.derive()
-        # Four daemon/SoraFS, five CLI, four config bounds, thirteen other public artifacts.
-        logical = 4 * 103 + 4 * 107 + 5 * 101 + 4 * 1024**2 + 13 * 128
-        artifact = logical + 30 * 4095 + 64 * 4096
+        # Four daemon/SoraFS/Kagami, five CLI, four config bounds, thirteen public artifacts.
+        logical = 4 * 103 + 4 * 107 + 4 * 109 + 5 * 101 + 4 * 1024**2 + 13 * 128
+        artifact = logical + 34 * 4095 + 64 * 4096
         expected = 3 * artifact + 2 * 1024**3
         self.assertEqual(result["derivation"]["artifact_logical_bytes"], logical)
         self.assertEqual(result["derivation"]["required_bytes"], expected)
-        self.assertEqual(len(result["derivation"]["artifact_role_sizes"]), 30)
+        self.assertEqual(len(result["derivation"]["artifact_role_sizes"]), 34)
+        self.assertEqual(result["derivation"]["artifacts"]["inodes"], 34 + 64)
         self.assertEqual(len(result["guest_plan"]["allocations"]), 4)
         self.assertEqual(sum(row["bytes"] for row in result["backing_plan"]["allocations"]), expected + 2 * 1024**3)
         self.assertIsNone(result["derivation"]["per_replica_runtime"])
@@ -229,6 +231,51 @@ class CoreDerivationTests(unittest.TestCase):
         self.assertFalse(result["derivation"]["existing_inputs_credited"])
         self.inputs["artifacts"][6]["bytes"] += 4096
         self.assertEqual(self.derive()["derivation"]["required_bytes"] - expected, 3 * 4096)
+
+    def test_capacity_inventory_tracks_native_required_artifact_roles(self):
+        # This join makes native role additions fail here even if a hand-written
+        # Python fixture would otherwise continue testing the retired census.
+        source = (PATH.parents[1] / "crates/iroha_cli/src/taira_public_reset.rs").read_text()
+        def roles(name):
+            definition = re.search(rf"const {name}: \[&str; (\d+)\] = \[(.*?)\];", source, re.S)
+            self.assertIsNotNone(definition, name)
+            values = re.findall(r'"([a-z_0-9]+)"', definition[2])
+            self.assertEqual(len(values), int(definition[1]))
+            return values
+        self.inputs["artifacts"] = [
+            {"slug": f"taira-validator-{i}", "role": role, "bytes": 128}
+            for i in range(1, 5) for role in roles("VALIDATOR_ARTIFACT_ROLES")
+        ] + [
+            {"slug": "taira-edge", "role": role, "bytes": 128}
+            for role in roles("EDGE_ARTIFACT_ROLES")
+        ]
+        self.assertEqual(len(self.derive()["derivation"]["artifact_role_sizes"]), 34)
+
+    def test_kagami_growth_is_charged_at_every_rollout_copy(self):
+        old = self.derive()
+        next(row for row in self.build["artifacts"] if row["name"] == "kagami")["size"] += 1024**2
+        new = self.derive()
+        self.assertEqual(new["derivation"]["required_bytes"] - old["derivation"]["required_bytes"],
+                         3 * 4 * 1024**2)
+        self.assertEqual(new["derivation"]["backing_required_bytes"] - old["derivation"]["backing_required_bytes"],
+                         3 * 4 * 1024**2)
+
+    def test_missing_duplicate_or_foreign_kagami_role_rejected(self):
+        original = self.inputs["artifacts"]
+        kagami = next(row for row in original if row["role"] == "kagami")
+        for variant in ("missing", "retired_inventory", "duplicate", "foreign_role"):
+            rows = [dict(row) for row in original]
+            if variant == "missing":
+                rows.remove(kagami)
+            elif variant == "retired_inventory":
+                rows = [row for row in rows if row["role"] != "kagami"]
+            elif variant == "duplicate":
+                rows.append(dict(kagami))
+            else:
+                next(row for row in rows if row == kagami)["role"] = "unknown_binary"
+            self.inputs["artifacts"] = rows
+            with self.subTest(variant=variant), self.assertRaisesRegex(capacity.CapacityError, "role inventory"):
+                self.derive()
 
     def test_core_derivation_rejects_every_inrou_dependency_and_missing_unit(self):
         for field, value in (("stage_files", [{"path": "/stage", "bytes": 1}]),

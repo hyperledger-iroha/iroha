@@ -256,9 +256,12 @@ impl PublicResetApply {
         &self,
         step: executor_model::ExecutionStep,
     ) -> Result<Option<PathBuf>> {
-        if step == executor_model::ExecutionStep::RestartProof {
+        if matches!(
+            step,
+            executor_model::ExecutionStep::Canary | executor_model::ExecutionStep::RestartProof
+        ) {
             Ok(Some(self.validator_operator_key.clone().ok_or_else(
-                || eyre!("RestartProof recovery requires --validator-operator-key"),
+                || eyre!("Canary/RestartProof recovery requires --validator-operator-key"),
             )?))
         } else {
             Ok(None)
@@ -5949,28 +5952,35 @@ mod executor_model {
                     .unwrap()
                     .is_some()
             );
+            assert!(
+                args.recovery_validator_operator_key(ExecutionStep::Canary)
+                    .unwrap()
+                    .is_some()
+            );
             args.validator_operator_key = None;
             assert!(
                 args.recovery_validator_operator_key(ExecutionStep::RestartProof)
                     .is_err()
             );
+            assert!(
+                args.recovery_validator_operator_key(ExecutionStep::Canary)
+                    .is_err()
+            );
             args.validator_client_config.clear();
-            for step in [ExecutionStep::Canary, ExecutionStep::EdgeVerify] {
-                assert!(
-                    args.recovery_validator_operator_key(step)
-                        .unwrap()
-                        .is_none()
-                );
-                if step == ExecutionStep::Canary {
-                    assert!(args.recovery_validator_client_configs(step).is_err());
-                } else {
-                    assert!(
-                        args.recovery_validator_client_configs(step)
-                            .unwrap()
-                            .is_empty()
-                    );
-                }
-            }
+            assert!(
+                args.recovery_validator_client_configs(ExecutionStep::Canary)
+                    .is_err()
+            );
+            assert!(
+                args.recovery_validator_operator_key(ExecutionStep::EdgeVerify)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                args.recovery_validator_client_configs(ExecutionStep::EdgeVerify)
+                    .unwrap()
+                    .is_empty()
+            );
         }
 
         struct MemoryJournal {

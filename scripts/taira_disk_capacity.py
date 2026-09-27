@@ -304,7 +304,7 @@ def derive_capacity(
     Config contents are never inputs. Each freshly rebased config is charged at
     the native materializer's 1 MiB output limit, not its previous measured size.
     Unknown stage/service layouts fail rather than silently omit new allocations.
-    Binary weights come from all 30 native roles, not four unique uploaded files.
+    Binary weights come from every native role, not four unique uploaded files.
     """
     _require_derivation(
         re.fullmatch("[0-9a-f]{40}", expected_commit or "") is not None,
@@ -351,6 +351,7 @@ def derive_capacity(
         for role in (
             "iroha3d",
             "iroha_cli",
+            "kagami",
             "sorafs_node",
             "config",
             "genesis",
@@ -361,12 +362,14 @@ def derive_capacity(
     expected_roles |= {("taira-edge", "iroha_cli"), ("taira-edge", "edge_config")}
     rows = inputs["artifacts"]
     _require_derivation(
-        len(rows) == 30 and {(r["slug"], r["role"]) for r in rows} == expected_roles,
+        len(rows) == len(expected_roles)
+        and {(r["slug"], r["role"]) for r in rows} == expected_roles,
         "exact four-validator and edge role inventory required",
     )
     binary_roles = {
         "iroha3d": "iroha3d_taira",
         "iroha_cli": "iroha",
+        "kagami": "kagami",
         "sorafs_node": "sorafs-node",
     }
     role_sizes = []
@@ -383,7 +386,7 @@ def derive_capacity(
             size = observed
         role_sizes.append({"slug": row["slug"], "role": row["role"], "bytes": size})
     artifact_logical = sum(row["bytes"] for row in role_sizes)
-    a = allocation_bound(artifact_logical, 30, 64, fragment)
+    a = allocation_bound(artifact_logical, len(role_sizes), 64, fragment)
 
     scope = inputs["qualification_scope"]
     if scope == "core_testnet":
