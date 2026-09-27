@@ -539,7 +539,15 @@ pub(crate) fn validate_committed_progress(
     validate_retained_staking_obligations(world, &historical_obligations, &live_obligations)
 }
 
-/// Resolve current signing authority exclusively from authenticated finalized history.
+/// Resolve the incumbent KAGEMUSHA signing authority from committed World state.
+///
+/// Execution calls this, so it reads only state every node shares, never a node's own
+/// certificates. The authority is the signed genesis generation
+/// (`ConsensusHandshakeMetadata::kagemusha_mint_finality`, immutable after genesis) bound to this
+/// chain's network id. The Sumeragi node certifies no epoch successor, so the genesis
+/// authorization governs every height and its interval is open-ended.
+// TODO(F8): once F8.3 keeps the authorization chain in World (`KagemushaMintFinalityWorldV1`),
+// read the chain head here; generation handoffs (F8-R) and elections (S8) then advance it.
 pub(crate) fn current_authority(
     state: &impl StateReadOnly,
 ) -> Result<
@@ -549,29 +557,96 @@ pub(crate) fn current_authority(
     ),
     String,
 > {
-    let height = u64::try_from(state.height()).map_err(|_| "committed height overflows")?;
-    let artifact = state
-        .kura()
-        .v2_finality_artifact(height)
-        .map_err(|error| error.to_string())?
-        .ok_or("validator preparation requires authenticated incumbent finality")?;
-    if artifact.height != height
-        || artifact.height_context.network_id != *state.network_id()
-        || state.latest_block_hash() != Some(artifact.block_hash)
-    {
-        return Err("incumbent finality differs from the exact committed State anchor".to_owned());
+    let authority = signed_genesis_authority(state.world(), *state.network_id())?;
+    let authorization = KagemushaMintFinalityEpochAuthorizationV1::genesis(&authority, u64::MAX)
+        .map_err(|error| error.to_string())?;
+    Ok((authority, authorization))
+}
+
+/// The signed generation-zero authority of World's genesis handshake metadata, bound to
+/// `network`, with every roster key checked to decode.
+fn signed_genesis_authority(
+    world: &impl WorldReadOnly,
+    network: iroha_data_model::NetworkId,
+) -> Result<KagemushaMintFinalityAuthorityGenerationV1, String> {
+    let metadata = world
+        .parameters()
+        .custom()
+        .get(&iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id())
+        .ok_or("validator preparation requires the signed genesis consensus metadata")?
+        .payload()
+        .try_into_any::<iroha_data_model::parameter::system::ConsensusHandshakeMetadata>()
+        .map_err(|error| format!("signed genesis consensus metadata does not decode: {error}"))?;
+    let parameters = &metadata.kagemusha_mint_finality;
+    parameters.validate().map_err(|error| error.to_string())?;
+    let authority = parameters
+        .authority_generation
+        .bind_network_id(network)
+        .map_err(|error| error.to_string())?;
+    crate::zk::kagemusha_v1_recursion::validate_kagemusha_mint_finality_roster_keys_v1(&authority)
+        .map_err(|error| error.to_string())?;
+    Ok(authority)
+}
+
+/// One NPoS scheduling epoch `e`: the heights `[e·L + 1, (e + 1)·L]` for the committed epoch
+/// length `L` (`SumeragiNposParameters::epoch_length_blocks`, immutable after its signed
+/// installation). Every node derives it from the same committed parameters, so validator
+/// tenure scheduling is deterministic. A frozen committee preparation may still fix its own
+/// target interval; see [`SchedulingEpoch::validate_prepared_successor`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SchedulingEpoch {
+    /// Epoch index, starting at zero.
+    pub(crate) epoch: u64,
+    /// First height of the epoch, inclusive.
+    pub(crate) first_height: u64,
+    /// Last height of the epoch, inclusive.
+    pub(crate) last_height: u64,
+}
+
+impl SchedulingEpoch {
+    /// The epoch containing `height` for epoch length `length`.
+    ///
+    /// # Errors
+    /// `height` or `length` is zero, or the epoch's last height overflows.
+    pub(crate) fn containing(height: u64, length: u64) -> Result<Self, String> {
+        if height == 0 || length == 0 {
+            return Err("scheduling epochs need a positive height and epoch length".to_owned());
+        }
+        let epoch = (height - 1) / length;
+        let first_height = epoch * length + 1;
+        let last_height = first_height
+            .checked_add(length - 1)
+            .ok_or("scheduling epoch end overflows")?;
+        Ok(Self {
+            epoch,
+            first_height,
+            last_height,
+        })
     }
-    let context = artifact.height_context;
-    Ok(match context.next_epoch_snapshot {
-        Some(snapshot) => (
-            snapshot.kagemusha_mint_finality_authority,
-            snapshot.kagemusha_mint_finality_authorization,
-        ),
-        None => (
-            context.kagemusha_mint_finality_authority,
-            context.kagemusha_mint_finality_authorization,
-        ),
-    })
+
+    /// Check that `preparation`, frozen for epoch `self.epoch + 1`, was selected at the end of
+    /// the preceding epoch and starts right after this one: the interval form of
+    /// `ValidatorCommitteePreparationV1::validate_against_preparing_authorization`.
+    ///
+    /// # Errors
+    /// The preparation is malformed or does not follow this epoch on `network`.
+    pub(crate) fn validate_prepared_successor(
+        &self,
+        network: iroha_data_model::NetworkId,
+        preparation: &iroha_data_model::nexus::ValidatorCommitteePreparationV1,
+    ) -> Result<(), String> {
+        preparation.validate()?;
+        if preparation.network_id != network
+            || preparation.selection_epoch.checked_add(1) != Some(self.epoch)
+            || preparation.selection_height.checked_add(1) != Some(self.first_height)
+            || self.last_height.checked_add(1) != Some(preparation.first_height)
+        {
+            return Err(
+                "frozen preparation does not follow the current scheduling epoch".to_owned(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Admit a finalized public transcript without giving it independent rotation authority.

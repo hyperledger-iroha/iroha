@@ -71,7 +71,6 @@ use iroha_executor_data_model::permission::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
         CanResolveAccountAlias,
     },
-    asset::CanMintAssetWithDefinition,
     governance::{CanEnactGovernance, CanManageConsensusKeys},
     nexus::{
         CanEnrollFeeSponsorProgram, CanPublishSpaceDirectoryManifest,
@@ -10993,6 +10992,7 @@ mod tests {
     }
     #[test]
     fn generated_permissioned_localnet_cannot_mint_additional_xor() {
+        use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
         let temp = tempfile::tempdir().expect("make temp dir");
         let opts = LocalnetOptions {
             sora_profile: None,

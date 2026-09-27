@@ -1,5 +1,7 @@
 //! Real paired-key and threshold-share tests for frozen committee preparation.
 
+#[path = "tests/incumbent.rs"]
+mod incumbent;
 #[path = "tests/liability.rs"]
 mod liability;
 #[path = "tests/restore.rs"]
@@ -69,27 +71,43 @@ pub(crate) fn fixture_with_selection_anchor(
             power: 1,
         })
         .collect::<Vec<_>>();
-    let incumbent = mint_finality_authority(network, 0, &roster[..4]);
+    // The incumbent is the four seats whose keys the beacon fixture signs with (seeds 1..=4 in
+    // canonical order); with more seats they are not the first four of the sorted roster.
+    let incumbent_keys = (1..=4_u8)
+        .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+        .collect::<Vec<_>>();
+    let incumbent_roster = roster
+        .iter()
+        .filter(|seat| {
+            incumbent_keys
+                .iter()
+                .any(|key| key.public_key() == seat.validator.public_key())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let incumbent = mint_finality_authority(network, 0, &incumbent_roster);
     let peers = incumbent
         .validators
         .iter()
         .map(|keys| keys.validator.clone())
         .collect::<Vec<_>>();
-    let dkg = |session_id, roster: &[PeerId], start_height| GlobalThresholdBeaconDkgSessionV1 {
-        version: 1,
-        network_id: network,
-        session_id,
-        attempt_id: session_id,
-        authority_generation: u64::from(start_height > 1),
-        roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(roster),
-        committee_size: roster.len() as u16,
-        threshold: ((roster.len() - 1) / 3 + 1) as u16,
-        start_height,
-        commitments_end_height: start_height + 1,
-        deliveries_end_height: start_height + 2,
-        acceptances_end_height: start_height + 3,
+    let dkg = |session_id, attempt_id, roster: &[PeerId], start_height| {
+        GlobalThresholdBeaconDkgSessionV1 {
+            version: 1,
+            network_id: network,
+            session_id,
+            attempt_id,
+            authority_generation: u64::from(start_height > 1),
+            roster_hash: crate::beacon::global_threshold_beacon_roster_hash_v1(roster),
+            committee_size: roster.len() as u16,
+            threshold: ((roster.len() - 1) / 3 + 1) as u16,
+            start_height,
+            commitments_end_height: start_height + 1,
+            deliveries_end_height: start_height + 2,
+            acceptances_end_height: start_height + 3,
+        }
     };
-    let (old, _) = prepared_session_and_signers_fixture_v1(dkg([0x71; 32], &peers, 1));
+    let (old, _) = prepared_session_and_signers_fixture_v1(dkg([0x71; 32], [0x71; 32], &peers, 1));
     let mut old_record =
         FinalizedGlobalThresholdBeaconKeySessionRecordV1::new(old.record().clone()).unwrap();
     old_record.activate(5).unwrap();
@@ -127,8 +145,10 @@ pub(crate) fn fixture_with_selection_anchor(
         .iter()
         .map(|seat| seat.validator.clone())
         .collect::<Vec<_>>();
+    // The target ceremony is the preparation's own attempt.
     let (target, signers) = prepared_session_and_signers_fixture_v1(dkg(
         preparation.beacon_session_id().unwrap(),
+        preparation.transition_id().unwrap(),
         &target_peers,
         11,
     ));

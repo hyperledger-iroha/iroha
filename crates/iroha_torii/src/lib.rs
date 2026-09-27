@@ -18270,13 +18270,12 @@ fn authoritative_lane_peer_statuses(
     app: &AppState,
     routing_decision: RoutingDecision,
 ) -> Vec<AuthoritativeLanePeerStatus> {
-    // State authority is canonical. In particular, an autoscale lane's
-    // immutable incarnation committee must never be replaced by its mutable
-    // exact-lane manifest. Manifest bindings only decorate canonical peers
-    // with an optional HTTP bridge URL.
+    // State authority is canonical: every route's authority is the global committee (lanes are
+    // routing labels; every transaction executes in the global block). Manifest bindings only
+    // decorate canonical peers with an optional HTTP bridge URL.
     let committee = match app
         .state
-        .resolve_lane_committee(lane_authority_route(routing_decision))
+        .resolve_route_authority(lane_authority_route(routing_decision))
     {
         Ok(committee) => committee,
         Err(error) => {
@@ -18284,7 +18283,7 @@ fn authoritative_lane_peer_statuses(
                 lane = routing_decision.lane_id.as_u32(),
                 dataspace = routing_decision.dataspace_id.as_u64(),
                 %error,
-                "Torii failed closed while resolving current lane authority"
+                "Torii failed closed while resolving current route authority"
             );
             return Vec::new();
         }
@@ -18311,7 +18310,7 @@ fn authoritative_lane_peer_statuses_at_height(
 ) -> Vec<AuthoritativeLanePeerStatus> {
     let authoritative_peer_ids = match app
         .state
-        .resolve_lane_committee_at_height(lane_authority_route(routing_decision), authority_height)
+        .resolve_route_authority_at_height(lane_authority_route(routing_decision), authority_height)
     {
         Ok(committee) => committee.into_validators(),
         Err(error) => {
@@ -18320,7 +18319,7 @@ fn authoritative_lane_peer_statuses_at_height(
                 dataspace = routing_decision.dataspace_id.as_u64(),
                 authority_height,
                 %error,
-                "Torii failed closed while resolving height-bound lane authority"
+                "Torii failed closed while resolving height-bound route authority"
             );
             return Vec::new();
         }
@@ -18834,7 +18833,7 @@ fn is_local_authoritative_for_peers(app: &AppState, authoritative_peers: &[PeerI
 fn is_local_authoritative_for_route(app: &AppState, routing_decision: RoutingDecision) -> bool {
     let Ok(committee) = app
         .state
-        .resolve_lane_committee(lane_authority_route(routing_decision))
+        .resolve_route_authority(lane_authority_route(routing_decision))
     else {
         return false;
     };

@@ -721,9 +721,9 @@ fn next_unfrozen_election_height(
         .ok_or_else(|| Error::InvariantViolation("validator epoch boundary overflowed".into()))
 }
 
-/// Select an unfrozen global tenure from authenticated interval boundaries.
-/// Future lengths are projected only after the last immutable interval; they are
-/// recomputed at execution and are never inferred from a genesis-height modulus.
+/// Select an unfrozen global tenure from committed interval boundaries: the current NPoS
+/// epoch and any frozen preparations after it. Lengths are projected only after the last
+/// frozen interval, so a preparation with its own interval moves every later boundary.
 fn global_eligibility_from_intervals(
     current_first: u64,
     current_last: u64,
@@ -784,19 +784,19 @@ fn validator_eligibility_height(
     if lane_id != LaneId::SINGLE {
         return next_unfrozen_election_height(key_ready_height, length);
     }
-    let (authority, current) =
-        crate::state::validator_committee::current_authority(state).map_err(fail)?;
-    current
-        .validate_against_authority(&authority)
-        .map_err(|error| fail(error.to_string()))?;
-    if execution_height < current.first_height
-        || execution_height > current.last_height
-        || key_ready_height < execution_height
-    {
+    // The current interval is the committed NPoS epoch containing the execution height; frozen
+    // preparations in World fix the intervals after it. No node-local finality is read.
+    // TODO(S8): once elections activate prepared committees at epoch boundaries, an activated
+    // preparation's interval (not the epoch arithmetic) becomes the current one.
+    let current =
+        crate::state::validator_committee::SchedulingEpoch::containing(execution_height, length)
+            .map_err(fail)?;
+    if key_ready_height < execution_height {
         return Err(fail(
-            "validator scheduling height lies outside the authenticated current interval".into(),
+            "validator key readiness precedes the scheduling execution height".into(),
         ));
     }
+    let network = *state.network_id();
     let next_epoch = current
         .epoch
         .checked_add(1)
@@ -808,14 +808,14 @@ fn validator_eligibility_height(
     let next = world.validator_committee_transitions().get(&next_epoch);
     let future = world.validator_committee_transitions().get(&future_epoch);
     if let Some(next) = next {
-        next.preparation
-            .validate_against_preparing_authorization(&current)
+        current
+            .validate_prepared_successor(network, &next.preparation)
             .map_err(fail)?;
     }
     if let Some(future) = future {
         future.preparation.validate().map_err(fail)?;
         if execution_height != current.last_height
-            || future.preparation.network_id != current.network_id
+            || future.preparation.network_id != network
             || future.preparation.selection_height != current.last_height
             || future.preparation.selection_epoch != current.epoch
             || future.preparation.target_epoch != future_epoch

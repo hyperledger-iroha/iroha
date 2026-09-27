@@ -564,13 +564,16 @@ LaneConfigEntry {
 - Unresolved routing is deterministic: if a rule resolves to an unknown lane,
   unknown dataspace, or lane/dataspace mismatch, admission is rejected with an
   unresolved-route error (no fallback-to-default rewrite for ambiguous inputs).
-- Every transaction executes in the global Sumeragi block, so a QueuePlan
-  admission context binds, for every route leg, the global committee that the
-  lag-2 schedule names for the proposal height
-  (`sumeragi::schedule::scheduled_committee`). Lane validator pools (manifest
-  bindings or public-lane stake) are not admission authority; staking exists
-  only on NPoS chains, and permissioned chains admit transactions with their
-  genesis roster.
+- Every transaction executes in the global Sumeragi block, so the authority of
+  an active route is the global committee that the lag-2 schedule names for the
+  authority height (`sumeragi::schedule::scheduled_committee`): a QueuePlan
+  admission context binds it for every route leg (at the proposal height), and
+  Torii routes and proxies requests by it (`State::resolve_route_authority`, at
+  the committed height). An unknown or inactive route has no authority. Lane
+  validator pools (manifest bindings or public-lane stake) are not route
+  authority; manifest bindings only add Torii URLs to committee members.
+  Staking exists only on NPoS chains, and permissioned chains admit and route
+  transactions with their genesis roster.
 - State-aware Torii, gossip, admission, consensus requeue, and block-requeue
   routing first synchronize the queue router, routing policy, and cached
   catalogs from current Nexus state, then validate computed plans against those

@@ -510,6 +510,7 @@ pub(crate) use committed_transaction_context::seed_committed_transaction_context
 pub(crate) use da_hydration::DaIndexHydrationError;
 #[cfg(test)]
 pub(crate) use lane_authority::authenticated_committee_in_finalized_bundle;
+pub(crate) use lane_authority::resolve_global_route;
 pub use lane_authority::{LaneAuthorityCommittee, LaneAuthorityError, LaneAuthorityRoute};
 
 struct ResolvedLaneAuthorityInputs {
@@ -760,22 +761,25 @@ pub fn threshold_key_lifecycle_certificate_preimage_v1(
     Ok(preimage)
 }
 
-fn threshold_key_lifecycle_successor_roster_v1(
-    current_height: u64,
-    parent_context: &iroha_data_model::block::consensus_v2::HeightContext,
-) -> Option<Vec<PeerId>> {
-    if parent_context.height.checked_add(1) != Some(current_height) {
-        return None;
+/// The committee that authorizes threshold-key lifecycle certificates at `height`: the entry
+/// World's lag-2 consensus schedule holds for that height (committed in `R_{height−2}`, identical
+/// on every node), in the core's canonical order.
+///
+/// # Errors
+/// The schedule holds no entry for `height`, or the entry's committee is empty.
+pub(crate) fn threshold_key_lifecycle_roster_v1(
+    world: &impl WorldReadOnly,
+    height: u64,
+) -> core::result::Result<Vec<PeerId>, String> {
+    let config = world.consensus_schedule().get(height).ok_or_else(|| {
+        format!("threshold-key lifecycle authority has no scheduled committee for height {height}")
+    })?;
+    if config.committee.is_empty() {
+        return Err(format!(
+            "threshold-key lifecycle authority has an empty committee at height {height}"
+        ));
     }
-    let roster = match (
-        parent_context.height == parent_context.epoch_end_height,
-        parent_context.next_epoch_snapshot.as_ref(),
-    ) {
-        (true, Some(snapshot)) => &snapshot.roster,
-        (false, None) => &parent_context.roster,
-        (true, None) | (false, Some(_)) => return None,
-    };
-    (!roster.is_empty()).then(|| roster.iter().map(|entry| entry.validator.clone()).collect())
+    Ok(config.committee.clone())
 }
 
 /// Verify an exact current-roster `2f + 1` lifecycle certificate.
@@ -1001,15 +1005,30 @@ mod threshold_key_lifecycle_certificate_tests {
         );
     }
 
-    #[test]
-    fn frozen_height_context_order_survives_commit_topology_rotation() {
-        use iroha_data_model::block::consensus_v2::{ConsensusMode, ValidatorPower};
+    fn schedule_world(entries: [Vec<PeerId>; 3], genesis_height: u64) -> World {
+        use crate::sumeragi::schedule::{ChainParamsRecord, ConsensusSchedule, ScheduledConfig};
+        let world = World::new();
+        let params = ChainParamsRecord::from_parameters(&Default::default());
+        let [first, second, third] = entries.map(|committee| ScheduledConfig {
+            height: 0,
+            committee,
+            params: params.clone(),
+        });
+        let mut schedule = world.consensus_schedule.block();
+        *schedule.get_mut() = ConsensusSchedule::genesis(genesis_height, [first, second, third]);
+        schedule.commit();
+        world
+    }
 
-        let (mut certificate, keys, roster) = certified_fixture();
-        certificate.effective_height = 2;
+    fn sign_at_height(
+        mut certificate: ThresholdKeyLifecycleCertificateV1,
+        keys: &[KeyPair],
+        height: u64,
+    ) -> ThresholdKeyLifecycleCertificateV1 {
+        certificate.effective_height = height;
         certificate.signatures.clear();
         let preimage = threshold_key_lifecycle_certificate_preimage_v1(&certificate)
-            .expect("encode height-two certificate preimage");
+            .expect("encode lifecycle certificate preimage");
         certificate.signatures = keys
             .iter()
             .take(3)
@@ -1017,54 +1036,28 @@ mod threshold_key_lifecycle_certificate_tests {
             .map(|(index, key)| ThresholdKeyLifecycleSignatureV1 {
                 signer_index: u16::try_from(index).expect("small signer index"),
                 signature: Signature::try_new(key.private_key(), &preimage)
-                    .expect("sign height-two lifecycle certificate"),
+                    .expect("sign lifecycle certificate"),
             })
             .collect();
-        let election_roster = roster
-            .iter()
-            .cloned()
-            .map(|validator| ValidatorPower {
-                validator,
-                power: 1,
-            })
-            .collect::<Vec<_>>();
-        let (kagemusha_mint_finality_authorization, kagemusha_mint_finality_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                certificate.network_id,
-                8,
-                &election_roster,
-            );
-        let parent_context = crate::sumeragi::v2_context::build_genesis_height_context(
-            crate::sumeragi::v2_context::GenesisContextInputs {
-                network_id: certificate.network_id,
-                election: crate::sumeragi::v2_context::FrozenElectionInputs {
-                    epoch: 0,
-                    kagemusha_mint_finality_authority,
-                    kagemusha_mint_finality_authorization,
-                    epoch_end_height: 8,
-                    mode: ConsensusMode::Npos,
-                    roster: election_roster,
-                    leader_seed: [0x51; 32],
-                },
-                next_epoch_snapshot: None,
-                nexus_amx_context_hash: Hash::prehashed([0x52; Hash::LENGTH]),
-                execution_policy_hash: Hash::prehashed([0x53; Hash::LENGTH]),
-                da_layout:
-                    iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
-            },
-        )
-        .expect("build exact parent height context");
-        let frozen_roster = threshold_key_lifecycle_successor_roster_v1(2, &parent_context)
-            .expect("derive the successor's frozen roster");
+        certificate
+    }
+
+    #[test]
+    fn scheduled_committee_order_survives_commit_topology_rotation() {
+        let (certificate, keys, roster) = certified_fixture();
+        let certificate = sign_at_height(certificate, &keys, 2);
+        let world = schedule_world([roster.clone(), roster.clone(), roster.clone()], 1);
+        let scheduled = threshold_key_lifecycle_roster_v1(&world.view(), 2)
+            .expect("the schedule holds height two");
+        assert_eq!(scheduled, roster);
         let mut rotated_commit_topology = roster.clone();
         rotated_commit_topology[..3].rotate_left(1);
-        assert_ne!(frozen_roster, rotated_commit_topology);
         assert_eq!(
             verify_threshold_key_lifecycle_certificate_v1(
                 &certificate,
                 &certificate.network_id,
                 2,
-                &frozen_roster,
+                &scheduled,
             ),
             Ok(()),
             "leader-role rotation must not change lifecycle signer indices",
@@ -1082,127 +1075,62 @@ mod threshold_key_lifecycle_certificate_tests {
     }
 
     #[test]
-    fn frozen_successor_roster_obeys_epoch_boundary_snapshot_presence() {
-        use iroha_data_model::block::consensus_v2::{
-            ConsensusMode, DualQuorum, ValidatorPower, finality::FinalizedNextEpochSnapshot,
-        };
-
-        let sorted_roster = || {
-            let mut roster = (0..4)
-                .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
-                .map(|validator| ValidatorPower {
-                    validator,
-                    power: 1,
-                })
-                .collect::<Vec<_>>();
-            roster.sort();
-            roster
-        };
-        let parent_roster = sorted_roster();
-        let successor_roster = sorted_roster();
-        let network_id = network_id(0x63);
-        let (parent_authorization, parent_authority) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_authorization(
-                network_id,
-                1,
-                &parent_roster,
-            );
-        let successor_authority = crate::kagemusha_v1_test_fixtures::mint_finality_authority(
-            network_id,
-            1,
-            &successor_roster,
-        );
-        let successor_authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_successor_authorization(
-                &parent_authorization,
-                &successor_authority,
-                9,
-                iroha_data_model::isi::kagemusha_v1::BeaconEpochBindingV1::Installed(
-                    iroha_data_model::isi::kagemusha_v1::InstalledBeaconEpochBindingV1 {
-                        session_id: [0x67; 32],
-                        transcript_hash: [0x68; 32],
-                    },
-                ),
-                iroha_data_model::isi::kagemusha_v1::KagemushaMintFinalityEpochDecisionV1::Activate,
-                [0x69; 32],
-            );
-        let successor_snapshot = FinalizedNextEpochSnapshot {
-            committee_preparation: None,
-            epoch: 1,
-            kagemusha_mint_finality_authorization: successor_authorization,
-            kagemusha_mint_finality_authority: successor_authority,
-            epoch_end_height: 9,
-            mode: ConsensusMode::Npos,
-            validator_set_pops: vec![vec![0x61]; successor_roster.len()],
-            quorum: DualQuorum::from_roster(&successor_roster)
-                .expect("derive exact successor quorum"),
-            roster: successor_roster.clone(),
-            leader_seed: [0x62; 32],
-        };
-        let boundary_parent = crate::sumeragi::v2_context::build_genesis_height_context(
-            crate::sumeragi::v2_context::GenesisContextInputs {
-                network_id,
-                election: crate::sumeragi::v2_context::FrozenElectionInputs {
-                    epoch: 0,
-                    kagemusha_mint_finality_authority: parent_authority,
-                    kagemusha_mint_finality_authorization: parent_authorization,
-                    epoch_end_height: 1,
-                    mode: ConsensusMode::Npos,
-                    roster: parent_roster.clone(),
-                    leader_seed: [0x64; 32],
-                },
-                next_epoch_snapshot: Some(successor_snapshot),
-                nexus_amx_context_hash: Hash::prehashed([0x65; Hash::LENGTH]),
-                execution_policy_hash: Hash::prehashed([0x66; Hash::LENGTH]),
-                da_layout:
-                    iroha_data_model::block::consensus_v2::recommended_data_availability_layout(),
-            },
-        )
-        .expect("build epoch-boundary parent context");
-        let selected = threshold_key_lifecycle_successor_roster_v1(2, &boundary_parent)
-            .expect("select authenticated next-epoch roster");
+    fn lifecycle_roster_is_the_scheduled_committee_of_exactly_that_height() {
+        let (_, _, roster) = certified_fixture();
+        let (_, _, successor) = certified_fixture();
+        let world = schedule_world([roster.clone(), roster.clone(), successor.clone()], 5);
         assert_eq!(
-            selected,
-            successor_roster
-                .iter()
-                .map(|entry| entry.validator.clone())
-                .collect::<Vec<_>>()
+            threshold_key_lifecycle_roster_v1(&world.view(), 6),
+            Ok(roster)
         );
-
-        let mut non_boundary_parent = boundary_parent.clone();
-        non_boundary_parent.epoch_end_height = 8;
-        non_boundary_parent.kagemusha_mint_finality_authorization =
-            crate::kagemusha_v1_test_fixtures::mint_finality_genesis_for_authority(
-                &non_boundary_parent.kagemusha_mint_finality_authority,
-                8,
-            );
-        non_boundary_parent.next_epoch_snapshot = None;
         assert_eq!(
-            threshold_key_lifecycle_successor_roster_v1(2, &non_boundary_parent),
-            Some(
-                parent_roster
-                    .iter()
-                    .map(|entry| entry.validator.clone())
-                    .collect()
-            ),
-            "non-boundary heights retain the parent frozen roster",
+            threshold_key_lifecycle_roster_v1(&world.view(), 7),
+            Ok(successor),
+            "a committee change scheduled for a height governs that height"
         );
+        for height in [4, 8] {
+            assert!(
+                threshold_key_lifecycle_roster_v1(&world.view(), height).is_err(),
+                "height {height} is outside the schedule window"
+            );
+        }
+        assert!(threshold_key_lifecycle_roster_v1(&World::new().view(), 1).is_err());
+        let empty = schedule_world([Vec::new(), Vec::new(), Vec::new()], 1);
+        assert!(threshold_key_lifecycle_roster_v1(&empty.view(), 2).is_err());
+    }
 
-        let mut unexpected_snapshot = non_boundary_parent.clone();
-        unexpected_snapshot.next_epoch_snapshot = boundary_parent.next_epoch_snapshot.clone();
-        assert!(
-            threshold_key_lifecycle_successor_roster_v1(2, &unexpected_snapshot).is_none(),
-            "a non-boundary parent cannot inject a next-epoch snapshot",
+    #[test]
+    fn next_height_admission_reads_the_committed_schedule() {
+        let (certificate, keys, roster) = certified_fixture();
+        let network = certificate.network_id;
+        let state = State::new_with_chain_and_network_id_for_testing(
+            schedule_world([roster.clone(), roster.clone(), roster.clone()], 1),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            iroha_model_base::chain::ChainId::from("lifecycle-admission"),
+            network,
         );
-        let mut missing_snapshot = boundary_parent.clone();
-        missing_snapshot.next_epoch_snapshot = None;
+        let certificate = sign_at_height(certificate, &keys, 2);
         assert!(
-            threshold_key_lifecycle_successor_roster_v1(2, &missing_snapshot).is_none(),
-            "an epoch-boundary parent must authenticate the complete successor snapshot",
+            state
+                .verify_next_height_threshold_key_lifecycle_certificate_v1(&certificate)
+                .is_err(),
+            "admission requires a committed parent"
         );
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
+        let mut block_hashes = state.block_hashes.block();
+        block_hashes.push_for_tests(header.hash());
+        block_hashes.commit_for_tests();
+        assert_eq!(
+            state.verify_next_height_threshold_key_lifecycle_certificate_v1(&certificate),
+            Ok((header.hash(), roster)),
+        );
+        let wrong_height = sign_at_height(certificate, &keys, 3);
         assert!(
-            threshold_key_lifecycle_successor_roster_v1(3, &boundary_parent).is_none(),
-            "a parent context cannot authorize a non-successor height",
+            state
+                .verify_next_height_threshold_key_lifecycle_certificate_v1(&wrong_height)
+                .is_err(),
+            "a certificate must name the next height"
         );
     }
 }
@@ -32700,48 +32628,32 @@ impl State {
     }
     /// Authenticate a threshold-key lifecycle certificate for the contiguous next block.
     ///
-    /// This admission check uses the durable parent's exact frozen roster, never
-    /// the mutable commit topology. Execution still checks the certificate again,
-    /// including its exact height, session compare-and-set and replay protection.
-    /// No State view is held while authenticating durable finality.
+    /// This admission check uses the committee World's consensus schedule holds for the next
+    /// height (the same entry execution reads), never the mutable commit topology. Execution
+    /// still checks the certificate again, including its exact height, session compare-and-set
+    /// and replay protection.
     ///
     /// # Errors
     ///
-    /// Rejects absent/corrupt finality, a changed committed tip, and any invalid
-    /// network, height, roster or quorum binding. Returns the authenticated parent
+    /// Rejects a chain without a committed parent, a next height without a scheduled committee,
+    /// and any invalid network, height, roster or quorum binding. Returns the committed parent
     /// hash and roster so ingress can also require local ownership of the global control route.
     pub fn verify_next_height_threshold_key_lifecycle_certificate_v1(
         &self,
         certificate: &iroha_data_model::isi::consensus_keys::ThresholdKeyLifecycleCertificateV1,
     ) -> core::result::Result<(HashOf<BlockHeader>, Vec<PeerId>), String> {
-        let (parent_height, parent_hash) = {
-            let hashes = self.block_hashes.view();
-            let height = u64::try_from(hashes.len())
-                .map_err(|_| "lifecycle parent height exceeds u64".to_owned())?;
-            let hash = hashes
-                .last()
-                .copied()
+        let (parent_hash, height, roster) = {
+            let view = self.view();
+            let parent_hash = view
+                .latest_block_hash()
                 .ok_or_else(|| "lifecycle admission requires a committed parent".to_owned())?;
-            (height, hash)
+            let height = u64::try_from(view.height())
+                .ok()
+                .and_then(|parent| parent.checked_add(1))
+                .ok_or_else(|| "lifecycle execution height overflows".to_owned())?;
+            let roster = threshold_key_lifecycle_roster_v1(view.world(), height)?;
+            (parent_hash, height, roster)
         };
-        let height = parent_height
-            .checked_add(1)
-            .ok_or_else(|| "lifecycle execution height overflows".to_owned())?;
-        let (header, parent) = self
-            .kura
-            .v2_finality_artifact_with_header(parent_height)
-            .map_err(|error| format!("lifecycle parent finality is invalid: {error}"))?
-            .ok_or_else(|| "lifecycle parent finality is absent".to_owned())?;
-        if header.height().get() != parent_height
-            || header.hash() != parent_hash
-            || parent.height_context.network_id != *self.network_id_ref()
-        {
-            return Err("lifecycle parent differs from the committed network/tip".to_owned());
-        }
-        let roster = threshold_key_lifecycle_successor_roster_v1(height, &parent.height_context)
-            .ok_or_else(|| {
-                "lifecycle parent does not authenticate the successor roster".to_owned()
-            })?;
         verify_threshold_key_lifecycle_certificate_v1(
             certificate,
             self.network_id_ref(),
@@ -32749,12 +32661,6 @@ impl State {
             &roster,
         )
         .map_err(|error| error.to_string())?;
-        let hashes = self.block_hashes.view();
-        if u64::try_from(hashes.len()).ok() != Some(parent_height)
-            || hashes.last().copied() != Some(parent_hash)
-        {
-            return Err("lifecycle committed tip changed during authentication".to_owned());
-        }
         Ok((parent_hash, roster))
     }
     /// Latest committed block height derived from the block hash journal.
@@ -34681,6 +34587,32 @@ impl State {
     ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
         let view = self.view();
         StateReadOnly::resolve_lane_committee_at_height(&view, route, authority_height)
+    }
+    /// Resolve the peers authoritative for a route at the committed height: the global
+    /// committee (lanes and dataspaces are routing labels; every transaction executes in the
+    /// global Sumeragi block). Torii routes and proxies requests by this authority.
+    ///
+    /// # Errors
+    /// The route is unknown or inactive, or no validator is live.
+    pub fn resolve_route_authority(
+        &self,
+        route: LaneAuthorityRoute,
+    ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+        let view = self.view();
+        let authority_height = u64::try_from(view.height()).unwrap_or(u64::MAX);
+        lane_authority::resolve_global_route(view.world(), route, view.nexus(), authority_height)
+    }
+    /// [`Self::resolve_route_authority`] at an explicit consensus height.
+    ///
+    /// # Errors
+    /// The route is unknown or inactive at `authority_height`, or no validator is live there.
+    pub fn resolve_route_authority_at_height(
+        &self,
+        route: LaneAuthorityRoute,
+        authority_height: u64,
+    ) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+        let view = self.view();
+        lane_authority::resolve_global_route(view.world(), route, view.nexus(), authority_height)
     }
     /// Return whether a lane is active at the committed lane-authority height.
     pub fn is_lane_active_for_authority(&self, lane_id: LaneId) -> bool {
@@ -59651,7 +59583,7 @@ mod public_lane_slash_observability_staging_tests {
     #[test]
     fn accepted_transaction_moves_slash_observability_to_the_block_boundary() {
         let state = test_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         let lane_id = LaneId::new(71);
         let slash_id = Hash::new("block-boundary-slash");
@@ -59689,7 +59621,7 @@ mod public_lane_slash_observability_staging_tests {
     #[test]
     fn dropped_transaction_discards_slash_observability() {
         let state = test_state();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         {
             let mut transaction = block.transaction();
@@ -59717,7 +59649,7 @@ mod public_lane_slash_observability_staging_tests {
                 .telemetry
                 .add_block_fee_amount(&Quantity::from(11_u64));
         }
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.consensus_effects_probe_block(header).unwrap();
         let lane_id = LaneId::new(73);
         let status_before = crate::status::lane_scoped_status_fingerprint_for_tests();
@@ -59847,7 +59779,7 @@ mod parliament_commit_telemetry_tests {
     fn parliament_metrics_publish_only_after_canonical_block_commit() {
         let (state, metrics) = state_with_parliament_telemetry();
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
             let mut block = state.block(header);
             stage_parliament_projection(&mut block);
             assert_eq!(
@@ -59875,7 +59807,7 @@ mod parliament_commit_telemetry_tests {
         );
         assert_eq!(metrics.governance_citizens_total.get(), 0);
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         stage_parliament_projection(&mut block);
         block
@@ -59908,7 +59840,7 @@ mod parliament_commit_telemetry_tests {
     #[test]
     fn authenticated_replay_refreshes_gauges_without_recounting_transitions() {
         let (state, metrics) = state_with_parliament_telemetry();
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         stage_parliament_projection(&mut block);
         block.authenticated_replay_commit = true;
@@ -60012,7 +59944,7 @@ mod musubi_replication_shortfall_telemetry_tests {
         let (state, metrics, _telemetry) = state_with_shortfall(2, true);
         assert_eq!(replication_shortfall_gauge(&metrics), 2);
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
             *transaction
@@ -60030,7 +59962,7 @@ mod musubi_replication_shortfall_telemetry_tests {
         );
         assert_eq!(replication_shortfall_gauge(&metrics), 2);
         {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+            let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
             let mut block = state.block(header);
             let mut transaction = block.transaction();
             *transaction
@@ -60049,7 +59981,7 @@ mod musubi_replication_shortfall_telemetry_tests {
             2
         );
         assert_eq!(replication_shortfall_gauge(&metrics), 2);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut block = state.block(header);
         let mut transaction = block.transaction();
         *transaction
@@ -60090,7 +60022,7 @@ mod committed_transaction_context_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         let signed = TransactionBuilder::new(
@@ -60120,7 +60052,7 @@ mod committed_transaction_context_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         let ballot = InstructionBox::from(iroha_data_model::isi::governance::CastZkBallot {
@@ -60155,7 +60087,7 @@ mod committed_transaction_context_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         );
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut transaction = state_block.transaction();
         let update = InstructionBox::from(UpdatePlainConviction {
@@ -63407,7 +63339,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let _guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
@@ -63502,7 +63434,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         state_block.authenticated_replay_commit = true;
         let _guard = crate::exec_witness::exec_witness_guard();
@@ -63546,7 +63478,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let _guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
@@ -63625,7 +63557,7 @@ mod fastpq_tx_set_hash_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new(world, kura, query);
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(core::num::NonZeroU64::MIN, None, None, 0, 0);
         let mut state_block = state.block(header);
         let _guard = crate::exec_witness::exec_witness_guard();
         crate::exec_witness::start_block();
@@ -64955,53 +64887,27 @@ impl StateTransaction<'_, '_> {
     pub fn block_height(&self) -> u64 {
         self._curr_block.height().get()
     }
-    /// Resolve the current height's exact finality-frozen validator order for
-    /// threshold-key lifecycle certificate authentication.
+    /// Resolve the current height's committee order for threshold-key lifecycle certificate
+    /// authentication: the committee World's lag-2 consensus schedule holds for this height
+    /// (see [`threshold_key_lifecycle_roster_v1`]).
     ///
-    /// The mutable commit topology rotates consensus roles after every block,
-    /// so its positions are not stable signer indices. The parent finality
-    /// artifact instead authenticates either the unchanged epoch roster or the
-    /// complete next-epoch snapshot governing this block.
+    /// The mutable commit topology rotates consensus roles after every block, so its positions
+    /// are not stable signer indices; the scheduled committee is committed state every node
+    /// shares.
     pub(crate) fn threshold_key_lifecycle_frozen_roster_v1(
         &self,
     ) -> core::result::Result<Vec<PeerId>, String> {
         let current_height = self.block_height();
-        let parent_height = current_height
-            .checked_sub(1)
-            .filter(|height| *height != 0)
-            .ok_or_else(|| {
-                "threshold-key lifecycle authority has no finalized parent height".to_owned()
-            })?;
-        let parent = match self.kura.v2_finality_artifact(parent_height) {
-            Ok(Some(parent)) => parent,
-            Ok(None) => {
-                #[cfg(test)]
-                {
-                    let fixture_roster = self.commit_topology().get().clone();
-                    if !fixture_roster.is_empty() {
-                        return Ok(fixture_roster);
-                    }
-                }
-                return Err(format!(
-                    "threshold-key lifecycle authority lacks finality at parent height {parent_height}"
-                ));
+        let roster = threshold_key_lifecycle_roster_v1(&self.world, current_height);
+        #[cfg(test)]
+        if roster.is_err() {
+            // Unit fixtures without a consensus schedule supply the roster directly.
+            let fixture_roster = self.commit_topology().get().clone();
+            if !fixture_roster.is_empty() {
+                return Ok(fixture_roster);
             }
-            Err(error) => {
-                return Err(format!(
-                    "failed to authenticate threshold-key lifecycle parent finality: {error}"
-                ));
-            }
-        };
-        if parent.height_context.network_id != self.network_id {
-            return Err(
-                "threshold-key lifecycle parent finality belongs to another network".to_owned(),
-            );
         }
-        threshold_key_lifecycle_successor_roster_v1(current_height, &parent.height_context)
-            .ok_or_else(|| {
-                "threshold-key lifecycle parent finality does not define this height's frozen roster"
-                    .to_owned()
-            })
+        roster
     }
     fn ensure_private_settlement_feature_active_v1(
         &self,

@@ -2556,6 +2556,12 @@ heights as it trusts it for its whole state. A consumer that needs an independen
 validator keeps full blocks in the first release, and a snapshot-bootstrapped node must retain the
 frames its instructions may name (goal S7).
 
+**Execution-time authority.** An instruction that needs the committee of a height (a
+threshold-key lifecycle certificate) reads the World schedule entry for that height (§10.1), and
+NPoS staking derives its scheduling epochs from the committed, immutable epoch length and the
+incumbent mint-finality authority from the signed genesis metadata in World
+(`specs/staking_validator_completion.md`). None of them reads a certificate.
+
 ---
 ## 13. Verification plan (deterministic simulator, scripted tests, driver conformance)
 
